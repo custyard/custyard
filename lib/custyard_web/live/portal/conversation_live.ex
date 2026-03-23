@@ -68,7 +68,8 @@ defmodule CustyardWeb.Portal.ConversationLive do
       end
 
       Scoring.calculate_and_cache(conv.id)
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:updated, conv.id})
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conv.id})
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conv.id}", {:message_added, conv.id})
     end
 
     {:noreply,

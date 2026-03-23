@@ -8,6 +8,7 @@ defmodule Custyard.Application do
     children = [
       CustyardWeb.Telemetry,
       Custyard.Repo,
+      Custyard.Scoring.Scheduler,
       {DNSCluster, query: Application.get_env(:custyard, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Custyard.PubSub},
       {Finch, name: Custyard.Finch},

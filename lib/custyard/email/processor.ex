@@ -15,7 +15,8 @@ defmodule Custyard.Email.Processor do
       Scoring.calculate_and_cache(conversation.id)
 
       # Broadcast update via PubSub
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:updated, conversation.id})
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conversation.id})
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", {:message_added, conversation.id})
 
       {:ok, Repo.reload!(conversation)}
     end

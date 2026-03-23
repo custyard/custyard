@@ -20,7 +20,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
   end
 
   @impl true
-  def handle_info({:updated, _id}, socket) do
+  def handle_info({:conversation_updated, _id}, socket) do
     {:noreply, load_conversations(socket)}
   end
 

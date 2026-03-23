@@ -69,7 +69,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> Repo.update()
 
     Scoring.calculate_and_cache(conversation.id)
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", :message_added)
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", {:message_added, conversation.id})
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conversation.id})
 
     {:noreply, socket |> assign(:reply_text, "") |> reload_conversation()}
@@ -90,7 +90,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       })
       |> Repo.insert()
 
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", :message_added)
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", {:message_added, conversation.id})
 
     {:noreply, socket |> assign(:note_text, "") |> reload_conversation()}
   end
@@ -165,7 +165,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   @impl true
-  def handle_info(:message_added, socket) do
+  def handle_info({:message_added, _id}, socket) do
     {:noreply, reload_conversation(socket)}
   end
 
