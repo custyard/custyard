@@ -1,0 +1,17 @@
+[Unit]
+Description=Custyard Service Platform
+After=network-online.target
+
+[Container]
+Image=localhost/custyard:latest
+PublishPort=4000:4000
+Volume=custyard-data:/data:Z
+Environment=PHX_HOST=onboard.eu.onetimesecret.com
+Environment=PHX_PORT=4000
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target default.target

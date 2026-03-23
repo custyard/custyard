@@ -1,0 +1,33 @@
+# Build artifacts
+_build/
+deps/
+.elixir_ls/
+
+# Test and development
+test/
+.git/
+.github/
+
+# Documentation
+*.md
+planning/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+*.swp
+
+# Local environment
+.env*
+*.local
+
+# Static assets (built in container)
+priv/static/assets/
+priv/static/cache_manifest.json
+
+# SQLite databases
+*.db
+*.db-*

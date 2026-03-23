@@ -1,0 +1,397 @@
+defmodule CustyardWeb.Operator.AttentionQueueLive do
+  use CustyardWeb, :live_view
+
+  alias Custyard.{Repo, Conversation, Scoring}
+  import Ecto.Query
+
+  @impl true
+  def mount(_params, _session, socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+    end
+
+    socket =
+      socket
+      |> assign(:filter, "all")
+      |> assign(:show_score_breakdown, nil)
+      |> assign(:show_snooze_menu, nil)
+      |> load_conversations()
+
+    {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    filter = params["filter"] || "all"
+
+    socket =
+      socket
+      |> assign(:filter, filter)
+      |> load_conversations()
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("filter", %{"filter" => filter}, socket) do
+    {:noreply, push_patch(socket, to: ~p"/operator?filter=#{filter}")}
+  end
+
+  def handle_event("toggle_score", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    current = socket.assigns.show_score_breakdown
+
+    {:noreply, assign(socket, :show_score_breakdown, if(current == id, do: nil, else: id))}
+  end
+
+  def handle_event("toggle_snooze", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    current = socket.assigns.show_snooze_menu
+
+    {:noreply, assign(socket, :show_snooze_menu, if(current == id, do: nil, else: id))}
+  end
+
+  def handle_event("snooze", %{"id" => id, "duration" => duration}, socket) do
+    id = String.to_integer(id)
+    conversation = Repo.get!(Conversation, id)
+
+    until = calculate_snooze_until(duration)
+
+    conversation
+    |> Conversation.snooze_changeset(until)
+    |> Repo.update!()
+
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+
+    {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_conversations()}
+  end
+
+  @impl true
+  def handle_info({:conversation_updated, _id}, socket) do
+    {:noreply, load_conversations(socket)}
+  end
+
+  def handle_info({:conversation_created, _id}, socket) do
+    {:noreply, load_conversations(socket)}
+  end
+
+  defp load_conversations(socket) do
+    filter = socket.assigns.filter
+    now = DateTime.utc_now()
+
+    query =
+      from c in Conversation,
+        join: o in assoc(c, :organization),
+        left_join: ct in assoc(c, :contact),
+        where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
+        order_by: [desc: c.cached_score],
+        preload: [organization: o, contact: ct]
+
+    query =
+      case filter do
+        "all" -> query
+        "new" -> from c in query, where: c.state == :new
+        "active" -> from c in query, where: c.state == :active
+        "waiting" -> from c in query, where: c.state == :waiting
+        "dormant" -> from c in query, where: c.state == :dormant
+        _ -> query
+      end
+
+    conversations = Repo.all(query)
+
+    # Add computed fields
+    conversations =
+      Enum.map(conversations, fn conv ->
+        neglect_status = Scoring.neglect_status(conv)
+        breakdown = Scoring.breakdown(conv)
+        hours_idle = hours_since(conv.last_operator_action_at || conv.inserted_at)
+
+        %{
+          conversation: conv,
+          neglect_status: neglect_status,
+          breakdown: breakdown,
+          hours_idle: hours_idle,
+          message_count: count_messages(conv.id)
+        }
+      end)
+
+    assign(socket, :conversations, conversations)
+  end
+
+  defp count_messages(conversation_id) do
+    from(m in Custyard.Message, where: m.conversation_id == ^conversation_id, select: count(m.id))
+    |> Repo.one()
+  end
+
+  defp hours_since(nil), do: 0
+
+  defp hours_since(datetime) do
+    DateTime.diff(DateTime.utc_now(), datetime, :hour)
+  end
+
+  defp calculate_snooze_until(duration) do
+    hours =
+      case duration do
+        "1h" -> 1
+        "4h" -> 4
+        "1d" -> 24
+        "3d" -> 72
+        _ -> 1
+      end
+
+    DateTime.add(DateTime.utc_now(), hours, :hour)
+  end
+
+  # Used in queue_card HEEx template
+  @compile {:nowarn_unused_function, format_idle_time: 1}
+  defp format_idle_time(hours) when hours < 24, do: "#{hours}h ago"
+  defp format_idle_time(hours), do: "#{div(hours, 24)}d ago"
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <div class="max-w-3xl mx-auto p-4">
+      <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-semibold text-gray-900">What needs attention</h1>
+        <span class="text-xs text-gray-400">{length(@conversations)} items</span>
+      </div>
+
+      <div class="flex gap-2 mb-4">
+        <.filter_button filter={@filter} value="all" label="all" />
+        <.filter_button filter={@filter} value="new" label="new" />
+        <.filter_button filter={@filter} value="active" label="active" />
+        <.filter_button filter={@filter} value="waiting" label="waiting" />
+        <.filter_button filter={@filter} value="dormant" label="dormant" />
+      </div>
+
+      <div class="space-y-2">
+        <%= if Enum.empty?(@conversations) do %>
+          <div class="text-center text-gray-400 py-12">
+            Nothing needs attention right now.
+          </div>
+        <% else %>
+          <%= for item <- @conversations do %>
+            <.queue_card
+              item={item}
+              show_score={@show_score_breakdown == item.conversation.id}
+              show_snooze={@show_snooze_menu == item.conversation.id}
+            />
+          <% end %>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  attr :filter, :string, required: true
+  attr :value, :string, required: true
+  attr :label, :string, required: true
+
+  defp filter_button(assigns) do
+    ~H"""
+    <button
+      phx-click="filter"
+      phx-value-filter={@value}
+      class={[
+        "text-xs px-2.5 py-1 rounded",
+        @filter == @value && "bg-indigo-100 text-indigo-700",
+        @filter != @value && "bg-gray-100 text-gray-500 hover:bg-gray-200"
+      ]}
+    >
+      {@label}
+    </button>
+    """
+  end
+
+  attr :item, :map, required: true
+  attr :show_score, :boolean, required: true
+  attr :show_snooze, :boolean, required: true
+
+  defp queue_card(assigns) do
+    border_color =
+      case assigns.item.neglect_status do
+        :critical -> "border-l-red-500"
+        :warning -> "border-l-amber-400"
+        _ -> "border-l-transparent"
+      end
+
+    assigns = assign(assigns, :border_color, border_color)
+
+    ~H"""
+    <div class={"bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow border-l-4 #{@border_color}"}>
+      <.link navigate={~p"/operator/conversation/#{@item.conversation.id}"} class="block">
+        <div class="flex items-start justify-between mb-1">
+          <div class="flex items-center gap-2">
+            <span class="font-semibold text-gray-900">{@item.conversation.organization.name}</span>
+            <.tier_badge tier={@item.conversation.organization.tier} />
+            <.neglect_badge level={@item.neglect_status} />
+          </div>
+          <span class="text-sm text-gray-400">{format_idle_time(@item.hours_idle)}</span>
+        </div>
+        <div class="text-sm text-gray-500 mb-1">
+          {if @item.conversation.contact, do: @item.conversation.contact.name || @item.conversation.contact.email, else: "Unknown contact"}
+        </div>
+        <div class="text-sm text-gray-800 mb-2">{@item.conversation.subject}</div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <.state_badge state={@item.conversation.state} />
+          <.urgency_badge urgency={@item.conversation.urgency} />
+          <span class="text-xs text-gray-400 ml-auto">{@item.message_count} msg</span>
+          <span class="text-xs text-gray-400">score: {@item.conversation.cached_score}</span>
+        </div>
+      </.link>
+
+      <div class="flex items-center gap-2 mt-3">
+        <button
+          phx-click="toggle_score"
+          phx-value-id={@item.conversation.id}
+          class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
+        >
+          {if @show_score, do: "Hide score", else: "Why this rank?"}
+        </button>
+
+        <div class="relative">
+          <button
+            phx-click="toggle_snooze"
+            phx-value-id={@item.conversation.id}
+            class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
+          >
+            Snooze
+          </button>
+          <%= if @show_snooze do %>
+            <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-10 p-1">
+              <%= for opt <- ["1h", "4h", "1d", "3d"] do %>
+                <button
+                  phx-click="snooze"
+                  phx-value-id={@item.conversation.id}
+                  phx-value-duration={opt}
+                  class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 rounded"
+                >
+                  {opt}
+                </button>
+              <% end %>
+            </div>
+          <% end %>
+        </div>
+      </div>
+
+      <%= if @show_score do %>
+        <.score_breakdown breakdown={@item.breakdown} />
+      <% end %>
+    </div>
+    """
+  end
+
+  attr :tier, :atom, required: true
+
+  defp tier_badge(assigns) do
+    colors =
+      case assigns.tier do
+        :enterprise -> "text-purple-700 bg-purple-50"
+        :standard -> "text-gray-600 bg-gray-50"
+        :basic -> "text-gray-400 bg-gray-50"
+        _ -> "text-gray-600 bg-gray-50"
+      end
+
+    assigns = assign(assigns, :colors, colors)
+
+    ~H"""
+    <span class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}>
+      {to_string(@tier)}
+    </span>
+    """
+  end
+
+  attr :level, :atom, required: true
+
+  defp neglect_badge(assigns) do
+    ~H"""
+    <%= case @level do %>
+      <% :critical -> %>
+        <span class="text-xs px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300">
+          NEGLECTED
+        </span>
+      <% :warning -> %>
+        <span class="text-xs px-1.5 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300">
+          aging
+        </span>
+      <% _ -> %>
+    <% end %>
+    """
+  end
+
+  attr :state, :atom, required: true
+
+  defp state_badge(assigns) do
+    colors =
+      case assigns.state do
+        :new -> "bg-blue-100 text-blue-800"
+        :active -> "bg-green-100 text-green-800"
+        :waiting -> "bg-yellow-100 text-yellow-800"
+        :dormant -> "bg-gray-100 text-gray-600"
+        :resolved -> "bg-gray-100 text-gray-400"
+        _ -> "bg-gray-100 text-gray-600"
+      end
+
+    assigns = assign(assigns, :colors, colors)
+
+    ~H"""
+    <span class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}>
+      {to_string(@state)}
+    </span>
+    """
+  end
+
+  attr :urgency, :atom, required: true
+
+  defp urgency_badge(assigns) do
+    ~H"""
+    <%= case @urgency do %>
+      <% :urgent -> %>
+        <span class="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-800">
+          urgent
+        </span>
+      <% :elevated -> %>
+        <span class="text-xs px-1.5 py-0.5 rounded font-medium bg-orange-100 text-orange-800">
+          elevated
+        </span>
+      <% _ -> %>
+    <% end %>
+    """
+  end
+
+  attr :breakdown, :map, required: true
+
+  defp score_breakdown(assigns) do
+    entries =
+      [
+        {"idle", assigns.breakdown.idle},
+        {"state", assigns.breakdown.state},
+        {"tier", assigns.breakdown.tier},
+        {"urgency", assigns.breakdown.urgency},
+        {"velocity", assigns.breakdown.velocity},
+        {"neglect", assigns.breakdown.neglect_bonus}
+      ]
+      |> Enum.filter(fn {_, v} -> v > 0 end)
+
+    total = Enum.sum(Enum.map(entries, fn {_, v} -> v end))
+    assigns = assign(assigns, :entries, entries) |> assign(:total, total)
+
+    ~H"""
+    <div class="mt-2 p-2 bg-gray-50 rounded text-xs space-y-1">
+      <div class="font-medium text-gray-700 mb-1">Score breakdown</div>
+      <%= for {key, val} <- @entries do %>
+        <div class="flex items-center gap-2">
+          <span class="w-20 text-gray-500">{key}</span>
+          <div class="flex-1 bg-gray-200 rounded-full h-1.5">
+            <div
+              class="bg-indigo-400 h-1.5 rounded-full"
+              style={"width: #{if @total > 0, do: (val / @total) * 100, else: 0}%"}
+            />
+          </div>
+          <span class="w-6 text-right text-gray-600">{val}</span>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+end
