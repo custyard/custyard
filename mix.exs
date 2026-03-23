@@ -26,7 +26,7 @@ defmodule Custyard.MixProject do
   defp deps do
     [
       {:phoenix, "~> 1.7"},
-      {:phoenix_live_view, "~> 0.20"},
+      {:phoenix_live_view, "~> 1.0"},
       {:phoenix_html, "~> 4.0"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:ecto_sqlite3, "~> 0.15"},
