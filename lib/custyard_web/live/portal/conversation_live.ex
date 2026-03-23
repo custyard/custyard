@@ -1,44 +1,34 @@
 defmodule CustyardWeb.Portal.ConversationLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversation, Message, Scoring}
-  import Ecto.Query
+  alias Custyard.{Repo, Conversation, Conversations, Message, Scoring}
 
   @impl true
   def mount(%{"org_token" => token, "id" => id}, _session, socket) do
     org = Repo.get_by!(Custyard.Organization, token: token)
-    conversation = Repo.get!(Conversation, id) |> Repo.preload([:contact, :organization])
 
-    # Security: ensure conversation belongs to this org
-    if conversation.organization_id != org.id do
-      {:ok, push_navigate(socket, to: ~p"/p/#{token}")}
-    else
-      if connected?(socket) do
-        Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
-      end
+    case Conversations.get_conversation_for_organization(id, org.id) do
+      {:error, _} ->
+        {:ok, push_navigate(socket, to: ~p"/p/#{token}")}
 
-      {:ok,
-       socket
-       |> assign(:org, org)
-       |> assign(:conversation, conversation)
-       |> assign(:page_title, conversation.subject)
-       |> assign(:reply_form, to_form(%{"body" => ""}))
-       |> load_messages()}
+      {:ok, conversation} ->
+        if connected?(socket) do
+          Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
+        end
+
+        {:ok,
+         socket
+         |> assign(:org, org)
+         |> assign(:conversation, conversation)
+         |> assign(:page_title, conversation.subject)
+         |> assign(:reply_form, to_form(%{"body" => ""}))
+         |> load_messages()}
     end
   end
 
   defp load_messages(socket) do
     conv = socket.assigns.conversation
-
-    # Portal only sees non-internal messages
-    messages =
-      from(m in Message,
-        where: m.conversation_id == ^conv.id,
-        where: m.is_internal_note == false,
-        order_by: [asc: m.inserted_at]
-      )
-      |> Repo.all()
-
+    messages = Conversations.list_public_messages(conv.id)
     assign(socket, :messages, messages)
   end
 

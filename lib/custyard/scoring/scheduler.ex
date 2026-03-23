@@ -5,12 +5,15 @@ defmodule Custyard.Scoring.Scheduler do
   Idle time components of the scoring formula go stale without periodic
   recalculation, so this GenServer invokes `Recalculator.recalculate_all/0`
   on a fixed interval.
+
+  Also runs dormancy checks to transition stale waiting conversations.
   """
 
   use GenServer
   require Logger
 
   alias Custyard.Scoring.Recalculator
+  alias Custyard.Conversations.DormancyChecker
 
   @interval :timer.minutes(5)
 
@@ -45,11 +48,35 @@ defmodule Custyard.Scoring.Scheduler do
       {:error, reason} ->
         Logger.error("Scoring.Scheduler: recalculation failed: #{inspect(reason)}")
     end
+
+    run_dormancy_check()
+  end
+
+  defp run_dormancy_check do
+    case safe_dormancy_check() do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("Scoring.Scheduler: transitioned #{count} conversations to dormant")
+
+      {:error, reason} ->
+        Logger.error("Scoring.Scheduler: dormancy check failed: #{inspect(reason)}")
+    end
   end
 
   defp safe_recalculate do
     Recalculator.recalculate_all()
     :ok
+  rescue
+    e -> {:error, e}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp safe_dormancy_check do
+    count = DormancyChecker.transition_stale_conversations()
+    {:ok, count}
   rescue
     e -> {:error, e}
   catch

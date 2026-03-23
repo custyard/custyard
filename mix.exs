@@ -42,7 +42,8 @@ defmodule Custyard.MixProject do
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 0.20"},
       {:dns_cluster, "~> 0.1.1"},
-      {:plug_cowboy, "~> 2.7"}
+      {:plug_cowboy, "~> 2.7"},
+      {:argon2_elixir, "~> 4.0"}
     ]
   end
 

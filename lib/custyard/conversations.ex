@@ -1,0 +1,159 @@
+defmodule Custyard.Conversations do
+  @moduledoc """
+  Context for conversation queries and operations.
+  """
+
+  alias Custyard.{Repo, Conversation, Message}
+  import Ecto.Query
+
+  @doc """
+  List conversations for the operator attention queue.
+  Excludes resolved and currently-snoozed conversations, ordered by cached_score descending.
+  """
+  def list_for_attention_queue(opts \\ []) do
+    filter = Keyword.get(opts, :filter, "all")
+    now = DateTime.utc_now()
+
+    query =
+      from c in Conversation,
+        join: o in assoc(c, :organization),
+        left_join: ct in assoc(c, :contact),
+        where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
+        order_by: [desc: c.cached_score],
+        preload: [organization: o, contact: ct]
+
+    query
+    |> apply_state_filter(filter)
+    |> Repo.all()
+  end
+
+  defp apply_state_filter(query, "all"), do: query
+  defp apply_state_filter(query, "new"), do: from(c in query, where: c.state == :new)
+  defp apply_state_filter(query, "active"), do: from(c in query, where: c.state == :active)
+  defp apply_state_filter(query, "waiting"), do: from(c in query, where: c.state == :waiting)
+  defp apply_state_filter(query, "dormant"), do: from(c in query, where: c.state == :dormant)
+  defp apply_state_filter(query, _), do: query
+
+  @doc """
+  List conversations for an organization's portal view.
+  """
+  def list_for_organization(org_id, opts \\ []) do
+    include_resolved = Keyword.get(opts, :include_resolved, false)
+
+    query =
+      from c in Conversation,
+        where: c.organization_id == ^org_id,
+        order_by: [desc: c.inserted_at],
+        preload: [:contact]
+
+    query =
+      if include_resolved do
+        query
+      else
+        from c in query, where: c.state != :resolved
+      end
+
+    Repo.all(query)
+  end
+
+  @doc """
+  Get a single conversation by ID.
+  """
+  def get_conversation(id) do
+    Repo.get(Conversation, id)
+  end
+
+  @doc """
+  Get a single conversation by ID or raise.
+  """
+  def get_conversation!(id) do
+    Repo.get!(Conversation, id)
+  end
+
+  @doc """
+  Get conversation for organization with ownership check.
+  Returns `{:ok, conversation}` or `{:error, :not_found}` or `{:error, :unauthorized}`.
+  """
+  def get_conversation_for_organization(id, org_id) do
+    case Repo.get(Conversation, id) |> Repo.preload([:contact, :organization]) do
+      nil ->
+        {:error, :not_found}
+
+      conversation ->
+        if conversation.organization_id == org_id do
+          {:ok, conversation}
+        else
+          {:error, :unauthorized}
+        end
+    end
+  end
+
+  @doc """
+  Get conversation with preloaded messages and associations.
+  """
+  def get_with_messages(id) do
+    Repo.get!(Conversation, id)
+    |> Repo.preload([
+      :organization,
+      :contact,
+      :tasks,
+      messages: from(m in Message, order_by: m.inserted_at)
+    ])
+  end
+
+  @doc """
+  Get public messages for a conversation (excludes internal notes).
+  """
+  def list_public_messages(conversation_id) do
+    from(m in Message,
+      where: m.conversation_id == ^conversation_id,
+      where: m.is_internal_note == false,
+      order_by: [asc: m.inserted_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Count messages for a conversation.
+  """
+  def count_messages(conversation_id) do
+    from(m in Message, where: m.conversation_id == ^conversation_id, select: count(m.id))
+    |> Repo.one()
+  end
+
+  @doc """
+  Create a new conversation.
+  """
+  def create_conversation(attrs) do
+    %Conversation{}
+    |> Conversation.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Update conversation state.
+  """
+  def update_state(conversation, new_state) do
+    conversation
+    |> Conversation.state_changeset(new_state)
+    |> Repo.update()
+  end
+
+  @doc """
+  Snooze a conversation until the given datetime.
+  """
+  def snooze(conversation, until) do
+    conversation
+    |> Conversation.snooze_changeset(until)
+    |> Repo.update()
+  end
+
+  @doc """
+  Update conversation with arbitrary changes.
+  """
+  def update_conversation(conversation, attrs) do
+    conversation
+    |> Ecto.Changeset.change(attrs)
+    |> Repo.update()
+  end
+end

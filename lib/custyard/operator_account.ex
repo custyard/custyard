@@ -38,18 +38,23 @@ defmodule Custyard.OperatorAccount do
         changeset
 
       password ->
-        # Simple SHA-256 hash for now. Replace with bcrypt/argon2 in production.
-        hash = :crypto.hash(:sha256, password) |> Base.encode64()
+        hash = Argon2.hash_pwd_salt(password)
         put_change(changeset, :password_hash, hash)
     end
   end
 
   @doc """
   Verifies a password against the stored hash.
+  Uses constant-time comparison to prevent timing attacks.
   """
   def verify_password(%__MODULE__{password_hash: hash}, password) when is_binary(password) do
-    computed = :crypto.hash(:sha256, password) |> Base.encode64()
-    computed == hash
+    Argon2.verify_pass(password, hash)
+  end
+
+  def verify_password(nil, _password) do
+    # Prevent timing attacks by simulating password check for non-existent users
+    Argon2.no_user_verify()
+    false
   end
 
   def verify_password(_, _), do: false

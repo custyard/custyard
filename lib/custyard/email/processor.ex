@@ -7,15 +7,16 @@ defmodule Custyard.Email.Processor do
   def process(params) do
     with {:ok, parsed} <- parse_payload(params),
          {:ok, org, contact} <- SenderMatcher.match(parsed.from),
-         {:ok, conversation} <- find_or_create_conversation(parsed, org, contact) do
+         {:ok, conversation, is_new} <- find_or_create_conversation(parsed, org, contact) do
       # Create message
       create_message(conversation, parsed)
 
       # Trigger score recalc
       Scoring.calculate_and_cache(conversation.id)
 
-      # Broadcast update via PubSub
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conversation.id})
+      # Broadcast via PubSub - distinguish new vs updated
+      event = if is_new, do: :conversation_created, else: :conversation_updated
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
       Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", {:message_added, conversation.id})
 
       {:ok, Repo.reload!(conversation)}
@@ -56,11 +57,14 @@ defmodule Custyard.Email.Processor do
       {:ok, conversation} ->
         # Reactivate if dormant/resolved
         conversation = maybe_reactivate(conversation)
-        {:ok, conversation}
+        {:ok, conversation, false}
 
       :not_found ->
         # Create new conversation
-        create_conversation(parsed, org, contact)
+        case create_conversation(parsed, org, contact) do
+          {:ok, conversation} -> {:ok, conversation, true}
+          error -> error
+        end
     end
   end
 

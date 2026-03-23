@@ -1,8 +1,7 @@
 defmodule CustyardWeb.Operator.ConversationLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversation, Message, Task, Scoring}
-  import Ecto.Query
+  alias Custyard.{Repo, Conversations, Message, Task, Scoring}
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -178,8 +177,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   defp load_conversation(id) do
-    Repo.get!(Conversation, id)
-    |> Repo.preload([:organization, :contact, :tasks, messages: from(m in Message, order_by: m.inserted_at)])
+    Conversations.get_with_messages(id)
   end
 
   defp reload_conversation(socket) do

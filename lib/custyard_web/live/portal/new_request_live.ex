@@ -40,7 +40,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
     |> Repo.insert!()
 
     Scoring.calculate_and_cache(conv.id)
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conv.id})
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_created, conv.id})
 
     {:noreply, push_navigate(socket, to: ~p"/p/#{org.token}/request/#{conv.id}")}
   end

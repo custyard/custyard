@@ -1,8 +1,7 @@
 defmodule CustyardWeb.Operator.AttentionQueueLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversation, Scoring}
-  import Ecto.Query
+  alias Custyard.{Conversations, Scoring}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -53,13 +52,11 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   def handle_event("snooze", %{"id" => id, "duration" => duration}, socket) do
     id = String.to_integer(id)
-    conversation = Repo.get!(Conversation, id)
+    conversation = Conversations.get_conversation!(id)
 
     until = calculate_snooze_until(duration)
 
-    conversation
-    |> Conversation.snooze_changeset(until)
-    |> Repo.update!()
+    {:ok, _} = Conversations.snooze(conversation, until)
 
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
 
@@ -77,31 +74,10 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   defp load_conversations(socket) do
     filter = socket.assigns.filter
-    now = DateTime.utc_now()
 
-    query =
-      from c in Conversation,
-        join: o in assoc(c, :organization),
-        left_join: ct in assoc(c, :contact),
-        where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
-        order_by: [desc: c.cached_score],
-        preload: [organization: o, contact: ct]
-
-    query =
-      case filter do
-        "all" -> query
-        "new" -> from c in query, where: c.state == :new
-        "active" -> from c in query, where: c.state == :active
-        "waiting" -> from c in query, where: c.state == :waiting
-        "dormant" -> from c in query, where: c.state == :dormant
-        _ -> query
-      end
-
-    conversations = Repo.all(query)
-
-    # Add computed fields
     conversations =
-      Enum.map(conversations, fn conv ->
+      Conversations.list_for_attention_queue(filter: filter)
+      |> Enum.map(fn conv ->
         neglect_status = Scoring.neglect_status(conv)
         breakdown = Scoring.breakdown(conv)
         hours_idle = hours_since(conv.last_operator_action_at || conv.inserted_at)
@@ -111,16 +87,11 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           neglect_status: neglect_status,
           breakdown: breakdown,
           hours_idle: hours_idle,
-          message_count: count_messages(conv.id)
+          message_count: Conversations.count_messages(conv.id)
         }
       end)
 
     assign(socket, :conversations, conversations)
-  end
-
-  defp count_messages(conversation_id) do
-    from(m in Custyard.Message, where: m.conversation_id == ^conversation_id, select: count(m.id))
-    |> Repo.one()
   end
 
   defp hours_since(nil), do: 0

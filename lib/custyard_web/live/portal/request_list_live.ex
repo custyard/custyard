@@ -1,8 +1,7 @@
 defmodule CustyardWeb.Portal.RequestListLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversation}
-  import Ecto.Query
+  alias Custyard.{Repo, Conversations}
 
   @impl true
   def mount(%{"org_token" => token}, _session, socket) do
@@ -26,16 +25,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
 
   defp load_conversations(socket) do
     org = socket.assigns.org
-
-    conversations =
-      from(c in Conversation,
-        where: c.organization_id == ^org.id,
-        where: c.state != :resolved,
-        order_by: [desc: c.inserted_at],
-        preload: [:contact]
-      )
-      |> Repo.all()
-
+    conversations = Conversations.list_for_organization(org.id)
     assign(socket, :conversations, conversations)
   end
 
