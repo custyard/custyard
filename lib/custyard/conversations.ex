@@ -9,18 +9,27 @@ defmodule Custyard.Conversations do
   @doc """
   List conversations for the operator attention queue.
   Excludes resolved and currently-snoozed conversations, ordered by cached_score descending.
+  Returns list of `%{conversation: conversation, message_count: count}` maps.
   """
   def list_for_attention_queue(opts \\ []) do
     filter = Keyword.get(opts, :filter, "all")
     now = DateTime.utc_now()
 
+    message_count_subquery =
+      from m in Message,
+        group_by: m.conversation_id,
+        select: %{conversation_id: m.conversation_id, count: count(m.id)}
+
     query =
       from c in Conversation,
         join: o in assoc(c, :organization),
         left_join: ct in assoc(c, :contact),
+        left_join: mc in subquery(message_count_subquery),
+        on: mc.conversation_id == c.id,
         where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
         order_by: [desc: c.cached_score],
-        preload: [organization: o, contact: ct]
+        preload: [organization: o, contact: ct],
+        select: %{conversation: c, message_count: coalesce(mc.count, 0)}
 
     query
     |> apply_state_filter(filter)
@@ -154,6 +163,60 @@ defmodule Custyard.Conversations do
   def update_conversation(conversation, attrs) do
     conversation
     |> Ecto.Changeset.change(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Reload a conversation from the database.
+  """
+  def reload!(conversation) do
+    Repo.reload!(conversation)
+  end
+
+  @doc """
+  Create a message for a conversation.
+  """
+  def create_message(attrs) do
+    %Message{}
+    |> Message.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Create a message for a conversation, raising on failure.
+  """
+  def create_message!(attrs) do
+    %Message{}
+    |> Message.changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  # --- Task functions ---
+
+  alias Custyard.Task
+
+  @doc """
+  Get a task by ID.
+  """
+  def get_task!(id) do
+    Repo.get!(Task, id)
+  end
+
+  @doc """
+  Create a task.
+  """
+  def create_task(attrs) do
+    %Task{}
+    |> Task.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Update task state.
+  """
+  def update_task_state(task, new_state) do
+    task
+    |> Task.state_changeset(new_state)
     |> Repo.update()
   end
 end

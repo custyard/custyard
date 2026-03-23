@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Operator.ConversationLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversations, Message, Task, Scoring}
+  alias Custyard.{Conversations, Message, Scoring}
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -18,9 +18,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         now = DateTime.utc_now()
 
         {:ok, updated} =
-          conversation
-          |> Ecto.Changeset.change(state: :active, last_operator_action_at: now)
-          |> Repo.update()
+          Conversations.update_conversation(conversation, state: :active, last_operator_action_at: now)
 
         Scoring.calculate_and_cache(updated.id)
         Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, updated.id})
@@ -50,22 +48,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
     conversation = socket.assigns.conversation
 
     {:ok, _message} =
-      %Message{}
-      |> Message.changeset(%{
+      Conversations.create_message(%{
         source: :operator,
         body: body,
         is_internal_note: false,
         conversation_id: conversation.id
       })
-      |> Repo.insert()
 
     # Update last_operator_action_at and ensure state is active
     now = DateTime.utc_now()
-
-    {:ok, _} =
-      conversation
-      |> Ecto.Changeset.change(last_operator_action_at: now, state: :active)
-      |> Repo.update()
+    {:ok, _} = Conversations.update_conversation(conversation, last_operator_action_at: now, state: :active)
 
     Scoring.calculate_and_cache(conversation.id)
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", {:message_added, conversation.id})
@@ -80,14 +72,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
     conversation = socket.assigns.conversation
 
     {:ok, _message} =
-      %Message{}
-      |> Message.changeset(%{
+      Conversations.create_message(%{
         source: :operator,
         body: body,
         is_internal_note: true,
         conversation_id: conversation.id
       })
-      |> Repo.insert()
 
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", {:message_added, conversation.id})
 
@@ -109,10 +99,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     new_state = String.to_existing_atom(state)
     now = DateTime.utc_now()
 
-    {:ok, _} =
-      conversation
-      |> Ecto.Changeset.change(state: new_state, last_operator_action_at: now)
-      |> Repo.update()
+    {:ok, _} = Conversations.update_conversation(conversation, state: new_state, last_operator_action_at: now)
 
     Scoring.calculate_and_cache(conversation.id)
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conversation.id})
@@ -132,12 +119,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
     conversation = socket.assigns.conversation
 
     {:ok, _task} =
-      %Task{}
-      |> Task.changeset(%{
+      Conversations.create_task(%{
         title: title,
         conversation_id: conversation.id
       })
-      |> Repo.insert()
 
     {:noreply,
      socket
@@ -149,7 +134,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   def handle_event("add_task", _params, socket), do: {:noreply, socket}
 
   def handle_event("toggle_task", %{"id" => id}, socket) do
-    task = Repo.get!(Task, id)
+    task = Conversations.get_task!(id)
 
     new_state =
       case task.state do
@@ -158,7 +143,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         :done -> :open
       end
 
-    {:ok, _} = task |> Task.state_changeset(new_state) |> Repo.update()
+    {:ok, _} = Conversations.update_task_state(task, new_state)
 
     {:noreply, reload_conversation(socket)}
   end

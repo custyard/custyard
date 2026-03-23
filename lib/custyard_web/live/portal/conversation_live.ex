@@ -1,11 +1,11 @@
 defmodule CustyardWeb.Portal.ConversationLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversation, Conversations, Message, Scoring}
+  alias Custyard.{Conversations, Scoring}
 
   @impl true
   def mount(%{"org_token" => token, "id" => id}, _session, socket) do
-    org = Repo.get_by!(Custyard.Organization, token: token)
+    org = Custyard.Repo.get_by!(Custyard.Organization, token: token)
 
     case Conversations.get_conversation_for_organization(id, org.id) do
       {:error, _} ->
@@ -38,23 +38,19 @@ defmodule CustyardWeb.Portal.ConversationLive do
     org = socket.assigns.org
 
     if String.trim(body) != "" do
-      %Message{}
-      |> Message.changeset(%{
+      Conversations.create_message!(%{
         conversation_id: conv.id,
         source: :portal,
         sender_email: "portal@#{org.domain}",
         body: body,
         is_internal_note: false
       })
-      |> Repo.insert!()
 
       # Update conversation timestamps and maybe reactivate
-      conv
-      |> Ecto.Changeset.change(last_customer_action_at: DateTime.utc_now())
-      |> Repo.update!()
+      {:ok, _} = Conversations.update_conversation(conv, last_customer_action_at: DateTime.utc_now())
 
       if conv.state in [:waiting, :dormant, :resolved] do
-        conv |> Conversation.state_changeset(:active) |> Repo.update!()
+        {:ok, _} = Conversations.update_state(conv, :active)
       end
 
       Scoring.calculate_and_cache(conv.id)
@@ -65,7 +61,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
     {:noreply,
      socket
      |> assign(:reply_form, to_form(%{"body" => ""}))
-     |> assign(:conversation, Repo.reload!(conv))
+     |> assign(:conversation, Conversations.reload!(conv))
      |> load_messages()}
   end
 

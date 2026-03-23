@@ -77,7 +77,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
     conversations =
       Conversations.list_for_attention_queue(filter: filter)
-      |> Enum.map(fn conv ->
+      |> Enum.map(fn %{conversation: conv, message_count: message_count} ->
         neglect_status = Scoring.neglect_status(conv)
         breakdown = Scoring.breakdown(conv)
         hours_idle = hours_since(conv.last_operator_action_at || conv.inserted_at)
@@ -87,7 +87,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           neglect_status: neglect_status,
           breakdown: breakdown,
           hours_idle: hours_idle,
-          message_count: Conversations.count_messages(conv.id)
+          message_count: message_count
         }
       end)
 
