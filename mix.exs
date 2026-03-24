@@ -25,8 +25,8 @@ defmodule Custyard.MixProject do
 
   defp deps do
     [
-      {:phoenix, "~> 1.7"},
-      {:phoenix_live_view, "~> 0.20"},
+      {:phoenix, "~> 1.8"},
+      {:phoenix_live_view, "~> 1.0"},
       {:phoenix_html, "~> 4.0"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:ecto_sqlite3, "~> 0.15"},
@@ -37,12 +37,14 @@ defmodule Custyard.MixProject do
       {:bandit, "~> 1.0"},
       {:finch, "~> 0.18"},
       {:floki, ">= 0.30.0", only: :test},
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 0.20"},
       {:dns_cluster, "~> 0.1.1"},
-      {:plug_cowboy, "~> 2.7"}
+      {:plug_cowboy, "~> 2.7"},
+      {:argon2_elixir, "~> 4.0"}
     ]
   end
 

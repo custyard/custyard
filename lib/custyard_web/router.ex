@@ -48,6 +48,7 @@ defmodule CustyardWeb.Router do
       live "/", AttentionQueueLive, :index
       live "/conversation/:id", ConversationLive, :show
       live "/organizations", OrganizationsLive, :index
+      live "/neglect", NeglectReportLive, :index
       live "/settings", SettingsLive, :index
     end
   end
@@ -59,7 +60,14 @@ defmodule CustyardWeb.Router do
     live "/", RequestListLive, :index
     live "/request/:id", ConversationLive, :show
     live "/new", NewRequestLive, :new
+    live "/projects", ProjectsListLive, :index
+    live "/projects/:id", ProjectLive, :show
   end
+
+  # Note: Custom domain portal routes are handled by the CustomDomain plug
+  # which rewrites paths from / -> /p/:token, /request/:id -> /p/:token/request/:id, etc.
+  # This allows organizations to use their own domain (e.g., support.acme.com)
+  # and have requests routed to the portal routes transparently.
 
   # LiveDashboard routes (requires phoenix_live_dashboard dependency)
   # if Application.compile_env(:custyard, :dev_routes) do

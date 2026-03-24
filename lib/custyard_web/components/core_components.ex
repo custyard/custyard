@@ -11,7 +11,7 @@ defmodule CustyardWeb.CoreComponents do
   use Phoenix.Component
 
   alias Phoenix.LiveView.JS
-  import CustyardWeb.Gettext
+  use Gettext, backend: CustyardWeb.Gettext
 
   @doc """
   Renders a modal.

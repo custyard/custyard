@@ -5,6 +5,8 @@ defmodule Custyard.Conversation do
   @states [:new, :active, :waiting, :dormant, :resolved]
   @urgencies [:normal, :elevated, :urgent]
 
+  @neglect_levels [:ok, :warning, :critical]
+
   schema "conversations" do
     field :subject, :string
     field :state, Ecto.Enum, values: @states, default: :new
@@ -14,10 +16,15 @@ defmodule Custyard.Conversation do
     field :last_customer_action_at, :utc_datetime
     field :snoozed_until, :utc_datetime
 
+    # Tracks the last neglect level that triggered a notification
+    # Prevents duplicate alerts when recalculating
+    field :last_neglect_notification, Ecto.Enum, values: @neglect_levels
+
     belongs_to :organization, Custyard.Organization
     belongs_to :contact, Custyard.Contact
     has_many :messages, Custyard.Message
     has_many :tasks, Custyard.Task
+    has_many :projects, Custyard.Project
 
     timestamps(type: :utc_datetime)
   end

@@ -96,6 +96,47 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Build project attributes.
+
+  ## Examples
+
+      build_project()
+      build_project(title: "Website Redesign", portal_visible: true)
+  """
+  def build_project(overrides \\ []) do
+    defaults = %{
+      title: "Test project #{unique_id()}",
+      description: "Test project description",
+      portal_visible: true,
+      project_type: :customer,
+      organization_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Build task attributes.
+
+  States: :open, :in_progress, :done
+
+  ## Examples
+
+      build_task()
+      build_task(title: "Implement feature", state: :in_progress)
+  """
+  def build_task(overrides \\ []) do
+    defaults = %{
+      title: "Test task #{unique_id()}",
+      state: :open,
+      portal_visible: true,
+      project_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
   Insert an organization into the database.
   """
   def insert_organization(overrides \\ []) do
@@ -140,6 +181,30 @@ defmodule Custyard.Factory do
     |> Custyard.Repo.insert!()
   end
 
+  @doc """
+  Insert a project into the database.
+  Requires organization_id or will create one.
+  """
+  def insert_project(overrides \\ []) do
+    overrides = ensure_organization(overrides)
+
+    %Custyard.Project{}
+    |> Custyard.Project.changeset(build_project(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
+  Insert a task into the database.
+  Requires project_id or will create one.
+  """
+  def insert_task(overrides \\ []) do
+    overrides = ensure_project(overrides)
+
+    %Custyard.Task{}
+    |> Custyard.Task.changeset(build_task(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
   # Private helpers
 
   defp unique_id do
@@ -165,6 +230,15 @@ defmodule Custyard.Factory do
     else
       conv = insert_conversation()
       Keyword.put(overrides, :conversation_id, conv.id)
+    end
+  end
+
+  defp ensure_project(overrides) do
+    if Keyword.has_key?(overrides, :project_id) do
+      overrides
+    else
+      project = insert_project()
+      Keyword.put(overrides, :project_id, project.id)
     end
   end
 end

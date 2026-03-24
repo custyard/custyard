@@ -1,21 +1,34 @@
 defmodule Custyard.Email.Processor do
-  @moduledoc "Process inbound emails from Lettermint webhook"
+  @moduledoc """
+  Process inbound emails from Lettermint webhook.
+
+  Handles email parsing, sender matching, thread detection, and Sieve header
+  metadata extraction. Custom headers injected by Sieve rules can override
+  auto-detected properties like urgency.
+  """
 
   alias Custyard.{Repo, Conversation, Message, Scoring}
-  alias Custyard.Email.{SenderMatcher, ThreadMatcher}
+  alias Custyard.Email.{SenderMatcher, ThreadMatcher, SieveHeaderMapper}
 
   def process(params) do
     with {:ok, parsed} <- parse_payload(params),
          {:ok, org, contact} <- SenderMatcher.match(parsed.from),
-         {:ok, conversation} <- find_or_create_conversation(parsed, org, contact) do
+         {:ok, conversation, is_new} <- find_or_create_conversation(parsed, org, contact) do
       # Create message
       create_message(conversation, parsed)
 
       # Trigger score recalc
       Scoring.calculate_and_cache(conversation.id)
 
-      # Broadcast update via PubSub
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:updated, conversation.id})
+      # Broadcast via PubSub - distinguish new vs updated
+      event = if is_new, do: :conversation_created, else: :conversation_updated
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
+
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
+        "conversation:#{conversation.id}",
+        {:message_added, conversation.id}
+      )
 
       {:ok, Repo.reload!(conversation)}
     end
@@ -23,21 +36,37 @@ defmodule Custyard.Email.Processor do
 
   defp parse_payload(params) do
     # Lettermint sends: from, to, subject, text, html, headers, attachments
+    headers = params["headers"] || %{}
+
     {:ok,
      %{
        from: params["from"] || params["sender"],
        to: params["to"] || params["recipient"],
        subject: params["subject"] || "(no subject)",
        body: params["text"] || strip_html(params["html"]) || "",
-       message_id: get_header(params, "message-id"),
-       in_reply_to: get_header(params, "in-reply-to"),
-       references: get_header(params, "references")
+       message_id: get_header(headers, "message-id"),
+       in_reply_to: get_header(headers, "in-reply-to"),
+       references: get_header(headers, "references"),
+       # Preserve all headers for Sieve metadata extraction
+       headers: headers
      }}
   end
 
-  defp get_header(params, name) do
-    headers = params["headers"] || %{}
-    headers[name] || headers[String.capitalize(name)]
+  # Get header value, case-insensitive for header name
+  defp get_header(headers, name) do
+    # Try exact match first
+    case headers[name] do
+      nil ->
+        # Fall back to case-insensitive lookup
+        lowercase_name = String.downcase(name)
+
+        Enum.find_value(headers, fn {k, v} ->
+          if String.downcase(to_string(k)) == lowercase_name, do: v
+        end)
+
+      value ->
+        value
+    end
   end
 
   defp strip_html(nil), do: nil
@@ -55,24 +84,35 @@ defmodule Custyard.Email.Processor do
       {:ok, conversation} ->
         # Reactivate if dormant/resolved
         conversation = maybe_reactivate(conversation)
-        {:ok, conversation}
+        {:ok, conversation, false}
 
       :not_found ->
         # Create new conversation
-        create_conversation(parsed, org, contact)
+        case create_conversation(parsed, org, contact) do
+          {:ok, conversation} -> {:ok, conversation, true}
+          error -> error
+        end
     end
   end
 
   defp create_conversation(parsed, org, contact) do
-    %Conversation{}
-    |> Conversation.changeset(%{
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # Start with auto-detected urgency
+    base_attrs = %{
       organization_id: org.id,
       contact_id: contact && contact.id,
       subject: parsed.subject,
       state: :new,
       urgency: detect_urgency(parsed.subject, parsed.body),
-      last_customer_action_at: DateTime.utc_now()
-    })
+      last_customer_action_at: now
+    }
+
+    # Apply Sieve header overrides (e.g., X-Priority -> urgency)
+    attrs = SieveHeaderMapper.merge_overrides(base_attrs, parsed.headers)
+
+    %Conversation{}
+    |> Conversation.changeset(attrs)
     |> Repo.insert()
   end
 
@@ -90,8 +130,10 @@ defmodule Custyard.Email.Processor do
     |> Repo.insert!()
 
     # Update last_customer_action_at
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
     conversation
-    |> Ecto.Changeset.change(last_customer_action_at: DateTime.utc_now())
+    |> Ecto.Changeset.change(last_customer_action_at: now)
     |> Repo.update!()
   end
 

@@ -36,5 +36,9 @@ defmodule CustyardWeb.Endpoint do
   plug Plug.MethodOverride
   plug Plug.Head
   plug Plug.Session, @session_options
+
+  # Custom domain support - rewrites paths for white-label portal domains
+  plug CustyardWeb.Plugs.CustomDomain
+
   plug CustyardWeb.Router
 end

@@ -42,7 +42,7 @@ defmodule CustyardWeb do
         layouts: [html: CustyardWeb.Layouts]
 
       import Plug.Conn
-      import CustyardWeb.Gettext
+      use Gettext, backend: CustyardWeb.Gettext
 
       unquote(verified_routes())
     end
@@ -80,7 +80,7 @@ defmodule CustyardWeb do
     quote do
       import Phoenix.HTML
       import CustyardWeb.CoreComponents
-      import CustyardWeb.Gettext
+      use Gettext, backend: CustyardWeb.Gettext
 
       alias Phoenix.LiveView.JS
 
