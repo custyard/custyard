@@ -12,7 +12,11 @@ defmodule CustyardWeb.Operator.SessionController do
       nil ->
         # Timing attack protection
         OperatorAccount.verify_password(nil, password)
-        render(conn, :new, error: "Invalid email or password", layout: {CustyardWeb.Layouts, :root})
+
+        render(conn, :new,
+          error: "Invalid email or password",
+          layout: {CustyardWeb.Layouts, :root}
+        )
 
       operator ->
         if OperatorAccount.verify_password(operator, password) do
@@ -21,7 +25,10 @@ defmodule CustyardWeb.Operator.SessionController do
           |> put_flash(:info, "Welcome back")
           |> redirect(to: ~p"/operator")
         else
-          render(conn, :new, error: "Invalid email or password", layout: {CustyardWeb.Layouts, :root})
+          render(conn, :new,
+            error: "Invalid email or password",
+            layout: {CustyardWeb.Layouts, :root}
+          )
         end
     end
   end

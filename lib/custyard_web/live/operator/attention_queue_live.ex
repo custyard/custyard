@@ -200,7 +200,9 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           <span class="text-sm text-gray-400">{format_idle_time(@item.hours_idle)}</span>
         </div>
         <div class="text-sm text-gray-500 mb-1">
-          {if @item.conversation.contact, do: @item.conversation.contact.name || @item.conversation.contact.email, else: "Unknown contact"}
+          {if @item.conversation.contact,
+            do: @item.conversation.contact.name || @item.conversation.contact.email,
+            else: "Unknown contact"}
         </div>
         <div class="text-sm text-gray-800 mb-2">{@item.conversation.subject}</div>
         <div class="flex items-center gap-2 flex-wrap">

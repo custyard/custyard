@@ -216,7 +216,9 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             <div class="text-sm text-gray-500 mb-2">{@org.domain}</div>
           <% end %>
           <div class="text-xs text-gray-400">
-            {@conversation_count} {if @conversation_count == 1, do: "conversation", else: "conversations"}
+            {@conversation_count} {if @conversation_count == 1,
+              do: "conversation",
+              else: "conversations"}
           </div>
         </div>
 

@@ -114,7 +114,11 @@ defmodule Custyard.Project do
       end
 
     if project_type == :internal and organization_id do
-      add_error(changeset, :organization_id, "internal projects cannot be linked to an organization")
+      add_error(
+        changeset,
+        :organization_id,
+        "internal projects cannot be linked to an organization"
+      )
     else
       changeset
     end
