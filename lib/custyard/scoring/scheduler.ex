@@ -6,7 +6,8 @@ defmodule Custyard.Scoring.Scheduler do
   recalculation, so this GenServer invokes `Recalculator.recalculate_all/0`
   on a fixed interval.
 
-  Also runs dormancy checks to transition stale waiting conversations.
+  Also runs dormancy checks to transition stale waiting conversations
+  and neglect notification checks.
   """
 
   use GenServer
@@ -14,6 +15,7 @@ defmodule Custyard.Scoring.Scheduler do
 
   alias Custyard.Scoring.Recalculator
   alias Custyard.Conversations.DormancyChecker
+  alias Custyard.Notifications.NeglectChecker
 
   @interval :timer.minutes(5)
 
@@ -50,6 +52,7 @@ defmodule Custyard.Scoring.Scheduler do
     end
 
     run_dormancy_check()
+    run_neglect_notifications()
   end
 
   defp run_dormancy_check do
@@ -65,6 +68,19 @@ defmodule Custyard.Scoring.Scheduler do
     end
   end
 
+  defp run_neglect_notifications do
+    case safe_neglect_check() do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("Scoring.Scheduler: sent #{count} neglect notifications")
+
+      {:error, reason} ->
+        Logger.error("Scoring.Scheduler: neglect notification check failed: #{inspect(reason)}")
+    end
+  end
+
   defp safe_recalculate do
     Recalculator.recalculate_all()
     :ok
@@ -77,6 +93,14 @@ defmodule Custyard.Scoring.Scheduler do
   defp safe_dormancy_check do
     count = DormancyChecker.transition_stale_conversations()
     {:ok, count}
+  rescue
+    e -> {:error, e}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp safe_neglect_check do
+    NeglectChecker.check_and_notify()
   rescue
     e -> {:error, e}
   catch

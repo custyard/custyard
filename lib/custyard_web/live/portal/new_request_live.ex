@@ -2,14 +2,16 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   use CustyardWeb, :live_view
 
   alias Custyard.{Repo, Conversation, Message, Scoring}
+  alias CustyardWeb.Portal.Helpers
 
   @impl true
-  def mount(%{"org_token" => token}, _session, socket) do
-    org = Repo.get_by!(Custyard.Organization, token: token)
+  def mount(params, _session, socket) do
+    org = Helpers.get_organization(params, socket)
 
     {:ok,
      socket
      |> assign(:org, org)
+     |> Helpers.assign_portal_path()
      |> assign(:page_title, "New Request")
      |> assign(:form, to_form(%{"subject" => "", "body" => "", "urgency" => "normal"}))}
   end
@@ -17,6 +19,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   @impl true
   def handle_event("submit", params, socket) do
     org = socket.assigns.org
+    portal_path = socket.assigns.portal_path
 
     {:ok, conv} =
       %Conversation{}
@@ -42,7 +45,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
     Scoring.calculate_and_cache(conv.id)
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_created, conv.id})
 
-    {:noreply, push_navigate(socket, to: ~p"/p/#{org.token}/request/#{conv.id}")}
+    {:noreply, push_navigate(socket, to: "#{portal_path}/request/#{conv.id}")}
   end
 
   @impl true
@@ -87,7 +90,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
 
         <div class="flex justify-end gap-3">
           <.link
-            navigate={~p"/p/#{@org.token}"}
+            navigate={@portal_path}
             class="px-4 py-2 text-gray-700 hover:text-gray-900"
           >
             Cancel

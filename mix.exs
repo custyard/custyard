@@ -37,6 +37,7 @@ defmodule Custyard.MixProject do
       {:bandit, "~> 1.0"},
       {:finch, "~> 0.18"},
       {:floki, ">= 0.30.0", only: :test},
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},

@@ -2,8 +2,10 @@ import Config
 
 config :custyard, Custyard.Repo,
   database: Path.expand("../priv/repo/custyard_test.db", __DIR__),
-  pool_size: 5,
-  pool: Ecto.Adapters.SQL.Sandbox
+  pool_size: 1,
+  pool: Ecto.Adapters.SQL.Sandbox,
+  journal_mode: :wal,
+  busy_timeout: 5000
 
 config :custyard, CustyardWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],

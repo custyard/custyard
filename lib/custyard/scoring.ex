@@ -8,17 +8,7 @@ defmodule Custyard.Scoring do
   """
 
   import Ecto.Query
-  alias Custyard.{Repo, Conversation, Message}
-
-  # Default weights (configurable later via settings)
-  @default_weights %{
-    idle: 1.0,
-    state: 1.0,
-    tier: 1.0,
-    urgency: 1.0,
-    velocity: 1.0,
-    neglect: 1.0
-  }
+  alias Custyard.{Repo, Conversation, Message, Settings}
 
   # State scores
   @state_scores %{
@@ -43,8 +33,9 @@ defmodule Custyard.Scoring do
     normal: 0
   }
 
-  # Neglect thresholds in hours {warning, critical}
-  @neglect_thresholds %{
+  # Default neglect thresholds in hours {warning, critical}
+  # Actual thresholds are read from Settings
+  @default_neglect_thresholds %{
     enterprise: {4, 8},
     standard: {24, 48},
     basic: {48, 72}
@@ -97,7 +88,8 @@ defmodule Custyard.Scoring do
     conversation = Repo.preload(conversation, :organization)
     hours_idle = hours_since_operator_action(conversation)
     tier = conversation.organization.tier
-    {warning, critical} = Map.get(@neglect_thresholds, tier, {24, 48})
+    thresholds = get_neglect_thresholds()
+    {warning, critical} = Map.get(thresholds, tier, {24, 48})
 
     cond do
       hours_idle >= critical -> :critical
@@ -163,5 +155,19 @@ defmodule Custyard.Scoring do
     |> Repo.one()
   end
 
-  defp get_weights, do: @default_weights
+  defp get_weights do
+    try do
+      Settings.get_weights()
+    rescue
+      _ -> %{idle: 1.0, state: 1.0, tier: 1.0, urgency: 1.0, velocity: 1.0, neglect: 1.0}
+    end
+  end
+
+  defp get_neglect_thresholds do
+    try do
+      Settings.get_neglect_thresholds()
+    rescue
+      _ -> @default_neglect_thresholds
+    end
+  end
 end

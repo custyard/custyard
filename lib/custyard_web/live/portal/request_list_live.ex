@@ -1,11 +1,12 @@
 defmodule CustyardWeb.Portal.RequestListLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversations}
+  alias Custyard.{Repo, Conversations, Contact}
+  alias CustyardWeb.Portal.Helpers
 
   @impl true
-  def mount(%{"org_token" => token}, _session, socket) do
-    org = Repo.get_by!(Custyard.Organization, token: token)
+  def mount(params, _session, socket) do
+    org = Helpers.get_organization(params, socket)
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
@@ -14,7 +15,39 @@ defmodule CustyardWeb.Portal.RequestListLive do
     {:ok,
      socket
      |> assign(:org, org)
-     |> assign(:page_title, "My Requests")
+     |> Helpers.assign_portal_path()
+     |> assign(:current_contact, nil)
+     |> assign(:admin_mode, false)
+     |> assign(:page_title, "My Requests")}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    # Allow simulating a contact via ?as=<contact_id> for testing
+    # In production, this would come from session/authentication
+    contact =
+      case params["as"] do
+        nil -> nil
+        contact_id -> Repo.get_by(Contact, id: contact_id, organization_id: socket.assigns.org.id)
+      end
+
+    # Only admin contacts can use admin mode
+    admin_mode = contact && contact.is_admin && params["admin"] == "true"
+
+    {:noreply,
+     socket
+     |> assign(:current_contact, contact)
+     |> assign(:admin_mode, admin_mode)
+     |> load_conversations()}
+  end
+
+  @impl true
+  def handle_event("toggle_admin_mode", _params, socket) do
+    new_mode = !socket.assigns.admin_mode
+
+    {:noreply,
+     socket
+     |> assign(:admin_mode, new_mode)
      |> load_conversations()}
   end
 
@@ -23,9 +56,31 @@ defmodule CustyardWeb.Portal.RequestListLive do
     {:noreply, load_conversations(socket)}
   end
 
+  def handle_info({:conversation_created, _id}, socket) do
+    {:noreply, load_conversations(socket)}
+  end
+
   defp load_conversations(socket) do
     org = socket.assigns.org
-    conversations = Conversations.list_for_organization(org.id)
+    contact = socket.assigns.current_contact
+    admin_mode = socket.assigns.admin_mode
+
+    opts =
+      cond do
+        # No contact - show all org conversations (legacy behavior)
+        is_nil(contact) ->
+          []
+
+        # Admin mode enabled - show all org conversations
+        admin_mode ->
+          []
+
+        # Regular contact - show only their conversations
+        true ->
+          [contact_id: contact.id]
+      end
+
+    conversations = Conversations.list_for_organization(org.id, opts)
     assign(socket, :conversations, conversations)
   end
 
@@ -34,40 +89,68 @@ defmodule CustyardWeb.Portal.RequestListLive do
     ~H"""
     <div class="max-w-4xl mx-auto py-8 px-4">
       <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-semibold text-gray-900">My Requests</h1>
-        <.link
-          navigate={~p"/p/#{@org.token}/new"}
-          class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
-        >
-          + New Request
-        </.link>
+        <div>
+          <h1 class="text-2xl font-semibold text-gray-900">
+            <%= if @admin_mode, do: "All Organization Requests", else: "My Requests" %>
+          </h1>
+          <p :if={@current_contact} class="text-sm text-gray-500 mt-1">
+            Viewing as: <%= @current_contact.name || @current_contact.email %>
+          </p>
+        </div>
+        <div class="flex items-center gap-4">
+          <div :if={@current_contact && @current_contact.is_admin} class="flex items-center gap-2">
+            <label class="text-sm text-gray-600">Admin view</label>
+            <button
+              type="button"
+              phx-click="toggle_admin_mode"
+              class={[
+                "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2",
+                if(@admin_mode, do: "bg-indigo-600", else: "bg-gray-200")
+              ]}
+              role="switch"
+              aria-checked={to_string(@admin_mode)}
+            >
+              <span class={[
+                "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                if(@admin_mode, do: "translate-x-5", else: "translate-x-0")
+              ]}>
+              </span>
+            </button>
+          </div>
+          <.link
+            navigate={"#{@portal_path}/new"}
+            class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+          >
+            + New Request
+          </.link>
+        </div>
       </div>
 
       <div class="space-y-4">
-        <%= for conv <- @conversations do %>
-          <.link navigate={~p"/p/#{@org.token}/request/#{conv.id}"} class="block">
-            <div class="bg-white border rounded-lg p-4 hover:border-indigo-300 transition">
-              <div class="flex justify-between items-start">
-                <div>
-                  <h3 class="font-medium text-gray-900"><%= conv.subject %></h3>
-                  <p class="text-sm text-gray-500 mt-1">
-                    <%= if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown" %>
-                    · <%= relative_time(conv.inserted_at) %>
-                  </p>
-                </div>
-                <span class={"px-2 py-1 text-xs rounded-full #{state_color(conv.state)}"}>
-                  <%= conv.state %>
-                </span>
+        <.link
+          :for={conv <- @conversations}
+          navigate={"#{@portal_path}/request/#{conv.id}"}
+          class="block"
+        >
+          <div class="bg-white border rounded-lg p-4 hover:border-indigo-300 transition">
+            <div class="flex justify-between items-start">
+              <div>
+                <h3 class="font-medium text-gray-900">{conv.subject}</h3>
+                <p class="text-sm text-gray-500 mt-1">
+                  {if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown"}
+                  · {relative_time(conv.inserted_at)}
+                </p>
               </div>
+              <span class={"px-2 py-1 text-xs rounded-full #{state_color(conv.state)}"}>
+                {conv.state}
+              </span>
             </div>
-          </.link>
-        <% end %>
-
-        <%= if @conversations == [] do %>
-          <div class="text-center py-12 text-gray-500">
-            No open requests. Create one to get started.
           </div>
-        <% end %>
+        </.link>
+
+        <div :if={@conversations == []} class="text-center py-12 text-gray-500">
+          No open requests. Create one to get started.
+        </div>
       </div>
     </div>
     """
@@ -87,4 +170,5 @@ defmodule CustyardWeb.Portal.RequestListLive do
       true -> "#{div(diff, 24)}d ago"
     end
   end
+
 end

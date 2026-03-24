@@ -11,6 +11,7 @@ defmodule Custyard.Task do
     field :due_at, :utc_datetime
 
     belongs_to :conversation, Custyard.Conversation
+    belongs_to :project, Custyard.Project
 
     timestamps(type: :utc_datetime)
   end
@@ -20,10 +21,11 @@ defmodule Custyard.Task do
   @doc false
   def changeset(task, attrs) do
     task
-    |> cast(attrs, [:title, :state, :portal_visible, :due_at, :conversation_id])
+    |> cast(attrs, [:title, :state, :portal_visible, :due_at, :conversation_id, :project_id])
     |> validate_required([:title])
     |> validate_inclusion(:state, @states)
     |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:project_id)
   end
 
   @doc """

@@ -44,16 +44,46 @@ defmodule Custyard.Conversations do
   defp apply_state_filter(query, _), do: query
 
   @doc """
+  List all conversations that are currently at or past neglect thresholds.
+  Returns conversations with organization preloaded, excluding resolved and snoozed.
+  """
+  def list_neglected do
+    now = DateTime.utc_now()
+
+    from(c in Conversation,
+      join: o in assoc(c, :organization),
+      left_join: ct in assoc(c, :contact),
+      where: c.state != :resolved,
+      where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
+      order_by: [asc: o.name, desc: c.cached_score],
+      preload: [organization: o, contact: ct]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   List conversations for an organization's portal view.
+
+  Options:
+    - :include_resolved - include resolved conversations (default: false)
+    - :contact_id - filter to only this contact's conversations (default: nil = all)
   """
   def list_for_organization(org_id, opts \\ []) do
     include_resolved = Keyword.get(opts, :include_resolved, false)
+    contact_id = Keyword.get(opts, :contact_id)
 
     query =
       from c in Conversation,
         where: c.organization_id == ^org_id,
         order_by: [desc: c.inserted_at],
         preload: [:contact]
+
+    query =
+      if contact_id do
+        from c in query, where: c.contact_id == ^contact_id
+      else
+        query
+      end
 
     query =
       if include_resolved do
@@ -218,5 +248,33 @@ defmodule Custyard.Conversations do
     task
     |> Task.state_changeset(new_state)
     |> Repo.update()
+  end
+
+  @doc """
+  Update a task with the given attributes.
+  """
+  def update_task(task, attrs) do
+    task
+    |> Task.changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Delete a task.
+  """
+  def delete_task(task) do
+    Repo.delete(task)
+  end
+
+  @doc """
+  List portal-visible tasks for a conversation.
+  """
+  def list_portal_visible_tasks(conversation_id) do
+    from(t in Task,
+      where: t.conversation_id == ^conversation_id,
+      where: t.portal_visible == true,
+      order_by: [asc: t.inserted_at]
+    )
+    |> Repo.all()
   end
 end
