@@ -488,9 +488,11 @@ defmodule Custyard.Email.Parser do
         |> normalize_unicode_result()
 
       "iso-8859-15" ->
-        # Latin-9, similar to Latin-1 with Euro sign
-        :unicode.characters_to_binary(text, :latin1, :utf8)
-        |> normalize_unicode_result()
+        # Latin-9 (ISO-8859-15) differs from Latin-1 at 8 code points.
+        # Remap those bytes before converting the rest as Latin-1.
+        text
+        |> remap_iso8859_15_bytes()
+        |> List.to_string()
 
       "windows-1252" ->
         # CP1252 has special characters in 0x80-0x9F range that differ from Latin-1
@@ -523,6 +525,39 @@ defmodule Custyard.Email.Parser do
   end
 
   defp cp1252_byte_to_codepoint(byte), do: byte
+
+  # ISO-8859-15 (Latin-9) byte-to-codepoint mapping for the 8 positions
+  # that differ from ISO-8859-1 (Latin-1):
+  #   0xA4 -> U+20AC (Euro sign, replaces currency sign)
+  #   0xA6 -> U+0160 (S with caron)
+  #   0xA8 -> U+0161 (s with caron)
+  #   0xB4 -> U+017D (Z with caron)
+  #   0xB8 -> U+017E (z with caron)
+  #   0xBC -> U+0152 (OE ligature)
+  #   0xBD -> U+0153 (oe ligature)
+  #   0xBE -> U+0178 (Y with diaeresis)
+  @iso8859_15_map %{
+    0xA4 => 0x20AC,
+    0xA6 => 0x0160,
+    0xA8 => 0x0161,
+    0xB4 => 0x017D,
+    0xB8 => 0x017E,
+    0xBC => 0x0152,
+    0xBD => 0x0153,
+    0xBE => 0x0178
+  }
+
+  defp remap_iso8859_15_bytes(text) when is_binary(text) do
+    text
+    |> :binary.bin_to_list()
+    |> Enum.map(&iso8859_15_byte_to_codepoint/1)
+  end
+
+  defp iso8859_15_byte_to_codepoint(byte) when is_map_key(@iso8859_15_map, byte) do
+    Map.fetch!(@iso8859_15_map, byte)
+  end
+
+  defp iso8859_15_byte_to_codepoint(byte), do: byte
 
   # Build headers map with normalized keys
   defp build_headers_map(headers) when is_list(headers) do

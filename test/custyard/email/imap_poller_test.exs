@@ -589,6 +589,85 @@ defmodule Custyard.Email.ImapPollerTest do
       Plover.logout(conn)
     end
 
+    test "connection is cleaned up when select fails after login succeeds" do
+      # Verifies the try/after pattern in poll_mailbox: even when an
+      # intermediate step (SELECT) fails, Plover.logout(conn) is called
+      # to release the connection.
+      {:ok, socket} = Mock.connect("imap.test.local", 993, [])
+
+      Mock.enqueue_greeting(socket, capabilities: ["IMAP4rev2"])
+      Mock.enqueue_response(socket, :ok, text: "LOGIN completed")
+
+      # SELECT fails with NO
+      Mock.enqueue_response(socket, :no, text: "Mailbox does not exist")
+
+      # LOGOUT response (the try/after block should send this)
+      Mock.enqueue_response(socket, :ok, text: "BYE Logging out")
+
+      {:ok, conn} = Plover.connect("imap.test.local", 993, transport: Mock, socket: socket)
+
+      # Simulate what poll_mailbox does with try/after
+      result =
+        try do
+          with {:ok, _} <- Plover.login(conn, "test@test.local", "secret"),
+               {:ok, _} <- Plover.select(conn, "NONEXISTENT") do
+            {:ok, 0}
+          else
+            {:error, reason} -> {:error, reason}
+          end
+        after
+          Plover.logout(conn)
+        end
+
+      # The select should have failed
+      assert {:error, _} = result
+
+      # Verify LOGOUT was sent (the after block ran)
+      sent = Mock.get_sent(socket)
+      logout_sent = Enum.any?(sent, fn data -> data =~ "LOGOUT" end)
+      assert logout_sent, "LOGOUT should be sent even when SELECT fails"
+    end
+
+    test "connection is cleaned up when search fails after select succeeds" do
+      # Another error path: login and select succeed, but search fails
+      {:ok, socket} = Mock.connect("imap.test.local", 993, [])
+
+      Mock.enqueue_greeting(socket, capabilities: ["IMAP4rev2"])
+      Mock.enqueue_response(socket, :ok, text: "LOGIN completed")
+
+      Mock.enqueue_response(socket, :ok,
+        untagged: [%Mailbox.Exists{count: 5}],
+        text: "SELECT completed"
+      )
+
+      # SEARCH fails
+      Mock.enqueue_response(socket, :no, text: "SEARCH failed")
+
+      # LOGOUT response
+      Mock.enqueue_response(socket, :ok, text: "BYE Logging out")
+
+      {:ok, conn} = Plover.connect("imap.test.local", 993, transport: Mock, socket: socket)
+
+      result =
+        try do
+          with {:ok, _} <- Plover.login(conn, "test@test.local", "secret"),
+               {:ok, _} <- Plover.select(conn, "INBOX"),
+               {:ok, _} <- Plover.search(conn, "UNSEEN") do
+            {:ok, 0}
+          else
+            {:error, reason} -> {:error, reason}
+          end
+        after
+          Plover.logout(conn)
+        end
+
+      assert {:error, _} = result
+
+      sent = Mock.get_sent(socket)
+      logout_sent = Enum.any?(sent, fn data -> data =~ "LOGOUT" end)
+      assert logout_sent, "LOGOUT should be sent even when SEARCH fails"
+    end
+
     test "search returns range sequence set" do
       # ESEARCH can also return ranges like "1:10"
       {:ok, socket} = Mock.connect("imap.test.local", 993, [])

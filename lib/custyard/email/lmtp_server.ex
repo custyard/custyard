@@ -365,8 +365,8 @@ defmodule Custyard.Email.LMTPServer do
   end
 
   defp tls_enabled?(tls_opts) do
-    # TLS is enabled if at least certfile is provided
-    Keyword.has_key?(tls_opts, :certfile)
+    # TLS requires both a certificate and its corresponding private key
+    Keyword.has_key?(tls_opts, :certfile) and Keyword.has_key?(tls_opts, :keyfile)
   end
 
   @doc """
@@ -826,7 +826,7 @@ defmodule Custyard.Email.LMTPServer do
         # Count occurrences of hostname in Received headers
         count = count_received_occurrences(data, hostname)
 
-        if count >= max_count do
+        if count > max_count do
           {:error, :mail_loop, count}
         else
           :ok

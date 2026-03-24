@@ -665,8 +665,7 @@ defmodule Custyard.Email.LMTPServerTest do
       LMTPServer.stop(pid)
     end
 
-    test "TLS requires certfile to be enabled" do
-      # keyfile alone is not sufficient
+    test "TLS requires certfile to be enabled (keyfile alone is not sufficient)" do
       {:ok, pid} =
         LMTPServer.start_link(
           port: @test_port,
@@ -682,6 +681,46 @@ defmodule Custyard.Email.LMTPServerTest do
       {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
 
       # STARTTLS should NOT be advertised without certfile
+      refute response =~ "STARTTLS"
+
+      :gen_tcp.close(socket)
+      LMTPServer.stop(pid)
+    end
+
+    test "TLS requires keyfile to be enabled (certfile alone is not sufficient)" do
+      {:ok, pid} =
+        LMTPServer.start_link(
+          port: @test_port,
+          tls: [certfile: "/tmp/fake-cert.pem"]
+        )
+
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _greeting} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
+
+      # STARTTLS should NOT be advertised without keyfile
+      refute response =~ "STARTTLS"
+
+      :gen_tcp.close(socket)
+      LMTPServer.stop(pid)
+    end
+
+    test "TLS disabled when neither certfile nor keyfile present" do
+      {:ok, pid} = LMTPServer.start_link(port: @test_port)
+
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _greeting} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
+
+      # STARTTLS should NOT be advertised when no TLS options provided
       refute response =~ "STARTTLS"
 
       :gen_tcp.close(socket)
@@ -1061,7 +1100,7 @@ defmodule Custyard.Email.LMTPServerTest do
       {:ok, org: org}
     end
 
-    test "rejects email when hostname appears too many times in Received headers", %{org: _org} do
+    test "rejects email when hostname appears more than max_received_count times", %{org: _org} do
       hostname = "mail.custyard.test"
 
       {:ok, pid} =
@@ -1078,12 +1117,13 @@ defmodule Custyard.Email.LMTPServerTest do
       :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
       {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
 
-      # Build email with multiple Received headers containing our hostname
+      # Build email with 3 Received headers containing our hostname (exceeds limit of 2)
       msg_id = :erlang.unique_integer([:positive])
 
       email =
         "Received: from external.example.com by #{hostname}; Mon, 24 Mar 2026 10:00:00 +0000\r\n" <>
           "Received: from internal.example.com by #{hostname}; Mon, 24 Mar 2026 09:59:00 +0000\r\n" <>
+          "Received: from relay.example.com by #{hostname}; Mon, 24 Mar 2026 09:58:00 +0000\r\n" <>
           "From: alice@example.com\r\n" <>
           "To: support@custyard.test\r\n" <>
           "Subject: Loop test\r\n" <>
@@ -1104,7 +1144,122 @@ defmodule Custyard.Email.LMTPServerTest do
       :ok = :gen_tcp.send(socket, email <> "\r\n.\r\n")
       {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
 
-      # Should return 554 mail loop error
+      # Should return 554 mail loop error (3 > 2)
+      assert response =~ "554"
+      assert response =~ "loop"
+
+      :gen_tcp.close(socket)
+      LMTPServer.stop(pid)
+    end
+
+    test "accepts email when hostname count equals exactly max_received_count (boundary)", %{
+      org: _org
+    } do
+      # With the off-by-one fix, count == max is allowed; only count > max triggers rejection.
+      # This is the boundary case: max_received_count is 5, exactly 5 occurrences should pass.
+      hostname = "mail.custyard.test"
+
+      {:ok, pid} =
+        LMTPServer.start_link(
+          port: @test_port,
+          hostname: hostname,
+          max_received_count: 5
+        )
+
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Build email with exactly 5 Received headers containing our hostname
+      msg_id = :erlang.unique_integer([:positive])
+
+      email =
+        "Received: from a.example.com by #{hostname}; Mon, 24 Mar 2026 10:00:00 +0000\r\n" <>
+          "Received: from b.example.com by #{hostname}; Mon, 24 Mar 2026 09:59:00 +0000\r\n" <>
+          "Received: from c.example.com by #{hostname}; Mon, 24 Mar 2026 09:58:00 +0000\r\n" <>
+          "Received: from d.example.com by #{hostname}; Mon, 24 Mar 2026 09:57:00 +0000\r\n" <>
+          "Received: from e.example.com by #{hostname}; Mon, 24 Mar 2026 09:56:00 +0000\r\n" <>
+          "From: alice@example.com\r\n" <>
+          "To: support@custyard.test\r\n" <>
+          "Subject: Boundary loop test\r\n" <>
+          "Message-ID: <#{msg_id}@example.com>\r\n" <>
+          "Content-Type: text/plain; charset=utf-8\r\n" <>
+          "\r\n" <>
+          "Body at the boundary\r\n"
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<alice@example.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support@custyard.test>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "DATA\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, email <> "\r\n.\r\n")
+      {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Exactly 5 occurrences with max_received_count=5 should be accepted (5 > 5 is false)
+      assert response =~ "250"
+
+      :gen_tcp.close(socket)
+      LMTPServer.stop(pid)
+    end
+
+    test "rejects email when hostname count is one more than max_received_count (boundary)", %{
+      org: _org
+    } do
+      # Companion to the above: 6 occurrences with max of 5 should be rejected.
+      hostname = "mail.custyard.test"
+
+      {:ok, pid} =
+        LMTPServer.start_link(
+          port: @test_port,
+          hostname: hostname,
+          max_received_count: 5
+        )
+
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Build email with 6 Received headers containing our hostname (exceeds limit of 5)
+      msg_id = :erlang.unique_integer([:positive])
+
+      email =
+        "Received: from a.example.com by #{hostname}; Mon, 24 Mar 2026 10:00:00 +0000\r\n" <>
+          "Received: from b.example.com by #{hostname}; Mon, 24 Mar 2026 09:59:00 +0000\r\n" <>
+          "Received: from c.example.com by #{hostname}; Mon, 24 Mar 2026 09:58:00 +0000\r\n" <>
+          "Received: from d.example.com by #{hostname}; Mon, 24 Mar 2026 09:57:00 +0000\r\n" <>
+          "Received: from e.example.com by #{hostname}; Mon, 24 Mar 2026 09:56:00 +0000\r\n" <>
+          "Received: from f.example.com by #{hostname}; Mon, 24 Mar 2026 09:55:00 +0000\r\n" <>
+          "From: alice@example.com\r\n" <>
+          "To: support@custyard.test\r\n" <>
+          "Subject: Over boundary loop test\r\n" <>
+          "Message-ID: <#{msg_id}@example.com>\r\n" <>
+          "Content-Type: text/plain; charset=utf-8\r\n" <>
+          "\r\n" <>
+          "Body over the boundary\r\n"
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<alice@example.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support@custyard.test>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "DATA\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, email <> "\r\n.\r\n")
+      {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
+
+      # 6 occurrences with max_received_count=5 should be rejected (6 > 5 is true)
       assert response =~ "554"
       assert response =~ "loop"
 
@@ -1179,12 +1334,13 @@ defmodule Custyard.Email.LMTPServerTest do
       :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
       {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
 
-      # Build email with mixed case hostnames
+      # Build email with 3 mixed-case hostnames (exceeds max_received_count of 2)
       msg_id = :erlang.unique_integer([:positive])
 
       email =
         "Received: from external.example.com by MAIL.CUSTYARD.TEST; Mon, 24 Mar 2026 10:00:00 +0000\r\n" <>
           "Received: from internal.example.com by Mail.Custyard.Test; Mon, 24 Mar 2026 09:59:00 +0000\r\n" <>
+          "Received: from relay.example.com by mail.CUSTYARD.test; Mon, 24 Mar 2026 09:58:00 +0000\r\n" <>
           "From: alice@example.com\r\n" <>
           "To: support@custyard.test\r\n" <>
           "Subject: Case test\r\n" <>
@@ -1205,7 +1361,7 @@ defmodule Custyard.Email.LMTPServerTest do
       :ok = :gen_tcp.send(socket, email <> "\r\n.\r\n")
       {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
 
-      # Should detect loop even with case differences
+      # Should detect loop even with case differences (3 > 2)
       assert response =~ "554"
       assert response =~ "loop"
 

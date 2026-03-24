@@ -131,6 +131,75 @@ defmodule Custyard.Email.ParserTest do
       assert parsed["subject"] =~ "aus"
     end
 
+    test "decodes ISO-8859-15 charset correctly" do
+      raw = read_fixture("iso_8859_15_charset.eml")
+      {:ok, parsed} = Parser.parse(raw)
+
+      assert String.valid?(parsed["text"])
+
+      # ISO-8859-15 byte 0xA4 maps to U+20AC (Euro sign), NOT U+00A4 (currency sign)
+      assert String.contains?(parsed["text"], <<0x20AC::utf8>>)
+
+      # ISO-8859-15 byte 0xBC maps to U+0152 (OE ligature), NOT U+00BC (vulgar fraction 1/4)
+      assert String.contains?(parsed["text"], <<0x0152::utf8>>)
+
+      # ISO-8859-15 byte 0xA6 maps to U+0160 (S with caron), NOT U+00A6 (broken bar)
+      assert String.contains?(parsed["text"], <<0x0160::utf8>>)
+
+      # ISO-8859-15 byte 0xA8 maps to U+0161 (s with caron), NOT U+00A8 (diaeresis)
+      assert String.contains?(parsed["text"], <<0x0161::utf8>>)
+
+      # 0xE8 is the same in Latin-1 and Latin-9: U+00E8 (e with grave)
+      assert String.contains?(parsed["text"], <<0x00E8::utf8>>)
+    end
+
+    test "ISO-8859-15 differs from Latin-1 at expected code points" do
+      # Test all 8 bytes that differ between ISO-8859-15 and ISO-8859-1.
+      # Uses quoted-printable encoding since mimemail needs proper line endings.
+      # QP hex codes: =A4 =A6 =A8 =B4 =B8 =BC =BD =BE
+      raw =
+        "From: test@example.com\r\n" <>
+          "To: support@custyard.test\r\n" <>
+          "Subject: Latin-9 remap test\r\n" <>
+          "Message-ID: <latin9-remap@example.com>\r\n" <>
+          "MIME-Version: 1.0\r\n" <>
+          "Content-Type: text/plain; charset=iso-8859-15\r\n" <>
+          "Content-Transfer-Encoding: quoted-printable\r\n" <>
+          "\r\n" <>
+          "=A4 =A6 =A8 =B4 =B8 =BC =BD =BE\r\n"
+
+      {:ok, parsed} = Parser.parse(raw)
+      text = parsed["text"]
+
+      assert String.valid?(text)
+
+      # All 8 differing code points should be remapped:
+      # 0xA4 -> Euro sign
+      assert String.contains?(text, <<0x20AC::utf8>>)
+      # 0xA6 -> S with caron
+      assert String.contains?(text, <<0x0160::utf8>>)
+      # 0xA8 -> s with caron
+      assert String.contains?(text, <<0x0161::utf8>>)
+      # 0xB4 -> Z with caron
+      assert String.contains?(text, <<0x017D::utf8>>)
+      # 0xB8 -> z with caron
+      assert String.contains?(text, <<0x017E::utf8>>)
+      # 0xBC -> OE ligature
+      assert String.contains?(text, <<0x0152::utf8>>)
+      # 0xBD -> oe ligature
+      assert String.contains?(text, <<0x0153::utf8>>)
+      # 0xBE -> Y with diaeresis
+      assert String.contains?(text, <<0x0178::utf8>>)
+
+      # Verify these are NOT the Latin-1 mappings
+      # currency sign (Latin-1 0xA4)
+      refute String.contains?(text, <<0x00A4::utf8>>)
+      # broken bar (Latin-1 0xA6)
+      refute String.contains?(text, <<0x00A6::utf8>>)
+      # 1/4 fraction (Latin-1 0xBC)
+      refute String.contains?(text, <<0x00BC::utf8>>)
+    end
+
     test "decodes Windows-1252 charset correctly" do
       raw = read_fixture("windows_1252_charset.eml")
       {:ok, parsed} = Parser.parse(raw)

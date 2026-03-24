@@ -135,15 +135,22 @@ defmodule Custyard.Email.ImapPoller do
   end
 
   defp poll_mailbox(state) do
-    with {:ok, conn} <- connect(state),
-         {:ok, _} <- Plover.login(conn, state.username, state.password),
-         {:ok, _} <- Plover.select(conn, state.folder),
-         {:ok, messages} <- fetch_unseen(conn),
-         processed <- process_messages(conn, messages) do
-      # Always try to logout, ignore errors
-      Plover.logout(conn)
-      {:ok, processed}
-    else
+    case connect(state) do
+      {:ok, conn} ->
+        try do
+          with {:ok, _} <- Plover.login(conn, state.username, state.password),
+               {:ok, _} <- Plover.select(conn, state.folder),
+               {:ok, messages} <- fetch_unseen(conn),
+               processed <- process_messages(conn, messages) do
+            {:ok, processed}
+          else
+            {:error, reason} ->
+              {:error, reason}
+          end
+        after
+          Plover.logout(conn)
+        end
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -151,11 +158,10 @@ defmodule Custyard.Email.ImapPoller do
 
   defp connect(state) do
     opts = [
-      port: state.port,
       ssl: state.ssl
     ]
 
-    Plover.connect(state.host, opts)
+    Plover.connect(state.host, state.port, opts)
   end
 
   defp fetch_unseen(conn) do
