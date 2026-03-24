@@ -41,3 +41,8 @@ custyard-*.tar
 
 # macOS
 .DS_Store
+
+# Environment files (secrets)
+.env
+.env.local
+.env.*.local
