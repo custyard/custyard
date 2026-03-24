@@ -334,53 +334,57 @@ defmodule CustyardWeb.Operator.ConversationLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-full">
+    <div class="flex h-full" data-testid="operator-conversation-page">
       <%!-- Left: message thread --%>
-      <div class="flex-1 flex flex-col min-w-0">
+      <div class="flex-1 flex flex-col min-w-0" data-testid="operator-conversation-thread">
         <div class="border-b border-gray-200 px-4 py-3 flex items-center gap-3 bg-white">
-          <.link navigate={~p"/operator"} class="text-sm text-gray-500 hover:text-gray-700">
+          <.link navigate={~p"/operator"} class="text-sm text-gray-500 hover:text-gray-700" data-testid="operator-conversation-back">
             &larr; Queue
           </.link>
-          <span class="font-semibold text-gray-900 truncate">{@conversation.subject}</span>
+          <span class="font-semibold text-gray-900 truncate" data-testid="operator-conversation-subject">{@conversation.subject}</span>
           <.state_badge state={@conversation.state} />
         </div>
 
-        <div class="flex-1 overflow-y-auto px-4 py-4 bg-gray-50 space-y-1">
+        <div class="flex-1 overflow-y-auto px-4 py-4 bg-gray-50 space-y-1" data-testid="operator-conversation-messages">
           <%= for message <- @conversation.messages do %>
             <.message_bubble message={message} />
           <% end %>
         </div>
 
         <div class="border-t border-gray-200 p-3 space-y-2 bg-white">
-          <form phx-submit="send_reply" class="flex gap-2">
+          <form phx-submit="send_reply" class="flex gap-2" data-testid="operator-reply-form">
             <input
               type="text"
               name="body"
               value={@reply_text}
               phx-change="update_reply"
               placeholder="Reply to customer..."
+              data-testid="operator-reply-input"
               class="flex-1 border border-gray-300 rounded px-3 py-2 text-sm"
             />
             <button
               type="submit"
               class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
+              data-testid="operator-reply-submit"
             >
               Send
             </button>
           </form>
 
-          <form phx-submit="add_note" class="flex gap-2">
+          <form phx-submit="add_note" class="flex gap-2" data-testid="operator-note-form">
             <input
               type="text"
               name="body"
               value={@note_text}
               phx-change="update_note"
               placeholder="Internal note (not visible to customer)..."
+              data-testid="operator-note-input"
               class="flex-1 border border-amber-300 bg-amber-50 rounded px-3 py-2 text-sm"
             />
             <button
               type="submit"
               class="bg-amber-500 text-white text-sm px-4 py-2 rounded hover:bg-amber-600"
+              data-testid="operator-note-submit"
             >
               Note
             </button>
@@ -389,7 +393,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       </div>
 
       <%!-- Right: metadata panel --%>
-      <div class="w-72 border-l border-gray-200 bg-white overflow-y-auto">
+      <div class="w-72 border-l border-gray-200 bg-white overflow-y-auto" data-testid="operator-conversation-sidebar">
         <div class="p-4 space-y-4">
           <%!-- Organization --%>
           <div>
@@ -421,11 +425,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
           <%!-- State actions --%>
           <div>
             <div class="text-xs text-gray-400 uppercase tracking-wide mb-2">Actions</div>
-            <div class="space-y-1.5">
+            <div class="space-y-1.5" data-testid="operator-state-actions">
               <button
                 phx-click="set_state"
                 phx-value-state="waiting"
                 class="w-full text-left text-sm px-3 py-1.5 rounded bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border border-yellow-200"
+                data-testid="operator-state-waiting"
               >
                 Waiting on customer
               </button>
@@ -433,6 +438,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                 phx-click="set_state"
                 phx-value-state="resolved"
                 class="w-full text-left text-sm px-3 py-1.5 rounded bg-green-50 hover:bg-green-100 text-green-800 border border-green-200"
+                data-testid="operator-state-resolved"
               >
                 Mark resolved
               </button>
@@ -468,6 +474,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                 phx-submit="add_task"
                 phx-change="update_new_task"
                 class="mt-3 space-y-2 p-2 bg-gray-50 rounded border border-gray-200"
+                data-testid="operator-task-form"
               >
                 <input
                   type="text"
@@ -518,6 +525,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
               <button
                 phx-click="toggle_task_form"
                 class="mt-2 text-xs text-indigo-600 hover:underline"
+                data-testid="operator-add-task-btn"
               >
                 + Add task
               </button>
@@ -560,8 +568,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:bg_class, bg_class)
 
     ~H"""
-    <div class={"flex #{if @is_operator, do: "justify-end", else: "justify-start"} mb-3"}>
-      <div class={"max-w-lg rounded-lg px-4 py-2.5 border #{@bg_class}"}>
+    <div class={"flex #{if @is_operator, do: "justify-end", else: "justify-start"} mb-3"} data-testid={"operator-message-#{@message.id}"}>
+      <div class={"max-w-lg rounded-lg px-4 py-2.5 border #{@bg_class}"} data-testid={"operator-message-#{if @is_internal, do: "internal", else: to_string(@message.source)}"}>
         <div class="flex items-center gap-2 mb-1">
           <span class={"text-xs font-medium #{if @is_operator, do: "text-indigo-700", else: "text-gray-700"}"}>
             {sender_name(@message)}
@@ -608,7 +616,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   defp task_item(assigns) do
     ~H"""
-    <div class="group flex items-start gap-2 text-sm p-1 rounded hover:bg-gray-50">
+    <div class="group flex items-start gap-2 text-sm p-1 rounded hover:bg-gray-50" data-testid={"operator-task-item-#{@task.id}"}>
       <button
         phx-click="toggle_task"
         phx-value-id={@task.id}
@@ -670,6 +678,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       phx-submit="save_task"
       phx-change="update_edit_task"
       class="p-2 bg-indigo-50 rounded border border-indigo-200 space-y-2"
+      data-testid={"operator-task-edit-form-#{@task.id}"}
     >
       <input
         type="text"

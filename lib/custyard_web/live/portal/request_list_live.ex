@@ -87,10 +87,10 @@ defmodule CustyardWeb.Portal.RequestListLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto py-8 px-4">
+    <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-request-list">
       <div class="flex justify-between items-center mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-gray-900">
+          <h1 class="text-2xl font-semibold text-gray-900" data-testid="portal-request-list-heading">
             {if @admin_mode, do: "All Organization Requests", else: "My Requests"}
           </h1>
           <p :if={@current_contact} class="text-sm text-gray-500 mt-1">
@@ -103,6 +103,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
             <button
               type="button"
               phx-click="toggle_admin_mode"
+              data-testid="portal-admin-toggle"
               class={[
                 "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2",
                 if(@admin_mode, do: "bg-indigo-600", else: "bg-gray-200")
@@ -120,6 +121,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
           <.link
             navigate={"#{@portal_path}/new"}
             class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+            data-testid="portal-new-request-link"
           >
             + New Request
           </.link>
@@ -131,25 +133,26 @@ defmodule CustyardWeb.Portal.RequestListLive do
           :for={conv <- @conversations}
           navigate={"#{@portal_path}/request/#{conv.id}"}
           class="block"
+          data-testid={"portal-request-item-#{conv.id}"}
         >
           <div class="bg-white border rounded-lg p-4 hover:border-indigo-300 transition">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="font-medium text-gray-900">{conv.subject}</h3>
+                <h3 class="font-medium text-gray-900" data-testid="portal-request-subject">{conv.subject}</h3>
                 <p class="text-sm text-gray-500 mt-1">
                   {if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown"} · {relative_time(
                     conv.inserted_at
                   )}
                 </p>
               </div>
-              <span class={"px-2 py-1 text-xs rounded-full #{state_color(conv.state)}"}>
+              <span class={"px-2 py-1 text-xs rounded-full #{state_color(conv.state)}"} data-testid="portal-state-badge">
                 {conv.state}
               </span>
             </div>
           </div>
         </.link>
 
-        <div :if={@conversations == []} class="text-center py-12 text-gray-500">
+        <div :if={@conversations == []} class="text-center py-12 text-gray-500" data-testid="portal-empty-state">
           No open requests. Create one to get started.
         </div>
       </div>

@@ -83,13 +83,13 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-3xl mx-auto p-4">
+    <div class="max-w-3xl mx-auto p-4" data-testid="operator-neglect-page">
       <div class="flex items-center gap-3 mb-4">
-        <.link navigate={~p"/operator"} class="text-sm text-gray-500 hover:text-gray-700">
+        <.link navigate={~p"/operator"} class="text-sm text-gray-500 hover:text-gray-700" data-testid="operator-neglect-back">
           &larr; Queue
         </.link>
         <h1 class="text-lg font-semibold text-gray-900">Neglect Report</h1>
-        <span class="text-sm text-gray-400">{@total_count} items past threshold</span>
+        <span class="text-sm text-gray-400" data-testid="operator-neglect-count">{@total_count} items past threshold</span>
       </div>
 
       <div :if={@total_count > 0} class="flex gap-4 mb-6 text-sm">
@@ -103,14 +103,14 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
         </div>
       </div>
 
-      <div :if={@total_count == 0} class="text-center text-gray-400 py-12">
+      <div :if={@total_count == 0} class="text-center text-gray-400 py-12" data-testid="operator-neglect-empty">
         No items are currently past their neglect thresholds.
       </div>
 
       <div class="space-y-6">
-        <div :for={{org, items} <- @grouped_conversations}>
+        <div :for={{org, items} <- @grouped_conversations} data-testid="operator-neglect-org-group">
           <div class="flex items-center gap-2 mb-2">
-            <span class="text-sm font-medium text-gray-700">{org.name}</span>
+            <span class="text-sm font-medium text-gray-700" data-testid="operator-neglect-org-name">{org.name}</span>
             <.tier_badge tier={org.tier} />
             <span class="text-xs text-gray-400">{length(items)} items</span>
           </div>
@@ -120,6 +120,7 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
               :for={item <- items}
               navigate={~p"/operator/conversation/#{item.conversation.id}"}
               class="block"
+              data-testid={"operator-neglect-item-#{item.conversation.id}"}
             >
               <div class={[
                 "bg-white border border-gray-200 rounded-lg p-3 hover:shadow-sm transition-shadow flex items-center gap-3 border-l-4",

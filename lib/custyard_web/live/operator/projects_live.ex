@@ -192,12 +192,13 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto p-4">
+    <div class="max-w-4xl mx-auto p-4" data-testid="operator-projects-page">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-lg font-semibold text-gray-900">Projects</h1>
+        <h1 class="text-lg font-semibold text-gray-900" data-testid="operator-projects-heading">Projects</h1>
         <button
           phx-click="show_form"
           class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
+          data-testid="operator-projects-add-btn"
         >
           Add project
         </button>
@@ -208,6 +209,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           phx-change="filter_org"
           name="org"
           class="border border-gray-300 rounded px-3 py-2 text-sm"
+          data-testid="operator-projects-org-filter"
         >
           <option value="">All organizations</option>
           <option
@@ -228,7 +230,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       />
 
       <div class="space-y-2">
-        <div :if={Enum.empty?(@projects)} class="text-center text-gray-400 py-12">
+        <div :if={Enum.empty?(@projects)} class="text-center text-gray-400 py-12" data-testid="operator-projects-empty">
           No projects found.
         </div>
         <.project_card :for={project <- @projects} project={project} />
@@ -243,12 +245,12 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
   defp project_form(assigns) do
     ~H"""
-    <div class="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+    <div class="bg-white border border-gray-200 rounded-lg p-4 mb-4" data-testid="operator-project-form-card">
       <h2 class="text-sm font-semibold text-gray-900 mb-4">
         {if @editing, do: "Edit project", else: "New project"}
       </h2>
 
-      <form phx-submit="save_project" class="space-y-4">
+      <form phx-submit="save_project" class="space-y-4" data-testid="operator-project-form">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Title</label>
           <input
@@ -357,11 +359,11 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
   defp project_card(assigns) do
     ~H"""
-    <div class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+    <div class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow" data-testid={"operator-project-card-#{@project.id}"}>
       <div class="flex items-start justify-between">
         <div class="flex-1">
           <div class="flex items-center gap-2 mb-1">
-            <span class="font-semibold text-gray-900">{@project.title}</span>
+            <span class="font-semibold text-gray-900" data-testid="operator-project-title">{@project.title}</span>
             <.project_type_badge type={@project.project_type} />
             <span
               :if={not @project.portal_visible}
@@ -396,6 +398,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           phx-click="edit_project"
           phx-value-id={@project.id}
           class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
+          data-testid={"operator-project-edit-#{@project.id}"}
         >
           Edit
         </button>
@@ -404,6 +407,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           phx-value-id={@project.id}
           data-confirm="Are you sure you want to delete this project?"
           class="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50"
+          data-testid={"operator-project-delete-#{@project.id}"}
         >
           Delete
         </button>

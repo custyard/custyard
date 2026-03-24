@@ -9,7 +9,7 @@ defmodule CustyardWeb.HomeLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="mx-auto max-w-xl">
+    <div class="mx-auto max-w-xl" data-testid="home-container">
       <.header class="text-center">
         Welcome to Custyard
         <:subtitle>
