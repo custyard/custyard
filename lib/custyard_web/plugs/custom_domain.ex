@@ -8,6 +8,8 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   This plug should be called early in the pipeline (in endpoint.ex) to allow
   route matching to work correctly with custom domains.
   """
+  require Logger
+
   import Plug.Conn
   alias Custyard.{Repo, Organization}
 
@@ -47,7 +49,14 @@ defmodule CustyardWeb.Plugs.CustomDomain do
         # /          -> /p/:token
         # /request/1 -> /p/:token/request/1
         # /new       -> /p/:token/new
-        rewritten_path = "/p/#{org.token}#{conn.request_path}"
+        # Guard against double-prefix if path already starts with /p/
+        rewritten_path =
+          if String.starts_with?(conn.request_path, "/p/") do
+            Logger.warning("CustomDomain plug received path already prefixed with /p/: #{conn.request_path}")
+            conn.request_path
+          else
+            "/p/#{org.token}#{conn.request_path}"
+          end
 
         conn
         |> assign(:organization, org)

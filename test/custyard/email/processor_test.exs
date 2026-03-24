@@ -202,5 +202,72 @@ defmodule Custyard.Email.ProcessorTest do
       # Score should be calculated (new state = 30, enterprise tier = 20)
       assert conversation.cached_score > 0
     end
+
+    test "handles hyphenated headers with various cases" do
+      org = insert_organization(domain: "acme.example.com")
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+      existing = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      insert_message(conversation_id: existing.id, message_id: "original@example.com")
+
+      # Test with "In-Reply-To" (capitalized each word) instead of "in-reply-to"
+      params = %{
+        "from" => "alice@acme.example.com",
+        "subject" => "Re: Original subject",
+        "text" => "This is a reply",
+        "headers" => %{
+          "In-Reply-To" => "original@example.com",
+          "Message-Id" => "reply@example.com"
+        }
+      }
+
+      assert {:ok, conversation} = Processor.process(params)
+
+      # Should thread to existing conversation using case-insensitive header lookup
+      assert conversation.id == existing.id
+    end
+
+    test "handles all-uppercase header names" do
+      org = insert_organization(domain: "acme.example.com")
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+      existing = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      insert_message(conversation_id: existing.id, message_id: "original@example.com")
+
+      # Some email servers/relays may uppercase header names
+      params = %{
+        "from" => "alice@acme.example.com",
+        "subject" => "Re: Original subject",
+        "text" => "This is a reply",
+        "headers" => %{
+          "IN-REPLY-TO" => "original@example.com",
+          "MESSAGE-ID" => "reply@example.com"
+        }
+      }
+
+      assert {:ok, conversation} = Processor.process(params)
+      assert conversation.id == existing.id
+    end
+
+    test "prefers exact header name match when available" do
+      org = insert_organization(domain: "acme.example.com")
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+      existing = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      insert_message(conversation_id: existing.id, message_id: "correct@example.com")
+
+      # If both exact and differently-cased headers exist, exact match should win
+      # (This tests the get_header implementation detail)
+      params = %{
+        "from" => "alice@acme.example.com",
+        "subject" => "Re: Original subject",
+        "text" => "This is a reply",
+        "headers" => %{
+          "in-reply-to" => "correct@example.com",
+          "In-Reply-To" => "wrong@example.com"
+        }
+      }
+
+      assert {:ok, conversation} = Processor.process(params)
+      # Should find the thread because we matched "in-reply-to" exactly
+      assert conversation.id == existing.id
+    end
   end
 end

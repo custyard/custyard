@@ -14,6 +14,12 @@ config :custyard, CustyardWeb.Endpoint,
 
 config :logger, level: :warning
 
+# Disable scoring scheduler in tests to avoid sandbox conflicts
+config :custyard, start_scheduler: false
+
+# Allow ?as=<contact_id> param for testing contact impersonation
+config :custyard, allow_contact_impersonation: true
+
 config :phoenix, :plug_init_mode, :runtime
 
 config :phoenix_live_view,

@@ -38,19 +38,29 @@ defmodule CustyardWeb.Portal.Helpers do
 
   For custom domains, URLs should be root-relative (e.g., "/request/1")
   For standard routes, URLs include the token prefix (e.g., "/p/:token/request/1")
+
+  Assigns:
+  - `:portal_path` - Base path prefix for building sub-paths (empty string for custom domains)
+  - `:portal_home_path` - Path to the portal home/list page (use this for navigation)
+  - `:is_custom_domain` - Boolean flag for custom domain detection
+
+  Note: Uses string interpolation instead of verified routes (~p"...") because custom
+  domains require dynamic path prefixes determined at runtime, not compile-time.
   """
   def assign_portal_path(socket) do
     is_custom_domain = custom_domain?(socket)
 
-    base_path =
+    {base_path, home_path} =
       if is_custom_domain do
-        ""
+        {"", "/"}
       else
-        "/p/#{socket.assigns.org.token}"
+        token_path = "/p/#{socket.assigns.org.token}"
+        {token_path, token_path}
       end
 
     socket
     |> assign(:portal_path, base_path)
+    |> assign(:portal_home_path, home_path)
     |> assign(:is_custom_domain, is_custom_domain)
   end
 

@@ -52,8 +52,21 @@ defmodule Custyard.Email.Processor do
      }}
   end
 
+  # Get header value, case-insensitive for header name
   defp get_header(headers, name) do
-    headers[name] || headers[String.capitalize(name)]
+    # Try exact match first
+    case headers[name] do
+      nil ->
+        # Fall back to case-insensitive lookup
+        lowercase_name = String.downcase(name)
+
+        Enum.find_value(headers, fn {k, v} ->
+          if String.downcase(to_string(k)) == lowercase_name, do: v
+        end)
+
+      value ->
+        value
+    end
   end
 
   defp strip_html(nil), do: nil

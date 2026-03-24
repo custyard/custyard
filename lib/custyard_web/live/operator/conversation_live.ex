@@ -295,20 +295,29 @@ defmodule CustyardWeb.Operator.ConversationLive do
     |> assign(:neglect_status, neglect_status)
   end
 
+  # NOTE: Timezone handling
+  # datetime-local inputs provide local time without timezone info.
+  # We treat them as UTC for storage and display, which is consistent but
+  # means users in non-UTC timezones will see times offset from their local.
+  # TODO: For proper timezone support, send user's timezone from client
+  # and convert local <-> UTC on save/display.
   defp parse_due_at(nil), do: nil
   defp parse_due_at(""), do: nil
 
   defp parse_due_at(date_str) when is_binary(date_str) do
+    # Append "Z" to treat input as UTC
     case DateTime.from_iso8601(date_str <> ":00Z") do
       {:ok, datetime, _offset} -> datetime
       _ -> nil
     end
   end
 
+  # Formats datetime for datetime-local input (displays as UTC)
   defp format_datetime_local(datetime) do
     Calendar.strftime(datetime, "%Y-%m-%dT%H:%M")
   end
 
+  # Formats due date for display (relative to UTC now)
   defp format_due_at(datetime) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     diff_days = Date.diff(DateTime.to_date(datetime), DateTime.to_date(now))

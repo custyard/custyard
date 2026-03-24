@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Portal.RequestListLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversations, Contact}
+  alias Custyard.Conversations
   alias CustyardWeb.Portal.Helpers
 
   @impl true
@@ -24,15 +24,8 @@ defmodule CustyardWeb.Portal.RequestListLive do
   @impl true
   def handle_params(params, _uri, socket) do
     # Allow simulating a contact via ?as=<contact_id> for testing
-    # In production, this would come from session/authentication
-    contact =
-      case params["as"] do
-        nil -> nil
-        contact_id -> Repo.get_by(Contact, id: contact_id, organization_id: socket.assigns.org.id)
-      end
-
-    # Only admin contacts can use admin mode
-    admin_mode = contact && contact.is_admin && params["admin"] == "true"
+    # Only enabled in dev/test environments via config
+    {contact, admin_mode} = maybe_impersonate_contact(params, socket.assigns.org.id)
 
     {:noreply,
      socket
@@ -43,12 +36,19 @@ defmodule CustyardWeb.Portal.RequestListLive do
 
   @impl true
   def handle_event("toggle_admin_mode", _params, socket) do
-    new_mode = !socket.assigns.admin_mode
+    contact = socket.assigns.current_contact
 
-    {:noreply,
-     socket
-     |> assign(:admin_mode, new_mode)
-     |> load_conversations()}
+    # Only admin contacts can toggle admin mode
+    if contact && contact.is_admin do
+      new_mode = !socket.assigns.admin_mode
+
+      {:noreply,
+       socket
+       |> assign(:admin_mode, new_mode)
+       |> load_conversations()}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -91,10 +91,10 @@ defmodule CustyardWeb.Portal.RequestListLive do
       <div class="flex justify-between items-center mb-6">
         <div>
           <h1 class="text-2xl font-semibold text-gray-900">
-            <%= if @admin_mode, do: "All Organization Requests", else: "My Requests" %>
+            {if @admin_mode, do: "All Organization Requests", else: "My Requests"}
           </h1>
           <p :if={@current_contact} class="text-sm text-gray-500 mt-1">
-            Viewing as: <%= @current_contact.name || @current_contact.email %>
+            Viewing as: {@current_contact.name || @current_contact.email}
           </p>
         </div>
         <div class="flex items-center gap-4">
@@ -137,8 +137,9 @@ defmodule CustyardWeb.Portal.RequestListLive do
               <div>
                 <h3 class="font-medium text-gray-900">{conv.subject}</h3>
                 <p class="text-sm text-gray-500 mt-1">
-                  {if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown"}
-                  · {relative_time(conv.inserted_at)}
+                  {if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown"} · {relative_time(
+                    conv.inserted_at
+                  )}
                 </p>
               </div>
               <span class={"px-2 py-1 text-xs rounded-full #{state_color(conv.state)}"}>
@@ -171,4 +172,21 @@ defmodule CustyardWeb.Portal.RequestListLive do
     end
   end
 
+  # Contact impersonation via ?as= param - only in dev/test
+  if Application.compile_env(:custyard, :allow_contact_impersonation, false) do
+    defp maybe_impersonate_contact(%{"as" => nil}, _org_id), do: {nil, false}
+
+    defp maybe_impersonate_contact(%{} = params, _org_id) when not is_map_key(params, "as"),
+      do: {nil, false}
+
+    defp maybe_impersonate_contact(%{"as" => contact_id} = params, org_id) do
+      alias Custyard.{Repo, Contact}
+      contact = Repo.get_by(Contact, id: contact_id, organization_id: org_id)
+      # Only admin contacts can use admin mode
+      admin_mode = contact && contact.is_admin && params["admin"] == "true"
+      {contact, admin_mode}
+    end
+  else
+    defp maybe_impersonate_contact(_params, _org_id), do: {nil, false}
+  end
 end

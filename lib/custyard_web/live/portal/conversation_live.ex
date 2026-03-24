@@ -16,7 +16,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
     case Conversations.get_conversation_for_organization(id, org.id) do
       {:error, _} ->
-        {:ok, push_navigate(socket, to: socket.assigns.portal_path)}
+        {:ok, push_navigate(socket, to: socket.assigns.portal_home_path)}
 
       {:ok, conversation} ->
         if connected?(socket) do
@@ -94,7 +94,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
     ~H"""
     <div class="max-w-4xl mx-auto py-8 px-4">
       <.link
-        navigate={@portal_path}
+        navigate={@portal_home_path}
         class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"
       >
         &#8592; Back to requests

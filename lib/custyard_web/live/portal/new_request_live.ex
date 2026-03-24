@@ -90,7 +90,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
 
         <div class="flex justify-end gap-3">
           <.link
-            navigate={@portal_path}
+            navigate={@portal_home_path}
             class="px-4 py-2 text-gray-700 hover:text-gray-900"
           >
             Cancel

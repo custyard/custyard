@@ -1,4 +1,12 @@
 defmodule CustyardWeb.Portal.RequestListLiveTest do
+  @moduledoc """
+  Tests for the portal request list LiveView.
+
+  NOTE: Contact impersonation tests (?as= param) rely on the
+  :allow_contact_impersonation config being set to true in test.exs.
+  In production builds, this config defaults to false and the
+  impersonation code path is compiled out entirely.
+  """
   use CustyardWeb.ConnCase, async: true
 
   import Phoenix.LiveViewTest
@@ -60,7 +68,22 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
     end
   end
 
+  describe "contact impersonation config" do
+    # Contact impersonation via ?as= param is gated by compile-time config.
+    # These tests verify the config is properly set in test environment.
+    # In production, :allow_contact_impersonation defaults to false and
+    # the impersonation code is compiled out.
+
+    test "impersonation is enabled in test environment" do
+      # This should be true in test.exs config
+      assert Application.get_env(:custyard, :allow_contact_impersonation, false) == true
+    end
+  end
+
   describe "contact filtering" do
+    # NOTE: These tests require :allow_contact_impersonation to be true in config.
+    # In production builds, the ?as= param is ignored.
+
     test "shows all conversations when no contact specified", %{conn: conn} do
       org = insert_organization()
 
@@ -144,6 +167,31 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
       assert html =~ conv1.subject
       assert html =~ conv2.subject
       assert html =~ "All Organization Requests"
+    end
+
+    test "toggle_admin_mode event is rejected for non-admin contacts", %{conn: conn} do
+      org = insert_organization()
+      non_admin = insert_contact(organization_id: org.id, is_admin: false)
+      other_contact = insert_contact(organization_id: org.id)
+
+      _conv1 = insert_conversation(organization_id: org.id, contact_id: non_admin.id, subject: "My Request")
+      conv2 = insert_conversation(organization_id: org.id, contact_id: other_contact.id, subject: "Other Request")
+
+      {:ok, view, html} = live(conn, ~p"/p/#{org.token}?as=#{non_admin.id}")
+
+      # Initially shows only non-admin's conversations
+      assert html =~ "My Request"
+      refute html =~ conv2.subject
+      assert html =~ "My Requests"
+
+      # Directly push toggle_admin_mode event (simulating JS manipulation)
+      html = render_click(view, "toggle_admin_mode", %{})
+
+      # admin_mode should remain false - still showing only user's conversations
+      assert html =~ "My Request"
+      refute html =~ conv2.subject
+      assert html =~ "My Requests"
+      refute html =~ "All Organization Requests"
     end
   end
 

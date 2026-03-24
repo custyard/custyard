@@ -2,19 +2,24 @@ defmodule CustyardWeb.Portal.ProjectLive do
   use CustyardWeb, :live_view
 
   alias Custyard.{Repo, Projects}
+  alias CustyardWeb.Portal.Helpers
 
   @impl true
   def mount(%{"org_token" => token, "id" => id}, _session, socket) do
     org = Repo.get_by!(Custyard.Organization, token: token)
 
+    socket =
+      socket
+      |> assign(:org, org)
+      |> Helpers.assign_portal_path()
+
     case Projects.get_portal_project(id, org.id) do
       {:error, _} ->
-        {:ok, push_navigate(socket, to: ~p"/p/#{token}/projects")}
+        {:ok, push_navigate(socket, to: "#{socket.assigns.portal_path}/projects")}
 
       {:ok, project} ->
         {:ok,
          socket
-         |> assign(:org, org)
          |> assign(:project, project)
          |> assign(:page_title, project.title)}
     end
@@ -25,7 +30,7 @@ defmodule CustyardWeb.Portal.ProjectLive do
     ~H"""
     <div class="max-w-4xl mx-auto py-8 px-4">
       <.link
-        navigate={~p"/p/#{@org.token}/projects"}
+        navigate={"#{@portal_path}/projects"}
         class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"
       >
         &larr; Back to projects

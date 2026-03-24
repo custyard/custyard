@@ -2,6 +2,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
   use CustyardWeb, :live_view
 
   alias Custyard.{Repo, Projects}
+  alias CustyardWeb.Portal.Helpers
 
   @impl true
   def mount(%{"org_token" => token}, _session, socket) do
@@ -10,6 +11,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
     {:ok,
      socket
      |> assign(:org, org)
+     |> Helpers.assign_portal_path()
      |> assign(:page_title, "Projects")
      |> load_projects()}
   end
@@ -32,7 +34,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
           </p>
         </div>
         <.link
-          navigate={~p"/p/#{@org.token}"}
+          navigate={@portal_home_path}
           class="text-indigo-600 hover:text-indigo-800"
         >
           View Requests
@@ -42,7 +44,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
       <div class="space-y-4">
         <.link
           :for={project <- @projects}
-          navigate={~p"/p/#{@org.token}/projects/#{project.id}"}
+          navigate={"#{@portal_path}/projects/#{project.id}"}
           class="block"
         >
           <div class="bg-white border rounded-lg p-4 hover:border-indigo-300 transition">
