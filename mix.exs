@@ -13,6 +13,10 @@ defmodule Custyard.MixProject do
     ]
   end
 
+  def cli do
+    [preferred_envs: [ci: :test]]
+  end
+
   def application do
     [
       mod: {Custyard.Application, []},
@@ -66,6 +70,12 @@ defmodule Custyard.MixProject do
         "tailwind custyard --minify",
         "esbuild custyard --minify",
         "phx.digest"
+      ],
+      ci: [
+        "compile --warnings-as-errors",
+        "format --check-formatted",
+        "credo --strict",
+        "test"
       ]
     ]
   end
