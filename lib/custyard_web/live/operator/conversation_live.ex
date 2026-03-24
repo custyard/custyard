@@ -15,7 +15,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     # Transition new to active when operator views
     conversation =
       if conversation.state == :new do
-        now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.truncate(:second)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
 
         {:ok, updated} =
           Conversations.update_conversation(conversation,
