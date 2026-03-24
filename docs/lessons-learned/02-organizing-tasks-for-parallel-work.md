@@ -1,6 +1,53 @@
 # docs/lessons-learned/02-organizing-tasks-for-parallel-work.md
-
 ---
+
+## Populating the tasks DB
+
+PROMPT
+
+Quality quest: http://localhost:4000/
+
+========================================
+OPERATOR ACCOUNT RESET
+========================================
+Reset password for operator account:
+
+  Email:    admin@custyard.local
+  Password: f1nG_f6m9_yTbksb
+
+Login at: http://localhost:4000/operator/login
+========================================
+
+Run a comprehensive quality audit of the web app at {url} — browser-based exploratory testing plus parallel code review agents.
+Catalog every finding into a SQLite task DB via /d:discover-tasks.
+
+Browser testing (you, using chrome-devtools):
+Use mcp__chrome-devtools__take_screenshot, take_snapshot, click, fill, upload_file for all browser interaction. Do NOT use
+mcp__claude-in-chrome__computer screenshot — it returns stale cached images. Use claude-in-chrome only for wait, key (keyboard
+shortcuts), and navigate.
+
+Navigate to {url}. Explore the app as an end user: identify the entry point, authenticate if needed, then systematically exercise
+every feature you can reach. Test happy paths, error states, edge cases. Check network requests for failures. Kill downstream
+dependencies if possible and observe recovery behavior.
+
+Parallel code review agents (launch all 3 simultaneously, background, bypassPermissions, general-purpose):
+Before launching, read the project structure to determine the frontend framework, backend language, and any API specs present.
+Then spawn:
+
+1. Frontend reviewer: UI components — state management bugs, error handling, race conditions, accessibility
+2. Backend reviewer: Server code — security (SSRF, auth, injection), error handling, API correctness
+3. Spec/schema analyzer (only if API specs exist): Compare specs against parser/loader code — parsing edge cases, cross-version
+differences, missing features
+
+Each agent's prompt must include the add command syntax so findings go directly into the DB:
+python3 ~/.claude/scripts/task_worker.py add <db_path> --category <bugs|frontend|ux|tooling> --priority <P1|P2|P3> --title '...'
+--description '...' --file-path '...'
+
+Output: Final status from task_worker.py status, full task list grouped by priority and category.
+
+
+
+## Organizing the tasks DB
 
 We're working on a big task a little task. The big task is improving quality of this project. The little task is:
 - Group tasks by the file they touch to avoid worker collisions.
