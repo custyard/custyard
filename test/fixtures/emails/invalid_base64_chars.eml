@@ -1,0 +1,9 @@
+From: invalid@example.com
+To: support@custyard.test
+Subject: Invalid base64 characters
+Message-ID: <invalid-base64-001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: base64
+
+VGhpcyBpcyBi@#$%^&*()YXNlNjQ= not valid at all

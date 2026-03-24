@@ -1,0 +1,30 @@
+From: nested@example.com
+To: support@custyard.test
+Subject: Nested multipart boundaries
+Message-ID: <nested-001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer-boundary"
+
+--outer-boundary
+Content-Type: multipart/alternative; boundary="inner-boundary"
+
+--inner-boundary
+Content-Type: text/plain; charset=utf-8
+
+Plain text in nested multipart.
+
+--inner-boundary
+Content-Type: text/html; charset=utf-8
+
+<html><body>HTML in nested multipart.</body></html>
+
+--inner-boundary--
+
+--outer-boundary
+Content-Type: application/pdf; name="nested.pdf"
+Content-Disposition: attachment; filename="nested.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQK
+
+--outer-boundary--

@@ -51,6 +51,7 @@ defmodule Custyard.MixProject do
       {:argon2_elixir, "~> 4.0"},
       {:swoosh, "~> 1.5"},
       {:gen_smtp, "~> 1.2"},
+      {:plover, "~> 0.6"},
 
       # QA tools
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

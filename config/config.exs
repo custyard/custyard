@@ -47,9 +47,22 @@ config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Local
 config :swoosh, :api_client, false
 
 # LMTP server configuration (for receiving emails from MTA)
+# TLS options (certfile, keyfile, etc.) can be configured for STARTTLS support
 config :custyard, :lmtp,
   enabled: false,
   port: 2024,
-  hostname: "localhost"
+  hostname: "localhost",
+  tls: []
+
+# IMAP poller configuration (for fetching emails from IMAP mailbox)
+config :custyard, :imap,
+  enabled: false,
+  host: "localhost",
+  port: 993,
+  username: "",
+  password: "",
+  folder: "INBOX",
+  poll_interval: 60_000,
+  ssl: true
 
 import_config "#{config_env()}.exs"

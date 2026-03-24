@@ -7,15 +7,103 @@ defmodule Custyard.Email.Parser do
   - Charset encoding (UTF-8, ISO-8859-1, etc.)
   - Transfer encoding (base64, quoted-printable)
   - Custom X-headers for Sieve integration
+
+  ## Output Format
+
+  Returns a map with BOTH atom keys and string keys for compatibility with
+  multiple consumers:
+
+  - **Atom keys** (e.g., `:from`, `:subject`): For direct pattern matching and
+    struct-like access in Elixir code (LMTP/IMAP flow).
+
+  - **String keys** (e.g., `"from"`, `"subject"`): For JSON webhook payloads
+    and external API compatibility (Processor.process/1 expects these).
+
+  Threading headers (`message_id`, `in_reply_to`, `references`) appear at the
+  top level for convenience and are also accessible in the `headers` map with
+  their original casing (e.g., `"message-id"`). The Processor re-extracts these
+  from headers for normalization.
   """
+
+  # Windows-1252 to Unicode mapping for bytes 0x80-0x9F
+  # These bytes differ from Latin-1 (which has control chars in this range)
+  @cp1252_map %{
+    # Euro sign
+    0x80 => 0x20AC,
+    # Undefined (keep as-is)
+    0x81 => 0x0081,
+    # Single low-9 quotation mark
+    0x82 => 0x201A,
+    # Latin small letter f with hook
+    0x83 => 0x0192,
+    # Double low-9 quotation mark
+    0x84 => 0x201E,
+    # Horizontal ellipsis
+    0x85 => 0x2026,
+    # Dagger
+    0x86 => 0x2020,
+    # Double dagger
+    0x87 => 0x2021,
+    # Modifier letter circumflex accent
+    0x88 => 0x02C6,
+    # Per mille sign
+    0x89 => 0x2030,
+    # Latin capital letter S with caron
+    0x8A => 0x0160,
+    # Single left-pointing angle quotation mark
+    0x8B => 0x2039,
+    # Latin capital ligature OE
+    0x8C => 0x0152,
+    # Undefined (keep as-is)
+    0x8D => 0x008D,
+    # Latin capital letter Z with caron
+    0x8E => 0x017D,
+    # Undefined (keep as-is)
+    0x8F => 0x008F,
+    # Undefined (keep as-is)
+    0x90 => 0x0090,
+    # Left single quotation mark
+    0x91 => 0x2018,
+    # Right single quotation mark
+    0x92 => 0x2019,
+    # Left double quotation mark
+    0x93 => 0x201C,
+    # Right double quotation mark
+    0x94 => 0x201D,
+    # Bullet
+    0x95 => 0x2022,
+    # En dash
+    0x96 => 0x2013,
+    # Em dash
+    0x97 => 0x2014,
+    # Small tilde
+    0x98 => 0x02DC,
+    # Trade mark sign
+    0x99 => 0x2122,
+    # Latin small letter s with caron
+    0x9A => 0x0161,
+    # Single right-pointing angle quotation mark
+    0x9B => 0x203A,
+    # Latin small ligature oe
+    0x9C => 0x0153,
+    # Undefined (keep as-is)
+    0x9D => 0x009D,
+    # Latin small letter z with caron
+    0x9E => 0x017E,
+    # Latin capital letter Y with diaeresis
+    0x9F => 0x0178
+  }
 
   @doc """
   Parse raw RFC 5322 email binary into normalized map.
 
-  Returns map compatible with Processor.process/1 (with atom keys for direct
-  struct access AND string keys for JSON webhook compatibility):
+  Returns map compatible with Processor.process/1. Fields have BOTH atom and
+  string keys for compatibility (see moduledoc for rationale).
+
+  ## Example Output
 
       %{
+        # Atom keys (for pattern matching)
         from: "sender@example.com",
         to: "support@platform.test",
         subject: "Subject line",
@@ -24,14 +112,21 @@ defmodule Custyard.Email.Parser do
         message_id: "<id@domain>",
         in_reply_to: "<ref@domain>",
         references: "<ref1> <ref2>",
-        headers: %{
-          "message-id" => "<id@domain>",
-          "X-Customer-Tier" => "enterprise"
-        },
-        attachments: [
-          %{filename: "file.pdf", content_type: "application/pdf", content: <<...>>}
-        ]
+        headers: %{"message-id" => "<id@domain>", "X-Priority" => "1"},
+        attachments: [%{filename: "doc.pdf", content_type: "application/pdf", content: <<...>>}],
+
+        # String keys (same values, for JSON/webhook compat)
+        "from" => "sender@example.com",
+        "to" => "support@platform.test",
+        "subject" => "Subject line",
+        "text" => "Plain text body",
+        "html" => "<html>...",
+        "headers" => %{...},
+        "attachments" => [%{...}]
       }
+
+  Note: `message_id`, `in_reply_to`, `references` exist only as atom keys at
+  top level. The Processor extracts these from `headers` map anyway.
   """
   @spec parse(binary()) :: {:ok, map()} | {:error, term()}
   def parse(nil), do: {:error, :nil_input}
@@ -79,6 +174,15 @@ defmodule Custyard.Email.Parser do
 
   # Add string key versions for JSON webhook compatibility
   defp add_string_keys(map) do
+    # Convert attachment maps to also have string keys
+    attachments_with_string_keys =
+      Enum.map(map.attachments, fn att ->
+        att
+        |> Map.put("filename", att.filename)
+        |> Map.put("content_type", att.content_type)
+        |> Map.put("content", att.content)
+      end)
+
     map
     |> Map.put("from", map.from)
     |> Map.put("to", map.to)
@@ -86,6 +190,7 @@ defmodule Custyard.Email.Parser do
     |> Map.put("text", map.text)
     |> Map.put("html", map.html)
     |> Map.put("headers", map.headers)
+    |> Map.put("attachments", attachments_with_string_keys)
   end
 
   # Extract email address from header value like "Name <email@domain>" or "email@domain"
@@ -388,9 +493,8 @@ defmodule Custyard.Email.Parser do
         |> normalize_unicode_result()
 
       "windows-1252" ->
-        # CP1252 is superset of Latin-1
-        :unicode.characters_to_binary(text, :latin1, :utf8)
-        |> normalize_unicode_result()
+        # CP1252 has special characters in 0x80-0x9F range that differ from Latin-1
+        convert_cp1252_to_utf8(text)
 
       _ ->
         # Best effort - try as-is
@@ -403,6 +507,22 @@ defmodule Custyard.Email.Parser do
   defp normalize_unicode_result(result) when is_binary(result), do: result
   defp normalize_unicode_result({:error, _, _}), do: ""
   defp normalize_unicode_result({:incomplete, partial, _}), do: partial
+
+  # Convert Windows-1252 (CP1252) to UTF-8
+  # Bytes 0x00-0x7F and 0xA0-0xFF are same as Latin-1
+  # Bytes 0x80-0x9F need special mapping
+  defp convert_cp1252_to_utf8(text) when is_binary(text) do
+    text
+    |> :binary.bin_to_list()
+    |> Enum.map(&cp1252_byte_to_codepoint/1)
+    |> List.to_string()
+  end
+
+  defp cp1252_byte_to_codepoint(byte) when byte in 0x80..0x9F do
+    Map.get(@cp1252_map, byte, byte)
+  end
+
+  defp cp1252_byte_to_codepoint(byte), do: byte
 
   # Build headers map with normalized keys
   defp build_headers_map(headers) when is_list(headers) do
