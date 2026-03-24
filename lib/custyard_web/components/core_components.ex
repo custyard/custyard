@@ -55,7 +55,12 @@ defmodule CustyardWeb.CoreComponents do
       data-testid={"modal-#{@id}"}
       class="relative z-50 hidden"
     >
-      <div id={"#{@id}-bg"} data-testid={"modal-overlay-#{@id}"} class="bg-zinc-50/90 fixed inset-0 transition-opacity" aria-hidden="true" />
+      <div
+        id={"#{@id}-bg"}
+        data-testid={"modal-overlay-#{@id}"}
+        class="bg-zinc-50/90 fixed inset-0 transition-opacity"
+        aria-hidden="true"
+      />
       <div
         class="fixed inset-0 overflow-y-auto"
         aria-labelledby={"#{@id}-title"}
@@ -86,7 +91,11 @@ defmodule CustyardWeb.CoreComponents do
               </div>
               <div id={"#{@id}-content"} data-testid={"modal-content-#{@id}"}>
                 <header :if={@title != []} class="mb-4">
-                  <h1 id={"#{@id}-title"} data-testid={"modal-title-#{@id}"} class="text-lg font-semibold leading-8 text-zinc-800">
+                  <h1
+                    id={"#{@id}-title"}
+                    data-testid={"modal-title-#{@id}"}
+                    class="text-lg font-semibold leading-8 text-zinc-800"
+                  >
                     {render_slot(@title)}
                   </h1>
                   <p :if={@subtitle != []} class="mt-2 text-sm leading-6 text-zinc-600">
@@ -239,7 +248,11 @@ defmodule CustyardWeb.CoreComponents do
     <.form :let={f} for={@for} as={@as} {@rest}>
       <div class="mt-10 space-y-8 bg-white" data-testid="simple-form">
         {render_slot(@inner_block, f)}
-        <div :for={action <- @actions} class="mt-2 flex items-center justify-between gap-6" data-testid="form-actions">
+        <div
+          :for={action <- @actions}
+          class="mt-2 flex items-center justify-between gap-6"
+          data-testid="form-actions"
+        >
           {render_slot(action, f)}
         </div>
       </div>
@@ -449,7 +462,10 @@ defmodule CustyardWeb.CoreComponents do
 
   def error(assigns) do
     ~H"""
-    <p class="mt-3 flex gap-3 text-sm leading-6 text-rose-600 phx-no-feedback:hidden" data-testid="form-error">
+    <p
+      class="mt-3 flex gap-3 text-sm leading-6 text-rose-600 phx-no-feedback:hidden"
+      data-testid="form-error"
+    >
       <.icon name="hero-exclamation-circle-mini" class="mt-0.5 h-5 w-5 flex-none" />
       {render_slot(@inner_block)}
     </p>
@@ -467,7 +483,10 @@ defmodule CustyardWeb.CoreComponents do
 
   def header(assigns) do
     ~H"""
-    <header class={[@actions != [] && "flex items-center justify-between gap-6", @class]} data-testid="header">
+    <header
+      class={[@actions != [] && "flex items-center justify-between gap-6", @class]}
+      data-testid="header"
+    >
       <div>
         <h1 class="text-lg font-semibold leading-8 text-zinc-800">
           {render_slot(@inner_block)}
@@ -528,7 +547,12 @@ defmodule CustyardWeb.CoreComponents do
           phx-update={match?(%Phoenix.LiveView.LiveStream{}, @rows) && "stream"}
           class="relative divide-y divide-zinc-100 border-t border-zinc-200 text-sm leading-6 text-zinc-700"
         >
-          <tr :for={row <- @rows} id={@row_id && @row_id.(row)} class="group hover:bg-zinc-50" data-testid="table-row">
+          <tr
+            :for={row <- @rows}
+            id={@row_id && @row_id.(row)}
+            class="group hover:bg-zinc-50"
+            data-testid="table-row"
+          >
             <td
               :for={{col, i} <- Enum.with_index(@col)}
               phx-click={@row_click && @row_click.(row)}

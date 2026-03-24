@@ -28,7 +28,9 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
     <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-projects-list">
       <div class="flex justify-between items-center mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-gray-900" data-testid="portal-projects-heading">Projects</h1>
+          <h1 class="text-2xl font-semibold text-gray-900" data-testid="portal-projects-heading">
+            Projects
+          </h1>
           <p class="text-sm text-gray-500 mt-1">
             Active projects and their progress
           </p>
@@ -52,7 +54,9 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
           <div class="bg-white border rounded-lg p-4 hover:border-indigo-300 transition">
             <div class="flex justify-between items-start mb-3">
               <div>
-                <h3 class="font-medium text-gray-900" data-testid="portal-project-title">{project.title}</h3>
+                <h3 class="font-medium text-gray-900" data-testid="portal-project-title">
+                  {project.title}
+                </h3>
                 <p :if={project.description} class="text-sm text-gray-500 mt-1 line-clamp-2">
                   {project.description}
                 </p>
@@ -73,7 +77,11 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
           </div>
         </.link>
 
-        <div :if={@projects == []} class="text-center py-12 text-gray-500" data-testid="portal-empty-state">
+        <div
+          :if={@projects == []}
+          class="text-center py-12 text-gray-500"
+          data-testid="portal-empty-state"
+        >
           No active projects at this time.
         </div>
       </div>

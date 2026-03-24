@@ -38,7 +38,9 @@ defmodule CustyardWeb.Portal.ProjectLive do
       </.link>
 
       <div class="bg-white border rounded-lg p-6 mb-6">
-        <h1 class="text-2xl font-semibold text-gray-900 mb-2" data-testid="portal-project-title">{@project.title}</h1>
+        <h1 class="text-2xl font-semibold text-gray-900 mb-2" data-testid="portal-project-title">
+          {@project.title}
+        </h1>
         <p :if={@project.description} class="text-gray-600 mb-4">
           {@project.description}
         </p>
@@ -55,14 +57,23 @@ defmodule CustyardWeb.Portal.ProjectLive do
         <.progress_bar progress={@project.progress} />
       </div>
 
-      <h2 class="text-lg font-semibold text-gray-900 mb-3" data-testid="portal-tasks-heading">Tasks</h2>
+      <h2 class="text-lg font-semibold text-gray-900 mb-3" data-testid="portal-tasks-heading">
+        Tasks
+      </h2>
 
-      <div :if={@project.tasks != []} class="bg-white border rounded-lg divide-y" data-testid="portal-tasks-list">
+      <div
+        :if={@project.tasks != []}
+        class="bg-white border rounded-lg divide-y"
+        data-testid="portal-tasks-list"
+      >
         <%= for task <- @project.tasks do %>
           <div class="p-4 flex items-center gap-4" data-testid="portal-task-item">
             <.task_state_icon state={task.state} />
             <div class="flex-1">
-              <div class={"text-gray-900 #{if task.state == :done, do: "line-through opacity-60"}"} data-testid="portal-task-title">
+              <div
+                class={"text-gray-900 #{if task.state == :done, do: "line-through opacity-60"}"}
+                data-testid="portal-task-title"
+              >
                 {task.title}
               </div>
               <div :if={task.due_at} class="text-sm text-gray-500">

@@ -101,11 +101,16 @@ defmodule CustyardWeb.Portal.ConversationLive do
         &#8592; Back to requests
       </.link>
 
-      <h1 class="text-2xl font-semibold text-gray-900 mb-6" data-testid="portal-conversation-subject">{@conversation.subject}</h1>
+      <h1 class="text-2xl font-semibold text-gray-900 mb-6" data-testid="portal-conversation-subject">
+        {@conversation.subject}
+      </h1>
 
       <div class="space-y-4 mb-8" data-testid="portal-messages">
         <%= for msg <- @messages do %>
-          <div class={"p-4 rounded-lg #{message_style(msg)}"} data-testid={"portal-message-#{msg.source}"}>
+          <div
+            class={"p-4 rounded-lg #{message_style(msg)}"}
+            data-testid={"portal-message-#{msg.source}"}
+          >
             <div class="flex justify-between text-sm text-gray-500 mb-2">
               <span>{msg.sender_email}</span>
               <span>{format_time(msg.inserted_at)}</span>
@@ -117,7 +122,11 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
       <.tasks_section tasks={@tasks} />
 
-      <form phx-submit="submit_reply" class="bg-white border rounded-lg p-4" data-testid="portal-reply-form">
+      <form
+        phx-submit="submit_reply"
+        class="bg-white border rounded-lg p-4"
+        data-testid="portal-reply-form"
+      >
         <textarea
           name="body"
           rows="4"

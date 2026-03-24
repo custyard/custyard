@@ -180,7 +180,9 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
     ~H"""
     <div class="max-w-4xl mx-auto p-4" data-testid="operator-orgs-page">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-lg font-semibold text-gray-900" data-testid="operator-orgs-heading">Organizations</h1>
+        <h1 class="text-lg font-semibold text-gray-900" data-testid="operator-orgs-heading">
+          Organizations
+        </h1>
         <button
           phx-click="show_form"
           class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
@@ -222,12 +224,20 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   defp org_form(assigns) do
     ~H"""
-    <div class="bg-white border border-gray-200 rounded-lg p-4 mb-4" data-testid="operator-org-form-card">
+    <div
+      class="bg-white border border-gray-200 rounded-lg p-4 mb-4"
+      data-testid="operator-org-form-card"
+    >
       <h2 class="text-sm font-semibold text-gray-900 mb-4">
         {if @editing, do: "Edit organization", else: "New organization"}
       </h2>
 
-      <form phx-submit="save_org" phx-change="validate_form" class="space-y-4" data-testid="operator-org-form">
+      <form
+        phx-submit="save_org"
+        phx-change="validate_form"
+        class="space-y-4"
+        data-testid="operator-org-form"
+      >
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
           <input
@@ -414,7 +424,10 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   defp org_card(assigns) do
     ~H"""
-    <div class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow" data-testid={"operator-org-card-#{@org.id}"}>
+    <div
+      class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+      data-testid={"operator-org-card-#{@org.id}"}
+    >
       <div class="flex items-start justify-between">
         <div class="flex items-start gap-3">
           <div :if={@org.logo_url} class="flex-shrink-0">
@@ -434,7 +447,9 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           </div>
           <div>
             <div class="flex items-center gap-2 mb-1">
-              <span class="font-semibold text-gray-900" data-testid="operator-org-name">{@org.name}</span>
+              <span class="font-semibold text-gray-900" data-testid="operator-org-name">
+                {@org.name}
+              </span>
               <.tier_badge tier={@org.tier} />
             </div>
             <div :if={@org.domain} class="text-sm text-gray-500 mb-2">{@org.domain}</div>

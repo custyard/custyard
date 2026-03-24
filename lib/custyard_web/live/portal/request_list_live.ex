@@ -138,21 +138,30 @@ defmodule CustyardWeb.Portal.RequestListLive do
           <div class="bg-white border rounded-lg p-4 hover:border-indigo-300 transition">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="font-medium text-gray-900" data-testid="portal-request-subject">{conv.subject}</h3>
+                <h3 class="font-medium text-gray-900" data-testid="portal-request-subject">
+                  {conv.subject}
+                </h3>
                 <p class="text-sm text-gray-500 mt-1">
                   {if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown"} · {relative_time(
                     conv.inserted_at
                   )}
                 </p>
               </div>
-              <span class={"px-2 py-1 text-xs rounded-full #{state_color(conv.state)}"} data-testid="portal-state-badge">
+              <span
+                class={"px-2 py-1 text-xs rounded-full #{state_color(conv.state)}"}
+                data-testid="portal-state-badge"
+              >
                 {conv.state}
               </span>
             </div>
           </div>
         </.link>
 
-        <div :if={@conversations == []} class="text-center py-12 text-gray-500" data-testid="portal-empty-state">
+        <div
+          :if={@conversations == []}
+          class="text-center py-12 text-gray-500"
+          data-testid="portal-empty-state"
+        >
           No open requests. Create one to get started.
         </div>
       </div>

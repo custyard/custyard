@@ -131,11 +131,16 @@ defmodule CustyardWeb.Operator.SettingsLive do
   def render(assigns) do
     ~H"""
     <div class="max-w-2xl mx-auto p-4" data-testid="operator-settings-page">
-      <h1 class="text-lg font-semibold text-gray-900 mb-6" data-testid="operator-settings-heading">Settings</h1>
+      <h1 class="text-lg font-semibold text-gray-900 mb-6" data-testid="operator-settings-heading">
+        Settings
+      </h1>
 
       <.flash_group flash={@flash} />
 
-      <div class="bg-white border border-gray-200 rounded-lg p-4 mb-4" data-testid="operator-settings-weights">
+      <div
+        class="bg-white border border-gray-200 rounded-lg p-4 mb-4"
+        data-testid="operator-settings-weights"
+      >
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-sm font-semibold text-gray-900">Score Weights</h2>
           <button
@@ -161,7 +166,12 @@ defmodule CustyardWeb.Operator.SettingsLive do
           </div>
         </div>
 
-        <form :if={@editing_weights} phx-submit="save_weights" class="space-y-3" data-testid="operator-settings-weights-form">
+        <form
+          :if={@editing_weights}
+          phx-submit="save_weights"
+          class="space-y-3"
+          data-testid="operator-settings-weights-form"
+        >
           <div :for={{key, value} <- @weights} class="flex items-center justify-between">
             <label class="text-sm text-gray-700 capitalize" for={"weights_#{key}"}>{key}</label>
             <input
@@ -193,7 +203,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
         </form>
       </div>
 
-      <div class="bg-white border border-gray-200 rounded-lg p-4 mb-4" data-testid="operator-settings-thresholds">
+      <div
+        class="bg-white border border-gray-200 rounded-lg p-4 mb-4"
+        data-testid="operator-settings-thresholds"
+      >
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-sm font-semibold text-gray-900">Neglect Thresholds</h2>
           <button
@@ -227,7 +240,12 @@ defmodule CustyardWeb.Operator.SettingsLive do
           </div>
         </div>
 
-        <form :if={@editing_thresholds} phx-submit="save_thresholds" class="space-y-3" data-testid="operator-settings-thresholds-form">
+        <form
+          :if={@editing_thresholds}
+          phx-submit="save_thresholds"
+          class="space-y-3"
+          data-testid="operator-settings-thresholds-form"
+        >
           <div
             :for={{tier, [warning, critical]} <- @thresholds}
             class="flex items-center justify-between"
