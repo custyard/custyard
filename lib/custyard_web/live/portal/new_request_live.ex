@@ -58,7 +58,12 @@ defmodule CustyardWeb.Portal.NewRequestLive do
 
       <form phx-submit="submit" class="space-y-4" data-testid="portal-new-request-form">
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+          <label
+            class="block text-sm font-medium text-gray-700 mb-1"
+            data-testid="portal-subject-label"
+          >
+            Subject
+          </label>
           <input
             type="text"
             name="subject"
@@ -70,7 +75,12 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Urgency</label>
+          <label
+            class="block text-sm font-medium text-gray-700 mb-1"
+            data-testid="portal-urgency-label"
+          >
+            Urgency
+          </label>
           <select
             name="urgency"
             class="w-full border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
@@ -83,7 +93,9 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+          <label class="block text-sm font-medium text-gray-700 mb-1" data-testid="portal-body-label">
+            Description
+          </label>
           <textarea
             name="body"
             rows="6"

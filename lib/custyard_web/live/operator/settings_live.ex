@@ -158,7 +158,11 @@ defmodule CustyardWeb.Operator.SettingsLive do
         </p>
 
         <div :if={not @editing_weights} class="space-y-3">
-          <div :for={{key, value} <- @weights} class="flex items-center justify-between">
+          <div
+            :for={{key, value} <- @weights}
+            class="flex items-center justify-between"
+            data-testid={"operator-settings-weight-#{key}"}
+          >
             <span class="text-sm text-gray-700 capitalize">{key}</span>
             <span class="text-sm font-mono text-gray-600 bg-gray-50 px-2 py-1 rounded">
               {value}
@@ -190,12 +194,14 @@ defmodule CustyardWeb.Operator.SettingsLive do
               type="button"
               phx-click="cancel_weights"
               class="text-xs text-gray-600 hover:text-gray-800 px-3 py-1"
+              data-testid="operator-settings-cancel-weights"
             >
               Cancel
             </button>
             <button
               type="submit"
               class="text-xs text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded"
+              data-testid="operator-settings-save-weights"
             >
               Save
             </button>
@@ -227,6 +233,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
           <div
             :for={{tier, [warning, critical]} <- @thresholds}
             class="flex items-center justify-between"
+            data-testid={"operator-settings-threshold-#{tier}"}
           >
             <span class="text-sm text-gray-700 capitalize">{tier}</span>
             <div class="flex items-center gap-2">
@@ -279,12 +286,14 @@ defmodule CustyardWeb.Operator.SettingsLive do
               type="button"
               phx-click="cancel_thresholds"
               class="text-xs text-gray-600 hover:text-gray-800 px-3 py-1"
+              data-testid="operator-settings-cancel-thresholds"
             >
               Cancel
             </button>
             <button
               type="submit"
               class="text-xs text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded"
+              data-testid="operator-settings-save-thresholds"
             >
               Save
             </button>
@@ -292,12 +301,18 @@ defmodule CustyardWeb.Operator.SettingsLive do
         </form>
       </div>
 
-      <div class="bg-white border border-gray-200 rounded-lg p-4">
+      <div
+        class="bg-white border border-gray-200 rounded-lg p-4"
+        data-testid="operator-settings-score-calc"
+      >
         <h2 class="text-sm font-semibold text-gray-900 mb-4">Score Calculation</h2>
         <p class="text-xs text-gray-500 mb-2">
           The attention score is calculated as:
         </p>
-        <pre class="text-xs text-gray-600 bg-gray-50 p-3 rounded overflow-x-auto">
+        <pre
+          class="text-xs text-gray-600 bg-gray-50 p-3 rounded overflow-x-auto"
+          data-testid="operator-settings-formula"
+        >
           Score = (idle_weight * idle_score) +
                   (state_weight * state_score) +
                   (tier_weight * tier_score) +

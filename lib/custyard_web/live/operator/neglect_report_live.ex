@@ -99,11 +99,19 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
       </div>
 
       <div :if={@total_count > 0} class="flex gap-4 mb-6 text-sm">
-        <div :if={@critical_count > 0} class="flex items-center gap-1.5">
+        <div
+          :if={@critical_count > 0}
+          class="flex items-center gap-1.5"
+          data-testid="operator-neglect-critical-count"
+        >
           <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
           <span class="text-gray-600">{@critical_count} critical</span>
         </div>
-        <div :if={@warning_count > 0} class="flex items-center gap-1.5">
+        <div
+          :if={@warning_count > 0}
+          class="flex items-center gap-1.5"
+          data-testid="operator-neglect-warning-count"
+        >
           <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
           <span class="text-gray-600">{@warning_count} warning</span>
         </div>
@@ -140,14 +148,19 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
               ]}>
                 <.neglect_badge level={item.neglect_status} />
                 <div class="flex-1 min-w-0">
-                  <div class="text-sm text-gray-800 truncate">{item.conversation.subject}</div>
-                  <div class="text-xs text-gray-500">
+                  <div class="text-sm text-gray-800 truncate" data-testid="operator-neglect-subject">
+                    {item.conversation.subject}
+                  </div>
+                  <div class="text-xs text-gray-500" data-testid="operator-neglect-contact">
                     {if item.conversation.contact,
                       do: item.conversation.contact.name || item.conversation.contact.email,
                       else: "Unknown contact"}
                   </div>
                 </div>
-                <span class="text-xs text-gray-400 whitespace-nowrap">
+                <span
+                  class="text-xs text-gray-400 whitespace-nowrap"
+                  data-testid="operator-neglect-idle-time"
+                >
                   {format_idle_time(item.hours_idle)}
                 </span>
               </div>
@@ -177,7 +190,10 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
     assigns = assign(assigns, :colors, colors)
 
     ~H"""
-    <span class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}>
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
+      data-testid={"operator-tier-badge-#{@tier}"}
+    >
       {to_string(@tier)}
     </span>
     """
@@ -190,12 +206,14 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
     <span
       :if={@level == :critical}
       class="text-xs px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300"
+      data-testid="operator-neglect-badge-critical"
     >
       NEGLECTED
     </span>
     <span
       :if={@level == :warning}
       class="text-xs px-1.5 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300"
+      data-testid="operator-neglect-badge-warning"
     >
       aging
     </span>

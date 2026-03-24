@@ -112,10 +112,12 @@ defmodule CustyardWeb.Portal.ConversationLive do
             data-testid={"portal-message-#{msg.source}"}
           >
             <div class="flex justify-between text-sm text-gray-500 mb-2">
-              <span>{msg.sender_email}</span>
-              <span>{format_time(msg.inserted_at)}</span>
+              <span data-testid="portal-message-sender">{msg.sender_email}</span>
+              <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
             </div>
-            <div class="text-gray-900 whitespace-pre-wrap">{msg.body}</div>
+            <div class="text-gray-900 whitespace-pre-wrap" data-testid="portal-message-body">
+              {msg.body}
+            </div>
           </div>
         <% end %>
       </div>
@@ -153,14 +155,16 @@ defmodule CustyardWeb.Portal.ConversationLive do
   defp tasks_section(assigns) do
     ~H"""
     <div :if={@tasks != []} class="mb-8" data-testid="portal-tasks-section">
-      <h2 class="text-lg font-semibold text-gray-900 mb-3">Tasks</h2>
+      <h2 class="text-lg font-semibold text-gray-900 mb-3" data-testid="portal-tasks-heading">
+        Tasks
+      </h2>
       <div class="bg-white border rounded-lg divide-y" data-testid="portal-tasks-list">
         <%= for task <- @tasks do %>
           <div class="p-3 flex items-center gap-3" data-testid="portal-task-item">
             <.task_state_badge state={task.state} />
             <div class="flex-1">
               <div class="text-gray-900" data-testid="portal-task-title">{task.title}</div>
-              <div :if={task.due_at} class="text-sm text-gray-500">
+              <div :if={task.due_at} class="text-sm text-gray-500" data-testid="portal-task-due">
                 Due: {format_due_at(task.due_at)}
               </div>
             </div>
@@ -189,7 +193,10 @@ defmodule CustyardWeb.Portal.ConversationLive do
       |> assign(:label, label)
 
     ~H"""
-    <span class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}>
+    <span
+      class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}
+      data-testid={"portal-task-badge-#{@state}"}
+    >
       {@label}
     </span>
     """

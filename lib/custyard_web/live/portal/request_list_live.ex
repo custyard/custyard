@@ -93,7 +93,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
           <h1 class="text-2xl font-semibold text-gray-900" data-testid="portal-request-list-heading">
             {if @admin_mode, do: "All Organization Requests", else: "My Requests"}
           </h1>
-          <p :if={@current_contact} class="text-sm text-gray-500 mt-1">
+          <p :if={@current_contact} class="text-sm text-gray-500 mt-1" data-testid="portal-viewing-as">
             Viewing as: {@current_contact.name || @current_contact.email}
           </p>
         </div>
@@ -141,7 +141,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
                 <h3 class="font-medium text-gray-900" data-testid="portal-request-subject">
                   {conv.subject}
                 </h3>
-                <p class="text-sm text-gray-500 mt-1">
+                <p class="text-sm text-gray-500 mt-1" data-testid="portal-request-meta">
                   {if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown"} · {relative_time(
                     conv.inserted_at
                   )}

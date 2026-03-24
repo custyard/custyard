@@ -41,11 +41,18 @@ defmodule CustyardWeb.Portal.ProjectLive do
         <h1 class="text-2xl font-semibold text-gray-900 mb-2" data-testid="portal-project-title">
           {@project.title}
         </h1>
-        <p :if={@project.description} class="text-gray-600 mb-4">
+        <p
+          :if={@project.description}
+          class="text-gray-600 mb-4"
+          data-testid="portal-project-description"
+        >
           {@project.description}
         </p>
 
-        <div class="flex items-center gap-6 text-sm text-gray-500 mb-4">
+        <div
+          class="flex items-center gap-6 text-sm text-gray-500 mb-4"
+          data-testid="portal-project-dates"
+        >
           <span :if={@project.start_date}>
             Started: {format_date(@project.start_date)}
           </span>
@@ -76,7 +83,7 @@ defmodule CustyardWeb.Portal.ProjectLive do
               >
                 {task.title}
               </div>
-              <div :if={task.due_at} class="text-sm text-gray-500">
+              <div :if={task.due_at} class="text-sm text-gray-500" data-testid="portal-task-due">
                 Due: {format_due_at(task.due_at)}
               </div>
             </div>
@@ -100,7 +107,7 @@ defmodule CustyardWeb.Portal.ProjectLive do
 
   defp progress_bar(assigns) do
     ~H"""
-    <div>
+    <div data-testid="portal-project-progress-bar">
       <div class="flex justify-between text-sm text-gray-600 mb-2">
         <span>Progress: {@progress.done} of {@progress.total} tasks completed</span>
         <span>{@progress.percentage}%</span>
@@ -121,15 +128,24 @@ defmodule CustyardWeb.Portal.ProjectLive do
     ~H"""
     <%= case @state do %>
       <% :done -> %>
-        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 flex items-center justify-center">
+        <span
+          class="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 flex items-center justify-center"
+          data-testid={"portal-task-icon-#{@state}"}
+        >
           <.icon name="hero-check" class="w-4 h-4 text-green-600" />
         </span>
       <% :in_progress -> %>
-        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
+        <span
+          class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center"
+          data-testid={"portal-task-icon-#{@state}"}
+        >
           <.icon name="hero-arrow-path" class="w-4 h-4 text-blue-600" />
         </span>
       <% _ -> %>
-        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center">
+        <span
+          class="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center"
+          data-testid={"portal-task-icon-#{@state}"}
+        >
           <span class="w-2 h-2 rounded-full bg-gray-400" />
         </span>
     <% end %>
@@ -154,7 +170,10 @@ defmodule CustyardWeb.Portal.ProjectLive do
       |> assign(:label, label)
 
     ~H"""
-    <span class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}>
+    <span
+      class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}
+      data-testid={"portal-task-badge-#{@state}"}
+    >
       {@label}
     </span>
     """

@@ -98,7 +98,11 @@ defmodule CustyardWeb.CoreComponents do
                   >
                     {render_slot(@title)}
                   </h1>
-                  <p :if={@subtitle != []} class="mt-2 text-sm leading-6 text-zinc-600">
+                  <p
+                    :if={@subtitle != []}
+                    class="mt-2 text-sm leading-6 text-zinc-600"
+                    data-testid={"modal-subtitle-#{@id}"}
+                  >
                     {render_slot(@subtitle)}
                   </p>
                 </header>
@@ -171,7 +175,12 @@ defmodule CustyardWeb.CoreComponents do
         {@title}
       </p>
       <p class="mt-2 text-sm leading-5">{msg}</p>
-      <button type="button" class="group absolute top-1 right-1 p-2" aria-label={gettext("close")}>
+      <button
+        type="button"
+        class="group absolute top-1 right-1 p-2"
+        aria-label={gettext("close")}
+        data-testid={"flash-close-#{@kind}"}
+      >
         <.icon name="hero-x-mark-solid" class="h-5 w-5 opacity-40 group-hover:opacity-70" />
       </button>
     </div>
@@ -449,7 +458,11 @@ defmodule CustyardWeb.CoreComponents do
 
   def label(assigns) do
     ~H"""
-    <label for={@for} class="block text-sm font-semibold leading-6 text-zinc-800">
+    <label
+      for={@for}
+      class="block text-sm font-semibold leading-6 text-zinc-800"
+      data-testid={@for && "label-#{@for}"}
+    >
       {render_slot(@inner_block)}
     </label>
     """
@@ -537,7 +550,11 @@ defmodule CustyardWeb.CoreComponents do
         <thead class="text-sm text-left leading-6 text-zinc-500">
           <tr>
             <th :for={col <- @col} class="p-0 pr-6 pb-4 font-normal">{col[:label]}</th>
-            <th :if={@action != []} class="relative p-0 pb-4">
+            <th
+              :if={@action != []}
+              class="relative p-0 pb-4"
+              data-testid={"table-actions-header-#{@id}"}
+            >
               <span class="sr-only">{gettext("Actions")}</span>
             </th>
           </tr>
@@ -601,7 +618,11 @@ defmodule CustyardWeb.CoreComponents do
     ~H"""
     <div class="mt-14" data-testid="list">
       <dl class="-my-4 divide-y divide-zinc-100">
-        <div :for={item <- @item} class="flex gap-4 py-4 text-sm leading-6 sm:gap-8">
+        <div
+          :for={item <- @item}
+          class="flex gap-4 py-4 text-sm leading-6 sm:gap-8"
+          data-testid="list-item"
+        >
           <dt class="w-1/4 flex-none text-zinc-500">{item.title}</dt>
           <dd class="text-zinc-700">{render_slot(item)}</dd>
         </div>

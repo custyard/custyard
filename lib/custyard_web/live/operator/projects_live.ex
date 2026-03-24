@@ -270,6 +270,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             phx-value-field="title"
             required
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            data-testid="operator-project-title-input"
           />
         </div>
 
@@ -281,6 +282,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             phx-value-field="description"
             rows="3"
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            data-testid="operator-project-desc-input"
           >{@form_data.description}</textarea>
         </div>
 
@@ -291,6 +293,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             phx-change="update_form"
             phx-value-field="organization_id"
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            data-testid="operator-project-org-select"
           >
             <option value="">Internal project (no organization)</option>
             <option
@@ -313,6 +316,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
               phx-change="update_form"
               phx-value-field="start_date"
               class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+              data-testid="operator-project-start-date"
             />
           </div>
           <div>
@@ -324,6 +328,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
               phx-change="update_form"
               phx-value-field="target_completion_date"
               class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+              data-testid="operator-project-target-date"
             />
           </div>
         </div>
@@ -338,6 +343,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             phx-value-field="portal_visible"
             value="true"
             class="rounded border-gray-300"
+            data-testid="operator-project-visible-checkbox"
           />
           <label for="portal_visible" class="text-sm text-gray-700">
             Visible in client portal
@@ -348,6 +354,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           <button
             type="submit"
             class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
+            data-testid="operator-project-submit-btn"
           >
             {if @editing, do: "Update", else: "Create"}
           </button>
@@ -355,6 +362,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             type="button"
             phx-click="hide_form"
             class="text-gray-600 text-sm px-4 py-2 rounded hover:bg-gray-100"
+            data-testid="operator-project-cancel-btn"
           >
             Cancel
           </button>
@@ -386,10 +394,18 @@ defmodule CustyardWeb.Operator.ProjectsLive do
               hidden
             </span>
           </div>
-          <div :if={@project.organization} class="text-sm text-gray-500 mb-2">
+          <div
+            :if={@project.organization}
+            class="text-sm text-gray-500 mb-2"
+            data-testid="operator-project-org"
+          >
             {@project.organization.name}
           </div>
-          <div :if={@project.description} class="text-sm text-gray-600 mb-2 line-clamp-2">
+          <div
+            :if={@project.description}
+            class="text-sm text-gray-600 mb-2 line-clamp-2"
+            data-testid="operator-project-desc"
+          >
             {@project.description}
           </div>
           <div class="flex items-center gap-4 text-xs text-gray-400">
@@ -425,7 +441,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         >
           Delete
         </button>
-        <span class="text-xs text-gray-400 ml-auto">
+        <span class="text-xs text-gray-400 ml-auto" data-testid="operator-project-task-count">
           {@project.progress.done}/{@project.progress.total} tasks
         </span>
       </div>
@@ -446,7 +462,10 @@ defmodule CustyardWeb.Operator.ProjectsLive do
     assigns = assign(assigns, :colors, colors)
 
     ~H"""
-    <span class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}>
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
+      data-testid={"operator-project-type-#{@type}"}
+    >
       {to_string(@type)}
     </span>
     """
@@ -466,7 +485,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       |> assign(:stroke_dashoffset, stroke_dashoffset)
 
     ~H"""
-    <div class="relative w-12 h-12">
+    <div class="relative w-12 h-12" data-testid="operator-project-progress">
       <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
         <circle
           cx="18"

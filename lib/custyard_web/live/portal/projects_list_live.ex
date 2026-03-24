@@ -57,14 +57,21 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
                 <h3 class="font-medium text-gray-900" data-testid="portal-project-title">
                   {project.title}
                 </h3>
-                <p :if={project.description} class="text-sm text-gray-500 mt-1 line-clamp-2">
+                <p
+                  :if={project.description}
+                  class="text-sm text-gray-500 mt-1 line-clamp-2"
+                  data-testid="portal-project-description"
+                >
                   {project.description}
                 </p>
               </div>
               <.progress_badge progress={project.progress} />
             </div>
 
-            <div class="flex items-center gap-4 text-sm text-gray-500">
+            <div
+              class="flex items-center gap-4 text-sm text-gray-500"
+              data-testid="portal-project-dates"
+            >
               <span :if={project.start_date}>
                 Started: {format_date(project.start_date)}
               </span>
@@ -93,7 +100,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
 
   defp progress_badge(assigns) do
     ~H"""
-    <span class="text-sm text-gray-600">
+    <span class="text-sm text-gray-600" data-testid="portal-progress-badge">
       {@progress.done}/{@progress.total} tasks
     </span>
     """

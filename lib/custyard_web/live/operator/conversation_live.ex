@@ -411,11 +411,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
       >
         <div class="p-4 space-y-4">
           <%!-- Organization --%>
-          <div>
+          <div data-testid="operator-sidebar-org">
             <div class="text-xs text-gray-400 uppercase tracking-wide mb-1">Organization</div>
             <.link
               navigate={~p"/operator/organizations"}
               class="text-sm text-indigo-600 hover:underline font-medium"
+              data-testid="operator-sidebar-org-link"
             >
               {@conversation.organization.name}
             </.link>
@@ -425,7 +426,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           </div>
 
           <%!-- Contact --%>
-          <div>
+          <div data-testid="operator-sidebar-contact">
             <div class="text-xs text-gray-400 uppercase tracking-wide mb-1">Contact</div>
             <div class="text-sm text-gray-800">
               {if @conversation.contact,
@@ -433,7 +434,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
                 else: "Unknown"}
             </div>
             <%= if @conversation.contact && @conversation.contact.email do %>
-              <div class="text-xs text-gray-500">{@conversation.contact.email}</div>
+              <div class="text-xs text-gray-500" data-testid="operator-sidebar-contact-email">
+                {@conversation.contact.email}
+              </div>
             <% end %>
           </div>
 
@@ -462,7 +465,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
           <%!-- Tasks --%>
           <div>
-            <div class="text-xs text-gray-400 uppercase tracking-wide mb-2">
+            <div
+              class="text-xs text-gray-400 uppercase tracking-wide mb-2"
+              data-testid="operator-tasks-section"
+            >
               Tasks ({length(@conversation.tasks)})
             </div>
             <%= if Enum.empty?(@conversation.tasks) do %>
@@ -498,6 +504,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                   placeholder="Task title..."
                   class="w-full text-xs border border-gray-300 rounded px-2 py-1"
                   autofocus
+                  data-testid="operator-task-title-input"
                 />
                 <div class="flex gap-2">
                   <input
@@ -505,6 +512,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                     name="due_at"
                     value={@new_task_due_at}
                     class="flex-1 text-xs border border-gray-300 rounded px-2 py-1"
+                    data-testid="operator-task-due-input"
                   />
                 </div>
                 <div class="flex items-center gap-2">
@@ -515,6 +523,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                     checked={@new_task_portal_visible}
                     id="new_task_portal_visible"
                     class="h-3 w-3"
+                    data-testid="operator-task-visible-checkbox"
                   />
                   <label for="new_task_portal_visible" class="text-xs text-gray-600">
                     Visible in portal
@@ -524,6 +533,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                   <button
                     type="submit"
                     class="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                    data-testid="operator-task-add-btn"
                   >
                     Add
                   </button>
@@ -531,6 +541,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                     type="button"
                     phx-click="toggle_task_form"
                     class="text-xs text-gray-500 hover:text-gray-700"
+                    data-testid="operator-task-cancel-btn"
                   >
                     Cancel
                   </button>
@@ -549,7 +560,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
           <%!-- Neglect status --%>
           <%= if @neglect_status != :ok do %>
-            <div>
+            <div data-testid="operator-sidebar-neglect">
               <div class="text-xs text-gray-400 uppercase tracking-wide mb-1">Status</div>
               <.neglect_badge level={@neglect_status} />
             </div>
@@ -592,20 +603,30 @@ defmodule CustyardWeb.Operator.ConversationLive do
         data-testid={"operator-message-#{if @is_internal, do: "internal", else: to_string(@message.source)}"}
       >
         <div class="flex items-center gap-2 mb-1">
-          <span class={"text-xs font-medium #{if @is_operator, do: "text-indigo-700", else: "text-gray-700"}"}>
+          <span
+            class={"text-xs font-medium #{if @is_operator, do: "text-indigo-700", else: "text-gray-700"}"}
+            data-testid="operator-message-sender"
+          >
             {sender_name(@message)}
           </span>
           <%= if @is_internal do %>
-            <span class="text-xs bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded">
+            <span
+              class="text-xs bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded"
+              data-testid="operator-message-internal-badge"
+            >
               internal note
             </span>
           <% end %>
           <span class="text-xs text-gray-400">
             {unless @is_internal, do: "via #{@message.source}"}
           </span>
-          <span class="text-xs text-gray-400 ml-auto">{format_time(@message.inserted_at)}</span>
+          <span class="text-xs text-gray-400 ml-auto" data-testid="operator-message-time">
+            {format_time(@message.inserted_at)}
+          </span>
         </div>
-        <div class="text-sm text-gray-800 whitespace-pre-wrap">{@message.body}</div>
+        <div class="text-sm text-gray-800 whitespace-pre-wrap" data-testid="operator-message-body">
+          {@message.body}
+        </div>
       </div>
     </div>
     """
@@ -661,11 +682,19 @@ defmodule CustyardWeb.Operator.ConversationLive do
       </div>
       <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <%= if @task.portal_visible do %>
-          <span class="text-xs text-gray-400" title="Visible in portal">
+          <span
+            class="text-xs text-gray-400"
+            title="Visible in portal"
+            data-testid="operator-task-visible-icon"
+          >
             <.icon name="hero-eye" class="h-3 w-3" />
           </span>
         <% else %>
-          <span class="text-xs text-gray-300" title="Hidden from portal">
+          <span
+            class="text-xs text-gray-300"
+            title="Hidden from portal"
+            data-testid="operator-task-hidden-icon"
+          >
             <.icon name="hero-eye-slash" class="h-3 w-3" />
           </span>
         <% end %>
@@ -674,6 +703,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           phx-value-id={@task.id}
           class="text-gray-400 hover:text-indigo-600"
           title="Edit task"
+          data-testid={"operator-task-edit-#{@task.id}"}
         >
           <.icon name="hero-pencil" class="h-3 w-3" />
         </button>
@@ -683,6 +713,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           data-confirm="Delete this task?"
           class="text-gray-400 hover:text-red-600"
           title="Delete task"
+          data-testid={"operator-task-delete-#{@task.id}"}
         >
           <.icon name="hero-trash" class="h-3 w-3" />
         </button>
@@ -711,12 +742,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
         placeholder="Task title..."
         class="w-full text-xs border border-gray-300 rounded px-2 py-1"
         autofocus
+        data-testid="operator-task-edit-title"
       />
       <input
         type="datetime-local"
         name="due_at"
         value={@due_at}
         class="w-full text-xs border border-gray-300 rounded px-2 py-1"
+        data-testid="operator-task-edit-due"
       />
       <div class="flex items-center gap-2">
         <input
@@ -726,6 +759,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           checked={@portal_visible}
           id={"edit_task_portal_visible_#{@task.id}"}
           class="h-3 w-3"
+          data-testid="operator-task-edit-visible"
         />
         <label for={"edit_task_portal_visible_#{@task.id}"} class="text-xs text-gray-600">
           Visible in portal
@@ -735,6 +769,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         <button
           type="submit"
           class="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+          data-testid="operator-task-edit-save"
         >
           Save
         </button>
@@ -742,6 +777,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           type="button"
           phx-click="cancel_edit_task"
           class="text-xs text-gray-500 hover:text-gray-700"
+          data-testid="operator-task-edit-cancel"
         >
           Cancel
         </button>
@@ -751,6 +787,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           phx-value-id={@task.id}
           data-confirm="Delete this task?"
           class="text-xs text-red-500 hover:text-red-700 ml-auto"
+          data-testid="operator-task-edit-delete"
         >
           Delete
         </button>
@@ -773,7 +810,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     assigns = assign(assigns, :color, color)
 
     ~H"""
-    <span class={"w-2 h-2 rounded-full #{@color}"} />
+    <span class={"w-2 h-2 rounded-full #{@color}"} data-testid={"operator-task-dot-#{@state}"} />
     """
   end
 
@@ -791,7 +828,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
     assigns = assign(assigns, :colors, colors)
 
     ~H"""
-    <span class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}>
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
+      data-testid={"operator-tier-badge-#{@tier}"}
+    >
       {to_string(@tier)}
     </span>
     """
@@ -813,7 +853,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
     assigns = assign(assigns, :colors, colors)
 
     ~H"""
-    <span class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}>
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
+      data-testid={"operator-state-badge-#{@state}"}
+    >
       {to_string(@state)}
     </span>
     """
@@ -825,11 +868,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
     ~H"""
     <%= case @level do %>
       <% :critical -> %>
-        <span class="text-xs px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300">
+        <span
+          class="text-xs px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300"
+          data-testid="operator-neglect-badge-critical"
+        >
           NEGLECTED
         </span>
       <% :warning -> %>
-        <span class="text-xs px-1.5 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300">
+        <span
+          class="text-xs px-1.5 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300"
+          data-testid="operator-neglect-badge-warning"
+        >
           aging
         </span>
       <% _ -> %>
@@ -855,7 +904,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     assigns = assign(assigns, :entries, entries) |> assign(:total, total)
 
     ~H"""
-    <div class="p-2 bg-gray-50 rounded text-xs space-y-1">
+    <div class="p-2 bg-gray-50 rounded text-xs space-y-1" data-testid="operator-score-breakdown">
       <div class="font-medium text-gray-700 mb-1">Score breakdown (total: {@breakdown.total})</div>
       <%= for {key, val} <- @entries do %>
         <div class="flex items-center gap-2">
