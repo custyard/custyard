@@ -1,5 +1,41 @@
 import Config
 
+# Configure Swoosh mailer for production
+if config_env() == :prod do
+  # Mail configuration (optional - falls back to Local adapter if not set)
+  mail_adapter = System.get_env("MAIL_ADAPTER")
+
+  if mail_adapter do
+    case mail_adapter do
+      "mailgun" ->
+        config :custyard, Custyard.Mailer,
+          adapter: Swoosh.Adapters.Mailgun,
+          api_key: System.get_env("MAILGUN_API_KEY"),
+          domain: System.get_env("MAILGUN_DOMAIN")
+
+      "sendgrid" ->
+        config :custyard, Custyard.Mailer,
+          adapter: Swoosh.Adapters.Sendgrid,
+          api_key: System.get_env("SENDGRID_API_KEY")
+
+      "smtp" ->
+        config :custyard, Custyard.Mailer,
+          adapter: Swoosh.Adapters.SMTP,
+          relay: System.get_env("SMTP_HOST"),
+          port: String.to_integer(System.get_env("SMTP_PORT") || "587"),
+          username: System.get_env("SMTP_USERNAME"),
+          password: System.get_env("SMTP_PASSWORD"),
+          ssl: System.get_env("SMTP_SSL") == "true",
+          tls: :always,
+          auth: :always
+
+      _ ->
+        # Unknown adapter, keep Local
+        :ok
+    end
+  end
+end
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||

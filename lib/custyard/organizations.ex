@@ -1,0 +1,158 @@
+defmodule Custyard.Organizations do
+  @moduledoc """
+  Context for organization operations including custom domain management.
+  """
+
+  alias Custyard.{Repo, Organization}
+  import Ecto.Query
+
+  @doc """
+  Verify that a custom domain has proper DNS configuration.
+
+  Checks that the domain has a CNAME record pointing to the app host.
+
+  Returns:
+  - `{:ok, :verified}` if DNS is correctly configured
+  - `{:error, :no_cname}` if no CNAME record found
+  - `{:error, :wrong_target}` if CNAME points to wrong host
+  - `{:error, :dns_lookup_failed}` if DNS lookup failed
+  """
+  @spec verify_custom_domain(String.t()) ::
+          {:ok, :verified}
+          | {:error, :no_cname | :wrong_target | :dns_lookup_failed}
+  def verify_custom_domain(domain) when is_binary(domain) do
+    expected_host = get_app_host()
+
+    case lookup_cname(domain) do
+      {:ok, cname_target} ->
+        # Normalize the CNAME target (remove trailing dot if present)
+        normalized_target = String.trim_trailing(cname_target, ".")
+
+        if String.downcase(normalized_target) == String.downcase(expected_host) do
+          {:ok, :verified}
+        else
+          {:error, :wrong_target}
+        end
+
+      {:error, :no_cname} ->
+        {:error, :no_cname}
+
+      {:error, _reason} ->
+        {:error, :dns_lookup_failed}
+    end
+  end
+
+  @doc """
+  Get the expected CNAME target for custom domains.
+  """
+  def expected_cname_target do
+    get_app_host()
+  end
+
+  # Look up CNAME record using :inet_res
+  defp lookup_cname(domain) do
+    # Convert to charlist for :inet_res
+    domain_charlist = String.to_charlist(domain)
+
+    case :inet_res.lookup(domain_charlist, :in, :cname) do
+      [] ->
+        # No CNAME record found
+        {:error, :no_cname}
+
+      [cname_target | _] ->
+        {:ok, List.to_string(cname_target)}
+    end
+  rescue
+    _ ->
+      {:error, :dns_lookup_failed}
+  catch
+    :exit, _ ->
+      {:error, :dns_lookup_failed}
+  end
+
+  defp get_app_host do
+    config = Application.get_env(:custyard, CustyardWeb.Endpoint, [])
+    get_in(config, [:url, :host]) || "localhost"
+  end
+
+  @doc """
+  Get an organization by ID.
+  """
+  def get_organization(id) do
+    Repo.get(Organization, id)
+  end
+
+  @doc """
+  Get an organization by ID, raising if not found.
+  """
+  def get_organization!(id) do
+    Repo.get!(Organization, id)
+  end
+
+  @doc """
+  Get an organization by token.
+  """
+  def get_organization_by_token(token) do
+    Repo.get_by(Organization, token: token)
+  end
+
+  @doc """
+  List all organizations.
+  """
+  def list_organizations do
+    from(o in Organization, order_by: [asc: o.name])
+    |> Repo.all()
+  end
+
+  @doc """
+  List all organizations with conversation counts.
+  """
+  def list_organizations_with_counts do
+    from(o in Organization,
+      left_join: c in assoc(o, :conversations),
+      group_by: o.id,
+      select: %{org: o, conversation_count: count(c.id)},
+      order_by: [asc: o.name]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Create a new organization.
+  """
+  def create_organization(attrs) do
+    %Organization{}
+    |> Organization.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Update an organization.
+  """
+  def update_organization(%Organization{} = org, attrs) do
+    org
+    |> Organization.changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Build a changeset for an organization.
+  """
+  def change_organization(%Organization{} = org, attrs \\ %{}) do
+    Organization.changeset(org, attrs)
+  end
+
+  @doc """
+  Delete an organization.
+  """
+  def delete_organization(%Organization{} = org) do
+    Repo.delete(org)
+  end
+
+  @doc """
+  Get an organization by custom domain.
+  """
+  def get_organization_by_custom_domain(domain) when is_binary(domain) do
+    Repo.get_by(Organization, custom_domain: domain)
+  end
+end

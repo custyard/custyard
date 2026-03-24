@@ -40,4 +40,10 @@ config :logger, :console,
 
 config :phoenix, :json_library, Jason
 
+# Swoosh mailer configuration
+config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Local
+
+# Disable Swoosh API client (we don't need the API routes)
+config :swoosh, :api_client, false
+
 import_config "#{config_env()}.exs"

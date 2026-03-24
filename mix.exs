@@ -45,6 +45,7 @@ defmodule Custyard.MixProject do
       {:dns_cluster, "~> 0.1.1"},
       {:plug_cowboy, "~> 2.7"},
       {:argon2_elixir, "~> 4.0"},
+      {:swoosh, "~> 1.5"},
 
       # QA tools
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
