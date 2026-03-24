@@ -1,0 +1,25 @@
+From: bob@example.com
+To: support@custyard.test
+Subject: Question about billing
+Date: Mon, 24 Mar 2026 11:00:00 +0000
+Message-ID: <multipart-alt-001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary-alt-123"
+
+--boundary-alt-123
+Content-Type: text/plain; charset=utf-8
+
+This is the plain text version.
+I have a question about my bill.
+
+--boundary-alt-123
+Content-Type: text/html; charset=utf-8
+
+<html>
+<body>
+<p>This is the <strong>HTML</strong> version.</p>
+<p>I have a question about my bill.</p>
+</body>
+</html>
+
+--boundary-alt-123--

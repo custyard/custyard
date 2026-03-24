@@ -50,6 +50,7 @@ defmodule Custyard.MixProject do
       {:plug_cowboy, "~> 2.7"},
       {:argon2_elixir, "~> 4.0"},
       {:swoosh, "~> 1.5"},
+      {:gen_smtp, "~> 1.2"},
 
       # QA tools
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

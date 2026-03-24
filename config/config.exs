@@ -46,4 +46,10 @@ config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Local
 # Disable Swoosh API client (we don't need the API routes)
 config :swoosh, :api_client, false
 
+# LMTP server configuration (for receiving emails from MTA)
+config :custyard, :lmtp,
+  enabled: false,
+  port: 2024,
+  hostname: "localhost"
+
 import_config "#{config_env()}.exs"

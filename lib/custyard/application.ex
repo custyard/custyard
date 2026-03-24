@@ -15,6 +15,7 @@ defmodule Custyard.Application do
         CustyardWeb.Endpoint
       ]
       |> maybe_add_scheduler()
+      |> maybe_add_lmtp_server()
 
     opts = [strategy: :one_for_one, name: Custyard.Supervisor]
     Supervisor.start_link(children, opts)
@@ -23,6 +24,19 @@ defmodule Custyard.Application do
   defp maybe_add_scheduler(children) do
     if Application.get_env(:custyard, :start_scheduler, true) do
       [Custyard.Scoring.Scheduler | children]
+    else
+      children
+    end
+  end
+
+  defp maybe_add_lmtp_server(children) do
+    lmtp_config = Application.get_env(:custyard, :lmtp, [])
+
+    if Keyword.get(lmtp_config, :enabled, false) do
+      port = Keyword.get(lmtp_config, :port, 2024)
+      hostname = Keyword.get(lmtp_config, :hostname, "localhost")
+
+      [{Custyard.Email.LMTPServer, port: port, hostname: hostname} | children]
     else
       children
     end

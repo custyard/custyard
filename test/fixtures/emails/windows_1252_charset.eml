@@ -1,0 +1,10 @@
+From: user@example.com
+To: support@custyard.test
+Subject: Smart quotes test
+Date: Mon, 24 Mar 2026 14:00:00 +0000
+Message-ID: <win1252-001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=windows-1252
+Content-Transfer-Encoding: quoted-printable
+
+Here are some =93smart quotes=94 and an =96em dash=97 and an ellipsis=85

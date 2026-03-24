@@ -1,0 +1,13 @@
+From: qp@example.com
+To: support@custyard.test
+Subject: Quoted-printable body
+Date: Mon, 24 Mar 2026 16:00:00 +0000
+Message-ID: <qp-001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+This is a quoted-printable message with a long line that exceeds 76 charac=
+ters and should be soft-wrapped.
+
+Special chars: =C3=A9=C3=A0=C3=BC (e-acute, a-grave, u-umlaut)

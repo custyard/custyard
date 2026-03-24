@@ -1,0 +1,12 @@
+From: vip@enterprise.com
+To: support@custyard.test
+Subject: Priority request
+Date: Mon, 24 Mar 2026 17:00:00 +0000
+Message-ID: <xheaders-001@enterprise.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+X-Customer-Tier: enterprise
+X-Priority: urgent
+X-Request-ID: req-12345
+
+This is a priority request from an enterprise customer.

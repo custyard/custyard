@@ -36,6 +36,16 @@ if config_env() == :prod do
   end
 end
 
+# LMTP server configuration (all environments)
+lmtp_enabled = System.get_env("LMTP_ENABLED") == "true"
+
+if lmtp_enabled do
+  config :custyard, :lmtp,
+    enabled: true,
+    port: String.to_integer(System.get_env("LMTP_PORT") || "2024"),
+    hostname: System.get_env("LMTP_HOSTNAME") || "localhost"
+end
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
