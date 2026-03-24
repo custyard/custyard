@@ -214,8 +214,19 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
       non_admin = insert_contact(organization_id: org.id, is_admin: false)
       other_contact = insert_contact(organization_id: org.id)
 
-      _conv1 = insert_conversation(organization_id: org.id, contact_id: non_admin.id, subject: "My Request")
-      conv2 = insert_conversation(organization_id: org.id, contact_id: other_contact.id, subject: "Other Request")
+      _conv1 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: non_admin.id,
+          subject: "My Request"
+        )
+
+      conv2 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: other_contact.id,
+          subject: "Other Request"
+        )
 
       {:ok, view, html} = live(conn, ~p"/p/#{org.token}?as=#{non_admin.id}")
 
