@@ -5,7 +5,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
   import Custyard.Factory
   import Ecto.Query
 
-  alias Custyard.{Repo, Conversation, Message}
+  alias Custyard.{Conversation, Message, Repo}
 
   describe "mount" do
     test "renders new request form", %{conn: conn} do

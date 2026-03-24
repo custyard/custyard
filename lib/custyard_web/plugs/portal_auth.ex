@@ -5,7 +5,7 @@ defmodule CustyardWeb.Plugs.PortalAuth do
   """
 
   import Plug.Conn
-  alias Custyard.{Repo, Organization}
+  alias Custyard.{Organization, Repo}
 
   def init(opts), do: opts
 

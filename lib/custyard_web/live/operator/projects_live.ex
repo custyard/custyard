@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Operator.ProjectsLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Projects, Organizations}
+  alias Custyard.{Organizations, Projects}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -123,16 +123,8 @@ defmodule CustyardWeb.Operator.ProjectsLive do
          |> load_projects()}
 
       {:error, changeset} ->
-        errors =
-          changeset
-          |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-            Enum.reduce(opts, msg, fn {key, value}, acc ->
-              String.replace(acc, "%{#{key}}", to_string(value))
-            end)
-          end)
-          |> Enum.map_join("; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
-
-        {:noreply, put_flash(socket, :error, "Failed to save: #{errors}")}
+        {:noreply,
+         put_flash(socket, :error, "Failed to save: #{format_changeset_errors(changeset)}")}
     end
   end
 
@@ -183,6 +175,18 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       {:ok, date} -> date
       _ -> nil
     end
+  end
+
+  defp format_changeset_errors(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(&format_error/1)
+    |> Enum.map_join("; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+  end
+
+  defp format_error({msg, opts}) do
+    Enum.reduce(opts, msg, fn {key, value}, acc ->
+      String.replace(acc, "%{#{key}}", to_string(value))
+    end)
   end
 
   @impl true

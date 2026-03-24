@@ -1,7 +1,7 @@
 defmodule Custyard.Email.SenderMatcher do
   @moduledoc "Match email sender to Contact/Organization"
 
-  alias Custyard.{Repo, Organization, Contact}
+  alias Custyard.{Contact, Organization, Repo}
 
   def match(from_address) do
     email = extract_email(from_address)

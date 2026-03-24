@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Portal.NewRequestLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Conversation, Message, Scoring}
+  alias Custyard.{Conversation, Message, Repo, Scoring}
   alias CustyardWeb.Portal.Helpers
 
   @impl true

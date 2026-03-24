@@ -180,7 +180,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
       do: {nil, false}
 
     defp maybe_impersonate_contact(%{"as" => contact_id} = params, org_id) do
-      alias Custyard.{Repo, Contact}
+      alias Custyard.{Contact, Repo}
       contact = Repo.get_by(Contact, id: contact_id, organization_id: org_id)
       # Only admin contacts can use admin mode
       admin_mode = contact && contact.is_admin && params["admin"] == "true"

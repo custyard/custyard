@@ -4,7 +4,7 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
-  alias Custyard.{OperatorAccount, Repo, Organization}
+  alias Custyard.{OperatorAccount, Organization, Repo}
 
   setup %{conn: conn} do
     # Create and authenticate an operator

@@ -90,56 +90,63 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
   end
 
   def handle_event("save_org", _params, socket) do
-    form_data = socket.assigns.form_data
-
-    # Process uploaded logo
-    logo_url = consume_uploaded_logo(socket)
-
-    attrs = %{
-      name: form_data.name,
-      domain: if(form_data.domain == "", do: nil, else: form_data.domain),
-      tier: String.to_existing_atom(form_data.tier),
-      primary_color: if(form_data.primary_color == "", do: nil, else: form_data.primary_color),
-      secondary_color:
-        if(form_data.secondary_color == "", do: nil, else: form_data.secondary_color),
-      custom_domain: if(form_data.custom_domain == "", do: nil, else: form_data.custom_domain)
-    }
-
-    # Add logo_url if a new logo was uploaded
-    attrs = if logo_url, do: Map.put(attrs, :logo_url, logo_url), else: attrs
+    attrs = build_org_attrs(socket)
 
     result =
       case socket.assigns.editing_org do
-        nil ->
-          Organizations.create_organization(attrs)
-
-        org ->
-          Organizations.update_organization(org, attrs)
+        nil -> Organizations.create_organization(attrs)
+        org -> Organizations.update_organization(org, attrs)
       end
 
-    case result do
-      {:ok, _org} ->
-        action = if socket.assigns.editing_org, do: "updated", else: "created"
+    handle_save_result(socket, result)
+  end
 
-        {:noreply,
-         socket
-         |> put_flash(:info, "Organization #{action} successfully.")
-         |> assign(:show_form, false)
-         |> assign(:editing_org, nil)
-         |> load_organizations()}
+  defp build_org_attrs(socket) do
+    form_data = socket.assigns.form_data
+    logo_url = consume_uploaded_logo(socket)
 
-      {:error, changeset} ->
-        errors =
-          changeset
-          |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-            Enum.reduce(opts, msg, fn {key, value}, acc ->
-              String.replace(acc, "%{#{key}}", to_string(value))
-            end)
-          end)
-          |> Enum.map_join("; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+    %{
+      name: form_data.name,
+      domain: empty_to_nil(form_data.domain),
+      tier: String.to_existing_atom(form_data.tier),
+      primary_color: empty_to_nil(form_data.primary_color),
+      secondary_color: empty_to_nil(form_data.secondary_color),
+      custom_domain: empty_to_nil(form_data.custom_domain)
+    }
+    |> maybe_add_logo(logo_url)
+  end
 
-        {:noreply, put_flash(socket, :error, "Failed to save: #{errors}")}
-    end
+  defp empty_to_nil(""), do: nil
+  defp empty_to_nil(value), do: value
+
+  defp maybe_add_logo(attrs, nil), do: attrs
+  defp maybe_add_logo(attrs, logo_url), do: Map.put(attrs, :logo_url, logo_url)
+
+  defp handle_save_result(socket, {:ok, _org}) do
+    action = if socket.assigns.editing_org, do: "updated", else: "created"
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Organization #{action} successfully.")
+     |> assign(:show_form, false)
+     |> assign(:editing_org, nil)
+     |> load_organizations()}
+  end
+
+  defp handle_save_result(socket, {:error, changeset}) do
+    {:noreply, put_flash(socket, :error, "Failed to save: #{format_changeset_errors(changeset)}")}
+  end
+
+  defp format_changeset_errors(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(&format_error/1)
+    |> Enum.map_join("; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+  end
+
+  defp format_error({msg, opts}) do
+    Enum.reduce(opts, msg, fn {key, value}, acc ->
+      String.replace(acc, "%{#{key}}", to_string(value))
+    end)
   end
 
   defp consume_uploaded_logo(socket) do

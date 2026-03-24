@@ -7,8 +7,8 @@ defmodule Custyard.Email.Processor do
   auto-detected properties like urgency.
   """
 
-  alias Custyard.{Repo, Conversation, Message, Scoring}
-  alias Custyard.Email.{SenderMatcher, ThreadMatcher, SieveHeaderMapper}
+  alias Custyard.{Conversation, Message, Repo, Scoring}
+  alias Custyard.Email.{SenderMatcher, SieveHeaderMapper, ThreadMatcher}
 
   def process(params) do
     with {:ok, parsed} <- parse_payload(params),
@@ -54,19 +54,16 @@ defmodule Custyard.Email.Processor do
 
   # Get header value, case-insensitive for header name
   defp get_header(headers, name) do
-    # Try exact match first
-    case headers[name] do
-      nil ->
-        # Fall back to case-insensitive lookup
-        lowercase_name = String.downcase(name)
+    # Try exact match first, fall back to case-insensitive lookup
+    headers[name] || find_header_case_insensitive(headers, name)
+  end
 
-        Enum.find_value(headers, fn {k, v} ->
-          if String.downcase(to_string(k)) == lowercase_name, do: v
-        end)
+  defp find_header_case_insensitive(headers, name) do
+    lowercase_name = String.downcase(name)
 
-      value ->
-        value
-    end
+    Enum.find_value(headers, fn {k, v} ->
+      if String.downcase(to_string(k)) == lowercase_name, do: v
+    end)
   end
 
   defp strip_html(nil), do: nil

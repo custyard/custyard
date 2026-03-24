@@ -1,8 +1,8 @@
 defmodule Custyard.Email.ProcessorTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.Email.Processor
   alias Custyard.Conversations
+  alias Custyard.Email.Processor
 
   import Custyard.Factory
 

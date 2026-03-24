@@ -1,7 +1,7 @@
 defmodule Custyard.ProjectsTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.{Projects, Project, Task, Repo}
+  alias Custyard.{Project, Projects, Repo, Task}
 
   import Custyard.Factory
 

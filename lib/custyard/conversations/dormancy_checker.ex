@@ -13,7 +13,7 @@ defmodule Custyard.Conversations.DormancyChecker do
   """
 
   import Ecto.Query
-  alias Custyard.{Repo, Conversation}
+  alias Custyard.{Conversation, Repo}
 
   # Dormancy thresholds in hours (same as neglect critical thresholds)
   @dormancy_thresholds %{

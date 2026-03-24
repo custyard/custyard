@@ -11,7 +11,7 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   require Logger
 
   import Plug.Conn
-  alias Custyard.{Repo, Organization}
+  alias Custyard.{Organization, Repo}
 
   @behaviour Plug
 

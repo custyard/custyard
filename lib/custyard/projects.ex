@@ -3,7 +3,7 @@ defmodule Custyard.Projects do
   Context for project queries and operations.
   """
 
-  alias Custyard.{Repo, Project, Task}
+  alias Custyard.{Project, Repo, Task}
   import Ecto.Query
 
   @doc """
@@ -156,17 +156,11 @@ defmodule Custyard.Projects do
     }
 
     Repo.transaction(fn ->
-      case create_project(project_attrs) do
-        {:ok, project} ->
-          tasks = create_tasks_from_template(project, template, start_date)
-
-          case tasks do
-            {:ok, _tasks} -> Repo.preload(project, :tasks) |> with_progress()
-            {:error, reason} -> Repo.rollback(reason)
-          end
-
-        {:error, changeset} ->
-          Repo.rollback(changeset)
+      with {:ok, project} <- create_project(project_attrs),
+           {:ok, _tasks} <- create_tasks_from_template(project, template, start_date) do
+        Repo.preload(project, :tasks) |> with_progress()
+      else
+        {:error, reason} -> Repo.rollback(reason)
       end
     end)
   end

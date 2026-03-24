@@ -13,9 +13,9 @@ defmodule Custyard.Scoring.Scheduler do
   use GenServer
   require Logger
 
-  alias Custyard.Scoring.Recalculator
   alias Custyard.Conversations.DormancyChecker
   alias Custyard.Notifications.NeglectChecker
+  alias Custyard.Scoring.Recalculator
 
   @interval :timer.minutes(5)
 

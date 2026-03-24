@@ -3,7 +3,7 @@ defmodule Custyard.Conversations do
   Context for conversation queries and operations.
   """
 
-  alias Custyard.{Repo, Conversation, Message}
+  alias Custyard.{Conversation, Message, Repo}
   import Ecto.Query
 
   @doc """

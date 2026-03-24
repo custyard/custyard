@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Operator.SessionController do
   use CustyardWeb, :controller
 
-  alias Custyard.{Repo, OperatorAccount}
+  alias Custyard.{OperatorAccount, Repo}
 
   def new(conn, _params) do
     render(conn, :new, error: nil, layout: {CustyardWeb.Layouts, :root})

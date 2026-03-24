@@ -5,7 +5,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
   import Custyard.Factory
   import Ecto.Query
 
-  alias Custyard.{Repo, Message}
+  alias Custyard.{Message, Repo}
 
   describe "mount" do
     test "renders conversation page with subject", %{conn: conn} do

@@ -3,7 +3,7 @@ defmodule Custyard.Organizations do
   Context for organization operations including custom domain management.
   """
 
-  alias Custyard.{Repo, Organization}
+  alias Custyard.{Organization, Repo}
   import Ecto.Query
 
   @doc """

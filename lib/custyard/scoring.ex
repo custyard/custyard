@@ -8,7 +8,7 @@ defmodule Custyard.Scoring do
   """
 
   import Ecto.Query
-  alias Custyard.{Repo, Conversation, Message, Settings}
+  alias Custyard.{Conversation, Message, Repo, Settings}
 
   # State scores
   @state_scores %{
@@ -156,18 +156,14 @@ defmodule Custyard.Scoring do
   end
 
   defp get_weights do
-    try do
-      Settings.get_weights()
-    rescue
-      _ -> %{idle: 1.0, state: 1.0, tier: 1.0, urgency: 1.0, velocity: 1.0, neglect: 1.0}
-    end
+    Settings.get_weights()
+  rescue
+    _ -> %{idle: 1.0, state: 1.0, tier: 1.0, urgency: 1.0, velocity: 1.0, neglect: 1.0}
   end
 
   defp get_neglect_thresholds do
-    try do
-      Settings.get_neglect_thresholds()
-    rescue
-      _ -> @default_neglect_thresholds
-    end
+    Settings.get_neglect_thresholds()
+  rescue
+    _ -> @default_neglect_thresholds
   end
 end
