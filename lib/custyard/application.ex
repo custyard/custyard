@@ -91,7 +91,7 @@ defmodule Custyard.Application do
   end
 
   defp setup_dev_operator do
-    alias Custyard.{Repo, OperatorAccount}
+    alias Custyard.{OperatorAccount, Repo}
 
     # Brief delay to ensure Repo is ready
     Process.sleep(100)

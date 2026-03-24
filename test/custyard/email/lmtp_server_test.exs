@@ -1432,8 +1432,7 @@ defmodule Custyard.Email.LMTPServerTest do
         encoded
         |> String.codepoints()
         |> Enum.chunk_every(76)
-        |> Enum.map(&Enum.join/1)
-        |> Enum.join("\r\n")
+        |> Enum.map_join("\r\n", &Enum.join/1)
 
       boundary = "----=_Part_#{System.unique_integer()}"
 
@@ -1497,12 +1496,12 @@ defmodule Custyard.Email.LMTPServerTest do
     end
 
     # Send data in chunks to avoid socket buffer issues with very large emails
-    defp send_data_in_chunks(socket, data) when byte_size(data) <= 65536 do
+    defp send_data_in_chunks(socket, data) when byte_size(data) <= 65_536 do
       :gen_tcp.send(socket, data)
     end
 
     defp send_data_in_chunks(socket, data) do
-      <<chunk::binary-size(65536), rest::binary>> = data
+      <<chunk::binary-size(65_536), rest::binary>> = data
       :ok = :gen_tcp.send(socket, chunk)
       send_data_in_chunks(socket, rest)
     end
@@ -1819,7 +1818,7 @@ defmodule Custyard.Email.LMTPServerTest do
       {:ok, pid} =
         LMTPServer.start_link(
           port: @test_port,
-          max_message_size: 10000
+          max_message_size: 10_000
         )
 
       {:ok, socket} =

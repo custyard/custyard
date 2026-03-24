@@ -36,7 +36,29 @@ config :tailwind,
 
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id]
+  metadata: [
+    :request_id,
+    :actual_size,
+    :client_hostname,
+    :command,
+    :current_count,
+    :declared_size,
+    :error_type,
+    :extension,
+    :hostname,
+    :limit_type,
+    :max_recipients,
+    :max_size,
+    :message_count,
+    :messages_processed,
+    :peer,
+    :reason,
+    :received_count,
+    :recipient,
+    :recipient_count,
+    :sender,
+    :size_bytes
+  ]
 
 config :phoenix, :json_library, Jason
 

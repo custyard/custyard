@@ -594,66 +594,11 @@ defmodule Custyard.Email.LMTPServer do
       size_bytes: data_size
     )
 
-    # Check message size limit
-    case check_message_size(data_size, state) do
-      :ok ->
-        # Check for mail loops before processing
-        case check_mail_loop(data, state) do
-          :ok ->
-            # Check rate limits before processing
-            case check_rate_limits(state) do
-              :ok ->
-                process_and_respond(data, state)
-
-              {:error, :connection_limit} ->
-                # Emit rate limit exceeded telemetry
-                :telemetry.execute(
-                  [:custyard, :lmtp, :rate_limit, :exceeded],
-                  %{count: 1},
-                  %{limit_type: :connection, peer: state[:peer_address]}
-                )
-
-                Logger.warning("LMTP rate limit exceeded",
-                  limit_type: :connection,
-                  message_count: state[:message_count],
-                  sender: state[:from]
-                )
-
-                {:error, "421 4.7.1 Too many messages on this connection", state}
-
-              {:error, :global_limit} ->
-                # Emit rate limit exceeded telemetry
-                :telemetry.execute(
-                  [:custyard, :lmtp, :rate_limit, :exceeded],
-                  %{count: 1},
-                  %{limit_type: :global, peer: state[:peer_address]}
-                )
-
-                Logger.warning("LMTP rate limit exceeded",
-                  limit_type: :global,
-                  sender: state[:from]
-                )
-
-                {:error, "421 4.7.1 Server busy, try again later", state}
-            end
-
-          {:error, :mail_loop, count} ->
-            # Emit mail loop telemetry
-            :telemetry.execute(
-              [:custyard, :lmtp, :mail_loop, :detected],
-              %{count: count},
-              %{hostname: state[:hostname], peer: state[:peer_address]}
-            )
-
-            Logger.warning("LMTP mail loop detected",
-              hostname: state[:hostname],
-              received_count: count,
-              sender: state[:from]
-            )
-
-            {:error, "554 5.4.6 Mail loop detected", state}
-        end
-
+    with :ok <- check_message_size(data_size, state),
+         :ok <- check_mail_loop(data, state),
+         :ok <- check_rate_limits(state) do
+      process_and_respond(data, state)
+    else
       {:error, :message_too_large, actual_size, max_size} ->
         Logger.warning("LMTP message too large",
           actual_size: actual_size,
@@ -662,6 +607,50 @@ defmodule Custyard.Email.LMTPServer do
         )
 
         {:error, "552 5.3.4 Message size exceeds fixed maximum message size", state}
+
+      {:error, :mail_loop, count} ->
+        :telemetry.execute(
+          [:custyard, :lmtp, :mail_loop, :detected],
+          %{count: count},
+          %{hostname: state[:hostname], peer: state[:peer_address]}
+        )
+
+        Logger.warning("LMTP mail loop detected",
+          hostname: state[:hostname],
+          received_count: count,
+          sender: state[:from]
+        )
+
+        {:error, "554 5.4.6 Mail loop detected", state}
+
+      {:error, :connection_limit} ->
+        :telemetry.execute(
+          [:custyard, :lmtp, :rate_limit, :exceeded],
+          %{count: 1},
+          %{limit_type: :connection, peer: state[:peer_address]}
+        )
+
+        Logger.warning("LMTP rate limit exceeded",
+          limit_type: :connection,
+          message_count: state[:message_count],
+          sender: state[:from]
+        )
+
+        {:error, "421 4.7.1 Too many messages on this connection", state}
+
+      {:error, :global_limit} ->
+        :telemetry.execute(
+          [:custyard, :lmtp, :rate_limit, :exceeded],
+          %{count: 1},
+          %{limit_type: :global, peer: state[:peer_address]}
+        )
+
+        Logger.warning("LMTP rate limit exceeded",
+          limit_type: :global,
+          sender: state[:from]
+        )
+
+        {:error, "421 4.7.1 Server busy, try again later", state}
     end
   end
 
@@ -906,9 +895,8 @@ defmodule Custyard.Email.LMTPServer do
   # Rate limiting functions
 
   defp check_rate_limits(state) do
-    with :ok <- check_connection_limit(state),
-         :ok <- check_global_limit(state) do
-      :ok
+    with :ok <- check_connection_limit(state) do
+      check_global_limit(state)
     end
   end
 
@@ -921,18 +909,16 @@ defmodule Custyard.Email.LMTPServer do
   end
 
   defp check_global_limit(%{messages_per_minute: limit, window_seconds: window}) do
-    cond do
-      limit == :infinity ->
+    if limit == :infinity do
+      :ok
+    else
+      current_count = get_global_message_count(window)
+
+      if current_count < limit do
         :ok
-
-      true ->
-        current_count = get_global_message_count(window)
-
-        if current_count < limit do
-          :ok
-        else
-          {:error, :global_limit}
-        end
+      else
+        {:error, :global_limit}
+      end
     end
   end
 
