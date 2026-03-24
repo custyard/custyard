@@ -4,7 +4,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
-  alias Custyard.{Scoring, OperatorAccount, Repo}
+  alias Custyard.{OperatorAccount, Repo, Scoring}
 
   setup %{conn: conn} do
     # Create and authenticate an operator
@@ -106,7 +106,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
 
       # Then trigger snooze for 1 hour
       view
-      |> element("[phx-click=snooze][phx-value-id=\"#{conv.id}\"][phx-value-duration=\"1h\"]")
+      |> element(~s([phx-click=snooze][phx-value-id="#{conv.id}"][phx-value-duration="1h"]))
       |> render_click()
 
       # Conversation should be snoozed and removed from queue

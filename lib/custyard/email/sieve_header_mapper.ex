@@ -71,19 +71,16 @@ defmodule Custyard.Email.SieveHeaderMapper do
 
   # Get header value, case-insensitive for header name
   defp get_header(headers, name) do
-    # Try exact match first
-    case headers[name] do
-      nil ->
-        # Try lowercase
-        lowercase_name = String.downcase(name)
+    # Try exact match first, fall back to case-insensitive lookup
+    headers[name] || find_header_case_insensitive(headers, name)
+  end
 
-        Enum.find_value(headers, fn {k, v} ->
-          if String.downcase(k) == lowercase_name, do: v
-        end)
+  defp find_header_case_insensitive(headers, name) do
+    lowercase_name = String.downcase(name)
 
-      value ->
-        value
-    end
+    Enum.find_value(headers, fn {k, v} ->
+      if String.downcase(k) == lowercase_name, do: v
+    end)
   end
 
   # Map a header value to a property using the config

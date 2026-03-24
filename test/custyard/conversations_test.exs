@@ -162,7 +162,7 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "returns nil when not found" do
-      assert Conversations.get_conversation(99999) == nil
+      assert Conversations.get_conversation(99_999) == nil
     end
   end
 
@@ -177,7 +177,7 @@ defmodule Custyard.ConversationsTest do
 
     test "raises when not found" do
       assert_raise Ecto.NoResultsError, fn ->
-        Conversations.get_conversation!(99999)
+        Conversations.get_conversation!(99_999)
       end
     end
   end
@@ -192,7 +192,7 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "returns error when conversation not found" do
-      assert {:error, :not_found} = Conversations.get_conversation_for_organization(99999, 1)
+      assert {:error, :not_found} = Conversations.get_conversation_for_organization(99_999, 1)
     end
 
     test "returns error when org does not match" do

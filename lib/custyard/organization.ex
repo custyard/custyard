@@ -26,12 +26,25 @@ defmodule Custyard.Organization do
   @doc false
   def changeset(organization, attrs) do
     organization
-    |> cast(attrs, [:name, :domain, :tier, :token, :logo_url, :primary_color, :secondary_color, :custom_domain])
+    |> cast(attrs, [
+      :name,
+      :domain,
+      :tier,
+      :token,
+      :logo_url,
+      :primary_color,
+      :secondary_color,
+      :custom_domain
+    ])
     |> maybe_generate_token()
     |> validate_required([:name, :token])
     |> validate_inclusion(:tier, [:enterprise, :standard, :basic])
-    |> validate_format(:primary_color, ~r/^#[0-9A-Fa-f]{6}$/, message: "must be a valid hex color (e.g., #1a2b3c)")
-    |> validate_format(:secondary_color, ~r/^#[0-9A-Fa-f]{6}$/, message: "must be a valid hex color (e.g., #1a2b3c)")
+    |> validate_format(:primary_color, ~r/^#[0-9A-Fa-f]{6}$/,
+      message: "must be a valid hex color (e.g., #1a2b3c)"
+    )
+    |> validate_format(:secondary_color, ~r/^#[0-9A-Fa-f]{6}$/,
+      message: "must be a valid hex color (e.g., #1a2b3c)"
+    )
     |> unique_constraint(:token)
     |> unique_constraint(:custom_domain)
     |> validate_custom_domain()
@@ -44,7 +57,10 @@ defmodule Custyard.Organization do
 
       domain when is_binary(domain) ->
         # Basic domain validation - must look like a hostname
-        if Regex.match?(~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i, domain) do
+        if Regex.match?(
+             ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i,
+             domain
+           ) do
           changeset
         else
           add_error(changeset, :custom_domain, "must be a valid domain name")
@@ -58,8 +74,12 @@ defmodule Custyard.Organization do
   def branding_changeset(organization, attrs) do
     organization
     |> cast(attrs, [:logo_url, :primary_color, :secondary_color])
-    |> validate_format(:primary_color, ~r/^#[0-9A-Fa-f]{6}$/, message: "must be a valid hex color (e.g., #1a2b3c)")
-    |> validate_format(:secondary_color, ~r/^#[0-9A-Fa-f]{6}$/, message: "must be a valid hex color (e.g., #1a2b3c)")
+    |> validate_format(:primary_color, ~r/^#[0-9A-Fa-f]{6}$/,
+      message: "must be a valid hex color (e.g., #1a2b3c)"
+    )
+    |> validate_format(:secondary_color, ~r/^#[0-9A-Fa-f]{6}$/,
+      message: "must be a valid hex color (e.g., #1a2b3c)"
+    )
   end
 
   defp maybe_generate_token(changeset) do

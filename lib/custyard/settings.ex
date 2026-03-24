@@ -165,28 +165,25 @@ defmodule Custyard.Settings do
 
   defp validate_thresholds(changeset) do
     case get_change(changeset, :neglect_thresholds) do
-      nil ->
-        changeset
-
-      thresholds ->
-        valid? =
-          Enum.all?(thresholds, fn {_tier, values} ->
-            case values do
-              [warning, critical] when is_number(warning) and is_number(critical) ->
-                warning > 0 and critical > warning
-
-              _ ->
-                false
-            end
-          end)
-
-        if valid? do
-          changeset
-        else
-          add_error(changeset, :neglect_thresholds, "invalid threshold format")
-        end
+      nil -> changeset
+      thresholds -> validate_threshold_values(changeset, thresholds)
     end
   end
+
+  defp validate_threshold_values(changeset, thresholds) do
+    if Enum.all?(thresholds, &valid_threshold?/1) do
+      changeset
+    else
+      add_error(changeset, :neglect_thresholds, "invalid threshold format")
+    end
+  end
+
+  defp valid_threshold?({_tier, [warning, critical]})
+       when is_number(warning) and is_number(critical) do
+    warning > 0 and critical > warning
+  end
+
+  defp valid_threshold?(_), do: false
 
   defp create_defaults do
     # Convert thresholds to JSON-friendly format

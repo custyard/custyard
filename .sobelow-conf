@@ -1,0 +1,6 @@
+[
+  # Skip infrastructure-level security (handled by reverse proxy)
+  ignore: ["Config.CSP", "Config.HTTPS"],
+  # Only fail on medium/high confidence findings
+  threshold: :medium
+]

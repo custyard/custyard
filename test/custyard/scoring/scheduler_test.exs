@@ -8,9 +8,9 @@ defmodule Custyard.Scoring.SchedulerTest do
   """
   use Custyard.DataCase, async: true
 
-  alias Custyard.Scoring.Recalculator
+  alias Custyard.{Conversation, Repo, Scoring}
   alias Custyard.Conversations.DormancyChecker
-  alias Custyard.{Repo, Conversation, Scoring}
+  alias Custyard.Scoring.Recalculator
 
   import Custyard.Factory
 

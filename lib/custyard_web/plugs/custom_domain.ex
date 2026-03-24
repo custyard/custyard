@@ -11,7 +11,7 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   require Logger
 
   import Plug.Conn
-  alias Custyard.{Repo, Organization}
+  alias Custyard.{Organization, Repo}
 
   @behaviour Plug
 
@@ -52,7 +52,10 @@ defmodule CustyardWeb.Plugs.CustomDomain do
         # Guard against double-prefix if path already starts with /p/
         rewritten_path =
           if String.starts_with?(conn.request_path, "/p/") do
-            Logger.warning("CustomDomain plug received path already prefixed with /p/: #{conn.request_path}")
+            Logger.warning(
+              "CustomDomain plug received path already prefixed with /p/: #{conn.request_path}"
+            )
+
             conn.request_path
           else
             "/p/#{org.token}#{conn.request_path}"

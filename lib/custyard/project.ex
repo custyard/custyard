@@ -34,6 +34,9 @@ defmodule Custyard.Project do
     # Tags for categorization (especially useful for internal projects)
     field :tags, {:array, :string}, default: []
 
+    # Template flag - templates are used to create new projects
+    field :is_template, :boolean, default: false
+
     belongs_to :organization, Custyard.Organization
     belongs_to :conversation, Custyard.Conversation
     has_many :tasks, Custyard.Task
@@ -55,6 +58,7 @@ defmodule Custyard.Project do
       :portal_visible,
       :project_type,
       :tags,
+      :is_template,
       :organization_id,
       :conversation_id
     ])
@@ -89,6 +93,10 @@ defmodule Custyard.Project do
   @doc "Returns true if this project is a customer project."
   def customer?(%__MODULE__{} = project), do: not internal?(project)
 
+  @doc "Returns true if this project is a template."
+  def template?(%__MODULE__{is_template: true}), do: true
+  def template?(_), do: false
+
   defp validate_completion_after_start(changeset) do
     start_date = get_field(changeset, :start_date)
     target_date = get_field(changeset, :target_completion_date)
@@ -114,7 +122,11 @@ defmodule Custyard.Project do
       end
 
     if project_type == :internal and organization_id do
-      add_error(changeset, :organization_id, "internal projects cannot be linked to an organization")
+      add_error(
+        changeset,
+        :organization_id,
+        "internal projects cannot be linked to an organization"
+      )
     else
       changeset
     end

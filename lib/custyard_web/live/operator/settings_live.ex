@@ -209,7 +209,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
         </p>
 
         <div :if={not @editing_thresholds} class="space-y-3">
-          <div :for={{tier, [warning, critical]} <- @thresholds} class="flex items-center justify-between">
+          <div
+            :for={{tier, [warning, critical]} <- @thresholds}
+            class="flex items-center justify-between"
+          >
             <span class="text-sm text-gray-700 capitalize">{tier}</span>
             <div class="flex items-center gap-2">
               <span class="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
@@ -223,7 +226,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
         </div>
 
         <form :if={@editing_thresholds} phx-submit="save_thresholds" class="space-y-3">
-          <div :for={{tier, [warning, critical]} <- @thresholds} class="flex items-center justify-between">
+          <div
+            :for={{tier, [warning, critical]} <- @thresholds}
+            class="flex items-center justify-between"
+          >
             <span class="text-sm text-gray-700 capitalize">{tier}</span>
             <div class="flex items-center gap-2">
               <div class="flex items-center gap-1">

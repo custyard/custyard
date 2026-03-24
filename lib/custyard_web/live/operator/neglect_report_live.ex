@@ -129,7 +129,9 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
                 <div class="flex-1 min-w-0">
                   <div class="text-sm text-gray-800 truncate">{item.conversation.subject}</div>
                   <div class="text-xs text-gray-500">
-                    {if item.conversation.contact, do: item.conversation.contact.name || item.conversation.contact.email, else: "Unknown contact"}
+                    {if item.conversation.contact,
+                      do: item.conversation.contact.name || item.conversation.contact.email,
+                      else: "Unknown contact"}
                   </div>
                 </div>
                 <span class="text-xs text-gray-400 whitespace-nowrap">

@@ -1,14 +1,13 @@
 defmodule Custyard.Email.ThreadMatcher do
   @moduledoc "Match inbound email to existing conversation via threading headers"
 
-  alias Custyard.{Repo, Conversation, Message}
+  alias Custyard.{Conversation, Message, Repo}
   import Ecto.Query
 
   def find_thread(parsed) do
-    # Try In-Reply-To first
-    with :not_found <- find_by_message_id(parsed.in_reply_to),
-         :not_found <- find_by_references(parsed.references) do
-      :not_found
+    # Try In-Reply-To first, then fall back to References header
+    with :not_found <- find_by_message_id(parsed.in_reply_to) do
+      find_by_references(parsed.references)
     end
   end
 

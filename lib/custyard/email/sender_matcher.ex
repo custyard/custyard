@@ -1,7 +1,7 @@
 defmodule Custyard.Email.SenderMatcher do
   @moduledoc "Match email sender to Contact/Organization"
 
-  alias Custyard.{Repo, Organization, Contact}
+  alias Custyard.{Contact, Organization, Repo}
 
   def match(from_address) do
     email = extract_email(from_address)
@@ -82,7 +82,11 @@ defmodule Custyard.Email.SenderMatcher do
     case Repo.get_by(Organization, domain: "_unmatched_") do
       nil ->
         %Organization{}
-        |> Organization.changeset(%{name: "Unmatched Senders", domain: "_unmatched_", tier: :basic})
+        |> Organization.changeset(%{
+          name: "Unmatched Senders",
+          domain: "_unmatched_",
+          tier: :basic
+        })
         |> Repo.insert()
 
       org ->

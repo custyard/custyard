@@ -14,7 +14,8 @@ defmodule Custyard.Notifications.NeglectChecker do
   import Ecto.Query
   require Logger
 
-  alias Custyard.{Repo, Conversation, Scoring}
+  alias Custyard.{Conversation, Repo, Scoring}
+  alias Custyard.Notifications.Email, as: NotificationEmail
 
   @doc """
   Check all active conversations for neglect threshold breaches and dispatch notifications.
@@ -96,6 +97,6 @@ defmodule Custyard.Notifications.NeglectChecker do
 
     # Delegate to email module when configured
     # This will be a no-op if email is not configured
-    Custyard.Notifications.Email.deliver_neglect_alert(conversation, level)
+    NotificationEmail.deliver_neglect_alert(conversation, level)
   end
 end

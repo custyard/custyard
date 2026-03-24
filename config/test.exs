@@ -2,10 +2,14 @@ import Config
 
 config :custyard, Custyard.Repo,
   database: Path.expand("../priv/repo/custyard_test.db", __DIR__),
-  pool_size: 1,
+  pool_size: 5,
   pool: Ecto.Adapters.SQL.Sandbox,
   journal_mode: :wal,
-  busy_timeout: 5000
+  # High busy_timeout needed because SQLite only allows one writer at a time
+  # and async tests cause write contention
+  busy_timeout: 30_000,
+  queue_target: 500,
+  queue_interval: 1000
 
 config :custyard, CustyardWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
@@ -24,3 +28,6 @@ config :phoenix, :plug_init_mode, :runtime
 
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
+
+# Use test adapter for Swoosh to capture emails in tests
+config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Test

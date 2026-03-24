@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Portal.ProjectLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Repo, Projects}
+  alias Custyard.{Projects, Repo}
   alias CustyardWeb.Portal.Helpers
 
   @impl true

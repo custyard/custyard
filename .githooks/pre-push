@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+
+echo "Running pre-push checks..."
+
+# Fast checks only - don't block flow
+mix format --check-formatted
+mix compile --warnings-as-errors
+
+echo "Checks passed."

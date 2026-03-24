@@ -44,23 +44,72 @@ defmodule Custyard.Notifications.Email do
     :ok
   end
 
-  defp send_neglect_alert(_conversation, _level) do
-    # TODO: Implement with Swoosh when email is configured
-    #
-    # Example implementation:
-    #
-    # import Swoosh.Email
-    #
-    # new()
-    # |> to(Application.get_env(:custyard, :operator_email))
-    # |> from({"Service Platform", "notifications@example.com"})
-    # |> subject("[#{level}] Neglect alert: #{conversation.subject}")
-    # |> html_body(neglect_alert_html(conversation, level))
-    # |> text_body(neglect_alert_text(conversation, level))
-    # |> Custyard.Mailer.deliver()
+  defp send_neglect_alert(conversation, level) do
+    import Swoosh.Email
 
-    :ok
+    operator_email = Application.get_env(:custyard, :operator_email, "operator@example.com")
+    from_name = Application.get_env(:custyard, :email_from_name, "Custyard Alerts")
+    from_email = Application.get_env(:custyard, :email_from_address, "alerts@custyard.local")
+
+    email =
+      new()
+      |> to(operator_email)
+      |> from({from_name, from_email})
+      |> subject("[#{String.upcase(to_string(level))}] Neglect alert: #{conversation.subject}")
+      |> html_body(neglect_alert_html(conversation, level))
+      |> text_body(neglect_alert_text(conversation, level))
+
+    case Custyard.Mailer.deliver(email) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Failed to send neglect alert email: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
+
+  defp neglect_alert_html(conversation, level) do
+    """
+    <html>
+    <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background: #{level_color(level)}; color: white; padding: 16px; border-radius: 8px 8px 0 0;">
+        <h2 style="margin: 0;">#{String.upcase(to_string(level))} Neglect Alert</h2>
+      </div>
+      <div style="padding: 16px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+        <p><strong>Conversation:</strong> #{conversation.subject}</p>
+        <p><strong>Organization:</strong> #{conversation.organization.name}</p>
+        <p><strong>Contact:</strong> #{contact_display(conversation.contact)}</p>
+        <p><strong>Last activity:</strong> #{format_datetime(conversation.updated_at)}</p>
+        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
+        <p style="color: #6b7280; font-size: 14px;">
+          This conversation requires attention. Please review and respond promptly.
+        </p>
+      </div>
+    </body>
+    </html>
+    """
+  end
+
+  defp neglect_alert_text(conversation, level) do
+    """
+    #{String.upcase(to_string(level))} NEGLECT ALERT
+
+    Conversation: #{conversation.subject}
+    Organization: #{conversation.organization.name}
+    Contact: #{contact_display(conversation.contact)}
+    Last activity: #{format_datetime(conversation.updated_at)}
+
+    This conversation requires attention. Please review and respond promptly.
+    """
+  end
+
+  defp level_color(:warning), do: "#f59e0b"
+  defp level_color(:critical), do: "#ef4444"
+  defp level_color(_), do: "#6b7280"
+
+  defp format_datetime(nil), do: "Unknown"
+  defp format_datetime(dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
 
   defp contact_display(nil), do: "Unknown"
   defp contact_display(contact), do: contact.name || contact.email

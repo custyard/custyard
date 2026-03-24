@@ -2,7 +2,7 @@ defmodule Custyard.Scoring.Recalculator do
   @moduledoc "Background recalculation of all active conversation scores"
 
   import Ecto.Query
-  alias Custyard.{Repo, Conversation, Scoring}
+  alias Custyard.{Conversation, Repo, Scoring}
 
   def recalculate_all do
     from(c in Conversation,

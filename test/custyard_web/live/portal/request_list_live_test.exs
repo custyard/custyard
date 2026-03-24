@@ -45,8 +45,15 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
     test "does not show resolved conversations", %{conn: conn} do
       org = insert_organization()
 
-      active_conv = insert_conversation(organization_id: org.id, state: :active, subject: "Active Request")
-      resolved_conv = insert_conversation(organization_id: org.id, state: :resolved, subject: "Resolved Request")
+      active_conv =
+        insert_conversation(organization_id: org.id, state: :active, subject: "Active Request")
+
+      resolved_conv =
+        insert_conversation(
+          organization_id: org.id,
+          state: :resolved,
+          subject: "Resolved Request"
+        )
 
       {:ok, _view, html} = live(conn, ~p"/p/#{org.token}")
 
@@ -90,8 +97,19 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
       contact1 = insert_contact(organization_id: org.id)
       contact2 = insert_contact(organization_id: org.id)
 
-      conv1 = insert_conversation(organization_id: org.id, contact_id: contact1.id, subject: "Contact1 Request")
-      conv2 = insert_conversation(organization_id: org.id, contact_id: contact2.id, subject: "Contact2 Request")
+      conv1 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact1.id,
+          subject: "Contact1 Request"
+        )
+
+      conv2 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact2.id,
+          subject: "Contact2 Request"
+        )
 
       {:ok, _view, html} = live(conn, ~p"/p/#{org.token}")
 
@@ -105,8 +123,19 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
       contact1 = insert_contact(organization_id: org.id)
       contact2 = insert_contact(organization_id: org.id)
 
-      conv1 = insert_conversation(organization_id: org.id, contact_id: contact1.id, subject: "Contact1 Request")
-      conv2 = insert_conversation(organization_id: org.id, contact_id: contact2.id, subject: "Contact2 Request")
+      conv1 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact1.id,
+          subject: "Contact1 Request"
+        )
+
+      conv2 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact2.id,
+          subject: "Contact2 Request"
+        )
 
       {:ok, _view, html} = live(conn, ~p"/p/#{org.token}?as=#{contact1.id}")
 
@@ -150,8 +179,19 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
       admin_contact = insert_contact(organization_id: org.id, is_admin: true)
       other_contact = insert_contact(organization_id: org.id)
 
-      conv1 = insert_conversation(organization_id: org.id, contact_id: admin_contact.id, subject: "Admin Request")
-      conv2 = insert_conversation(organization_id: org.id, contact_id: other_contact.id, subject: "Other Request")
+      conv1 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: admin_contact.id,
+          subject: "Admin Request"
+        )
+
+      conv2 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: other_contact.id,
+          subject: "Other Request"
+        )
 
       {:ok, view, html} = live(conn, ~p"/p/#{org.token}?as=#{admin_contact.id}")
 
@@ -174,8 +214,19 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
       non_admin = insert_contact(organization_id: org.id, is_admin: false)
       other_contact = insert_contact(organization_id: org.id)
 
-      _conv1 = insert_conversation(organization_id: org.id, contact_id: non_admin.id, subject: "My Request")
-      conv2 = insert_conversation(organization_id: org.id, contact_id: other_contact.id, subject: "Other Request")
+      _conv1 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: non_admin.id,
+          subject: "My Request"
+        )
+
+      conv2 =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: other_contact.id,
+          subject: "Other Request"
+        )
 
       {:ok, view, html} = live(conn, ~p"/p/#{org.token}?as=#{non_admin.id}")
 

@@ -5,7 +5,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
   import Custyard.Factory
   import Ecto.Query
 
-  alias Custyard.{Repo, Message}
+  alias Custyard.{Message, Repo}
 
   describe "mount" do
     test "renders conversation page with subject", %{conn: conn} do
@@ -130,7 +130,8 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
       # The reply appears in messages but textarea value should be empty
       # Check that the textarea doesn't have the value attribute with our text
-      assert html =~ "Form reply text"  # Appears in messages
+      # Appears in messages
+      assert html =~ "Form reply text"
 
       # Verify a new message was created and reply form is reset
       messages = Repo.all(from m in Message, where: m.conversation_id == ^conv.id)
