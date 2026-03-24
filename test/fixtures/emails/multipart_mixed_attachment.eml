@@ -1,0 +1,22 @@
+From: charlie@example.com
+To: support@custyard.test
+Subject: Invoice attached
+Date: Mon, 24 Mar 2026 12:00:00 +0000
+Message-ID: <multipart-mixed-001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="boundary-mixed-456"
+
+--boundary-mixed-456
+Content-Type: text/plain; charset=utf-8
+
+Please see the attached invoice.
+
+--boundary-mixed-456
+Content-Type: application/pdf; name="invoice.pdf"
+Content-Disposition: attachment; filename="invoice.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRv
+Ymo=
+
+--boundary-mixed-456--

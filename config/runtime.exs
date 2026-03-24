@@ -36,6 +36,54 @@ if config_env() == :prod do
   end
 end
 
+# LMTP server configuration (all environments)
+lmtp_enabled = System.get_env("LMTP_ENABLED") == "true"
+
+if lmtp_enabled do
+  # Build TLS options if certificate paths are provided
+  lmtp_tls_opts =
+    []
+    |> then(fn opts ->
+      case System.get_env("LMTP_TLS_CERTFILE") do
+        nil -> opts
+        path -> Keyword.put(opts, :certfile, path)
+      end
+    end)
+    |> then(fn opts ->
+      case System.get_env("LMTP_TLS_KEYFILE") do
+        nil -> opts
+        path -> Keyword.put(opts, :keyfile, path)
+      end
+    end)
+    |> then(fn opts ->
+      case System.get_env("LMTP_TLS_CACERTFILE") do
+        nil -> opts
+        path -> Keyword.put(opts, :cacertfile, path)
+      end
+    end)
+
+  config :custyard, :lmtp,
+    enabled: true,
+    port: String.to_integer(System.get_env("LMTP_PORT") || "2024"),
+    hostname: System.get_env("LMTP_HOSTNAME") || "localhost",
+    tls: lmtp_tls_opts
+end
+
+# IMAP poller configuration (all environments)
+imap_enabled = System.get_env("IMAP_ENABLED") == "true"
+
+if imap_enabled do
+  config :custyard, :imap,
+    enabled: true,
+    host: System.get_env("IMAP_HOST") || "localhost",
+    port: String.to_integer(System.get_env("IMAP_PORT") || "993"),
+    username: System.get_env("IMAP_USERNAME") || "",
+    password: System.get_env("IMAP_PASSWORD") || "",
+    folder: System.get_env("IMAP_FOLDER") || "INBOX",
+    poll_interval: String.to_integer(System.get_env("IMAP_POLL_INTERVAL") || "60000"),
+    ssl: System.get_env("IMAP_SSL") != "false"
+end
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||

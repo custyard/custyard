@@ -1,0 +1,9 @@
+From: truncated@example.com
+To: support@custyard.test
+Subject: Truncated base64 body
+Message-ID: <truncated-base64-001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: base64
+
+VGhpcyBpcyB0cnVuY2F0ZWQgYmFzZTY0IHRoYXQgZW5kcyBtaWQtc2VxdWVu

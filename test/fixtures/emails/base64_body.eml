@@ -1,0 +1,10 @@
+From: encoded@example.com
+To: support@custyard.test
+Subject: Base64 encoded body
+Date: Mon, 24 Mar 2026 15:00:00 +0000
+Message-ID: <base64-001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: base64
+
+VGhpcyBpcyBhIGJhc2U2NCBlbmNvZGVkIG1lc3NhZ2UuCgpJdCBoYXMgbXVsdGlwbGUgbGluZXMu

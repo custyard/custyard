@@ -1,21 +1,37 @@
-<div class="h-screen flex flex-col bg-gray-100">
+<div class="h-screen flex flex-col bg-gray-100" data-testid="operator-layout">
   <%!-- Top nav --%>
-  <div class="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-4">
+  <div
+    class="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-4"
+    data-testid="operator-layout-nav"
+  >
     <span class="font-bold text-gray-900 text-sm tracking-tight">Service Platform</span>
     <span class="text-gray-300">|</span>
-    <.link navigate={~p"/operator"} class="text-sm text-gray-500 hover:text-gray-700">
+    <.link
+      navigate={~p"/operator"}
+      class="text-sm text-gray-500 hover:text-gray-700"
+      data-testid="operator-nav-queue"
+    >
       Attention Queue
     </.link>
-    <.link navigate={~p"/operator/neglect"} class="text-sm text-gray-500 hover:text-gray-700">
+    <.link
+      navigate={~p"/operator/neglect"}
+      class="text-sm text-gray-500 hover:text-gray-700"
+      data-testid="operator-nav-neglect"
+    >
       Neglect Report
     </.link>
     <.link
       navigate={~p"/operator/organizations"}
       class="text-sm text-gray-500 hover:text-gray-700"
+      data-testid="operator-nav-orgs"
     >
       Organizations
     </.link>
-    <.link navigate={~p"/operator/settings"} class="text-sm text-gray-500 hover:text-gray-700">
+    <.link
+      navigate={~p"/operator/settings"}
+      class="text-sm text-gray-500 hover:text-gray-700"
+      data-testid="operator-nav-settings"
+    >
       Settings
     </.link>
     <div class="ml-auto">
@@ -23,6 +39,7 @@
         href={~p"/operator/logout"}
         method="delete"
         class="text-sm text-gray-500 hover:text-gray-700"
+        data-testid="operator-nav-logout"
       >
         Log out
       </.link>
@@ -33,7 +50,7 @@
   <.flash_group flash={@flash} />
 
   <%!-- Content --%>
-  <div class="flex-1 overflow-hidden">
+  <div class="flex-1 overflow-hidden" data-testid="operator-layout-content">
     {@inner_content}
   </div>
 </div>

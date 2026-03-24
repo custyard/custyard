@@ -178,12 +178,15 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto p-4">
+    <div class="max-w-4xl mx-auto p-4" data-testid="operator-orgs-page">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-lg font-semibold text-gray-900">Organizations</h1>
+        <h1 class="text-lg font-semibold text-gray-900" data-testid="operator-orgs-heading">
+          Organizations
+        </h1>
         <button
           phx-click="show_form"
           class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
+          data-testid="operator-orgs-add-btn"
         >
           Add organization
         </button>
@@ -221,12 +224,20 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   defp org_form(assigns) do
     ~H"""
-    <div class="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+    <div
+      class="bg-white border border-gray-200 rounded-lg p-4 mb-4"
+      data-testid="operator-org-form-card"
+    >
       <h2 class="text-sm font-semibold text-gray-900 mb-4">
         {if @editing, do: "Edit organization", else: "New organization"}
       </h2>
 
-      <form phx-submit="save_org" phx-change="validate_form" class="space-y-4">
+      <form
+        phx-submit="save_org"
+        phx-change="validate_form"
+        class="space-y-4"
+        data-testid="operator-org-form"
+      >
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
           <input
@@ -237,6 +248,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             phx-value-field="name"
             required
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            data-testid="operator-org-name-input"
           />
         </div>
 
@@ -250,6 +262,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             phx-value-field="domain"
             placeholder="example.com"
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            data-testid="operator-org-domain-input"
           />
         </div>
 
@@ -263,6 +276,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             phx-value-field="custom_domain"
             placeholder="support.example.com"
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            data-testid="operator-org-custom-domain-input"
           />
           <p class="text-xs text-gray-500 mt-1">
             White-label portal domain. Requires CNAME pointing to app host.
@@ -276,6 +290,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             phx-change="update_form"
             phx-value-field="tier"
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            data-testid="operator-org-tier-select"
           >
             <option value="basic" selected={@form_data.tier == "basic"}>Basic</option>
             <option value="standard" selected={@form_data.tier == "standard"}>Standard</option>
@@ -340,6 +355,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
                     phx-change="update_form"
                     phx-value-field="primary_color"
                     class="w-10 h-10 rounded border border-gray-300 cursor-pointer"
+                    data-testid="operator-org-primary-color-picker"
                   />
                   <input
                     type="text"
@@ -350,6 +366,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
                     placeholder="#4f46e5"
                     pattern="^#[0-9A-Fa-f]{6}$"
                     class="flex-1 border border-gray-300 rounded px-3 py-2 text-sm"
+                    data-testid="operator-org-primary-color-input"
                   />
                 </div>
               </div>
@@ -371,6 +388,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
                     phx-change="update_form"
                     phx-value-field="secondary_color"
                     class="w-10 h-10 rounded border border-gray-300 cursor-pointer"
+                    data-testid="operator-org-secondary-color-picker"
                   />
                   <input
                     type="text"
@@ -381,6 +399,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
                     placeholder="#6366f1"
                     pattern="^#[0-9A-Fa-f]{6}$"
                     class="flex-1 border border-gray-300 rounded px-3 py-2 text-sm"
+                    data-testid="operator-org-secondary-color-input"
                   />
                 </div>
               </div>
@@ -392,6 +411,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           <button
             type="submit"
             class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
+            data-testid="operator-org-submit-btn"
           >
             {if @editing, do: "Update", else: "Create"}
           </button>
@@ -399,6 +419,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             type="button"
             phx-click="hide_form"
             class="text-gray-600 text-sm px-4 py-2 rounded hover:bg-gray-100"
+            data-testid="operator-org-cancel-btn"
           >
             Cancel
           </button>
@@ -413,7 +434,10 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   defp org_card(assigns) do
     ~H"""
-    <div class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+    <div
+      class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+      data-testid={"operator-org-card-#{@org.id}"}
+    >
       <div class="flex items-start justify-between">
         <div class="flex items-start gap-3">
           <div :if={@org.logo_url} class="flex-shrink-0">
@@ -433,11 +457,13 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           </div>
           <div>
             <div class="flex items-center gap-2 mb-1">
-              <span class="font-semibold text-gray-900">{@org.name}</span>
+              <span class="font-semibold text-gray-900" data-testid="operator-org-name">
+                {@org.name}
+              </span>
               <.tier_badge tier={@org.tier} />
             </div>
             <div :if={@org.domain} class="text-sm text-gray-500 mb-2">{@org.domain}</div>
-            <div class="text-xs text-gray-400">
+            <div class="text-xs text-gray-400" data-testid="operator-org-conv-count">
               {@conversation_count} {if @conversation_count == 1,
                 do: "conversation",
                 else: "conversations"}
@@ -450,13 +476,17 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             phx-click="edit_org"
             phx-value-id={@org.id}
             class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
+            data-testid={"operator-org-edit-#{@org.id}"}
           >
             Edit
           </button>
         </div>
       </div>
 
-      <div class="mt-3 pt-3 border-t border-gray-100">
+      <div
+        class="mt-3 pt-3 border-t border-gray-100"
+        data-testid={"operator-org-portal-link-#{@org.id}"}
+      >
         <div class="text-xs text-gray-400 mb-1">Portal link</div>
         <code class="text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded break-all">
           /p/{@org.token}
@@ -480,7 +510,10 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
     assigns = assign(assigns, :colors, colors)
 
     ~H"""
-    <span class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}>
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
+      data-testid={"operator-tier-badge-#{@tier}"}
+    >
       {to_string(@tier)}
     </span>
     """

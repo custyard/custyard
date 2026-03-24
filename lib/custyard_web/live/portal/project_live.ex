@@ -28,21 +28,31 @@ defmodule CustyardWeb.Portal.ProjectLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto py-8 px-4">
+    <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-project-detail">
       <.link
         navigate={"#{@portal_path}/projects"}
         class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"
+        data-testid="portal-back-link"
       >
         &larr; Back to projects
       </.link>
 
       <div class="bg-white border rounded-lg p-6 mb-6">
-        <h1 class="text-2xl font-semibold text-gray-900 mb-2">{@project.title}</h1>
-        <p :if={@project.description} class="text-gray-600 mb-4">
+        <h1 class="text-2xl font-semibold text-gray-900 mb-2" data-testid="portal-project-title">
+          {@project.title}
+        </h1>
+        <p
+          :if={@project.description}
+          class="text-gray-600 mb-4"
+          data-testid="portal-project-description"
+        >
           {@project.description}
         </p>
 
-        <div class="flex items-center gap-6 text-sm text-gray-500 mb-4">
+        <div
+          class="flex items-center gap-6 text-sm text-gray-500 mb-4"
+          data-testid="portal-project-dates"
+        >
           <span :if={@project.start_date}>
             Started: {format_date(@project.start_date)}
           </span>
@@ -54,17 +64,26 @@ defmodule CustyardWeb.Portal.ProjectLive do
         <.progress_bar progress={@project.progress} />
       </div>
 
-      <h2 class="text-lg font-semibold text-gray-900 mb-3">Tasks</h2>
+      <h2 class="text-lg font-semibold text-gray-900 mb-3" data-testid="portal-tasks-heading">
+        Tasks
+      </h2>
 
-      <div :if={@project.tasks != []} class="bg-white border rounded-lg divide-y">
+      <div
+        :if={@project.tasks != []}
+        class="bg-white border rounded-lg divide-y"
+        data-testid="portal-tasks-list"
+      >
         <%= for task <- @project.tasks do %>
-          <div class="p-4 flex items-center gap-4">
+          <div class="p-4 flex items-center gap-4" data-testid="portal-task-item">
             <.task_state_icon state={task.state} />
             <div class="flex-1">
-              <div class={"text-gray-900 #{if task.state == :done, do: "line-through opacity-60"}"}>
+              <div
+                class={"text-gray-900 #{if task.state == :done, do: "line-through opacity-60"}"}
+                data-testid="portal-task-title"
+              >
                 {task.title}
               </div>
-              <div :if={task.due_at} class="text-sm text-gray-500">
+              <div :if={task.due_at} class="text-sm text-gray-500" data-testid="portal-task-due">
                 Due: {format_due_at(task.due_at)}
               </div>
             </div>
@@ -76,6 +95,7 @@ defmodule CustyardWeb.Portal.ProjectLive do
       <div
         :if={@project.tasks == []}
         class="text-center py-12 text-gray-500 bg-white border rounded-lg"
+        data-testid="portal-empty-state"
       >
         No tasks in this project yet.
       </div>
@@ -87,7 +107,7 @@ defmodule CustyardWeb.Portal.ProjectLive do
 
   defp progress_bar(assigns) do
     ~H"""
-    <div>
+    <div data-testid="portal-project-progress-bar">
       <div class="flex justify-between text-sm text-gray-600 mb-2">
         <span>Progress: {@progress.done} of {@progress.total} tasks completed</span>
         <span>{@progress.percentage}%</span>
@@ -108,15 +128,24 @@ defmodule CustyardWeb.Portal.ProjectLive do
     ~H"""
     <%= case @state do %>
       <% :done -> %>
-        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 flex items-center justify-center">
+        <span
+          class="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 flex items-center justify-center"
+          data-testid={"portal-task-icon-#{@state}"}
+        >
           <.icon name="hero-check" class="w-4 h-4 text-green-600" />
         </span>
       <% :in_progress -> %>
-        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
+        <span
+          class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center"
+          data-testid={"portal-task-icon-#{@state}"}
+        >
           <.icon name="hero-arrow-path" class="w-4 h-4 text-blue-600" />
         </span>
       <% _ -> %>
-        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center">
+        <span
+          class="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center"
+          data-testid={"portal-task-icon-#{@state}"}
+        >
           <span class="w-2 h-2 rounded-full bg-gray-400" />
         </span>
     <% end %>
@@ -141,7 +170,10 @@ defmodule CustyardWeb.Portal.ProjectLive do
       |> assign(:label, label)
 
     ~H"""
-    <span class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}>
+    <span
+      class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}
+      data-testid={"portal-task-badge-#{@state}"}
+    >
       {@label}
     </span>
     """

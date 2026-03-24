@@ -1,0 +1,28 @@
+From: deep@example.com
+To: support@custyard.test
+Subject: Deeply nested multipart
+Message-ID: <deep-nested-001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="level-1"
+
+--level-1
+Content-Type: multipart/related; boundary="level-2"
+
+--level-2
+Content-Type: multipart/alternative; boundary="level-3"
+
+--level-3
+Content-Type: text/plain; charset=utf-8
+
+Deep nesting level 3 plain text.
+
+--level-3
+Content-Type: text/html; charset=utf-8
+
+<html><body>Deep nesting level 3 HTML.</body></html>
+
+--level-3--
+
+--level-2--
+
+--level-1--

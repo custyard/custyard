@@ -1,0 +1,11 @@
+From: sender@example.com
+To: support@custyard.test
+Subject: Truncated message
+Message-ID: <truncated-001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="never-ends"
+
+--never-ends
+Content-Type: text/plain
+
+This boundary never closes...

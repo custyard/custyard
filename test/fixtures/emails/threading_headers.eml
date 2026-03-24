@@ -1,0 +1,11 @@
+From: replier@example.com
+To: support@custyard.test
+Subject: Re: Original thread
+Date: Mon, 24 Mar 2026 18:00:00 +0000
+Message-ID: <reply-001@example.com>
+In-Reply-To: <original-001@example.com>
+References: <original-001@example.com> <followup-001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This is a reply in a thread.

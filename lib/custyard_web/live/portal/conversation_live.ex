@@ -92,41 +92,55 @@ defmodule CustyardWeb.Portal.ConversationLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto py-8 px-4">
+    <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-conversation">
       <.link
         navigate={@portal_home_path}
         class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"
+        data-testid="portal-back-link"
       >
         &#8592; Back to requests
       </.link>
 
-      <h1 class="text-2xl font-semibold text-gray-900 mb-6">{@conversation.subject}</h1>
+      <h1 class="text-2xl font-semibold text-gray-900 mb-6" data-testid="portal-conversation-subject">
+        {@conversation.subject}
+      </h1>
 
-      <div class="space-y-4 mb-8">
+      <div class="space-y-4 mb-8" data-testid="portal-messages">
         <%= for msg <- @messages do %>
-          <div class={"p-4 rounded-lg #{message_style(msg)}"}>
+          <div
+            class={"p-4 rounded-lg #{message_style(msg)}"}
+            data-testid={"portal-message-#{msg.source}"}
+          >
             <div class="flex justify-between text-sm text-gray-500 mb-2">
-              <span>{msg.sender_email}</span>
-              <span>{format_time(msg.inserted_at)}</span>
+              <span data-testid="portal-message-sender">{msg.sender_email}</span>
+              <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
             </div>
-            <div class="text-gray-900 whitespace-pre-wrap">{msg.body}</div>
+            <div class="text-gray-900 whitespace-pre-wrap" data-testid="portal-message-body">
+              {msg.body}
+            </div>
           </div>
         <% end %>
       </div>
 
       <.tasks_section tasks={@tasks} />
 
-      <form phx-submit="submit_reply" class="bg-white border rounded-lg p-4">
+      <form
+        phx-submit="submit_reply"
+        class="bg-white border rounded-lg p-4"
+        data-testid="portal-reply-form"
+      >
         <textarea
           name="body"
           rows="4"
           class="w-full border-gray-300 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
           placeholder="Write a reply..."
+          data-testid="portal-reply-textarea"
         >{@reply_form[:body].value}</textarea>
         <div class="flex justify-end mt-3">
           <button
             type="submit"
             class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+            data-testid="portal-reply-submit"
           >
             Send Reply
           </button>
@@ -140,15 +154,17 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
   defp tasks_section(assigns) do
     ~H"""
-    <div :if={@tasks != []} class="mb-8">
-      <h2 class="text-lg font-semibold text-gray-900 mb-3">Tasks</h2>
-      <div class="bg-white border rounded-lg divide-y">
+    <div :if={@tasks != []} class="mb-8" data-testid="portal-tasks-section">
+      <h2 class="text-lg font-semibold text-gray-900 mb-3" data-testid="portal-tasks-heading">
+        Tasks
+      </h2>
+      <div class="bg-white border rounded-lg divide-y" data-testid="portal-tasks-list">
         <%= for task <- @tasks do %>
-          <div class="p-3 flex items-center gap-3">
+          <div class="p-3 flex items-center gap-3" data-testid="portal-task-item">
             <.task_state_badge state={task.state} />
             <div class="flex-1">
-              <div class="text-gray-900">{task.title}</div>
-              <div :if={task.due_at} class="text-sm text-gray-500">
+              <div class="text-gray-900" data-testid="portal-task-title">{task.title}</div>
+              <div :if={task.due_at} class="text-sm text-gray-500" data-testid="portal-task-due">
                 Due: {format_due_at(task.due_at)}
               </div>
             </div>
@@ -177,7 +193,10 @@ defmodule CustyardWeb.Portal.ConversationLive do
       |> assign(:label, label)
 
     ~H"""
-    <span class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}>
+    <span
+      class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}
+      data-testid={"portal-task-badge-#{@state}"}
+    >
       {@label}
     </span>
     """

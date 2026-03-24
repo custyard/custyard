@@ -36,7 +36,29 @@ config :tailwind,
 
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id]
+  metadata: [
+    :request_id,
+    :actual_size,
+    :client_hostname,
+    :command,
+    :current_count,
+    :declared_size,
+    :error_type,
+    :extension,
+    :hostname,
+    :limit_type,
+    :max_recipients,
+    :max_size,
+    :message_count,
+    :messages_processed,
+    :peer,
+    :reason,
+    :received_count,
+    :recipient,
+    :recipient_count,
+    :sender,
+    :size_bytes
+  ]
 
 config :phoenix, :json_library, Jason
 
@@ -45,5 +67,24 @@ config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Local
 
 # Disable Swoosh API client (we don't need the API routes)
 config :swoosh, :api_client, false
+
+# LMTP server configuration (for receiving emails from MTA)
+# TLS options (certfile, keyfile, etc.) can be configured for STARTTLS support
+config :custyard, :lmtp,
+  enabled: false,
+  port: 2024,
+  hostname: "localhost",
+  tls: []
+
+# IMAP poller configuration (for fetching emails from IMAP mailbox)
+config :custyard, :imap,
+  enabled: false,
+  host: "localhost",
+  port: 993,
+  username: "",
+  password: "",
+  folder: "INBOX",
+  poll_interval: 60_000,
+  ssl: true
 
 import_config "#{config_env()}.exs"

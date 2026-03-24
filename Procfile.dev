@@ -1,0 +1,16 @@
+# Overmind Procfile for development
+# Usage: overmind start -f Procfile.dev
+
+export ELIXIR_ERL_OPTIONS="+Bd"
+
+# Phoenix server with IEx shell
+web: elixir --erl "+Bd" -S mix phx.server
+
+# Asset watchers
+tailwind: mix tailwind custyard --watch
+esbuild: mix esbuild custyard --watch
+
+# Note: LMTP server starts automatically via supervision tree when LMTP_ENABLED=true
+# Note: IMAP poller starts automatically via supervision tree when IMAP_ENABLED=true
+#
+# @see docs/lessons-learned/

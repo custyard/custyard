@@ -1,4 +1,4 @@
-<div class="min-h-screen flex items-center justify-center bg-gray-100">
+<div class="min-h-screen flex items-center justify-center bg-gray-100" data-testid="auth-page">
   <div class="max-w-md w-full">
     <div class="bg-white rounded-lg shadow-md p-8">
       <div class="text-center mb-8">
@@ -7,12 +7,15 @@
       </div>
 
       <%= if @error do %>
-        <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+        <div
+          class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800"
+          data-testid="auth-error"
+        >
           {@error}
         </div>
       <% end %>
 
-      <form action={~p"/operator/login"} method="post">
+      <form action={~p"/operator/login"} method="post" data-testid="auth-form">
         <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
 
         <div class="mb-4">
@@ -25,6 +28,7 @@
             id="email"
             autocomplete="email"
             required
+            data-testid="auth-email-input"
             class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
           />
         </div>
@@ -39,6 +43,7 @@
             id="password"
             autocomplete="current-password"
             required
+            data-testid="auth-password-input"
             class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
           />
         </div>
@@ -46,6 +51,7 @@
         <button
           type="submit"
           class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 font-medium"
+          data-testid="auth-submit"
         >
           Log in
         </button>

@@ -51,26 +51,40 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-2xl mx-auto py-8 px-4">
-      <h1 class="text-2xl font-semibold text-gray-900 mb-6">New Request</h1>
+    <div class="max-w-2xl mx-auto py-8 px-4" data-testid="portal-new-request">
+      <h1 class="text-2xl font-semibold text-gray-900 mb-6" data-testid="portal-new-request-heading">
+        New Request
+      </h1>
 
-      <form phx-submit="submit" class="space-y-4">
+      <form phx-submit="submit" class="space-y-4" data-testid="portal-new-request-form">
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+          <label
+            class="block text-sm font-medium text-gray-700 mb-1"
+            data-testid="portal-subject-label"
+          >
+            Subject
+          </label>
           <input
             type="text"
             name="subject"
             required
+            data-testid="portal-subject-input"
             class="w-full border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
             value={@form[:subject].value}
           />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Urgency</label>
+          <label
+            class="block text-sm font-medium text-gray-700 mb-1"
+            data-testid="portal-urgency-label"
+          >
+            Urgency
+          </label>
           <select
             name="urgency"
             class="w-full border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            data-testid="portal-urgency-select"
           >
             <option value="normal">Normal</option>
             <option value="elevated">Elevated</option>
@@ -79,11 +93,14 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+          <label class="block text-sm font-medium text-gray-700 mb-1" data-testid="portal-body-label">
+            Description
+          </label>
           <textarea
             name="body"
             rows="6"
             required
+            data-testid="portal-body-textarea"
             class="w-full border-gray-300 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
           ><%= @form[:body].value %></textarea>
         </div>
@@ -92,12 +109,14 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           <.link
             navigate={@portal_home_path}
             class="px-4 py-2 text-gray-700 hover:text-gray-900"
+            data-testid="portal-cancel-link"
           >
             Cancel
           </.link>
           <button
             type="submit"
             class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+            data-testid="portal-submit"
           >
             Submit Request
           </button>

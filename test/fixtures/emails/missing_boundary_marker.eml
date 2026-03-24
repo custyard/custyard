@@ -1,0 +1,13 @@
+From: broken@example.com
+To: support@custyard.test
+Subject: Missing boundary marker
+Message-ID: <missing-boundary-001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="expected-boundary"
+
+This content appears before any boundary marker.
+The parser should handle this gracefully.
+
+Content-Type: text/plain
+
+Orphan text that lacks proper boundary delimiter.
