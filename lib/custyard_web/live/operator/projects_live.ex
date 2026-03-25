@@ -86,18 +86,20 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   def handle_event("save_project", _params, socket) do
     form_data = socket.assigns.form_data
 
+    org_id =
+      case Integer.parse(form_data.organization_id || "") do
+        {id, ""} -> id
+        _ -> nil
+      end
+
     attrs = %{
       title: form_data.title,
       description: if(form_data.description == "", do: nil, else: form_data.description),
-      organization_id:
-        if(form_data.organization_id == "",
-          do: nil,
-          else: String.to_integer(form_data.organization_id)
-        ),
+      organization_id: org_id,
       start_date: parse_date(form_data.start_date),
       target_completion_date: parse_date(form_data.target_completion_date),
       portal_visible: form_data.portal_visible,
-      project_type: if(form_data.organization_id == "", do: :internal, else: :customer)
+      project_type: if(org_id == nil, do: :internal, else: :customer)
     }
 
     result =
@@ -141,9 +143,17 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   defp load_projects(socket) do
     projects =
       case socket.assigns.filter_org do
-        nil -> Projects.list_for_operator()
-        "" -> Projects.list_for_operator()
-        org_id -> Projects.list_for_organization(String.to_integer(org_id))
+        nil ->
+          Projects.list_for_operator()
+
+        "" ->
+          Projects.list_for_operator()
+
+        org_id ->
+          case Integer.parse(org_id) do
+            {id, ""} -> Projects.list_for_organization(id)
+            _ -> Projects.list_for_operator()
+          end
       end
 
     assign(socket, :projects, projects)
@@ -205,7 +215,9 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       </div>
 
       <div class="mb-4">
+        <label for="org-filter" class="sr-only">Filter by organization</label>
         <select
+          id="org-filter"
           phx-change="filter_org"
           name="org"
           class="border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
@@ -250,6 +262,8 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   defp project_form(assigns) do
     ~H"""
     <div
+      id="project-form-card"
+      phx-hook="ScrollIntoView"
       class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 mb-4"
       data-testid="operator-project-form-card"
     >
@@ -270,6 +284,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             name="title"
             value={@form_data.title}
             required
+            phx-debounce="300"
             class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
             data-testid="operator-project-title-input"
           />
@@ -282,6 +297,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           <textarea
             name="description"
             rows="3"
+            phx-debounce="300"
             class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
             data-testid="operator-project-desc-input"
           >{@form_data.description}</textarea>
@@ -492,7 +508,12 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
     ~H"""
     <div class="relative w-12 h-12" data-testid="operator-project-progress">
-      <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+      <svg
+        class="w-full h-full transform -rotate-90"
+        viewBox="0 0 36 36"
+        role="img"
+        aria-label={"Progress: #{@progress.percentage}%"}
+      >
         <circle
           cx="18"
           cy="18"

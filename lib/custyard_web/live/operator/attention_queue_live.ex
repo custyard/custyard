@@ -37,30 +37,47 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   end
 
   def handle_event("toggle_score", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-    current = socket.assigns.show_score_breakdown
+    case Integer.parse(id) do
+      {id, ""} ->
+        current = socket.assigns.show_score_breakdown
+        {:noreply, assign(socket, :show_score_breakdown, if(current == id, do: nil, else: id))}
 
-    {:noreply, assign(socket, :show_score_breakdown, if(current == id, do: nil, else: id))}
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("toggle_snooze", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-    current = socket.assigns.show_snooze_menu
+    case Integer.parse(id) do
+      {id, ""} ->
+        current = socket.assigns.show_snooze_menu
+        {:noreply, assign(socket, :show_snooze_menu, if(current == id, do: nil, else: id))}
 
-    {:noreply, assign(socket, :show_snooze_menu, if(current == id, do: nil, else: id))}
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("snooze", %{"id" => id, "duration" => duration}, socket) do
-    id = String.to_integer(id)
-    conversation = Conversations.get_conversation!(id)
+    with {id, ""} <- Integer.parse(id),
+         true <- queue_contains_conversation?(socket, id) do
+      conversation = Conversations.get_conversation!(id)
+      until = calculate_snooze_until(duration)
 
-    until = calculate_snooze_until(duration)
+      {:ok, _} = Conversations.snooze(conversation, until)
 
-    {:ok, _} = Conversations.snooze(conversation, until)
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
 
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
+        "conversations:org:#{conversation.organization_id}",
+        {:conversation_updated, id}
+      )
 
-    {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_conversations()}
+      {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_conversations()}
+    else
+      _ -> {:noreply, socket}
+    end
   end
 
   @impl true
@@ -92,6 +109,10 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       end)
 
     assign(socket, :conversations, conversations)
+  end
+
+  defp queue_contains_conversation?(socket, id) do
+    Enum.any?(socket.assigns.conversations, fn item -> item.conversation.id == id end)
   end
 
   defp hours_since(nil), do: 0
@@ -274,6 +295,8 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           </button>
           <%= if @show_snooze do %>
             <div
+              phx-click-away="toggle_snooze"
+              phx-value-id={@item.conversation.id}
               class="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-10 p-1"
               data-testid="operator-queue-snooze-menu"
             >

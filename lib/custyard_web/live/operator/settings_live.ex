@@ -98,7 +98,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
       # Convert to tuple format for update_thresholds
       thresholds_tuples =
         thresholds
-        |> Enum.map(fn {tier, [w, c]} -> {String.to_atom(tier), {w, c}} end)
+        |> Enum.map(fn {tier, [w, c]} -> {String.to_existing_atom(tier), {w, c}} end)
         |> Map.new()
 
       case Settings.update_thresholds(thresholds_tuples) do
@@ -275,12 +275,18 @@ defmodule CustyardWeb.Operator.SettingsLive do
             :for={{tier, [warning, critical]} <- @thresholds}
             class="flex items-center justify-between"
           >
-            <span class="text-sm text-gray-700 dark:text-zinc-300 capitalize">{tier}</span>
+            <span class="text-sm text-gray-700 dark:text-zinc-300 capitalize" id={"thresholds-#{tier}-label"}>
+              {tier}
+            </span>
             <div class="flex items-center gap-2">
               <div class="flex items-center gap-1">
+                <label for={"thresholds_#{tier}_warning"} class="sr-only">
+                  {tier} warning threshold (hours)
+                </label>
                 <input
                   type="number"
                   min="1"
+                  id={"thresholds_#{tier}_warning"}
                   name={"thresholds[#{tier}_warning]"}
                   value={warning}
                   class="w-16 text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200 focus:ring-amber-500 focus:border-amber-500"
@@ -288,9 +294,13 @@ defmodule CustyardWeb.Operator.SettingsLive do
                 <span class="text-xs text-gray-500 dark:text-zinc-400">h</span>
               </div>
               <div class="flex items-center gap-1">
+                <label for={"thresholds_#{tier}_critical"} class="sr-only">
+                  {tier} critical threshold (hours)
+                </label>
                 <input
                   type="number"
                   min="1"
+                  id={"thresholds_#{tier}_critical"}
                   name={"thresholds[#{tier}_critical]"}
                   value={critical}
                   class="w-16 text-xs text-red-600 bg-red-50 px-2 py-1 rounded border border-red-200 focus:ring-red-500 focus:border-red-500"

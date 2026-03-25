@@ -26,6 +26,7 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
     {:noreply, load_neglected(socket)}
   end
 
+  @impl true
   def handle_info({:conversation_created, _id}, socket) do
     {:noreply, load_neglected(socket)}
   end

@@ -2,6 +2,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   use CustyardWeb, :live_view
 
   alias Custyard.{Conversation, Message, Repo, Scoring}
+  alias Ecto.Multi
 
   @impl true
   def mount(_params, _session, socket) do
@@ -21,31 +22,47 @@ defmodule CustyardWeb.Portal.NewRequestLive do
     org = socket.assigns.current_org
     portal_path = socket.assigns.portal_path
 
-    {:ok, conv} =
-      %Conversation{}
-      |> Conversation.changeset(%{
-        organization_id: org.id,
-        subject: params["subject"],
-        state: :new,
-        urgency: String.to_existing_atom(urgency),
-        last_customer_action_at: DateTime.utc_now()
-      })
-      |> Repo.insert()
+    result =
+      Multi.new()
+      |> Multi.insert(:conversation,
+        Conversation.changeset(%Conversation{}, %{
+          organization_id: org.id,
+          subject: params["subject"],
+          state: :new,
+          urgency: String.to_existing_atom(urgency),
+          last_customer_action_at: DateTime.utc_now()
+        })
+      )
+      |> Multi.insert(:message, fn %{conversation: conv} ->
+        Message.changeset(%Message{}, %{
+          conversation_id: conv.id,
+          source: :portal,
+          sender_email: "portal@#{org.domain}",
+          body: params["body"],
+          is_internal_note: false
+        })
+      end)
+      |> Repo.transaction()
 
-    %Message{}
-    |> Message.changeset(%{
-      conversation_id: conv.id,
-      source: :portal,
-      sender_email: "portal@#{org.domain}",
-      body: params["body"],
-      is_internal_note: false
-    })
-    |> Repo.insert!()
+    case result do
+      {:ok, %{conversation: conv}} ->
+        Scoring.calculate_and_cache(conv.id)
 
-    Scoring.calculate_and_cache(conv.id)
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_created, conv.id})
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversations",
+          {:conversation_created, conv.id}
+        )
 
-    {:noreply, push_navigate(socket, to: "#{portal_path}/request/#{conv.id}")}
+        {:noreply, push_navigate(socket, to: "#{portal_path}/request/#{conv.id}")}
+
+      {:error, _step, changeset, _changes} ->
+        errors =
+          Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+          |> Enum.map_join(", ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+
+        {:noreply, put_flash(socket, :error, "Could not create request: #{errors}")}
+    end
   end
 
   def handle_event("submit", _params, socket) do
@@ -66,6 +83,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
       <form phx-submit="submit" class="space-y-4" data-testid="portal-new-request-form">
         <div>
           <label
+            for="subject"
             class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
             data-testid="portal-subject-label"
           >
@@ -74,6 +92,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           <input
             type="text"
             name="subject"
+            id="subject"
             required
             data-testid="portal-subject-input"
             class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
@@ -83,6 +102,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
 
         <div>
           <label
+            for="urgency"
             class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
             data-testid="portal-urgency-label"
           >
@@ -90,6 +110,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           </label>
           <select
             name="urgency"
+            id="urgency"
             class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
             data-testid="portal-urgency-select"
           >
@@ -101,6 +122,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
 
         <div>
           <label
+            for="body"
             class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
             data-testid="portal-body-label"
           >
@@ -108,6 +130,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           </label>
           <textarea
             name="body"
+            id="body"
             rows="6"
             required
             data-testid="portal-body-textarea"

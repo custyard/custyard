@@ -8,7 +8,8 @@ defmodule CustyardWeb.Portal.RequestListLive do
     # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
 
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      org = socket.assigns.current_org
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:#{org.id}")
     end
 
     {:ok,
@@ -103,7 +104,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
         </div>
         <div class="flex items-center gap-4">
           <div :if={@current_contact && @current_contact.is_admin} class="flex items-center gap-2">
-            <label class="text-sm text-gray-600 dark:text-zinc-400">Admin view</label>
+            <label id="admin-view-label" class="text-sm text-gray-600 dark:text-zinc-400">Admin view</label>
             <button
               type="button"
               phx-click="toggle_admin_mode"
@@ -114,6 +115,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
               ]}
               role="switch"
               aria-checked={to_string(@admin_mode)}
+              aria-labelledby="admin-view-label"
             >
               <span class={[
                 "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",

@@ -45,25 +45,51 @@ defmodule CustyardWeb.Portal.ConversationLive do
     conv = socket.assigns.conversation
     org = socket.assigns.current_org
 
+    # Re-verify the conversation still belongs to this organization
+    case Conversations.get_conversation_for_organization(conv.id, org.id) do
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "This conversation is no longer accessible")
+         |> push_navigate(to: socket.assigns.portal_home_path)}
+
+      {:ok, conv} ->
+        submit_reply(socket, conv, org, body)
+    end
+  end
+
+  defp submit_reply(socket, conv, org, body) do
     if String.trim(body) != "" do
+      sender_email = "portal@#{org.domain || "portal"}"
+
       Conversations.create_message!(%{
         conversation_id: conv.id,
         source: :portal,
-        sender_email: "portal@#{org.domain}",
+        sender_email: sender_email,
         body: body,
         is_internal_note: false
       })
 
-      # Update conversation timestamps and maybe reactivate
+      # Update conversation timestamps and reactivate if needed, in a single write
       now = DateTime.utc_now() |> DateTime.truncate(:second)
-      {:ok, _} = Conversations.update_conversation(conv, last_customer_action_at: now)
 
-      if conv.state in [:waiting, :dormant, :resolved] do
-        {:ok, _} = Conversations.update_state(conv, :active)
-      end
+      update_attrs =
+        if conv.state in [:waiting, :dormant, :resolved] do
+          [last_customer_action_at: now, state: :active]
+        else
+          [last_customer_action_at: now]
+        end
+
+      {:ok, _} = Conversations.update_conversation(conv, update_attrs)
 
       Scoring.calculate_and_cache(conv.id)
       Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conv.id})
+
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
+        "conversations:org:#{conv.organization_id}",
+        {:conversation_updated, conv.id}
+      )
 
       Phoenix.PubSub.broadcast(
         Custyard.PubSub,
@@ -83,7 +109,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
   @impl true
   def handle_info({:message_added, _}, socket) do
-    {:noreply, load_messages(socket)}
+    {:noreply, socket |> load_messages() |> load_tasks()}
   end
 
   @impl true
@@ -106,23 +132,22 @@ defmodule CustyardWeb.Portal.ConversationLive do
       </h1>
 
       <div class="space-y-4 mb-8" data-testid="portal-messages">
-        <%= for msg <- @messages do %>
-          <div
-            class={"p-4 rounded-lg #{message_style(msg)}"}
-            data-testid={"portal-message-#{msg.source}"}
-          >
-            <div class="flex justify-between text-sm text-gray-500 dark:text-zinc-400 mb-2">
-              <span data-testid="portal-message-sender">{msg.sender_email}</span>
-              <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
-            </div>
-            <div
-              class="text-gray-900 dark:text-zinc-100 whitespace-pre-wrap"
-              data-testid="portal-message-body"
-            >
-              {msg.body}
-            </div>
+        <div
+          :for={msg <- @messages}
+          class={"p-4 rounded-lg #{message_style(msg)}"}
+          data-testid={"portal-message-#{msg.source}"}
+        >
+          <div class="flex justify-between text-sm text-gray-500 dark:text-zinc-400 mb-2">
+            <span data-testid="portal-message-sender">{msg.sender_email}</span>
+            <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
           </div>
-        <% end %>
+          <div
+            class="text-gray-900 dark:text-zinc-100 whitespace-pre-wrap"
+            data-testid="portal-message-body"
+          >
+            {msg.body}
+          </div>
+        </div>
       </div>
 
       <.tasks_section tasks={@tasks} />
@@ -168,23 +193,21 @@ defmodule CustyardWeb.Portal.ConversationLive do
         class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg divide-y dark:divide-zinc-700"
         data-testid="portal-tasks-list"
       >
-        <%= for task <- @tasks do %>
-          <div class="p-3 flex items-center gap-3" data-testid="portal-task-item">
-            <.task_state_badge state={task.state} />
-            <div class="flex-1">
-              <div class="text-gray-900 dark:text-zinc-100" data-testid="portal-task-title">
-                {task.title}
-              </div>
-              <div
-                :if={task.due_at}
-                class="text-sm text-gray-500 dark:text-zinc-400"
-                data-testid="portal-task-due"
-              >
-                Due: {format_due_at(task.due_at)}
-              </div>
+        <div :for={task <- @tasks} class="p-3 flex items-center gap-3" data-testid="portal-task-item">
+          <.task_state_badge state={task.state} />
+          <div class="flex-1">
+            <div class="text-gray-900 dark:text-zinc-100" data-testid="portal-task-title">
+              {task.title}
+            </div>
+            <div
+              :if={task.due_at}
+              class="text-sm text-gray-500 dark:text-zinc-400"
+              data-testid="portal-task-due"
+            >
+              Due: {format_due_at(task.due_at)}
             </div>
           </div>
-        <% end %>
+        </div>
       </div>
     </div>
     """

@@ -18,8 +18,8 @@ defmodule Custyard.Contact do
     contact
     |> cast(attrs, [:email, :name, :is_admin, :organization_id])
     |> validate_required([:email, :organization_id])
-    |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/, message: "must be a valid email address")
-    |> unique_constraint(:email)
+    |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/, message: "must be a valid email address")
+    |> unique_constraint([:email, :organization_id])
     |> foreign_key_constraint(:organization_id)
   end
 end

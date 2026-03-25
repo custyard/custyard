@@ -46,8 +46,10 @@ defmodule Custyard.Organization do
       message: "must be a valid hex color (e.g., #1a2b3c)"
     )
     |> unique_constraint(:token)
+    |> unique_constraint(:domain)
     |> unique_constraint(:custom_domain)
     |> validate_custom_domain()
+    |> validate_logo_url()
   end
 
   defp validate_custom_domain(changeset) do
@@ -80,6 +82,21 @@ defmodule Custyard.Organization do
     |> validate_format(:secondary_color, ~r/^#[0-9A-Fa-f]{6}$/,
       message: "must be a valid hex color (e.g., #1a2b3c)"
     )
+    |> validate_logo_url()
+  end
+
+  defp validate_logo_url(changeset) do
+    case get_change(changeset, :logo_url) do
+      nil ->
+        changeset
+
+      url when is_binary(url) ->
+        if String.starts_with?(url, "/uploads/") or String.starts_with?(url, "https://") do
+          changeset
+        else
+          add_error(changeset, :logo_url, "must start with /uploads/ or https://")
+        end
+    end
   end
 
   defp maybe_generate_token(changeset) do

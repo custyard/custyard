@@ -30,6 +30,13 @@
       Organizations
     </.link>
     <.link
+      navigate={~p"/operator/projects"}
+      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+      data-testid="operator-nav-projects"
+    >
+      Projects
+    </.link>
+    <.link
       navigate={~p"/operator/settings"}
       class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
       data-testid="operator-nav-settings"
@@ -52,7 +59,7 @@
   <.flash_group flash={@flash} />
 
   <%!-- Content --%>
-  <div class="flex-1 overflow-hidden" data-testid="operator-layout-content">
+  <div class="flex-1 overflow-auto" data-testid="operator-layout-content">
     {@inner_content}
   </div>
 </div>

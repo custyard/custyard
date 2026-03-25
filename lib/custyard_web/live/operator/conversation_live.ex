@@ -5,12 +5,19 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
+    conversation = load_conversation(id)
+
+    unless conversation do
+      {:ok,
+       socket
+       |> put_flash(:error, "Conversation not found")
+       |> redirect(to: ~p"/operator")}
+    end
+
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
     end
-
-    conversation = load_conversation(id)
 
     # Transition new to active when operator views
     conversation =
@@ -28,6 +35,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
           "conversations",
+          {:conversation_updated, updated.id}
+        )
+
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversations:org:#{updated.organization_id}",
           {:conversation_updated, updated.id}
         )
 
@@ -93,6 +106,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
       {:conversation_updated, conversation.id}
     )
 
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations:org:#{conversation.organization_id}",
+      {:conversation_updated, conversation.id}
+    )
+
     {:noreply, socket |> assign(:reply_text, "") |> reload_conversation()}
   end
 
@@ -147,6 +166,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
       {:conversation_updated, conversation.id}
     )
 
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations:org:#{conversation.organization_id}",
+      {:conversation_updated, conversation.id}
+    )
+
     {:noreply, reload_conversation(socket)}
   end
 
@@ -193,7 +218,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   def handle_event("toggle_task", %{"id" => id}, socket) do
-    task = Conversations.get_task!(id)
+    task = get_scoped_task!(socket, id)
 
     new_state =
       case task.state do
@@ -208,7 +233,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   def handle_event("edit_task", %{"id" => id}, socket) do
-    task = Conversations.get_task!(id)
+    task = get_scoped_task!(socket, id)
     due_at_str = if task.due_at, do: format_datetime_local(task.due_at), else: ""
 
     {:noreply,
@@ -237,7 +262,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     title = params["title"] || ""
 
     if byte_size(title) > 0 do
-      task = Conversations.get_task!(socket.assigns.editing_task_id)
+      task = get_scoped_task!(socket, socket.assigns.editing_task_id)
       due_at = parse_due_at(params["due_at"])
       portal_visible = params["portal_visible"] == "true"
 
@@ -258,7 +283,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   def handle_event("delete_task", %{"id" => id}, socket) do
-    task = Conversations.get_task!(id)
+    task = get_scoped_task!(socket, id)
     {:ok, _} = Conversations.delete_task(task)
 
     {:noreply,
@@ -280,8 +305,21 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
+  defp get_scoped_task!(socket, task_id) do
+    task = Conversations.get_task!(task_id)
+    conversation_id = socket.assigns.conversation.id
+
+    unless task.conversation_id == conversation_id do
+      raise Ecto.NoResultsError, queryable: Custyard.Task
+    end
+
+    task
+  end
+
   defp load_conversation(id) do
     Conversations.get_with_messages(id)
+  rescue
+    Ecto.NoResultsError -> nil
   end
 
   defp reload_conversation(socket) do
@@ -355,6 +393,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
         </div>
 
         <div
+          id="message-thread"
+          phx-hook="ScrollBottom"
           class="flex-1 overflow-y-auto px-4 py-4 bg-gray-50 dark:bg-zinc-800 space-y-1"
           data-testid="operator-conversation-messages"
         >
@@ -365,17 +405,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
         <div class="border-t border-gray-200 dark:border-zinc-700 p-3 space-y-2 bg-white dark:bg-zinc-800">
           <form phx-submit="send_reply" class="flex gap-2" data-testid="operator-reply-form">
-            <input
-              type="text"
+            <textarea
               name="body"
-              value={@reply_text}
+              rows="2"
               phx-change="update_reply"
               placeholder="Reply to customer..."
               data-testid="operator-reply-input"
-              class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
-            />
+              class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y"
+            >{@reply_text}</textarea>
             <button
               type="submit"
+              phx-disable-with="Sending..."
               class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
               data-testid="operator-reply-submit"
             >
@@ -395,6 +435,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
             />
             <button
               type="submit"
+              phx-disable-with="Saving..."
               class="bg-amber-500 text-white text-sm px-4 py-2 rounded hover:bg-amber-600"
               data-testid="operator-note-submit"
             >
@@ -406,7 +447,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
       <%!-- Right: metadata panel --%>
       <div
-        class="w-72 border-l border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 overflow-y-auto"
+        class="hidden lg:block w-72 border-l border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 overflow-y-auto"
         data-testid="operator-conversation-sidebar"
       >
         <div class="p-4 space-y-4">
@@ -453,22 +494,34 @@ defmodule CustyardWeb.Operator.ConversationLive do
               Actions
             </div>
             <div class="space-y-1.5" data-testid="operator-state-actions">
-              <button
-                phx-click="set_state"
-                phx-value-state="waiting"
-                class="w-full text-left text-sm px-3 py-1.5 rounded bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border border-yellow-200"
-                data-testid="operator-state-waiting"
-              >
-                Waiting on customer
-              </button>
-              <button
-                phx-click="set_state"
-                phx-value-state="resolved"
-                class="w-full text-left text-sm px-3 py-1.5 rounded bg-green-50 hover:bg-green-100 text-green-800 border border-green-200"
-                data-testid="operator-state-resolved"
-              >
-                Mark resolved
-              </button>
+              <%= if @conversation.state == :resolved do %>
+                <button
+                  phx-click="set_state"
+                  phx-value-state="active"
+                  class="w-full text-left text-sm px-3 py-1.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200"
+                  data-testid="operator-state-reopen"
+                >
+                  Reopen
+                </button>
+              <% else %>
+                <button
+                  phx-click="set_state"
+                  phx-value-state="waiting"
+                  class="w-full text-left text-sm px-3 py-1.5 rounded bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border border-yellow-200"
+                  data-testid="operator-state-waiting"
+                >
+                  Waiting on customer
+                </button>
+                <button
+                  phx-click="set_state"
+                  phx-value-state="resolved"
+                  data-confirm="Mark this conversation as resolved?"
+                  class="w-full text-left text-sm px-3 py-1.5 rounded bg-green-50 hover:bg-green-100 text-green-800 border border-green-200"
+                  data-testid="operator-state-resolved"
+                >
+                  Mark resolved
+                </button>
+              <% end %>
             </div>
           </div>
 
@@ -525,6 +578,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                   />
                 </div>
                 <div class="flex items-center gap-2">
+                  <input type="hidden" name="portal_visible" value="false" />
                   <input
                     type="checkbox"
                     name="portal_visible"
@@ -652,6 +706,11 @@ defmodule CustyardWeb.Operator.ConversationLive do
     """
   end
 
+  defp next_task_state(:open), do: "in progress"
+  defp next_task_state(:in_progress), do: "done"
+  defp next_task_state(:done), do: "open"
+  defp next_task_state(_), do: "in progress"
+
   defp sender_name(message) do
     cond do
       message.source == :operator -> "You"
@@ -687,6 +746,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         phx-value-id={@task.id}
         class="mt-0.5 flex-shrink-0"
         title="Cycle state: open -> in_progress -> done"
+        aria-label={"Task status: #{@task.state}. Click to change to #{next_task_state(@task.state)}."}
       >
         <.task_status_dot state={@task.state} />
       </button>
@@ -772,6 +832,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         data-testid="operator-task-edit-due"
       />
       <div class="flex items-center gap-2">
+        <input type="hidden" name="portal_visible" value="false" />
         <input
           type="checkbox"
           name="portal_visible"

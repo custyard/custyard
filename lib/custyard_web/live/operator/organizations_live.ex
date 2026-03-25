@@ -162,7 +162,8 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
         # Generate a unique filename
         ext = Path.extname(entry.client_name)
         filename = "#{Ecto.UUID.generate()}#{ext}"
-        dest_dir = Path.join([:code.priv_dir(:custyard), "static", "uploads", "logos"])
+        upload_dir = Application.get_env(:custyard, :upload_dir)
+        dest_dir = Path.join(upload_dir, "logos")
         File.mkdir_p!(dest_dir)
         dest = Path.join(dest_dir, filename)
 
@@ -497,7 +498,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
       >
         <div class="text-xs text-gray-400 dark:text-zinc-500 mb-1">Portal link</div>
         <code class="text-xs text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded break-all">
-          /p/{@org.token}
+          {CustyardWeb.Endpoint.url()}/p/{@org.token}
         </code>
       </div>
     </div>

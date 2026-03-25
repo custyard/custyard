@@ -74,27 +74,25 @@ defmodule CustyardWeb.Portal.ProjectLive do
         class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg divide-y dark:divide-zinc-700"
         data-testid="portal-tasks-list"
       >
-        <%= for task <- @project.tasks do %>
-          <div class="p-4 flex items-center gap-4" data-testid="portal-task-item">
-            <.task_state_icon state={task.state} />
-            <div class="flex-1">
-              <div
-                class={"text-gray-900 dark:text-zinc-100 #{if task.state == :done, do: "line-through opacity-60"}"}
-                data-testid="portal-task-title"
-              >
-                {task.title}
-              </div>
-              <div
-                :if={task.due_at}
-                class="text-sm text-gray-500 dark:text-zinc-400"
-                data-testid="portal-task-due"
-              >
-                Due: {format_due_at(task.due_at)}
-              </div>
+        <div :for={task <- @project.tasks} class="p-4 flex items-center gap-4" data-testid="portal-task-item">
+          <.task_state_icon state={task.state} />
+          <div class="flex-1">
+            <div
+              class={"text-gray-900 dark:text-zinc-100 #{if task.state == :done, do: "line-through opacity-60"}"}
+              data-testid="portal-task-title"
+            >
+              {task.title}
             </div>
-            <.task_state_badge state={task.state} />
+            <div
+              :if={task.due_at}
+              class="text-sm text-gray-500 dark:text-zinc-400"
+              data-testid="portal-task-due"
+            >
+              Due: {format_due_at(task.due_at)}
+            </div>
           </div>
-        <% end %>
+          <.task_state_badge state={task.state} />
+        </div>
       </div>
 
       <div
