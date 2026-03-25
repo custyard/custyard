@@ -6,6 +6,7 @@
 
 @layer base {
   html {
-    @apply text-zinc-900 antialiased;
+    color-scheme: light dark;
+    @apply text-zinc-900 antialiased dark:text-zinc-100;
   }
 }

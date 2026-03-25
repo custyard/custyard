@@ -6,13 +6,19 @@ defmodule CustyardWeb.Live.OperatorAuth do
   import Phoenix.LiveView
   import Phoenix.Component
 
+  alias Custyard.{OperatorAccount, Repo}
+
   def on_mount(:default, _params, session, socket) do
     case session["operator_id"] do
       nil ->
         {:halt, redirect(socket, to: "/operator/login")}
 
       operator_id ->
-        {:cont, assign(socket, :operator_id, operator_id)}
+        if Repo.get(OperatorAccount, operator_id) do
+          {:cont, assign(socket, :operator_id, operator_id)}
+        else
+          {:halt, redirect(socket, to: "/operator/login")}
+        end
     end
   end
 end

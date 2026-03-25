@@ -70,40 +70,21 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   @form_fields ~w(title description organization_id start_date target_completion_date portal_visible)a
+  def handle_event("validate_form", params, socket) do
+    form_data = socket.assigns.form_data
 
-  def handle_event("update_form", %{"field" => field, "value" => value}, socket) do
-    field_atom = String.to_existing_atom(field)
+    form_data =
+      Enum.reduce(@form_fields, form_data, fn field, acc ->
+        val = Map.get(params, to_string(field), "")
+        val = if field == :portal_visible and is_binary(val), do: val == "true", else: val
+        Map.put(acc, field, val)
+      end)
 
-    if field_atom in @form_fields do
-      value =
-        case field_atom do
-          :portal_visible -> value == "true"
-          _ -> value
-        end
-
-      form_data = Map.put(socket.assigns.form_data, field_atom, value)
-      {:noreply, assign(socket, :form_data, form_data)}
-    else
-      {:noreply, socket}
-    end
+    {:noreply, assign(socket, :form_data, form_data)}
   end
 
   def handle_event("save_project", _params, socket) do
-    form_data = socket.assigns.form_data
-
-    attrs = %{
-      title: form_data.title,
-      description: if(form_data.description == "", do: nil, else: form_data.description),
-      organization_id:
-        if(form_data.organization_id == "",
-          do: nil,
-          else: String.to_integer(form_data.organization_id)
-        ),
-      start_date: parse_date(form_data.start_date),
-      target_completion_date: parse_date(form_data.target_completion_date),
-      portal_visible: form_data.portal_visible,
-      project_type: if(form_data.organization_id == "", do: :internal, else: :customer)
-    }
+    attrs = build_project_attrs(socket.assigns.form_data)
 
     result =
       case socket.assigns.editing_project do
@@ -111,21 +92,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         project -> Projects.update_project(project, attrs)
       end
 
-    case result do
-      {:ok, _project} ->
-        action = if socket.assigns.editing_project, do: "updated", else: "created"
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Project #{action} successfully.")
-         |> assign(:show_form, false)
-         |> assign(:editing_project, nil)
-         |> load_projects()}
-
-      {:error, changeset} ->
-        {:noreply,
-         put_flash(socket, :error, "Failed to save: #{format_changeset_errors(changeset)}")}
-    end
+    handle_save_result(result, socket)
   end
 
   def handle_event("delete_project", %{"id" => id}, socket) do
@@ -143,12 +110,59 @@ defmodule CustyardWeb.Operator.ProjectsLive do
     end
   end
 
+  defp handle_save_result({:ok, _project}, socket) do
+    action = if socket.assigns.editing_project, do: "updated", else: "created"
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Project #{action} successfully.")
+     |> assign(:show_form, false)
+     |> assign(:editing_project, nil)
+     |> load_projects()}
+  end
+
+  defp handle_save_result({:error, changeset}, socket) do
+    {:noreply, put_flash(socket, :error, "Failed to save: #{format_changeset_errors(changeset)}")}
+  end
+
+  defp build_project_attrs(form_data) do
+    org_id = parse_org_id(form_data.organization_id)
+
+    %{
+      title: form_data.title,
+      description: if(form_data.description == "", do: nil, else: form_data.description),
+      organization_id: org_id,
+      start_date: parse_date(form_data.start_date),
+      target_completion_date: parse_date(form_data.target_completion_date),
+      portal_visible: form_data.portal_visible,
+      project_type: if(org_id == nil, do: :internal, else: :customer)
+    }
+  end
+
+  defp parse_org_id(nil), do: nil
+  defp parse_org_id(""), do: nil
+
+  defp parse_org_id(str) do
+    case Integer.parse(str) do
+      {id, ""} -> id
+      _ -> nil
+    end
+  end
+
   defp load_projects(socket) do
     projects =
       case socket.assigns.filter_org do
-        nil -> Projects.list_for_operator()
-        "" -> Projects.list_for_operator()
-        org_id -> Projects.list_for_organization(String.to_integer(org_id))
+        nil ->
+          Projects.list_for_operator()
+
+        "" ->
+          Projects.list_for_operator()
+
+        org_id ->
+          case Integer.parse(org_id) do
+            {id, ""} -> Projects.list_for_organization(id)
+            _ -> Projects.list_for_operator()
+          end
       end
 
     assign(socket, :projects, projects)
@@ -194,7 +208,10 @@ defmodule CustyardWeb.Operator.ProjectsLive do
     ~H"""
     <div class="max-w-4xl mx-auto p-4" data-testid="operator-projects-page">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-lg font-semibold text-gray-900" data-testid="operator-projects-heading">
+        <h1
+          class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
+          data-testid="operator-projects-heading"
+        >
           Projects
         </h1>
         <button
@@ -207,10 +224,12 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       </div>
 
       <div class="mb-4">
+        <label for="org-filter" class="sr-only">Filter by organization</label>
         <select
+          id="org-filter"
           phx-change="filter_org"
           name="org"
-          class="border border-gray-300 rounded px-3 py-2 text-sm"
+          class="border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
           data-testid="operator-projects-org-filter"
         >
           <option value="">All organizations</option>
@@ -234,7 +253,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       <div class="space-y-2">
         <div
           :if={Enum.empty?(@projects)}
-          class="text-center text-gray-400 py-12"
+          class="text-center text-gray-400 dark:text-zinc-500 py-12"
           data-testid="operator-projects-empty"
         >
           No projects found.
@@ -252,47 +271,54 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   defp project_form(assigns) do
     ~H"""
     <div
-      class="bg-white border border-gray-200 rounded-lg p-4 mb-4"
+      id="project-form-card"
+      phx-hook="ScrollIntoView"
+      class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 mb-4"
       data-testid="operator-project-form-card"
     >
-      <h2 class="text-sm font-semibold text-gray-900 mb-4">
+      <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100 mb-4">
         {if @editing, do: "Edit project", else: "New project"}
       </h2>
 
-      <form phx-submit="save_project" class="space-y-4" data-testid="operator-project-form">
+      <form
+        phx-change="validate_form"
+        phx-submit="save_project"
+        class="space-y-4"
+        data-testid="operator-project-form"
+      >
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">Title</label>
           <input
             type="text"
             name="title"
             value={@form_data.title}
-            phx-change="update_form"
-            phx-value-field="title"
             required
-            class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            phx-debounce="300"
+            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
             data-testid="operator-project-title-input"
           />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+            Description
+          </label>
           <textarea
             name="description"
-            phx-change="update_form"
-            phx-value-field="description"
             rows="3"
-            class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            phx-debounce="300"
+            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
             data-testid="operator-project-desc-input"
           >{@form_data.description}</textarea>
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Organization</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+            Organization
+          </label>
           <select
             name="organization_id"
-            phx-change="update_form"
-            phx-value-field="organization_id"
-            class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
             data-testid="operator-project-org-select"
           >
             <option value="">Internal project (no organization)</option>
@@ -308,44 +334,43 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Start date</label>
+            <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+              Start date
+            </label>
             <input
               type="date"
               name="start_date"
               value={@form_data.start_date}
-              phx-change="update_form"
-              phx-value-field="start_date"
-              class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+              class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
               data-testid="operator-project-start-date"
             />
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Target completion</label>
+            <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+              Target completion
+            </label>
             <input
               type="date"
               name="target_completion_date"
               value={@form_data.target_completion_date}
-              phx-change="update_form"
-              phx-value-field="target_completion_date"
-              class="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+              class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
               data-testid="operator-project-target-date"
             />
           </div>
         </div>
 
         <div class="flex items-center gap-2">
+          <input type="hidden" name="portal_visible" value="false" />
           <input
             type="checkbox"
             id="portal_visible"
             name="portal_visible"
             checked={@form_data.portal_visible}
-            phx-change="update_form"
-            phx-value-field="portal_visible"
             value="true"
-            class="rounded border-gray-300"
+            class="rounded border-gray-300 dark:border-zinc-600"
             data-testid="operator-project-visible-checkbox"
           />
-          <label for="portal_visible" class="text-sm text-gray-700">
+          <label for="portal_visible" class="text-sm text-gray-700 dark:text-zinc-300">
             Visible in client portal
           </label>
         </div>
@@ -361,7 +386,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           <button
             type="button"
             phx-click="hide_form"
-            class="text-gray-600 text-sm px-4 py-2 rounded hover:bg-gray-100"
+            class="text-gray-600 dark:text-zinc-400 text-sm px-4 py-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
             data-testid="operator-project-cancel-btn"
           >
             Cancel
@@ -377,38 +402,41 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   defp project_card(assigns) do
     ~H"""
     <div
-      class="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+      class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 hover:shadow-md transition-shadow"
       data-testid={"operator-project-card-#{@project.id}"}
     >
       <div class="flex items-start justify-between">
         <div class="flex-1">
           <div class="flex items-center gap-2 mb-1">
-            <span class="font-semibold text-gray-900" data-testid="operator-project-title">
+            <span
+              class="font-semibold text-gray-900 dark:text-zinc-100"
+              data-testid="operator-project-title"
+            >
               {@project.title}
             </span>
             <.project_type_badge type={@project.project_type} />
             <span
               :if={not @project.portal_visible}
-              class="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500"
+              class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-500 dark:text-zinc-400"
             >
               hidden
             </span>
           </div>
           <div
             :if={@project.organization}
-            class="text-sm text-gray-500 mb-2"
+            class="text-sm text-gray-500 dark:text-zinc-400 mb-2"
             data-testid="operator-project-org"
           >
             {@project.organization.name}
           </div>
           <div
             :if={@project.description}
-            class="text-sm text-gray-600 mb-2 line-clamp-2"
+            class="text-sm text-gray-600 dark:text-zinc-400 mb-2 line-clamp-2"
             data-testid="operator-project-desc"
           >
             {@project.description}
           </div>
-          <div class="flex items-center gap-4 text-xs text-gray-400">
+          <div class="flex items-center gap-4 text-xs text-gray-400 dark:text-zinc-500">
             <span :if={@project.start_date}>
               Start: {Date.to_iso8601(@project.start_date)}
             </span>
@@ -423,11 +451,11 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         </div>
       </div>
 
-      <div class="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
+      <div class="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-zinc-700">
         <button
           phx-click="edit_project"
           phx-value-id={@project.id}
-          class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
+          class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
           data-testid={"operator-project-edit-#{@project.id}"}
         >
           Edit
@@ -441,7 +469,10 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         >
           Delete
         </button>
-        <span class="text-xs text-gray-400 ml-auto" data-testid="operator-project-task-count">
+        <span
+          class="text-xs text-gray-400 dark:text-zinc-500 ml-auto"
+          data-testid="operator-project-task-count"
+        >
           {@project.progress.done}/{@project.progress.total} tasks
         </span>
       </div>
@@ -456,7 +487,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       case assigns.type do
         :customer -> "text-blue-700 bg-blue-50"
         :internal -> "text-purple-700 bg-purple-50"
-        _ -> "text-gray-600 bg-gray-50"
+        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
       end
 
     assigns = assign(assigns, :colors, colors)
@@ -486,7 +517,12 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
     ~H"""
     <div class="relative w-12 h-12" data-testid="operator-project-progress">
-      <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+      <svg
+        class="w-full h-full transform -rotate-90"
+        viewBox="0 0 36 36"
+        role="img"
+        aria-label={"Progress: #{@progress.percentage}%"}
+      >
         <circle
           cx="18"
           cy="18"
@@ -508,7 +544,9 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         />
       </svg>
       <div class="absolute inset-0 flex items-center justify-center">
-        <span class="text-xs font-medium text-gray-700">{@progress.percentage}%</span>
+        <span class="text-xs font-medium text-gray-700 dark:text-zinc-300">
+          {@progress.percentage}%
+        </span>
       </div>
     </div>
     """

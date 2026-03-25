@@ -18,6 +18,10 @@ defmodule CustyardWeb.Router do
     plug CustyardWeb.Plugs.RequireOperator
   end
 
+  pipeline :portal_auth do
+    plug CustyardWeb.Plugs.PortalAuth
+  end
+
   scope "/", CustyardWeb do
     pipe_through :browser
 
@@ -55,15 +59,18 @@ defmodule CustyardWeb.Router do
     end
   end
 
-  # Portal routes - accessed via unguessable org token
+  # Portal routes - accessed via unguessable org token or custom domain
   scope "/p/:org_token", CustyardWeb.Portal, as: :portal do
-    pipe_through [:browser]
+    pipe_through [:browser, :portal_auth]
 
-    live "/", RequestListLive, :index
-    live "/request/:id", ConversationLive, :show
-    live "/new", NewRequestLive, :new
-    live "/projects", ProjectsListLive, :index
-    live "/projects/:id", ProjectLive, :show
+    live_session :portal,
+      on_mount: [{CustyardWeb.Live.PortalAuth, :default}] do
+      live "/", RequestListLive, :index
+      live "/request/:id", ConversationLive, :show
+      live "/new", NewRequestLive, :new
+      live "/projects", ProjectsListLive, :index
+      live "/projects/:id", ProjectLive, :show
+    end
   end
 
   # Note: Custom domain portal routes are handled by the CustomDomain plug

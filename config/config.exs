@@ -2,7 +2,8 @@ import Config
 
 config :custyard,
   ecto_repos: [Custyard.Repo],
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  upload_dir: Path.expand("../priv/static/uploads", __DIR__)
 
 config :custyard, CustyardWeb.Endpoint,
   url: [host: "localhost"],
@@ -12,7 +13,7 @@ config :custyard, CustyardWeb.Endpoint,
     layout: false
   ],
   pubsub_server: Custyard.PubSub,
-  live_view: [signing_salt: "custyard_lv_salt"]
+  live_view: [signing_salt: "Ed+HmLgiLg+0Lm6jRnNF5s5tlCch/CuV"]
 
 config :esbuild,
   version: "0.17.11",

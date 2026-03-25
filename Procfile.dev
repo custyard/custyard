@@ -1,8 +1,6 @@
 # Overmind Procfile for development
 # Usage: overmind start -f Procfile.dev
 
-export ELIXIR_ERL_OPTIONS="+Bd"
-
 # Phoenix server with IEx shell
 web: elixir --erl "+Bd" -S mix phx.server
 

@@ -2,20 +2,18 @@ defmodule CustyardWeb.Portal.RequestListLive do
   use CustyardWeb, :live_view
 
   alias Custyard.Conversations
-  alias CustyardWeb.Portal.Helpers
 
   @impl true
-  def mount(params, _session, socket) do
-    org = Helpers.get_organization(params, socket)
+  def mount(_params, _session, socket) do
+    # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
 
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      org = socket.assigns.current_org
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:#{org.id}")
     end
 
     {:ok,
      socket
-     |> assign(:org, org)
-     |> Helpers.assign_portal_path()
      |> assign(:current_contact, nil)
      |> assign(:admin_mode, false)
      |> assign(:page_title, "My Requests")}
@@ -25,7 +23,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
   def handle_params(params, _uri, socket) do
     # Allow simulating a contact via ?as=<contact_id> for testing
     # Only enabled in dev/test environments via config
-    {contact, admin_mode} = maybe_impersonate_contact(params, socket.assigns.org.id)
+    {contact, admin_mode} = maybe_impersonate_contact(params, socket.assigns.current_org.id)
 
     {:noreply,
      socket
@@ -61,7 +59,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
   end
 
   defp load_conversations(socket) do
-    org = socket.assigns.org
+    org = socket.assigns.current_org
     contact = socket.assigns.current_contact
     admin_mode = socket.assigns.admin_mode
 
@@ -90,26 +88,36 @@ defmodule CustyardWeb.Portal.RequestListLive do
     <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-request-list">
       <div class="flex justify-between items-center mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-gray-900" data-testid="portal-request-list-heading">
+          <h1
+            class="text-2xl font-semibold text-gray-900 dark:text-zinc-100"
+            data-testid="portal-request-list-heading"
+          >
             {if @admin_mode, do: "All Organization Requests", else: "My Requests"}
           </h1>
-          <p :if={@current_contact} class="text-sm text-gray-500 mt-1" data-testid="portal-viewing-as">
+          <p
+            :if={@current_contact}
+            class="text-sm text-gray-500 dark:text-zinc-400 mt-1"
+            data-testid="portal-viewing-as"
+          >
             Viewing as: {@current_contact.name || @current_contact.email}
           </p>
         </div>
         <div class="flex items-center gap-4">
           <div :if={@current_contact && @current_contact.is_admin} class="flex items-center gap-2">
-            <label class="text-sm text-gray-600">Admin view</label>
+            <label id="admin-view-label" class="text-sm text-gray-600 dark:text-zinc-400">
+              Admin view
+            </label>
             <button
               type="button"
               phx-click="toggle_admin_mode"
               data-testid="portal-admin-toggle"
               class={[
                 "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2",
-                if(@admin_mode, do: "bg-indigo-600", else: "bg-gray-200")
+                if(@admin_mode, do: "bg-indigo-600", else: "bg-gray-200 dark:bg-zinc-700")
               ]}
               role="switch"
               aria-checked={to_string(@admin_mode)}
+              aria-labelledby="admin-view-label"
             >
               <span class={[
                 "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
@@ -135,13 +143,19 @@ defmodule CustyardWeb.Portal.RequestListLive do
           class="block"
           data-testid={"portal-request-item-#{conv.id}"}
         >
-          <div class="bg-white border rounded-lg p-4 hover:border-indigo-300 transition">
+          <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 hover:border-indigo-300 transition">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="font-medium text-gray-900" data-testid="portal-request-subject">
+                <h3
+                  class="font-medium text-gray-900 dark:text-zinc-100"
+                  data-testid="portal-request-subject"
+                >
                   {conv.subject}
                 </h3>
-                <p class="text-sm text-gray-500 mt-1" data-testid="portal-request-meta">
+                <p
+                  class="text-sm text-gray-500 dark:text-zinc-400 mt-1"
+                  data-testid="portal-request-meta"
+                >
                   {if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown"} · {relative_time(
                     conv.inserted_at
                   )}
@@ -159,7 +173,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
 
         <div
           :if={@conversations == []}
-          class="text-center py-12 text-gray-500"
+          class="text-center py-12 text-gray-500 dark:text-zinc-400"
           data-testid="portal-empty-state"
         >
           No open requests. Create one to get started.
@@ -172,7 +186,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
   defp state_color(:new), do: "bg-blue-100 text-blue-800"
   defp state_color(:active), do: "bg-green-100 text-green-800"
   defp state_color(:waiting), do: "bg-yellow-100 text-yellow-800"
-  defp state_color(_), do: "bg-gray-100 text-gray-800"
+  defp state_color(_), do: "bg-gray-100 dark:bg-zinc-700 text-gray-800 dark:text-zinc-200"
 
   defp relative_time(datetime) do
     diff = DateTime.diff(DateTime.utc_now(), datetime, :hour)

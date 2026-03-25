@@ -13,25 +13,42 @@ defmodule Custyard.Email.Processor do
   def process(params) do
     with {:ok, parsed} <- parse_payload(params),
          {:ok, org, contact} <- SenderMatcher.match(parsed.from),
-         {:ok, conversation, is_new} <- find_or_create_conversation(parsed, org, contact) do
-      # Create message
-      create_message(conversation, parsed)
-
-      # Trigger score recalc
-      Scoring.calculate_and_cache(conversation.id)
-
-      # Broadcast via PubSub - distinguish new vs updated
-      event = if is_new, do: :conversation_created, else: :conversation_updated
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
-
-      Phoenix.PubSub.broadcast(
-        Custyard.PubSub,
-        "conversation:#{conversation.id}",
-        {:message_added, conversation.id}
-      )
-
+         {:ok, {conversation, is_new}} <- transact_conversation(parsed, org, contact) do
+      broadcast_updates(conversation, is_new)
       {:ok, Repo.reload!(conversation)}
     end
+  end
+
+  defp transact_conversation(parsed, org, contact) do
+    Repo.transaction(fn ->
+      case find_or_create_conversation(parsed, org, contact) do
+        {:ok, conversation, is_new} ->
+          create_message(conversation, parsed)
+          {conversation, is_new}
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp broadcast_updates(conversation, is_new) do
+    event = if is_new, do: :conversation_created, else: :conversation_updated
+    Scoring.calculate_and_cache(conversation.id)
+
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations:org:#{conversation.organization_id}",
+      {event, conversation.id}
+    )
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversation:#{conversation.id}",
+      {:message_added, conversation.id}
+    )
   end
 
   defp parse_payload(params) do
@@ -113,13 +130,17 @@ defmodule Custyard.Email.Processor do
     |> Repo.insert()
   end
 
+  @max_body_length 100_000
+
   defp create_message(conversation, parsed) do
+    body = String.slice(parsed.body || "", 0, @max_body_length)
+
     %Message{}
     |> Message.changeset(%{
       conversation_id: conversation.id,
       source: :email,
       sender_email: parsed.from,
-      body: parsed.body,
+      body: body,
       message_id: parsed.message_id,
       in_reply_to: parsed.in_reply_to,
       is_internal_note: false
@@ -144,12 +165,21 @@ defmodule Custyard.Email.Processor do
     end
   end
 
+  @urgent_patterns [
+    ~r/\burgent\b/,
+    ~r/\bemergency\b/,
+    ~r/\bcritical\b/,
+    ~r/\bdown\b/,
+    ~r/\boutage\b/
+  ]
+  @elevated_patterns [~r/\bimportant\b/, ~r/\basap\b/, ~r/\bpriority\b/]
+
   defp detect_urgency(subject, body) do
     text = String.downcase(subject <> " " <> body)
 
     cond do
-      String.contains?(text, ["urgent", "emergency", "critical", "down", "outage"]) -> :urgent
-      String.contains?(text, ["important", "asap", "priority"]) -> :elevated
+      Enum.any?(@urgent_patterns, &Regex.match?(&1, text)) -> :urgent
+      Enum.any?(@elevated_patterns, &Regex.match?(&1, text)) -> :elevated
       true -> :normal
     end
   end

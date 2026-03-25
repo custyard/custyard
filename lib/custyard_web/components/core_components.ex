@@ -58,7 +58,7 @@ defmodule CustyardWeb.CoreComponents do
       <div
         id={"#{@id}-bg"}
         data-testid={"modal-overlay-#{@id}"}
-        class="bg-zinc-50/90 fixed inset-0 transition-opacity"
+        class="bg-zinc-50/90 dark:bg-zinc-900/90 fixed inset-0 transition-opacity"
         aria-hidden="true"
       />
       <div
@@ -76,7 +76,7 @@ defmodule CustyardWeb.CoreComponents do
               phx-window-keydown={JS.exec("data-cancel", to: "##{@id}")}
               phx-key="escape"
               phx-click-away={JS.exec("data-cancel", to: "##{@id}")}
-              class="shadow-zinc-700/10 ring-zinc-700/10 relative hidden rounded-2xl bg-white p-14 shadow-lg ring-1 transition"
+              class="shadow-zinc-700/10 dark:shadow-zinc-300/10 ring-zinc-700/10 dark:ring-zinc-300/10 relative hidden rounded-2xl bg-white dark:bg-zinc-800 p-14 shadow-lg ring-1 transition"
             >
               <div class="absolute top-6 right-5">
                 <button
@@ -94,13 +94,13 @@ defmodule CustyardWeb.CoreComponents do
                   <h1
                     id={"#{@id}-title"}
                     data-testid={"modal-title-#{@id}"}
-                    class="text-lg font-semibold leading-8 text-zinc-800"
+                    class="text-lg font-semibold leading-8 text-zinc-800 dark:text-zinc-200"
                   >
                     {render_slot(@title)}
                   </h1>
                   <p
                     :if={@subtitle != []}
-                    class="mt-2 text-sm leading-6 text-zinc-600"
+                    class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400"
                     data-testid={"modal-subtitle-#{@id}"}
                   >
                     {render_slot(@subtitle)}
@@ -121,7 +121,7 @@ defmodule CustyardWeb.CoreComponents do
                   <.link
                     :for={cancel <- @cancel}
                     phx-click={JS.exec("data-cancel", to: "##{@id}")}
-                    class="text-sm font-semibold leading-6 text-zinc-900 hover:text-zinc-700"
+                    class="text-sm font-semibold leading-6 text-zinc-900 dark:text-zinc-100 hover:text-zinc-700 dark:hover:text-zinc-300"
                     data-testid={"modal-cancel-#{@id}"}
                   >
                     {render_slot(cancel)}
@@ -164,8 +164,10 @@ defmodule CustyardWeb.CoreComponents do
       data-testid={"flash-#{@kind}"}
       class={[
         "fixed top-2 right-2 mr-2 w-80 sm:w-96 z-50 rounded-lg p-3 ring-1",
-        @kind == :info && "bg-emerald-50 text-emerald-800 ring-emerald-500 fill-cyan-900",
-        @kind == :error && "bg-rose-50 text-rose-900 shadow-md ring-rose-500 fill-rose-900"
+        @kind == :info &&
+          "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 ring-emerald-500 fill-cyan-900 dark:fill-cyan-300",
+        @kind == :error &&
+          "bg-rose-50 dark:bg-rose-950 text-rose-900 dark:text-rose-300 shadow-md ring-rose-500 fill-rose-900 dark:fill-rose-300"
       ]}
       {@rest}
     >
@@ -255,7 +257,7 @@ defmodule CustyardWeb.CoreComponents do
   def simple_form(assigns) do
     ~H"""
     <.form :let={f} for={@for} as={@as} {@rest}>
-      <div class="mt-10 space-y-8 bg-white" data-testid="simple-form">
+      <div class="mt-10 space-y-8 bg-white dark:bg-zinc-800" data-testid="simple-form">
         {render_slot(@inner_block, f)}
         <div
           :for={action <- @actions}
@@ -288,8 +290,8 @@ defmodule CustyardWeb.CoreComponents do
     <button
       type={@type}
       class={[
-        "phx-submit-loading:opacity-75 rounded-lg bg-zinc-900 hover:bg-zinc-700 py-2 px-3",
-        "text-sm font-semibold leading-6 text-white active:text-white/80",
+        "phx-submit-loading:opacity-75 rounded-lg bg-zinc-900 dark:bg-zinc-100 hover:bg-zinc-700 dark:hover:bg-zinc-300 py-2 px-3",
+        "text-sm font-semibold leading-6 text-white dark:text-zinc-900 active:text-white/80 dark:active:text-zinc-900/80",
         @class
       ]}
       data-testid="button"
@@ -367,7 +369,7 @@ defmodule CustyardWeb.CoreComponents do
 
     ~H"""
     <div phx-feedback-for={@name}>
-      <label class="flex items-center gap-4 text-sm leading-6 text-zinc-600">
+      <label class="flex items-center gap-4 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
         <input type="hidden" name={@name} value="false" />
         <input
           type="checkbox"
@@ -375,7 +377,7 @@ defmodule CustyardWeb.CoreComponents do
           name={@name}
           value="true"
           checked={@checked}
-          class="rounded border-zinc-300 text-zinc-900 focus:ring-0"
+          class="rounded border-zinc-300 dark:border-zinc-600 text-zinc-900 dark:text-zinc-100 focus:ring-0"
           data-testid={"input-checkbox-#{@name}"}
           {@rest}
         />
@@ -393,7 +395,7 @@ defmodule CustyardWeb.CoreComponents do
       <select
         id={@id}
         name={@name}
-        class="mt-2 block w-full rounded-md border border-gray-300 bg-white shadow-sm focus:border-zinc-400 focus:ring-0 sm:text-sm"
+        class="mt-2 block w-full rounded-md border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 shadow-sm focus:border-zinc-400 focus:ring-0 sm:text-sm"
         multiple={@multiple}
         data-testid={"input-select-#{@name}"}
         {@rest}
@@ -415,9 +417,9 @@ defmodule CustyardWeb.CoreComponents do
         name={@name}
         data-testid={"input-textarea-#{@name}"}
         class={[
-          "mt-2 block w-full rounded-lg text-zinc-900 focus:ring-0 sm:text-sm sm:leading-6",
+          "mt-2 block w-full rounded-lg text-zinc-900 dark:text-zinc-100 focus:ring-0 sm:text-sm sm:leading-6",
           "min-h-[6rem] phx-no-feedback:border-zinc-300 phx-no-feedback:focus:border-zinc-400",
-          @errors == [] && "border-zinc-300 focus:border-zinc-400",
+          @errors == [] && "border-zinc-300 dark:border-zinc-600 focus:border-zinc-400",
           @errors != [] && "border-rose-400 focus:border-rose-400"
         ]}
         {@rest}
@@ -438,9 +440,9 @@ defmodule CustyardWeb.CoreComponents do
         value={Phoenix.HTML.Form.normalize_value(@type, @value)}
         data-testid={"input-#{@type}-#{@name}"}
         class={[
-          "mt-2 block w-full rounded-lg text-zinc-900 focus:ring-0 sm:text-sm sm:leading-6",
+          "mt-2 block w-full rounded-lg text-zinc-900 dark:text-zinc-100 focus:ring-0 sm:text-sm sm:leading-6",
           "phx-no-feedback:border-zinc-300 phx-no-feedback:focus:border-zinc-400",
-          @errors == [] && "border-zinc-300 focus:border-zinc-400",
+          @errors == [] && "border-zinc-300 dark:border-zinc-600 focus:border-zinc-400",
           @errors != [] && "border-rose-400 focus:border-rose-400"
         ]}
         {@rest}
@@ -460,7 +462,7 @@ defmodule CustyardWeb.CoreComponents do
     ~H"""
     <label
       for={@for}
-      class="block text-sm font-semibold leading-6 text-zinc-800"
+      class="block text-sm font-semibold leading-6 text-zinc-800 dark:text-zinc-200"
       data-testid={@for && "label-#{@for}"}
     >
       {render_slot(@inner_block)}
@@ -476,7 +478,7 @@ defmodule CustyardWeb.CoreComponents do
   def error(assigns) do
     ~H"""
     <p
-      class="mt-3 flex gap-3 text-sm leading-6 text-rose-600 phx-no-feedback:hidden"
+      class="mt-3 flex gap-3 text-sm leading-6 text-rose-600 dark:text-rose-400 phx-no-feedback:hidden"
       data-testid="form-error"
     >
       <.icon name="hero-exclamation-circle-mini" class="mt-0.5 h-5 w-5 flex-none" />
@@ -501,10 +503,10 @@ defmodule CustyardWeb.CoreComponents do
       data-testid="header"
     >
       <div>
-        <h1 class="text-lg font-semibold leading-8 text-zinc-800">
+        <h1 class="text-lg font-semibold leading-8 text-zinc-800 dark:text-zinc-200">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="mt-2 text-sm leading-6 text-zinc-600">
+        <p :if={@subtitle != []} class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
           {render_slot(@subtitle)}
         </p>
       </div>
@@ -547,7 +549,7 @@ defmodule CustyardWeb.CoreComponents do
     ~H"""
     <div class="overflow-y-auto px-4 sm:overflow-visible sm:px-0" data-testid={"table-#{@id}"}>
       <table class="w-[40rem] mt-11 sm:w-full">
-        <thead class="text-sm text-left leading-6 text-zinc-500">
+        <thead class="text-sm text-left leading-6 text-zinc-500 dark:text-zinc-400">
           <tr>
             <th :for={col <- @col} class="p-0 pr-6 pb-4 font-normal">{col[:label]}</th>
             <th
@@ -562,12 +564,12 @@ defmodule CustyardWeb.CoreComponents do
         <tbody
           id={@id}
           phx-update={match?(%Phoenix.LiveView.LiveStream{}, @rows) && "stream"}
-          class="relative divide-y divide-zinc-100 border-t border-zinc-200 text-sm leading-6 text-zinc-700"
+          class="relative divide-y divide-zinc-100 dark:divide-zinc-800 border-t border-zinc-200 dark:border-zinc-700 text-sm leading-6 text-zinc-700 dark:text-zinc-300"
         >
           <tr
             :for={row <- @rows}
             id={@row_id && @row_id.(row)}
-            class="group hover:bg-zinc-50"
+            class="group hover:bg-zinc-50 dark:hover:bg-zinc-800"
             data-testid="table-row"
           >
             <td
@@ -576,18 +578,18 @@ defmodule CustyardWeb.CoreComponents do
               class={["relative p-0", @row_click && "hover:cursor-pointer"]}
             >
               <div class="block py-4 pr-6">
-                <span class="absolute -inset-y-px right-0 -left-4 group-hover:bg-zinc-50 sm:rounded-l-xl" />
-                <span class={["relative", i == 0 && "font-semibold text-zinc-900"]}>
+                <span class="absolute -inset-y-px right-0 -left-4 group-hover:bg-zinc-50 dark:group-hover:bg-zinc-800 sm:rounded-l-xl" />
+                <span class={["relative", i == 0 && "font-semibold text-zinc-900 dark:text-zinc-100"]}>
                   {render_slot(col, @row_item.(row))}
                 </span>
               </div>
             </td>
             <td :if={@action != []} class="relative w-14 p-0">
               <div class="relative whitespace-nowrap py-4 text-right text-sm font-medium">
-                <span class="absolute -inset-y-px -right-4 left-0 group-hover:bg-zinc-50 sm:rounded-r-xl" />
+                <span class="absolute -inset-y-px -right-4 left-0 group-hover:bg-zinc-50 dark:group-hover:bg-zinc-800 sm:rounded-r-xl" />
                 <span
                   :for={action <- @action}
-                  class="relative ml-4 font-semibold leading-6 text-zinc-900 hover:text-zinc-700"
+                  class="relative ml-4 font-semibold leading-6 text-zinc-900 dark:text-zinc-100 hover:text-zinc-700 dark:hover:text-zinc-300"
                 >
                   {render_slot(action, @row_item.(row))}
                 </span>
@@ -617,14 +619,14 @@ defmodule CustyardWeb.CoreComponents do
   def list(assigns) do
     ~H"""
     <div class="mt-14" data-testid="list">
-      <dl class="-my-4 divide-y divide-zinc-100">
+      <dl class="-my-4 divide-y divide-zinc-100 dark:divide-zinc-800">
         <div
           :for={item <- @item}
           class="flex gap-4 py-4 text-sm leading-6 sm:gap-8"
           data-testid="list-item"
         >
-          <dt class="w-1/4 flex-none text-zinc-500">{item.title}</dt>
-          <dd class="text-zinc-700">{render_slot(item)}</dd>
+          <dt class="w-1/4 flex-none text-zinc-500 dark:text-zinc-400">{item.title}</dt>
+          <dd class="text-zinc-700 dark:text-zinc-300">{render_slot(item)}</dd>
         </div>
       </dl>
     </div>
@@ -646,7 +648,7 @@ defmodule CustyardWeb.CoreComponents do
     <div class="mt-16" data-testid="back-link">
       <.link
         navigate={@navigate}
-        class="text-sm font-semibold leading-6 text-zinc-900 hover:text-zinc-700"
+        class="text-sm font-semibold leading-6 text-zinc-900 dark:text-zinc-100 hover:text-zinc-700 dark:hover:text-zinc-300"
         data-testid="back-link-anchor"
       >
         <.icon name="hero-arrow-left-solid" class="h-3 w-3" />

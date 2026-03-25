@@ -25,6 +25,11 @@ defmodule Custyard.Email.Parser do
   from headers for normalization.
   """
 
+  # Maximum raw email size: 25 MB (matches common provider limits)
+  @max_email_size 25 * 1024 * 1024
+  # Maximum MIME nesting depth to prevent stack exhaustion
+  @max_mime_depth 10
+
   # Windows-1252 to Unicode mapping for bytes 0x80-0x9F
   # These bytes differ from Latin-1 (which has control chars in this range)
   @cp1252_map %{
@@ -131,6 +136,10 @@ defmodule Custyard.Email.Parser do
   @spec parse(binary()) :: {:ok, map()} | {:error, term()}
   def parse(nil), do: {:error, :nil_input}
   def parse(""), do: {:error, :empty_input}
+
+  def parse(raw_email) when is_binary(raw_email) and byte_size(raw_email) > @max_email_size do
+    {:error, :email_too_large}
+  end
 
   def parse(raw_email) when is_binary(raw_email) do
     # Normalize line endings to CRLF (RFC 5322 requirement)
@@ -299,36 +308,42 @@ defmodule Custyard.Email.Parser do
 
   defp extract_html_body(_), do: nil
 
-  # Find a specific content type in multipart body
-  defp find_part_by_type(parts, type, subtype) when is_list(parts) do
+  # Find a specific content type in multipart body (with depth limiting)
+  defp find_part_by_type(parts, type, subtype, depth \\ 0)
+
+  defp find_part_by_type(_parts, _type, _subtype, depth) when depth >= @max_mime_depth, do: nil
+
+  defp find_part_by_type(parts, type, subtype, depth) when is_list(parts) do
     Enum.find_value(parts, fn
       {^type, ^subtype, headers, props, body} ->
         decode_body(body, headers, props)
 
       {"multipart", _sub, _headers, _props, nested_parts} when is_list(nested_parts) ->
-        find_part_by_type(nested_parts, type, subtype)
+        find_part_by_type(nested_parts, type, subtype, depth + 1)
 
       _ ->
         nil
     end)
   end
 
-  # Extract attachments from MIME structure
+  # Extract attachments from MIME structure (with depth limiting)
   defp extract_attachments({_type, _subtype, _headers, _props, body}) when is_list(body) do
     body
-    |> Enum.flat_map(&extract_attachment_from_part/1)
+    |> Enum.flat_map(&extract_attachment_from_part(&1, 0))
   end
 
   defp extract_attachments(_), do: []
 
-  # Handle nested multipart first (more specific pattern)
-  defp extract_attachment_from_part({"multipart", _sub, _headers, _props, nested})
+  # Handle nested multipart first (more specific pattern), with depth limit
+  defp extract_attachment_from_part(_part, depth) when depth >= @max_mime_depth, do: []
+
+  defp extract_attachment_from_part({"multipart", _sub, _headers, _props, nested}, depth)
        when is_list(nested) do
-    Enum.flat_map(nested, &extract_attachment_from_part/1)
+    Enum.flat_map(nested, &extract_attachment_from_part(&1, depth + 1))
   end
 
   # Handle regular MIME parts
-  defp extract_attachment_from_part({type, subtype, headers, props, body}) do
+  defp extract_attachment_from_part({type, subtype, headers, props, body}, _depth) do
     is_non_text = type != "text"
     is_text_attachment = type == "text" and attachment?(props)
 
@@ -354,7 +369,7 @@ defmodule Custyard.Email.Parser do
     end
   end
 
-  defp extract_attachment_from_part(_), do: []
+  defp extract_attachment_from_part(_, _depth), do: []
 
   defp attachment?(props) do
     disposition = Map.get(props, :disposition, "inline")
@@ -513,18 +528,26 @@ defmodule Custyard.Email.Parser do
   # Convert Windows-1252 (CP1252) to UTF-8
   # Bytes 0x00-0x7F and 0xA0-0xFF are same as Latin-1
   # Bytes 0x80-0x9F need special mapping
+  # Uses binary pattern matching to avoid creating a full byte list
   defp convert_cp1252_to_utf8(text) when is_binary(text) do
-    text
-    |> :binary.bin_to_list()
-    |> Enum.map(&cp1252_byte_to_codepoint/1)
-    |> List.to_string()
+    convert_cp1252_binary(text, <<>>)
   end
 
-  defp cp1252_byte_to_codepoint(byte) when byte in 0x80..0x9F do
-    Map.get(@cp1252_map, byte, byte)
+  defp convert_cp1252_binary(<<>>, acc), do: acc
+
+  defp convert_cp1252_binary(<<byte, rest::binary>>, acc) when byte in 0x80..0x9F do
+    codepoint = Map.get(@cp1252_map, byte, byte)
+    convert_cp1252_binary(rest, <<acc::binary, codepoint::utf8>>)
   end
 
-  defp cp1252_byte_to_codepoint(byte), do: byte
+  defp convert_cp1252_binary(<<byte, rest::binary>>, acc) when byte <= 0x7F do
+    convert_cp1252_binary(rest, <<acc::binary, byte>>)
+  end
+
+  defp convert_cp1252_binary(<<byte, rest::binary>>, acc) do
+    # 0xA0-0xFF: same as Latin-1, encode as UTF-8 codepoint
+    convert_cp1252_binary(rest, <<acc::binary, byte::utf8>>)
+  end
 
   # ISO-8859-15 (Latin-9) byte-to-codepoint mapping for the 8 positions
   # that differ from ISO-8859-1 (Latin-1):
