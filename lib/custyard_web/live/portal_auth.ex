@@ -32,13 +32,10 @@ defmodule CustyardWeb.Live.PortalAuth do
     end
   end
 
-  defp assign_portal_paths(socket, _org, true = _is_custom_domain) do
-    socket
-    |> assign(:portal_path, "")
-    |> assign(:portal_home_path, "/")
-  end
-
-  defp assign_portal_paths(socket, org, false = _is_custom_domain) do
+  # Always use token-based paths. Custom domain path rewriting (/ instead of
+  # /p/:token) requires a CustomDomain plug + router scope that don't exist yet.
+  # When that lands, this function can branch on is_custom_domain again.
+  defp assign_portal_paths(socket, org, _is_custom_domain) do
     token_path = "/p/#{org.token}"
 
     socket
