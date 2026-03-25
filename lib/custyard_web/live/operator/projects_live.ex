@@ -122,8 +122,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   defp handle_save_result({:error, changeset}, socket) do
-    {:noreply,
-     put_flash(socket, :error, "Failed to save: #{format_changeset_errors(changeset)}")}
+    {:noreply, put_flash(socket, :error, "Failed to save: #{format_changeset_errors(changeset)}")}
   end
 
   defp build_project_attrs(form_data) do
