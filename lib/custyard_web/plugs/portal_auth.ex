@@ -25,7 +25,7 @@ defmodule CustyardWeb.Plugs.PortalAuth do
         |> halt()
 
       org ->
-        is_custom_domain = is_custom_domain?(conn)
+        is_custom_domain = custom_domain?(conn)
 
         conn
         |> assign(:current_org, org)
@@ -34,7 +34,7 @@ defmodule CustyardWeb.Plugs.PortalAuth do
     end
   end
 
-  defp is_custom_domain?(conn) do
+  defp custom_domain?(conn) do
     Map.get(conn.assigns, :custom_domain_request, false) ||
       conn.private[:custyard_custom_domain] == true
   end
