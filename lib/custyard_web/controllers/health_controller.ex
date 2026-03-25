@@ -7,10 +7,12 @@ defmodule CustyardWeb.HealthController do
   """
   use CustyardWeb, :controller
 
+  alias Ecto.Adapters.SQL
+
   require Logger
 
   def index(conn, _params) do
-    case Ecto.Adapters.SQL.query(Custyard.Repo, "SELECT 1") do
+    case SQL.query(Custyard.Repo, "SELECT 1") do
       {:ok, _} ->
         conn
         |> put_status(200)
