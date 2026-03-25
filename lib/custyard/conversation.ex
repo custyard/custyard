@@ -51,9 +51,11 @@ defmodule Custyard.Conversation do
       :contact_id,
       :project_id
     ])
-    |> validate_required([:subject, :organization_id])
+    |> validate_required_organization()
+    |> validate_required([:subject])
     |> validate_inclusion(:state, @states)
     |> validate_inclusion(:urgency, @urgencies)
+    |> validate_inclusion(:source, @sources)
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:contact_id)
     |> foreign_key_constraint(:project_id)
@@ -74,5 +76,16 @@ defmodule Custyard.Conversation do
   def snooze_changeset(conversation, until) do
     conversation
     |> cast(%{snoozed_until: until}, [:snoozed_until])
+  end
+
+  # Disambiguation conversations can have nil organization_id
+  defp validate_required_organization(changeset) do
+    source = get_field(changeset, :source)
+
+    if source == :disambiguation do
+      changeset
+    else
+      validate_required(changeset, [:organization_id])
+    end
   end
 end

@@ -18,18 +18,23 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
     attrs = build_enrichment_attrs(normalized)
 
     if map_size(attrs) > 0 do
-      conversation
-      |> Conversation.changeset(attrs)
-      |> Repo.update()
+      changeset = Conversation.changeset(conversation, attrs)
 
-      # Recalculate score after enrichment
-      Scoring.calculate_and_cache(conversation.id)
+      case Repo.update(changeset) do
+        {:ok, updated} ->
+          Scoring.calculate_and_cache(updated.id)
 
-      Phoenix.PubSub.broadcast(
-        Custyard.PubSub,
-        "conversations",
-        {:conversation_updated, conversation.id}
-      )
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations",
+            {:conversation_updated, updated.id}
+          )
+
+        {:error, changeset} ->
+          Logger.error(
+            "Failed to enrich conversation #{conversation.id}: #{inspect(changeset.errors)}"
+          )
+      end
     end
 
     :ok

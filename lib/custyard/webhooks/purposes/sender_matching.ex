@@ -13,6 +13,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   alias Custyard.{Conversation, Message, Repo, Scoring}
   alias Custyard.Email.{SenderMatcher, SieveHeaderMapper, ThreadMatcher}
 
+  require Logger
+
   @doc """
   Process an incoming normalized payload and create/update a conversation.
 
@@ -119,8 +121,12 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp message_source(:zendesk), do: :portal
   defp message_source(:intercom), do: :portal
   defp message_source(:slack), do: :portal
+  defp message_source(:disambiguation), do: :email
   defp message_source(source) when source in [:email, :portal, :operator], do: source
-  defp message_source(_), do: :email
+  defp message_source(other) do
+    Logger.warning("Unknown message source #{inspect(other)}, defaulting to :email")
+    :email
+  end
 
   defp maybe_reactivate(conversation) do
     if conversation.state in [:dormant, :resolved] do

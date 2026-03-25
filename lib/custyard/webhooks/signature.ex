@@ -6,14 +6,7 @@ defmodule Custyard.Webhooks.Signature do
   Supports HMAC-SHA256, HMAC-SHA1, and API key verification.
   """
 
-  alias Custyard.Webhooks.Adapters
-
-  @adapters %{
-    lettermint: Adapters.Lettermint,
-    zendesk: Adapters.Zendesk,
-    intercom: Adapters.Intercom,
-    slack: Adapters.Slack
-  }
+  alias Custyard.Webhooks.Registry
 
   @doc """
   Verify the webhook signature for the given source.
@@ -27,7 +20,7 @@ defmodule Custyard.Webhooks.Signature do
   Returns `:ok` or `{:error, reason}`.
   """
   def verify(source, payload, signature, secret) do
-    case Map.get(@adapters, source) do
+    case Registry.get_adapter(source) do
       nil -> {:error, "unknown source: #{source}"}
       adapter -> adapter.verify_signature(payload, signature, secret)
     end

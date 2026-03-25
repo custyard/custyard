@@ -16,7 +16,12 @@ defmodule Custyard.Webhooks.Adapters.Intercom do
 
   def verify_signature(payload, signature, secret) when is_binary(signature) do
     body = if is_binary(payload), do: payload, else: Jason.encode!(payload)
-    expected = "sha1=" <> (:crypto.mac(:hmac, :sha, secret, body) |> Base.encode16(case: :lower))
+
+    hmac =
+      :crypto.mac(:hmac, :sha, secret, body)
+      |> Base.encode16(case: :lower)
+
+    expected = "sha1=" <> hmac
 
     if Plug.Crypto.secure_compare(expected, String.downcase(signature)) do
       :ok
@@ -53,7 +58,7 @@ defmodule Custyard.Webhooks.Adapters.Intercom do
        to: nil,
        subject: subject,
        body: body,
-       message_id: build_message_id(item),
+       message_id: build_message_id(item, latest_part),
        in_reply_to: build_in_reply_to(item),
        references: nil,
        headers: %{},
@@ -75,18 +80,31 @@ defmodule Custyard.Webhooks.Adapters.Intercom do
     latest_part["body"] || source["body"] || ""
   end
 
-  defp build_message_id(item) do
+  # Build a unique message ID. If there's a latest conversation part, use its
+  # ID to distinguish it from the parent conversation.
+  defp build_message_id(item, nil) do
     case item["id"] do
       nil -> nil
       id -> "intercom-#{id}@intercom.webhook"
     end
   end
 
+  defp build_message_id(item, latest_part) do
+    part_id = latest_part["id"]
+    conv_id = item["id"]
+
+    cond do
+      part_id -> "intercom-#{conv_id}-part-#{part_id}@intercom.webhook"
+      conv_id -> "intercom-#{conv_id}@intercom.webhook"
+      true -> nil
+    end
+  end
+
+  # Reference the parent conversation ID for threading
   defp build_in_reply_to(item) do
-    # If this is a reply, reference the parent conversation
     case item["id"] do
       nil -> nil
-      id -> "intercom-#{id}@intercom.webhook"
+      id -> "intercom-conv-#{id}@intercom.webhook"
     end
   end
 end

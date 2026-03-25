@@ -5,6 +5,13 @@ defmodule CustyardWeb.WebhookController do
   alias Custyard.Email.Processor
   alias Custyard.Webhooks.{Dispatcher, Normalizer, Registry, Signature}
 
+  @signature_headers %{
+    lettermint: "x-lettermint-signature",
+    zendesk: "x-zendesk-webhook-signature",
+    intercom: "x-hub-signature",
+    slack: "x-slack-signature"
+  }
+
   @doc """
   Legacy inbound webhook endpoint.
 
@@ -34,14 +41,12 @@ defmodule CustyardWeb.WebhookController do
          {:ok, adapter} <- resolve_adapter(source),
          :ok <- verify_webhook(adapter, conn, params),
          {:ok, normalized} <- adapter.normalize(params) do
-      case Dispatcher.dispatch(route, normalized) do
-        {:ok, conversation} ->
-          json(conn, %{status: "ok", conversation_id: conversation.id})
-
-        {:error, reason} ->
-          conn |> put_status(422) |> json(%{status: "error", reason: reason})
-      end
+      dispatch_normalized(conn, route, normalized)
     else
+      # Slack URL verification bypass
+      {:bypass, %{type: "url_verification", challenge: challenge}} ->
+        json(conn, %{challenge: challenge})
+
       {:error, reason} ->
         conn |> put_status(401) |> json(%{status: "error", reason: reason})
     end
@@ -51,16 +56,20 @@ defmodule CustyardWeb.WebhookController do
     # Default to lettermint when no source specified
     with {:ok, route} <- find_route(callback_token),
          {:ok, normalized} <- Normalizer.normalize_legacy(params) do
-      case Dispatcher.dispatch(route, normalized) do
-        {:ok, conversation} ->
-          json(conn, %{status: "ok", conversation_id: conversation.id})
-
-        {:error, reason} ->
-          conn |> put_status(422) |> json(%{status: "error", reason: reason})
-      end
+      dispatch_normalized(conn, route, normalized)
     else
       {:error, reason} ->
         conn |> put_status(401) |> json(%{status: "error", reason: reason})
+    end
+  end
+
+  defp dispatch_normalized(conn, route, normalized) do
+    case Dispatcher.dispatch(route, normalized) do
+      {:ok, conversation} ->
+        json(conn, %{status: "ok", conversation_id: conversation.id})
+
+      {:error, reason} ->
+        conn |> put_status(422) |> json(%{status: "error", reason: reason})
     end
   end
 
@@ -78,38 +87,35 @@ defmodule CustyardWeb.WebhookController do
     end
   end
 
-  defp verify_webhook(adapter, conn, params) do
-    # Get webhook secret from application config
+  defp verify_webhook(adapter, conn, _params) do
     source = adapter.source_name()
     secret = get_webhook_secret(source)
 
     if secret do
-      signature = get_signature_header(conn, source)
-      raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
-      Signature.verify(source, raw_body, signature, secret)
+      case conn.private[:raw_body] do
+        nil ->
+          {:error, "missing raw request body for signature verification"}
+
+        raw_body ->
+          signature = get_signature_header(conn, source)
+          Signature.verify(source, raw_body, signature, secret)
+      end
     else
-      # No secret configured — skip verification (development mode)
-      :ok
+      # No secret configured — skip in dev/test, fail closed in prod
+      if Application.get_env(:custyard, :env, :prod) in [:dev, :test] do
+        :ok
+      else
+        {:error, "webhook secret not configured for source: #{source}"}
+      end
     end
   end
 
-  defp get_signature_header(conn, :lettermint) do
-    get_req_header(conn, "x-lettermint-signature") |> List.first()
+  defp get_signature_header(conn, source) do
+    case Map.get(@signature_headers, source) do
+      nil -> nil
+      header_name -> get_req_header(conn, header_name) |> List.first()
+    end
   end
-
-  defp get_signature_header(conn, :zendesk) do
-    get_req_header(conn, "x-zendesk-webhook-signature") |> List.first()
-  end
-
-  defp get_signature_header(conn, :intercom) do
-    get_req_header(conn, "x-hub-signature") |> List.first()
-  end
-
-  defp get_signature_header(conn, :slack) do
-    get_req_header(conn, "x-slack-signature") |> List.first()
-  end
-
-  defp get_signature_header(_conn, _source), do: nil
 
   defp get_webhook_secret(source) do
     Application.get_env(:custyard, :webhook_secrets, %{})
