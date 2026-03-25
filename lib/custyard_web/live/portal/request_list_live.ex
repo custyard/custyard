@@ -87,10 +87,17 @@ defmodule CustyardWeb.Portal.RequestListLive do
     <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-request-list">
       <div class="flex justify-between items-center mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-gray-900 dark:text-zinc-100" data-testid="portal-request-list-heading">
+          <h1
+            class="text-2xl font-semibold text-gray-900 dark:text-zinc-100"
+            data-testid="portal-request-list-heading"
+          >
             {if @admin_mode, do: "All Organization Requests", else: "My Requests"}
           </h1>
-          <p :if={@current_contact} class="text-sm text-gray-500 dark:text-zinc-400 mt-1" data-testid="portal-viewing-as">
+          <p
+            :if={@current_contact}
+            class="text-sm text-gray-500 dark:text-zinc-400 mt-1"
+            data-testid="portal-viewing-as"
+          >
             Viewing as: {@current_contact.name || @current_contact.email}
           </p>
         </div>
@@ -135,10 +142,16 @@ defmodule CustyardWeb.Portal.RequestListLive do
           <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 hover:border-indigo-300 transition">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="font-medium text-gray-900 dark:text-zinc-100" data-testid="portal-request-subject">
+                <h3
+                  class="font-medium text-gray-900 dark:text-zinc-100"
+                  data-testid="portal-request-subject"
+                >
                   {conv.subject}
                 </h3>
-                <p class="text-sm text-gray-500 dark:text-zinc-400 mt-1" data-testid="portal-request-meta">
+                <p
+                  class="text-sm text-gray-500 dark:text-zinc-400 mt-1"
+                  data-testid="portal-request-meta"
+                >
                   {if conv.contact, do: conv.contact.name || conv.contact.email, else: "Unknown"} · {relative_time(
                     conv.inserted_at
                   )}

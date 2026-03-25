@@ -123,7 +123,10 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     ~H"""
     <div class="max-w-3xl mx-auto p-4" data-testid="operator-queue-page">
       <div class="flex items-center justify-between mb-4">
-        <h1 class="text-lg font-semibold text-gray-900 dark:text-zinc-100" data-testid="operator-queue-heading">
+        <h1
+          class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
+          data-testid="operator-queue-heading"
+        >
           What needs attention
         </h1>
         <span class="text-xs text-gray-400 dark:text-zinc-500" data-testid="operator-queue-count">
@@ -141,7 +144,10 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
       <div class="space-y-2">
         <%= if Enum.empty?(@conversations) do %>
-          <div class="text-center text-gray-400 dark:text-zinc-500 py-12" data-testid="operator-queue-empty">
+          <div
+            class="text-center text-gray-400 dark:text-zinc-500 py-12"
+            data-testid="operator-queue-empty"
+          >
             Nothing needs attention right now.
           </div>
         <% else %>
@@ -171,7 +177,8 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       class={[
         "text-xs px-2.5 py-1 rounded",
         @filter == @value && "bg-indigo-100 text-indigo-700",
-        @filter != @value && "bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400 hover:bg-gray-200 dark:hover:bg-zinc-600"
+        @filter != @value &&
+          "bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400 hover:bg-gray-200 dark:hover:bg-zinc-600"
       ]}
     >
       {@label}
@@ -201,28 +208,43 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       <.link navigate={~p"/operator/conversation/#{@item.conversation.id}"} class="block">
         <div class="flex items-start justify-between mb-1">
           <div class="flex items-center gap-2">
-            <span class="font-semibold text-gray-900 dark:text-zinc-100" data-testid="operator-queue-org-name">
+            <span
+              class="font-semibold text-gray-900 dark:text-zinc-100"
+              data-testid="operator-queue-org-name"
+            >
               {@item.conversation.organization.name}
             </span>
             <.tier_badge tier={@item.conversation.organization.tier} />
             <.neglect_badge level={@item.neglect_status} />
           </div>
-          <span class="text-sm text-gray-400 dark:text-zinc-500" data-testid="operator-queue-idle-time">
+          <span
+            class="text-sm text-gray-400 dark:text-zinc-500"
+            data-testid="operator-queue-idle-time"
+          >
             {format_idle_time(@item.hours_idle)}
           </span>
         </div>
-        <div class="text-sm text-gray-500 dark:text-zinc-400 mb-1" data-testid="operator-queue-contact">
+        <div
+          class="text-sm text-gray-500 dark:text-zinc-400 mb-1"
+          data-testid="operator-queue-contact"
+        >
           {if @item.conversation.contact,
             do: @item.conversation.contact.name || @item.conversation.contact.email,
             else: "Unknown contact"}
         </div>
-        <div class="text-sm text-gray-800 dark:text-zinc-200 mb-2" data-testid="operator-queue-subject">
+        <div
+          class="text-sm text-gray-800 dark:text-zinc-200 mb-2"
+          data-testid="operator-queue-subject"
+        >
           {@item.conversation.subject}
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <.state_badge state={@item.conversation.state} />
           <.urgency_badge urgency={@item.conversation.urgency} />
-          <span class="text-xs text-gray-400 dark:text-zinc-500 ml-auto" data-testid="operator-queue-msg-count">
+          <span
+            class="text-xs text-gray-400 dark:text-zinc-500 ml-auto"
+            data-testid="operator-queue-msg-count"
+          >
             {@item.message_count} msg
           </span>
           <span class="text-xs text-gray-400 dark:text-zinc-500" data-testid="operator-queue-score">
@@ -392,7 +414,10 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     assigns = assign(assigns, :entries, entries) |> assign(:total, total)
 
     ~H"""
-    <div class="mt-2 p-2 bg-gray-50 dark:bg-zinc-800 rounded text-xs space-y-1" data-testid="operator-score-breakdown">
+    <div
+      class="mt-2 p-2 bg-gray-50 dark:bg-zinc-800 rounded text-xs space-y-1"
+      data-testid="operator-score-breakdown"
+    >
       <div class="font-medium text-gray-700 dark:text-zinc-300 mb-1">Score breakdown</div>
       <%= for {key, val} <- @entries do %>
         <div class="flex items-center gap-2">

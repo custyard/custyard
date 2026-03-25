@@ -56,7 +56,10 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   def render(assigns) do
     ~H"""
     <div class="max-w-2xl mx-auto py-8 px-4" data-testid="portal-new-request">
-      <h1 class="text-2xl font-semibold text-gray-900 dark:text-zinc-100 mb-6" data-testid="portal-new-request-heading">
+      <h1
+        class="text-2xl font-semibold text-gray-900 dark:text-zinc-100 mb-6"
+        data-testid="portal-new-request-heading"
+      >
         New Request
       </h1>
 
@@ -97,7 +100,10 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1" data-testid="portal-body-label">
+          <label
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+            data-testid="portal-body-label"
+          >
             Description
           </label>
           <textarea

@@ -1,4 +1,7 @@
-<div class="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-zinc-900" data-testid="auth-page">
+<div
+  class="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-zinc-900"
+  data-testid="auth-page"
+>
   <div class="max-w-md w-full">
     <div class="bg-white dark:bg-zinc-800 rounded-lg shadow-md p-8">
       <div class="text-center mb-8">
@@ -19,7 +22,10 @@
         <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
 
         <div class="mb-4">
-          <label for="email" class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+          <label
+            for="email"
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
             Email
           </label>
           <input
@@ -34,7 +40,10 @@
         </div>
 
         <div class="mb-6">
-          <label for="password" class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+          <label
+            for="password"
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
             Password
           </label>
           <input

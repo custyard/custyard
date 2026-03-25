@@ -187,7 +187,10 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
     ~H"""
     <div class="max-w-4xl mx-auto p-4" data-testid="operator-orgs-page">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-lg font-semibold text-gray-900 dark:text-zinc-100" data-testid="operator-orgs-heading">
+        <h1
+          class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
+          data-testid="operator-orgs-heading"
+        >
           Organizations
         </h1>
         <button
@@ -258,7 +261,9 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">Domain</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+            Domain
+          </label>
           <input
             type="text"
             name="domain"
@@ -270,7 +275,9 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">Custom Domain</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+            Custom Domain
+          </label>
           <input
             type="text"
             name="custom_domain"
@@ -302,7 +309,9 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">Logo</label>
+              <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+                Logo
+              </label>
               <div class="flex items-start gap-4">
                 <div :if={@editing_org && @editing_org.logo_url} class="flex-shrink-0">
                   <img
@@ -448,13 +457,21 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           </div>
           <div>
             <div class="flex items-center gap-2 mb-1">
-              <span class="font-semibold text-gray-900 dark:text-zinc-100" data-testid="operator-org-name">
+              <span
+                class="font-semibold text-gray-900 dark:text-zinc-100"
+                data-testid="operator-org-name"
+              >
                 {@org.name}
               </span>
               <.tier_badge tier={@org.tier} />
             </div>
-            <div :if={@org.domain} class="text-sm text-gray-500 dark:text-zinc-400 mb-2">{@org.domain}</div>
-            <div class="text-xs text-gray-400 dark:text-zinc-500" data-testid="operator-org-conv-count">
+            <div :if={@org.domain} class="text-sm text-gray-500 dark:text-zinc-400 mb-2">
+              {@org.domain}
+            </div>
+            <div
+              class="text-xs text-gray-400 dark:text-zinc-500"
+              data-testid="operator-org-conv-count"
+            >
               {@conversation_count} {if @conversation_count == 1,
                 do: "conversation",
                 else: "conversations"}

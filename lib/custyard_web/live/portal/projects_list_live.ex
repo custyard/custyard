@@ -25,7 +25,10 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
     <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-projects-list">
       <div class="flex justify-between items-center mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-gray-900 dark:text-zinc-100" data-testid="portal-projects-heading">
+          <h1
+            class="text-2xl font-semibold text-gray-900 dark:text-zinc-100"
+            data-testid="portal-projects-heading"
+          >
             Projects
           </h1>
           <p class="text-sm text-gray-500 dark:text-zinc-400 mt-1">
@@ -51,7 +54,10 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
           <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 hover:border-indigo-300 transition">
             <div class="flex justify-between items-start mb-3">
               <div>
-                <h3 class="font-medium text-gray-900 dark:text-zinc-100" data-testid="portal-project-title">
+                <h3
+                  class="font-medium text-gray-900 dark:text-zinc-100"
+                  data-testid="portal-project-title"
+                >
                   {project.title}
                 </h3>
                 <p

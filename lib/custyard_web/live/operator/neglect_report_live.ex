@@ -128,7 +128,10 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
       <div class="space-y-6">
         <div :for={{org, items} <- @grouped_conversations} data-testid="operator-neglect-org-group">
           <div class="flex items-center gap-2 mb-2">
-            <span class="text-sm font-medium text-gray-700 dark:text-zinc-300" data-testid="operator-neglect-org-name">
+            <span
+              class="text-sm font-medium text-gray-700 dark:text-zinc-300"
+              data-testid="operator-neglect-org-name"
+            >
               {org.name}
             </span>
             <.tier_badge tier={org.tier} />
@@ -148,10 +151,16 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
               ]}>
                 <.neglect_badge level={item.neglect_status} />
                 <div class="flex-1 min-w-0">
-                  <div class="text-sm text-gray-800 dark:text-zinc-200 truncate" data-testid="operator-neglect-subject">
+                  <div
+                    class="text-sm text-gray-800 dark:text-zinc-200 truncate"
+                    data-testid="operator-neglect-subject"
+                  >
                     {item.conversation.subject}
                   </div>
-                  <div class="text-xs text-gray-500 dark:text-zinc-400" data-testid="operator-neglect-contact">
+                  <div
+                    class="text-xs text-gray-500 dark:text-zinc-400"
+                    data-testid="operator-neglect-contact"
+                  >
                     {if item.conversation.contact,
                       do: item.conversation.contact.name || item.conversation.contact.email,
                       else: "Unknown contact"}

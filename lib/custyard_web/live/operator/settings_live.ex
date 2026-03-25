@@ -146,7 +146,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
   def render(assigns) do
     ~H"""
     <div class="max-w-2xl mx-auto p-4" data-testid="operator-settings-page">
-      <h1 class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-6" data-testid="operator-settings-heading">
+      <h1
+        class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-6"
+        data-testid="operator-settings-heading"
+      >
         Settings
       </h1>
 
@@ -190,7 +193,9 @@ defmodule CustyardWeb.Operator.SettingsLive do
           data-testid="operator-settings-weights-form"
         >
           <div :for={{key, value} <- @weights} class="flex items-center justify-between">
-            <label class="text-sm text-gray-700 dark:text-zinc-300 capitalize" for={"weights_#{key}"}>{key}</label>
+            <label class="text-sm text-gray-700 dark:text-zinc-300 capitalize" for={"weights_#{key}"}>
+              {key}
+            </label>
             <input
               type="number"
               step="0.1"

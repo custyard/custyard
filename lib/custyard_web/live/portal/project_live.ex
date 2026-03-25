@@ -33,7 +33,10 @@ defmodule CustyardWeb.Portal.ProjectLive do
       </.link>
 
       <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-6 mb-6">
-        <h1 class="text-2xl font-semibold text-gray-900 dark:text-zinc-100 mb-2" data-testid="portal-project-title">
+        <h1
+          class="text-2xl font-semibold text-gray-900 dark:text-zinc-100 mb-2"
+          data-testid="portal-project-title"
+        >
           {@project.title}
         </h1>
         <p
@@ -59,7 +62,10 @@ defmodule CustyardWeb.Portal.ProjectLive do
         <.progress_bar progress={@project.progress} />
       </div>
 
-      <h2 class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-3" data-testid="portal-tasks-heading">
+      <h2
+        class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-3"
+        data-testid="portal-tasks-heading"
+      >
         Tasks
       </h2>
 
@@ -78,7 +84,11 @@ defmodule CustyardWeb.Portal.ProjectLive do
               >
                 {task.title}
               </div>
-              <div :if={task.due_at} class="text-sm text-gray-500 dark:text-zinc-400" data-testid="portal-task-due">
+              <div
+                :if={task.due_at}
+                class="text-sm text-gray-500 dark:text-zinc-400"
+                data-testid="portal-task-due"
+              >
                 Due: {format_due_at(task.due_at)}
               </div>
             </div>
