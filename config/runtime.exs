@@ -102,15 +102,35 @@ if config_env() == :prod do
     config :custyard, :operator_password, operator_password
   end
 
+  # Webhook authentication token (required to accept inbound webhook requests)
+  webhook_token = System.get_env("WEBHOOK_TOKEN")
+
+  if webhook_token do
+    config :custyard, :webhook_token, webhook_token
+  end
+
+  live_view_signing_salt =
+    System.get_env("LIVE_VIEW_SIGNING_SALT") ||
+      raise """
+      environment variable LIVE_VIEW_SIGNING_SALT is missing.
+      You can generate one by calling: mix phx.gen.secret 32
+      """
+
   config :custyard, CustyardWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
       port: port
     ],
-    secret_key_base: secret_key_base
+    check_origin: ["//" <> host],
+    secret_key_base: secret_key_base,
+    live_view: [signing_salt: live_view_signing_salt]
 
   config :custyard, Custyard.Repo,
     database: System.get_env("DATABASE_PATH") || "/data/custyard.db",
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10")
+
+  # Persistent upload directory (survives deployments, unlike priv/static)
+  config :custyard,
+    upload_dir: System.get_env("UPLOAD_DIR") || "/data/uploads"
 end

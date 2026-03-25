@@ -75,7 +75,7 @@ defmodule Custyard.Email.ImapPoller do
       errors: 0
     }
 
-    Logger.info("IMAP poller starting for #{state.username}@#{state.host}:#{state.port}")
+    Logger.info("IMAP poller starting for #{state.host}:#{state.port}")
 
     # Schedule first poll
     schedule_poll(state.poll_interval)

@@ -47,6 +47,7 @@ defmodule Custyard.Conversation do
       :contact_id
     ])
     |> validate_required([:subject, :organization_id])
+    |> validate_length(:subject, max: 500)
     |> validate_inclusion(:state, @states)
     |> validate_inclusion(:urgency, @urgencies)
     |> foreign_key_constraint(:organization_id)

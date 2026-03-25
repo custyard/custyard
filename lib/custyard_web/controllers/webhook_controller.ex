@@ -3,6 +3,8 @@ defmodule CustyardWeb.WebhookController do
 
   alias Custyard.Email.Processor
 
+  plug CustyardWeb.Plugs.WebhookAuth
+
   def inbound(conn, params) do
     case Processor.process(params) do
       {:ok, conversation} ->

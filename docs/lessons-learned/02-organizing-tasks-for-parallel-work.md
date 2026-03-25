@@ -127,17 +127,17 @@ Your task today is the little task.
 The slash command is /d:work-tasks-db:
 
 ```
-  /d:work-tasks-db qa-tasks.db --status    # Check task counts
-  /d:work-tasks-db qa-tasks.db --shards    # Preview shard distribution
-  /d:work-tasks-db qa-tasks.db             # Launch parallel workers
-  /d:work-tasks-db qa-tasks.db --agents 6  # Launch with N agents
+  /d:work-tasks-db {sqlite-db-path} --status    # Check task counts
+  /d:work-tasks-db {sqlite-db-path} --shards    # Preview shard distribution
+  /d:work-tasks-db {sqlite-db-path}             # Launch parallel workers
+  /d:work-tasks-db {sqlite-db-path} --agents 6  # Launch with N agents
 
   The worker script lives at ~/.claude/scripts/task_worker.py with subcommands:
-  python3 ~/.claude/scripts/task_worker.py status qa-tasks.db
-  python3 ~/.claude/scripts/task_worker.py shards qa-tasks.db --agent-count 4
-  python3 ~/.claude/scripts/task_worker.py claim qa-tasks.db --agent-index 0 --agent-count 4
-  python3 ~/.claude/scripts/task_worker.py resolve qa-tasks.db --task-id 42 --notes "fixed"
-  python3 ~/.claude/scripts/task_worker.py wontfix qa-tasks.db --task-id 99 --notes "out of scope"
+  python3 ~/.claude/scripts/task_worker.py status {sqlite-db-path}
+  python3 ~/.claude/scripts/task_worker.py shards {sqlite-db-path} --agent-count 4
+  python3 ~/.claude/scripts/task_worker.py claim {sqlite-db-path} --agent-index 0 --agent-count 4
+  python3 ~/.claude/scripts/task_worker.py resolve {sqlite-db-path} --task-id 42 --notes "fixed"
+  python3 ~/.claude/scripts/task_worker.py wontfix {sqlite-db-path} --task-id 99 --notes "out of scope"
 ```
 
 For help: /help:work-tasks-db.

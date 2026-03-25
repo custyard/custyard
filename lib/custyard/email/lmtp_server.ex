@@ -704,7 +704,7 @@ defmodule Custyard.Email.LMTPServer do
               sender: state[:from]
             )
 
-            {:error, "421 4.7.0 Temporary failure: #{inspect(reason)}", state}
+            {:error, "421 4.7.0 Temporary failure, try again later", state}
 
           :permanent ->
             Logger.warning("LMTP permanent processing error",
@@ -713,7 +713,7 @@ defmodule Custyard.Email.LMTPServer do
               sender: state[:from]
             )
 
-            {:error, "550 5.7.0 Permanent failure: #{inspect(reason)}", state}
+            {:error, "550 5.7.0 Permanent failure", state}
         end
     end
   end

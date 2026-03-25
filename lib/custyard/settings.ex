@@ -24,6 +24,9 @@ defmodule Custyard.Settings do
     basic: {48, 72}
   }
 
+  @valid_weight_keys Map.keys(@default_weights) |> Enum.map(&to_string/1)
+  @valid_threshold_keys Map.keys(@default_thresholds) |> Enum.map(&to_string/1)
+
   schema "settings" do
     # Score weights (stored as map in JSON column)
     field :score_weights, :map, default: @default_weights
@@ -56,12 +59,12 @@ defmodule Custyard.Settings do
     settings = get()
 
     settings.score_weights
+    |> Enum.filter(fn {k, _v} -> k in @valid_weight_keys end)
     |> Enum.map(fn {k, v} -> {String.to_existing_atom(k), v} end)
     |> Map.new()
-  rescue
-    ArgumentError ->
-      # If atom doesn't exist (shouldn't happen), return defaults
-      @default_weights
+    |> then(fn weights ->
+      Map.merge(@default_weights, weights)
+    end)
   end
 
   @doc """
@@ -71,13 +74,14 @@ defmodule Custyard.Settings do
     settings = get()
 
     settings.neglect_thresholds
+    |> Enum.filter(fn {k, _v} -> k in @valid_threshold_keys end)
     |> Enum.map(fn {tier, [warning, critical]} ->
       {String.to_existing_atom(tier), {warning, critical}}
     end)
     |> Map.new()
-  rescue
-    ArgumentError ->
-      @default_thresholds
+    |> then(fn thresholds ->
+      Map.merge(@default_thresholds, thresholds)
+    end)
   end
 
   @doc """
@@ -194,11 +198,17 @@ defmodule Custyard.Settings do
       end)
       |> Map.new()
 
+    # Use a fixed ID and on_conflict: :nothing to handle concurrent first-access
+    # race conditions safely. If another process inserts first, this is a no-op.
     %__MODULE__{
+      id: 1,
       score_weights: stringify_keys(@default_weights),
       neglect_thresholds: thresholds_for_db
     }
-    |> Repo.insert!()
+    |> Repo.insert!(on_conflict: :nothing, conflict_target: [:id])
+
+    # Always re-read to return the persisted row (whether we inserted or not)
+    Repo.one!(__MODULE__)
   end
 
   defp stringify_keys(map) do

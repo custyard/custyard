@@ -3,6 +3,9 @@ defmodule CustyardWeb.Operator.SessionController do
 
   alias Custyard.{OperatorAccount, Repo}
 
+  plug CustyardWeb.Plugs.LoginRateLimit,
+       [max_attempts: 5, window_ms: 60_000] when action == :create
+
   def new(conn, _params) do
     render(conn, :new, error: nil, layout: {CustyardWeb.Layouts, :root})
   end
@@ -21,6 +24,7 @@ defmodule CustyardWeb.Operator.SessionController do
       operator ->
         if OperatorAccount.verify_password(operator, password) do
           conn
+          |> configure_session(renew: true)
           |> put_session(:operator_id, operator.id)
           |> put_flash(:info, "Welcome back")
           |> redirect(to: ~p"/operator")

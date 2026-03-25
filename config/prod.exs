@@ -1,5 +1,7 @@
 import Config
 
+config :custyard, env: :prod
+
 config :custyard, Custyard.Repo,
   database: "/data/custyard.db",
   pool_size: 10

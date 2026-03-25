@@ -132,7 +132,7 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
       |> render_click()
 
       # Update form field using the correct event structure
-      render_hook(view, "update_form", %{"field" => "name", "value" => "New Corp"})
+      view |> element("form") |> render_change(%{"name" => "New Corp"})
 
       # Submit
       html =
@@ -154,15 +154,12 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
       |> render_click()
 
       # Fill fields using update_form events
-      render_hook(view, "update_form", %{"field" => "name", "value" => "Full Corp"})
-      render_hook(view, "update_form", %{"field" => "domain", "value" => "full.example.com"})
+      view |> element("form") |> render_change(%{"name" => "Full Corp"})
+      view |> element("form") |> render_change(%{"domain" => "full.example.com"})
 
-      render_hook(view, "update_form", %{
-        "field" => "custom_domain",
-        "value" => "support.full.com"
-      })
+      view |> element("form") |> render_change(%{"custom_domain" => "support.full.com"})
 
-      render_hook(view, "update_form", %{"field" => "tier", "value" => "enterprise"})
+      view |> element("form") |> render_change(%{"tier" => "enterprise"})
 
       view
       |> element("form")
@@ -187,7 +184,7 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
       |> render_click()
 
       # Change name
-      render_hook(view, "update_form", %{"field" => "name", "value" => "Updated Name"})
+      view |> element("form") |> render_change(%{"name" => "Updated Name"})
 
       # Submit
       html =
@@ -225,9 +222,9 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
       |> element("button", "Add organization")
       |> render_click()
 
-      render_hook(view, "update_form", %{"field" => "name", "value" => "Branded Corp"})
-      render_hook(view, "update_form", %{"field" => "primary_color", "value" => "#ff0000"})
-      render_hook(view, "update_form", %{"field" => "secondary_color", "value" => "#00ff00"})
+      view |> element("form") |> render_change(%{"name" => "Branded Corp"})
+      view |> element("form") |> render_change(%{"primary_color" => "#ff0000"})
+      view |> element("form") |> render_change(%{"secondary_color" => "#00ff00"})
 
       view
       |> element("form")
@@ -266,12 +263,9 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
       |> element("button", "Add organization")
       |> render_click()
 
-      render_hook(view, "update_form", %{"field" => "name", "value" => "Domain Corp"})
+      view |> element("form") |> render_change(%{"name" => "Domain Corp"})
 
-      render_hook(view, "update_form", %{
-        "field" => "custom_domain",
-        "value" => "portal.domaincorp.com"
-      })
+      view |> element("form") |> render_change(%{"custom_domain" => "portal.domaincorp.com"})
 
       view
       |> element("form")
