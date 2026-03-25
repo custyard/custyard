@@ -126,9 +126,18 @@ if config_env() == :prod do
     secret_key_base: secret_key_base,
     live_view: [signing_salt: live_view_signing_salt]
 
-  config :custyard, Custyard.Repo,
-    database: System.get_env("DATABASE_PATH") || "/data/custyard.db",
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10")
+  database_url = System.get_env("DATABASE_URL")
+  pool_size = String.to_integer(System.get_env("POOL_SIZE") || "10")
+
+  if database_url do
+    config :custyard, Custyard.Repo,
+      url: database_url,
+      pool_size: pool_size
+  else
+    config :custyard, Custyard.Repo,
+      database: System.get_env("DATABASE_PATH") || "/data/custyard.db",
+      pool_size: pool_size
+  end
 
   # Persistent upload directory (survives deployments, unlike priv/static)
   config :custyard,

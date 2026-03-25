@@ -77,6 +77,7 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 |----------|---------|-------------|
 | `PORT` | `4000` | HTTP listen port |
 | `PHX_HOST` | `custyard.fly.dev` | Public hostname |
+| `DATABASE_URL` | — | Connection URL for Postgres or Turso (takes precedence over `DATABASE_PATH`) |
 | `DATABASE_PATH` | `/data/custyard.db` | SQLite DB path (must be on the mounted volume) |
 | `POOL_SIZE` | `10` | Ecto connection pool size |
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
@@ -144,6 +145,50 @@ fly volumes snapshots restore <snapshot-id> --name custyard_data
 ```
 
 > **Single-node constraint:** SQLite doesn't support concurrent writes from multiple machines. Keep `min_machines_running = 1` and don't scale beyond one machine in the same region. For multi-region or multi-machine setups, migrate to PostgreSQL. See [Fly Postgres docs](https://fly.io/docs/postgres/).
+
+## Alternate data stores
+
+The default adapter is SQLite (`Ecto.Adapters.SQLite3`). To use a different backend, set `repo_adapter` at compile time and provide `DATABASE_URL` at runtime.
+
+### PostgreSQL
+
+```elixir
+# config/config.exs (or config/prod.exs)
+config :custyard, repo_adapter: Ecto.Adapters.Postgres
+```
+
+```bash
+fly postgres create --name custyard-db
+fly postgres attach custyard-db  # sets DATABASE_URL automatically
+fly deploy
+```
+
+Remove the `[mounts]` section from `fly.toml` if you no longer need SQLite volumes. See [Fly Postgres docs](https://fly.io/docs/postgres/).
+
+### Turso (libSQL)
+
+[Turso](https://turso.tech) is distributed SQLite. Use the `ecto_sqlite3` adapter with a libSQL connection URL:
+
+```bash
+fly secrets set DATABASE_URL="libsql://your-db.turso.io?authToken=..."
+```
+
+The `ecto_sqlite3` adapter supports libSQL URLs via [exqlite](https://hexdocs.pm/exqlite). No adapter change needed — keep `repo_adapter: Ecto.Adapters.SQLite3`. See [Turso + Fly.io guide](https://docs.turso.tech/sdk/elixir/guides/fly).
+
+### Neon / Supabase
+
+External Postgres providers work the same way — set the adapter to Postgres and provide `DATABASE_URL`:
+
+```bash
+fly secrets set DATABASE_URL="postgres://user:pass@host/db?sslmode=require"
+```
+
+### Migration notes
+
+All migrations use standard Ecto syntax. Two caveats when moving from SQLite to Postgres:
+
+- `:map` columns (settings table) map to `jsonb` on Postgres — works automatically
+- `:text` columns storing JSON arrays (project tags) work on both — consider migrating to `{:array, :string}` on Postgres for native array support
 
 ## Troubleshooting
 
