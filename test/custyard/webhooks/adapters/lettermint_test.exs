@@ -38,8 +38,7 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
     end
 
     test "returns error for no secret configured" do
-      assert {:error, "no secret configured"} =
-               Lettermint.verify_signature("payload", "sig", nil)
+      assert {:error, "no secret configured"} = Lettermint.verify_signature("payload", "sig", nil)
     end
   end
 

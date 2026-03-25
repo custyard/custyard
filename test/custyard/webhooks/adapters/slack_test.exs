@@ -91,8 +91,7 @@ defmodule Custyard.Webhooks.Adapters.SlackTest do
     end
 
     test "returns error for invalid signature" do
-      assert {:error, "invalid signature"} =
-               Slack.verify_signature("payload", "v0=bad", "secret")
+      assert {:error, "invalid signature"} = Slack.verify_signature("payload", "v0=bad", "secret")
     end
 
     test "returns error for missing signature" do
@@ -101,8 +100,7 @@ defmodule Custyard.Webhooks.Adapters.SlackTest do
     end
 
     test "returns error for no secret" do
-      assert {:error, "no secret configured"} =
-               Slack.verify_signature("payload", "sig", nil)
+      assert {:error, "no secret configured"} = Slack.verify_signature("payload", "sig", nil)
     end
   end
 

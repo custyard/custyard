@@ -19,8 +19,7 @@ defmodule Custyard.Webhooks.Adapters.ZendeskTest do
     end
 
     test "returns error for invalid signature" do
-      assert {:error, "invalid signature"} =
-               Zendesk.verify_signature("payload", "bad", "secret")
+      assert {:error, "invalid signature"} = Zendesk.verify_signature("payload", "bad", "secret")
     end
   end
 
