@@ -21,6 +21,7 @@ fly volumes create custyard_data --region <your-region> --size 1
 # Set required secrets
 fly secrets set \
   SECRET_KEY_BASE=$(mix phx.gen.secret) \
+  LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32) \
   OPERATOR_PASSWORD="<GENERATE_A_STRONG_PASSWORD>"
 
 # Deploy
@@ -51,7 +52,11 @@ Manage secrets with [`fly secrets`](https://fly.io/docs/apps/secrets/):
 ```bash
 # Required
 fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
+fly secrets set LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32)
 fly secrets set OPERATOR_PASSWORD="..."
+
+# Optional — inbound webhook authentication
+fly secrets set WEBHOOK_TOKEN="..."
 
 # Optional — outbound email (pick one adapter)
 fly secrets set MAIL_ADAPTER=sendgrid SENDGRID_API_KEY="..."
@@ -59,9 +64,6 @@ fly secrets set MAIL_ADAPTER=sendgrid SENDGRID_API_KEY="..."
 fly secrets set MAIL_ADAPTER=mailgun MAILGUN_API_KEY="..." MAILGUN_DOMAIN="..."
 # or
 fly secrets set MAIL_ADAPTER=smtp SMTP_HOST="..." SMTP_USERNAME="..." SMTP_PASSWORD="..."
-
-# Optional — inbound webhook verification
-fly secrets set WEBHOOK_SECRET="..."
 
 # List current secrets
 fly secrets list
@@ -79,6 +81,7 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 | `POOL_SIZE` | `10` | Ecto connection pool size |
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
 | `IMAP_ENABLED` | `false` | IMAP polling (disabled — ports blocked on Fly.io) |
+| `UPLOAD_DIR` | `/data/uploads` | Persistent upload directory (must be on the mounted volume) |
 
 ## Health check
 
