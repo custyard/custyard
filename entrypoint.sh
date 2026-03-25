@@ -13,7 +13,7 @@ bin/custyard eval "Custyard.Release.migrate()"
 
 # Generate or load operator password
 if [ -z "$OPERATOR_PASSWORD" ]; then
-    OPERATOR_PASSWORD=$(openssl rand -base64 12)
+    export OPERATOR_PASSWORD=$(openssl rand -base64 12)
     echo ""
     echo "=========================================="
     echo "OPERATOR PASSWORD (auto-generated):"
@@ -24,8 +24,8 @@ if [ -z "$OPERATOR_PASSWORD" ]; then
     echo ""
 fi
 
-# Create/update operator account
-bin/custyard eval "Custyard.Release.setup_operator(\"$OPERATOR_PASSWORD\")"
+# Create/update operator account (reads OPERATOR_PASSWORD from env)
+bin/custyard eval "Custyard.Release.setup_operator()"
 
 echo "Custyard ready. Starting server..."
 exec "$@"

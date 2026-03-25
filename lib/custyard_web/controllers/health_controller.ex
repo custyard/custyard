@@ -7,6 +7,8 @@ defmodule CustyardWeb.HealthController do
   """
   use CustyardWeb, :controller
 
+  require Logger
+
   def index(conn, _params) do
     case Ecto.Adapters.SQL.query(Custyard.Repo, "SELECT 1") do
       {:ok, _} ->
@@ -15,9 +17,11 @@ defmodule CustyardWeb.HealthController do
         |> json(%{status: "ok"})
 
       {:error, reason} ->
+        Logger.error("Health check failed: #{inspect(reason)}")
+
         conn
         |> put_status(503)
-        |> json(%{status: "error", reason: inspect(reason)})
+        |> json(%{status: "error"})
     end
   end
 end

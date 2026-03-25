@@ -20,10 +20,13 @@ defmodule Custyard.Release do
     {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
   end
 
-  def setup_operator(password) do
+  def setup_operator do
     load_app()
 
     {:ok, _} = Application.ensure_all_started(@app)
+
+    # Read password from environment to avoid exposing it in the process list
+    password = System.get_env("OPERATOR_PASSWORD") || raise "OPERATOR_PASSWORD environment variable is not set"
 
     # Hash the password and store/update operator account
     # This will be implemented once the accounts context exists
