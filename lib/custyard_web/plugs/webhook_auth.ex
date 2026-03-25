@@ -20,29 +20,31 @@ defmodule CustyardWeb.Plugs.WebhookAuth do
     configured_token = Application.get_env(:custyard, :webhook_token)
 
     if is_nil(configured_token) or configured_token == "" do
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(401, Jason.encode!(%{error: "Webhook authentication not configured"}))
-      |> halt()
+      reject(conn, "Webhook authentication not configured")
     else
-      case get_bearer_token(conn) do
-        nil ->
-          conn
-          |> put_resp_content_type("application/json")
-          |> send_resp(401, Jason.encode!(%{error: "Missing authorization token"}))
-          |> halt()
-
-        token ->
-          if Plug.Crypto.secure_compare(token, configured_token) do
-            conn
-          else
-            conn
-            |> put_resp_content_type("application/json")
-            |> send_resp(401, Jason.encode!(%{error: "Invalid authorization token"}))
-            |> halt()
-          end
-      end
+      verify_token(conn, configured_token)
     end
+  end
+
+  defp verify_token(conn, configured_token) do
+    case get_bearer_token(conn) do
+      nil ->
+        reject(conn, "Missing authorization token")
+
+      token ->
+        if Plug.Crypto.secure_compare(token, configured_token) do
+          conn
+        else
+          reject(conn, "Invalid authorization token")
+        end
+    end
+  end
+
+  defp reject(conn, message) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(401, Jason.encode!(%{error: message}))
+    |> halt()
   end
 
   defp get_bearer_token(conn) do

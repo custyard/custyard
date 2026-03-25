@@ -12,46 +12,43 @@ defmodule Custyard.Email.Processor do
 
   def process(params) do
     with {:ok, parsed} <- parse_payload(params),
-         {:ok, org, contact} <- SenderMatcher.match(parsed.from) do
-      # Wrap conversation + message creation in a transaction for atomicity
-      result =
-        Repo.transaction(fn ->
-          case find_or_create_conversation(parsed, org, contact) do
-            {:ok, conversation, is_new} ->
-              create_message(conversation, parsed)
-              {conversation, is_new}
+         {:ok, org, contact} <- SenderMatcher.match(parsed.from),
+         {:ok, {conversation, is_new}} <- transact_conversation(parsed, org, contact) do
+      broadcast_updates(conversation, is_new)
+      {:ok, Repo.reload!(conversation)}
+    end
+  end
 
-            {:error, reason} ->
-              Repo.rollback(reason)
-          end
-        end)
-
-      case result do
-        {:ok, {conversation, is_new}} ->
-          # Side effects outside the transaction
-          Scoring.calculate_and_cache(conversation.id)
-
-          event = if is_new, do: :conversation_created, else: :conversation_updated
-          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
-
-          Phoenix.PubSub.broadcast(
-            Custyard.PubSub,
-            "conversations:org:#{conversation.organization_id}",
-            {event, conversation.id}
-          )
-
-          Phoenix.PubSub.broadcast(
-            Custyard.PubSub,
-            "conversation:#{conversation.id}",
-            {:message_added, conversation.id}
-          )
-
-          {:ok, Repo.reload!(conversation)}
+  defp transact_conversation(parsed, org, contact) do
+    Repo.transaction(fn ->
+      case find_or_create_conversation(parsed, org, contact) do
+        {:ok, conversation, is_new} ->
+          create_message(conversation, parsed)
+          {conversation, is_new}
 
         {:error, reason} ->
-          {:error, reason}
+          Repo.rollback(reason)
       end
-    end
+    end)
+  end
+
+  defp broadcast_updates(conversation, is_new) do
+    event = if is_new, do: :conversation_created, else: :conversation_updated
+    Scoring.calculate_and_cache(conversation.id)
+
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations:org:#{conversation.organization_id}",
+      {event, conversation.id}
+    )
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversation:#{conversation.id}",
+      {:message_added, conversation.id}
+    )
   end
 
   defp parse_payload(params) do

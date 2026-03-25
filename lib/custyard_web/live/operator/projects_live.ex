@@ -84,23 +84,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   def handle_event("save_project", _params, socket) do
-    form_data = socket.assigns.form_data
-
-    org_id =
-      case Integer.parse(form_data.organization_id || "") do
-        {id, ""} -> id
-        _ -> nil
-      end
-
-    attrs = %{
-      title: form_data.title,
-      description: if(form_data.description == "", do: nil, else: form_data.description),
-      organization_id: org_id,
-      start_date: parse_date(form_data.start_date),
-      target_completion_date: parse_date(form_data.target_completion_date),
-      portal_visible: form_data.portal_visible,
-      project_type: if(org_id == nil, do: :internal, else: :customer)
-    }
+    attrs = build_project_attrs(socket.assigns.form_data)
 
     result =
       case socket.assigns.editing_project do
@@ -108,21 +92,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         project -> Projects.update_project(project, attrs)
       end
 
-    case result do
-      {:ok, _project} ->
-        action = if socket.assigns.editing_project, do: "updated", else: "created"
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Project #{action} successfully.")
-         |> assign(:show_form, false)
-         |> assign(:editing_project, nil)
-         |> load_projects()}
-
-      {:error, changeset} ->
-        {:noreply,
-         put_flash(socket, :error, "Failed to save: #{format_changeset_errors(changeset)}")}
-    end
+    handle_save_result(result, socket)
   end
 
   def handle_event("delete_project", %{"id" => id}, socket) do
@@ -137,6 +107,46 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Failed to delete project.")}
+    end
+  end
+
+  defp handle_save_result({:ok, _project}, socket) do
+    action = if socket.assigns.editing_project, do: "updated", else: "created"
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Project #{action} successfully.")
+     |> assign(:show_form, false)
+     |> assign(:editing_project, nil)
+     |> load_projects()}
+  end
+
+  defp handle_save_result({:error, changeset}, socket) do
+    {:noreply,
+     put_flash(socket, :error, "Failed to save: #{format_changeset_errors(changeset)}")}
+  end
+
+  defp build_project_attrs(form_data) do
+    org_id = parse_org_id(form_data.organization_id)
+
+    %{
+      title: form_data.title,
+      description: if(form_data.description == "", do: nil, else: form_data.description),
+      organization_id: org_id,
+      start_date: parse_date(form_data.start_date),
+      target_completion_date: parse_date(form_data.target_completion_date),
+      portal_visible: form_data.portal_visible,
+      project_type: if(org_id == nil, do: :internal, else: :customer)
+    }
+  end
+
+  defp parse_org_id(nil), do: nil
+  defp parse_org_id(""), do: nil
+
+  defp parse_org_id(str) do
+    case Integer.parse(str) do
+      {id, ""} -> id
+      _ -> nil
     end
   end
 
