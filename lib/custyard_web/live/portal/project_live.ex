@@ -74,7 +74,11 @@ defmodule CustyardWeb.Portal.ProjectLive do
         class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg divide-y dark:divide-zinc-700"
         data-testid="portal-tasks-list"
       >
-        <div :for={task <- @project.tasks} class="p-4 flex items-center gap-4" data-testid="portal-task-item">
+        <div
+          :for={task <- @project.tasks}
+          class="p-4 flex items-center gap-4"
+          data-testid="portal-task-item"
+        >
           <.task_state_icon state={task.state} />
           <div class="flex-1">
             <div

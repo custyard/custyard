@@ -3,7 +3,8 @@ defmodule CustyardWeb.Operator.SessionController do
 
   alias Custyard.{OperatorAccount, Repo}
 
-  plug CustyardWeb.Plugs.LoginRateLimit, [max_attempts: 5, window_ms: 60_000] when action == :create
+  plug CustyardWeb.Plugs.LoginRateLimit,
+       [max_attempts: 5, window_ms: 60_000] when action == :create
 
   def new(conn, _params) do
     render(conn, :new, error: nil, layout: {CustyardWeb.Layouts, :root})

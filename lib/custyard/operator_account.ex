@@ -15,7 +15,9 @@ defmodule Custyard.OperatorAccount do
     operator_account
     |> cast(attrs, [:email, :password])
     |> validate_required([:email, :password])
-    |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/, message: "must be a valid email address")
+    |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
+      message: "must be a valid email address"
+    )
     |> validate_length(:password, min: 8, max: 72, message: "must be between 8 and 72 characters")
     |> unique_constraint(:email)
     |> hash_password()

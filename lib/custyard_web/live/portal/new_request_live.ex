@@ -24,7 +24,8 @@ defmodule CustyardWeb.Portal.NewRequestLive do
 
     result =
       Multi.new()
-      |> Multi.insert(:conversation,
+      |> Multi.insert(
+        :conversation,
         Conversation.changeset(%Conversation{}, %{
           organization_id: org.id,
           subject: params["subject"],

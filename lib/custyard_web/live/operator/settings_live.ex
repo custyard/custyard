@@ -275,7 +275,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
             :for={{tier, [warning, critical]} <- @thresholds}
             class="flex items-center justify-between"
           >
-            <span class="text-sm text-gray-700 dark:text-zinc-300 capitalize" id={"thresholds-#{tier}-label"}>
+            <span
+              class="text-sm text-gray-700 dark:text-zinc-300 capitalize"
+              id={"thresholds-#{tier}-label"}
+            >
               {tier}
             </span>
             <div class="flex items-center gap-2">

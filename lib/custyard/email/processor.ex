@@ -168,7 +168,13 @@ defmodule Custyard.Email.Processor do
     end
   end
 
-  @urgent_patterns [~r/\burgent\b/, ~r/\bemergency\b/, ~r/\bcritical\b/, ~r/\bdown\b/, ~r/\boutage\b/]
+  @urgent_patterns [
+    ~r/\burgent\b/,
+    ~r/\bemergency\b/,
+    ~r/\bcritical\b/,
+    ~r/\bdown\b/,
+    ~r/\boutage\b/
+  ]
   @elevated_patterns [~r/\bimportant\b/, ~r/\basap\b/, ~r/\bpriority\b/]
 
   defp detect_urgency(subject, body) do

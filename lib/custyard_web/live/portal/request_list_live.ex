@@ -104,7 +104,9 @@ defmodule CustyardWeb.Portal.RequestListLive do
         </div>
         <div class="flex items-center gap-4">
           <div :if={@current_contact && @current_contact.is_admin} class="flex items-center gap-2">
-            <label id="admin-view-label" class="text-sm text-gray-600 dark:text-zinc-400">Admin view</label>
+            <label id="admin-view-label" class="text-sm text-gray-600 dark:text-zinc-400">
+              Admin view
+            </label>
             <button
               type="button"
               phx-click="toggle_admin_mode"

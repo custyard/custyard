@@ -274,7 +274,12 @@ defmodule CustyardWeb.Portal.RequestListLiveTest do
 
       # Create new conversation and broadcast
       conv = insert_conversation(organization_id: org.id, subject: "New PubSub Request")
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations:org:#{org.id}", {:conversation_created, conv.id})
+
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
+        "conversations:org:#{org.id}",
+        {:conversation_created, conv.id}
+      )
 
       # Wait for update
       Process.sleep(50)
