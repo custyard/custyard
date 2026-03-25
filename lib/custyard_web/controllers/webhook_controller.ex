@@ -92,24 +92,30 @@ defmodule CustyardWeb.WebhookController do
 
   defp verify_webhook(adapter, conn, _params) do
     source = adapter.source_name()
-    secret = get_webhook_secret(source)
 
-    if secret do
-      case conn.private[:raw_body] do
-        nil ->
-          {:error, "missing raw request body for signature verification"}
+    case get_webhook_secret(source) do
+      nil -> verify_without_secret(source)
+      secret -> verify_with_secret(conn, source, secret)
+    end
+  end
 
-        raw_body ->
-          signature = get_signature_header(conn, source)
-          Signature.verify(source, raw_body, signature, secret)
-      end
+  defp verify_without_secret(source) do
+    # No secret configured — skip in dev/test, fail closed in prod
+    if Application.get_env(:custyard, :env, :prod) in [:dev, :test] do
+      :ok
     else
-      # No secret configured — skip in dev/test, fail closed in prod
-      if Application.get_env(:custyard, :env, :prod) in [:dev, :test] do
-        :ok
-      else
-        {:error, "webhook secret not configured for source: #{source}"}
-      end
+      {:error, "webhook secret not configured for source: #{source}"}
+    end
+  end
+
+  defp verify_with_secret(conn, source, secret) do
+    case conn.private[:raw_body] do
+      nil ->
+        {:error, "missing raw request body for signature verification"}
+
+      raw_body ->
+        signature = get_signature_header(conn, source)
+        Signature.verify(source, raw_body, signature, secret)
     end
   end
 

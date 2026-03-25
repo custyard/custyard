@@ -6,6 +6,7 @@ defmodule Custyard.Webhooks.Normalizer do
   common post-processing (HTML stripping, subject defaults, etc.).
   """
 
+  alias Custyard.Webhooks.Adapters.Lettermint
   alias Custyard.Webhooks.Registry
 
   @doc """
@@ -27,6 +28,6 @@ defmodule Custyard.Webhooks.Normalizer do
   endpoint that predates the routed webhook system.
   """
   def normalize_legacy(params) do
-    Custyard.Webhooks.Adapters.Lettermint.normalize(params)
+    Lettermint.normalize(params)
   end
 end
