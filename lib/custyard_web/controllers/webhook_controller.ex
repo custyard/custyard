@@ -13,7 +13,7 @@ defmodule CustyardWeb.WebhookController do
   }
 
   # Bearer token auth for legacy inbound endpoint
-  plug CustyardWeb.Plugs.WebhookAuth when action == :inbound
+  plug CustyardWeb.Plugs.WebhookAuth when action in [:inbound]
 
   @doc """
   Legacy inbound webhook endpoint.
