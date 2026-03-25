@@ -32,20 +32,20 @@ defmodule CustyardWeb.Portal.ProjectLive do
         &larr; Back to projects
       </.link>
 
-      <div class="bg-white border rounded-lg p-6 mb-6">
-        <h1 class="text-2xl font-semibold text-gray-900 mb-2" data-testid="portal-project-title">
+      <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-6 mb-6">
+        <h1 class="text-2xl font-semibold text-gray-900 dark:text-zinc-100 mb-2" data-testid="portal-project-title">
           {@project.title}
         </h1>
         <p
           :if={@project.description}
-          class="text-gray-600 mb-4"
+          class="text-gray-600 dark:text-zinc-400 mb-4"
           data-testid="portal-project-description"
         >
           {@project.description}
         </p>
 
         <div
-          class="flex items-center gap-6 text-sm text-gray-500 mb-4"
+          class="flex items-center gap-6 text-sm text-gray-500 dark:text-zinc-400 mb-4"
           data-testid="portal-project-dates"
         >
           <span :if={@project.start_date}>
@@ -59,13 +59,13 @@ defmodule CustyardWeb.Portal.ProjectLive do
         <.progress_bar progress={@project.progress} />
       </div>
 
-      <h2 class="text-lg font-semibold text-gray-900 mb-3" data-testid="portal-tasks-heading">
+      <h2 class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-3" data-testid="portal-tasks-heading">
         Tasks
       </h2>
 
       <div
         :if={@project.tasks != []}
-        class="bg-white border rounded-lg divide-y"
+        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg divide-y dark:divide-zinc-700"
         data-testid="portal-tasks-list"
       >
         <%= for task <- @project.tasks do %>
@@ -73,12 +73,12 @@ defmodule CustyardWeb.Portal.ProjectLive do
             <.task_state_icon state={task.state} />
             <div class="flex-1">
               <div
-                class={"text-gray-900 #{if task.state == :done, do: "line-through opacity-60"}"}
+                class={"text-gray-900 dark:text-zinc-100 #{if task.state == :done, do: "line-through opacity-60"}"}
                 data-testid="portal-task-title"
               >
                 {task.title}
               </div>
-              <div :if={task.due_at} class="text-sm text-gray-500" data-testid="portal-task-due">
+              <div :if={task.due_at} class="text-sm text-gray-500 dark:text-zinc-400" data-testid="portal-task-due">
                 Due: {format_due_at(task.due_at)}
               </div>
             </div>
@@ -89,7 +89,7 @@ defmodule CustyardWeb.Portal.ProjectLive do
 
       <div
         :if={@project.tasks == []}
-        class="text-center py-12 text-gray-500 bg-white border rounded-lg"
+        class="text-center py-12 text-gray-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg"
         data-testid="portal-empty-state"
       >
         No tasks in this project yet.
@@ -103,11 +103,11 @@ defmodule CustyardWeb.Portal.ProjectLive do
   defp progress_bar(assigns) do
     ~H"""
     <div data-testid="portal-project-progress-bar">
-      <div class="flex justify-between text-sm text-gray-600 mb-2">
+      <div class="flex justify-between text-sm text-gray-600 dark:text-zinc-400 mb-2">
         <span>Progress: {@progress.done} of {@progress.total} tasks completed</span>
         <span>{@progress.percentage}%</span>
       </div>
-      <div class="w-full bg-gray-200 rounded-full h-3">
+      <div class="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-3">
         <div
           class="bg-indigo-600 h-3 rounded-full transition-all duration-300"
           style={"width: #{@progress.percentage}%"}
@@ -138,10 +138,10 @@ defmodule CustyardWeb.Portal.ProjectLive do
         </span>
       <% _ -> %>
         <span
-          class="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center"
+          class="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 dark:bg-zinc-700 flex items-center justify-center"
           data-testid={"portal-task-icon-#{@state}"}
         >
-          <span class="w-2 h-2 rounded-full bg-gray-400" />
+          <span class="w-2 h-2 rounded-full bg-gray-400 dark:bg-zinc-500" />
         </span>
     <% end %>
     """
@@ -154,8 +154,8 @@ defmodule CustyardWeb.Portal.ProjectLive do
       case assigns.state do
         :done -> {"bg-green-100", "text-green-800", "Done"}
         :in_progress -> {"bg-blue-100", "text-blue-800", "In Progress"}
-        :open -> {"bg-gray-100", "text-gray-600", "Open"}
-        _ -> {"bg-gray-100", "text-gray-600", "Open"}
+        :open -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
+        _ -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
       end
 
     assigns =

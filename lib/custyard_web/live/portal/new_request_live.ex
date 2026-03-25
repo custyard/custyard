@@ -56,14 +56,14 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   def render(assigns) do
     ~H"""
     <div class="max-w-2xl mx-auto py-8 px-4" data-testid="portal-new-request">
-      <h1 class="text-2xl font-semibold text-gray-900 mb-6" data-testid="portal-new-request-heading">
+      <h1 class="text-2xl font-semibold text-gray-900 dark:text-zinc-100 mb-6" data-testid="portal-new-request-heading">
         New Request
       </h1>
 
       <form phx-submit="submit" class="space-y-4" data-testid="portal-new-request-form">
         <div>
           <label
-            class="block text-sm font-medium text-gray-700 mb-1"
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
             data-testid="portal-subject-label"
           >
             Subject
@@ -73,21 +73,21 @@ defmodule CustyardWeb.Portal.NewRequestLive do
             name="subject"
             required
             data-testid="portal-subject-input"
-            class="w-full border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
             value={@form[:subject].value}
           />
         </div>
 
         <div>
           <label
-            class="block text-sm font-medium text-gray-700 mb-1"
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
             data-testid="portal-urgency-label"
           >
             Urgency
           </label>
           <select
             name="urgency"
-            class="w-full border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
             data-testid="portal-urgency-select"
           >
             <option value="normal">Normal</option>
@@ -97,7 +97,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1" data-testid="portal-body-label">
+          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1" data-testid="portal-body-label">
             Description
           </label>
           <textarea
@@ -105,14 +105,14 @@ defmodule CustyardWeb.Portal.NewRequestLive do
             rows="6"
             required
             data-testid="portal-body-textarea"
-            class="w-full border-gray-300 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
+            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
           ><%= @form[:body].value %></textarea>
         </div>
 
         <div class="flex justify-end gap-3">
           <.link
             navigate={@portal_home_path}
-            class="px-4 py-2 text-gray-700 hover:text-gray-900"
+            class="px-4 py-2 text-gray-700 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-zinc-100"
             data-testid="portal-cancel-link"
           >
             Cancel

@@ -98,7 +98,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
         &#8592; Back to requests
       </.link>
 
-      <h1 class="text-2xl font-semibold text-gray-900 mb-6" data-testid="portal-conversation-subject">
+      <h1 class="text-2xl font-semibold text-gray-900 dark:text-zinc-100 mb-6" data-testid="portal-conversation-subject">
         {@conversation.subject}
       </h1>
 
@@ -108,11 +108,11 @@ defmodule CustyardWeb.Portal.ConversationLive do
             class={"p-4 rounded-lg #{message_style(msg)}"}
             data-testid={"portal-message-#{msg.source}"}
           >
-            <div class="flex justify-between text-sm text-gray-500 mb-2">
+            <div class="flex justify-between text-sm text-gray-500 dark:text-zinc-400 mb-2">
               <span data-testid="portal-message-sender">{msg.sender_email}</span>
               <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
             </div>
-            <div class="text-gray-900 whitespace-pre-wrap" data-testid="portal-message-body">
+            <div class="text-gray-900 dark:text-zinc-100 whitespace-pre-wrap" data-testid="portal-message-body">
               {msg.body}
             </div>
           </div>
@@ -123,13 +123,13 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
       <form
         phx-submit="submit_reply"
-        class="bg-white border rounded-lg p-4"
+        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
         data-testid="portal-reply-form"
       >
         <textarea
           name="body"
           rows="4"
-          class="w-full border-gray-300 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
+          class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
           placeholder="Write a reply..."
           data-testid="portal-reply-textarea"
         >{@reply_form[:body].value}</textarea>
@@ -152,16 +152,16 @@ defmodule CustyardWeb.Portal.ConversationLive do
   defp tasks_section(assigns) do
     ~H"""
     <div :if={@tasks != []} class="mb-8" data-testid="portal-tasks-section">
-      <h2 class="text-lg font-semibold text-gray-900 mb-3" data-testid="portal-tasks-heading">
+      <h2 class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-3" data-testid="portal-tasks-heading">
         Tasks
       </h2>
-      <div class="bg-white border rounded-lg divide-y" data-testid="portal-tasks-list">
+      <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg divide-y dark:divide-zinc-700" data-testid="portal-tasks-list">
         <%= for task <- @tasks do %>
           <div class="p-3 flex items-center gap-3" data-testid="portal-task-item">
             <.task_state_badge state={task.state} />
             <div class="flex-1">
-              <div class="text-gray-900" data-testid="portal-task-title">{task.title}</div>
-              <div :if={task.due_at} class="text-sm text-gray-500" data-testid="portal-task-due">
+              <div class="text-gray-900 dark:text-zinc-100" data-testid="portal-task-title">{task.title}</div>
+              <div :if={task.due_at} class="text-sm text-gray-500 dark:text-zinc-400" data-testid="portal-task-due">
                 Due: {format_due_at(task.due_at)}
               </div>
             </div>
@@ -179,8 +179,8 @@ defmodule CustyardWeb.Portal.ConversationLive do
       case assigns.state do
         :done -> {"bg-green-100", "text-green-800", "Done"}
         :in_progress -> {"bg-blue-100", "text-blue-800", "In Progress"}
-        :open -> {"bg-gray-100", "text-gray-600", "Open"}
-        _ -> {"bg-gray-100", "text-gray-600", "Open"}
+        :open -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
+        _ -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
       end
 
     assigns =
@@ -203,7 +203,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
     if msg.source == :operator do
       "bg-indigo-50 border-l-4 border-indigo-400"
     else
-      "bg-gray-50"
+      "bg-gray-50 dark:bg-zinc-800"
     end
   end
 

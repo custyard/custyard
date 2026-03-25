@@ -123,10 +123,10 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     ~H"""
     <div class="max-w-3xl mx-auto p-4" data-testid="operator-queue-page">
       <div class="flex items-center justify-between mb-4">
-        <h1 class="text-lg font-semibold text-gray-900" data-testid="operator-queue-heading">
+        <h1 class="text-lg font-semibold text-gray-900 dark:text-zinc-100" data-testid="operator-queue-heading">
           What needs attention
         </h1>
-        <span class="text-xs text-gray-400" data-testid="operator-queue-count">
+        <span class="text-xs text-gray-400 dark:text-zinc-500" data-testid="operator-queue-count">
           {length(@conversations)} items
         </span>
       </div>
@@ -141,7 +141,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
       <div class="space-y-2">
         <%= if Enum.empty?(@conversations) do %>
-          <div class="text-center text-gray-400 py-12" data-testid="operator-queue-empty">
+          <div class="text-center text-gray-400 dark:text-zinc-500 py-12" data-testid="operator-queue-empty">
             Nothing needs attention right now.
           </div>
         <% else %>
@@ -171,7 +171,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       class={[
         "text-xs px-2.5 py-1 rounded",
         @filter == @value && "bg-indigo-100 text-indigo-700",
-        @filter != @value && "bg-gray-100 text-gray-500 hover:bg-gray-200"
+        @filter != @value && "bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400 hover:bg-gray-200 dark:hover:bg-zinc-600"
       ]}
     >
       {@label}
@@ -195,37 +195,37 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
     ~H"""
     <div
-      class={"bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow border-l-4 #{@border_color}"}
+      class={"bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 hover:shadow-md transition-shadow border-l-4 #{@border_color}"}
       data-testid={"operator-queue-card-#{@item.conversation.id}"}
     >
       <.link navigate={~p"/operator/conversation/#{@item.conversation.id}"} class="block">
         <div class="flex items-start justify-between mb-1">
           <div class="flex items-center gap-2">
-            <span class="font-semibold text-gray-900" data-testid="operator-queue-org-name">
+            <span class="font-semibold text-gray-900 dark:text-zinc-100" data-testid="operator-queue-org-name">
               {@item.conversation.organization.name}
             </span>
             <.tier_badge tier={@item.conversation.organization.tier} />
             <.neglect_badge level={@item.neglect_status} />
           </div>
-          <span class="text-sm text-gray-400" data-testid="operator-queue-idle-time">
+          <span class="text-sm text-gray-400 dark:text-zinc-500" data-testid="operator-queue-idle-time">
             {format_idle_time(@item.hours_idle)}
           </span>
         </div>
-        <div class="text-sm text-gray-500 mb-1" data-testid="operator-queue-contact">
+        <div class="text-sm text-gray-500 dark:text-zinc-400 mb-1" data-testid="operator-queue-contact">
           {if @item.conversation.contact,
             do: @item.conversation.contact.name || @item.conversation.contact.email,
             else: "Unknown contact"}
         </div>
-        <div class="text-sm text-gray-800 mb-2" data-testid="operator-queue-subject">
+        <div class="text-sm text-gray-800 dark:text-zinc-200 mb-2" data-testid="operator-queue-subject">
           {@item.conversation.subject}
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <.state_badge state={@item.conversation.state} />
           <.urgency_badge urgency={@item.conversation.urgency} />
-          <span class="text-xs text-gray-400 ml-auto" data-testid="operator-queue-msg-count">
+          <span class="text-xs text-gray-400 dark:text-zinc-500 ml-auto" data-testid="operator-queue-msg-count">
             {@item.message_count} msg
           </span>
-          <span class="text-xs text-gray-400" data-testid="operator-queue-score">
+          <span class="text-xs text-gray-400 dark:text-zinc-500" data-testid="operator-queue-score">
             score: {@item.conversation.cached_score}
           </span>
         </div>
@@ -235,7 +235,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         <button
           phx-click="toggle_score"
           phx-value-id={@item.conversation.id}
-          class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
+          class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
           data-testid="operator-queue-score-toggle"
         >
           {if @show_score, do: "Hide score", else: "Why this rank?"}
@@ -245,14 +245,14 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           <button
             phx-click="toggle_snooze"
             phx-value-id={@item.conversation.id}
-            class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
+            class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
             data-testid="operator-queue-snooze-btn"
           >
             Snooze
           </button>
           <%= if @show_snooze do %>
             <div
-              class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-10 p-1"
+              class="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-10 p-1"
               data-testid="operator-queue-snooze-menu"
             >
               <%= for opt <- ["1h", "4h", "1d", "3d"] do %>
@@ -260,7 +260,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
                   phx-click="snooze"
                   phx-value-id={@item.conversation.id}
                   phx-value-duration={opt}
-                  class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 rounded"
+                  class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded"
                   data-testid={"operator-queue-snooze-opt-#{opt}"}
                 >
                   {opt}
@@ -284,9 +284,9 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     colors =
       case assigns.tier do
         :enterprise -> "text-purple-700 bg-purple-50"
-        :standard -> "text-gray-600 bg-gray-50"
-        :basic -> "text-gray-400 bg-gray-50"
-        _ -> "text-gray-600 bg-gray-50"
+        :standard -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
+        :basic -> "text-gray-400 dark:text-zinc-500 bg-gray-50 dark:bg-zinc-800"
+        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
       end
 
     assigns = assign(assigns, :colors, colors)
@@ -333,9 +333,9 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         :new -> "bg-blue-100 text-blue-800"
         :active -> "bg-green-100 text-green-800"
         :waiting -> "bg-yellow-100 text-yellow-800"
-        :dormant -> "bg-gray-100 text-gray-600"
-        :resolved -> "bg-gray-100 text-gray-400"
-        _ -> "bg-gray-100 text-gray-600"
+        :dormant -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
+        :resolved -> "bg-gray-100 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500"
+        _ -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
       end
 
     assigns = assign(assigns, :colors, colors)
@@ -392,18 +392,18 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     assigns = assign(assigns, :entries, entries) |> assign(:total, total)
 
     ~H"""
-    <div class="mt-2 p-2 bg-gray-50 rounded text-xs space-y-1" data-testid="operator-score-breakdown">
-      <div class="font-medium text-gray-700 mb-1">Score breakdown</div>
+    <div class="mt-2 p-2 bg-gray-50 dark:bg-zinc-800 rounded text-xs space-y-1" data-testid="operator-score-breakdown">
+      <div class="font-medium text-gray-700 dark:text-zinc-300 mb-1">Score breakdown</div>
       <%= for {key, val} <- @entries do %>
         <div class="flex items-center gap-2">
-          <span class="w-20 text-gray-500">{key}</span>
-          <div class="flex-1 bg-gray-200 rounded-full h-1.5">
+          <span class="w-20 text-gray-500 dark:text-zinc-400">{key}</span>
+          <div class="flex-1 bg-gray-200 dark:bg-zinc-600 rounded-full h-1.5">
             <div
               class="bg-indigo-400 h-1.5 rounded-full"
               style={"width: #{if @total > 0, do: (val / @total) * 100, else: 0}%"}
             />
           </div>
-          <span class="w-6 text-right text-gray-600">{val}</span>
+          <span class="w-6 text-right text-gray-600 dark:text-zinc-400">{val}</span>
         </div>
       <% end %>
     </div>
