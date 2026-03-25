@@ -20,7 +20,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   """
   def process(normalized, route_context \\ %{}) do
     with {:ok, org, contact} <- resolve_sender(normalized, route_context),
-         {:ok, conversation, is_new} <- find_or_create_conversation(normalized, org, contact, route_context) do
+         {:ok, conversation, is_new} <-
+           find_or_create_conversation(normalized, org, contact, route_context) do
       create_message(conversation, normalized)
       Scoring.calculate_and_cache(conversation.id)
 

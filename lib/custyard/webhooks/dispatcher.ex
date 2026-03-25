@@ -17,8 +17,6 @@ defmodule Custyard.Webhooks.Dispatcher do
   alias Custyard.{InboundRoute, Repo}
   alias Custyard.Webhooks.Purposes
 
-  require Logger
-
   @doc """
   Dispatch an incoming webhook through the route's registered purposes.
 
@@ -68,13 +66,9 @@ defmodule Custyard.Webhooks.Dispatcher do
     |> MapSet.new()
   end
 
-  defp run_sender_matching(normalized, route_context, enabled_purposes) do
-    if MapSet.member?(enabled_purposes, :sender_matching) do
-      Purposes.SenderMatching.process(normalized, route_context)
-    else
-      # Even without explicit sender_matching webhook, we need to create the conversation
-      Purposes.SenderMatching.process(normalized, route_context)
-    end
+  defp run_sender_matching(normalized, route_context, _enabled_purposes) do
+    # Always run sender matching — it's required to create the conversation
+    Purposes.SenderMatching.process(normalized, route_context)
   end
 
   defp run_async_purposes(conversation, normalized, route_context, enabled_purposes) do

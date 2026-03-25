@@ -27,8 +27,11 @@ defmodule Custyard.Webhooks.Adapter do
   The `conn` provides access to request headers for signature extraction.
   The `secret` is the shared secret configured for this webhook source.
   """
-  @callback verify_signature(payload :: map(), signature :: String.t() | nil, secret :: String.t()) ::
-              :ok | {:error, String.t()}
+  @callback verify_signature(
+              payload :: map(),
+              signature :: String.t() | nil,
+              secret :: String.t()
+            ) :: :ok | {:error, String.t()}
 
   @doc """
   Normalize the source-specific payload into the unified message format.

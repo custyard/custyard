@@ -17,7 +17,12 @@ defmodule Custyard.Webhooks.Adapters.Slack do
     # Slack uses "v0=hmac" format with a timestamp-prefixed body
     # For simplicity, we verify the HMAC portion against the raw body
     body = if is_binary(payload), do: payload, else: Jason.encode!(payload)
-    expected = "v0=" <> (:crypto.mac(:hmac, :sha256, secret, "v0:0:#{body}") |> Base.encode16(case: :lower))
+
+    hmac =
+      :crypto.mac(:hmac, :sha256, secret, "v0:0:#{body}")
+      |> Base.encode16(case: :lower)
+
+    expected = "v0=" <> hmac
 
     if Plug.Crypto.secure_compare(expected, String.downcase(signature)) do
       :ok

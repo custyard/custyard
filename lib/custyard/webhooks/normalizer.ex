@@ -27,7 +27,6 @@ defmodule Custyard.Webhooks.Normalizer do
   endpoint that predates the routed webhook system.
   """
   def normalize_legacy(params) do
-    alias Custyard.Webhooks.Adapters.Lettermint
-    Lettermint.normalize(params)
+    Custyard.Webhooks.Adapters.Lettermint.normalize(params)
   end
 end
