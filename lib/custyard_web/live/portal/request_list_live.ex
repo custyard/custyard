@@ -198,5 +198,4 @@ defmodule CustyardWeb.Portal.RequestListLive do
   else
     defp maybe_impersonate_contact(_params, _org_id), do: {nil, false}
   end
-
 end
