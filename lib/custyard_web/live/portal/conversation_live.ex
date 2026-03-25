@@ -75,13 +75,15 @@ defmodule CustyardWeb.Portal.ConversationLive do
         "conversation:#{conv.id}",
         {:message_added, conv.id}
       )
-    end
 
-    {:noreply,
-     socket
-     |> assign(:reply_form, to_form(%{"body" => ""}))
-     |> assign(:conversation, Conversations.reload!(conv))
-     |> load_messages()}
+      {:noreply,
+       socket
+       |> assign(:reply_form, to_form(%{"body" => ""}))
+       |> assign(:conversation, Conversations.reload!(conv))
+       |> load_messages()}
+    else
+      {:noreply, put_flash(socket, :error, "Reply cannot be empty")}
+    end
   end
 
   @impl true

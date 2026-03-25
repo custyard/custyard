@@ -1,12 +1,12 @@
 defmodule CustyardWeb.Portal.ProjectLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Projects, Repo}
+  alias Custyard.Projects
   alias CustyardWeb.Portal.Helpers
 
   @impl true
-  def mount(%{"org_token" => token, "id" => id}, _session, socket) do
-    org = Repo.get_by!(Custyard.Organization, token: token)
+  def mount(%{"id" => id} = params, _session, socket) do
+    org = Helpers.get_organization(params, socket)
 
     socket =
       socket

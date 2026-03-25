@@ -81,23 +81,38 @@ defmodule CustyardWeb.Operator.SettingsLive do
         ]
       }
 
-    # Convert to tuple format for update_thresholds
-    thresholds_tuples =
+    # Validate that warning < critical for each tier
+    invalid_tiers =
       thresholds
-      |> Enum.map(fn {tier, [w, c]} -> {String.to_atom(tier), {w, c}} end)
-      |> Map.new()
+      |> Enum.filter(fn {_tier, [warning, critical]} -> warning >= critical end)
+      |> Enum.map(fn {tier, _} -> tier end)
 
-    case Settings.update_thresholds(thresholds_tuples) do
-      {:ok, _settings} ->
-        {:noreply,
-         socket
-         |> assign(:thresholds, thresholds)
-         |> assign(:editing_thresholds, false)
-         |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
-         |> put_flash(:info, "Thresholds updated successfully")}
+    if invalid_tiers != [] do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "Warning threshold must be less than critical threshold for: #{Enum.join(invalid_tiers, ", ")}"
+       )}
+    else
+      # Convert to tuple format for update_thresholds
+      thresholds_tuples =
+        thresholds
+        |> Enum.map(fn {tier, [w, c]} -> {String.to_atom(tier), {w, c}} end)
+        |> Map.new()
 
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to update thresholds")}
+      case Settings.update_thresholds(thresholds_tuples) do
+        {:ok, _settings} ->
+          {:noreply,
+           socket
+           |> assign(:thresholds, thresholds)
+           |> assign(:editing_thresholds, false)
+           |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
+           |> put_flash(:info, "Thresholds updated successfully")}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to update thresholds")}
+      end
     end
   end
 
@@ -134,8 +149,6 @@ defmodule CustyardWeb.Operator.SettingsLive do
       <h1 class="text-lg font-semibold text-gray-900 mb-6" data-testid="operator-settings-heading">
         Settings
       </h1>
-
-      <.flash_group flash={@flash} />
 
       <div
         class="bg-white border border-gray-200 rounded-lg p-4 mb-4"

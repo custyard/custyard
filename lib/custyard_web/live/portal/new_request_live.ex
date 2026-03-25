@@ -16,8 +16,11 @@ defmodule CustyardWeb.Portal.NewRequestLive do
      |> assign(:form, to_form(%{"subject" => "", "body" => "", "urgency" => "normal"}))}
   end
 
+  @allowed_urgencies ~w(normal elevated urgent)
+
   @impl true
-  def handle_event("submit", params, socket) do
+  def handle_event("submit", %{"urgency" => urgency} = params, socket)
+      when urgency in @allowed_urgencies do
     org = socket.assigns.org
     portal_path = socket.assigns.portal_path
 
@@ -27,7 +30,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         organization_id: org.id,
         subject: params["subject"],
         state: :new,
-        urgency: String.to_existing_atom(params["urgency"]),
+        urgency: String.to_existing_atom(urgency),
         last_customer_action_at: DateTime.utc_now()
       })
       |> Repo.insert()
@@ -46,6 +49,10 @@ defmodule CustyardWeb.Portal.NewRequestLive do
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_created, conv.id})
 
     {:noreply, push_navigate(socket, to: "#{portal_path}/request/#{conv.id}")}
+  end
+
+  def handle_event("submit", _params, socket) do
+    {:noreply, put_flash(socket, :error, "Invalid urgency value")}
   end
 
   @impl true

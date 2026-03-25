@@ -21,6 +21,7 @@ defmodule CustyardWeb.Operator.SessionController do
       operator ->
         if OperatorAccount.verify_password(operator, password) do
           conn
+          |> configure_session(renew: true)
           |> put_session(:operator_id, operator.id)
           |> put_flash(:info, "Welcome back")
           |> redirect(to: ~p"/operator")
