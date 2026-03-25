@@ -40,7 +40,6 @@ defmodule CustyardWeb.Router do
 
     get "/login", SessionController, :new
     post "/login", SessionController, :create
-    get "/logout", SessionController, :delete
     delete "/logout", SessionController, :delete
   end
 
