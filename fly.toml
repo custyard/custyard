@@ -21,8 +21,8 @@ primary_region = "iad"
 
   [http_service.concurrency]
     type = "connections"
-    hard_limit = 1000
-    soft_limit = 800
+    hard_limit = 200
+    soft_limit = 150
 
 [[vm]]
   size = "shared-cpu-1x"

@@ -16,12 +16,12 @@ Deploy Custyard to [Fly.io](https://fly.io) with SQLite persistent storage.
 fly launch --no-deploy
 
 # Create a persistent volume for SQLite (pick the same region as your app)
-fly volumes create custyard_data --region iad --size 1
+fly volumes create custyard_data --region <your-region> --size 1
 
 # Set required secrets
 fly secrets set \
   SECRET_KEY_BASE=$(mix phx.gen.secret) \
-  OPERATOR_PASSWORD="your-secure-password"
+  OPERATOR_PASSWORD="<GENERATE_A_STRONG_PASSWORD>"
 
 # Deploy
 fly deploy
@@ -120,10 +120,10 @@ See [fly deploy docs](https://fly.io/docs/launch/deploy/).
 ## Custom domain
 
 ```bash
-fly certs add custyard.example.com
+fly certs add <your-domain.com>
 ```
 
-Then create a CNAME record pointing `custyard.example.com` to `<app-name>.fly.dev`. Update `PHX_HOST` in `fly.toml` to match. See [custom domains docs](https://fly.io/docs/networking/custom-domain/).
+Then create a CNAME record pointing your domain to `<app-name>.fly.dev`. Update `PHX_HOST` in `fly.toml` to match. See [custom domains docs](https://fly.io/docs/networking/custom-domain/).
 
 ## Volumes and backups
 
