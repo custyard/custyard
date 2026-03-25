@@ -32,6 +32,7 @@ defmodule Custyard.Message do
       :conversation_id
     ])
     |> validate_required([:source, :body, :conversation_id])
+    |> validate_length(:body, max: 100_000)
     |> validate_inclusion(:source, @sources)
     |> foreign_key_constraint(:conversation_id)
   end

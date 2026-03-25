@@ -36,7 +36,7 @@ defmodule Custyard.Application do
 
   defp maybe_add_scheduler(children) do
     if Application.get_env(:custyard, :start_scheduler, true) do
-      [Custyard.Scoring.Scheduler | children]
+      children ++ [Custyard.Scoring.Scheduler]
     else
       children
     end
@@ -58,7 +58,7 @@ defmodule Custyard.Application do
         max_received_count: max_received_count
       ]
 
-      [{Custyard.Email.LMTPServer, opts} | children]
+      children ++ [{Custyard.Email.LMTPServer, opts}]
     else
       children
     end
@@ -78,7 +78,7 @@ defmodule Custyard.Application do
         ssl: Keyword.get(imap_config, :ssl, true)
       ]
 
-      [{Custyard.Email.ImapPoller, opts} | children]
+      children ++ [{Custyard.Email.ImapPoller, opts}]
     else
       children
     end

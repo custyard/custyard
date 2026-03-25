@@ -55,7 +55,7 @@ defmodule Custyard.Scoring do
 
   @doc "Calculate score without caching (for display/debugging)"
   def calculate(conversation) do
-    conversation = Repo.preload(conversation, :organization)
+    conversation = ensure_preloaded(conversation, :organization)
     weights = get_weights()
 
     idle = idle_score(conversation) * weights.idle
@@ -70,7 +70,7 @@ defmodule Custyard.Scoring do
 
   @doc "Get score breakdown for transparency UI"
   def breakdown(conversation) do
-    conversation = Repo.preload(conversation, :organization)
+    conversation = ensure_preloaded(conversation, :organization)
 
     %{
       idle: round(idle_score(conversation)),
@@ -85,7 +85,7 @@ defmodule Custyard.Scoring do
 
   @doc "Get neglect status for a conversation"
   def neglect_status(conversation) do
-    conversation = Repo.preload(conversation, :organization)
+    conversation = ensure_preloaded(conversation, :organization)
     hours_idle = hours_since_operator_action(conversation)
     tier = conversation.organization.tier
     thresholds = get_neglect_thresholds()
@@ -165,5 +165,13 @@ defmodule Custyard.Scoring do
     Settings.get_neglect_thresholds()
   rescue
     _ -> @default_neglect_thresholds
+  end
+
+  defp ensure_preloaded(struct, assoc) do
+    if Ecto.assoc_loaded?(Map.get(struct, assoc)) do
+      struct
+    else
+      Repo.preload(struct, assoc)
+    end
   end
 end

@@ -37,26 +37,27 @@ defmodule Custyard.Conversations.DormancyChecker do
   Query conversations in :waiting state that have exceeded their dormancy threshold.
   """
   def stale_conversations do
-    now = DateTime.utc_now()
+    enterprise_cutoff = hours_ago(@dormancy_thresholds.enterprise)
+    standard_cutoff = hours_ago(@dormancy_thresholds.standard)
+    basic_cutoff = hours_ago(@dormancy_thresholds.basic)
 
     from(c in Conversation,
       join: o in assoc(c, :organization),
       where: c.state == :waiting,
-      select: {c, o.tier}
+      where:
+        (o.tier == :enterprise and
+           coalesce(c.last_customer_action_at, c.inserted_at) <= ^enterprise_cutoff) or
+          (o.tier == :standard and
+             coalesce(c.last_customer_action_at, c.inserted_at) <= ^standard_cutoff) or
+          (o.tier == :basic and
+             coalesce(c.last_customer_action_at, c.inserted_at) <= ^basic_cutoff),
+      select: c
     )
     |> Repo.all()
-    |> Enum.filter(fn {conversation, tier} ->
-      exceeds_dormancy_threshold?(conversation, tier, now)
-    end)
-    |> Enum.map(fn {conversation, _tier} -> conversation end)
   end
 
-  defp exceeds_dormancy_threshold?(conversation, tier, now) do
-    threshold_hours = Map.get(@dormancy_thresholds, tier, 48)
-    reference_time = conversation.last_customer_action_at || conversation.inserted_at
-    hours_idle = DateTime.diff(now, reference_time, :hour)
-
-    hours_idle >= threshold_hours
+  defp hours_ago(hours) do
+    DateTime.add(DateTime.utc_now(), -hours, :hour)
   end
 
   defp transition_to_dormant(conversation) do
@@ -67,6 +68,12 @@ defmodule Custyard.Conversations.DormancyChecker do
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
           "conversations",
+          {:conversation_updated, updated.id}
+        )
+
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversations:org:#{updated.organization_id}",
           {:conversation_updated, updated.id}
         )
 

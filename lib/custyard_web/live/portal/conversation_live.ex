@@ -2,17 +2,12 @@ defmodule CustyardWeb.Portal.ConversationLive do
   use CustyardWeb, :live_view
 
   alias Custyard.{Conversations, Scoring}
-  alias CustyardWeb.Portal.Helpers
 
   @impl true
   def mount(params, _session, socket) do
-    org = Helpers.get_organization(params, socket)
+    # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
+    org = socket.assigns.current_org
     id = params["id"]
-
-    socket =
-      socket
-      |> assign(:org, org)
-      |> Helpers.assign_portal_path()
 
     case Conversations.get_conversation_for_organization(id, org.id) do
       {:error, _} ->
@@ -48,45 +43,73 @@ defmodule CustyardWeb.Portal.ConversationLive do
   @impl true
   def handle_event("submit_reply", %{"body" => body}, socket) do
     conv = socket.assigns.conversation
-    org = socket.assigns.org
+    org = socket.assigns.current_org
 
+    # Re-verify the conversation still belongs to this organization
+    case Conversations.get_conversation_for_organization(conv.id, org.id) do
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "This conversation is no longer accessible")
+         |> push_navigate(to: socket.assigns.portal_home_path)}
+
+      {:ok, conv} ->
+        submit_reply(socket, conv, org, body)
+    end
+  end
+
+  defp submit_reply(socket, conv, org, body) do
     if String.trim(body) != "" do
+      sender_email = "portal@#{org.domain || "portal"}"
+
       Conversations.create_message!(%{
         conversation_id: conv.id,
         source: :portal,
-        sender_email: "portal@#{org.domain}",
+        sender_email: sender_email,
         body: body,
         is_internal_note: false
       })
 
-      # Update conversation timestamps and maybe reactivate
+      # Update conversation timestamps and reactivate if needed, in a single write
       now = DateTime.utc_now() |> DateTime.truncate(:second)
-      {:ok, _} = Conversations.update_conversation(conv, last_customer_action_at: now)
 
-      if conv.state in [:waiting, :dormant, :resolved] do
-        {:ok, _} = Conversations.update_state(conv, :active)
-      end
+      update_attrs =
+        if conv.state in [:waiting, :dormant, :resolved] do
+          [last_customer_action_at: now, state: :active]
+        else
+          [last_customer_action_at: now]
+        end
+
+      {:ok, _} = Conversations.update_conversation(conv, update_attrs)
 
       Scoring.calculate_and_cache(conv.id)
       Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conv.id})
 
       Phoenix.PubSub.broadcast(
         Custyard.PubSub,
+        "conversations:org:#{conv.organization_id}",
+        {:conversation_updated, conv.id}
+      )
+
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
         "conversation:#{conv.id}",
         {:message_added, conv.id}
       )
-    end
 
-    {:noreply,
-     socket
-     |> assign(:reply_form, to_form(%{"body" => ""}))
-     |> assign(:conversation, Conversations.reload!(conv))
-     |> load_messages()}
+      {:noreply,
+       socket
+       |> assign(:reply_form, to_form(%{"body" => ""}))
+       |> assign(:conversation, Conversations.reload!(conv))
+       |> load_messages()}
+    else
+      {:noreply, put_flash(socket, :error, "Reply cannot be empty")}
+    end
   end
 
   @impl true
   def handle_info({:message_added, _}, socket) do
-    {:noreply, load_messages(socket)}
+    {:noreply, socket |> load_messages() |> load_tasks()}
   end
 
   @impl true
@@ -101,38 +124,43 @@ defmodule CustyardWeb.Portal.ConversationLive do
         &#8592; Back to requests
       </.link>
 
-      <h1 class="text-2xl font-semibold text-gray-900 mb-6" data-testid="portal-conversation-subject">
+      <h1
+        class="text-2xl font-semibold text-gray-900 dark:text-zinc-100 mb-6"
+        data-testid="portal-conversation-subject"
+      >
         {@conversation.subject}
       </h1>
 
       <div class="space-y-4 mb-8" data-testid="portal-messages">
-        <%= for msg <- @messages do %>
-          <div
-            class={"p-4 rounded-lg #{message_style(msg)}"}
-            data-testid={"portal-message-#{msg.source}"}
-          >
-            <div class="flex justify-between text-sm text-gray-500 mb-2">
-              <span data-testid="portal-message-sender">{msg.sender_email}</span>
-              <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
-            </div>
-            <div class="text-gray-900 whitespace-pre-wrap" data-testid="portal-message-body">
-              {msg.body}
-            </div>
+        <div
+          :for={msg <- @messages}
+          class={"p-4 rounded-lg #{message_style(msg)}"}
+          data-testid={"portal-message-#{msg.source}"}
+        >
+          <div class="flex justify-between text-sm text-gray-500 dark:text-zinc-400 mb-2">
+            <span data-testid="portal-message-sender">{msg.sender_email}</span>
+            <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
           </div>
-        <% end %>
+          <div
+            class="text-gray-900 dark:text-zinc-100 whitespace-pre-wrap"
+            data-testid="portal-message-body"
+          >
+            {msg.body}
+          </div>
+        </div>
       </div>
 
       <.tasks_section tasks={@tasks} />
 
       <form
         phx-submit="submit_reply"
-        class="bg-white border rounded-lg p-4"
+        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
         data-testid="portal-reply-form"
       >
         <textarea
           name="body"
           rows="4"
-          class="w-full border-gray-300 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
+          class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
           placeholder="Write a reply..."
           data-testid="portal-reply-textarea"
         >{@reply_form[:body].value}</textarea>
@@ -155,21 +183,31 @@ defmodule CustyardWeb.Portal.ConversationLive do
   defp tasks_section(assigns) do
     ~H"""
     <div :if={@tasks != []} class="mb-8" data-testid="portal-tasks-section">
-      <h2 class="text-lg font-semibold text-gray-900 mb-3" data-testid="portal-tasks-heading">
+      <h2
+        class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-3"
+        data-testid="portal-tasks-heading"
+      >
         Tasks
       </h2>
-      <div class="bg-white border rounded-lg divide-y" data-testid="portal-tasks-list">
-        <%= for task <- @tasks do %>
-          <div class="p-3 flex items-center gap-3" data-testid="portal-task-item">
-            <.task_state_badge state={task.state} />
-            <div class="flex-1">
-              <div class="text-gray-900" data-testid="portal-task-title">{task.title}</div>
-              <div :if={task.due_at} class="text-sm text-gray-500" data-testid="portal-task-due">
-                Due: {format_due_at(task.due_at)}
-              </div>
+      <div
+        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg divide-y dark:divide-zinc-700"
+        data-testid="portal-tasks-list"
+      >
+        <div :for={task <- @tasks} class="p-3 flex items-center gap-3" data-testid="portal-task-item">
+          <.task_state_badge state={task.state} />
+          <div class="flex-1">
+            <div class="text-gray-900 dark:text-zinc-100" data-testid="portal-task-title">
+              {task.title}
+            </div>
+            <div
+              :if={task.due_at}
+              class="text-sm text-gray-500 dark:text-zinc-400"
+              data-testid="portal-task-due"
+            >
+              Due: {format_due_at(task.due_at)}
             </div>
           </div>
-        <% end %>
+        </div>
       </div>
     </div>
     """
@@ -182,8 +220,8 @@ defmodule CustyardWeb.Portal.ConversationLive do
       case assigns.state do
         :done -> {"bg-green-100", "text-green-800", "Done"}
         :in_progress -> {"bg-blue-100", "text-blue-800", "In Progress"}
-        :open -> {"bg-gray-100", "text-gray-600", "Open"}
-        _ -> {"bg-gray-100", "text-gray-600", "Open"}
+        :open -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
+        _ -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
       end
 
     assigns =
@@ -206,7 +244,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
     if msg.source == :operator do
       "bg-indigo-50 border-l-4 border-indigo-400"
     else
-      "bg-gray-50"
+      "bg-gray-50 dark:bg-zinc-800"
     end
   end
 

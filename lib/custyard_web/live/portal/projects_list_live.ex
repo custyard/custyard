@@ -1,23 +1,20 @@
 defmodule CustyardWeb.Portal.ProjectsListLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Projects, Repo}
-  alias CustyardWeb.Portal.Helpers
+  alias Custyard.Projects
 
   @impl true
-  def mount(%{"org_token" => token}, _session, socket) do
-    org = Repo.get_by!(Custyard.Organization, token: token)
+  def mount(_params, _session, socket) do
+    # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
 
     {:ok,
      socket
-     |> assign(:org, org)
-     |> Helpers.assign_portal_path()
      |> assign(:page_title, "Projects")
      |> load_projects()}
   end
 
   defp load_projects(socket) do
-    org = socket.assigns.org
+    org = socket.assigns.current_org
     projects = Projects.list_portal_visible(org.id)
     assign(socket, :projects, projects)
   end
@@ -28,10 +25,13 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
     <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-projects-list">
       <div class="flex justify-between items-center mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-gray-900" data-testid="portal-projects-heading">
+          <h1
+            class="text-2xl font-semibold text-gray-900 dark:text-zinc-100"
+            data-testid="portal-projects-heading"
+          >
             Projects
           </h1>
-          <p class="text-sm text-gray-500 mt-1">
+          <p class="text-sm text-gray-500 dark:text-zinc-400 mt-1">
             Active projects and their progress
           </p>
         </div>
@@ -51,15 +51,18 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
           class="block"
           data-testid={"portal-project-item-#{project.id}"}
         >
-          <div class="bg-white border rounded-lg p-4 hover:border-indigo-300 transition">
+          <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 hover:border-indigo-300 transition">
             <div class="flex justify-between items-start mb-3">
               <div>
-                <h3 class="font-medium text-gray-900" data-testid="portal-project-title">
+                <h3
+                  class="font-medium text-gray-900 dark:text-zinc-100"
+                  data-testid="portal-project-title"
+                >
                   {project.title}
                 </h3>
                 <p
                   :if={project.description}
-                  class="text-sm text-gray-500 mt-1 line-clamp-2"
+                  class="text-sm text-gray-500 dark:text-zinc-400 mt-1 line-clamp-2"
                   data-testid="portal-project-description"
                 >
                   {project.description}
@@ -69,7 +72,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
             </div>
 
             <div
-              class="flex items-center gap-4 text-sm text-gray-500"
+              class="flex items-center gap-4 text-sm text-gray-500 dark:text-zinc-400"
               data-testid="portal-project-dates"
             >
               <span :if={project.start_date}>
@@ -86,7 +89,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
 
         <div
           :if={@projects == []}
-          class="text-center py-12 text-gray-500"
+          class="text-center py-12 text-gray-500 dark:text-zinc-400"
           data-testid="portal-empty-state"
         >
           No active projects at this time.
@@ -100,7 +103,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
 
   defp progress_badge(assigns) do
     ~H"""
-    <span class="text-sm text-gray-600" data-testid="portal-progress-badge">
+    <span class="text-sm text-gray-600 dark:text-zinc-400" data-testid="portal-progress-badge">
       {@progress.done}/{@progress.total} tasks
     </span>
     """
@@ -111,11 +114,11 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
   defp progress_bar(assigns) do
     ~H"""
     <div class="mt-3" data-testid="portal-progress-bar">
-      <div class="flex justify-between text-xs text-gray-500 mb-1">
+      <div class="flex justify-between text-xs text-gray-500 dark:text-zinc-400 mb-1">
         <span>Progress</span>
         <span>{@progress.percentage}%</span>
       </div>
-      <div class="w-full bg-gray-200 rounded-full h-2">
+      <div class="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2">
         <div
           class="bg-indigo-600 h-2 rounded-full transition-all duration-300"
           style={"width: #{@progress.percentage}%"}

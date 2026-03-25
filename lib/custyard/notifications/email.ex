@@ -12,6 +12,8 @@ defmodule Custyard.Notifications.Email do
   See: https://hexdocs.pm/swoosh/readme.html
   """
 
+  alias Phoenix.HTML.Engine, as: HTMLEngine
+
   require Logger
 
   @doc """
@@ -70,6 +72,10 @@ defmodule Custyard.Notifications.Email do
   end
 
   defp neglect_alert_html(conversation, level) do
+    safe_subject = html_escape(conversation.subject)
+    safe_org_name = html_escape(conversation.organization.name)
+    safe_contact = html_escape(contact_display(conversation.contact))
+
     """
     <html>
     <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
@@ -77,9 +83,9 @@ defmodule Custyard.Notifications.Email do
         <h2 style="margin: 0;">#{String.upcase(to_string(level))} Neglect Alert</h2>
       </div>
       <div style="padding: 16px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
-        <p><strong>Conversation:</strong> #{conversation.subject}</p>
-        <p><strong>Organization:</strong> #{conversation.organization.name}</p>
-        <p><strong>Contact:</strong> #{contact_display(conversation.contact)}</p>
+        <p><strong>Conversation:</strong> #{safe_subject}</p>
+        <p><strong>Organization:</strong> #{safe_org_name}</p>
+        <p><strong>Contact:</strong> #{safe_contact}</p>
         <p><strong>Last activity:</strong> #{format_datetime(conversation.updated_at)}</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
         <p style="color: #6b7280; font-size: 14px;">
@@ -113,4 +119,12 @@ defmodule Custyard.Notifications.Email do
 
   defp contact_display(nil), do: "Unknown"
   defp contact_display(contact), do: contact.name || contact.email
+
+  defp html_escape(value) when is_binary(value) do
+    value
+    |> HTMLEngine.html_escape()
+    |> IO.iodata_to_binary()
+  end
+
+  defp html_escape(nil), do: ""
 end

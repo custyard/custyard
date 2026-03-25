@@ -81,23 +81,38 @@ defmodule CustyardWeb.Operator.SettingsLive do
         ]
       }
 
-    # Convert to tuple format for update_thresholds
-    thresholds_tuples =
+    # Validate that warning < critical for each tier
+    invalid_tiers =
       thresholds
-      |> Enum.map(fn {tier, [w, c]} -> {String.to_atom(tier), {w, c}} end)
-      |> Map.new()
+      |> Enum.filter(fn {_tier, [warning, critical]} -> warning >= critical end)
+      |> Enum.map(fn {tier, _} -> tier end)
 
-    case Settings.update_thresholds(thresholds_tuples) do
-      {:ok, _settings} ->
-        {:noreply,
-         socket
-         |> assign(:thresholds, thresholds)
-         |> assign(:editing_thresholds, false)
-         |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
-         |> put_flash(:info, "Thresholds updated successfully")}
+    if invalid_tiers != [] do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "Warning threshold must be less than critical threshold for: #{Enum.join(invalid_tiers, ", ")}"
+       )}
+    else
+      # Convert to tuple format for update_thresholds
+      thresholds_tuples =
+        thresholds
+        |> Enum.map(fn {tier, [w, c]} -> {String.to_existing_atom(tier), {w, c}} end)
+        |> Map.new()
 
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to update thresholds")}
+      case Settings.update_thresholds(thresholds_tuples) do
+        {:ok, _settings} ->
+          {:noreply,
+           socket
+           |> assign(:thresholds, thresholds)
+           |> assign(:editing_thresholds, false)
+           |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
+           |> put_flash(:info, "Thresholds updated successfully")}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to update thresholds")}
+      end
     end
   end
 
@@ -131,18 +146,19 @@ defmodule CustyardWeb.Operator.SettingsLive do
   def render(assigns) do
     ~H"""
     <div class="max-w-2xl mx-auto p-4" data-testid="operator-settings-page">
-      <h1 class="text-lg font-semibold text-gray-900 mb-6" data-testid="operator-settings-heading">
+      <h1
+        class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-6"
+        data-testid="operator-settings-heading"
+      >
         Settings
       </h1>
 
-      <.flash_group flash={@flash} />
-
       <div
-        class="bg-white border border-gray-200 rounded-lg p-4 mb-4"
+        class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 mb-4"
         data-testid="operator-settings-weights"
       >
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-semibold text-gray-900">Score Weights</h2>
+          <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">Score Weights</h2>
           <button
             :if={not @editing_weights}
             phx-click="edit_weights"
@@ -152,7 +168,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
             Edit
           </button>
         </div>
-        <p class="text-xs text-gray-500 mb-4">
+        <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
           These weights affect how conversations are ranked in the attention queue.
           Higher weights give more importance to that factor.
         </p>
@@ -163,8 +179,8 @@ defmodule CustyardWeb.Operator.SettingsLive do
             class="flex items-center justify-between"
             data-testid={"operator-settings-weight-#{key}"}
           >
-            <span class="text-sm text-gray-700 capitalize">{key}</span>
-            <span class="text-sm font-mono text-gray-600 bg-gray-50 px-2 py-1 rounded">
+            <span class="text-sm text-gray-700 dark:text-zinc-300 capitalize">{key}</span>
+            <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded">
               {value}
             </span>
           </div>
@@ -177,7 +193,9 @@ defmodule CustyardWeb.Operator.SettingsLive do
           data-testid="operator-settings-weights-form"
         >
           <div :for={{key, value} <- @weights} class="flex items-center justify-between">
-            <label class="text-sm text-gray-700 capitalize" for={"weights_#{key}"}>{key}</label>
+            <label class="text-sm text-gray-700 dark:text-zinc-300 capitalize" for={"weights_#{key}"}>
+              {key}
+            </label>
             <input
               type="number"
               step="0.1"
@@ -186,14 +204,14 @@ defmodule CustyardWeb.Operator.SettingsLive do
               name={"weights[#{key}]"}
               id={"weights_#{key}"}
               value={value}
-              class="w-20 text-sm font-mono text-gray-600 bg-gray-50 px-2 py-1 rounded border border-gray-300 focus:ring-blue-500 focus:border-blue-500"
+              class="w-20 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
-          <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100">
+          <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-zinc-700">
             <button
               type="button"
               phx-click="cancel_weights"
-              class="text-xs text-gray-600 hover:text-gray-800 px-3 py-1"
+              class="text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200 px-3 py-1"
               data-testid="operator-settings-cancel-weights"
             >
               Cancel
@@ -210,11 +228,11 @@ defmodule CustyardWeb.Operator.SettingsLive do
       </div>
 
       <div
-        class="bg-white border border-gray-200 rounded-lg p-4 mb-4"
+        class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 mb-4"
         data-testid="operator-settings-thresholds"
       >
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-semibold text-gray-900">Neglect Thresholds</h2>
+          <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">Neglect Thresholds</h2>
           <button
             :if={not @editing_thresholds}
             phx-click="edit_thresholds"
@@ -224,7 +242,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
             Edit
           </button>
         </div>
-        <p class="text-xs text-gray-500 mb-4">
+        <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
           Hours without operator action before conversations are flagged.
           (warning, critical) by tier.
         </p>
@@ -235,7 +253,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
             class="flex items-center justify-between"
             data-testid={"operator-settings-threshold-#{tier}"}
           >
-            <span class="text-sm text-gray-700 capitalize">{tier}</span>
+            <span class="text-sm text-gray-700 dark:text-zinc-300 capitalize">{tier}</span>
             <div class="flex items-center gap-2">
               <span class="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
                 {warning}h warning
@@ -257,35 +275,48 @@ defmodule CustyardWeb.Operator.SettingsLive do
             :for={{tier, [warning, critical]} <- @thresholds}
             class="flex items-center justify-between"
           >
-            <span class="text-sm text-gray-700 capitalize">{tier}</span>
+            <span
+              class="text-sm text-gray-700 dark:text-zinc-300 capitalize"
+              id={"thresholds-#{tier}-label"}
+            >
+              {tier}
+            </span>
             <div class="flex items-center gap-2">
               <div class="flex items-center gap-1">
+                <label for={"thresholds_#{tier}_warning"} class="sr-only">
+                  {tier} warning threshold (hours)
+                </label>
                 <input
                   type="number"
                   min="1"
+                  id={"thresholds_#{tier}_warning"}
                   name={"thresholds[#{tier}_warning]"}
                   value={warning}
                   class="w-16 text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200 focus:ring-amber-500 focus:border-amber-500"
                 />
-                <span class="text-xs text-gray-500">h</span>
+                <span class="text-xs text-gray-500 dark:text-zinc-400">h</span>
               </div>
               <div class="flex items-center gap-1">
+                <label for={"thresholds_#{tier}_critical"} class="sr-only">
+                  {tier} critical threshold (hours)
+                </label>
                 <input
                   type="number"
                   min="1"
+                  id={"thresholds_#{tier}_critical"}
                   name={"thresholds[#{tier}_critical]"}
                   value={critical}
                   class="w-16 text-xs text-red-600 bg-red-50 px-2 py-1 rounded border border-red-200 focus:ring-red-500 focus:border-red-500"
                 />
-                <span class="text-xs text-gray-500">h</span>
+                <span class="text-xs text-gray-500 dark:text-zinc-400">h</span>
               </div>
             </div>
           </div>
-          <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100">
+          <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-zinc-700">
             <button
               type="button"
               phx-click="cancel_thresholds"
-              class="text-xs text-gray-600 hover:text-gray-800 px-3 py-1"
+              class="text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200 px-3 py-1"
               data-testid="operator-settings-cancel-thresholds"
             >
               Cancel
@@ -302,15 +333,15 @@ defmodule CustyardWeb.Operator.SettingsLive do
       </div>
 
       <div
-        class="bg-white border border-gray-200 rounded-lg p-4"
+        class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4"
         data-testid="operator-settings-score-calc"
       >
-        <h2 class="text-sm font-semibold text-gray-900 mb-4">Score Calculation</h2>
-        <p class="text-xs text-gray-500 mb-2">
+        <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100 mb-4">Score Calculation</h2>
+        <p class="text-xs text-gray-500 dark:text-zinc-400 mb-2">
           The attention score is calculated as:
         </p>
         <pre
-          class="text-xs text-gray-600 bg-gray-50 p-3 rounded overflow-x-auto"
+          class="text-xs text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 p-3 rounded overflow-x-auto"
           data-testid="operator-settings-formula"
         >
           Score = (idle_weight * idle_score) +
@@ -321,7 +352,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
                   (neglect_weight * neglect_bonus)
         </pre>
 
-        <div class="mt-4 space-y-2 text-xs text-gray-500">
+        <div class="mt-4 space-y-2 text-xs text-gray-500 dark:text-zinc-400">
           <div><strong>idle_score:</strong> ln(hours + 1) * 10, capped at 40</div>
           <div><strong>state_score:</strong> new=30, dormant=25, active=15, waiting/resolved=0</div>
           <div><strong>tier_score:</strong> enterprise=20, standard=10, basic=5</div>
