@@ -2,11 +2,10 @@ defmodule CustyardWeb.Portal.RequestListLive do
   use CustyardWeb, :live_view
 
   alias Custyard.Conversations
-  alias CustyardWeb.Portal.Helpers
 
   @impl true
-  def mount(params, _session, socket) do
-    org = Helpers.get_organization(params, socket)
+  def mount(_params, _session, socket) do
+    # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
@@ -14,8 +13,6 @@ defmodule CustyardWeb.Portal.RequestListLive do
 
     {:ok,
      socket
-     |> assign(:org, org)
-     |> Helpers.assign_portal_path()
      |> assign(:current_contact, nil)
      |> assign(:admin_mode, false)
      |> assign(:page_title, "My Requests")}
@@ -25,7 +22,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
   def handle_params(params, _uri, socket) do
     # Allow simulating a contact via ?as=<contact_id> for testing
     # Only enabled in dev/test environments via config
-    {contact, admin_mode} = maybe_impersonate_contact(params, socket.assigns.org.id)
+    {contact, admin_mode} = maybe_impersonate_contact(params, socket.assigns.current_org.id)
 
     {:noreply,
      socket
@@ -61,7 +58,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
   end
 
   defp load_conversations(socket) do
-    org = socket.assigns.org
+    org = socket.assigns.current_org
     contact = socket.assigns.current_contact
     admin_mode = socket.assigns.admin_mode
 
@@ -201,4 +198,5 @@ defmodule CustyardWeb.Portal.RequestListLive do
   else
     defp maybe_impersonate_contact(_params, _org_id), do: {nil, false}
   end
+
 end

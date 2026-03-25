@@ -2,17 +2,12 @@ defmodule CustyardWeb.Portal.ConversationLive do
   use CustyardWeb, :live_view
 
   alias Custyard.{Conversations, Scoring}
-  alias CustyardWeb.Portal.Helpers
 
   @impl true
   def mount(params, _session, socket) do
-    org = Helpers.get_organization(params, socket)
+    # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
+    org = socket.assigns.current_org
     id = params["id"]
-
-    socket =
-      socket
-      |> assign(:org, org)
-      |> Helpers.assign_portal_path()
 
     case Conversations.get_conversation_for_organization(id, org.id) do
       {:error, _} ->
@@ -48,7 +43,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
   @impl true
   def handle_event("submit_reply", %{"body" => body}, socket) do
     conv = socket.assigns.conversation
-    org = socket.assigns.org
+    org = socket.assigns.current_org
 
     if String.trim(body) != "" do
       Conversations.create_message!(%{

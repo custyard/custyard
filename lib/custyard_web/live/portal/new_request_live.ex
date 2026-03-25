@@ -2,16 +2,13 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   use CustyardWeb, :live_view
 
   alias Custyard.{Conversation, Message, Repo, Scoring}
-  alias CustyardWeb.Portal.Helpers
 
   @impl true
-  def mount(params, _session, socket) do
-    org = Helpers.get_organization(params, socket)
+  def mount(_params, _session, socket) do
+    # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
 
     {:ok,
      socket
-     |> assign(:org, org)
-     |> Helpers.assign_portal_path()
      |> assign(:page_title, "New Request")
      |> assign(:form, to_form(%{"subject" => "", "body" => "", "urgency" => "normal"}))}
   end
@@ -21,7 +18,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   @impl true
   def handle_event("submit", %{"urgency" => urgency} = params, socket)
       when urgency in @allowed_urgencies do
-    org = socket.assigns.org
+    org = socket.assigns.current_org
     portal_path = socket.assigns.portal_path
 
     {:ok, conv} =

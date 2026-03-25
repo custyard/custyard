@@ -2,16 +2,11 @@ defmodule CustyardWeb.Portal.ProjectLive do
   use CustyardWeb, :live_view
 
   alias Custyard.Projects
-  alias CustyardWeb.Portal.Helpers
 
   @impl true
-  def mount(%{"id" => id} = params, _session, socket) do
-    org = Helpers.get_organization(params, socket)
-
-    socket =
-      socket
-      |> assign(:org, org)
-      |> Helpers.assign_portal_path()
+  def mount(%{"id" => id}, _session, socket) do
+    # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
+    org = socket.assigns.current_org
 
     case Projects.get_portal_project(id, org.id) do
       {:error, _} ->
