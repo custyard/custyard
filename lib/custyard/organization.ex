@@ -46,6 +46,7 @@ defmodule Custyard.Organization do
       message: "must be a valid hex color (e.g., #1a2b3c)"
     )
     |> unique_constraint(:token)
+    |> unique_constraint(:domain)
     |> unique_constraint(:custom_domain)
     |> validate_custom_domain()
   end
