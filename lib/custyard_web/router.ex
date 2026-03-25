@@ -27,6 +27,7 @@ defmodule CustyardWeb.Router do
   scope "/api", CustyardWeb do
     pipe_through :api
 
+    get "/health", HealthController, :index
     post "/webhook/inbound", WebhookController, :inbound
   end
 
