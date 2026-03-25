@@ -134,6 +134,9 @@ defmodule Custyard.Email.SenderMatcher do
 
   defp get_or_create_unmatched_org do
     case Repo.get_by(Organization, domain: "_unmatched_") do
+      %Organization{} = org ->
+        {:ok, org}
+
       nil ->
         %Organization{}
         |> Organization.changeset(%{
@@ -142,9 +145,6 @@ defmodule Custyard.Email.SenderMatcher do
           tier: :basic
         })
         |> Repo.insert()
-
-      org ->
-        {:ok, org}
     end
   end
 end

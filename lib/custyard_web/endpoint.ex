@@ -5,7 +5,9 @@ defmodule CustyardWeb.Endpoint do
     store: :cookie,
     key: "_custyard_key",
     signing_salt: "custyard_signing",
-    same_site: "Lax"
+    same_site: "Lax",
+    secure: Application.compile_env(:custyard, :env) == :prod,
+    max_age: 86_400
   ]
 
   socket "/live", Phoenix.LiveView.Socket,
@@ -17,6 +19,9 @@ defmodule CustyardWeb.Endpoint do
     from: :custyard,
     gzip: false,
     only: CustyardWeb.static_paths()
+
+  # Serve uploaded files from persistent storage directory (configurable via :upload_dir)
+  plug CustyardWeb.Plugs.UploadedFiles
 
   if code_reloading? do
     socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket

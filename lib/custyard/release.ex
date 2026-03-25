@@ -6,6 +6,7 @@ defmodule Custyard.Release do
   """
 
   @app :custyard
+  @default_operator_email "admin@custyard.local"
 
   def migrate do
     load_app()
@@ -20,15 +21,35 @@ defmodule Custyard.Release do
     {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
   end
 
-  def setup_operator(password) do
+  @doc """
+  Creates or updates an operator account in the database.
+
+  Uses the default email (#{@default_operator_email}) unless overridden.
+
+  ## Examples
+
+      # In a release eval:
+      Custyard.Release.setup_operator("secure_password")
+      Custyard.Release.setup_operator("secure_password", "ops@example.com")
+  """
+  def setup_operator(password, email \\ @default_operator_email) do
     load_app()
 
     {:ok, _} = Application.ensure_all_started(@app)
 
-    # Hash the password and store/update operator account
-    # This will be implemented once the accounts context exists
-    # For now, just configure the password in the application env
-    Application.put_env(@app, :operator_password, password)
+    alias Custyard.{OperatorAccount, Repo}
+
+    case Repo.get_by(OperatorAccount, email: email) do
+      nil ->
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{email: email, password: password})
+        |> Repo.insert!()
+
+      existing ->
+        existing
+        |> OperatorAccount.password_changeset(%{password: password})
+        |> Repo.update!()
+    end
 
     :ok
   end

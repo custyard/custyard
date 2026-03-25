@@ -12,6 +12,9 @@ defmodule CustyardWeb.WebhookController do
     slack: "x-slack-signature"
   }
 
+  # Bearer token auth for legacy inbound endpoint
+  plug CustyardWeb.Plugs.WebhookAuth when action == :inbound
+
   @doc """
   Legacy inbound webhook endpoint.
 

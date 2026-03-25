@@ -53,6 +53,7 @@ defmodule Custyard.Conversation do
     ])
     |> validate_required_organization()
     |> validate_required([:subject])
+    |> validate_length(:subject, max: 500)
     |> validate_inclusion(:state, @states)
     |> validate_inclusion(:urgency, @urgencies)
     |> validate_inclusion(:source, @sources)
