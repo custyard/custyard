@@ -246,13 +246,9 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       |> element("button", "Add project")
       |> render_click()
 
-      # Use hook to update form fields
-      render_hook(view, "update_form", %{"field" => "title", "value" => "New Project"})
-
-      render_hook(view, "update_form", %{
-        "field" => "organization_id",
-        "value" => to_string(org.id)
-      })
+      # Use form-level change to update fields
+      view |> element("form") |> render_change(%{"title" => "New Project"})
+      view |> element("form") |> render_change(%{"organization_id" => to_string(org.id)})
 
       html =
         view
@@ -273,9 +269,9 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       |> element("button", "Add project")
       |> render_click()
 
-      render_hook(view, "update_form", %{"field" => "title", "value" => "Internal Project"})
+      view |> element("form") |> render_change(%{"title" => "Internal Project"})
       # Uncheck portal visible (internal projects cannot be portal visible)
-      render_hook(view, "update_form", %{"field" => "portal_visible", "value" => "false"})
+      view |> element("form") |> render_change(%{"portal_visible" => "false"})
 
       view
       |> element("form[phx-submit=save_project]")
@@ -295,19 +291,11 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       |> element("button", "Add project")
       |> render_click()
 
-      render_hook(view, "update_form", %{"field" => "title", "value" => "Dated Project"})
+      view |> element("form") |> render_change(%{"title" => "Dated Project"})
+      view |> element("form") |> render_change(%{"organization_id" => to_string(org.id)})
+      view |> element("form") |> render_change(%{"start_date" => "2024-06-01"})
 
-      render_hook(view, "update_form", %{
-        "field" => "organization_id",
-        "value" => to_string(org.id)
-      })
-
-      render_hook(view, "update_form", %{"field" => "start_date", "value" => "2024-06-01"})
-
-      render_hook(view, "update_form", %{
-        "field" => "target_completion_date",
-        "value" => "2024-08-31"
-      })
+      view |> element("form") |> render_change(%{"target_completion_date" => "2024-08-31"})
 
       view
       |> element("form[phx-submit=save_project]")
@@ -330,7 +318,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       |> element("[phx-click=edit_project][phx-value-id=\"#{project.id}\"]")
       |> render_click()
 
-      render_hook(view, "update_form", %{"field" => "title", "value" => "Updated Title"})
+      view |> element("form") |> render_change(%{"title" => "Updated Title"})
 
       html =
         view
@@ -372,15 +360,11 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       |> element("button", "Add project")
       |> render_click()
 
-      render_hook(view, "update_form", %{"field" => "title", "value" => "Hidden Project"})
-
-      render_hook(view, "update_form", %{
-        "field" => "organization_id",
-        "value" => to_string(org.id)
-      })
+      view |> element("form") |> render_change(%{"title" => "Hidden Project"})
+      view |> element("form") |> render_change(%{"organization_id" => to_string(org.id)})
 
       # Uncheck portal_visible
-      render_hook(view, "update_form", %{"field" => "portal_visible", "value" => "false"})
+      view |> element("form") |> render_change(%{"portal_visible" => "false"})
 
       view
       |> element("form[phx-submit=save_project]")
