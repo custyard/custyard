@@ -32,7 +32,12 @@ RUN mix release
 # Runtime stage
 FROM debian:13-slim
 
-RUN apt-get update && apt-get install -y libstdc++6 openssl libncurses6 locales && \
+LABEL org.opencontainers.image.source="https://github.com/onetimesecret/custyard"
+LABEL org.opencontainers.image.description="Custyard Service Platform"
+LABEL org.opencontainers.image.licenses="MIT"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libstdc++6 openssl libncurses6 locales curl && \
     rm -rf /var/lib/apt/lists/* && \
     sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 
@@ -40,20 +45,29 @@ ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 
+# Run as non-root user
+RUN groupadd --system custyard && \
+    useradd --system --gid custyard --home /app custyard
+
 WORKDIR /app
 
 # Copy release from builder
 COPY --from=builder /app/_build/prod/rel/custyard ./
 
-# Create data directory for SQLite
-RUN mkdir -p /data
-
-# Expose port
-EXPOSE 4000
+# Create data directory for SQLite and set ownership
+RUN mkdir -p /data && chown -R custyard:custyard /app /data
 
 # Entrypoint script
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+USER custyard
+
+# Expose port
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -f http://localhost:4000/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bin/custyard", "start"]

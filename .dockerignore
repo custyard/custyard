@@ -11,10 +11,17 @@ test/
 # Documentation
 *.md
 planning/
+CLAUDE.md
 
 # IDE
 .vscode/
 .idea/
+
+# Deployment files (not needed inside container)
+docker-compose.yml
+*.container
+fly.toml
+Procfile*
 
 # macOS
 .DS_Store

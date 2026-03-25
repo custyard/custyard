@@ -18,6 +18,11 @@ defmodule CustyardWeb.Router do
     plug CustyardWeb.Plugs.RequireOperator
   end
 
+  # Health check — no pipeline, minimal overhead for orchestrators
+  scope "/", CustyardWeb do
+    get "/health", HealthController, :index
+  end
+
   scope "/", CustyardWeb do
     pipe_through :browser
 
