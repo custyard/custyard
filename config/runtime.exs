@@ -1,5 +1,18 @@
 import Config
 
+# Safe integer parsing helper (returns default on invalid input)
+parse_int = fn env_var, default ->
+  case System.get_env(env_var) do
+    nil -> default
+    "" -> default
+    value ->
+      case Integer.parse(value) do
+        {int, ""} -> int
+        _ -> default
+      end
+  end
+end
+
 # Configure Swoosh mailer for production
 if config_env() == :prod do
   # Mail configuration (optional - falls back to Local adapter if not set)
@@ -22,7 +35,7 @@ if config_env() == :prod do
         config :custyard, Custyard.Mailer,
           adapter: Swoosh.Adapters.SMTP,
           relay: System.get_env("SMTP_HOST"),
-          port: String.to_integer(System.get_env("SMTP_PORT") || "587"),
+          port: parse_int.("SMTP_PORT", 587),
           username: System.get_env("SMTP_USERNAME"),
           password: System.get_env("SMTP_PASSWORD"),
           ssl: System.get_env("SMTP_SSL") == "true",
@@ -35,6 +48,7 @@ if config_env() == :prod do
           api_key: System.get_env("POSTMARK_API_KEY")
 
       "lettermint" ->
+        # Swoosh.Adapters.Lettermint available since swoosh 1.17+
         config :custyard, Custyard.Mailer,
           adapter: Swoosh.Adapters.Lettermint,
           api_token: System.get_env("LETTERMINT_API_TOKEN"),
@@ -75,7 +89,7 @@ if lmtp_enabled do
 
   config :custyard, :lmtp,
     enabled: true,
-    port: String.to_integer(System.get_env("LMTP_PORT") || "2024"),
+    port: parse_int.("LMTP_PORT", 2024),
     hostname: System.get_env("LMTP_HOSTNAME") || "localhost",
     tls: lmtp_tls_opts
 end
@@ -87,11 +101,11 @@ if imap_enabled do
   config :custyard, :imap,
     enabled: true,
     host: System.get_env("IMAP_HOST") || "localhost",
-    port: String.to_integer(System.get_env("IMAP_PORT") || "993"),
+    port: parse_int.("IMAP_PORT", 993),
     username: System.get_env("IMAP_USERNAME") || "",
     password: System.get_env("IMAP_PASSWORD") || "",
     folder: System.get_env("IMAP_FOLDER") || "INBOX",
-    poll_interval: String.to_integer(System.get_env("IMAP_POLL_INTERVAL") || "60000"),
+    poll_interval: parse_int.("IMAP_POLL_INTERVAL", 60000),
     ssl: System.get_env("IMAP_SSL") != "false"
 end
 
@@ -107,7 +121,7 @@ if config_env() == :prod do
   operator_password = System.get_env("OPERATOR_PASSWORD")
 
   host = System.get_env("PHX_HOST") || "localhost"
-  port = String.to_integer(System.get_env("PORT") || "4000")
+  port = parse_int.("PORT", 4000)
 
   if operator_password do
     config :custyard, :operator_password, operator_password
@@ -143,7 +157,7 @@ if config_env() == :prod do
       url -> url
     end
 
-  pool_size = String.to_integer(System.get_env("POOL_SIZE") || "10")
+  pool_size = parse_int.("POOL_SIZE", 10)
 
   cond do
     is_binary(database_url) and String.starts_with?(database_url, "libsql://") ->

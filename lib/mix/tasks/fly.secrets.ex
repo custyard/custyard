@@ -116,7 +116,16 @@ defmodule Mix.Tasks.Fly.Secrets do
         [var, value] ->
           var = String.trim(var)
           value = value |> String.trim() |> strip_quotes()
-          if value != "", do: [{var, value}], else: []
+
+          if valid_var_name?(var) and value != "" do
+            [{var, value}]
+          else
+            if not valid_var_name?(var) and var != "" do
+              Mix.shell().info("Skipping invalid variable name: #{var}")
+            end
+
+            []
+          end
 
         _ ->
           []
@@ -124,16 +133,25 @@ defmodule Mix.Tasks.Fly.Secrets do
     end)
   end
 
+  defp valid_var_name?(name) do
+    Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*$/, name)
+  end
+
   defp filter_vars(all_vars, allowed) do
     Enum.filter(all_vars, fn {var, _} -> var in allowed end)
   end
 
   defp strip_quotes(value) do
-    value
-    |> String.trim_leading("\"")
-    |> String.trim_trailing("\"")
-    |> String.trim_leading("'")
-    |> String.trim_trailing("'")
+    cond do
+      String.starts_with?(value, "\"") and String.ends_with?(value, "\"") ->
+        value |> String.trim_leading("\"") |> String.trim_trailing("\"")
+
+      String.starts_with?(value, "'") and String.ends_with?(value, "'") ->
+        value |> String.trim_leading("'") |> String.trim_trailing("'")
+
+      true ->
+        value
+    end
   end
 
   defp preview_changes(secrets, config, env_file, toml_file) do
@@ -231,8 +249,12 @@ defmodule Mix.Tasks.Fly.Secrets do
   end
 
   defp set_fly_secrets(secrets, opts) do
-    app_args = if opts[:app], do: "-a #{opts[:app]}", else: ""
-    stage_args = if opts[:stage], do: "--stage", else: ""
+    # Validate app name to prevent command injection
+    if opts[:app] && not valid_app_name?(opts[:app]) do
+      Mix.shell().error("Error: Invalid app name '#{opts[:app]}'")
+      Mix.shell().error("App names must contain only letters, numbers, and hyphens")
+      exit({:shutdown, 1})
+    end
 
     Mix.shell().info("Setting #{length(secrets)} secret(s) via fly secrets import...")
 
@@ -240,28 +262,29 @@ defmodule Mix.Tasks.Fly.Secrets do
       Mix.shell().info("(Staging only - no redeploy)")
     end
 
-    # Write secrets to temp file to avoid shell escaping issues
-    tmp_file = Path.join(System.tmp_dir!(), "fly_secrets_#{:erlang.unique_integer([:positive])}")
+    # Build args list for System.cmd (avoids shell injection)
+    args =
+      ["secrets", "import"]
+      |> then(fn args -> if opts[:app], do: args ++ ["-a", opts[:app]], else: args end)
+      |> then(fn args -> if opts[:stage], do: args ++ ["--stage"], else: args end)
 
-    try do
-      content = Enum.map_join(secrets, "\n", fn {var, value} -> "#{var}=#{value}" end)
-      File.write!(tmp_file, content)
+    # Pipe secrets via stdin
+    secrets_input = Enum.map_join(secrets, "\n", fn {var, value} -> "#{var}=#{value}" end)
 
-      cmd = "fly secrets import #{app_args} #{stage_args} < #{tmp_file}"
+    case System.cmd("fly", args, stdin: secrets_input, stderr_to_stdout: true) do
+      {output, 0} ->
+        if output != "", do: Mix.shell().info(String.trim(output))
+        Mix.shell().info("Secrets set successfully")
 
-      case System.shell(cmd) do
-        {output, 0} ->
-          if output != "", do: Mix.shell().info(String.trim(output))
-          Mix.shell().info("Secrets set successfully")
-
-        {output, code} ->
-          if output != "", do: Mix.shell().error(String.trim(output))
-          Mix.shell().error("fly secrets import failed with exit code #{code}")
-          exit({:shutdown, code})
-      end
-    after
-      File.rm(tmp_file)
+      {output, code} ->
+        if output != "", do: Mix.shell().error(String.trim(output))
+        Mix.shell().error("fly secrets import failed with exit code #{code}")
+        exit({:shutdown, code})
     end
+  end
+
+  defp valid_app_name?(name) do
+    Regex.match?(~r/^[a-zA-Z0-9-]+$/, name)
   end
 
   defp mask_value(value) when byte_size(value) > 8 do
