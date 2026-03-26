@@ -29,6 +29,11 @@ if config_env() == :prod do
           tls: :always,
           auth: :always
 
+      "postmark" ->
+        config :custyard, Custyard.Mailer,
+          adapter: Swoosh.Adapters.Postmark,
+          api_key: System.get_env("POSTMARK_API_KEY")
+
       _ ->
         # Unknown adapter, keep Local
         :ok
@@ -135,14 +140,25 @@ if config_env() == :prod do
 
   pool_size = String.to_integer(System.get_env("POOL_SIZE") || "10")
 
-  if database_url do
-    config :custyard, Custyard.Repo,
-      url: database_url,
-      pool_size: pool_size
-  else
-    config :custyard, Custyard.Repo,
-      database: System.get_env("DATABASE_PATH") || "/data/custyard.db",
-      pool_size: pool_size
+  cond do
+    is_binary(database_url) and String.starts_with?(database_url, "libsql://") ->
+      # Turso/libSQL: pass URL as :database with auth token
+      config :custyard, Custyard.Repo,
+        database: database_url,
+        token: System.get_env("TURSO_AUTH_TOKEN"),
+        pool_size: pool_size
+
+    is_binary(database_url) ->
+      # Postgres-style URL
+      config :custyard, Custyard.Repo,
+        url: database_url,
+        pool_size: pool_size
+
+    true ->
+      # Default: local SQLite file
+      config :custyard, Custyard.Repo,
+        database: System.get_env("DATABASE_PATH") || "/data/custyard.db",
+        pool_size: pool_size
   end
 
   # Persistent upload directory (survives deployments, unlike priv/static)

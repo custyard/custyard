@@ -59,6 +59,8 @@ fly secrets set OPERATOR_PASSWORD="..."
 fly secrets set WEBHOOK_TOKEN="..."
 
 # Optional — outbound email (pick one adapter)
+fly secrets set MAIL_ADAPTER=postmark POSTMARK_API_KEY="..."
+# or
 fly secrets set MAIL_ADAPTER=sendgrid SENDGRID_API_KEY="..."
 # or
 fly secrets set MAIL_ADAPTER=mailgun MAILGUN_API_KEY="..." MAILGUN_DOMAIN="..."
@@ -164,6 +166,18 @@ fly deploy
 ```
 
 Remove the `[mounts]` section from `fly.toml` if you no longer need SQLite volumes. See [Fly Postgres docs](https://fly.io/docs/postgres/).
+
+### Turso (libSQL)
+
+[Turso](https://turso.tech) is distributed SQLite. The runtime config detects `libsql://` URLs and passes them as `:database` with a separate auth token:
+
+```bash
+fly secrets set \
+  DATABASE_URL="libsql://your-db.turso.io" \
+  TURSO_AUTH_TOKEN="your-auth-token"
+```
+
+No compile-time adapter change needed — keep `repo_adapter: Ecto.Adapters.SQLite3`. Requires `exqlite` with libSQL support. See [Turso Elixir SDK docs](https://docs.turso.tech/sdk/elixir).
 
 ### Neon / Supabase
 
