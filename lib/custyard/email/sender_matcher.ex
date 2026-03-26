@@ -1,29 +1,62 @@
 defmodule Custyard.Email.SenderMatcher do
-  @moduledoc "Match email sender to Contact/Organization"
+  @moduledoc """
+  Match email sender to Contact/Organization.
+
+  Supports two matching modes:
+  1. `match/1` — domain-based matching (legacy, for unrouted webhooks)
+  2. `match_within_org/2` — route-context matching (preferred, uses org from inbound route)
+
+  Priority order for routing:
+  1. Route context (org/project from inbound route)
+  2. Contact match within route's org scope
+  3. Global contact match (catchall only — handles multi-org disambiguation)
+  4. Domain match (catchall, unknown sender)
+  """
 
   alias Custyard.{Contact, Organization, Repo}
+  import Ecto.Query
 
   def match(from_address) do
     email = extract_email(from_address)
     domain = extract_domain(email)
 
-    case find_contact_by_email(email) do
-      {:ok, contact} ->
+    case find_contacts_by_email(email) do
+      [] ->
+        # No contact found — try domain match or create unmatched
+        match_by_domain_or_create(email, domain, from_address)
+
+      [contact] ->
+        # Single match — unambiguous
         org = Repo.get!(Organization, contact.organization_id)
         {:ok, org, contact}
 
-      :not_found ->
-        case find_org_by_domain(domain) do
-          {:ok, org} ->
-            # Create contact for known org
-            {:ok, contact} = create_contact(org, email, from_address)
-            {:ok, org, contact}
+      [contact | _rest] ->
+        # Multiple contacts across orgs — use the first match for now.
+        # Route-context matching (match_within_org/2) is the preferred path
+        # to avoid this ambiguity. Disambiguation DM flow handles this in
+        # the catchall route via the disambiguation webhook purpose.
+        org = Repo.get!(Organization, contact.organization_id)
+        {:ok, org, contact}
+    end
+  end
 
-          :not_found ->
-            # Unknown sender - create "unmatched" org placeholder
-            {:ok, org} = get_or_create_unmatched_org()
-            {:ok, contact} = create_contact(org, email, from_address)
-            {:ok, org, contact}
+  @doc """
+  Match a sender within a specific organization (route-context matching).
+
+  The organization is already known from the inbound route. We only need
+  to find or create the contact within that org scope.
+  """
+  def match_within_org(from_address, org_id) do
+    email = extract_email(from_address)
+    org = Repo.get!(Organization, org_id)
+
+    case find_contact_in_org(email, org_id) do
+      {:ok, contact} ->
+        {:ok, org, contact}
+
+      :not_found ->
+        with {:ok, contact} <- create_contact(org, email, from_address) do
+          {:ok, org, contact}
         end
     end
   end
@@ -43,10 +76,34 @@ defmodule Custyard.Email.SenderMatcher do
     end
   end
 
-  defp find_contact_by_email(email) do
-    case Repo.get_by(Contact, email: email) do
+  defp find_contacts_by_email(email) do
+    from(c in Contact, where: c.email == ^email)
+    |> Repo.all()
+  end
+
+  defp find_contact_in_org(email, org_id) do
+    query =
+      from c in Contact,
+        where: c.email == ^email and c.organization_id == ^org_id
+
+    case Repo.one(query) do
       nil -> :not_found
       contact -> {:ok, contact}
+    end
+  end
+
+  defp match_by_domain_or_create(email, domain, from_address) do
+    case find_org_by_domain(domain) do
+      {:ok, org} ->
+        with {:ok, contact} <- create_contact(org, email, from_address) do
+          {:ok, org, contact}
+        end
+
+      :not_found ->
+        with {:ok, org} <- get_or_create_unmatched_org(),
+             {:ok, contact} <- create_contact(org, email, from_address) do
+          {:ok, org, contact}
+        end
     end
   end
 

@@ -1,5 +1,7 @@
 import Config
 
+config :custyard, env: :test
+
 config :custyard, Custyard.Repo,
   database: Path.expand("../priv/repo/custyard_test.db", __DIR__),
   pool_size: 5,

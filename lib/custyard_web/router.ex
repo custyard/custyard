@@ -32,7 +32,12 @@ defmodule CustyardWeb.Router do
     pipe_through :api
 
     get "/health", HealthController, :index
+
+    # Legacy Lettermint webhook (backward compatible)
     post "/webhook/inbound", WebhookController, :inbound
+
+    # Routed webhooks — dispatched by callback_token with source-specific adapters
+    post "/webhook/route/:callback_token", WebhookController, :routed
   end
 
   # Operator routes - public (login/logout)
