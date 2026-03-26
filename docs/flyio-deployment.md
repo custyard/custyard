@@ -102,8 +102,11 @@ On every deploy, the container entrypoint (`entrypoint.sh`) runs:
 ### Deploy commands
 
 ```bash
-# Deploy latest code
+# Deploy latest code ()
 fly deploy
+
+# Migrations are run automatically by the entrypoint, but you can also run them manually:
+# fly ssh console -C "bin/custyard eval 'Custyard.Release.migrate()'"
 
 # Deploy a specific commit/image
 fly deploy --image-ref <ref>
@@ -120,6 +123,10 @@ fly logs
 # SSH into a running machine
 fly ssh console
 ```
+
+https://fly.io/apps/custyard/monitoring
+
+https://custyard.fly.dev/
 
 See [fly deploy docs](https://fly.io/docs/launch/deploy/).
 
