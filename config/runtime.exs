@@ -34,6 +34,12 @@ if config_env() == :prod do
           adapter: Swoosh.Adapters.Postmark,
           api_key: System.get_env("POSTMARK_API_KEY")
 
+      "lettermint" ->
+        config :custyard, Custyard.Mailer,
+          adapter: Swoosh.Adapters.Lettermint,
+          api_token: System.get_env("LETTERMINT_API_TOKEN"),
+          base_url: System.get_env("LETTERMINT_BASE_URL")
+
       _ ->
         # Unknown adapter, keep Local
         :ok
