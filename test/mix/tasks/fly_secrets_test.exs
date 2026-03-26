@@ -769,18 +769,18 @@ defmodule Mix.Tasks.Fly.SecretsTest do
     |> String.split("\n")
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(String.starts_with?(&1, "#") or &1 == ""))
-    |> Enum.flat_map(fn line ->
-      case String.split(line, "=", parts: 2) do
-        [var, value] ->
-          var = String.trim(var)
-          value = value |> String.trim() |> strip_quotes()
-          if value != "", do: [{var, value}], else: []
-
-        _ ->
-          []
-      end
-    end)
+    |> Enum.flat_map(&parse_env_line/1)
   end
+
+  defp parse_env_line(line) do
+    case String.split(line, "=", parts: 2) do
+      [var, value] -> build_var_entry(String.trim(var), strip_quotes(String.trim(value)))
+      _ -> []
+    end
+  end
+
+  defp build_var_entry(_var, ""), do: []
+  defp build_var_entry(var, value), do: [{var, value}]
 
   defp filter_vars(all_vars, allowed) do
     Enum.filter(all_vars, fn {var, _} -> var in allowed end)

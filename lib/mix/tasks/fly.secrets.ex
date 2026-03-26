@@ -111,27 +111,37 @@ defmodule Mix.Tasks.Fly.Secrets do
     |> String.split("\n")
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(String.starts_with?(&1, "#") or &1 == ""))
-    |> Enum.flat_map(fn line ->
-      case String.split(line, "=", parts: 2) do
-        [var, value] ->
-          var = String.trim(var)
-          value = value |> String.trim() |> strip_quotes()
-
-          if valid_var_name?(var) and value != "" do
-            [{var, value}]
-          else
-            if not valid_var_name?(var) and var != "" do
-              Mix.shell().info("Skipping invalid variable name: #{var}")
-            end
-
-            []
-          end
-
-        _ ->
-          []
-      end
-    end)
+    |> Enum.flat_map(&parse_env_line/1)
   end
+
+  defp parse_env_line(line) do
+    case String.split(line, "=", parts: 2) do
+      [var, value] ->
+        var = String.trim(var)
+        value = value |> String.trim() |> strip_quotes()
+        build_var_entry(var, value)
+
+      _ ->
+        []
+    end
+  end
+
+  defp build_var_entry(var, value) when value != "" do
+    if valid_var_name?(var) do
+      [{var, value}]
+    else
+      warn_invalid_var_name(var)
+      []
+    end
+  end
+
+  defp build_var_entry(_var, _value), do: []
+
+  defp warn_invalid_var_name(var) when var != "" do
+    Mix.shell().info("Skipping invalid variable name: #{var}")
+  end
+
+  defp warn_invalid_var_name(_var), do: :ok
 
   defp valid_var_name?(name) do
     Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*$/, name)
@@ -249,39 +259,61 @@ defmodule Mix.Tasks.Fly.Secrets do
   end
 
   defp set_fly_secrets(secrets, opts) do
-    # Validate app name to prevent command injection
-    if opts[:app] && not valid_app_name?(opts[:app]) do
-      Mix.shell().error("Error: Invalid app name '#{opts[:app]}'")
+    validate_app_name(opts[:app])
+    log_secrets_info(secrets, opts)
+
+    args = build_fly_args(opts)
+    secrets_input = Enum.map_join(secrets, "\n", fn {var, value} -> "#{var}=#{value}" end)
+
+    run_fly_secrets_import(args, secrets_input)
+  end
+
+  defp validate_app_name(nil), do: :ok
+
+  defp validate_app_name(app) do
+    if valid_app_name?(app) do
+      :ok
+    else
+      Mix.shell().error("Error: Invalid app name '#{app}'")
       Mix.shell().error("App names must contain only letters, numbers, and hyphens")
       exit({:shutdown, 1})
     end
+  end
 
+  defp log_secrets_info(secrets, opts) do
     Mix.shell().info("Setting #{length(secrets)} secret(s) via fly secrets import...")
+    if opts[:stage], do: Mix.shell().info("(Staging only - no redeploy)")
+  end
 
-    if opts[:stage] do
-      Mix.shell().info("(Staging only - no redeploy)")
-    end
+  defp build_fly_args(opts) do
+    ["secrets", "import"]
+    |> maybe_add_app_arg(opts[:app])
+    |> maybe_add_stage_arg(opts[:stage])
+  end
 
-    # Build args list for System.cmd (avoids shell injection)
-    args =
-      ["secrets", "import"]
-      |> then(fn args -> if opts[:app], do: args ++ ["-a", opts[:app]], else: args end)
-      |> then(fn args -> if opts[:stage], do: args ++ ["--stage"], else: args end)
+  defp maybe_add_app_arg(args, nil), do: args
+  defp maybe_add_app_arg(args, app), do: args ++ ["-a", app]
 
-    # Pipe secrets via stdin
-    secrets_input = Enum.map_join(secrets, "\n", fn {var, value} -> "#{var}=#{value}" end)
+  defp maybe_add_stage_arg(args, nil), do: args
+  defp maybe_add_stage_arg(args, false), do: args
+  defp maybe_add_stage_arg(args, true), do: args ++ ["--stage"]
 
+  defp run_fly_secrets_import(args, secrets_input) do
     case System.cmd("fly", args, stdin: secrets_input, stderr_to_stdout: true) do
       {output, 0} ->
-        if output != "", do: Mix.shell().info(String.trim(output))
+        log_output(output, :info)
         Mix.shell().info("Secrets set successfully")
 
       {output, code} ->
-        if output != "", do: Mix.shell().error(String.trim(output))
+        log_output(output, :error)
         Mix.shell().error("fly secrets import failed with exit code #{code}")
         exit({:shutdown, code})
     end
   end
+
+  defp log_output("", _level), do: :ok
+  defp log_output(output, :info), do: Mix.shell().info(String.trim(output))
+  defp log_output(output, :error), do: Mix.shell().error(String.trim(output))
 
   defp valid_app_name?(name) do
     Regex.match?(~r/^[a-zA-Z0-9-]+$/, name)
