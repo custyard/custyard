@@ -1,43 +1,45 @@
 # See https://fly.io/docs/reference/configuration/ for information about this file.
 
-app = "custyard"
-primary_region = "iad"
+app = "custyard-ui"
+org = "custyard"
+primary_region = "ams"
 
 [build]
-  dockerfile = "Containerfile"
+dockerfile = "Containerfile"
 
 [env]
-  PORT = "4000"
-  PHX_HOST = "custyard.fly.dev"
-  LMTP_ENABLED = "false"
-  IMAP_ENABLED = "false"
+PORT = "4000"
+PHX_HOST = "custyard.fly.dev"
+LMTP_ENABLED = "false"
+IMAP_ENABLED = "false"
 
 [http_service]
-  internal_port = 4000
-  force_https = true
-  auto_stop_machines = "stop"
-  auto_start_machines = true
-  min_machines_running = 1
+internal_port = 4000
+force_https = true
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 1
 
-  [http_service.concurrency]
-    type = "connections"
-    hard_limit = 200
-    soft_limit = 150
+[http_service.concurrency]
+type = "connections"
+hard_limit = 200
+soft_limit = 150
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+size = "shared-cpu-1x"
+memory = "512mb"
 
-[mounts]
-  source = "custyard_data"
-  destination = "/data"
+# Not needed when using Turso
+# [mounts]
+# source = "custyard_data"
+# destination = "/data"
 
 [checks]
-  [checks.health]
-    port = 4000
-    type = "http"
-    interval = "10s"
-    timeout = "2s"
-    grace_period = "30s"
-    method = "GET"
-    path = "/api/health"
+[checks.health]
+port = 4000
+type = "http"
+interval = "10s"
+timeout = "2s"
+grace_period = "30s"
+method = "GET"
+path = "/api/health"
