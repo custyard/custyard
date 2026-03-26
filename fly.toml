@@ -1,6 +1,6 @@
 # See https://fly.io/docs/reference/configuration/ for information about this file.
 
-app = "custyard-ui"
+app = "custyard"
 org = "custyard"
 primary_region = "ams"
 
