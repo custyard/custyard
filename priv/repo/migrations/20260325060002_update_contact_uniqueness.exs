@@ -7,6 +7,6 @@ defmodule Custyard.Repo.Migrations.UpdateContactUniqueness do
     drop_if_exists unique_index(:contacts, [:email], name: :contacts_email_index)
 
     # Create composite unique index: email + organization_id
-    create unique_index(:contacts, [:email, :organization_id])
+    create_if_not_exists unique_index(:contacts, [:email, :organization_id])
   end
 end
