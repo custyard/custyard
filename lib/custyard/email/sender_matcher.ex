@@ -55,8 +55,9 @@ defmodule Custyard.Email.SenderMatcher do
         {:ok, org, contact}
 
       :not_found ->
-        {:ok, contact} = create_contact(org, email, from_address)
-        {:ok, org, contact}
+        with {:ok, contact} <- create_contact(org, email, from_address) do
+          {:ok, org, contact}
+        end
     end
   end
 
@@ -94,13 +95,15 @@ defmodule Custyard.Email.SenderMatcher do
   defp match_by_domain_or_create(email, domain, from_address) do
     case find_org_by_domain(domain) do
       {:ok, org} ->
-        {:ok, contact} = create_contact(org, email, from_address)
-        {:ok, org, contact}
+        with {:ok, contact} <- create_contact(org, email, from_address) do
+          {:ok, org, contact}
+        end
 
       :not_found ->
-        {:ok, org} = get_or_create_unmatched_org()
-        {:ok, contact} = create_contact(org, email, from_address)
-        {:ok, org, contact}
+        with {:ok, org} <- get_or_create_unmatched_org(),
+             {:ok, contact} <- create_contact(org, email, from_address) do
+          {:ok, org, contact}
+        end
     end
   end
 

@@ -21,11 +21,11 @@ defmodule Custyard.Webhooks.Adapters.Slack do
 
   def verify_signature(payload, signature, secret)
       when is_binary(signature) and is_binary(secret) do
+    # Simplified verification without timestamp — used only for basic
+    # signature checks. The controller uses verify_request/4 instead,
+    # which includes proper timestamp validation and replay protection.
     body = if is_binary(payload), do: payload, else: Jason.encode!(payload)
 
-    # Slack signs "v0:{timestamp}:{body}" — when called from the controller,
-    # the timestamp is embedded in the signature verification flow. Here we
-    # accept the pre-built base string or fall back to timestamp=0 for tests.
     hmac =
       :crypto.mac(:hmac, :sha256, secret, body)
       |> Base.encode16(case: :lower)

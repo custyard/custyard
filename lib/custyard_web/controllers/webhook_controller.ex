@@ -4,6 +4,7 @@ defmodule CustyardWeb.WebhookController do
   alias Custyard.{InboundRoute, Repo}
   alias Custyard.Email.Processor
   alias Custyard.Webhooks.{Dispatcher, Normalizer, Registry, Signature}
+  alias Custyard.Webhooks.Adapters.Slack, as: SlackAdapter
 
   @signature_headers %{
     lettermint: "x-lettermint-signature",
@@ -105,6 +106,18 @@ defmodule CustyardWeb.WebhookController do
       :ok
     else
       {:error, "webhook secret not configured for source: #{source}"}
+    end
+  end
+
+  defp verify_with_secret(conn, :slack, secret) do
+    case conn.private[:raw_body] do
+      nil ->
+        {:error, "missing raw request body for signature verification"}
+
+      raw_body ->
+        signature = get_signature_header(conn, :slack)
+        timestamp = get_req_header(conn, "x-slack-request-timestamp") |> List.first()
+        SlackAdapter.verify_request(raw_body, timestamp, signature, secret)
     end
   end
 
