@@ -15,8 +15,11 @@ defmodule Mix.Tasks.Fly.SecretsTest do
   describe "run/1 preview mode" do
     setup do
       # Create temp files for testing
-      env_file = Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.env")
-      toml_file = Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.toml")
+      env_file =
+        Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.env")
+
+      toml_file =
+        Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.toml")
 
       on_exit(fn ->
         File.rm(env_file)
@@ -96,8 +99,11 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
   describe "run/1 apply mode with fly.toml update" do
     setup do
-      env_file = Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.env")
-      toml_file = Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.toml")
+      env_file =
+        Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.env")
+
+      toml_file =
+        Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.toml")
 
       # Change to temp dir so fly.toml is found
       original_dir = File.cwd!()
@@ -532,6 +538,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
   describe "TOML update logic" do
     test "correctly formats env section with single var" do
       config = [{"PHX_HOST", "example.com"}]
+
       original = """
       app = "custyard"
 
@@ -572,6 +579,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
     test "replaces existing [env] section" do
       config = [{"PHX_HOST", "new.example.com"}]
+
       original = """
       app = "custyard"
 
@@ -593,6 +601,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
     test "inserts after [build] section when no [env] exists" do
       config = [{"PHX_HOST", "example.com"}]
+
       original = """
       app = "custyard"
 
@@ -616,6 +625,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
     test "appends at end when no [build] or [env] exists" do
       config = [{"PHX_HOST", "example.com"}]
+
       original = """
       app = "custyard"
       primary_region = "sjc"
@@ -631,6 +641,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
     test "preserves file structure outside [env] block" do
       config = [{"PHX_HOST", "example.com"}]
+
       original = """
       app = "custyard"
       primary_region = "sjc"
@@ -684,6 +695,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
     test "handles empty config list" do
       config = []
+
       original = """
       app = "custyard"
 
@@ -701,6 +713,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       # Values containing quotes need proper escaping in TOML
       # This documents current behavior
       config = [{"PHX_HOST", "example.com"}]
+
       original = """
       app = "custyard"
       """
