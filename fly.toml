@@ -8,10 +8,17 @@ primary_region = "ams"
 dockerfile = "Containerfile"
 
 [env]
-PORT = "4000"
-PHX_HOST = "custyard.fly.dev"
-LMTP_ENABLED = "false"
 IMAP_ENABLED = "false"
+IMAP_FOLDER = "INBOX"
+IMAP_HOST = "imap.example.com"
+IMAP_POLL_INTERVAL = "60000"
+IMAP_PORT = "993"
+IMAP_SSL = "true"
+LETTERMINT_BASE_URL = "https://api.lettermint.co/v1"
+LMTP_ENABLED = "false"
+LMTP_HOSTNAME = "localhost"
+LMTP_PORT = "2024"
+MAIL_ADAPTER = "lettermint"
 
 [http_service]
 internal_port = 4000

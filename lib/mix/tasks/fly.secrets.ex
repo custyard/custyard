@@ -231,8 +231,8 @@ defmodule Mix.Tasks.Fly.Secrets do
   end
 
   defp set_fly_secrets(secrets, opts) do
-    app_flag = if opts[:app], do: ["-a", opts[:app]], else: []
-    stage_flag = if opts[:stage], do: ["--stage"], else: []
+    app_args = if opts[:app], do: "-a #{opts[:app]}", else: ""
+    stage_args = if opts[:stage], do: "--stage", else: ""
 
     Mix.shell().info("Setting #{length(secrets)} secret(s) via fly secrets import...")
 
@@ -240,46 +240,27 @@ defmodule Mix.Tasks.Fly.Secrets do
       Mix.shell().info("(Staging only - no redeploy)")
     end
 
-    input = Enum.map_join(secrets, "\n", fn {var, value} -> "#{var}=#{value}" end)
-    args = ["secrets", "import"] ++ app_flag ++ stage_flag
+    # Write secrets to temp file to avoid shell escaping issues
+    tmp_file = Path.join(System.tmp_dir!(), "fly_secrets_#{:erlang.unique_integer([:positive])}")
 
-    case System.find_executable("fly") || System.find_executable("flyctl") do
-      nil ->
-        Mix.shell().error("Error: fly/flyctl not found in PATH")
-        Mix.shell().error("Install from https://fly.io/docs/flyctl/install/")
-        exit({:shutdown, 1})
+    try do
+      content = Enum.map_join(secrets, "\n", fn {var, value} -> "#{var}=#{value}" end)
+      File.write!(tmp_file, content)
 
-      flyctl ->
-        port =
-          Port.open({:spawn_executable, flyctl}, [
-            :binary,
-            :exit_status,
-            args: args
-          ])
+      cmd = "fly secrets import #{app_args} #{stage_args} < #{tmp_file}"
 
-        Port.command(port, input)
-        Port.command(port, :eof)
+      case System.shell(cmd) do
+        {output, 0} ->
+          if output != "", do: Mix.shell().info(String.trim(output))
+          Mix.shell().info("Secrets set successfully")
 
-        wait_for_port(port)
-    end
-  end
-
-  defp wait_for_port(port) do
-    receive do
-      {^port, {:data, data}} ->
-        Mix.shell().info(String.trim(data))
-        wait_for_port(port)
-
-      {^port, {:exit_status, 0}} ->
-        Mix.shell().info("Secrets set successfully")
-
-      {^port, {:exit_status, code}} ->
-        Mix.shell().error("fly secrets import failed with exit code #{code}")
-        exit({:shutdown, code})
+        {output, code} ->
+          if output != "", do: Mix.shell().error(String.trim(output))
+          Mix.shell().error("fly secrets import failed with exit code #{code}")
+          exit({:shutdown, code})
+      end
     after
-      60_000 ->
-        Mix.shell().error("Timeout waiting for fly secrets import")
-        exit({:shutdown, 1})
+      File.rm(tmp_file)
     end
   end
 
