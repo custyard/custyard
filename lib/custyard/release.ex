@@ -24,18 +24,24 @@ defmodule Custyard.Release do
   @doc """
   Creates or updates an operator account in the database.
 
-  Uses the default email (#{@default_operator_email}) unless overridden.
+  Reads password from the OPERATOR_PASSWORD environment variable to avoid
+  exposing it in the process list. Optionally accepts an email override.
 
   ## Examples
 
-      # In a release eval:
-      Custyard.Release.setup_operator("secure_password")
-      Custyard.Release.setup_operator("secure_password", "ops@example.com")
+      # In a release eval (reads OPERATOR_PASSWORD from env):
+      Custyard.Release.setup_operator()
+      Custyard.Release.setup_operator("ops@example.com")
   """
-  def setup_operator(password, email \\ @default_operator_email) do
+  def setup_operator(email \\ @default_operator_email) do
     load_app()
 
     {:ok, _} = Application.ensure_all_started(@app)
+
+    # Read password from environment to avoid exposing it in the process list
+    password =
+      System.get_env("OPERATOR_PASSWORD") ||
+        raise "OPERATOR_PASSWORD environment variable is not set"
 
     alias Custyard.{OperatorAccount, Repo}
 
