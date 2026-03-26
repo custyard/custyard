@@ -2,7 +2,7 @@
 # Keep in sync with .github/workflows/ci.yml
 FROM elixir:1.18.3-otp-27-slim AS builder
 
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
