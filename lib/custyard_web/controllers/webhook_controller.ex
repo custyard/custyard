@@ -1,10 +1,14 @@
 defmodule CustyardWeb.WebhookController do
   use CustyardWeb, :controller
 
-  alias Custyard.{InboundRoute, Repo}
   alias Custyard.Email.Processor
-  alias Custyard.Webhooks.{Dispatcher, Normalizer, Registry, Signature}
+  alias Custyard.InboundRoute
+  alias Custyard.Repo
   alias Custyard.Webhooks.Adapters.Slack, as: SlackAdapter
+  alias Custyard.Webhooks.Dispatcher
+  alias Custyard.Webhooks.Normalizer
+  alias Custyard.Webhooks.Registry
+  alias Custyard.Webhooks.Signature
 
   @signature_headers %{
     lettermint: "x-lettermint-signature",
