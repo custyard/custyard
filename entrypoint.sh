@@ -7,6 +7,12 @@ if [ -z "$SECRET_KEY_BASE" ]; then
     echo "Generated SECRET_KEY_BASE (auto-generated, set SECRET_KEY_BASE env to use a fixed value)"
 fi
 
+# Generate LiveView signing salt if not set (minimum 32 bytes)
+if [ -z "$LIVE_VIEW_SIGNING_SALT" ]; then
+    export LIVE_VIEW_SIGNING_SALT=$(openssl rand -base64 32)
+    echo "Generated LIVE_VIEW_SIGNING_SALT (auto-generated, set LIVE_VIEW_SIGNING_SALT env to use a fixed value)"
+fi
+
 # Run migrations
 echo "Running database migrations..."
 bin/custyard eval "Custyard.Release.migrate()"
