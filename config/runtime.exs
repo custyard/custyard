@@ -126,7 +126,13 @@ if config_env() == :prod do
     secret_key_base: secret_key_base,
     live_view: [signing_salt: live_view_signing_salt]
 
-  database_url = System.get_env("DATABASE_URL")
+  database_url =
+    case System.get_env("DATABASE_URL") do
+      nil -> nil
+      "" -> nil
+      url -> url
+    end
+
   pool_size = String.to_integer(System.get_env("POOL_SIZE") || "10")
 
   if database_url do

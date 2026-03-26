@@ -55,7 +55,7 @@ fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
 fly secrets set LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32)
 fly secrets set OPERATOR_PASSWORD="..."
 
-# Optional — inbound webhook authentication
+# Inbound webhooks/email — set to enable /api/webhook/inbound (omit to disable)
 fly secrets set WEBHOOK_TOKEN="..."
 
 # Optional — outbound email (pick one adapter)
@@ -164,16 +164,6 @@ fly deploy
 ```
 
 Remove the `[mounts]` section from `fly.toml` if you no longer need SQLite volumes. See [Fly Postgres docs](https://fly.io/docs/postgres/).
-
-### Turso (libSQL)
-
-[Turso](https://turso.tech) is distributed SQLite. Use the `ecto_sqlite3` adapter with a libSQL connection URL:
-
-```bash
-fly secrets set DATABASE_URL="libsql://your-db.turso.io?authToken=..."
-```
-
-The `ecto_sqlite3` adapter supports libSQL URLs via [exqlite](https://hexdocs.pm/exqlite). No adapter change needed — keep `repo_adapter: Ecto.Adapters.SQLite3`. See [Turso + Fly.io guide](https://docs.turso.tech/sdk/elixir/guides/fly).
 
 ### Neon / Supabase
 
