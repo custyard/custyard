@@ -67,7 +67,7 @@ USER custyard
 EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD curl -f http://localhost:4000/health
+  CMD curl -f http://localhost:${PORT:-4000}/api/health
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bin/custyard", "start"]

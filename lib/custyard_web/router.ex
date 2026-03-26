@@ -22,11 +22,6 @@ defmodule CustyardWeb.Router do
     plug CustyardWeb.Plugs.PortalAuth
   end
 
-  # Health check — no pipeline, minimal overhead for orchestrators
-  scope "/", CustyardWeb do
-    get "/health", HealthController, :index
-  end
-
   scope "/", CustyardWeb do
     pipe_through :browser
 
@@ -36,6 +31,7 @@ defmodule CustyardWeb.Router do
   scope "/api", CustyardWeb do
     pipe_through :api
 
+    get "/health", HealthController, :index
     post "/webhook/inbound", WebhookController, :inbound
   end
 

@@ -14,9 +14,7 @@ defmodule CustyardWeb.HealthController do
   def index(conn, _params) do
     case SQL.query(Custyard.Repo, "SELECT 1") do
       {:ok, _} ->
-        conn
-        |> put_status(200)
-        |> json(%{status: "ok"})
+        json(conn, %{status: "ok"})
 
       {:error, reason} ->
         Logger.error("Health check failed: #{inspect(reason)}")
