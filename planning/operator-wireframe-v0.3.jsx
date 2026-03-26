@@ -327,6 +327,11 @@ function ProgressBar({ tasks }) {
   );
 }
 
+function formatIdleTime(hours, suffix = "") {
+  const formatted = hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+  return suffix ? `${formatted} ${suffix}` : formatted;
+}
+
 function ProjectIcon() {
   return (
     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -416,7 +421,7 @@ function QueueCard({ convo, onSelect, onSnooze, onNavigateProject }) {
           <NeglectBadge level={convo.neglect} />
         </div>
         <span className="text-xs text-gray-400 flex-shrink-0">
-          {convo.idleHours < 24 ? `${convo.idleHours}h ago` : `${Math.floor(convo.idleHours / 24)}d ago`}
+          {formatIdleTime(convo.idleHours, "ago")}
         </span>
       </div>
       <div className="text-xs text-gray-500 mb-1">{convo.contact}</div>
@@ -533,7 +538,7 @@ function ConversationDetail({ convo, onBack, onStateChange, onNavigateProject })
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-medium text-gray-900 text-sm">{convo.title}</span>
-              <StateBadge state={convo.state === "new" ? "active" : convo.state} />
+              <StateBadge state={convo.state} />
               <UrgencyIndicator urgency={convo.urgency} />
             </div>
             {convo.project && (
@@ -733,7 +738,7 @@ function NeglectReport({ conversations, onSelect, onBack }) {
                 <NeglectBadge level={c.neglect} />
                 <span className="text-sm text-gray-800 flex-1">{c.title}</span>
                 <span className="text-xs text-gray-400">
-                  {c.idleHours < 24 ? `${c.idleHours}h` : `${Math.floor(c.idleHours / 24)}d`} idle
+                  {formatIdleTime(c.idleHours, "idle")}
                 </span>
               </div>
             ))}
@@ -957,7 +962,9 @@ export default function OperatorWireframe() {
   };
 
   const handleSnooze = (id) => {
-    setSnoozed([...snoozed, id]);
+    setSnoozed((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
+    );
   };
 
   const handleStateChange = (id, newState) => {
@@ -1018,7 +1025,12 @@ export default function OperatorWireframe() {
         </div>
         <div className="ml-auto flex items-center gap-3">
           {snoozed.length > 0 && (
-            <span className="text-xs text-gray-400">{snoozed.length} snoozed</span>
+            <button
+              className="text-xs text-gray-400 hover:text-indigo-600 transition-colors"
+              onClick={() => setView(view === "snoozed" ? "queue" : "snoozed")}
+            >
+              {snoozed.length} snoozed {view === "snoozed" ? "▼" : "▶"}
+            </button>
           )}
           <span className="text-xs text-gray-400 tabular-nums">{visibleConvos.length} in queue</span>
         </div>
@@ -1094,6 +1106,36 @@ export default function OperatorWireframe() {
 
         {view === "projects" && (
           <ProjectsView onSelectProject={(p) => { setSelectedProject(p); setView("projectDetail"); }} />
+        )}
+
+        {view === "snoozed" && (
+          <div className="h-full overflow-y-auto">
+            <div className="max-w-3xl mx-auto p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <button className="text-sm text-gray-400 hover:text-gray-600" onClick={() => setView("queue")}>←</button>
+                <h1 className="text-lg font-semibold text-gray-900">Snoozed conversations</h1>
+              </div>
+              <div className="space-y-2">
+                {conversations.filter((c) => snoozed.includes(c.id)).map((c) => (
+                  <div key={c.id} className="bg-white border border-gray-200 rounded-lg p-3 flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-900">{c.title}</div>
+                      <div className="text-xs text-gray-500">{c.org} · {c.contact}</div>
+                    </div>
+                    <button
+                      className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors"
+                      onClick={() => handleSnooze(c.id)}
+                    >
+                      Unsnooze
+                    </button>
+                  </div>
+                ))}
+                {snoozed.length === 0 && (
+                  <div className="text-center text-gray-400 py-12">No snoozed conversations.</div>
+                )}
+              </div>
+            </div>
+          </div>
         )}
 
         {view === "projectDetail" && selectedProject && (
