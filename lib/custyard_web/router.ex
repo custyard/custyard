@@ -31,6 +31,8 @@ defmodule CustyardWeb.Router do
   scope "/api", CustyardWeb do
     pipe_through :api
 
+    get "/health", HealthController, :index
+
     # Legacy Lettermint webhook (backward compatible)
     post "/webhook/inbound", WebhookController, :inbound
 
