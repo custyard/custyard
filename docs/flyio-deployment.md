@@ -177,6 +177,15 @@ fly secrets set \
   TURSO_AUTH_TOKEN="your-auth-token"
 ```
 
+To get your database URL and token, install the [Turso CLI](https://docs.turso.tech/cli/installation):
+
+```bash
+brew install tursodatabase/tap/turso
+turso auth login
+turso db show <your-db-name>        # shows URL
+turso db tokens create <your-db-name>  # generates auth token
+```
+
 No compile-time adapter change needed — keep `repo_adapter: Ecto.Adapters.SQLite3`. Requires `exqlite` with libSQL support. See [Turso Elixir SDK docs](https://docs.turso.tech/sdk/elixir).
 
 ### Neon / Supabase
