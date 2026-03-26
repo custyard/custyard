@@ -3,8 +3,12 @@ import Config
 # Safe integer parsing helper (returns default on invalid input)
 parse_int = fn env_var, default ->
   case System.get_env(env_var) do
-    nil -> default
-    "" -> default
+    nil ->
+      default
+
+    "" ->
+      default
+
     value ->
       case Integer.parse(value) do
         {int, ""} -> int
