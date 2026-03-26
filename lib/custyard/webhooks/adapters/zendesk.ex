@@ -29,33 +29,37 @@ defmodule Custyard.Webhooks.Adapters.Zendesk do
   @impl true
   def normalize(params) do
     ticket = params["ticket"] || params
-
-    requester = ticket["requester"] || %{}
-    from_email = requester["email"] || params["current_user_email"] || ""
-    from_name = requester["name"] || params["current_user_name"]
-    from = if from_name, do: "#{from_name} <#{from_email}>", else: from_email
-
-    subject = ticket["subject"] || ticket["title"] || "(no subject)"
-    body = extract_body(ticket)
+    from = extract_sender(ticket, params)
 
     {:ok,
      %{
        from: from,
        to: nil,
-       subject: subject,
-       body: body,
+       subject: ticket["subject"] || ticket["title"] || "(no subject)",
+       body: extract_body(ticket),
        message_id: build_message_id(ticket),
        in_reply_to: nil,
        references: nil,
        headers: %{},
        source: :zendesk,
-       metadata: %{
-         external_id: to_string(ticket["id"]),
-         external_status: ticket["status"],
-         external_priority: ticket["priority"],
-         tags: ticket["tags"] || []
-       }
+       metadata: build_metadata(ticket)
      }}
+  end
+
+  defp extract_sender(ticket, params) do
+    requester = ticket["requester"] || %{}
+    email = requester["email"] || params["current_user_email"] || ""
+    name = requester["name"] || params["current_user_name"]
+    if name, do: "#{name} <#{email}>", else: email
+  end
+
+  defp build_metadata(ticket) do
+    %{
+      external_id: to_string(ticket["id"]),
+      external_status: ticket["status"],
+      external_priority: ticket["priority"],
+      tags: ticket["tags"] || []
+    }
   end
 
   defp extract_body(ticket) do

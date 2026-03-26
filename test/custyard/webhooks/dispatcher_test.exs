@@ -1,8 +1,8 @@
 defmodule Custyard.Webhooks.DispatcherTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.Webhooks.Dispatcher
   alias Custyard.{InboundRoute, InboundRouteWebhook}
+  alias Custyard.Webhooks.Dispatcher
 
   import Custyard.Factory
 

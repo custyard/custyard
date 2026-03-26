@@ -34,30 +34,16 @@ defmodule Custyard.Webhooks.Adapters.Intercom do
 
   @impl true
   def normalize(params) do
-    data = params["data"] || %{}
-    item = data["item"] || %{}
-
-    # Intercom wraps conversation data differently for different event types
-    conversation_parts = item["conversation_parts"] || %{}
-    parts = conversation_parts["conversation_parts"] || []
-    latest_part = List.last(parts)
-
+    {item, latest_part} = extract_item_and_part(params)
     source = item["source"] || %{}
-    author = source["author"] || latest_part_author(latest_part) || %{}
-
-    from_email = author["email"] || ""
-    from_name = author["name"]
-    from = if from_name, do: "#{from_name} <#{from_email}>", else: from_email
-
-    subject = source["subject"] || item["title"] || "(no subject)"
-    body = extract_body(source, latest_part)
+    author = resolve_author(source, latest_part)
 
     {:ok,
      %{
-       from: from,
+       from: format_sender(author),
        to: nil,
-       subject: subject,
-       body: body,
+       subject: source["subject"] || item["title"] || "(no subject)",
+       body: extract_body(source, latest_part),
        message_id: build_message_id(item, latest_part),
        in_reply_to: build_in_reply_to(item),
        references: nil,
@@ -69,6 +55,24 @@ defmodule Custyard.Webhooks.Adapters.Intercom do
          author_type: author["type"]
        }
      }}
+  end
+
+  defp extract_item_and_part(params) do
+    data = params["data"] || %{}
+    item = data["item"] || %{}
+    conversation_parts = item["conversation_parts"] || %{}
+    parts = conversation_parts["conversation_parts"] || []
+    {item, List.last(parts)}
+  end
+
+  defp resolve_author(source, latest_part) do
+    source["author"] || latest_part_author(latest_part) || %{}
+  end
+
+  defp format_sender(author) do
+    email = author["email"] || ""
+    name = author["name"]
+    if name, do: "#{name} <#{email}>", else: email
   end
 
   defp latest_part_author(nil), do: nil

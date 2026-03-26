@@ -27,7 +27,7 @@ defmodule Custyard.Webhooks.Adapters.ZendeskTest do
     test "normalizes ticket creation payload" do
       params = %{
         "ticket" => %{
-          "id" => 12345,
+          "id" => 12_345,
           "subject" => "Cannot access account",
           "description" => "I need help resetting my password",
           "status" => "new",
