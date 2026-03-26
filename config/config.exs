@@ -17,7 +17,7 @@ config :custyard, CustyardWeb.Endpoint,
   live_view: [signing_salt: "Ed+HmLgiLg+0Lm6jRnNF5s5tlCch/CuV"]
 
 config :esbuild,
-  version: "0.17.11",
+  version: "0.24.0",
   custyard: [
     args:
       ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
@@ -26,10 +26,9 @@ config :esbuild,
   ]
 
 config :tailwind,
-  version: "3.4.0",
+  version: "4.0.9",
   custyard: [
     args: ~w(
-      --config=tailwind.config.js
       --input=css/app.css
       --output=../priv/static/assets/app.css
     ),
