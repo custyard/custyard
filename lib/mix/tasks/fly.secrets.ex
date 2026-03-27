@@ -225,37 +225,120 @@ defmodule Mix.Tasks.Fly.Secrets do
     end
   end
 
+  # Regex for matching the [env] section in fly.toml up to the next section or EOF.
+  #
+  # Assumptions about fly.toml format (validated by Fly.io tooling):
+  #   - Section headers are on their own line: [env]
+  #   - Variables use format: KEY = "value" (spaces around =, double quotes)
+  #   - Variable names: uppercase letters, digits, underscores (start with letter)
+  #   - Next section header or EOF terminates the [env] block
+  #   - Empty lines within [env] are allowed
+  #
+  # If your fly.toml uses a different format, this task will error.
+  # Use preview mode first to verify changes before applying.
+  @env_section_greedy_regex ~r/\[env\]\n(?:[^\[]*?)(?=\n\[|\z)/s
+
   defp update_env_section(content, config) do
-    # Build new [env] section
     env_lines =
       config
       |> Enum.sort_by(fn {var, _} -> var end)
-      |> Enum.map(fn {var, value} -> "#{var} = \"#{value}\"" end)
+      |> Enum.map(fn {var, value} -> "#{var} = \"#{escape_toml_value(value)}\"" end)
 
     new_env = "[env]\n" <> Enum.join(env_lines, "\n")
 
-    # Replace existing [env] section or insert after [build]
     cond do
       String.contains?(content, "[env]") ->
-        # Replace existing [env] section (up to next section or EOF)
-        Regex.replace(
-          ~r/\[env\]\n(?:[A-Z_]+ = "[^"]*"\n?)*/,
-          content,
-          new_env <> "\n"
-        )
+        replace_existing_env_section(content, new_env, config)
 
       String.contains?(content, "[build]") ->
-        # Insert after [build] section
-        Regex.replace(
-          ~r/(\[build\]\n[^\[]*)/,
-          content,
-          "\\1\n#{new_env}\n"
-        )
+        insert_env_after_build(content, new_env)
 
       true ->
-        # Append at end
         content <> "\n#{new_env}\n"
     end
+  end
+
+  defp replace_existing_env_section(content, new_env, config) do
+    case extract_and_validate_env_section(content) do
+      {:ok, _existing_section} ->
+        # Use function replacement to avoid backslash interpretation in new_env
+        Regex.replace(@env_section_greedy_regex, content, fn _ -> new_env end, global: false)
+
+      :invalid ->
+        report_invalid_env_section(config)
+    end
+  end
+
+  defp extract_and_validate_env_section(content) do
+    case Regex.run(@env_section_greedy_regex, content) do
+      [existing_section] when existing_section != "" ->
+        if valid_env_section?(existing_section), do: {:ok, existing_section}, else: :invalid
+
+      _ ->
+        :invalid
+    end
+  end
+
+  defp valid_env_section?(section) do
+    # Check that everything after [env]\n is either:
+    # - Empty lines
+    # - KEY = "value" format lines
+    # - Nothing (empty section)
+    lines =
+      section
+      |> String.trim_leading("[env]\n")
+      |> String.split("\n")
+
+    Enum.all?(lines, fn line ->
+      trimmed = String.trim(line)
+      # Empty line, or properly formatted KEY = "value"
+      trimmed == "" or Regex.match?(~r/^[A-Z][A-Z0-9_]* = "[^"]*"$/, trimmed)
+    end)
+  end
+
+  defp report_invalid_env_section(config) do
+    Mix.shell().error("""
+    Error: Could not update [env] section in fly.toml.
+    The existing [env] section has an unexpected format.
+
+    Expected format:
+      [env]
+      KEY = "value"
+
+    Found entries that don't match (lowercase names, missing quotes, etc.).
+    Please fix fly.toml manually or remove the [env] section to let this task create it.
+
+    Variables that would be set: #{Enum.map_join(config, ", ", fn {k, _} -> k end)}
+    """)
+
+    exit({:shutdown, 1})
+  end
+
+  defp insert_env_after_build(content, new_env) do
+    # Insert after [build] section - matches [build] plus any non-section content
+    # Use function replacement to avoid backslash interpretation in new_env
+    result =
+      Regex.replace(
+        ~r/(\[build\]\n[^\[]*)/,
+        content,
+        fn _, build_section -> "#{build_section}\n#{new_env}\n" end,
+        global: false
+      )
+
+    if result == content do
+      # Fallback: [build] exists but regex didn't match its structure
+      # This shouldn't happen in practice but append as fallback
+      content <> "\n#{new_env}\n"
+    else
+      result
+    end
+  end
+
+  defp escape_toml_value(value) do
+    # Escape backslashes and double quotes for TOML string values
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\"", "\\\"")
   end
 
   defp set_fly_secrets(secrets, opts) do
