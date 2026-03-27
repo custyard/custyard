@@ -205,7 +205,9 @@ defmodule CustyardWeb.Portal.RequestListLive do
               />
             </svg>
           </div>
-          <p class="text-gray-600 dark:text-zinc-400 text-sm">No open requests. Create one to get started.</p>
+          <p class="text-gray-600 dark:text-zinc-400 text-sm">
+            No open requests. Create one to get started.
+          </p>
         </div>
       </div>
     </div>

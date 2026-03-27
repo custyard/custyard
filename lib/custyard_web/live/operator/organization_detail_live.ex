@@ -30,7 +30,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   end
 
   @impl true
-  def handle_params(%{"tab" => tab}, _uri, socket) when tab in ~w(conversations contacts projects) do
+  def handle_params(%{"tab" => tab}, _uri, socket)
+      when tab in ~w(conversations contacts projects) do
     socket =
       socket
       |> assign(:tab, tab)
@@ -71,7 +72,12 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             data-testid="org-detail-back"
           >
             <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
           </.link>
           <div class="flex-1">
@@ -96,7 +102,10 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
                 <span data-testid="org-detail-domain">{@organization.domain}</span>
               <% end %>
               <%= if @organization.custom_domain do %>
-                <span class="text-indigo-600 dark:text-indigo-400" data-testid="org-detail-custom-domain">
+                <span
+                  class="text-indigo-600 dark:text-indigo-400"
+                  data-testid="org-detail-custom-domain"
+                >
                   {@organization.custom_domain}
                 </span>
               <% end %>
@@ -106,13 +115,25 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
         <%!-- Tabs --%>
         <div class="mt-4 flex gap-4 border-b border-gray-200 dark:border-zinc-700 -mb-px">
-          <.tab_link tab="conversations" current={@tab} patch={~p"/operator/organizations/#{@organization.id}?tab=conversations"}>
+          <.tab_link
+            tab="conversations"
+            current={@tab}
+            patch={~p"/operator/organizations/#{@organization.id}?tab=conversations"}
+          >
             Conversations
           </.tab_link>
-          <.tab_link tab="contacts" current={@tab} patch={~p"/operator/organizations/#{@organization.id}?tab=contacts"}>
+          <.tab_link
+            tab="contacts"
+            current={@tab}
+            patch={~p"/operator/organizations/#{@organization.id}?tab=contacts"}
+          >
             Contacts
           </.tab_link>
-          <.tab_link tab="projects" current={@tab} patch={~p"/operator/organizations/#{@organization.id}?tab=projects"}>
+          <.tab_link
+            tab="projects"
+            current={@tab}
+            patch={~p"/operator/organizations/#{@organization.id}?tab=projects"}
+          >
             Projects
           </.tab_link>
         </div>
@@ -146,7 +167,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
         if(@tab == @current,
           do: "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400",
-          else: "border-transparent text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:border-gray-300 dark:hover:border-zinc-600"
+          else:
+            "border-transparent text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:border-gray-300 dark:hover:border-zinc-600"
         )
       ]}
       data-testid={"org-tab-#{@tab}"}
