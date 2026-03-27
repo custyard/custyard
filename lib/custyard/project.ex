@@ -38,7 +38,10 @@ defmodule Custyard.Project do
     field :is_template, :boolean, default: false
 
     belongs_to :organization, Custyard.Organization
+    # Single linked conversation (e.g., initial onboarding request)
     belongs_to :conversation, Custyard.Conversation
+    # All conversations associated with this project
+    has_many :conversations, Custyard.Conversation
     has_many :tasks, Custyard.Task
     has_many :inbound_routes, Custyard.InboundRoute
 

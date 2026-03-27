@@ -22,22 +22,44 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   """
   def process(normalized, route_context \\ %{}) do
     with {:ok, org, contact} <- resolve_sender(normalized, route_context),
-         {:ok, conversation, is_new} <-
-           find_or_create_conversation(normalized, org, contact, route_context) do
-      create_message(conversation, normalized)
-      Scoring.calculate_and_cache(conversation.id)
-
-      event = if is_new, do: :conversation_created, else: :conversation_updated
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
-
-      Phoenix.PubSub.broadcast(
-        Custyard.PubSub,
-        "conversation:#{conversation.id}",
-        {:message_added, conversation.id}
-      )
-
+         {:ok, {conversation, is_new}} <-
+           transact_conversation(normalized, org, contact, route_context) do
+      broadcast_updates(conversation, is_new)
       {:ok, Repo.reload!(conversation)}
     end
+  end
+
+  defp transact_conversation(normalized, org, contact, route_context) do
+    Repo.transaction(fn ->
+      case find_or_create_conversation(normalized, org, contact, route_context) do
+        {:ok, conversation, is_new} ->
+          create_message(conversation, normalized)
+          {conversation, is_new}
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp broadcast_updates(conversation, is_new) do
+    Scoring.calculate_and_cache(conversation.id)
+
+    event = if is_new, do: :conversation_created, else: :conversation_updated
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
+
+    # Broadcast to org-scoped topic for portal LiveViews
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations:org:#{conversation.organization_id}",
+      {event, conversation.id}
+    )
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversation:#{conversation.id}",
+      {:message_added, conversation.id}
+    )
   end
 
   defp resolve_sender(normalized, route_context) do
@@ -53,7 +75,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   end
 
   defp find_or_create_conversation(normalized, org, contact, route_context) do
-    case ThreadMatcher.find_thread(normalized) do
+    # Thread matching is scoped to organization to prevent cross-org leakage
+    case ThreadMatcher.find_thread(normalized, org.id) do
       {:ok, conversation} ->
         conversation = maybe_reactivate(conversation)
         {:ok, conversation, false}
@@ -100,8 +123,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     # Simplified message type
     source = message_source(origin)
 
-    %Message{}
-    |> Message.changeset(%{
+    # Use idempotent insert for webhook retry safety
+    attrs = %{
       conversation_id: conversation.id,
       source: source,
       origin: origin,
@@ -110,14 +133,19 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       message_id: normalized.message_id,
       in_reply_to: normalized.in_reply_to,
       is_internal_note: false
-    })
-    |> Repo.insert!()
+    }
 
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    case Message.insert_idempotent(attrs) do
+      {:ok, _message} ->
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    conversation
-    |> Ecto.Changeset.change(last_customer_action_at: now)
-    |> Repo.update!()
+        conversation
+        |> Ecto.Changeset.change(last_customer_action_at: now)
+        |> Repo.update!()
+
+      {:error, changeset} ->
+        raise Ecto.InvalidChangesetError, action: :insert, changeset: changeset
+    end
   end
 
   # Map adapter source to message source enum
@@ -145,12 +173,30 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     end
   end
 
+  # Urgency patterns - use word boundaries to reduce false positives
+  # "down" is context-sensitive: "site is down" vs "scroll down"
+  @urgent_patterns [
+    ~r/\burgent\b/i,
+    ~r/\bemergency\b/i,
+    ~r/\bcritical\b/i,
+    ~r/\boutage\b/i,
+    # "down" with service context: "is down", "went down", "site down", "server down"
+    ~r/\b(is|went|site|server|service|system|app|application|website)\s+down\b/i,
+    ~r/\bdown\s*(for|since|again)\b/i
+  ]
+  @elevated_patterns [
+    ~r/\bimportant\b/i,
+    ~r/\basap\b/i,
+    ~r/\bpriority\b/i
+  ]
+
   defp detect_urgency(subject, body) do
-    text = String.downcase((subject || "") <> " " <> (body || ""))
+    # Limit scan to first 2000 chars to avoid scanning huge email bodies
+    text = String.slice((subject || "") <> " " <> (body || ""), 0, 2000)
 
     cond do
-      String.contains?(text, ["urgent", "emergency", "critical", "down", "outage"]) -> :urgent
-      String.contains?(text, ["important", "asap", "priority"]) -> :elevated
+      Enum.any?(@urgent_patterns, &Regex.match?(&1, text)) -> :urgent
+      Enum.any?(@elevated_patterns, &Regex.match?(&1, text)) -> :elevated
       true -> :normal
     end
   end

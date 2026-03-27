@@ -90,6 +90,14 @@ defmodule Custyard.Webhooks.Dispatcher do
       end)
     end
 
+    # Disambiguation is reserved for future implementation
+    # (sends DM to ambiguous senders asking them to clarify their identity)
+    # Currently a no-op - the purpose is in the schema but not yet implemented
+    if MapSet.member?(enabled_purposes, :disambiguation) do
+      # TODO: Implement Purposes.Disambiguation.process/3
+      :noop
+    end
+
     :ok
   end
 end

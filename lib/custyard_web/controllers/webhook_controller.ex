@@ -83,8 +83,14 @@ defmodule CustyardWeb.WebhookController do
 
   defp find_route(callback_token) do
     case Repo.get_by(InboundRoute, callback_token: callback_token) do
-      nil -> {:error, "unknown route"}
-      route -> {:ok, route}
+      nil ->
+        # Add a small random delay to prevent timing attacks
+        # This makes it harder to distinguish "not found" from "found but failed"
+        :timer.sleep(:rand.uniform(50) + 10)
+        {:error, "unauthorized"}
+
+      route ->
+        {:ok, route}
     end
   end
 

@@ -41,18 +41,23 @@ defmodule Custyard.Scoring.Scheduler do
   end
 
   defp run_recalculate do
+    # Run all checks in parallel Tasks to avoid blocking the GenServer
+    # This prevents long-running recalculations from blocking dormancy/neglect checks
+    Task.start(fn -> run_recalculate_task() end)
+    Task.start(fn -> run_dormancy_check() end)
+    Task.start(fn -> run_neglect_notifications() end)
+  end
+
+  defp run_recalculate_task do
     Logger.info("Scoring.Scheduler: starting recalculation")
 
     case safe_recalculate() do
-      :ok ->
-        Logger.info("Scoring.Scheduler: recalculation complete")
+      {:ok, count} ->
+        Logger.info("Scoring.Scheduler: recalculated #{count} conversations")
 
       {:error, reason} ->
         Logger.error("Scoring.Scheduler: recalculation failed: #{inspect(reason)}")
     end
-
-    run_dormancy_check()
-    run_neglect_notifications()
   end
 
   defp run_dormancy_check do
@@ -82,8 +87,8 @@ defmodule Custyard.Scoring.Scheduler do
   end
 
   defp safe_recalculate do
-    Recalculator.recalculate_all()
-    :ok
+    count = Recalculator.recalculate_all()
+    {:ok, count}
   rescue
     e -> {:error, e}
   catch

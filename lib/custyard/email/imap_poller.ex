@@ -62,11 +62,18 @@ defmodule Custyard.Email.ImapPoller do
 
   @impl true
   def init(opts) do
+    # Store a credential fetcher function instead of the raw password.
+    # This prevents password exposure in crash dumps and :sys.get_state calls.
+    credential_fetcher = Keyword.get_lazy(opts, :credential_fetcher, fn ->
+      password = Keyword.fetch!(opts, :password)
+      fn -> password end
+    end)
+
     state = %{
       host: Keyword.fetch!(opts, :host),
       port: Keyword.get(opts, :port, @default_port),
       username: Keyword.fetch!(opts, :username),
-      password: Keyword.fetch!(opts, :password),
+      credential_fetcher: credential_fetcher,
       folder: Keyword.get(opts, :folder, @default_folder),
       poll_interval: Keyword.get(opts, :poll_interval, @default_poll_interval),
       ssl: Keyword.get(opts, :ssl, true),
@@ -92,7 +99,7 @@ defmodule Custyard.Email.ImapPoller do
   @impl true
   def handle_call(:get_state, _from, state) do
     # Return state without sensitive data
-    safe_state = Map.drop(state, [:password])
+    safe_state = Map.drop(state, [:credential_fetcher])
     {:reply, safe_state, state}
   end
 
@@ -138,7 +145,10 @@ defmodule Custyard.Email.ImapPoller do
     case connect(state) do
       {:ok, conn} ->
         try do
-          with {:ok, _} <- Plover.login(conn, state.username, state.password),
+          # Fetch password on-demand to avoid storing in state
+          password = state.credential_fetcher.()
+
+          with {:ok, _} <- Plover.login(conn, state.username, password),
                {:ok, _} <- Plover.select(conn, state.folder),
                {:ok, messages} <- fetch_unseen(conn),
                processed <- process_messages(conn, messages) do
@@ -196,18 +206,24 @@ defmodule Custyard.Email.ImapPoller do
 
     Logger.debug("Processing IMAP message UID: #{uid}")
 
-    with {:ok, raw_email} <- fetch_raw_email(conn, uid),
-         {:ok, parsed} <- Parser.parse(raw_email),
-         {:ok, _conversation} <- Processor.process(parsed) do
-      # Mark as seen after successful processing
-      mark_as_seen(conn, uid)
-      Logger.debug("Successfully processed IMAP message UID: #{uid}")
-      :ok
-    else
-      {:error, reason} ->
-        Logger.warning("Failed to process IMAP message UID #{uid}: #{inspect(reason)}")
-        {:error, reason}
-    end
+    result =
+      with {:ok, raw_email} <- fetch_raw_email(conn, uid),
+           {:ok, parsed} <- Parser.parse(raw_email),
+           {:ok, _conversation} <- Processor.process(parsed) do
+        Logger.debug("Successfully processed IMAP message UID: #{uid}")
+        :ok
+      else
+        {:error, reason} ->
+          Logger.warning("Failed to process IMAP message UID #{uid}: #{inspect(reason)}")
+          {:error, reason}
+      end
+
+    # Always mark as seen to prevent infinite retry loops on messages that
+    # consistently fail processing. Failed messages are logged but won't block
+    # the poller from advancing.
+    mark_as_seen(conn, uid)
+
+    result
   end
 
   defp fetch_raw_email(conn, uid) do

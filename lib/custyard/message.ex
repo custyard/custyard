@@ -43,15 +43,40 @@ defmodule Custyard.Message do
     ])
     |> validate_required([:source, :body, :conversation_id])
     |> validate_length(:body, max: 100_000)
-    |> validate_inclusion(:source, @sources)
-    |> maybe_validate_origin()
+    # Note: :source and :origin use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:conversation_id)
+    # Unique constraint on message_id for webhook idempotency
+    |> unique_constraint(:message_id, name: :messages_message_id_unique_index)
   end
 
-  defp maybe_validate_origin(changeset) do
-    case get_field(changeset, :origin) do
-      nil -> changeset
-      _ -> validate_inclusion(changeset, :origin, @origins)
+  @doc """
+  Insert a message, handling duplicate message_id gracefully.
+
+  For webhook idempotency: if a message with the same message_id already exists,
+  returns the existing message instead of creating a duplicate.
+
+  Returns `{:ok, message}` on success or duplicate, `{:error, changeset}` on validation failure.
+  """
+  def insert_idempotent(attrs) do
+    alias Custyard.Repo
+
+    changeset = changeset(%__MODULE__{}, attrs)
+
+    case Repo.insert(changeset) do
+      {:ok, message} ->
+        {:ok, message}
+
+      {:error, %Ecto.Changeset{errors: errors} = cs} ->
+        # Check if it's a duplicate message_id error
+        if Keyword.has_key?(errors, :message_id) and attrs[:message_id] do
+          # Return the existing message
+          case Repo.get_by(__MODULE__, message_id: attrs[:message_id]) do
+            nil -> {:error, cs}
+            existing -> {:ok, existing}
+          end
+        else
+          {:error, cs}
+        end
     end
   end
 end

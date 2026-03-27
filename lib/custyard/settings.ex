@@ -39,6 +39,9 @@ defmodule Custyard.Settings do
     # Example: %{"X-Customer-Tier" => %{"property" => "tier", "mapping" => %{"ent" => "enterprise"}}}
     field :sieve_header_mappings, :map, default: %{}
 
+    # Singleton constraint - always true, unique constraint ensures only one row
+    field :singleton, :boolean, default: true
+
     timestamps(type: :utc_datetime)
   end
 
@@ -173,6 +176,7 @@ defmodule Custyard.Settings do
     settings
     |> cast(attrs, [:score_weights, :neglect_thresholds, :sieve_header_mappings])
     |> validate_weights()
+    |> validate_weight_values()
     |> validate_thresholds()
     |> validate_sieve_header_mappings()
   end
@@ -192,6 +196,44 @@ defmodule Custyard.Settings do
         end
     end
   end
+
+  # Validate that weight values are finite positive numbers
+  defp validate_weight_values(changeset) do
+    case get_change(changeset, :score_weights) do
+      nil ->
+        changeset
+
+      weights ->
+        invalid_values =
+          weights
+          |> Enum.reject(fn {_k, v} ->
+            is_number(v) and v >= 0 and v <= 1000 and not is_nan_or_inf?(v)
+          end)
+          |> Enum.map(fn {k, _v} -> k end)
+
+        if Enum.empty?(invalid_values) do
+          changeset
+        else
+          add_error(
+            changeset,
+            :score_weights,
+            "contains invalid values for: #{Enum.join(invalid_values, ", ")}. Values must be numbers between 0 and 1000."
+          )
+        end
+    end
+  end
+
+  # Check for NaN and Infinity
+  # In Elixir, NaN != NaN (self-comparison is false)
+  # Infinity compares as greater than any finite float
+  defp is_nan_or_inf?(value) when is_float(value) do
+    # NaN self-comparison returns false
+    value != value or
+      # Check for infinity by comparing to a very large number
+      abs(value) > 1.0e308
+  end
+
+  defp is_nan_or_inf?(_), do: false
 
   defp validate_thresholds(changeset) do
     case get_change(changeset, :neglect_thresholds) do
@@ -272,11 +314,11 @@ defmodule Custyard.Settings do
         |> Map.new()
 
       %__MODULE__{
-        id: 1,
         score_weights: stringify_keys(@default_weights),
-        neglect_thresholds: thresholds_for_db
+        neglect_thresholds: thresholds_for_db,
+        singleton: true
       }
-      |> Repo.insert!(on_conflict: :nothing, conflict_target: [:id])
+      |> Repo.insert!(on_conflict: :nothing, conflict_target: [:singleton])
 
       # Always re-read the persisted row - this is the authoritative source of truth
       Repo.one!(__MODULE__)

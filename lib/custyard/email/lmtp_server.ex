@@ -546,29 +546,80 @@ defmodule Custyard.Email.LMTPServer do
     current_count = length(state.to)
     max_recipients = Map.get(state, :max_recipients, @default_max_recipients)
 
-    cond do
-      max_recipients == :infinity ->
-        {:ok, %{state | to: [to | state.to]}}
+    # Validate recipient domain before accepting
+    with :ok <- validate_recipient_domain(to) do
+      cond do
+        max_recipients == :infinity ->
+          {:ok, %{state | to: [to | state.to]}}
 
-      current_count < max_recipients ->
-        {:ok, %{state | to: [to | state.to]}}
+        current_count < max_recipients ->
+          {:ok, %{state | to: [to | state.to]}}
 
-      true ->
-        # Emit telemetry for recipient limit exceeded
-        :telemetry.execute(
-          [:custyard, :lmtp, :recipient_limit, :exceeded],
-          %{count: 1},
-          %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
-        )
+        true ->
+          # Emit telemetry for recipient limit exceeded
+          :telemetry.execute(
+            [:custyard, :lmtp, :recipient_limit, :exceeded],
+            %{count: 1},
+            %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
+          )
 
-        Logger.warning("LMTP recipient limit exceeded",
-          current_count: current_count,
-          max_recipients: max_recipients,
+          Logger.warning("LMTP recipient limit exceeded",
+            current_count: current_count,
+            max_recipients: max_recipients,
+            sender: state[:from]
+          )
+
+          {:error, "452 4.5.3 Too many recipients", state}
+      end
+    else
+      {:error, :invalid_domain} ->
+        Logger.warning("LMTP rejecting unknown recipient domain",
+          recipient: to,
           sender: state[:from]
         )
 
-        {:error, "452 4.5.3 Too many recipients", state}
+        {:error, "550 5.1.1 Unknown recipient domain", state}
     end
+  end
+
+  # Validate that the recipient domain is one we serve
+  # Prevents open relay by rejecting mail for unknown domains
+  defp validate_recipient_domain(recipient) when is_binary(recipient) do
+    case extract_domain(recipient) do
+      nil ->
+        {:error, :invalid_domain}
+
+      domain ->
+        # Check if domain matches any organization's domain or custom_domain
+        if known_domain?(domain) do
+          :ok
+        else
+          {:error, :invalid_domain}
+        end
+    end
+  end
+
+  defp validate_recipient_domain(_), do: {:error, :invalid_domain}
+
+  defp extract_domain(email) do
+    case String.split(to_string(email), "@") do
+      [_, domain] -> String.downcase(domain)
+      _ -> nil
+    end
+  end
+
+  # Check if domain is known (matches an organization)
+  defp known_domain?(domain) do
+    import Ecto.Query
+
+    # Check both domain and custom_domain fields
+    query =
+      from(o in Custyard.Organization,
+        where: o.domain == ^domain or o.custom_domain == ^domain,
+        limit: 1
+      )
+
+    Custyard.Repo.exists?(query)
   end
 
   @impl true
@@ -910,6 +961,9 @@ defmodule Custyard.Email.LMTPServer do
 
   defp check_global_limit(%{messages_per_minute: limit, window_seconds: window}) do
     if limit == :infinity do
+      # Still clean up old entries periodically even when rate limiting is disabled
+      # This prevents unbounded ETS table growth
+      maybe_cleanup_stale_entries(window)
       :ok
     else
       current_count = get_global_message_count(window)
@@ -918,6 +972,33 @@ defmodule Custyard.Email.LMTPServer do
         :ok
       else
         {:error, :global_limit}
+      end
+    end
+  end
+
+  # Clean up stale entries approximately every 100 messages to avoid memory leak
+  # when rate limiting is disabled (limit == :infinity)
+  defp maybe_cleanup_stale_entries(window_seconds) do
+    # Only clean up 1% of the time to avoid overhead
+    if :rand.uniform(100) == 1 do
+      now = System.system_time(:second)
+      window_start = now - window_seconds
+
+      try do
+        :ets.foldl(
+          fn
+            {{:count, timestamp}, _count}, acc when timestamp <= window_start ->
+              :ets.delete(@rate_limit_table, {:count, timestamp})
+              acc
+
+            _, acc ->
+              acc
+          end,
+          :ok,
+          @rate_limit_table
+        )
+      rescue
+        ArgumentError -> :ok
       end
     end
   end

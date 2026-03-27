@@ -93,8 +93,8 @@ defmodule Custyard.Email.Processor do
   end
 
   defp find_or_create_conversation(parsed, org, contact) do
-    # Try threading first
-    case ThreadMatcher.find_thread(parsed) do
+    # Try threading first, scoped to the organization
+    case ThreadMatcher.find_thread(parsed, org.id) do
       {:ok, conversation} ->
         # Reactivate if dormant/resolved
         conversation = maybe_reactivate(conversation)
@@ -118,6 +118,8 @@ defmodule Custyard.Email.Processor do
       contact_id: contact && contact.id,
       subject: parsed.subject,
       state: :new,
+      # Explicitly set source (LMTP path = direct email)
+      source: :email,
       urgency: detect_urgency(parsed.subject, parsed.body),
       last_customer_action_at: now
     }
@@ -135,24 +137,31 @@ defmodule Custyard.Email.Processor do
   defp create_message(conversation, parsed) do
     body = String.slice(parsed.body || "", 0, @max_body_length)
 
-    %Message{}
-    |> Message.changeset(%{
+    # Use idempotent insert for duplicate email safety
+    attrs = %{
       conversation_id: conversation.id,
       source: :email,
+      # LMTP/direct email - origin tracks the adapter source
+      origin: :email,
       sender_email: parsed.from,
       body: body,
       message_id: parsed.message_id,
       in_reply_to: parsed.in_reply_to,
       is_internal_note: false
-    })
-    |> Repo.insert!()
+    }
 
-    # Update last_customer_action_at
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    case Message.insert_idempotent(attrs) do
+      {:ok, _message} ->
+        # Update last_customer_action_at
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    conversation
-    |> Ecto.Changeset.change(last_customer_action_at: now)
-    |> Repo.update!()
+        conversation
+        |> Ecto.Changeset.change(last_customer_action_at: now)
+        |> Repo.update!()
+
+      {:error, changeset} ->
+        raise Ecto.InvalidChangesetError, action: :insert, changeset: changeset
+    end
   end
 
   defp maybe_reactivate(conversation) do
@@ -165,17 +174,22 @@ defmodule Custyard.Email.Processor do
     end
   end
 
+  # Urgency patterns - use word boundaries to reduce false positives
+  # "down" is context-sensitive: "site is down" vs "scroll down"
   @urgent_patterns [
-    ~r/\burgent\b/,
-    ~r/\bemergency\b/,
-    ~r/\bcritical\b/,
-    ~r/\bdown\b/,
-    ~r/\boutage\b/
+    ~r/\burgent\b/i,
+    ~r/\bemergency\b/i,
+    ~r/\bcritical\b/i,
+    ~r/\boutage\b/i,
+    # "down" with service context: "is down", "went down", "site down", "server down"
+    ~r/\b(is|went|site|server|service|system|app|application|website)\s+down\b/i,
+    ~r/\bdown\s*(for|since|again)\b/i
   ]
-  @elevated_patterns [~r/\bimportant\b/, ~r/\basap\b/, ~r/\bpriority\b/]
+  @elevated_patterns [~r/\bimportant\b/i, ~r/\basap\b/i, ~r/\bpriority\b/i]
 
   defp detect_urgency(subject, body) do
-    text = String.downcase(subject <> " " <> body)
+    # Limit scan to first 2000 chars to avoid scanning huge email bodies
+    text = String.slice((subject || "") <> " " <> (body || ""), 0, 2000)
 
     cond do
       Enum.any?(@urgent_patterns, &Regex.match?(&1, text)) -> :urgent

@@ -7,6 +7,7 @@ defmodule Custyard.Scoring do
           (velocity_weight * velocity_score) + neglect_bonus
   """
 
+  require Logger
   import Ecto.Query
   alias Custyard.{Conversation, Message, Repo, Settings}
 
@@ -41,60 +42,185 @@ defmodule Custyard.Scoring do
     basic: {48, 72}
   }
 
-  @doc "Calculate and cache score for a conversation"
+  @doc """
+  Calculate and cache score for a conversation.
+
+  Returns `{:ok, score}` on success, `{:error, reason}` on failure.
+  Non-raising version to allow callers to handle errors gracefully.
+  """
   def calculate_and_cache(conversation_id) do
-    conversation = Repo.get!(Conversation, conversation_id) |> Repo.preload(:organization)
-    score = calculate(conversation)
+    case Repo.get(Conversation, conversation_id) do
+      nil ->
+        {:error, :not_found}
 
-    conversation
-    |> Ecto.Changeset.change(cached_score: score)
-    |> Repo.update!()
+      conversation ->
+        conversation = Repo.preload(conversation, :organization)
+        score = calculate(conversation)
 
-    score
+        case conversation
+             |> Ecto.Changeset.change(cached_score: score)
+             |> Repo.update() do
+          {:ok, _updated} ->
+            {:ok, score}
+
+          {:error, changeset} ->
+            {:error, {:update_failed, changeset}}
+        end
+    end
   end
 
-  @doc "Calculate score without caching (for display/debugging)"
+  @doc """
+  Calculate and cache scores for a list of conversation IDs.
+  More efficient than calling calculate_and_cache/1 in a loop as it batch-preloads
+  message counts in a single query.
+  """
+  def calculate_and_cache_batch(conversation_ids) when is_list(conversation_ids) do
+    if Enum.empty?(conversation_ids), do: :ok
+
+    # Batch load conversations with organizations
+    conversations =
+      from(c in Conversation,
+        where: c.id in ^conversation_ids,
+        preload: [:organization]
+      )
+      |> Repo.all()
+
+    # Batch load message counts
+    cutoff = DateTime.add(DateTime.utc_now(), -24, :hour)
+
+    message_counts =
+      from(m in Message,
+        where: m.conversation_id in ^conversation_ids,
+        where: m.inserted_at >= ^cutoff,
+        group_by: m.conversation_id,
+        select: {m.conversation_id, count(m.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Calculate and update each - use non-raising update to handle race conditions
+    updated_count =
+      conversations
+      |> Enum.map(fn conv ->
+        msg_count = Map.get(message_counts, conv.id, 0)
+        score = calculate_with_message_count(conv, msg_count)
+
+        case conv
+             |> Ecto.Changeset.change(cached_score: score)
+             |> Repo.update() do
+          {:ok, _} -> 1
+          {:error, _} -> 0
+        end
+      end)
+      |> Enum.sum()
+
+    updated_count
+  end
+
+  # Internal: Calculate score with pre-fetched message count
+  # Returns 0 for conversations with nil organization (e.g., disambiguation conversations)
+  defp calculate_with_message_count(conversation, message_count) do
+    conversation = ensure_preloaded(conversation, :organization)
+
+    if is_nil(conversation.organization) do
+      0
+    else
+      weights = get_weights()
+
+      idle = idle_score(conversation) * weights.idle
+      state = state_score(conversation) * weights.state
+      tier = tier_score(conversation) * weights.tier
+      urgency = urgency_score(conversation) * weights.urgency
+      velocity = velocity_score_from_count(message_count) * weights.velocity
+      neglect = neglect_bonus(conversation) * weights.neglect
+
+      round(idle + state + tier + urgency + velocity + neglect)
+    end
+  end
+
+  defp velocity_score_from_count(count) do
+    # Log scale: ln(count + 1) * 3, capped at 10
+    min(10, :math.log(count + 1) * 3)
+  end
+
+  @doc """
+  Calculate score without caching (for display/debugging).
+
+  Returns 0 for conversations with nil organization (e.g., disambiguation conversations).
+  """
   def calculate(conversation) do
     conversation = ensure_preloaded(conversation, :organization)
-    weights = get_weights()
 
-    idle = idle_score(conversation) * weights.idle
-    state = state_score(conversation) * weights.state
-    tier = tier_score(conversation) * weights.tier
-    urgency = urgency_score(conversation) * weights.urgency
-    velocity = velocity_score(conversation) * weights.velocity
-    neglect = neglect_bonus(conversation) * weights.neglect
+    # Disambiguation conversations have nil organization - return 0 score
+    if is_nil(conversation.organization) do
+      0
+    else
+      weights = get_weights()
 
-    round(idle + state + tier + urgency + velocity + neglect)
+      idle = idle_score(conversation) * weights.idle
+      state = state_score(conversation) * weights.state
+      tier = tier_score(conversation) * weights.tier
+      urgency = urgency_score(conversation) * weights.urgency
+      velocity = velocity_score(conversation) * weights.velocity
+      neglect = neglect_bonus(conversation) * weights.neglect
+
+      round(idle + state + tier + urgency + velocity + neglect)
+    end
   end
 
-  @doc "Get score breakdown for transparency UI"
+  @doc """
+  Get score breakdown for transparency UI.
+
+  Returns all zeros for conversations with nil organization (e.g., disambiguation conversations).
+  """
   def breakdown(conversation) do
     conversation = ensure_preloaded(conversation, :organization)
 
-    %{
-      idle: round(idle_score(conversation)),
-      state: round(state_score(conversation)),
-      tier: round(tier_score(conversation)),
-      urgency: round(urgency_score(conversation)),
-      velocity: round(velocity_score(conversation)),
-      neglect_bonus: round(neglect_bonus(conversation)),
-      total: calculate(conversation)
-    }
+    if is_nil(conversation.organization) do
+      %{
+        idle: 0,
+        state: 0,
+        tier: 0,
+        urgency: 0,
+        velocity: 0,
+        neglect_bonus: 0,
+        total: 0
+      }
+    else
+      %{
+        idle: round(idle_score(conversation)),
+        state: round(state_score(conversation)),
+        tier: round(tier_score(conversation)),
+        urgency: round(urgency_score(conversation)),
+        velocity: round(velocity_score(conversation)),
+        neglect_bonus: round(neglect_bonus(conversation)),
+        total: calculate(conversation)
+      }
+    end
   end
 
-  @doc "Get neglect status for a conversation"
+  @doc """
+  Get neglect status for a conversation.
+
+  Returns :ok for conversations with nil organization (e.g., disambiguation conversations).
+  """
   def neglect_status(conversation) do
     conversation = ensure_preloaded(conversation, :organization)
-    hours_idle = hours_since_operator_action(conversation)
-    tier = conversation.organization.tier
-    thresholds = get_neglect_thresholds()
-    {warning, critical} = Map.get(thresholds, tier, {24, 48})
 
-    cond do
-      hours_idle >= critical -> :critical
-      hours_idle >= warning -> :warning
-      true -> :ok
+    # Disambiguation conversations have nil organization - always :ok status
+    if is_nil(conversation.organization) do
+      :ok
+    else
+      hours_idle = hours_since_operator_action(conversation)
+      tier = conversation.organization.tier
+      thresholds = get_neglect_thresholds()
+      {warning, critical} = Map.get(thresholds, tier, {24, 48})
+
+      cond do
+        hours_idle >= critical -> :critical
+        hours_idle >= warning -> :warning
+        true -> :ok
+      end
     end
   end
 
@@ -158,13 +284,17 @@ defmodule Custyard.Scoring do
   defp get_weights do
     Settings.get_weights()
   rescue
-    _ -> %{idle: 1.0, state: 1.0, tier: 1.0, urgency: 1.0, velocity: 1.0, neglect: 1.0}
+    e ->
+      Logger.error("Failed to load score weights from Settings, using defaults: #{inspect(e)}")
+      %{idle: 1.0, state: 1.0, tier: 1.0, urgency: 1.0, velocity: 1.0, neglect: 1.0}
   end
 
   defp get_neglect_thresholds do
     Settings.get_neglect_thresholds()
   rescue
-    _ -> @default_neglect_thresholds
+    e ->
+      Logger.error("Failed to load neglect thresholds from Settings, using defaults: #{inspect(e)}")
+      @default_neglect_thresholds
   end
 
   defp ensure_preloaded(struct, assoc) do
