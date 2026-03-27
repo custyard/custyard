@@ -21,6 +21,7 @@ defmodule Custyard.Organization do
     has_many :projects, Custyard.Project
     has_many :tasks, Custyard.Task
     has_many :operator_accounts, Custyard.OperatorAccount
+    has_many :inbound_routes, Custyard.InboundRoute
 
     timestamps(type: :utc_datetime)
   end
