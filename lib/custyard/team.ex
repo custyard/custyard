@@ -22,7 +22,7 @@ defmodule Custyard.Team do
     team
     |> cast(attrs, [:name, :organization_id])
     |> validate_required([:name])
-    |> unique_constraint(:name)
+    |> unique_constraint([:organization_id, :name])
     |> foreign_key_constraint(:organization_id)
   end
 end

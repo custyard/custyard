@@ -17,15 +17,27 @@ defmodule Custyard.TeamTest do
       assert "can't be blank" in errors_on(changeset).name
     end
 
-    test "enforces unique name" do
-      insert_team(name: "Support Team")
+    test "enforces unique name within an organization" do
+      org = insert_organization()
+      insert_team(name: "Support Team", organization_id: org.id)
 
       {:error, changeset} =
         %Team{}
-        |> Team.changeset(%{name: "Support Team"})
+        |> Team.changeset(%{name: "Support Team", organization_id: org.id})
         |> Repo.insert()
 
-      assert errors_on(changeset)[:name]
+      assert errors_on(changeset)[:organization_id]
+    end
+
+    test "allows same name in different organizations" do
+      org1 = insert_organization()
+      org2 = insert_organization()
+      insert_team(name: "Support Team", organization_id: org1.id)
+
+      assert {:ok, _team} =
+               %Team{}
+               |> Team.changeset(%{name: "Support Team", organization_id: org2.id})
+               |> Repo.insert()
     end
 
     test "accepts organization_id" do

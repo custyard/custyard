@@ -9,7 +9,7 @@ defmodule Custyard.Repo.Migrations.AddTeamsAndOperatorRoles do
       timestamps(type: :utc_datetime)
     end
 
-    create unique_index(:teams, [:name])
+    create unique_index(:teams, [:organization_id, :name])
     create index(:teams, [:organization_id])
 
     alter table(:operator_accounts) do
