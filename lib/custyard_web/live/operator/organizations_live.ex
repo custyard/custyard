@@ -314,7 +314,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
                 Logo
               </label>
               <div class="flex items-start gap-4">
-                <div :if={@editing_org && @editing_org.logo_url} class="flex-shrink-0">
+                <div :if={@editing_org && @editing_org.logo_url} class="shrink-0">
                   <img
                     src={@editing_org.logo_url}
                     alt="Current logo"
@@ -441,7 +441,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
     >
       <div class="flex items-start justify-between">
         <div class="flex items-start gap-3">
-          <div :if={@org.logo_url} class="flex-shrink-0">
+          <div :if={@org.logo_url} class="shrink-0">
             <img
               src={@org.logo_url}
               alt={"#{@org.name} logo"}
@@ -450,7 +450,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           </div>
           <div
             :if={!@org.logo_url}
-            class="flex-shrink-0 w-10 h-10 rounded bg-gray-100 dark:bg-zinc-800 flex items-center justify-center"
+            class="shrink-0 w-10 h-10 rounded bg-gray-100 dark:bg-zinc-800 flex items-center justify-center"
           >
             <span class="text-gray-400 dark:text-zinc-500 text-sm font-medium">
               {String.first(@org.name)}
