@@ -2001,4 +2001,174 @@ defmodule Custyard.Email.LMTPServerTest do
       {:ok, org: org}
     end
   end
+
+  describe "recipient domain validation (open relay prevention)" do
+    setup do
+      {:ok, pid} = LMTPServer.start_link(port: @test_port)
+
+      # Create organizations with known domains
+      org1 = insert_organization(domain: "acme.example.com")
+      org2 = insert_organization(domain: "widgets.example.com", custom_domain: "support.widgets.com")
+
+      on_exit(fn -> LMTPServer.stop(pid) end)
+      {:ok, server: pid, org1: org1, org2: org2}
+    end
+
+    test "accepts RCPT TO for known organization domain", %{org1: _org1} do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Recipient domain matches org1's domain
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support@acme.example.com>\r\n")
+      {:ok, rcpt_resp} = :gen_tcp.recv(socket, 0, 5000)
+
+      assert rcpt_resp =~ "250"
+
+      :gen_tcp.close(socket)
+    end
+
+    test "accepts RCPT TO for organization custom_domain", %{org2: _org2} do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Recipient domain matches org2's custom_domain
+      :ok = :gen_tcp.send(socket, "RCPT TO:<help@support.widgets.com>\r\n")
+      {:ok, rcpt_resp} = :gen_tcp.recv(socket, 0, 5000)
+
+      assert rcpt_resp =~ "250"
+
+      :gen_tcp.close(socket)
+    end
+
+    test "rejects RCPT TO for unknown domain with 550 error" do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Unknown domain - should be rejected to prevent open relay
+      :ok = :gen_tcp.send(socket, "RCPT TO:<user@unknown-domain.com>\r\n")
+      {:ok, rcpt_resp} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Should return 550 5.1.1 Unknown recipient domain
+      assert rcpt_resp =~ "550"
+
+      :gen_tcp.close(socket)
+    end
+
+    test "rejects invalid email format without @ sign" do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Invalid email - no @ sign
+      :ok = :gen_tcp.send(socket, "RCPT TO:<invalid-email>\r\n")
+      {:ok, rcpt_resp} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Should be rejected (5xx error)
+      assert rcpt_resp =~ "5"
+
+      :gen_tcp.close(socket)
+    end
+
+    test "domain matching is case-insensitive", %{org1: _org1} do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Same domain with different case - should still match
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support@ACME.EXAMPLE.COM>\r\n")
+      {:ok, rcpt_resp} = :gen_tcp.recv(socket, 0, 5000)
+
+      assert rcpt_resp =~ "250"
+
+      :gen_tcp.close(socket)
+    end
+
+    test "accepts multiple recipients on known domains", %{org1: _org1, org2: _org2} do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # First recipient on org1's domain
+      :ok = :gen_tcp.send(socket, "RCPT TO:<user1@acme.example.com>\r\n")
+      {:ok, rcpt_resp1} = :gen_tcp.recv(socket, 0, 5000)
+      assert rcpt_resp1 =~ "250"
+
+      # Second recipient on org2's domain
+      :ok = :gen_tcp.send(socket, "RCPT TO:<user2@widgets.example.com>\r\n")
+      {:ok, rcpt_resp2} = :gen_tcp.recv(socket, 0, 5000)
+      assert rcpt_resp2 =~ "250"
+
+      :gen_tcp.close(socket)
+    end
+
+    test "rejects relay to external domain even after accepting valid recipient" do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # First recipient is valid
+      :ok = :gen_tcp.send(socket, "RCPT TO:<user@acme.example.com>\r\n")
+      {:ok, rcpt_resp1} = :gen_tcp.recv(socket, 0, 5000)
+      assert rcpt_resp1 =~ "250"
+
+      # Second recipient is relay attempt - should be rejected
+      :ok = :gen_tcp.send(socket, "RCPT TO:<victim@relay-target.com>\r\n")
+      {:ok, rcpt_resp2} = :gen_tcp.recv(socket, 0, 5000)
+      assert rcpt_resp2 =~ "550"
+
+      :gen_tcp.close(socket)
+    end
+  end
 end

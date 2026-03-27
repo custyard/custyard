@@ -32,12 +32,22 @@ defmodule Custyard.OrganizationTest do
     end
 
     test "preserves token when provided" do
-      custom_token = "my-custom-token-123"
+      # Token must be at least 32 chars for security validation
+      custom_token = "my-custom-token-with-sufficient-entropy"
       attrs = build_organization(token: custom_token)
       changeset = Organization.changeset(%Organization{}, attrs)
 
-      assert changeset.valid?
+      assert changeset.valid?, "Changeset errors: #{inspect(changeset.errors)}"
       assert get_change(changeset, :token) == custom_token
+    end
+
+    test "rejects short tokens" do
+      attrs = build_organization(token: "short-token")
+      changeset = Organization.changeset(%Organization{}, attrs)
+
+      refute changeset.valid?
+      assert %{token: [error_msg]} = errors_on(changeset)
+      assert error_msg =~ "at least 32 characters"
     end
   end
 
@@ -68,6 +78,63 @@ defmodule Custyard.OrganizationTest do
     end
   end
 
+  describe "domain validation" do
+    test "accepts valid domain names" do
+      valid_domains = [
+        "example.com",
+        "sub.example.com",
+        "my-company.co.uk",
+        "foo123.bar-baz.net",
+        "EXAMPLE.COM"
+      ]
+
+      for domain <- valid_domains do
+        attrs = build_organization(domain: domain)
+        changeset = Organization.changeset(%Organization{}, attrs)
+
+        assert changeset.valid?, "Expected '#{domain}' to be valid, got errors: #{inspect(changeset.errors)}"
+      end
+    end
+
+    test "rejects invalid domain names" do
+      invalid_domains = [
+        "-example.com",
+        "example-.com",
+        "example..com",
+        ".example.com",
+        "example.com.",
+        "example",
+        "http://example.com",
+        "example.com/path",
+        "user@example.com",
+        "example .com"
+      ]
+
+      for domain <- invalid_domains do
+        attrs = build_organization(domain: domain)
+        changeset = Organization.changeset(%Organization{}, attrs)
+
+        refute changeset.valid?, "Expected '#{domain}' to be invalid"
+        assert "must be a valid domain name" in errors_on(changeset).domain
+      end
+    end
+
+    test "converts empty string domain to nil" do
+      attrs = build_organization(domain: "")
+      changeset = Organization.changeset(%Organization{}, attrs)
+
+      assert changeset.valid?
+      assert get_change(changeset, :domain) == nil
+    end
+
+    test "allows nil domain" do
+      attrs = build_organization() |> Map.delete(:domain)
+      changeset = Organization.changeset(%Organization{}, attrs)
+
+      assert changeset.valid?
+    end
+  end
+
   describe "database persistence" do
     test "inserts with auto-generated token" do
       attrs = build_organization() |> Map.put(:token, nil)
@@ -79,7 +146,8 @@ defmodule Custyard.OrganizationTest do
     end
 
     test "token uniqueness constraint" do
-      token = "shared-token-abc"
+      # Token must be at least 32 chars
+      token = "shared-token-abc-with-sufficient-length"
       insert_organization(token: token)
 
       attrs = build_organization(token: token)

@@ -36,9 +36,9 @@ defmodule Custyard.Webhooks.Adapters.IntercomTest do
       assert normalized.source == :intercom
       assert normalized.metadata.external_id == "conv_abc123"
       assert normalized.metadata.topic == "conversation.user.created"
-      # message_id and in_reply_to should differ
+      # message_id and in_reply_to match format for threading
       assert normalized.message_id == "intercom-conv_abc123@intercom.webhook"
-      assert normalized.in_reply_to == "intercom-conv-conv_abc123@intercom.webhook"
+      assert normalized.in_reply_to == "intercom-conv_abc123@intercom.webhook"
     end
 
     test "uses part ID when conversation parts are present" do
@@ -69,8 +69,9 @@ defmodule Custyard.Webhooks.Adapters.IntercomTest do
 
       assert {:ok, normalized} = Intercom.normalize(params)
       assert normalized.body == "A reply to the conversation"
+      # Part messages have unique message_id, but in_reply_to references parent conversation
       assert normalized.message_id == "intercom-conv_abc123-part-part_789@intercom.webhook"
-      assert normalized.in_reply_to == "intercom-conv-conv_abc123@intercom.webhook"
+      assert normalized.in_reply_to == "intercom-conv_abc123@intercom.webhook"
     end
   end
 end

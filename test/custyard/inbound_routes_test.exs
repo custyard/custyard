@@ -67,14 +67,29 @@ defmodule Custyard.InboundRoutesTest do
 
     test "create_route accepts custom callback_token" do
       org = Factory.insert_organization()
+      # Token must be at least 32 chars for security
+      custom_token = "custom-token-with-sufficient-length-123456"
 
       {:ok, route} = InboundRoutes.create_route(%{
         organization_id: org.id,
         route_type: :general,
-        callback_token: "custom-token-123"
+        callback_token: custom_token
       })
 
-      assert route.callback_token == "custom-token-123"
+      assert route.callback_token == custom_token
+    end
+
+    test "create_route rejects short callback_token" do
+      org = Factory.insert_organization()
+
+      {:error, changeset} = InboundRoutes.create_route(%{
+        organization_id: org.id,
+        route_type: :general,
+        callback_token: "short-token"
+      })
+
+      assert %{callback_token: [error_msg]} = errors_on(changeset)
+      assert error_msg =~ "at least 32 characters"
     end
 
     test "create_route validates project_id for project routes" do
