@@ -9,6 +9,57 @@ defmodule Custyard.Webhooks.Adapters.IntercomTest do
     end
   end
 
+  describe "verify_signature/3" do
+    test "returns :ok for valid signature" do
+      payload = ~s({"data":{"item":{"id":"123"}}})
+      secret = "intercom-secret"
+      hmac = :crypto.mac(:hmac, :sha, secret, payload) |> Base.encode16(case: :lower)
+      signature = "sha1=" <> hmac
+
+      assert :ok = Intercom.verify_signature(payload, signature, secret)
+    end
+
+    test "returns error for invalid signature" do
+      assert {:error, "invalid signature"} = Intercom.verify_signature("payload", "sha1=bad", "secret")
+    end
+  end
+
+  describe "verify_request/4" do
+    test "returns :ok for valid signature without timestamp" do
+      payload = ~s({"data":{"item":{"id":"123"}}})
+      secret = "intercom-secret"
+      hmac = :crypto.mac(:hmac, :sha, secret, payload) |> Base.encode16(case: :lower)
+      signature = "sha1=" <> hmac
+
+      assert :ok = Intercom.verify_request(payload, nil, signature, secret)
+    end
+
+    test "returns :ok for valid signature with valid timestamp" do
+      payload = ~s({"data":{"item":{"id":"123"}}})
+      secret = "intercom-secret"
+      hmac = :crypto.mac(:hmac, :sha, secret, payload) |> Base.encode16(case: :lower)
+      signature = "sha1=" <> hmac
+      timestamp = to_string(System.system_time(:second))
+
+      assert :ok = Intercom.verify_request(payload, timestamp, signature, secret)
+    end
+
+    test "returns error for stale timestamp" do
+      payload = ~s({"data":{"item":{"id":"123"}}})
+      secret = "intercom-secret"
+      hmac = :crypto.mac(:hmac, :sha, secret, payload) |> Base.encode16(case: :lower)
+      signature = "sha1=" <> hmac
+      # Timestamp from 10 minutes ago (beyond 5 minute skew)
+      stale_timestamp = to_string(System.system_time(:second) - 600)
+
+      assert {:error, "stale timestamp" <> _} = Intercom.verify_request(payload, stale_timestamp, signature, secret)
+    end
+
+    test "returns signature error before checking timestamp" do
+      assert {:error, "invalid signature"} = Intercom.verify_request("payload", "123", "sha1=bad", "secret")
+    end
+  end
+
   describe "normalize/1" do
     test "normalizes conversation created event" do
       params = %{

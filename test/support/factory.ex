@@ -137,6 +137,30 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Build audit event attributes.
+
+  Event types: :webhook_received, :webhook_processed, :webhook_error
+
+  ## Examples
+
+      build_audit_event()
+      build_audit_event(event_type: :webhook_error, source: "zendesk")
+  """
+  def build_audit_event(overrides \\ []) do
+    defaults = %{
+      event_type: :webhook_received,
+      source: "email",
+      message_id: "audit-mid-#{unique_id()}",
+      payload: %{"test" => "data"},
+      conversation_id: nil,
+      organization_id: nil,
+      project_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
   Build operator account attributes.
 
   Roles: "super_admin", "admin", "agent"
@@ -232,6 +256,15 @@ defmodule Custyard.Factory do
 
     %Custyard.Task{}
     |> Custyard.Task.changeset(build_task(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
+  Insert an audit event into the database.
+  """
+  def insert_audit_event(overrides \\ []) do
+    %Custyard.AuditEvent{}
+    |> Custyard.AuditEvent.changeset(build_audit_event(overrides))
     |> Custyard.Repo.insert!()
   end
 
