@@ -10,9 +10,14 @@ defmodule Custyard.Conversations do
   List conversations for the operator attention queue.
   Excludes resolved and currently-snoozed conversations, ordered by cached_score descending.
   Returns list of `%{conversation: conversation, message_count: count}` maps.
+
+  Options:
+    - :filter - state filter ("all", "new", "active", "waiting", "dormant")
+    - :organization_id - scope to a specific organization (nil for all - super_admin only)
   """
   def list_for_attention_queue(opts \\ []) do
     filter = Keyword.get(opts, :filter, "all")
+    organization_id = Keyword.get(opts, :organization_id)
     now = DateTime.utc_now()
 
     message_count_subquery =
@@ -32,8 +37,15 @@ defmodule Custyard.Conversations do
         select: %{conversation: c, message_count: coalesce(mc.count, 0)}
 
     query
+    |> apply_organization_filter(organization_id)
     |> apply_state_filter(filter)
     |> Repo.all()
+  end
+
+  defp apply_organization_filter(query, nil), do: query
+
+  defp apply_organization_filter(query, org_id) when is_integer(org_id) do
+    from c in query, where: c.organization_id == ^org_id
   end
 
   defp apply_state_filter(query, "all"), do: query
@@ -46,8 +58,12 @@ defmodule Custyard.Conversations do
   @doc """
   List all conversations that are currently at or past neglect thresholds.
   Returns conversations with organization preloaded, excluding resolved and snoozed.
+
+  Options:
+    - :organization_id - scope to a specific organization (nil for all - super_admin only)
   """
-  def list_neglected do
+  def list_neglected(opts \\ []) do
+    organization_id = Keyword.get(opts, :organization_id)
     now = DateTime.utc_now()
 
     from(c in Conversation,
@@ -58,6 +74,7 @@ defmodule Custyard.Conversations do
       order_by: [asc: o.name, desc: c.cached_score],
       preload: [organization: o, contact: ct]
     )
+    |> apply_organization_filter(organization_id)
     |> Repo.all()
   end
 
@@ -188,11 +205,12 @@ defmodule Custyard.Conversations do
   end
 
   @doc """
-  Update conversation with arbitrary changes.
+  Update conversation with allowed changes (goes through changeset for validation).
+  Note: cached_score and last_neglect_notification are not allowed - they are computed fields.
   """
   def update_conversation(conversation, attrs) do
     conversation
-    |> Ecto.Changeset.change(attrs)
+    |> Conversation.changeset(attrs)
     |> Repo.update()
   end
 

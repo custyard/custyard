@@ -32,7 +32,9 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
   end
 
   defp load_neglected(socket) do
-    conversations = Conversations.list_neglected()
+    # Scope to operator's organization (nil for super_admin = all orgs)
+    org_id = socket.assigns[:scoped_organization_id]
+    conversations = Conversations.list_neglected(organization_id: org_id)
 
     # Filter to only neglected items and enrich with status
     neglected =

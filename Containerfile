@@ -17,12 +17,20 @@ COPY mix.exs mix.lock ./
 COPY config config
 RUN mix deps.get --only prod && mix deps.compile
 
-# Copy application source and assets, then build
+# Copy application source
 COPY lib lib
+
+# Copy assets and static files for asset build (NOT migrations yet - they change frequently)
 COPY assets assets
-COPY priv priv
+COPY priv/static priv/static
+COPY priv/gettext priv/gettext
 RUN mix assets.deploy
+
+# Compile application
 RUN mix compile
+
+# Copy migrations and seeds (after compile - changes here won't invalidate compile cache)
+COPY priv/repo priv/repo
 
 # Build release
 RUN mix release

@@ -150,7 +150,9 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
       port: port
     ],
-    check_origin: ["//" <> host],
+    # Dynamic origin check: allows PHX_HOST and all organization custom_domains
+    # This enables LiveView WebSockets on custom domain portals
+    check_origin: &CustyardWeb.OriginValidator.check_origin/1,
     secret_key_base: secret_key_base,
     live_view: [signing_salt: live_view_signing_salt]
 
@@ -179,9 +181,13 @@ if config_env() == :prod do
 
     true ->
       # Default: local SQLite file
+      # WAL mode is essential for concurrent read/write performance
+      # busy_timeout handles write contention (Scoring.Recalculator runs bulk updates)
       config :custyard, Custyard.Repo,
         database: System.get_env("DATABASE_PATH") || "/data/custyard.db",
-        pool_size: pool_size
+        pool_size: pool_size,
+        journal_mode: :wal,
+        busy_timeout: 5000
   end
 
   # Persistent upload directory (survives deployments, unlike priv/static)

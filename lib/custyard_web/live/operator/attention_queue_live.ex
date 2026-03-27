@@ -91,9 +91,11 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   defp load_conversations(socket) do
     filter = socket.assigns.filter
+    # Scope to operator's organization (nil for super_admin = all orgs)
+    org_id = socket.assigns[:scoped_organization_id]
 
     conversations =
-      Conversations.list_for_attention_queue(filter: filter)
+      Conversations.list_for_attention_queue(filter: filter, organization_id: org_id)
       |> Enum.map(fn %{conversation: conv, message_count: message_count} ->
         neglect_status = Scoring.neglect_status(conv)
         breakdown = Scoring.breakdown(conv)

@@ -95,12 +95,16 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   end
 
   defp create_message(conversation, normalized) do
-    source = message_source(normalized[:source])
+    # Original adapter source (for audit/reporting)
+    origin = normalized[:source]
+    # Simplified message type
+    source = message_source(origin)
 
     %Message{}
     |> Message.changeset(%{
       conversation_id: conversation.id,
       source: source,
+      origin: origin,
       sender_email: normalized.from,
       body: normalized.body,
       message_id: normalized.message_id,
@@ -117,6 +121,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   end
 
   # Map adapter source to message source enum
+  # Source = message type (email, portal, operator)
+  # Origin = original adapter (tracked separately for audit/reporting)
   defp message_source(:lettermint), do: :email
   defp message_source(:zendesk), do: :portal
   defp message_source(:intercom), do: :portal

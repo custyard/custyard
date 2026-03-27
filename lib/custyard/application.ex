@@ -34,6 +34,77 @@ defmodule Custyard.Application do
     result
   end
 
+  # Detect dangerous configuration: local SQLite with ephemeral /data path on Fly.io
+  # This would cause data loss on every deploy/restart without a persistent volume mount.
+  defp warn_if_ephemeral_sqlite do
+    repo_config = Application.get_env(:custyard, Custyard.Repo, [])
+    database_path = Keyword.get(repo_config, :database)
+    upload_dir = Application.get_env(:custyard, :upload_dir)
+
+    # Check if using SQLite (database_path is set, not using Turso/Postgres via url)
+    using_sqlite? = is_binary(database_path) and not Keyword.has_key?(repo_config, :url)
+
+    if using_sqlite? do
+      check_ephemeral_path(database_path, "DATABASE_PATH", "database")
+    end
+
+    if is_binary(upload_dir) do
+      check_ephemeral_path(upload_dir, "UPLOAD_DIR", "uploads")
+    end
+  end
+
+  defp check_ephemeral_path(path, env_var, description) do
+    # /data is Fly.io's convention for mounted volumes, but without a mount it's ephemeral
+    if String.starts_with?(path, "/data") do
+      parent_dir = Path.dirname(path)
+
+      cond do
+        # If /data doesn't exist at all, the mount is definitely missing
+        not File.exists?("/data") ->
+          Logger.error("""
+
+          ╔═══════════════════════════════════════════════════════════════════════════════╗
+          ║ CRITICAL: DATA LOSS RISK - EPHEMERAL STORAGE DETECTED                         ║
+          ╠═══════════════════════════════════════════════════════════════════════════════╣
+          ║ #{description} path: #{path}
+          ║
+          ║ The /data directory does not exist. On Fly.io, this means no persistent
+          ║ volume is mounted. All data will be LOST on deploy, restart, or auto-stop.
+          ║
+          ║ To fix: uncomment [mounts] in fly.toml and create a volume:
+          ║   fly volumes create custyard_data --region <your-region> --size 1
+          ║
+          ║ Or set #{env_var} to use a different storage location.
+          ╚═══════════════════════════════════════════════════════════════════════════════╝
+          """)
+
+        # If parent dir doesn't exist and can't be created, warn
+        not File.exists?(parent_dir) ->
+          case File.mkdir_p(parent_dir) do
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning("""
+              Cannot create #{description} directory #{parent_dir}: #{inspect(reason)}
+              Ensure the path is writable or set #{env_var} to a different location.
+              """)
+          end
+
+        # Path exists but may still be ephemeral - provide info-level notice
+        true ->
+          # On Fly.io, check if this looks like a mounted volume by checking for .fly-volume marker
+          # or just log an info message since we can't be certain
+          if System.get_env("FLY_APP_NAME") != nil and not File.exists?("/data/.fly-volume") do
+            Logger.info("""
+            Using /data for #{description}. Ensure a persistent volume is mounted in fly.toml
+            to prevent data loss. If using Turso for the database, this warning can be ignored.
+            """)
+          end
+      end
+    end
+  end
+
   defp maybe_add_scheduler(children) do
     if Application.get_env(:custyard, :start_scheduler, true) do
       children ++ [Custyard.Scoring.Scheduler]

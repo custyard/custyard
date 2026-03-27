@@ -163,9 +163,14 @@ defmodule Custyard.Factory do
   """
   def insert_conversation(overrides \\ []) do
     overrides = ensure_organization(overrides)
+    attrs = build_conversation(overrides)
+
+    # Extract cached_score (not in changeset cast list for security)
+    {cached_score, attrs} = Map.pop(attrs, :cached_score, 0)
 
     %Custyard.Conversation{}
-    |> Custyard.Conversation.changeset(build_conversation(overrides))
+    |> Custyard.Conversation.changeset(attrs)
+    |> Ecto.Changeset.change(cached_score: cached_score)
     |> Custyard.Repo.insert!()
   end
 

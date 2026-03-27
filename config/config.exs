@@ -13,8 +13,7 @@ config :custyard, CustyardWeb.Endpoint,
     formats: [html: CustyardWeb.ErrorHTML, json: CustyardWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Custyard.PubSub,
-  live_view: [signing_salt: "Ed+HmLgiLg+0Lm6jRnNF5s5tlCch/CuV"]
+  pubsub_server: Custyard.PubSub
 
 config :esbuild,
   version: "0.24.0",

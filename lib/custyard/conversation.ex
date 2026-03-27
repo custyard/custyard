@@ -43,7 +43,8 @@ defmodule Custyard.Conversation do
       :state,
       :urgency,
       :source,
-      :cached_score,
+      # Note: :cached_score is computed by Scoring.calculate_and_cache/1
+      # Note: :last_neglect_notification is managed by NeglectChecker
       :last_operator_action_at,
       :last_customer_action_at,
       :snoozed_until,

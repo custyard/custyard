@@ -359,13 +359,26 @@ defmodule Custyard.ConversationsTest do
   end
 
   describe "update_conversation/2" do
-    test "updates conversation with arbitrary attributes" do
-      conv = insert_conversation(cached_score: 10)
+    test "updates conversation with valid attributes" do
+      conv = insert_conversation()
 
       assert {:ok, updated} =
-               Conversations.update_conversation(conv, %{cached_score: 50})
+               Conversations.update_conversation(conv, %{subject: "Updated subject"})
 
-      assert updated.cached_score == 50
+      assert updated.subject == "Updated subject"
+    end
+
+    test "ignores cached_score in attrs (computed field)" do
+      conv = insert_conversation(cached_score: 10)
+
+      # cached_score should not be updatable via changeset
+      assert {:ok, updated} =
+               Conversations.update_conversation(conv, %{cached_score: 9999, subject: "Test"})
+
+      # Score unchanged (input ignored)
+      assert updated.cached_score == 10
+      # But valid attrs still applied
+      assert updated.subject == "Test"
     end
 
     test "updates last_operator_action_at" do

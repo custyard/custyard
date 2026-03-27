@@ -19,6 +19,7 @@ defmodule Custyard.Organization do
     has_many :contacts, Custyard.Contact
     has_many :conversations, Custyard.Conversation
     has_many :projects, Custyard.Project
+    has_many :operator_accounts, Custyard.OperatorAccount
 
     timestamps(type: :utc_datetime)
   end

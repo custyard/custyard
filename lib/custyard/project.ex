@@ -40,6 +40,7 @@ defmodule Custyard.Project do
     belongs_to :organization, Custyard.Organization
     belongs_to :conversation, Custyard.Conversation
     has_many :tasks, Custyard.Task
+    has_many :inbound_routes, Custyard.InboundRoute
 
     timestamps(type: :utc_datetime)
   end
