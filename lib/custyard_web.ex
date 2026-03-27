@@ -17,7 +17,8 @@ defmodule CustyardWeb do
   those modules here.
   """
 
-  def static_paths, do: ~w(assets fonts images uploads favicon.ico favicon.svg robots.txt site.webmanifest)
+  def static_paths,
+    do: ~w(assets fonts images uploads favicon.ico favicon.svg robots.txt site.webmanifest)
 
   def router do
     quote do
