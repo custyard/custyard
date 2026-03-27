@@ -136,21 +136,21 @@ defmodule CustyardWeb.Portal.ProjectLive do
     <%= case @state do %>
       <% :done -> %>
         <span
-          class="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 flex items-center justify-center"
+          class="shrink-0 w-6 h-6 rounded-full bg-green-100 flex items-center justify-center"
           data-testid={"portal-task-icon-#{@state}"}
         >
           <.icon name="hero-check" class="w-4 h-4 text-green-600" />
         </span>
       <% :in_progress -> %>
         <span
-          class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center"
+          class="shrink-0 w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center"
           data-testid={"portal-task-icon-#{@state}"}
         >
           <.icon name="hero-arrow-path" class="w-4 h-4 text-blue-600" />
         </span>
       <% _ -> %>
         <span
-          class="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 dark:bg-zinc-700 flex items-center justify-center"
+          class="shrink-0 w-6 h-6 rounded-full bg-gray-100 dark:bg-zinc-700 flex items-center justify-center"
           data-testid={"portal-task-icon-#{@state}"}
         >
           <span class="w-2 h-2 rounded-full bg-gray-400 dark:bg-zinc-500" />

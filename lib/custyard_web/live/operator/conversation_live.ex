@@ -744,7 +744,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       <button
         phx-click="toggle_task"
         phx-value-id={@task.id}
-        class="mt-0.5 flex-shrink-0"
+        class="mt-0.5 shrink-0"
         title="Cycle state: open -> in_progress -> done"
         aria-label={"Task status: #{@task.state}. Click to change to #{next_task_state(@task.state)}."}
       >
