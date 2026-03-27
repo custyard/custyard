@@ -38,7 +38,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         Message.changeset(%Message{}, %{
           conversation_id: conv.id,
           source: :portal,
-          sender_email: "portal@#{org.domain}",
+          sender_email: "portal@#{org.domain || "portal"}",
           body: params["body"],
           is_internal_note: false
         })

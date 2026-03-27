@@ -5,6 +5,22 @@ defmodule Custyard.Webhooks.Adapters.Intercom do
   Intercom sends webhook notifications when conversations are created or
   replied to. Uses HMAC-SHA1 signature verification via the
   `X-Hub-Signature` header.
+
+  ## Security Note: HMAC-SHA1
+
+  This adapter uses HMAC-SHA1 for signature verification because Intercom's
+  webhook signature scheme uses SHA-1. While SHA-1 has known collision
+  vulnerabilities (SHAttered attack, 2017), HMAC-SHA1 remains secure for
+  message authentication because:
+
+  1. HMAC construction prevents length-extension attacks
+  2. Collision attacks don't translate to HMAC forgery
+  3. Finding a valid HMAC for an arbitrary message still requires the secret
+
+  However, SHA-1 is considered deprecated for new implementations. If Intercom
+  introduces a newer signature scheme (e.g., SHA-256), this adapter should be
+  updated. Monitor Intercom's webhook documentation for updates:
+  https://developers.intercom.com/docs/webhooks
   """
   @behaviour Custyard.Webhooks.Adapter
 
@@ -104,11 +120,12 @@ defmodule Custyard.Webhooks.Adapters.Intercom do
     end
   end
 
-  # Reference the parent conversation ID for threading
+  # Reference the parent conversation ID for threading.
+  # Format must match build_message_id for ThreadMatcher to find the parent.
   defp build_in_reply_to(item) do
     case item["id"] do
       nil -> nil
-      id -> "intercom-conv-#{id}@intercom.webhook"
+      id -> "intercom-#{id}@intercom.webhook"
     end
   end
 end

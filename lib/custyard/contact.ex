@@ -21,15 +21,44 @@ defmodule Custyard.Contact do
   # - At least one dot in domain
   @email_regex ~r/^[a-zA-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/
 
-  @doc false
+  @doc """
+  Changeset for creating a new contact.
+  """
   def changeset(contact, attrs) do
     contact
     |> cast(attrs, [:email, :name, :is_admin, :organization_id])
     |> validate_required([:email, :organization_id])
+    |> validate_organization_immutable()
     |> validate_length(:email, max: 320, message: "must be at most 320 characters")
     |> validate_email()
     |> unique_constraint([:email, :organization_id])
     |> foreign_key_constraint(:organization_id)
+  end
+
+  @doc """
+  Changeset for updating an existing contact.
+  Does not allow changing organization_id to prevent orphaning conversations.
+  """
+  def update_changeset(contact, attrs) do
+    contact
+    |> cast(attrs, [:email, :name, :is_admin])
+    |> validate_length(:email, max: 320, message: "must be at most 320 characters")
+    |> validate_email()
+    |> unique_constraint([:email, :organization_id])
+  end
+
+  # Prevent changing organization_id on existing contacts
+  defp validate_organization_immutable(changeset) do
+    # Only validate on updates (when data has an id)
+    if changeset.data.id && get_change(changeset, :organization_id) do
+      add_error(
+        changeset,
+        :organization_id,
+        "cannot be changed after contact is created"
+      )
+    else
+      changeset
+    end
   end
 
   defp validate_email(changeset) do

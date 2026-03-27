@@ -5,6 +5,9 @@ defmodule CustyardWeb.Endpoint do
     store: :cookie,
     key: "_custyard_key",
     signing_salt: "custyard_signing",
+    # Encryption salt ensures session data (operator_id, portal_org_id) is encrypted,
+    # not just signed. Without this, session contents are readable via Base64 decode.
+    encryption_salt: "custyard_encrypt",
     same_site: "Lax",
     secure: Application.compile_env(:custyard, :env) == :prod,
     max_age: 86_400
@@ -33,9 +36,13 @@ defmodule CustyardWeb.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
+  # Parsers for supported content types.
+  # pass: restricts which additional content types pass through unparsed.
+  # text/plain is allowed for some webhook providers that send text bodies.
+  # The CacheRawBody reader caches raw body for webhook signature verification.
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
-    pass: ["*/*"],
+    pass: ["text/plain"],
     body_reader: {CustyardWeb.Plugs.CacheRawBody, :read_body, []},
     json_decoder: Phoenix.json_library()
 

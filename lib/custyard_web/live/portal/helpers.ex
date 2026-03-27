@@ -12,16 +12,21 @@ defmodule CustyardWeb.Portal.Helpers do
   @doc """
   Get organization from params or socket assigns.
   Supports both URL-based org token and custom domain assignment.
+
+  Returns `{:ok, organization}` or `{:error, :not_found}`.
   """
   def get_organization(%{"org_token" => token}, _socket) do
-    Repo.get_by!(Custyard.Organization, token: token)
+    case Repo.get_by(Custyard.Organization, token: token) do
+      nil -> {:error, :not_found}
+      org -> {:ok, org}
+    end
   end
 
   def get_organization(_params, socket) do
     # Custom domain - org should be assigned by the plug
     case socket.assigns[:organization] do
-      nil -> raise "Organization not found for custom domain"
-      org -> org
+      nil -> {:error, :not_found}
+      org -> {:ok, org}
     end
   end
 

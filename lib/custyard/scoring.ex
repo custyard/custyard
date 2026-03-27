@@ -77,6 +77,9 @@ defmodule Custyard.Scoring do
   def calculate_and_cache_batch(conversation_ids) when is_list(conversation_ids) do
     if Enum.empty?(conversation_ids), do: :ok
 
+    start_time = System.monotonic_time()
+    batch_size = length(conversation_ids)
+
     # Batch load conversations with organizations
     conversations =
       from(c in Conversation,
@@ -113,6 +116,15 @@ defmodule Custyard.Scoring do
         end
       end)
       |> Enum.sum()
+
+    # Emit telemetry for batch scoring
+    duration = System.monotonic_time() - start_time
+
+    :telemetry.execute(
+      [:custyard, :scoring, :batch, :stop],
+      %{duration: duration, count: batch_size},
+      %{updated: updated_count}
+    )
 
     updated_count
   end
@@ -187,14 +199,28 @@ defmodule Custyard.Scoring do
         total: 0
       }
     else
+      # Fetch weights once for consistent calculation
+      weights = get_weights()
+
+      # Calculate each weighted component
+      idle = idle_score(conversation) * weights.idle
+      state = state_score(conversation) * weights.state
+      tier = tier_score(conversation) * weights.tier
+      urgency = urgency_score(conversation) * weights.urgency
+      velocity = velocity_score(conversation) * weights.velocity
+      neglect = neglect_bonus(conversation) * weights.neglect
+
+      # Compute total from the already-calculated components (avoiding recalculation)
+      total = round(idle + state + tier + urgency + velocity + neglect)
+
       %{
-        idle: round(idle_score(conversation)),
-        state: round(state_score(conversation)),
-        tier: round(tier_score(conversation)),
-        urgency: round(urgency_score(conversation)),
-        velocity: round(velocity_score(conversation)),
-        neglect_bonus: round(neglect_bonus(conversation)),
-        total: calculate(conversation)
+        idle: round(idle),
+        state: round(state),
+        tier: round(tier),
+        urgency: round(urgency),
+        velocity: round(velocity),
+        neglect_bonus: round(neglect),
+        total: total
       }
     end
   end
@@ -203,8 +229,13 @@ defmodule Custyard.Scoring do
   Get neglect status for a conversation.
 
   Returns :ok for conversations with nil organization (e.g., disambiguation conversations).
+
+  Optionally accepts pre-loaded thresholds to avoid repeated Settings lookups
+  when checking multiple conversations.
   """
-  def neglect_status(conversation) do
+  def neglect_status(conversation, thresholds \\ nil)
+
+  def neglect_status(conversation, thresholds) do
     conversation = ensure_preloaded(conversation, :organization)
 
     # Disambiguation conversations have nil organization - always :ok status
@@ -213,7 +244,7 @@ defmodule Custyard.Scoring do
     else
       hours_idle = hours_since_operator_action(conversation)
       tier = conversation.organization.tier
-      thresholds = get_neglect_thresholds()
+      thresholds = thresholds || get_neglect_thresholds()
       {warning, critical} = Map.get(thresholds, tier, {24, 48})
 
       cond do
@@ -281,20 +312,69 @@ defmodule Custyard.Scoring do
     |> Repo.one()
   end
 
+  @default_weights %{idle: 1.0, state: 1.0, tier: 1.0, urgency: 1.0, velocity: 1.0, neglect: 1.0}
+
   defp get_weights do
     Settings.get_weights()
   rescue
+    e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
+      # Expected errors during first boot or if Settings row doesn't exist yet
+      Logger.warning("Settings not available for score weights, using defaults: #{inspect(e)}")
+      @default_weights
+
+    e in [DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->
+      # Database connectivity issues - this is more serious
+      Logger.error(
+        "DATABASE ERROR loading score weights, using defaults. This may indicate DB issues: #{inspect(e)}"
+      )
+
+      emit_settings_error_telemetry(:weights, e)
+      @default_weights
+
     e ->
-      Logger.error("Failed to load score weights from Settings, using defaults: #{inspect(e)}")
-      %{idle: 1.0, state: 1.0, tier: 1.0, urgency: 1.0, velocity: 1.0, neglect: 1.0}
+      # Unexpected error - log and emit telemetry for investigation
+      Logger.error("Unexpected error loading score weights, using defaults: #{Exception.format(:error, e)}")
+      emit_settings_error_telemetry(:weights, e)
+      @default_weights
   end
 
   defp get_neglect_thresholds do
     Settings.get_neglect_thresholds()
   rescue
-    e ->
-      Logger.error("Failed to load neglect thresholds from Settings, using defaults: #{inspect(e)}")
+    e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
+      # Expected errors during first boot
+      Logger.warning("Settings not available for neglect thresholds, using defaults: #{inspect(e)}")
       @default_neglect_thresholds
+
+    e in [DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->
+      # Database connectivity issues
+      Logger.error(
+        "DATABASE ERROR loading neglect thresholds, using defaults. This may indicate DB issues: #{inspect(e)}"
+      )
+
+      emit_settings_error_telemetry(:neglect_thresholds, e)
+      @default_neglect_thresholds
+
+    e ->
+      # Unexpected error
+      Logger.error(
+        "Unexpected error loading neglect thresholds, using defaults: #{Exception.format(:error, e)}"
+      )
+
+      emit_settings_error_telemetry(:neglect_thresholds, e)
+      @default_neglect_thresholds
+  end
+
+  defp emit_settings_error_telemetry(setting_type, exception) do
+    :telemetry.execute(
+      [:custyard, :scoring, :settings_error],
+      %{count: 1},
+      %{
+        setting: setting_type,
+        error_type: exception.__struct__,
+        message: Exception.message(exception)
+      }
+    )
   end
 
   defp ensure_preloaded(struct, assoc) do

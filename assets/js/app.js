@@ -25,6 +25,27 @@ Hooks.ScrollBottom = {
   }
 }
 
+// Auto-dismiss flash messages after a timeout
+// Used for info/success flashes that don't need user acknowledgment
+Hooks.AutoDismiss = {
+  mounted() {
+    const timeout = parseInt(this.el.dataset.dismissTimeout || "5000")
+    this.timer = setTimeout(() => {
+      // Fade out then hide
+      this.el.style.transition = "opacity 200ms ease-out"
+      this.el.style.opacity = "0"
+      setTimeout(() => {
+        this.el.style.display = "none"
+        // Clear the flash from LiveView state
+        this.pushEvent("lv:clear-flash", {key: this.el.dataset.flashKind || "info"})
+      }, 200)
+    }, timeout)
+  },
+  destroyed() {
+    if (this.timer) clearTimeout(this.timer)
+  }
+}
+
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,

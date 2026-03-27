@@ -3,7 +3,8 @@ defmodule Custyard.Organizations do
   Context for organization operations including custom domain management.
   """
 
-  alias Custyard.{Organization, Repo}
+  require Logger
+  alias Custyard.{Conversation, Contact, Organization, Repo}
   import Ecto.Query
 
   @doc """
@@ -144,9 +145,52 @@ defmodule Custyard.Organizations do
 
   @doc """
   Delete an organization.
+
+  WARNING: This is a hard delete that cascades to all associated contacts and
+  conversations. This action is irreversible. Deletion is logged for audit purposes.
+
+  Returns `{:ok, organization}` or `{:error, changeset}`.
   """
   def delete_organization(%Organization{} = org) do
-    Repo.delete(org)
+    # Count associated records for audit logging
+    contact_count = Repo.aggregate(from(c in Contact, where: c.organization_id == ^org.id), :count)
+
+    conversation_count =
+      Repo.aggregate(from(c in Conversation, where: c.organization_id == ^org.id), :count)
+
+    # Log deletion details before executing
+    Logger.warning(
+      "Deleting organization",
+      organization_id: org.id,
+      organization_name: org.name,
+      organization_domain: org.domain,
+      contacts_to_delete: contact_count,
+      conversations_to_delete: conversation_count
+    )
+
+    result = Repo.delete(org)
+
+    case result do
+      {:ok, deleted} ->
+        Logger.info(
+          "Organization deleted successfully",
+          organization_id: deleted.id,
+          organization_name: deleted.name
+        )
+
+        # Emit telemetry for monitoring
+        :telemetry.execute(
+          [:custyard, :organization, :deleted],
+          %{count: 1, contacts: contact_count, conversations: conversation_count},
+          %{organization_id: org.id, organization_name: org.name}
+        )
+
+        {:ok, deleted}
+
+      {:error, _} = error ->
+        Logger.error("Failed to delete organization", organization_id: org.id)
+        error
+    end
   end
 
   @doc """

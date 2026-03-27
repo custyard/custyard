@@ -12,8 +12,6 @@ defmodule Custyard.Notifications.Email do
   See: https://hexdocs.pm/swoosh/readme.html
   """
 
-  alias Phoenix.HTML.Engine, as: HTMLEngine
-
   require Logger
 
   @doc """
@@ -121,9 +119,13 @@ defmodule Custyard.Notifications.Email do
   defp contact_display(contact), do: contact.name || contact.email
 
   defp html_escape(value) when is_binary(value) do
-    value
-    |> HTMLEngine.html_escape()
-    |> IO.iodata_to_binary()
+    # Use Phoenix.HTML.html_escape/1 which returns {:safe, iodata}
+    # Extract the iodata and convert to binary string
+    case Phoenix.HTML.html_escape(value) do
+      {:safe, iodata} -> IO.iodata_to_binary(iodata)
+      # Fallback for already-safe content
+      iodata when is_list(iodata) or is_binary(iodata) -> IO.iodata_to_binary(iodata)
+    end
   end
 
   defp html_escape(nil), do: ""

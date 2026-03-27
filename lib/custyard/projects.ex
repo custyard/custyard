@@ -227,18 +227,29 @@ defmodule Custyard.Projects do
     DateTime.add(new_start_dt, offset_seconds)
   end
 
-  defp with_progress(project) do
+  @doc """
+  Calculate and attach progress data to a project.
+
+  Returns the project with its virtual `:progress` field populated:
+  - `total`: total number of tasks
+  - `done`: number of completed tasks
+  - `percentage`: completion percentage (0-100)
+
+  Requires tasks to be preloaded.
+  """
+  def with_progress(project) do
     tasks = project.tasks || []
     total = length(tasks)
     done = Enum.count(tasks, &(&1.state == :done))
 
-    progress =
+    percentage =
       if total > 0 do
         round(done / total * 100)
       else
         0
       end
 
-    Map.put(project, :progress, %{total: total, done: done, percentage: progress})
+    # Use struct syntax to properly assign the virtual field
+    %{project | progress: %{total: total, done: done, percentage: percentage}}
   end
 end

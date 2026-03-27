@@ -45,8 +45,12 @@ defmodule Custyard.Email.SieveHeaderMapper do
 
   alias Custyard.Settings
 
-  @valid_tiers ~w(enterprise standard basic)
-  @valid_urgencies ~w(urgent elevated normal)
+  # Allowed properties and their valid values
+  # Using atoms directly to ensure they exist at compile time
+  @valid_properties %{
+    "tier" => %{atom: :tier, values: ~w(enterprise standard basic)},
+    "urgency" => %{atom: :urgency, values: ~w(urgent elevated normal)}
+  }
 
   @doc """
   Extract conversation property overrides from email headers.
@@ -90,12 +94,21 @@ defmodule Custyard.Email.SieveHeaderMapper do
     property = config["property"]
     mapping = config["mapping"] || %{}
 
-    # Look up the mapped value (case-insensitive)
-    mapped_value = find_mapped_value(header_value, mapping)
+    # Validate property is in allowlist first - prevents atom exhaustion
+    # and ensures we use pre-existing atoms from @valid_properties
+    case Map.get(@valid_properties, property) do
+      nil ->
+        # Unknown property - ignore silently to avoid crashing email processing
+        nil
 
-    case validate_property_value(property, mapped_value) do
-      {:ok, atom_value} -> {String.to_existing_atom(property), atom_value}
-      :error -> nil
+      %{atom: property_atom, values: valid_values} ->
+        # Look up the mapped value (case-insensitive)
+        mapped_value = find_mapped_value(header_value, mapping)
+
+        case validate_value(mapped_value, valid_values) do
+          {:ok, value_atom} -> {property_atom, value_atom}
+          :error -> nil
+        end
     end
   end
 
@@ -107,15 +120,18 @@ defmodule Custyard.Email.SieveHeaderMapper do
     end)
   end
 
-  defp validate_property_value("tier", value) when value in @valid_tiers do
-    {:ok, String.to_existing_atom(value)}
-  end
+  # Validate the value is in the allowed list for this property
+  defp validate_value(nil, _valid_values), do: :error
 
-  defp validate_property_value("urgency", value) when value in @valid_urgencies do
-    {:ok, String.to_existing_atom(value)}
+  defp validate_value(value, valid_values) do
+    if value in valid_values do
+      # Safe because valid_values contains only strings for atoms that exist
+      # (enterprise, standard, basic, urgent, elevated, normal)
+      {:ok, String.to_existing_atom(value)}
+    else
+      :error
+    end
   end
-
-  defp validate_property_value(_property, _value), do: :error
 
   @doc """
   Merge extracted properties into conversation attributes.

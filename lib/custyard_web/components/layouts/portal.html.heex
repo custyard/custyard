@@ -1,0 +1,47 @@
+<div class="h-screen flex flex-col bg-gray-100 dark:bg-zinc-900" data-testid="portal-layout">
+  <%!-- Top nav --%>
+  <div
+    class="bg-white dark:bg-zinc-800 border-b border-gray-200 dark:border-zinc-700 px-4 py-2 flex items-center gap-4"
+    data-testid="portal-layout-nav"
+  >
+    <span class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight">
+      <%= if assigns[:current_org] && @current_org.name do %>
+        {@current_org.name}
+      <% else %>
+        Support Portal
+      <% end %>
+    </span>
+    <span class="text-gray-300 dark:text-zinc-600">|</span>
+    <.link
+      navigate={@portal_home_path}
+      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+      data-testid="portal-nav-requests"
+    >
+      Requests
+    </.link>
+    <.link
+      navigate={"#{@portal_path}/projects"}
+      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+      data-testid="portal-nav-projects"
+    >
+      Projects
+    </.link>
+    <div class="ml-auto">
+      <.link
+        navigate={"#{@portal_path}/new"}
+        class="text-sm bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700"
+        data-testid="portal-nav-new-request"
+      >
+        New Request
+      </.link>
+    </div>
+  </div>
+
+  <%!-- Flash messages --%>
+  <.flash_group flash={@flash} />
+
+  <%!-- Content --%>
+  <div class="flex-1 overflow-auto" data-testid="portal-layout-content">
+    {@inner_content}
+  </div>
+</div>

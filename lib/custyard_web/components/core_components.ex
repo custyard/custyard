@@ -160,6 +160,9 @@ defmodule CustyardWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
+      phx-hook={@kind == :info && "AutoDismiss"}
+      data-dismiss-timeout="5000"
+      data-flash-kind={@kind}
       role="alert"
       data-testid={"flash-#{@kind}"}
       class={[

@@ -42,4 +42,27 @@ defmodule Custyard.Webhooks.Adapter do
   Returns the name of this adapter source (e.g., :lettermint, :zendesk).
   """
   @callback source_name() :: atom()
+
+  @doc """
+  Verify the request with full replay protection (optional callback).
+
+  Adapters can implement this to verify both signature AND timestamp for
+  replay protection. Falls back to `verify_signature/3` if not implemented.
+
+  ## Parameters
+  - `raw_body` - the raw request body (binary)
+  - `timestamp` - timestamp string from request header (nil if not provided)
+  - `signature` - the signature from the request header
+  - `secret` - the shared secret for this source
+
+  Returns `:ok`, `{:error, reason}`, or `:not_implemented` to fall back.
+  """
+  @callback verify_request(
+              raw_body :: binary(),
+              timestamp :: String.t() | nil,
+              signature :: String.t() | nil,
+              secret :: String.t()
+            ) :: :ok | {:error, String.t()} | :not_implemented
+
+  @optional_callbacks verify_request: 4
 end

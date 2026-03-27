@@ -40,6 +40,7 @@ defmodule Custyard.Organization do
     ])
     |> maybe_generate_token()
     |> validate_required([:name, :token])
+    |> validate_token_strength()
     # Note: :tier uses Ecto.Enum which validates values automatically
     |> validate_format(:primary_color, ~r/^#[0-9A-Fa-f]{6}$/,
       message: "must be a valid hex color (e.g., #1a2b3c)"
@@ -145,6 +146,32 @@ defmodule Custyard.Organization do
     case get_field(changeset, :token) do
       nil -> put_change(changeset, :token, generate_token())
       _ -> changeset
+    end
+  end
+
+  # Minimum token length: 32 chars provides ~192 bits of entropy (sufficient for auth)
+  # Auto-generated tokens are 43 chars (256 bits). This allows manually set tokens
+  # while still rejecting short/guessable values like "test" or "password".
+  @min_token_length 32
+
+  defp validate_token_strength(changeset) do
+    case get_field(changeset, :token) do
+      nil ->
+        changeset
+
+      token when is_binary(token) ->
+        if String.length(token) >= @min_token_length do
+          changeset
+        else
+          add_error(
+            changeset,
+            :token,
+            "must be at least #{@min_token_length} characters for security"
+          )
+        end
+
+      _ ->
+        changeset
     end
   end
 

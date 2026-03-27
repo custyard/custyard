@@ -1,10 +1,36 @@
 defmodule CustyardWeb.Operator.ConversationLive do
+  @moduledoc """
+  Operator view for a single conversation with reply, state management, and task tools.
+
+  ## Authorization Model
+
+  Currently, any authenticated operator can access any conversation. This is
+  intentional for small teams where all operators are trusted staff. If the
+  system is extended to support:
+
+  - Multi-tenancy (operators scoped to specific organizations)
+  - Role-based access (e.g., read-only operators)
+  - Team assignment (operators see only assigned conversations)
+
+  Authorization checks should be added in `mount/3` after loading the conversation
+  to verify the operator has access. Example:
+
+      with {:ok, conversation} <- load_conversation(id),
+           :ok <- authorize_operator(socket.assigns.current_operator, conversation) do
+        # proceed
+      end
+
+  The `authorize_operator/2` function would check organization membership,
+  team assignment, or role permissions as appropriate.
+  """
   use CustyardWeb, :live_view
 
   alias Custyard.{Conversations, Message, Scoring}
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
+    # TODO: Add authorization check here if implementing multi-tenancy or RBAC
+    # See moduledoc for guidance
     conversation = load_conversation(id)
 
     unless conversation do
@@ -75,44 +101,50 @@ defmodule CustyardWeb.Operator.ConversationLive do
   def handle_event("send_reply", %{"body" => body}, socket) when byte_size(body) > 0 do
     conversation = socket.assigns.conversation
 
-    {:ok, _message} =
-      Conversations.create_message(%{
-        source: :operator,
-        body: body,
-        is_internal_note: false,
-        conversation_id: conversation.id
-      })
+    case Conversations.create_message(%{
+           source: :operator,
+           body: body,
+           is_internal_note: false,
+           conversation_id: conversation.id
+         }) do
+      {:ok, _message} ->
+        # Update last_operator_action_at and ensure state is active
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    # Update last_operator_action_at and ensure state is active
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+        case Conversations.update_conversation(conversation,
+               last_operator_action_at: now,
+               state: :active
+             ) do
+          {:ok, _} ->
+            Scoring.calculate_and_cache(conversation.id)
 
-    {:ok, _} =
-      Conversations.update_conversation(conversation,
-        last_operator_action_at: now,
-        state: :active
-      )
+            Phoenix.PubSub.broadcast(
+              Custyard.PubSub,
+              "conversation:#{conversation.id}",
+              {:message_added, conversation.id}
+            )
 
-    Scoring.calculate_and_cache(conversation.id)
+            Phoenix.PubSub.broadcast(
+              Custyard.PubSub,
+              "conversations",
+              {:conversation_updated, conversation.id}
+            )
 
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "conversation:#{conversation.id}",
-      {:message_added, conversation.id}
-    )
+            Phoenix.PubSub.broadcast(
+              Custyard.PubSub,
+              "conversations:org:#{conversation.organization_id}",
+              {:conversation_updated, conversation.id}
+            )
 
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "conversations",
-      {:conversation_updated, conversation.id}
-    )
+            {:noreply, socket |> assign(:reply_text, "") |> reload_conversation()}
 
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "conversations:org:#{conversation.organization_id}",
-      {:conversation_updated, conversation.id}
-    )
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Failed to update conversation")}
+        end
 
-    {:noreply, socket |> assign(:reply_text, "") |> reload_conversation()}
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Failed to send reply")}
+    end
   end
 
   def handle_event("send_reply", _params, socket), do: {:noreply, socket}
@@ -120,21 +152,24 @@ defmodule CustyardWeb.Operator.ConversationLive do
   def handle_event("add_note", %{"body" => body}, socket) when byte_size(body) > 0 do
     conversation = socket.assigns.conversation
 
-    {:ok, _message} =
-      Conversations.create_message(%{
-        source: :operator,
-        body: body,
-        is_internal_note: true,
-        conversation_id: conversation.id
-      })
+    case Conversations.create_message(%{
+           source: :operator,
+           body: body,
+           is_internal_note: true,
+           conversation_id: conversation.id
+         }) do
+      {:ok, _message} ->
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversation:#{conversation.id}",
+          {:message_added, conversation.id}
+        )
 
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "conversation:#{conversation.id}",
-      {:message_added, conversation.id}
-    )
+        {:noreply, socket |> assign(:note_text, "") |> reload_conversation()}
 
-    {:noreply, socket |> assign(:note_text, "") |> reload_conversation()}
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Failed to add note")}
+    end
   end
 
   def handle_event("add_note", _params, socket), do: {:noreply, socket}
@@ -152,27 +187,30 @@ defmodule CustyardWeb.Operator.ConversationLive do
     new_state = String.to_existing_atom(state)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    {:ok, _} =
-      Conversations.update_conversation(conversation,
-        state: new_state,
-        last_operator_action_at: now
-      )
+    case Conversations.update_conversation(conversation, %{
+           state: new_state,
+           last_operator_action_at: now
+         }) do
+      {:ok, _} ->
+        Scoring.calculate_and_cache(conversation.id)
 
-    Scoring.calculate_and_cache(conversation.id)
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversations",
+          {:conversation_updated, conversation.id}
+        )
 
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "conversations",
-      {:conversation_updated, conversation.id}
-    )
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversations:org:#{conversation.organization_id}",
+          {:conversation_updated, conversation.id}
+        )
 
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "conversations:org:#{conversation.organization_id}",
-      {:conversation_updated, conversation.id}
-    )
+        {:noreply, reload_conversation(socket)}
 
-    {:noreply, reload_conversation(socket)}
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Failed to update state")}
+    end
   end
 
   def handle_event("toggle_task_form", _params, socket) do
@@ -197,21 +235,24 @@ defmodule CustyardWeb.Operator.ConversationLive do
       due_at = parse_due_at(params["due_at"])
       portal_visible = params["portal_visible"] == "true"
 
-      {:ok, _task} =
-        Conversations.create_task(%{
-          title: title,
-          due_at: due_at,
-          portal_visible: portal_visible,
-          conversation_id: conversation.id
-        })
+      case Conversations.create_task(%{
+             title: title,
+             due_at: due_at,
+             portal_visible: portal_visible,
+             conversation_id: conversation.id
+           }) do
+        {:ok, _task} ->
+          {:noreply,
+           socket
+           |> assign(:new_task_title, "")
+           |> assign(:new_task_due_at, "")
+           |> assign(:new_task_portal_visible, true)
+           |> assign(:show_task_form, false)
+           |> reload_conversation()}
 
-      {:noreply,
-       socket
-       |> assign(:new_task_title, "")
-       |> assign(:new_task_due_at, "")
-       |> assign(:new_task_portal_visible, true)
-       |> assign(:show_task_form, false)
-       |> reload_conversation()}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to create task")}
+      end
     else
       {:noreply, socket}
     end
@@ -227,9 +268,13 @@ defmodule CustyardWeb.Operator.ConversationLive do
         :done -> :open
       end
 
-    {:ok, _} = Conversations.update_task_state(task, new_state)
+    case Conversations.update_task_state(task, new_state) do
+      {:ok, _} ->
+        {:noreply, reload_conversation(socket)}
 
-    {:noreply, reload_conversation(socket)}
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Failed to update task")}
+    end
   end
 
   def handle_event("edit_task", %{"id" => id}, socket) do
@@ -266,17 +311,20 @@ defmodule CustyardWeb.Operator.ConversationLive do
       due_at = parse_due_at(params["due_at"])
       portal_visible = params["portal_visible"] == "true"
 
-      {:ok, _} =
-        Conversations.update_task(task, %{
-          title: title,
-          due_at: due_at,
-          portal_visible: portal_visible
-        })
+      case Conversations.update_task(task, %{
+             title: title,
+             due_at: due_at,
+             portal_visible: portal_visible
+           }) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> assign(:editing_task_id, nil)
+           |> reload_conversation()}
 
-      {:noreply,
-       socket
-       |> assign(:editing_task_id, nil)
-       |> reload_conversation()}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to save task")}
+      end
     else
       {:noreply, socket}
     end
@@ -284,12 +332,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   def handle_event("delete_task", %{"id" => id}, socket) do
     task = get_scoped_task!(socket, id)
-    {:ok, _} = Conversations.delete_task(task)
 
-    {:noreply,
-     socket
-     |> assign(:editing_task_id, nil)
-     |> reload_conversation()}
+    case Conversations.delete_task(task) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> assign(:editing_task_id, nil)
+         |> reload_conversation()}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Failed to delete task")}
+    end
   end
 
   @impl true

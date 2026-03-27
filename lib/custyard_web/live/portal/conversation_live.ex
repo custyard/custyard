@@ -62,46 +62,50 @@ defmodule CustyardWeb.Portal.ConversationLive do
     if String.trim(body) != "" do
       sender_email = "portal@#{org.domain || "portal"}"
 
-      Conversations.create_message!(%{
-        conversation_id: conv.id,
-        source: :portal,
-        sender_email: sender_email,
-        body: body,
-        is_internal_note: false
-      })
+      case Conversations.create_message(%{
+             conversation_id: conv.id,
+             source: :portal,
+             sender_email: sender_email,
+             body: body,
+             is_internal_note: false
+           }) do
+        {:ok, _message} ->
+          # Update conversation timestamps and reactivate if needed, in a single write
+          now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      # Update conversation timestamps and reactivate if needed, in a single write
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
+          update_attrs =
+            if conv.state in [:waiting, :dormant, :resolved] do
+              [last_customer_action_at: now, state: :active]
+            else
+              [last_customer_action_at: now]
+            end
 
-      update_attrs =
-        if conv.state in [:waiting, :dormant, :resolved] do
-          [last_customer_action_at: now, state: :active]
-        else
-          [last_customer_action_at: now]
-        end
+          {:ok, _} = Conversations.update_conversation(conv, update_attrs)
 
-      {:ok, _} = Conversations.update_conversation(conv, update_attrs)
+          Scoring.calculate_and_cache(conv.id)
+          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conv.id})
 
-      Scoring.calculate_and_cache(conv.id)
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conv.id})
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations:org:#{conv.organization_id}",
+            {:conversation_updated, conv.id}
+          )
 
-      Phoenix.PubSub.broadcast(
-        Custyard.PubSub,
-        "conversations:org:#{conv.organization_id}",
-        {:conversation_updated, conv.id}
-      )
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversation:#{conv.id}",
+            {:message_added, conv.id}
+          )
 
-      Phoenix.PubSub.broadcast(
-        Custyard.PubSub,
-        "conversation:#{conv.id}",
-        {:message_added, conv.id}
-      )
+          {:noreply,
+           socket
+           |> assign(:reply_form, to_form(%{"body" => ""}))
+           |> assign(:conversation, Conversations.reload!(conv))
+           |> load_messages()}
 
-      {:noreply,
-       socket
-       |> assign(:reply_form, to_form(%{"body" => ""}))
-       |> assign(:conversation, Conversations.reload!(conv))
-       |> load_messages()}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to send reply. Please try again.")}
+      end
     else
       {:noreply, put_flash(socket, :error, "Reply cannot be empty")}
     end
@@ -110,6 +114,12 @@ defmodule CustyardWeb.Portal.ConversationLive do
   @impl true
   def handle_info({:message_added, _}, socket) do
     {:noreply, socket |> load_messages() |> load_tasks()}
+  end
+
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  @impl true
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
   end
 
   @impl true

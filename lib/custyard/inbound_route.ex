@@ -1,6 +1,6 @@
 defmodule Custyard.InboundRoute do
   @moduledoc """
-  Represents a Lettermint inbound route that maps to an organization and
+  Represents an inbound route that maps to an organization and
   optionally a project. Each route has a unique callback_token embedded
   in its webhook URL for routing incoming messages.
 
@@ -8,16 +8,27 @@ defmodule Custyard.InboundRoute do
   - `:general` — org-wide catch-all route
   - `:project` — project-specific route (sets project_id on conversations)
   - `:disambiguation` — handles ambiguous sender resolution via DM
+
+  Webhook sources:
+  - `:lettermint` — Lettermint email service
+  - `:zendesk` — Zendesk webhooks
+  - `:intercom` — Intercom conversation webhooks
+  - `:slack` — Slack events API
   """
   use Ecto.Schema
   import Ecto.Changeset
 
   @route_types [:general, :project, :disambiguation]
+  # Sources must match adapter registry - see Custyard.Webhooks.Registry
+  @sources [:lettermint, :zendesk, :intercom, :slack]
 
   schema "inbound_routes" do
     field :lettermint_route_id, :string
     field :callback_token, :string
     field :route_type, Ecto.Enum, values: @route_types, default: :general
+    # Source determines which webhook adapter processes requests to this route.
+    # This is a security control - prevents attackers from selecting adapters.
+    field :source, Ecto.Enum, values: @sources, default: :lettermint
 
     belongs_to :organization, Custyard.Organization
     belongs_to :project, Custyard.Project
@@ -27,6 +38,7 @@ defmodule Custyard.InboundRoute do
   end
 
   def route_types, do: @route_types
+  def sources, do: @sources
 
   @doc false
   def changeset(route, attrs) do
@@ -35,12 +47,14 @@ defmodule Custyard.InboundRoute do
       :lettermint_route_id,
       :callback_token,
       :route_type,
+      :source,
       :organization_id,
       :project_id
     ])
     |> maybe_generate_callback_token()
     |> validate_required([:callback_token, :route_type, :organization_id])
     |> validate_inclusion(:route_type, @route_types)
+    |> validate_token_strength()
     |> unique_constraint(:callback_token)
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:project_id)
@@ -62,6 +76,31 @@ defmodule Custyard.InboundRoute do
     case get_field(changeset, :callback_token) do
       nil -> put_change(changeset, :callback_token, generate_token())
       _ -> changeset
+    end
+  end
+
+  # Minimum token length: 32 chars provides ~192 bits of entropy (sufficient for auth)
+  # Auto-generated tokens are 43 chars (256 bits). This rejects short/guessable values.
+  @min_token_length 32
+
+  defp validate_token_strength(changeset) do
+    case get_field(changeset, :callback_token) do
+      nil ->
+        changeset
+
+      token when is_binary(token) ->
+        if String.length(token) >= @min_token_length do
+          changeset
+        else
+          add_error(
+            changeset,
+            :callback_token,
+            "must be at least #{@min_token_length} characters for security"
+          )
+        end
+
+      _ ->
+        changeset
     end
   end
 

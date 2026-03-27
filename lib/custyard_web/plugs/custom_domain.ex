@@ -7,6 +7,18 @@ defmodule CustyardWeb.Plugs.CustomDomain do
 
   This plug should be called early in the pipeline (in endpoint.ex) to allow
   route matching to work correctly with custom domains.
+
+  ## Security Notes
+
+  - **Host header trust**: This plug trusts the Host header for domain matching.
+    Organizations must explicitly configure their custom_domain in settings.
+    An attacker pointing arbitrary DNS at the server would need to guess an
+    existing configured custom_domain, and would only access the public portal.
+
+  - **Path rewriting**: This plug directly modifies `conn.request_path` and
+    `conn.path_info` to inject the organization token. This is intentional and
+    required for router matching. The original path is preserved in the
+    rewritten URL structure (`/p/:token/original/path`).
   """
   require Logger
 

@@ -7,7 +7,7 @@ defmodule CustyardWeb.Operator.SessionController do
        [max_attempts: 5, window_ms: 60_000] when action == :create
 
   def new(conn, _params) do
-    render(conn, :new, error: nil, layout: {CustyardWeb.Layouts, :root})
+    render(conn, :new, error: nil, email: nil, layout: {CustyardWeb.Layouts, :root})
   end
 
   def create(conn, %{"email" => email, "password" => password}) do
@@ -18,6 +18,7 @@ defmodule CustyardWeb.Operator.SessionController do
 
         render(conn, :new,
           error: "Invalid email or password",
+          email: email,
           layout: {CustyardWeb.Layouts, :root}
         )
 
@@ -31,6 +32,7 @@ defmodule CustyardWeb.Operator.SessionController do
         else
           render(conn, :new,
             error: "Invalid email or password",
+            email: email,
             layout: {CustyardWeb.Layouts, :root}
           )
         end

@@ -46,7 +46,10 @@ defmodule Custyard.Message do
     # Note: :source and :origin use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:conversation_id)
     # Unique constraint on message_id for webhook idempotency
+    # Handle both possible index names (migration creates _unique_index, but SQLite
+    # error messages sometimes report just _index due to how Exqlite parses errors)
     |> unique_constraint(:message_id, name: :messages_message_id_unique_index)
+    |> unique_constraint(:message_id, name: :messages_message_id_index)
   end
 
   @doc """

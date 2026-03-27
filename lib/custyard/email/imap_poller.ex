@@ -29,6 +29,11 @@ defmodule Custyard.Email.ImapPoller do
   @default_folder "INBOX"
   @default_port 993
 
+  # Backoff settings for error handling
+  @max_backoff_interval 15 * 60_000   # Max 15 minutes between retries
+  @backoff_multiplier 2               # Double delay on each failure
+  @circuit_breaker_threshold 10       # Log error after this many consecutive failures
+
   # Client API
 
   def start_link(opts) do
@@ -79,7 +84,9 @@ defmodule Custyard.Email.ImapPoller do
       ssl: Keyword.get(opts, :ssl, true),
       last_poll: nil,
       messages_processed: 0,
-      errors: 0
+      errors: 0,
+      consecutive_errors: 0,
+      current_backoff: Keyword.get(opts, :poll_interval, @default_poll_interval)
     }
 
     Logger.info("IMAP poller starting for #{state.host}:#{state.port}")
@@ -106,7 +113,8 @@ defmodule Custyard.Email.ImapPoller do
   @impl true
   def handle_info(:poll, state) do
     new_state = do_poll(state)
-    schedule_poll(state.poll_interval)
+    # Use backoff interval for scheduling (may be longer if there are consecutive errors)
+    schedule_poll(new_state.current_backoff)
     {:noreply, new_state}
   end
 
@@ -129,15 +137,52 @@ defmodule Custyard.Email.ImapPoller do
       {:ok, processed_count} ->
         Logger.info("IMAP poll complete: #{processed_count} messages processed")
 
+        # Success: reset backoff and consecutive error counter
         %{
           state
           | last_poll: DateTime.utc_now(),
-            messages_processed: state.messages_processed + processed_count
+            messages_processed: state.messages_processed + processed_count,
+            consecutive_errors: 0,
+            current_backoff: state.poll_interval
         }
 
       {:error, reason} ->
-        Logger.warning("IMAP poll failed: #{inspect(reason)}")
-        %{state | errors: state.errors + 1}
+        consecutive = state.consecutive_errors + 1
+
+        # Calculate backoff with exponential increase, capped at max
+        new_backoff =
+          min(
+            state.current_backoff * @backoff_multiplier,
+            @max_backoff_interval
+          )
+
+        # Log at warning level, but upgrade to error for circuit breaker
+        if consecutive >= @circuit_breaker_threshold do
+          Logger.error(
+            "IMAP poll failing repeatedly (#{consecutive} consecutive failures): #{inspect(reason)}. " <>
+              "Connection to #{state.host}:#{state.port} may be down. " <>
+              "Next retry in #{div(new_backoff, 1000)} seconds."
+          )
+
+          # Emit telemetry for alerting
+          :telemetry.execute(
+            [:custyard, :imap, :circuit_breaker],
+            %{consecutive_errors: consecutive},
+            %{host: state.host, port: state.port, reason: inspect(reason)}
+          )
+        else
+          Logger.warning(
+            "IMAP poll failed: #{inspect(reason)}. " <>
+              "Retry #{consecutive}/#{@circuit_breaker_threshold} in #{div(new_backoff, 1000)}s."
+          )
+        end
+
+        %{
+          state
+          | errors: state.errors + 1,
+            consecutive_errors: consecutive,
+            current_backoff: new_backoff
+        }
     end
   end
 

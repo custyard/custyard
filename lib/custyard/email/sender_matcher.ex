@@ -13,6 +13,7 @@ defmodule Custyard.Email.SenderMatcher do
   4. Domain match (catchall, unknown sender)
   """
 
+  require Logger
   alias Custyard.{Contact, Organization, Repo}
   import Ecto.Query
 
@@ -30,12 +31,22 @@ defmodule Custyard.Email.SenderMatcher do
         org = Repo.get!(Organization, contact.organization_id)
         {:ok, org, contact}
 
-      [contact | _rest] ->
-        # Multiple contacts across orgs — use the first match for now.
+      [contact | rest] ->
+        # Multiple contacts across orgs — use the oldest contact (first relationship).
         # Route-context matching (match_within_org/2) is the preferred path
         # to avoid this ambiguity. Disambiguation DM flow handles this in
         # the catchall route via the disambiguation webhook purpose.
         org = Repo.get!(Organization, contact.organization_id)
+
+        # Log warning for visibility into multi-org routing decisions
+        other_org_ids = Enum.map(rest, & &1.organization_id)
+
+        Logger.warning(
+          "Multi-org sender ambiguity: email #{email} exists in #{length(rest) + 1} organizations. " <>
+            "Routing to org #{org.id} (#{org.name}). Other org IDs: #{inspect(other_org_ids)}. " <>
+            "Consider using route-context matching to avoid ambiguity."
+        )
+
         {:ok, org, contact}
     end
   end
@@ -77,7 +88,10 @@ defmodule Custyard.Email.SenderMatcher do
   end
 
   defp find_contacts_by_email(email) do
-    from(c in Contact, where: c.email == ^email)
+    # Order by inserted_at to ensure deterministic behavior when the same email
+    # exists in multiple organizations. Oldest contact (first relationship) wins.
+    # This is a fallback for when route-context matching isn't available.
+    from(c in Contact, where: c.email == ^email, order_by: [asc: c.inserted_at])
     |> Repo.all()
   end
 

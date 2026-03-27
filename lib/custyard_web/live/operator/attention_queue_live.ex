@@ -64,17 +64,21 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       conversation = Conversations.get_conversation!(id)
       until = calculate_snooze_until(duration)
 
-      {:ok, _} = Conversations.snooze(conversation, until)
+      case Conversations.snooze(conversation, until) do
+        {:ok, _} ->
+          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
 
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations:org:#{conversation.organization_id}",
+            {:conversation_updated, id}
+          )
 
-      Phoenix.PubSub.broadcast(
-        Custyard.PubSub,
-        "conversations:org:#{conversation.organization_id}",
-        {:conversation_updated, id}
-      )
+          {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_conversations()}
 
-      {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_conversations()}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to snooze conversation")}
+      end
     else
       _ -> {:noreply, socket}
     end
@@ -157,7 +161,12 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         </span>
       </div>
 
-      <div class="flex gap-2 mb-4" data-testid="operator-queue-filters">
+      <div
+        class="flex gap-2 mb-4"
+        role="group"
+        aria-label="Filter by status"
+        data-testid="operator-queue-filters"
+      >
         <.filter_button filter={@filter} value="all" label="all" />
         <.filter_button filter={@filter} value="new" label="new" />
         <.filter_button filter={@filter} value="active" label="active" />
@@ -196,6 +205,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     <button
       phx-click="filter"
       phx-value-filter={@value}
+      aria-pressed={to_string(@filter == @value)}
       data-testid={"operator-queue-filter-#{@value}"}
       class={[
         "text-xs px-2.5 py-1 rounded",
