@@ -149,11 +149,16 @@ defmodule Custyard.Application do
     imap_config = Application.get_env(:custyard, :imap, [])
 
     if Keyword.get(imap_config, :enabled, false) do
+      # Build credential_fetcher from password_env to avoid storing credentials
+      # in Application config (visible in crash dumps and :sys.get_state).
+      password_env = Keyword.get(imap_config, :password_env, "IMAP_PASSWORD")
+      credential_fetcher = fn -> System.get_env(password_env) || "" end
+
       opts = [
         host: Keyword.get(imap_config, :host, "localhost"),
         port: Keyword.get(imap_config, :port, 993),
         username: Keyword.get(imap_config, :username, ""),
-        password: Keyword.get(imap_config, :password, ""),
+        credential_fetcher: credential_fetcher,
         folder: Keyword.get(imap_config, :folder, "INBOX"),
         poll_interval: Keyword.get(imap_config, :poll_interval, 60_000),
         ssl: Keyword.get(imap_config, :ssl, true)

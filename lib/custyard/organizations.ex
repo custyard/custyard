@@ -200,4 +200,18 @@ defmodule Custyard.Organizations do
   def get_organization_by_custom_domain(domain) when is_binary(domain) do
     Repo.get_by(Organization, custom_domain: domain)
   end
+
+  @doc """
+  Regenerate the portal access token for an organization.
+
+  This invalidates any existing portal links using the old token.
+  Returns `{:ok, organization}` or `{:error, changeset}`.
+  """
+  def regenerate_portal_token(%Organization{} = org) do
+    new_token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+
+    org
+    |> Ecto.Changeset.change(token: new_token)
+    |> Repo.update()
+  end
 end

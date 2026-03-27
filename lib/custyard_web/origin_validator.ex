@@ -8,9 +8,9 @@ defmodule CustyardWeb.OriginValidator do
 
   This enables custom domain portals to use LiveView WebSockets.
 
-  ## Usage in Endpoint
+  ## Usage in Endpoint (Phoenix 1.8+ MFA tuple format)
 
-      check_origin: &CustyardWeb.OriginValidator.check_origin/1
+      check_origin: {CustyardWeb.OriginValidator, :check_origin, []}
   """
 
   alias Custyard.{Organization, Repo}

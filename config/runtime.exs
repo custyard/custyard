@@ -120,7 +120,10 @@ if imap_enabled do
     host: System.get_env("IMAP_HOST") || "localhost",
     port: parse_int.("IMAP_PORT", 993),
     username: System.get_env("IMAP_USERNAME") || "",
-    password: System.get_env("IMAP_PASSWORD") || "",
+    # Store env var name instead of password value to prevent credential
+    # exposure in Application config, crash dumps, and :sys.get_state calls.
+    # The ImapPoller reads this at connection time via credential_fetcher.
+    password_env: "IMAP_PASSWORD",
     folder: System.get_env("IMAP_FOLDER") || "INBOX",
     poll_interval: parse_int.("IMAP_POLL_INTERVAL", 60000),
     ssl: System.get_env("IMAP_SSL") != "false"
@@ -211,7 +214,8 @@ if config_env() == :prod do
     ],
     # Dynamic origin check: allows PHX_HOST and all organization custom_domains
     # This enables LiveView WebSockets on custom domain portals
-    check_origin: &CustyardWeb.OriginValidator.check_origin/1,
+    # Phoenix 1.8+ requires MFA tuple format, not function capture
+    check_origin: {CustyardWeb.OriginValidator, :check_origin, []},
     secret_key_base: secret_key_base,
     live_view: [signing_salt: live_view_signing_salt],
     # Session salts derived from secret_key_base for security
