@@ -66,6 +66,8 @@ defmodule Custyard.InboundRoute do
   end
 
   defp generate_token do
-    :crypto.strong_rand_bytes(24) |> Base.url_encode64(padding: false)
+    # 32 bytes = 256 bits, matching Organization.generate_token
+    # Callback tokens are exposed in external webhook URLs, so use full entropy
+    :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
   end
 end
