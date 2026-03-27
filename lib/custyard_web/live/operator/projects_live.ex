@@ -1,6 +1,8 @@
 defmodule CustyardWeb.Operator.ProjectsLive do
   use CustyardWeb, :live_view
 
+  import CustyardWeb.FormHelpers
+
   alias Custyard.{Organizations, Projects}
 
   @impl true
@@ -9,6 +11,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
     socket =
       socket
+      |> assign(:page_title, "Projects")
       |> assign(:organizations, organizations)
       |> assign(:filter_org, nil)
       |> assign(:show_form, false)
@@ -53,20 +56,27 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   def handle_event("edit_project", %{"id" => id}, socket) do
-    project = Projects.get_project!(id)
+    case Projects.get_project(id) do
+      nil ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Project not found")
+         |> load_projects()}
 
-    {:noreply,
-     socket
-     |> assign(:show_form, true)
-     |> assign(:editing_project, project)
-     |> assign(:form_data, %{
-       title: project.title,
-       description: project.description || "",
-       organization_id: to_string(project.organization_id || ""),
-       start_date: format_date(project.start_date),
-       target_completion_date: format_date(project.target_completion_date),
-       portal_visible: project.portal_visible
-     })}
+      project ->
+        {:noreply,
+         socket
+         |> assign(:show_form, true)
+         |> assign(:editing_project, project)
+         |> assign(:form_data, %{
+           title: project.title,
+           description: project.description || "",
+           organization_id: to_string(project.organization_id || ""),
+           start_date: format_date(project.start_date),
+           target_completion_date: format_date(project.target_completion_date),
+           portal_visible: project.portal_visible
+         })}
+    end
   end
 
   @form_fields ~w(title description organization_id start_date target_completion_date portal_visible)a
@@ -96,17 +106,24 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   def handle_event("delete_project", %{"id" => id}, socket) do
-    project = Projects.get_project!(id)
-
-    case Projects.delete_project(project) do
-      {:ok, _} ->
+    case Projects.get_project(id) do
+      nil ->
         {:noreply,
          socket
-         |> put_flash(:info, "Project deleted.")
+         |> put_flash(:error, "Project not found")
          |> load_projects()}
 
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to delete project.")}
+      project ->
+        case Projects.delete_project(project) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Project deleted.")
+             |> load_projects()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Failed to delete project.")}
+        end
     end
   end
 
@@ -189,18 +206,6 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       {:ok, date} -> date
       _ -> nil
     end
-  end
-
-  defp format_changeset_errors(changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(&format_error/1)
-    |> Enum.map_join("; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
-  end
-
-  defp format_error({msg, opts}) do
-    Enum.reduce(opts, msg, fn {key, value}, acc ->
-      String.replace(acc, "%{#{key}}", to_string(value))
-    end)
   end
 
   @impl true
@@ -287,10 +292,16 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         data-testid="operator-project-form"
       >
         <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">Title</label>
+          <label
+            for="project-title"
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
+            Title
+          </label>
           <input
             type="text"
             name="title"
+            id="project-title"
             value={@form_data.title}
             required
             phx-debounce="300"
@@ -300,11 +311,15 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+          <label
+            for="project-description"
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
             Description
           </label>
           <textarea
             name="description"
+            id="project-description"
             rows="3"
             phx-debounce="300"
             class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
@@ -313,11 +328,15 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+          <label
+            for="project-organization"
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
             Organization
           </label>
           <select
             name="organization_id"
+            id="project-organization"
             class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
             data-testid="operator-project-org-select"
           >
@@ -334,24 +353,32 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+            <label
+              for="project-start-date"
+              class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+            >
               Start date
             </label>
             <input
               type="date"
               name="start_date"
+              id="project-start-date"
               value={@form_data.start_date}
               class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
               data-testid="operator-project-start-date"
             />
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+            <label
+              for="project-target-date"
+              class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+            >
               Target completion
             </label>
             <input
               type="date"
               name="target_completion_date"
+              id="project-target-date"
               value={@form_data.target_completion_date}
               class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
               data-testid="operator-project-target-date"
@@ -528,7 +555,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           cy="18"
           r="16"
           fill="none"
-          stroke="#e5e7eb"
+          class="stroke-gray-200 dark:stroke-zinc-600"
           stroke-width="3"
         />
         <circle
@@ -536,7 +563,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           cy="18"
           r="16"
           fill="none"
-          stroke="#4f46e5"
+          class="stroke-indigo-600"
           stroke-width="3"
           stroke-linecap="round"
           stroke-dasharray={@stroke_dasharray}

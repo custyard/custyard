@@ -25,21 +25,27 @@ defmodule CustyardWeb.Operator.ConversationLive do
   """
   use CustyardWeb, :live_view
 
+  import CustyardWeb.OperatorComponents
+
   alias Custyard.{Conversations, Message, Scoring}
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
     # TODO: Add authorization check here if implementing multi-tenancy or RBAC
     # See moduledoc for guidance
-    conversation = load_conversation(id)
+    case load_conversation(id) do
+      nil ->
+        {:ok,
+         socket
+         |> put_flash(:error, "Conversation not found")
+         |> redirect(to: ~p"/operator")}
 
-    unless conversation do
-      {:ok,
-       socket
-       |> put_flash(:error, "Conversation not found")
-       |> redirect(to: ~p"/operator")}
+      conversation ->
+        mount_conversation(socket, id, conversation)
     end
+  end
 
+  defp mount_conversation(socket, id, conversation) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
@@ -50,27 +56,37 @@ defmodule CustyardWeb.Operator.ConversationLive do
       if conversation.state == :new do
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-        {:ok, updated} =
-          Conversations.update_conversation(conversation,
-            state: :active,
-            last_operator_action_at: now
-          )
+        case Conversations.update_conversation(conversation,
+               state: :active,
+               last_operator_action_at: now
+             ) do
+          {:ok, updated} ->
+            # Reload first to get fresh data before any broadcasts
+            reloaded = load_conversation(id)
 
-        Scoring.calculate_and_cache(updated.id)
+            # Calculate score with fresh data
+            Scoring.calculate_and_cache(updated.id)
 
-        Phoenix.PubSub.broadcast(
-          Custyard.PubSub,
-          "conversations",
-          {:conversation_updated, updated.id}
-        )
+            # Broadcast after successful update and score calculation
+            Phoenix.PubSub.broadcast(
+              Custyard.PubSub,
+              "conversations",
+              {:conversation_updated, updated.id}
+            )
 
-        Phoenix.PubSub.broadcast(
-          Custyard.PubSub,
-          "conversations:org:#{updated.organization_id}",
-          {:conversation_updated, updated.id}
-        )
+            Phoenix.PubSub.broadcast(
+              Custyard.PubSub,
+              "conversations:org:#{updated.organization_id}",
+              {:conversation_updated, updated.id}
+            )
 
-        load_conversation(id)
+            reloaded
+
+          {:error, _changeset} ->
+            # If state transition fails, continue with original conversation
+            # The operator can still view and work with it
+            conversation
+        end
       else
         conversation
       end
@@ -81,6 +97,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
     socket =
       socket
+      |> assign(:page_title, truncate_subject(conversation.subject))
       |> assign(:conversation, conversation)
       |> assign(:breakdown, breakdown)
       |> assign(:neglect_status, neglect_status)
@@ -95,6 +112,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:edit_task_title, "")
       |> assign(:edit_task_due_at, "")
       |> assign(:edit_task_portal_visible, true)
+      |> assign(:show_sidebar, false)
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
   end
@@ -184,7 +202,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     {:noreply, assign(socket, :note_text, body)}
   end
 
-  def handle_event("set_state", %{"state" => state}, socket) do
+  def handle_event("set_state", %{"state" => state}, socket) when state in ~w(active waiting resolved) do
     conversation = socket.assigns.conversation
     new_state = String.to_existing_atom(state)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -215,8 +233,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
+  def handle_event("set_state", %{"state" => _state}, socket) do
+    # Invalid state value - silently ignore (could also flash an error)
+    {:noreply, socket}
+  end
+
   def handle_event("toggle_task_form", _params, socket) do
     {:noreply, assign(socket, :show_task_form, !socket.assigns.show_task_form)}
+  end
+
+  def handle_event("toggle_sidebar", _params, socket) do
+    {:noreply, assign(socket, :show_sidebar, !socket.assigns.show_sidebar)}
   end
 
   def handle_event("update_new_task", params, socket) do
@@ -360,7 +387,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
-  defp get_scoped_task!(socket, task_id) do
+  defp get_scoped_task!(socket, task_id) when is_binary(task_id) do
+    case Integer.parse(task_id) do
+      {int_id, ""} -> get_scoped_task!(socket, int_id)
+      _ -> raise Ecto.NoResultsError, queryable: Custyard.Task
+    end
+  end
+
+  defp get_scoped_task!(socket, task_id) when is_integer(task_id) do
     task = Conversations.get_task!(task_id)
     conversation_id = socket.assigns.conversation.id
 
@@ -378,16 +412,24 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   defp reload_conversation(socket) do
-    conversation = load_conversation(socket.assigns.conversation.id)
-    breakdown = Scoring.breakdown(conversation)
-    neglect_status = Scoring.neglect_status(conversation)
-    other_conversations = fetch_other_org_conversations(conversation)
+    case load_conversation(socket.assigns.conversation.id) do
+      nil ->
+        # Conversation was deleted - redirect to queue
+        socket
+        |> put_flash(:error, "Conversation no longer exists")
+        |> push_navigate(to: ~p"/operator")
 
-    socket
-    |> assign(:conversation, conversation)
-    |> assign(:breakdown, breakdown)
-    |> assign(:neglect_status, neglect_status)
-    |> assign(:other_conversations, other_conversations)
+      conversation ->
+        breakdown = Scoring.breakdown(conversation)
+        neglect_status = Scoring.neglect_status(conversation)
+        other_conversations = fetch_other_org_conversations(conversation)
+
+        socket
+        |> assign(:conversation, conversation)
+        |> assign(:breakdown, breakdown)
+        |> assign(:neglect_status, neglect_status)
+        |> assign(:other_conversations, other_conversations)
+    end
   end
 
   defp fetch_other_org_conversations(conversation) do
@@ -395,6 +437,13 @@ defmodule CustyardWeb.Operator.ConversationLive do
     |> Conversations.list_for_organization(include_resolved: false)
     |> Enum.reject(&(&1.id == conversation.id))
     |> Enum.take(5)
+  end
+
+  # Truncate subject for page title (browser tab)
+  defp truncate_subject(subject) when byte_size(subject) <= 50, do: subject
+
+  defp truncate_subject(subject) do
+    String.slice(subject, 0, 47) <> "..."
   end
 
   # NOTE: Timezone handling
@@ -448,12 +497,22 @@ defmodule CustyardWeb.Operator.ConversationLive do
             &larr; Queue
           </.link>
           <span
-            class="font-semibold text-gray-900 dark:text-zinc-100 truncate"
+            class="font-semibold text-gray-900 dark:text-zinc-100 truncate flex-1"
             data-testid="operator-conversation-subject"
           >
             {@conversation.subject}
           </span>
           <.state_badge state={@conversation.state} />
+          <button
+            phx-click="toggle_sidebar"
+            class="lg:hidden text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 p-1"
+            aria-label="Toggle details panel"
+            data-testid="operator-sidebar-toggle"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
         </div>
 
         <div
@@ -462,6 +521,13 @@ defmodule CustyardWeb.Operator.ConversationLive do
           class="flex-1 overflow-y-auto px-4 py-4 bg-gray-50 dark:bg-zinc-800 space-y-1"
           data-testid="operator-conversation-messages"
         >
+          <div
+            :if={@conversation.messages == []}
+            class="text-center py-8 text-gray-500 dark:text-zinc-400"
+            data-testid="operator-no-messages"
+          >
+            No messages yet
+          </div>
           <%= for message <- @conversation.messages do %>
             <.message_bubble message={message} />
           <% end %>
@@ -474,6 +540,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
               rows="2"
               phx-change="update_reply"
               placeholder="Reply to customer..."
+              aria-label="Reply to customer"
               data-testid="operator-reply-input"
               class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y"
             >{@reply_text}</textarea>
@@ -494,8 +561,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
               value={@note_text}
               phx-change="update_note"
               placeholder="Internal note (not visible to customer)..."
+              aria-label="Internal note (not visible to customer)"
               data-testid="operator-note-input"
-              class="flex-1 border border-amber-300 bg-amber-50 rounded px-3 py-2 text-sm"
+              class="flex-1 border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             />
             <button
               type="submit"
@@ -509,11 +577,40 @@ defmodule CustyardWeb.Operator.ConversationLive do
         </div>
       </div>
 
+      <%!-- Mobile sidebar overlay --%>
+      <div
+        :if={@show_sidebar}
+        class="lg:hidden fixed inset-0 z-40 bg-black/50"
+        phx-click="toggle_sidebar"
+        data-testid="operator-sidebar-backdrop"
+      />
+
       <%!-- Right: metadata panel --%>
       <div
-        class="hidden lg:block w-72 border-l border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 overflow-y-auto"
+        class={[
+          "w-72 border-l border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 overflow-y-auto",
+          "lg:block lg:relative",
+          if(@show_sidebar,
+            do: "fixed right-0 top-0 bottom-0 z-50",
+            else: "hidden"
+          )
+        ]}
         data-testid="operator-conversation-sidebar"
       >
+        <%!-- Mobile close button --%>
+        <div class="lg:hidden flex justify-between items-center p-3 border-b border-gray-200 dark:border-zinc-700">
+          <span class="font-medium text-gray-700 dark:text-zinc-300">Details</span>
+          <button
+            phx-click="toggle_sidebar"
+            class="text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 p-1"
+            aria-label="Close details panel"
+            data-testid="operator-sidebar-close"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
         <div class="p-4 space-y-4">
           <%!-- Organization --%>
           <div data-testid="operator-sidebar-org">
@@ -628,6 +725,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                   name="title"
                   value={@new_task_title}
                   placeholder="Task title..."
+                  aria-label="Task title"
                   class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1"
                   autofocus
                   data-testid="operator-task-title-input"
@@ -637,6 +735,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
                     type="datetime-local"
                     name="due_at"
                     value={@new_task_due_at}
+                    aria-label="Due date"
                     class="flex-1 text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1"
                     data-testid="operator-task-due-input"
                   />
@@ -735,8 +834,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
     bg_class =
       cond do
-        is_internal -> "bg-amber-50 border-amber-200"
-        is_operator -> "bg-indigo-50 border-indigo-100"
+        is_internal -> "bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-700"
+        is_operator -> "bg-indigo-50 dark:bg-indigo-900/30 border-indigo-100 dark:border-indigo-700"
         true -> "bg-white dark:bg-zinc-800 border-gray-200 dark:border-zinc-700"
       end
 
@@ -781,7 +880,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           </span>
         </div>
         <div
-          class="text-sm text-gray-800 dark:text-zinc-200 whitespace-pre-wrap"
+          class="text-sm text-gray-800 dark:text-zinc-200 whitespace-pre-wrap break-words"
           data-testid="operator-message-body"
         >
           {@message.body}
@@ -813,7 +912,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     cond do
       diff_days == 0 -> time_str
       diff_days == 1 -> "Yesterday #{time_str}"
-      diff_days < 7 -> Calendar.strftime(datetime, "%a #{time_str}")
+      diff_days < 7 -> "#{Calendar.strftime(datetime, "%a")} #{time_str}"
       true -> Calendar.strftime(datetime, "%b %d")
     end
   end
@@ -845,7 +944,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           </div>
         <% end %>
       </div>
-      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
         <%= if @task.portal_visible do %>
           <span
             class="text-xs text-gray-400 dark:text-zinc-500"
@@ -897,7 +996,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     <form
       phx-submit="save_task"
       phx-change="update_edit_task"
-      class="p-2 bg-indigo-50 rounded border border-indigo-200 space-y-2"
+      class="p-2 bg-indigo-50 dark:bg-indigo-900/30 rounded border border-indigo-200 dark:border-indigo-700 space-y-2"
       data-testid={"operator-task-edit-form-#{@task.id}"}
     >
       <input
@@ -905,6 +1004,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         name="title"
         value={@title}
         placeholder="Task title..."
+        aria-label="Task title"
         class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1"
         autofocus
         data-testid="operator-task-edit-title"
@@ -913,6 +1013,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         type="datetime-local"
         name="due_at"
         value={@due_at}
+        aria-label="Due date"
         class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1"
         data-testid="operator-task-edit-due"
       />
@@ -983,29 +1084,6 @@ defmodule CustyardWeb.Operator.ConversationLive do
     """
   end
 
-  attr :tier, :atom, required: true
-
-  defp tier_badge(assigns) do
-    colors =
-      case assigns.tier do
-        :enterprise -> "text-purple-700 bg-purple-50"
-        :standard -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-        :basic -> "text-gray-400 dark:text-zinc-500 bg-gray-50 dark:bg-zinc-800"
-        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-      end
-
-    assigns = assign(assigns, :colors, colors)
-
-    ~H"""
-    <span
-      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
-      data-testid={"operator-tier-badge-#{@tier}"}
-    >
-      {to_string(@tier)}
-    </span>
-    """
-  end
-
   defp state_dot_color(state) do
     color =
       case state do
@@ -1018,95 +1096,5 @@ defmodule CustyardWeb.Operator.ConversationLive do
       end
 
     "background-color: #{color}"
-  end
-
-  attr :state, :atom, required: true
-
-  defp state_badge(assigns) do
-    colors =
-      case assigns.state do
-        :new -> "bg-blue-100 text-blue-800"
-        :active -> "bg-green-100 text-green-800"
-        :waiting -> "bg-yellow-100 text-yellow-800"
-        :dormant -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
-        :resolved -> "bg-gray-100 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500"
-        _ -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
-      end
-
-    assigns = assign(assigns, :colors, colors)
-
-    ~H"""
-    <span
-      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
-      data-testid={"operator-state-badge-#{@state}"}
-    >
-      {to_string(@state)}
-    </span>
-    """
-  end
-
-  attr :level, :atom, required: true
-
-  defp neglect_badge(assigns) do
-    ~H"""
-    <%= case @level do %>
-      <% :critical -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300"
-          data-testid="operator-neglect-badge-critical"
-        >
-          NEGLECTED
-        </span>
-      <% :warning -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300"
-          data-testid="operator-neglect-badge-warning"
-        >
-          aging
-        </span>
-      <% _ -> %>
-    <% end %>
-    """
-  end
-
-  attr :breakdown, :map, required: true
-
-  defp score_breakdown(assigns) do
-    entries =
-      [
-        {"idle", assigns.breakdown.idle},
-        {"state", assigns.breakdown.state},
-        {"tier", assigns.breakdown.tier},
-        {"urgency", assigns.breakdown.urgency},
-        {"velocity", assigns.breakdown.velocity},
-        {"neglect", assigns.breakdown.neglect_bonus}
-      ]
-      |> Enum.filter(fn {_, v} -> v > 0 end)
-
-    total = Enum.sum(Enum.map(entries, fn {_, v} -> v end))
-    assigns = assign(assigns, :entries, entries) |> assign(:total, total)
-
-    ~H"""
-    <div
-      class="p-2 bg-gray-50 dark:bg-zinc-800 rounded text-xs space-y-1"
-      data-testid="operator-score-breakdown"
-    >
-      <div class="font-medium text-gray-700 dark:text-zinc-300 mb-1">
-        Score breakdown (total: {@breakdown.total})
-      </div>
-      <%= for {key, val} <- @entries do %>
-        <div class="flex items-center gap-2">
-          <span class="w-20 text-gray-500 dark:text-zinc-400">{key}</span>
-          <div class="flex-1 bg-gray-200 dark:bg-zinc-600 rounded-full h-1.5">
-            <div
-              class="bg-indigo-400 h-1.5 rounded-full"
-              style={"width: #{if @total > 0, do: (val / @total) * 100, else: 0}%"}
-            />
-          </div>
-          <span class="w-6 text-right text-gray-600 dark:text-zinc-400">{val}</span>
-        </div>
-      <% end %>
-    </div>
-    """
   end
 end

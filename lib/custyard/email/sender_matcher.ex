@@ -150,30 +150,38 @@ defmodule Custyard.Email.SenderMatcher do
   end
 
   defp get_or_create_unmatched_org do
-    # Use upsert pattern to handle race conditions where concurrent requests
-    # both try to create the unmatched org. on_conflict: :nothing avoids
-    # constraint errors, then we re-query to get the existing record.
-    attrs = %{
-      name: "Unmatched Senders",
-      domain: "_unmatched_",
-      tier: :basic
-    }
-
-    case %Organization{}
-         |> Organization.changeset(attrs)
-         |> Repo.insert(
-           on_conflict: :nothing,
-           conflict_target: :domain
-         ) do
-      {:ok, %Organization{id: nil}} ->
-        # Insert was skipped due to conflict, fetch existing record
-        {:ok, Repo.get_by!(Organization, domain: "_unmatched_")}
-
-      {:ok, org} ->
+    case Repo.get_by(Organization, domain: "_unmatched_") do
+      %Organization{} = org ->
         {:ok, org}
 
-      {:error, changeset} ->
-        {:error, changeset}
+      nil ->
+        # Race condition handling: if a concurrent request creates the org
+        # between our check and insert, catch the constraint error and re-query.
+        attrs = %{
+          name: "Unmatched Senders",
+          domain: "_unmatched_",
+          tier: :basic
+        }
+
+        %Organization{}
+        |> Organization.changeset(attrs)
+        |> Repo.insert()
+        |> case do
+          {:ok, org} ->
+            {:ok, org}
+
+          {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+            # Check if error is due to unique constraint on domain
+            if Keyword.has_key?(errors, :domain) do
+              # Concurrent insert won - fetch the existing record
+              case Repo.get_by(Organization, domain: "_unmatched_") do
+                %Organization{} = org -> {:ok, org}
+                nil -> {:error, changeset}
+              end
+            else
+              {:error, changeset}
+            end
+        end
     end
   end
 end

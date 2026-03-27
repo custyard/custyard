@@ -30,6 +30,27 @@ defmodule CustyardWeb.WebhookController do
 
   Maintains backward compatibility with the existing Lettermint integration.
   Delegates to the email Processor directly.
+
+  ## Deprecation Notice
+
+  This endpoint uses a single global WEBHOOK_TOKEN for all organizations. Consider
+  migrating to routed webhooks (`POST /api/webhook/route/:callback_token`) which
+  provide:
+
+  - Per-route callback tokens (can be rotated independently)
+  - Per-source signature verification (HMAC)
+  - Project/organization context from the route
+  - Multi-purpose webhook pipeline (enrichment, notifications, audit)
+
+  ## Security Limitations
+
+  With the legacy endpoint:
+
+  - A leaked WEBHOOK_TOKEN exposes all organizations
+  - No HMAC signature verification (bearer token only)
+  - SenderMatcher may auto-create contacts and organizations
+
+  For new integrations, use routed webhooks with proper HMAC secrets configured.
   """
   def inbound(conn, params) do
     case Processor.process(params) do
@@ -53,17 +74,41 @@ defmodule CustyardWeb.WebhookController do
   Looks up the InboundRoute by token, verifies the source adapter signature,
   normalizes the payload, and dispatches through the multi-webhook pipeline.
 
-  ## Security Notes
+  ## Security Model
 
-  - The adapter is determined by the `source` field on the InboundRoute, NOT
-    from the request body. This prevents attackers from selecting adapters
-    with weaker or no signature verification.
+  Authentication uses two layers:
 
-  - Each adapter has its own signature verification. Always configure
-    `:webhook_secrets` in production to enable verification.
+  1. **callback_token** (route-level): A 256-bit random token in the URL path.
+     Provides defense against random probing but can be leaked in logs or error
+     messages. Treat as sensitive and rotate if compromised.
 
-  - The callback_token provides route-level authentication (256 bits entropy).
-    If a token is leaked, rotate it in the InboundRoute record.
+  2. **webhook signature** (request-level): HMAC signature from the webhook
+     provider. Requires configuring `:webhook_secrets` in config/runtime.exs.
+
+  ## Production Requirements
+
+  In production, if `:webhook_secrets` is NOT configured for a source, requests
+  from that source will fail with "unauthorized". This is intentional fail-closed
+  behavior. Always configure secrets for each webhook source in production:
+
+      config :custyard, :webhook_secrets, %{
+        lettermint: "secret_from_lettermint",
+        zendesk: "secret_from_zendesk",
+        intercom: "secret_from_intercom",
+        slack: "secret_from_slack"
+      }
+
+  ## Dev/Test Behavior
+
+  In dev/test environments without configured secrets, signature verification
+  is skipped with a warning. This allows local testing but should never be
+  used in production.
+
+  ## Adapter Selection
+
+  The adapter is determined by the `source` field on the InboundRoute, NOT
+  from the request body. This prevents attackers from selecting adapters
+  with weaker or no signature verification.
   """
   def routed(conn, %{"callback_token" => callback_token} = params) do
     with {:ok, route} <- find_route(callback_token),
@@ -96,9 +141,30 @@ defmodule CustyardWeb.WebhookController do
         json(conn, %{status: "ok", conversation_id: conversation.id})
 
       {:error, reason} ->
-        conn |> put_status(422) |> json(%{status: "error", reason: reason})
+        conn |> put_status(422) |> json(%{status: "error", reason: format_error(reason)})
     end
   end
+
+  # Convert error reasons to JSON-safe strings
+  defp format_error(%Ecto.Changeset{} = changeset) do
+    # Return generic message to avoid leaking internal details
+    errors =
+      Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
+        Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
+          opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+        end)
+      end)
+
+    if map_size(errors) > 0 do
+      "validation failed"
+    else
+      "processing failed"
+    end
+  end
+
+  defp format_error(reason) when is_binary(reason), do: reason
+  defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_error(_reason), do: "processing failed"
 
   defp find_route(callback_token) do
     case Repo.get_by(InboundRoute, callback_token: callback_token) do

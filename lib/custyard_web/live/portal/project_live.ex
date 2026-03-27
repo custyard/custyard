@@ -13,11 +13,34 @@ defmodule CustyardWeb.Portal.ProjectLive do
         {:ok, push_navigate(socket, to: "#{socket.assigns.portal_path}/projects")}
 
       {:ok, project} ->
+        if connected?(socket) do
+          # Subscribe to project-specific updates (task changes, etc.)
+          Phoenix.PubSub.subscribe(Custyard.PubSub, "project:#{project.id}")
+        end
+
         {:ok,
          socket
          |> assign(:project, project)
          |> assign(:page_title, project.title)}
     end
+  end
+
+  @impl true
+  def handle_info({:project_updated, _id}, socket) do
+    # Reload the project to get updated task states
+    case Projects.get_portal_project(socket.assigns.project.id, socket.assigns.current_org.id) do
+      {:ok, project} ->
+        {:noreply, assign(socket, :project, project)}
+
+      {:error, _} ->
+        # Project no longer accessible, redirect
+        {:noreply, push_navigate(socket, to: "#{socket.assigns.portal_path}/projects")}
+    end
+  end
+
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
   end
 
   @impl true
@@ -156,33 +179,6 @@ defmodule CustyardWeb.Portal.ProjectLive do
           <span class="w-2 h-2 rounded-full bg-gray-400 dark:bg-zinc-500" />
         </span>
     <% end %>
-    """
-  end
-
-  attr :state, :atom, required: true
-
-  defp task_state_badge(assigns) do
-    {bg_color, text_color, label} =
-      case assigns.state do
-        :done -> {"bg-green-100", "text-green-800", "Done"}
-        :in_progress -> {"bg-blue-100", "text-blue-800", "In Progress"}
-        :open -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
-        _ -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
-      end
-
-    assigns =
-      assigns
-      |> assign(:bg_color, bg_color)
-      |> assign(:text_color, text_color)
-      |> assign(:label, label)
-
-    ~H"""
-    <span
-      class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}
-      data-testid={"portal-task-badge-#{@state}"}
-    >
-      {@label}
-    </span>
     """
   end
 

@@ -12,6 +12,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
     socket =
       socket
+      |> assign(:page_title, "Settings")
       |> assign(:weights, weights)
       |> assign(:thresholds, thresholds)
       |> assign(:editing_weights, false)
@@ -34,22 +35,33 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   @impl true
   def handle_event("save_weights", %{"weights" => weight_params}, socket) do
-    weights =
+    parsed =
       weight_params
       |> Enum.map(fn {k, v} -> {k, parse_float(v)} end)
-      |> Map.new()
 
-    case Settings.update_weights(weights) do
-      {:ok, _settings} ->
-        {:noreply,
-         socket
-         |> assign(:weights, weights)
-         |> assign(:editing_weights, false)
-         |> assign(:weight_form, to_form(weights, as: "weights"))
-         |> put_flash(:info, "Weights updated successfully")}
+    invalid_keys =
+      parsed
+      |> Enum.filter(fn {_k, v} -> v == :error end)
+      |> Enum.map(fn {k, _} -> k end)
 
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to update weights")}
+    if invalid_keys != [] do
+      {:noreply,
+       put_flash(socket, :error, "Invalid numeric values for: #{Enum.join(invalid_keys, ", ")}")}
+    else
+      weights = Map.new(parsed)
+
+      case Settings.update_weights(weights) do
+        {:ok, _settings} ->
+          {:noreply,
+           socket
+           |> assign(:weights, weights)
+           |> assign(:editing_weights, false)
+           |> assign(:weight_form, to_form(weights, as: "weights"))
+           |> put_flash(:info, "Weights updated successfully")}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to update weights")}
+      end
     end
   end
 
@@ -65,53 +77,65 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   @impl true
   def handle_event("save_thresholds", %{"thresholds" => threshold_params}, socket) do
-    thresholds =
-      %{
-        "enterprise" => [
-          parse_int(threshold_params["enterprise_warning"]),
-          parse_int(threshold_params["enterprise_critical"])
-        ],
-        "standard" => [
-          parse_int(threshold_params["standard_warning"]),
-          parse_int(threshold_params["standard_critical"])
-        ],
-        "basic" => [
-          parse_int(threshold_params["basic_warning"]),
-          parse_int(threshold_params["basic_critical"])
-        ]
-      }
+    parsed_values = [
+      {"enterprise_warning", parse_int(threshold_params["enterprise_warning"])},
+      {"enterprise_critical", parse_int(threshold_params["enterprise_critical"])},
+      {"standard_warning", parse_int(threshold_params["standard_warning"])},
+      {"standard_critical", parse_int(threshold_params["standard_critical"])},
+      {"basic_warning", parse_int(threshold_params["basic_warning"])},
+      {"basic_critical", parse_int(threshold_params["basic_critical"])}
+    ]
 
-    # Validate that warning < critical for each tier
-    invalid_tiers =
-      thresholds
-      |> Enum.filter(fn {_tier, [warning, critical]} -> warning >= critical end)
-      |> Enum.map(fn {tier, _} -> tier end)
+    invalid_fields =
+      parsed_values
+      |> Enum.filter(fn {_k, v} -> v == :error end)
+      |> Enum.map(fn {k, _} -> k end)
 
-    if invalid_tiers != [] do
+    if invalid_fields != [] do
       {:noreply,
-       put_flash(
-         socket,
-         :error,
-         "Warning threshold must be less than critical threshold for: #{Enum.join(invalid_tiers, ", ")}"
-       )}
+       put_flash(socket, :error, "Invalid numeric values for: #{Enum.join(invalid_fields, ", ")}")}
     else
-      # Convert to tuple format for update_thresholds
-      thresholds_tuples =
+      values = Map.new(parsed_values)
+
+      thresholds =
+        %{
+          "enterprise" => [values["enterprise_warning"], values["enterprise_critical"]],
+          "standard" => [values["standard_warning"], values["standard_critical"]],
+          "basic" => [values["basic_warning"], values["basic_critical"]]
+        }
+
+      # Validate that warning < critical for each tier
+      invalid_tiers =
         thresholds
-        |> Enum.map(fn {tier, [w, c]} -> {String.to_existing_atom(tier), {w, c}} end)
-        |> Map.new()
+        |> Enum.filter(fn {_tier, [warning, critical]} -> warning >= critical end)
+        |> Enum.map(fn {tier, _} -> tier end)
 
-      case Settings.update_thresholds(thresholds_tuples) do
-        {:ok, _settings} ->
-          {:noreply,
-           socket
-           |> assign(:thresholds, thresholds)
-           |> assign(:editing_thresholds, false)
-           |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
-           |> put_flash(:info, "Thresholds updated successfully")}
+      if invalid_tiers != [] do
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Warning threshold must be less than critical threshold for: #{Enum.join(invalid_tiers, ", ")}"
+         )}
+      else
+        # Convert to tuple format for update_thresholds
+        thresholds_tuples =
+          thresholds
+          |> Enum.map(fn {tier, [w, c]} -> {String.to_existing_atom(tier), {w, c}} end)
+          |> Map.new()
 
-        {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "Failed to update thresholds")}
+        case Settings.update_thresholds(thresholds_tuples) do
+          {:ok, _settings} ->
+            {:noreply,
+             socket
+             |> assign(:thresholds, thresholds)
+             |> assign(:editing_thresholds, false)
+             |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
+             |> put_flash(:info, "Thresholds updated successfully")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Failed to update thresholds")}
+        end
       end
     end
   end
@@ -119,20 +143,22 @@ defmodule CustyardWeb.Operator.SettingsLive do
   defp parse_float(str) when is_binary(str) do
     case Float.parse(str) do
       {f, _} -> f
-      :error -> 1.0
+      :error -> :error
     end
   end
 
   defp parse_float(num) when is_number(num), do: num / 1
+  defp parse_float(_), do: :error
 
   defp parse_int(str) when is_binary(str) do
     case Integer.parse(str) do
       {i, _} -> i
-      :error -> 24
+      :error -> :error
     end
   end
 
   defp parse_int(num) when is_integer(num), do: num
+  defp parse_int(_), do: :error
 
   defp flatten_thresholds(thresholds) do
     Enum.reduce(thresholds, %{}, fn {tier, [warning, critical]}, acc ->

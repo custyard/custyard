@@ -67,6 +67,10 @@ defmodule Custyard.Organization do
         # Convert empty string to nil so partial unique index works correctly
         put_change(changeset, :domain, nil)
 
+      # Allow _unmatched_ sentinel value for unknown sender organization
+      "_unmatched_" ->
+        changeset
+
       domain when is_binary(domain) ->
         # Basic domain validation - must look like a hostname
         if Regex.match?(

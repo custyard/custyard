@@ -6,11 +6,30 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
   @impl true
   def mount(_params, _session, socket) do
     # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
+    org = socket.assigns.current_org
+
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "projects:org:#{org.id}")
+    end
 
     {:ok,
      socket
      |> assign(:page_title, "Projects")
      |> load_projects()}
+  end
+
+  @impl true
+  def handle_info({:project_updated, _id}, socket) do
+    {:noreply, load_projects(socket)}
+  end
+
+  def handle_info({:project_created, _id}, socket) do
+    {:noreply, load_projects(socket)}
+  end
+
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
   end
 
   defp load_projects(socket) do

@@ -54,8 +54,15 @@ defmodule CustyardWeb.Portal.RequestListLive do
     {:noreply, load_conversations(socket)}
   end
 
+  @impl true
   def handle_info({:conversation_created, _id}, socket) do
     {:noreply, load_conversations(socket)}
+  end
+
+  # Catch-all for unexpected messages to prevent FunctionClauseError crashes
+  @impl true
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
   end
 
   defp load_conversations(socket) do
@@ -127,6 +134,13 @@ defmodule CustyardWeb.Portal.RequestListLive do
             </button>
           </div>
           <.link
+            navigate={"#{@portal_path}/projects"}
+            class="text-indigo-600 dark:text-indigo-400 px-4 py-2 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+            data-testid="portal-projects-link"
+          >
+            View Projects
+          </.link>
+          <.link
             navigate={"#{@portal_path}/new"}
             class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
             data-testid="portal-new-request-link"
@@ -165,7 +179,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
                 class={"px-2 py-1 text-xs rounded-full #{state_color(conv.state)}"}
                 data-testid="portal-state-badge"
               >
-                {conv.state}
+                {state_label(conv.state)}
               </span>
             </div>
           </div>
@@ -183,10 +197,18 @@ defmodule CustyardWeb.Portal.RequestListLive do
     """
   end
 
-  defp state_color(:new), do: "bg-blue-100 text-blue-800"
-  defp state_color(:active), do: "bg-green-100 text-green-800"
-  defp state_color(:waiting), do: "bg-yellow-100 text-yellow-800"
+  defp state_color(:new), do: "bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300"
+  defp state_color(:active), do: "bg-green-100 dark:bg-green-950 text-green-800 dark:text-green-300"
+  defp state_color(:waiting), do: "bg-yellow-100 dark:bg-yellow-950 text-yellow-800 dark:text-yellow-300"
   defp state_color(_), do: "bg-gray-100 dark:bg-zinc-700 text-gray-800 dark:text-zinc-200"
+
+  # Customer-friendly state labels
+  defp state_label(:new), do: "Open"
+  defp state_label(:active), do: "In Progress"
+  defp state_label(:waiting), do: "Awaiting Reply"
+  defp state_label(:dormant), do: "On Hold"
+  defp state_label(:resolved), do: "Closed"
+  defp state_label(_), do: "Unknown"
 
   defp relative_time(datetime) do
     diff = DateTime.diff(DateTime.utc_now(), datetime, :hour)
@@ -198,21 +220,31 @@ defmodule CustyardWeb.Portal.RequestListLive do
     end
   end
 
-  # Contact impersonation via ?as= param - only in dev/test
-  if Application.compile_env(:custyard, :allow_contact_impersonation, false) do
-    defp maybe_impersonate_contact(%{"as" => nil}, _org_id), do: {nil, false}
-
-    defp maybe_impersonate_contact(%{} = params, _org_id) when not is_map_key(params, "as"),
-      do: {nil, false}
-
-    defp maybe_impersonate_contact(%{"as" => contact_id} = params, org_id) do
-      alias Custyard.{Contact, Repo}
-      contact = Repo.get_by(Contact, id: contact_id, organization_id: org_id)
-      # Only admin contacts can use admin mode
-      admin_mode = contact && contact.is_admin && params["admin"] == "true"
-      {contact, admin_mode}
+  # Contact impersonation via ?as= param - only when explicitly enabled at runtime.
+  # This is a runtime check (not compile-time) so it can be disabled even if the
+  # binary was built with the wrong config.
+  defp maybe_impersonate_contact(params, org_id) do
+    if impersonation_enabled?() do
+      do_impersonate_contact(params, org_id)
+    else
+      {nil, false}
     end
-  else
-    defp maybe_impersonate_contact(_params, _org_id), do: {nil, false}
+  end
+
+  defp impersonation_enabled? do
+    Application.get_env(:custyard, :allow_contact_impersonation, false) == true
+  end
+
+  defp do_impersonate_contact(%{"as" => nil}, _org_id), do: {nil, false}
+
+  defp do_impersonate_contact(%{} = params, _org_id) when not is_map_key(params, "as"),
+    do: {nil, false}
+
+  defp do_impersonate_contact(%{"as" => contact_id} = params, org_id) do
+    alias Custyard.{Contact, Repo}
+    contact = Repo.get_by(Contact, id: contact_id, organization_id: org_id)
+    # Only admin contacts can use admin mode
+    admin_mode = contact && contact.is_admin && params["admin"] == "true"
+    {contact, admin_mode}
   end
 end

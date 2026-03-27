@@ -1,7 +1,13 @@
 defmodule CustyardWeb.Operator.AttentionQueueLive do
   use CustyardWeb, :live_view
 
+  import CustyardWeb.OperatorComponents
+
   alias Custyard.{Conversations, Scoring}
+
+  # Debounce delay for PubSub-triggered reloads (milliseconds)
+  # This prevents N+1 query storms when multiple conversations update rapidly
+  @reload_debounce_ms 500
 
   @impl true
   def mount(_params, _session, socket) do
@@ -11,9 +17,11 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
     socket =
       socket
+      |> assign(:page_title, "Attention Queue")
       |> assign(:filter, "all")
       |> assign(:show_score_breakdown, nil)
       |> assign(:show_snooze_menu, nil)
+      |> assign(:reload_timer, nil)
       |> load_conversations()
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
@@ -86,11 +94,36 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   @impl true
   def handle_info({:conversation_updated, _id}, socket) do
-    {:noreply, load_conversations(socket)}
+    {:noreply, schedule_reload(socket)}
   end
 
   def handle_info({:conversation_created, _id}, socket) do
-    {:noreply, load_conversations(socket)}
+    {:noreply, schedule_reload(socket)}
+  end
+
+  # Debounced reload timer fired - perform the actual reload
+  def handle_info(:debounced_reload, socket) do
+    {:noreply,
+     socket
+     |> assign(:reload_timer, nil)
+     |> load_conversations()}
+  end
+
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
+  # Schedule a debounced reload - cancel any pending timer first
+  defp schedule_reload(socket) do
+    # Cancel existing timer if any
+    if timer = socket.assigns[:reload_timer] do
+      Process.cancel_timer(timer)
+    end
+
+    # Schedule new reload
+    timer = Process.send_after(self(), :debounced_reload, @reload_debounce_ms)
+    assign(socket, :reload_timer, timer)
   end
 
   defp load_conversations(socket) do
@@ -157,7 +190,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           What needs attention
         </h1>
         <span class="text-xs text-gray-400 dark:text-zinc-500" data-testid="operator-queue-count">
-          {length(@conversations)} items
+          {length(@conversations)} {if length(@conversations) == 1, do: "item", else: "items"}
         </span>
       </div>
 
@@ -336,144 +369,10 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       </div>
 
       <%= if @show_score do %>
-        <.score_breakdown breakdown={@item.breakdown} />
+        <.score_breakdown breakdown={@item.breakdown} show_total={false} />
       <% end %>
     </div>
     """
   end
 
-  attr :tier, :atom, required: true
-
-  defp tier_badge(assigns) do
-    colors =
-      case assigns.tier do
-        :enterprise -> "text-purple-700 bg-purple-50"
-        :standard -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-        :basic -> "text-gray-400 dark:text-zinc-500 bg-gray-50 dark:bg-zinc-800"
-        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-      end
-
-    assigns = assign(assigns, :colors, colors)
-
-    ~H"""
-    <span
-      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
-      data-testid={"operator-tier-badge-#{@tier}"}
-    >
-      {to_string(@tier)}
-    </span>
-    """
-  end
-
-  attr :level, :atom, required: true
-
-  defp neglect_badge(assigns) do
-    ~H"""
-    <%= case @level do %>
-      <% :critical -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300"
-          data-testid="operator-neglect-badge-critical"
-        >
-          NEGLECTED
-        </span>
-      <% :warning -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300"
-          data-testid="operator-neglect-badge-warning"
-        >
-          aging
-        </span>
-      <% _ -> %>
-    <% end %>
-    """
-  end
-
-  attr :state, :atom, required: true
-
-  defp state_badge(assigns) do
-    colors =
-      case assigns.state do
-        :new -> "bg-blue-100 text-blue-800"
-        :active -> "bg-green-100 text-green-800"
-        :waiting -> "bg-yellow-100 text-yellow-800"
-        :dormant -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
-        :resolved -> "bg-gray-100 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500"
-        _ -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
-      end
-
-    assigns = assign(assigns, :colors, colors)
-
-    ~H"""
-    <span
-      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
-      data-testid={"operator-state-badge-#{@state}"}
-    >
-      {to_string(@state)}
-    </span>
-    """
-  end
-
-  attr :urgency, :atom, required: true
-
-  defp urgency_badge(assigns) do
-    ~H"""
-    <%= case @urgency do %>
-      <% :urgent -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-800"
-          data-testid="operator-urgency-badge-urgent"
-        >
-          urgent
-        </span>
-      <% :elevated -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded font-medium bg-orange-100 text-orange-800"
-          data-testid="operator-urgency-badge-elevated"
-        >
-          elevated
-        </span>
-      <% _ -> %>
-    <% end %>
-    """
-  end
-
-  attr :breakdown, :map, required: true
-
-  defp score_breakdown(assigns) do
-    entries =
-      [
-        {"idle", assigns.breakdown.idle},
-        {"state", assigns.breakdown.state},
-        {"tier", assigns.breakdown.tier},
-        {"urgency", assigns.breakdown.urgency},
-        {"velocity", assigns.breakdown.velocity},
-        {"neglect", assigns.breakdown.neglect_bonus}
-      ]
-      |> Enum.filter(fn {_, v} -> v > 0 end)
-
-    total = Enum.sum(Enum.map(entries, fn {_, v} -> v end))
-    assigns = assign(assigns, :entries, entries) |> assign(:total, total)
-
-    ~H"""
-    <div
-      class="mt-2 p-2 bg-gray-50 dark:bg-zinc-800 rounded text-xs space-y-1"
-      data-testid="operator-score-breakdown"
-    >
-      <div class="font-medium text-gray-700 dark:text-zinc-300 mb-1">Score breakdown</div>
-      <%= for {key, val} <- @entries do %>
-        <div class="flex items-center gap-2">
-          <span class="w-20 text-gray-500 dark:text-zinc-400">{key}</span>
-          <div class="flex-1 bg-gray-200 dark:bg-zinc-600 rounded-full h-1.5">
-            <div
-              class="bg-indigo-400 h-1.5 rounded-full"
-              style={"width: #{if @total > 0, do: (val / @total) * 100, else: 0}%"}
-            />
-          </div>
-          <span class="w-6 text-right text-gray-600 dark:text-zinc-400">{val}</span>
-        </div>
-      <% end %>
-    </div>
-    """
-  end
 end

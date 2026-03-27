@@ -77,16 +77,22 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
     end
   end
 
+  # Conversation.changeset validates subject max 500 chars
+  @max_subject_length 500
+  # Message.changeset validates body max 100,000 chars
+  @max_body_length 100_000
+
   @impl true
   def normalize(params) do
     headers = params["headers"] || %{}
+    body = params["text"] || strip_html(params["html"]) || ""
 
     {:ok,
      %{
        from: params["from"] || params["sender"],
        to: params["to"] || params["recipient"],
-       subject: params["subject"] || "(no subject)",
-       body: params["text"] || strip_html(params["html"]) || "",
+       subject: truncate(params["subject"] || "(no subject)", @max_subject_length),
+       body: truncate(body, @max_body_length),
        message_id: get_header(headers, "message-id"),
        in_reply_to: get_header(headers, "in-reply-to"),
        references: get_header(headers, "references"),
@@ -115,5 +121,12 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
     |> String.replace(~r/<[^>]+>/, "")
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
+  end
+
+  defp truncate(nil, _max_length), do: ""
+  defp truncate(text, max_length) when byte_size(text) <= max_length, do: text
+
+  defp truncate(text, max_length) do
+    String.slice(text, 0, max_length - 3) <> "..."
   end
 end

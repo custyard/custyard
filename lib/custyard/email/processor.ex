@@ -12,6 +12,11 @@ defmodule Custyard.Email.Processor do
 
   alias Custyard.Webhooks.Purposes.SenderMatching
 
+  # Conversation.changeset validates subject max 500 chars
+  @max_subject_length 500
+  # Message.changeset validates body max 100,000 chars
+  @max_body_length 100_000
+
   @doc """
   Process raw email payload from LMTP, IMAP, or legacy webhook.
 
@@ -27,13 +32,15 @@ defmodule Custyard.Email.Processor do
   defp parse_payload(params) do
     # Lettermint sends: from, to, subject, text, html, headers, attachments
     headers = params["headers"] || %{}
+    subject = params["subject"] || "(no subject)"
+    body = params["text"] || strip_html(params["html"]) || ""
 
     {:ok,
      %{
        from: params["from"] || params["sender"],
        to: params["to"] || params["recipient"],
-       subject: params["subject"] || "(no subject)",
-       body: params["text"] || strip_html(params["html"]) || "",
+       subject: truncate(subject, @max_subject_length),
+       body: truncate(body, @max_body_length),
        message_id: get_header(headers, "message-id"),
        in_reply_to: get_header(headers, "in-reply-to"),
        references: get_header(headers, "references"),
@@ -65,5 +72,12 @@ defmodule Custyard.Email.Processor do
     |> String.replace(~r/<[^>]+>/, "")
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
+  end
+
+  defp truncate(nil, _max_length), do: ""
+  defp truncate(text, max_length) when byte_size(text) <= max_length, do: text
+
+  defp truncate(text, max_length) do
+    String.slice(text, 0, max_length - 3) <> "..."
   end
 end

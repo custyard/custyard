@@ -17,6 +17,11 @@ defmodule CustyardWeb.Portal.NewRequestLive do
   @allowed_urgencies ~w(normal elevated urgent)
 
   @impl true
+  def handle_event("validate", params, socket) do
+    {:noreply, assign(socket, :form, to_form(params))}
+  end
+
+  @impl true
   def handle_event("submit", %{"urgency" => urgency} = params, socket)
       when urgency in @allowed_urgencies do
     org = socket.assigns.current_org
@@ -62,12 +67,18 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
           |> Enum.map_join(", ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
 
-        {:noreply, put_flash(socket, :error, "Could not create request: #{errors}")}
+        {:noreply,
+         socket
+         |> assign(:form, to_form(params))
+         |> put_flash(:error, "Could not create request: #{errors}")}
     end
   end
 
-  def handle_event("submit", _params, socket) do
-    {:noreply, put_flash(socket, :error, "Invalid urgency value")}
+  def handle_event("submit", params, socket) do
+    {:noreply,
+     socket
+     |> assign(:form, to_form(params))
+     |> put_flash(:error, "Invalid urgency value")}
   end
 
   @impl true
@@ -81,7 +92,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         New Request
       </h1>
 
-      <form phx-submit="submit" class="space-y-4" data-testid="portal-new-request-form">
+      <form phx-submit="submit" phx-change="validate" class="space-y-4" data-testid="portal-new-request-form">
         <div>
           <label
             for="subject"
@@ -95,10 +106,13 @@ defmodule CustyardWeb.Portal.NewRequestLive do
             name="subject"
             id="subject"
             required
+            minlength="3"
+            maxlength="200"
             data-testid="portal-subject-input"
-            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 phx-submit-loading:opacity-50"
             value={@form[:subject].value}
           />
+          <p class="mt-1 text-xs text-gray-500 dark:text-zinc-400">3-200 characters</p>
         </div>
 
         <div>
@@ -112,12 +126,12 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           <select
             name="urgency"
             id="urgency"
-            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 phx-submit-loading:opacity-50"
             data-testid="portal-urgency-select"
           >
-            <option value="normal">Normal</option>
-            <option value="elevated">Elevated</option>
-            <option value="urgent">Urgent</option>
+            <option value="normal" selected={@form[:urgency].value == "normal"}>Normal</option>
+            <option value="elevated" selected={@form[:urgency].value == "elevated"}>Elevated</option>
+            <option value="urgent" selected={@form[:urgency].value == "urgent"}>Urgent</option>
           </select>
         </div>
 
@@ -134,9 +148,11 @@ defmodule CustyardWeb.Portal.NewRequestLive do
             id="body"
             rows="6"
             required
+            minlength="10"
             data-testid="portal-body-textarea"
-            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
+            class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500 phx-submit-loading:opacity-50"
           ><%= @form[:body].value %></textarea>
+          <p class="mt-1 text-xs text-gray-500 dark:text-zinc-400">Minimum 10 characters</p>
         </div>
 
         <div class="flex justify-end gap-3">
@@ -149,7 +165,8 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           </.link>
           <button
             type="submit"
-            class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+            phx-disable-with="Submitting..."
+            class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 phx-submit-loading:opacity-75"
             data-testid="portal-submit"
           >
             Submit Request

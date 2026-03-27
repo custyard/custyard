@@ -751,4 +751,40 @@ defmodule CustyardWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+  @doc """
+  Renders a task state badge with consistent styling.
+
+  ## Examples
+
+      <.task_state_badge state={:open} />
+      <.task_state_badge state={:in_progress} />
+      <.task_state_badge state={:done} />
+  """
+  attr :state, :atom, required: true
+
+  def task_state_badge(assigns) do
+    {bg_color, text_color, label} =
+      case assigns.state do
+        :done -> {"bg-green-100", "text-green-800", "Done"}
+        :in_progress -> {"bg-blue-100", "text-blue-800", "In Progress"}
+        :open -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
+        _ -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
+      end
+
+    assigns =
+      assigns
+      |> assign(:bg_color, bg_color)
+      |> assign(:text_color, text_color)
+      |> assign(:label, label)
+
+    ~H"""
+    <span
+      class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}
+      data-testid={"task-badge-#{@state}"}
+    >
+      {@label}
+    </span>
+    """
+  end
 end

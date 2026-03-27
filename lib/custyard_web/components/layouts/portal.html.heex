@@ -1,10 +1,34 @@
+<%!-- Helper to determine if a nav link is active --%>
+<% # Get current view module for LiveView pages
+current_view = assigns[:socket] && assigns.socket.view
+
+# Check if current view matches target views
+nav_active? = fn target_views ->
+  is_list(target_views) && current_view in target_views
+end
+
+active_class = "text-sm font-medium text-indigo-600 dark:text-indigo-400"
+
+inactive_class =
+  "text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200" %>
 <div class="h-screen flex flex-col bg-gray-100 dark:bg-zinc-900" data-testid="portal-layout">
   <%!-- Top nav --%>
   <div
     class="bg-white dark:bg-zinc-800 border-b border-gray-200 dark:border-zinc-700 px-4 py-2 flex items-center gap-4"
     data-testid="portal-layout-nav"
   >
-    <span class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight">
+    <%= if assigns[:current_org] && @current_org.logo_url do %>
+      <img
+        src={@current_org.logo_url}
+        alt={"#{@current_org.name} logo"}
+        class="h-6 w-auto"
+        data-testid="portal-nav-logo"
+      />
+    <% end %>
+    <span
+      class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight"
+      style={if assigns[:current_org] && @current_org.primary_color, do: "color: #{@current_org.primary_color}", else: nil}
+    >
       <%= if assigns[:current_org] && @current_org.name do %>
         {@current_org.name}
       <% else %>
@@ -14,14 +38,22 @@
     <span class="text-gray-300 dark:text-zinc-600">|</span>
     <.link
       navigate={@portal_home_path}
-      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+      class={
+        if nav_active?.([CustyardWeb.Portal.RequestListLive, CustyardWeb.Portal.ConversationLive, CustyardWeb.Portal.NewRequestLive]),
+          do: active_class,
+          else: inactive_class
+      }
       data-testid="portal-nav-requests"
     >
       Requests
     </.link>
     <.link
       navigate={"#{@portal_path}/projects"}
-      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+      class={
+        if nav_active?.([CustyardWeb.Portal.ProjectsListLive, CustyardWeb.Portal.ProjectLive]),
+          do: active_class,
+          else: inactive_class
+      }
       data-testid="portal-nav-projects"
     >
       Projects
@@ -29,7 +61,14 @@
     <div class="ml-auto">
       <.link
         navigate={"#{@portal_path}/new"}
-        class="text-sm bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700"
+        class="text-sm text-white px-3 py-1 rounded"
+        style={
+          if assigns[:current_org] && @current_org.primary_color do
+            "background-color: #{@current_org.primary_color}"
+          else
+            "background-color: #4f46e5"
+          end
+        }
         data-testid="portal-nav-new-request"
       >
         New Request

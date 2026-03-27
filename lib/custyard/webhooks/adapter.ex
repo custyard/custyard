@@ -35,8 +35,15 @@ defmodule Custyard.Webhooks.Adapter do
 
   @doc """
   Normalize the source-specific payload into the unified message format.
+
+  Returns:
+  - `{:ok, normalized_payload()}` - Successfully normalized payload
+  - `{:error, String.t()}` - Normalization failed
+  - `{:bypass, term()}` - Payload requires special handling (e.g., Slack URL verification)
+                         The caller should handle the bypass directly (return challenge, etc.)
   """
-  @callback normalize(payload :: map()) :: {:ok, normalized_payload()} | {:error, String.t()}
+  @callback normalize(payload :: map()) ::
+              {:ok, normalized_payload()} | {:error, String.t()} | {:bypass, term()}
 
   @doc """
   Returns the name of this adapter source (e.g., :lettermint, :zendesk).

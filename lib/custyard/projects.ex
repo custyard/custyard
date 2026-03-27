@@ -79,6 +79,18 @@ defmodule Custyard.Projects do
 
   @doc """
   Get a project by ID (operator access).
+  Returns nil if not found.
+  """
+  def get_project(id) do
+    case Repo.get(Project, id) do
+      nil -> nil
+      project -> project |> Repo.preload(:tasks) |> with_progress()
+    end
+  end
+
+  @doc """
+  Get a project by ID (operator access).
+  Raises if not found.
   """
   def get_project!(id) do
     Repo.get!(Project, id)

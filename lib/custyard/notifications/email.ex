@@ -84,7 +84,7 @@ defmodule Custyard.Notifications.Email do
         <p><strong>Conversation:</strong> #{safe_subject}</p>
         <p><strong>Organization:</strong> #{safe_org_name}</p>
         <p><strong>Contact:</strong> #{safe_contact}</p>
-        <p><strong>Last activity:</strong> #{format_datetime(conversation.updated_at)}</p>
+        <p><strong>Last activity:</strong> #{format_datetime(last_activity(conversation))}</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
         <p style="color: #6b7280; font-size: 14px;">
           This conversation requires attention. Please review and respond promptly.
@@ -102,7 +102,7 @@ defmodule Custyard.Notifications.Email do
     Conversation: #{conversation.subject}
     Organization: #{conversation.organization.name}
     Contact: #{contact_display(conversation.contact)}
-    Last activity: #{format_datetime(conversation.updated_at)}
+    Last activity: #{format_datetime(last_activity(conversation))}
 
     This conversation requires attention. Please review and respond promptly.
     """
@@ -114,6 +114,13 @@ defmodule Custyard.Notifications.Email do
 
   defp format_datetime(nil), do: "Unknown"
   defp format_datetime(dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
+
+  # Returns the most recent activity timestamp (customer or operator action)
+  defp last_activity(conversation) do
+    [conversation.last_customer_action_at, conversation.last_operator_action_at]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max(DateTime, fn -> nil end)
+  end
 
   defp contact_display(nil), do: "Unknown"
   defp contact_display(contact), do: contact.name || contact.email

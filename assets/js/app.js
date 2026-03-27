@@ -25,6 +25,22 @@ Hooks.ScrollBottom = {
   }
 }
 
+// Reset textarea value after form submit
+// Ensures textarea is cleared even when LiveView DOM diffing might not update inner content
+Hooks.ResetOnSubmit = {
+  mounted() {
+    const form = this.el.closest("form")
+    if (form) {
+      form.addEventListener("submit", () => {
+        // Clear on next tick after form data is collected
+        setTimeout(() => {
+          this.el.value = ""
+        }, 0)
+      })
+    }
+  }
+}
+
 // Auto-dismiss flash messages after a timeout
 // Used for info/success flashes that don't need user acknowledgment
 Hooks.AutoDismiss = {
