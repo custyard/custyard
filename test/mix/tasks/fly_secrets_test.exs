@@ -186,6 +186,41 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
       assert output =~ "No changes to apply"
     end
+
+    test "errors when fly.toml [env] section has unexpected format", %{
+      env_file: env_file,
+      toml_file: toml_file,
+      original_dir: original_dir
+    } do
+      # Config vars to trigger fly.toml update
+      File.write!(env_file, """
+      PHX_HOST=example.com
+      """)
+
+      # fly.toml with non-standard [env] format (lowercase var name)
+      File.write!(toml_file, """
+      app = "custyard"
+
+      [env]
+      lowercase_var = "value"
+
+      [http_service]
+      internal_port = 4000
+      """)
+
+      File.cd!(Path.dirname(toml_file))
+      fly_toml = Path.join(Path.dirname(toml_file), "fly.toml")
+      File.rename!(toml_file, fly_toml)
+
+      assert catch_exit(
+               ExUnit.CaptureIO.capture_io(:stderr, fn ->
+                 Secrets.run(["--apply", "--env", env_file])
+               end)
+             ) == {:shutdown, 1}
+
+      File.cd!(original_dir)
+      File.rm(fly_toml)
+    end
   end
 
   describe "env file parsing" do
@@ -498,16 +533,15 @@ defmodule Mix.Tasks.Fly.SecretsTest do
     end
 
     test "leaves mismatched quotes alone (double-single)" do
-      # Current implementation strips sequentially, so this actually strips both
-      # This documents actual behavior
+      # Fixed implementation only strips when both ends match
       result = strip_quotes("\"hello'")
-      assert result == "hello"
+      assert result == "\"hello'"
     end
 
     test "leaves mismatched quotes alone (single-double)" do
-      # Current implementation strips sequentially
+      # Fixed implementation only strips when both ends match
       result = strip_quotes("'hello\"")
-      assert result == "hello"
+      assert result == "'hello\""
     end
 
     test "leaves unquoted values unchanged" do
@@ -528,10 +562,25 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       assert strip_quotes("''") == ""
     end
 
-    test "handles nested quotes" do
+    test "handles nested quotes - outer double, inner single" do
       # Outer double quotes stripped, inner single quotes remain
       result = strip_quotes("\"'nested'\"")
-      assert result == "nested"
+      assert result == "'nested'"
+    end
+
+    test "handles nested quotes - outer single, inner double" do
+      result = strip_quotes("'\"nested\"'")
+      assert result == "\"nested\""
+    end
+
+    test "preserves single leading quote without trailing" do
+      assert strip_quotes("\"foo") == "\"foo"
+      assert strip_quotes("'foo") == "'foo"
+    end
+
+    test "preserves single trailing quote without leading" do
+      assert strip_quotes("foo\"") == "foo\""
+      assert strip_quotes("foo'") == "foo'"
     end
   end
 
@@ -733,6 +782,110 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       assert result =~ "[env]"
       assert result =~ "PHX_HOST = \"example.com\""
     end
+
+    test "escapes double quotes in values" do
+      config = [{"SOME_VAR", "value with \"quotes\" inside"}]
+
+      original = """
+      app = "custyard"
+
+      [build]
+      dockerfile = "Dockerfile"
+      """
+
+      result = update_env_section(original, config)
+
+      assert result =~ ~S(SOME_VAR = "value with \"quotes\" inside")
+    end
+
+    test "escapes backslashes in values" do
+      config = [{"PATH_VAR", "C:\\Users\\test"}]
+
+      original = """
+      app = "custyard"
+
+      [build]
+      dockerfile = "Dockerfile"
+      """
+
+      result = update_env_section(original, config)
+
+      # The helper escapes \ to \\ for TOML, so C:\Users\test becomes C:\\Users\\test
+      assert result =~ "PATH_VAR = \"C:\\\\Users\\\\test\""
+    end
+
+    test "handles vars with numbers in name" do
+      config = [{"CACHE_TTL_3600", "true"}]
+
+      original = """
+      app = "custyard"
+
+      [env]
+      CACHE_TTL_3600 = "false"
+
+      [http_service]
+      internal_port = 4000
+      """
+
+      result = update_env_section(original, config)
+
+      assert result =~ ~S(CACHE_TTL_3600 = "true")
+      refute result =~ ~S(CACHE_TTL_3600 = "false")
+    end
+  end
+
+  describe "app name validation" do
+    test "accepts valid alphanumeric app names" do
+      assert valid_app_name?("myapp")
+      assert valid_app_name?("my-app")
+      assert valid_app_name?("my-app-123")
+      assert valid_app_name?("MyApp")
+      assert valid_app_name?("MYAPP")
+      assert valid_app_name?("app123")
+      assert valid_app_name?("123app")
+      assert valid_app_name?("a")
+      assert valid_app_name?("1")
+    end
+
+    test "rejects app names with shell metacharacters" do
+      # Command injection attempts
+      refute valid_app_name?("app; rm -rf /")
+      refute valid_app_name?("app && cat /etc/passwd")
+      refute valid_app_name?("app | grep secret")
+      refute valid_app_name?("$(whoami)")
+      refute valid_app_name?("`whoami`")
+      refute valid_app_name?("app$HOME")
+    end
+
+    test "rejects app names with spaces" do
+      refute valid_app_name?("my app")
+      refute valid_app_name?(" myapp")
+      refute valid_app_name?("myapp ")
+    end
+
+    test "rejects app names with special characters" do
+      refute valid_app_name?("my_app")
+      refute valid_app_name?("my.app")
+      refute valid_app_name?("my/app")
+      refute valid_app_name?("my\\app")
+      refute valid_app_name?("my@app")
+      refute valid_app_name?("my!app")
+      refute valid_app_name?("my#app")
+      refute valid_app_name?("my%app")
+      refute valid_app_name?("my^app")
+      refute valid_app_name?("my&app")
+      refute valid_app_name?("my*app")
+      refute valid_app_name?("my(app)")
+      refute valid_app_name?("my[app]")
+      refute valid_app_name?("my{app}")
+      refute valid_app_name?("my<app>")
+      refute valid_app_name?("my'app")
+      refute valid_app_name?("my\"app")
+    end
+
+    test "rejects empty app name" do
+      refute valid_app_name?("")
+    end
   end
 
   describe "value masking" do
@@ -787,41 +940,52 @@ defmodule Mix.Tasks.Fly.SecretsTest do
   end
 
   defp strip_quotes(value) do
-    value
-    |> String.trim_leading("\"")
-    |> String.trim_trailing("\"")
-    |> String.trim_leading("'")
-    |> String.trim_trailing("'")
+    cond do
+      String.starts_with?(value, "\"") and String.ends_with?(value, "\"") ->
+        value |> String.trim_leading("\"") |> String.trim_trailing("\"")
+
+      String.starts_with?(value, "'") and String.ends_with?(value, "'") ->
+        value |> String.trim_leading("'") |> String.trim_trailing("'")
+
+      true ->
+        value
+    end
   end
 
+  # Mirror the module's greedy regex for test helper - matches [env] up to next section or EOF
+  @env_section_greedy_regex ~r/\[env\]\n(?:[^\[]*?)(?=\n\[|\z)/s
+
   defp update_env_section(content, config) do
-    # Build new [env] section
     env_lines =
       config
       |> Enum.sort_by(fn {var, _} -> var end)
-      |> Enum.map(fn {var, value} -> "#{var} = \"#{value}\"" end)
+      |> Enum.map(fn {var, value} -> "#{var} = \"#{escape_toml_value(value)}\"" end)
 
     new_env = "[env]\n" <> Enum.join(env_lines, "\n")
 
-    # Replace existing [env] section or insert after [build]
     cond do
       String.contains?(content, "[env]") ->
-        Regex.replace(
-          ~r/\[env\]\n(?:[A-Z_]+ = "[^"]*"\n?)*/,
-          content,
-          new_env <> "\n"
-        )
+        # Use function replacement to avoid backslash interpretation
+        Regex.replace(@env_section_greedy_regex, content, fn _ -> new_env end, global: false)
 
       String.contains?(content, "[build]") ->
+        # Use function replacement to avoid backslash interpretation
         Regex.replace(
           ~r/(\[build\]\n[^\[]*)/,
           content,
-          "\\1\n#{new_env}\n"
+          fn _, build_section -> "#{build_section}\n#{new_env}\n" end,
+          global: false
         )
 
       true ->
         content <> "\n#{new_env}\n"
     end
+  end
+
+  defp escape_toml_value(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\"", "\\\"")
   end
 
   defp mask_value(value) when byte_size(value) > 8 do
@@ -868,5 +1032,9 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       SMTP_USERNAME
       SMTP_SSL
     )
+  end
+
+  defp valid_app_name?(name) do
+    Regex.match?(~r/^[a-zA-Z0-9-]+$/, name)
   end
 end
