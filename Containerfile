@@ -17,13 +17,11 @@ COPY mix.exs mix.lock ./
 COPY config config
 RUN mix deps.get --only prod && mix deps.compile
 
-# Copy assets and compile
+# Copy application source and assets, then build
+COPY lib lib
 COPY assets assets
 COPY priv priv
 RUN mix assets.deploy
-
-# Copy lib and compile
-COPY lib lib
 RUN mix compile
 
 # Build release
