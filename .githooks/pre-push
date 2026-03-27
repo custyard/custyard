@@ -3,8 +3,55 @@ set -e
 
 echo "Running pre-push checks..."
 
-# Fast checks only - don't block flow
-mix format --check-formatted
+# Read stdin to get the refs being pushed
+# Format: <local ref> <local sha> <remote ref> <remote sha>
+while read local_ref local_sha remote_ref remote_sha; do
+  # Skip if deleting a branch
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  # Determine the range of commits being pushed
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch - compare against the default branch
+    # Find the merge-base with main/master to get only new commits
+    base=$(git merge-base "$local_sha" origin/main 2>/dev/null || git merge-base "$local_sha" origin/master 2>/dev/null || echo "")
+    if [ -n "$base" ]; then
+      range="$base..$local_sha"
+    else
+      # Fallback: check all commits on this branch
+      range="$local_sha"
+    fi
+  else
+    # Existing branch - check commits between remote and local
+    range="$remote_sha..$local_sha"
+  fi
+
+  # Get Elixir files changed in the commits being pushed
+  if [ "$range" = "$local_sha" ]; then
+    # Single commit case
+    files=$(git diff-tree --no-commit-id --name-only -r "$local_sha" 2>/dev/null | grep -E '\.(ex|exs)$' || true)
+  else
+    files=$(git diff --name-only "$range" 2>/dev/null | grep -E '\.(ex|exs)$' || true)
+  fi
+
+  if [ -n "$files" ]; then
+    echo "Checking format for Elixir files in pushed commits..."
+    # Filter to only existing files (in case of deletions)
+    existing_files=()
+    while IFS= read -r f; do
+      if [ -n "$f" ] && [ -f "$f" ]; then
+        existing_files+=("$f")
+      fi
+    done <<< "$files"
+
+    if [ ${#existing_files[@]} -gt 0 ]; then
+      mix format --check-formatted "${existing_files[@]}"
+    fi
+  fi
+done
+
+# Compile check still runs on full project (necessary for correctness)
 mix compile --warnings-as-errors
 
 echo "Checks passed."
