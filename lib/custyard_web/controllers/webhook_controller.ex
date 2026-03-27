@@ -81,7 +81,11 @@ defmodule CustyardWeb.WebhookController do
         # Return generic error to prevent information leakage.
         # Log specific error server-side for debugging.
         require Logger
-        Logger.warning("Webhook auth failed for token #{String.slice(callback_token, 0, 8)}...: #{reason}")
+
+        Logger.warning(
+          "Webhook auth failed for token #{String.slice(callback_token, 0, 8)}...: #{reason}"
+        )
+
         conn |> put_status(401) |> json(%{status: "error", reason: "unauthorized"})
     end
   end

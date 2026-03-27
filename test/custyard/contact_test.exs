@@ -23,7 +23,8 @@ defmodule Custyard.ContactTest do
         attrs = build_contact(email: email, organization_id: org.id)
         changeset = Contact.changeset(%Contact{}, attrs)
 
-        assert changeset.valid?, "Expected #{email} to be valid, got errors: #{inspect(changeset.errors)}"
+        assert changeset.valid?,
+               "Expected #{email} to be valid, got errors: #{inspect(changeset.errors)}"
       end
     end
 
@@ -41,10 +42,14 @@ defmodule Custyard.ContactTest do
       org = insert_organization()
 
       invalid_emails = [
-        "test\x00@example.com",  # Null byte
-        "test\x07@example.com",  # Bell
-        "test\x1F@example.com",  # Unit separator
-        "test\x7F@example.com"   # DEL
+        # Null byte
+        "test\x00@example.com",
+        # Bell
+        "test\x07@example.com",
+        # Unit separator
+        "test\x1F@example.com",
+        # DEL
+        "test\x7F@example.com"
       ]
 
       for email <- invalid_emails do
@@ -77,7 +82,8 @@ defmodule Custyard.ContactTest do
       attrs = build_contact(email: email, organization_id: org.id)
       changeset = Contact.changeset(%Contact{}, attrs)
 
-      assert changeset.valid?, "Expected 64-char local part to be valid, got: #{inspect(changeset.errors)}"
+      assert changeset.valid?,
+             "Expected 64-char local part to be valid, got: #{inspect(changeset.errors)}"
     end
 
     test "rejects total email length over 320 characters" do
@@ -95,22 +101,31 @@ defmodule Custyard.ContactTest do
       refute changeset.valid?
       # Should fail the length validation
       errors = errors_on(changeset)
+
       assert "must be at most 320 characters" in errors.email or
-             "must be a valid email address" in errors.email
+               "must be a valid email address" in errors.email
     end
 
     test "rejects invalid email formats" do
       org = insert_organization()
 
       invalid_emails = [
-        "plainaddress",           # No @ sign
-        "@example.com",           # No local part
-        "user@",                  # No domain
-        "user@.com",              # Domain starts with dot
-        "user@example",           # No TLD (no dot in domain)
-        "user@@example.com",      # Double @
-        "user @example.com",      # Space in email
-        "user\t@example.com"      # Tab in email (control character)
+        # No @ sign
+        "plainaddress",
+        # No local part
+        "@example.com",
+        # No domain
+        "user@",
+        # Domain starts with dot
+        "user@.com",
+        # No TLD (no dot in domain)
+        "user@example",
+        # Double @
+        "user@@example.com",
+        # Space in email
+        "user @example.com",
+        # Tab in email (control character)
+        "user\t@example.com"
       ]
 
       for email <- invalid_emails do
@@ -118,6 +133,7 @@ defmodule Custyard.ContactTest do
         changeset = Contact.changeset(%Contact{}, attrs)
 
         refute changeset.valid?, "Expected #{inspect(email)} to be rejected"
+
         assert Map.has_key?(errors_on(changeset), :email),
                "Expected email error for #{inspect(email)}, got: #{inspect(changeset.errors)}"
       end
@@ -130,10 +146,13 @@ defmodule Custyard.ContactTest do
       local = String.duplicate("a", 60)
       # 61+1+61+1+61+1+61+1+7+1+3 = 259 chars for domain
       domain =
-        String.duplicate("a", 61) <> "." <>
-        String.duplicate("b", 61) <> "." <>
-        String.duplicate("c", 61) <> "." <>
-        String.duplicate("d", 61) <> ".aaaaaaa.com"
+        String.duplicate("a", 61) <>
+          "." <>
+          String.duplicate("b", 61) <>
+          "." <>
+          String.duplicate("c", 61) <>
+          "." <>
+          String.duplicate("d", 61) <> ".aaaaaaa.com"
 
       email = "#{local}@#{domain}"
       assert String.length(email) == 320, "Expected 320 chars, got #{String.length(email)}"
@@ -251,12 +270,14 @@ defmodule Custyard.ContactTest do
       email = "shared@example.com"
 
       # Insert in org1
-      {:ok, contact1} = %Contact{}
+      {:ok, contact1} =
+        %Contact{}
         |> Contact.changeset(build_contact(email: email, organization_id: org1.id))
         |> Repo.insert()
 
       # Insert same email in org2 - should succeed
-      {:ok, contact2} = %Contact{}
+      {:ok, contact2} =
+        %Contact{}
         |> Contact.changeset(build_contact(email: email, organization_id: org2.id))
         |> Repo.insert()
 

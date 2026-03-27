@@ -203,7 +203,9 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
 
       # Create conversations in both orgs (both must be in attention-worthy states)
       own_conv = insert_conversation(organization_id: org.id, state: :active, subject: "Own Conv")
-      other_conv = insert_conversation(organization_id: other_org.id, state: :active, subject: "Other Conv")
+
+      other_conv =
+        insert_conversation(organization_id: other_org.id, state: :active, subject: "Other Conv")
 
       Scoring.calculate_and_cache(own_conv.id)
       Scoring.calculate_and_cache(other_conv.id)
@@ -246,8 +248,15 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
 
       # Create conversations in both orgs (use active state for scoring)
       # Avoid apostrophes in subjects - they get HTML-escaped
-      own_conv = insert_conversation(organization_id: org.id, state: :active, subject: "Agent Own Conv")
-      other_conv = insert_conversation(organization_id: other_org.id, state: :active, subject: "Different Org Conv")
+      own_conv =
+        insert_conversation(organization_id: org.id, state: :active, subject: "Agent Own Conv")
+
+      other_conv =
+        insert_conversation(
+          organization_id: other_org.id,
+          state: :active,
+          subject: "Different Org Conv"
+        )
 
       Scoring.calculate_and_cache(own_conv.id)
       Scoring.calculate_and_cache(other_conv.id)

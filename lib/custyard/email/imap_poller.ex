@@ -30,9 +30,12 @@ defmodule Custyard.Email.ImapPoller do
   @default_port 993
 
   # Backoff settings for error handling
-  @max_backoff_interval 15 * 60_000   # Max 15 minutes between retries
-  @backoff_multiplier 2               # Double delay on each failure
-  @circuit_breaker_threshold 10       # Log error after this many consecutive failures
+  # Max 15 minutes between retries
+  @max_backoff_interval 15 * 60_000
+  # Double delay on each failure
+  @backoff_multiplier 2
+  # Log error after this many consecutive failures
+  @circuit_breaker_threshold 10
 
   # Client API
 
@@ -69,10 +72,11 @@ defmodule Custyard.Email.ImapPoller do
   def init(opts) do
     # Store a credential fetcher function instead of the raw password.
     # This prevents password exposure in crash dumps and :sys.get_state calls.
-    credential_fetcher = Keyword.get_lazy(opts, :credential_fetcher, fn ->
-      password = Keyword.fetch!(opts, :password)
-      fn -> password end
-    end)
+    credential_fetcher =
+      Keyword.get_lazy(opts, :credential_fetcher, fn ->
+        password = Keyword.fetch!(opts, :password)
+        fn -> password end
+      end)
 
     state = %{
       host: Keyword.fetch!(opts, :host),

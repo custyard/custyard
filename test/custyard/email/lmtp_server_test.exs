@@ -2008,7 +2008,9 @@ defmodule Custyard.Email.LMTPServerTest do
 
       # Create organizations with known domains
       org1 = insert_organization(domain: "acme.example.com")
-      org2 = insert_organization(domain: "widgets.example.com", custom_domain: "support.widgets.com")
+
+      org2 =
+        insert_organization(domain: "widgets.example.com", custom_domain: "support.widgets.com")
 
       on_exit(fn -> LMTPServer.stop(pid) end)
       {:ok, server: pid, org1: org1, org2: org2}

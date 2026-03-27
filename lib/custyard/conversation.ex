@@ -120,6 +120,7 @@ defmodule Custyard.Conversation do
       changeset
     else
       allowed = Map.get(@valid_transitions, from_state, [])
+
       add_error(
         changeset,
         :state,

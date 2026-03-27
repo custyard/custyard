@@ -333,7 +333,10 @@ defmodule Custyard.Scoring do
 
     e ->
       # Unexpected error - log and emit telemetry for investigation
-      Logger.error("Unexpected error loading score weights, using defaults: #{Exception.format(:error, e)}")
+      Logger.error(
+        "Unexpected error loading score weights, using defaults: #{Exception.format(:error, e)}"
+      )
+
       emit_settings_error_telemetry(:weights, e)
       @default_weights
   end
@@ -343,7 +346,10 @@ defmodule Custyard.Scoring do
   rescue
     e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
       # Expected errors during first boot
-      Logger.warning("Settings not available for neglect thresholds, using defaults: #{inspect(e)}")
+      Logger.warning(
+        "Settings not available for neglect thresholds, using defaults: #{inspect(e)}"
+      )
+
       @default_neglect_thresholds
 
     e in [DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->

@@ -228,8 +228,8 @@ defmodule Custyard.Settings do
   # Infinity compares as greater than any finite float
   defp is_nan_or_inf?(value) when is_float(value) do
     # NaN self-comparison returns false
+    # Check for infinity by comparing to a very large number
     value != value or
-      # Check for infinity by comparing to a very large number
       abs(value) > 1.0e308
   end
 

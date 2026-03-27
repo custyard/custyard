@@ -1,25 +1,27 @@
 <%!-- Helper to determine if a nav link is active --%>
-<%
-  # Get current path from socket URI or assigns
-  current_path = case assigns do
+<% # Get current path from socket URI or assigns
+current_path =
+  case assigns do
     %{socket: %{host_uri: %{path: path}}} when is_binary(path) -> path
-    %{live_action: _} -> nil  # LiveView - use live_action instead
+    # LiveView - use live_action instead
+    %{live_action: _} -> nil
     _ -> nil
   end
 
-  # Check if current view matches the nav item
-  # For LiveViews, we can check the view module
-  current_view = assigns[:socket] && assigns.socket.view
+# Check if current view matches the nav item
+# For LiveViews, we can check the view module
+current_view = assigns[:socket] && assigns.socket.view
 
-  nav_active? = fn target_path, target_views ->
-    path_match = current_path && String.starts_with?(current_path, target_path)
-    view_match = is_list(target_views) && current_view in target_views
-    path_match || view_match
-  end
+nav_active? = fn target_path, target_views ->
+  path_match = current_path && String.starts_with?(current_path, target_path)
+  view_match = is_list(target_views) && current_view in target_views
+  path_match || view_match
+end
 
-  active_class = "text-sm font-medium text-indigo-600 dark:text-indigo-400"
-  inactive_class = "text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-%>
+active_class = "text-sm font-medium text-indigo-600 dark:text-indigo-400"
+
+inactive_class =
+  "text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200" %>
 <div class="h-screen flex flex-col bg-gray-100 dark:bg-zinc-900" data-testid="operator-layout">
   <%!-- Top nav --%>
   <div
@@ -36,35 +38,54 @@
         <nav class="hidden md:flex items-center gap-4">
           <.link
             navigate={~p"/operator"}
-            class={if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) && !nav_active?.("/operator/", []), do: active_class, else: inactive_class}
+            class={
+              if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) &&
+                   !nav_active?.("/operator/", []), do: active_class, else: inactive_class
+            }
             data-testid="operator-nav-queue"
           >
             Attention Queue
           </.link>
           <.link
             navigate={~p"/operator/neglect"}
-            class={if nav_active?.("/operator/neglect", [CustyardWeb.Operator.NeglectReportLive]), do: active_class, else: inactive_class}
+            class={
+              if nav_active?.("/operator/neglect", [CustyardWeb.Operator.NeglectReportLive]),
+                do: active_class,
+                else: inactive_class
+            }
             data-testid="operator-nav-neglect"
           >
             Neglect Report
           </.link>
           <.link
             navigate={~p"/operator/organizations"}
-            class={if nav_active?.("/operator/organizations", [CustyardWeb.Operator.OrganizationsLive]), do: active_class, else: inactive_class}
+            class={
+              if nav_active?.("/operator/organizations", [CustyardWeb.Operator.OrganizationsLive]),
+                 do: active_class,
+                 else: inactive_class
+            }
             data-testid="operator-nav-orgs"
           >
             Organizations
           </.link>
           <.link
             navigate={~p"/operator/projects"}
-            class={if nav_active?.("/operator/projects", [CustyardWeb.Operator.ProjectsLive]), do: active_class, else: inactive_class}
+            class={
+              if nav_active?.("/operator/projects", [CustyardWeb.Operator.ProjectsLive]),
+                do: active_class,
+                else: inactive_class
+            }
             data-testid="operator-nav-projects"
           >
             Projects
           </.link>
           <.link
             navigate={~p"/operator/settings"}
-            class={if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]), do: active_class, else: inactive_class}
+            class={
+              if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
+                do: active_class,
+                else: inactive_class
+            }
             data-testid="operator-nav-settings"
           >
             Settings
@@ -91,7 +112,12 @@
         data-testid="operator-nav-mobile-toggle"
       >
         <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 6h16M4 12h16M4 18h16"
+          />
         </svg>
       </button>
     </div>
@@ -102,31 +128,50 @@
     >
       <.link
         navigate={~p"/operator"}
-        class={if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) && !nav_active?.("/operator/", []), do: active_class, else: inactive_class}
+        class={
+          if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) &&
+               !nav_active?.("/operator/", []), do: active_class, else: inactive_class
+        }
       >
         Attention Queue
       </.link>
       <.link
         navigate={~p"/operator/neglect"}
-        class={if nav_active?.("/operator/neglect", [CustyardWeb.Operator.NeglectReportLive]), do: active_class, else: inactive_class}
+        class={
+          if nav_active?.("/operator/neglect", [CustyardWeb.Operator.NeglectReportLive]),
+            do: active_class,
+            else: inactive_class
+        }
       >
         Neglect Report
       </.link>
       <.link
         navigate={~p"/operator/organizations"}
-        class={if nav_active?.("/operator/organizations", [CustyardWeb.Operator.OrganizationsLive]), do: active_class, else: inactive_class}
+        class={
+          if nav_active?.("/operator/organizations", [CustyardWeb.Operator.OrganizationsLive]),
+            do: active_class,
+            else: inactive_class
+        }
       >
         Organizations
       </.link>
       <.link
         navigate={~p"/operator/projects"}
-        class={if nav_active?.("/operator/projects", [CustyardWeb.Operator.ProjectsLive]), do: active_class, else: inactive_class}
+        class={
+          if nav_active?.("/operator/projects", [CustyardWeb.Operator.ProjectsLive]),
+            do: active_class,
+            else: inactive_class
+        }
       >
         Projects
       </.link>
       <.link
         navigate={~p"/operator/settings"}
-        class={if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]), do: active_class, else: inactive_class}
+        class={
+          if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
+            do: active_class,
+            else: inactive_class
+        }
       >
         Settings
       </.link>

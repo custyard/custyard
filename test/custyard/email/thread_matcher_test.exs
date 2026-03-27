@@ -9,7 +9,9 @@ defmodule Custyard.Email.ThreadMatcherTest do
     test "thread found via In-Reply-To in same org returns {:ok, conversation}" do
       org = insert_organization()
       conversation = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conversation.id, message_id: "msg-123@example.com")
+
+      message =
+        insert_message(conversation_id: conversation.id, message_id: "msg-123@example.com")
 
       parsed = %{
         in_reply_to: message.message_id,
@@ -23,7 +25,9 @@ defmodule Custyard.Email.ThreadMatcherTest do
     test "thread found via References in same org returns {:ok, conversation}" do
       org = insert_organization()
       conversation = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conversation.id, message_id: "ref-456@example.com")
+
+      message =
+        insert_message(conversation_id: conversation.id, message_id: "ref-456@example.com")
 
       parsed = %{
         in_reply_to: nil,
@@ -38,10 +42,14 @@ defmodule Custyard.Email.ThreadMatcherTest do
       org = insert_organization()
 
       conversation1 = insert_conversation(organization_id: org.id, subject: "Thread 1")
-      message1 = insert_message(conversation_id: conversation1.id, message_id: "primary@example.com")
+
+      message1 =
+        insert_message(conversation_id: conversation1.id, message_id: "primary@example.com")
 
       conversation2 = insert_conversation(organization_id: org.id, subject: "Thread 2")
-      message2 = insert_message(conversation_id: conversation2.id, message_id: "secondary@example.com")
+
+      message2 =
+        insert_message(conversation_id: conversation2.id, message_id: "secondary@example.com")
 
       parsed = %{
         in_reply_to: message1.message_id,
@@ -81,7 +89,9 @@ defmodule Custyard.Email.ThreadMatcherTest do
 
       # Create conversation and message in org1
       conversation = insert_conversation(organization_id: org1.id)
-      message = insert_message(conversation_id: conversation.id, message_id: "isolated@example.com")
+
+      message =
+        insert_message(conversation_id: conversation.id, message_id: "isolated@example.com")
 
       # Try to find it from org2's context - should NOT match
       parsed = %{

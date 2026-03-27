@@ -8,6 +8,7 @@ defmodule Custyard.OperatorAccount do
     field :email, :string
     field :password_hash, :string
     field :password, :string, virtual: true
+
     # Role for RBAC: super_admin can access all orgs, admin manages their org, agent handles support
     field :role, :string, default: "super_admin"
 
@@ -56,10 +57,18 @@ defmodule Custyard.OperatorAccount do
 
     cond do
       role == "super_admin" && org_id != nil ->
-        add_error(changeset, :organization_id, "super_admin operators cannot be scoped to an organization")
+        add_error(
+          changeset,
+          :organization_id,
+          "super_admin operators cannot be scoped to an organization"
+        )
 
       role in ["admin", "agent"] && is_nil(org_id) ->
-        add_error(changeset, :organization_id, "#{role} operators must be assigned to an organization")
+        add_error(
+          changeset,
+          :organization_id,
+          "#{role} operators must be assigned to an organization"
+        )
 
       true ->
         changeset

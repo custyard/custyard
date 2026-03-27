@@ -83,7 +83,12 @@ defmodule CustyardWeb.Portal.ConversationLive do
           {:ok, _} = Conversations.update_conversation(conv, update_attrs)
 
           Scoring.calculate_and_cache(conv.id)
-          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, conv.id})
+
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations",
+            {:conversation_updated, conv.id}
+          )
 
           Phoenix.PubSub.broadcast(
             Custyard.PubSub,
@@ -170,14 +175,15 @@ defmodule CustyardWeb.Portal.ConversationLive do
         <textarea
           name="body"
           rows="4"
-          class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
+          class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500 phx-submit-loading:opacity-50 phx-submit-loading:cursor-not-allowed"
           placeholder="Write a reply..."
           data-testid="portal-reply-textarea"
         >{@reply_form[:body].value}</textarea>
         <div class="flex justify-end mt-3">
           <button
             type="submit"
-            class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+            phx-disable-with="Sending..."
+            class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 phx-submit-loading:opacity-75 phx-submit-loading:cursor-not-allowed"
             data-testid="portal-reply-submit"
           >
             Send Reply

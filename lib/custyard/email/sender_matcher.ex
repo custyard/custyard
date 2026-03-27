@@ -150,18 +150,30 @@ defmodule Custyard.Email.SenderMatcher do
   end
 
   defp get_or_create_unmatched_org do
-    case Repo.get_by(Organization, domain: "_unmatched_") do
-      %Organization{} = org ->
+    # Use upsert pattern to handle race conditions where concurrent requests
+    # both try to create the unmatched org. on_conflict: :nothing avoids
+    # constraint errors, then we re-query to get the existing record.
+    attrs = %{
+      name: "Unmatched Senders",
+      domain: "_unmatched_",
+      tier: :basic
+    }
+
+    case %Organization{}
+         |> Organization.changeset(attrs)
+         |> Repo.insert(
+           on_conflict: :nothing,
+           conflict_target: :domain
+         ) do
+      {:ok, %Organization{id: nil}} ->
+        # Insert was skipped due to conflict, fetch existing record
+        {:ok, Repo.get_by!(Organization, domain: "_unmatched_")}
+
+      {:ok, org} ->
         {:ok, org}
 
-      nil ->
-        %Organization{}
-        |> Organization.changeset(%{
-          name: "Unmatched Senders",
-          domain: "_unmatched_",
-          tier: :basic
-        })
-        |> Repo.insert()
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 end

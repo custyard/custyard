@@ -300,6 +300,8 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           <button
             phx-click="toggle_snooze"
             phx-value-id={@item.conversation.id}
+            aria-haspopup="menu"
+            aria-expanded={to_string(@show_snooze)}
             class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
             data-testid="operator-queue-snooze-btn"
           >
@@ -308,7 +310,11 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           <%= if @show_snooze do %>
             <div
               phx-click-away="toggle_snooze"
+              phx-key="escape"
+              phx-keydown="toggle_snooze"
               phx-value-id={@item.conversation.id}
+              role="menu"
+              aria-label="Snooze duration options"
               class="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-10 p-1"
               data-testid="operator-queue-snooze-menu"
             >
@@ -317,7 +323,8 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
                   phx-click="snooze"
                   phx-value-id={@item.conversation.id}
                   phx-value-duration={opt}
-                  class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded"
+                  role="menuitem"
+                  class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded focus:outline-none focus:bg-gray-100 dark:focus:bg-zinc-700"
                   data-testid={"operator-queue-snooze-opt-#{opt}"}
                 >
                   {opt}

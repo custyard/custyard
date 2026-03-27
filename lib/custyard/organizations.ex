@@ -153,7 +153,8 @@ defmodule Custyard.Organizations do
   """
   def delete_organization(%Organization{} = org) do
     # Count associated records for audit logging
-    contact_count = Repo.aggregate(from(c in Contact, where: c.organization_id == ^org.id), :count)
+    contact_count =
+      Repo.aggregate(from(c in Contact, where: c.organization_id == ^org.id), :count)
 
     conversation_count =
       Repo.aggregate(from(c in Conversation, where: c.organization_id == ^org.id), :count)

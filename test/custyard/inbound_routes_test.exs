@@ -11,7 +11,9 @@ defmodule Custyard.InboundRoutesTest do
       other_org = Factory.insert_organization()
 
       {:ok, route1} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
-      {:ok, _route2} = InboundRoutes.create_route(%{organization_id: other_org.id, route_type: :general})
+
+      {:ok, _route2} =
+        InboundRoutes.create_route(%{organization_id: other_org.id, route_type: :general})
 
       routes = InboundRoutes.list_for_organization(org.id)
 
@@ -56,10 +58,11 @@ defmodule Custyard.InboundRoutesTest do
     test "create_route generates callback_token if not provided" do
       org = Factory.insert_organization()
 
-      {:ok, route} = InboundRoutes.create_route(%{
-        organization_id: org.id,
-        route_type: :general
-      })
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general
+        })
 
       assert is_binary(route.callback_token)
       assert String.length(route.callback_token) > 20
@@ -70,11 +73,12 @@ defmodule Custyard.InboundRoutesTest do
       # Token must be at least 32 chars for security
       custom_token = "custom-token-with-sufficient-length-123456"
 
-      {:ok, route} = InboundRoutes.create_route(%{
-        organization_id: org.id,
-        route_type: :general,
-        callback_token: custom_token
-      })
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          callback_token: custom_token
+        })
 
       assert route.callback_token == custom_token
     end
@@ -82,11 +86,12 @@ defmodule Custyard.InboundRoutesTest do
     test "create_route rejects short callback_token" do
       org = Factory.insert_organization()
 
-      {:error, changeset} = InboundRoutes.create_route(%{
-        organization_id: org.id,
-        route_type: :general,
-        callback_token: "short-token"
-      })
+      {:error, changeset} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          callback_token: "short-token"
+        })
 
       assert %{callback_token: [error_msg]} = errors_on(changeset)
       assert error_msg =~ "at least 32 characters"
@@ -95,11 +100,12 @@ defmodule Custyard.InboundRoutesTest do
     test "create_route validates project_id for project routes" do
       org = Factory.insert_organization()
 
-      {:error, changeset} = InboundRoutes.create_route(%{
-        organization_id: org.id,
-        route_type: :project
-        # Missing project_id
-      })
+      {:error, changeset} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :project
+          # Missing project_id
+        })
 
       assert %{project_id: ["is required for project routes"]} = errors_on(changeset)
     end
@@ -137,10 +143,11 @@ defmodule Custyard.InboundRoutesTest do
     end
 
     test "list_webhooks_for_route returns webhooks", %{route: route} do
-      {:ok, webhook} = InboundRoutes.create_webhook(%{
-        inbound_route_id: route.id,
-        purpose: :sender_matching
-      })
+      {:ok, webhook} =
+        InboundRoutes.create_webhook(%{
+          inbound_route_id: route.id,
+          purpose: :sender_matching
+        })
 
       webhooks = InboundRoutes.list_webhooks_for_route(route.id)
 
@@ -149,11 +156,12 @@ defmodule Custyard.InboundRoutesTest do
     end
 
     test "create_webhook creates with valid attrs", %{route: route} do
-      {:ok, webhook} = InboundRoutes.create_webhook(%{
-        inbound_route_id: route.id,
-        purpose: :enrichment,
-        endpoint_url: "https://example.com/hook"
-      })
+      {:ok, webhook} =
+        InboundRoutes.create_webhook(%{
+          inbound_route_id: route.id,
+          purpose: :enrichment,
+          endpoint_url: "https://example.com/hook"
+        })
 
       assert webhook.purpose == :enrichment
       assert webhook.endpoint_url == "https://example.com/hook"
@@ -168,24 +176,27 @@ defmodule Custyard.InboundRoutesTest do
     end
 
     test "update_webhook updates attributes", %{route: route} do
-      {:ok, webhook} = InboundRoutes.create_webhook(%{
-        inbound_route_id: route.id,
-        purpose: :notification
-      })
+      {:ok, webhook} =
+        InboundRoutes.create_webhook(%{
+          inbound_route_id: route.id,
+          purpose: :notification
+        })
 
-      {:ok, updated} = InboundRoutes.update_webhook(webhook, %{
-        endpoint_url: "https://new.example.com/hook"
-      })
+      {:ok, updated} =
+        InboundRoutes.update_webhook(webhook, %{
+          endpoint_url: "https://new.example.com/hook"
+        })
 
       assert updated.endpoint_url == "https://new.example.com/hook"
     end
 
     test "enable_webhook sets enabled to true", %{route: route} do
-      {:ok, webhook} = InboundRoutes.create_webhook(%{
-        inbound_route_id: route.id,
-        purpose: :audit,
-        enabled: false
-      })
+      {:ok, webhook} =
+        InboundRoutes.create_webhook(%{
+          inbound_route_id: route.id,
+          purpose: :audit,
+          enabled: false
+        })
 
       {:ok, enabled} = InboundRoutes.enable_webhook(webhook)
 
@@ -193,11 +204,12 @@ defmodule Custyard.InboundRoutesTest do
     end
 
     test "disable_webhook sets enabled to false", %{route: route} do
-      {:ok, webhook} = InboundRoutes.create_webhook(%{
-        inbound_route_id: route.id,
-        purpose: :audit,
-        enabled: true
-      })
+      {:ok, webhook} =
+        InboundRoutes.create_webhook(%{
+          inbound_route_id: route.id,
+          purpose: :audit,
+          enabled: true
+        })
 
       {:ok, disabled} = InboundRoutes.disable_webhook(webhook)
 
@@ -205,10 +217,11 @@ defmodule Custyard.InboundRoutesTest do
     end
 
     test "delete_webhook removes the webhook", %{route: route} do
-      {:ok, webhook} = InboundRoutes.create_webhook(%{
-        inbound_route_id: route.id,
-        purpose: :sender_matching
-      })
+      {:ok, webhook} =
+        InboundRoutes.create_webhook(%{
+          inbound_route_id: route.id,
+          purpose: :sender_matching
+        })
 
       {:ok, _} = InboundRoutes.delete_webhook(webhook)
 
@@ -228,7 +241,9 @@ defmodule Custyard.InboundRoutesTest do
 
     test "find_or_create_general_route returns existing route" do
       org = Factory.insert_organization()
-      {:ok, existing} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      {:ok, existing} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
 
       {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
 
@@ -254,11 +269,12 @@ defmodule Custyard.InboundRoutesTest do
       org = Factory.insert_organization()
       project = Factory.insert_project(organization_id: org.id)
 
-      {:ok, _route} = InboundRoutes.create_route(%{
-        organization_id: org.id,
-        route_type: :project,
-        project_id: project.id
-      })
+      {:ok, _route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :project,
+          project_id: project.id
+        })
 
       route = InboundRoutes.get_project_route(project.id)
 

@@ -49,9 +49,7 @@ defmodule Custyard.Webhooks.Purposes.Audit do
     end
   rescue
     error ->
-      Logger.error(
-        "Audit logging failed for conversation #{conversation.id}: #{inspect(error)}"
-      )
+      Logger.error("Audit logging failed for conversation #{conversation.id}: #{inspect(error)}")
 
       :ok
   end

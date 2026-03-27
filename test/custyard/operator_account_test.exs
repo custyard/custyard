@@ -40,7 +40,8 @@ defmodule Custyard.OperatorAccountTest do
         attrs = Factory.build_operator_account(role: role, organization_id: org_id)
         changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
 
-        assert changeset.valid?, "Role #{role} should be valid, errors: #{inspect(errors_on(changeset))}"
+        assert changeset.valid?,
+               "Role #{role} should be valid, errors: #{inspect(errors_on(changeset))}"
       end
     end
 
@@ -83,7 +84,8 @@ defmodule Custyard.OperatorAccountTest do
       operator = Factory.insert_operator_account(role: "super_admin")
       org = Factory.insert_organization()
 
-      changeset = OperatorAccount.role_changeset(operator, %{role: "admin", organization_id: org.id})
+      changeset =
+        OperatorAccount.role_changeset(operator, %{role: "admin", organization_id: org.id})
 
       assert changeset.valid?
     end

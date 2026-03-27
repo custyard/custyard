@@ -92,7 +92,8 @@ defmodule Custyard.OrganizationTest do
         attrs = build_organization(domain: domain)
         changeset = Organization.changeset(%Organization{}, attrs)
 
-        assert changeset.valid?, "Expected '#{domain}' to be valid, got errors: #{inspect(changeset.errors)}"
+        assert changeset.valid?,
+               "Expected '#{domain}' to be valid, got errors: #{inspect(changeset.errors)}"
       end
     end
 

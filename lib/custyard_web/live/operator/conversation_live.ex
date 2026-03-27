@@ -77,12 +77,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
     breakdown = Scoring.breakdown(conversation)
     neglect_status = Scoring.neglect_status(conversation)
+    other_conversations = fetch_other_org_conversations(conversation)
 
     socket =
       socket
       |> assign(:conversation, conversation)
       |> assign(:breakdown, breakdown)
       |> assign(:neglect_status, neglect_status)
+      |> assign(:other_conversations, other_conversations)
       |> assign(:reply_text, "")
       |> assign(:note_text, "")
       |> assign(:new_task_title, "")
@@ -379,11 +381,20 @@ defmodule CustyardWeb.Operator.ConversationLive do
     conversation = load_conversation(socket.assigns.conversation.id)
     breakdown = Scoring.breakdown(conversation)
     neglect_status = Scoring.neglect_status(conversation)
+    other_conversations = fetch_other_org_conversations(conversation)
 
     socket
     |> assign(:conversation, conversation)
     |> assign(:breakdown, breakdown)
     |> assign(:neglect_status, neglect_status)
+    |> assign(:other_conversations, other_conversations)
+  end
+
+  defp fetch_other_org_conversations(conversation) do
+    conversation.organization_id
+    |> Conversations.list_for_organization(include_resolved: false)
+    |> Enum.reject(&(&1.id == conversation.id))
+    |> Enum.take(5)
   end
 
   # NOTE: Timezone handling
@@ -675,6 +686,27 @@ defmodule CustyardWeb.Operator.ConversationLive do
                 + Add task
               </button>
             <% end %>
+          </div>
+
+          <%!-- Other open conversations for this org --%>
+          <div :if={@other_conversations != []} data-testid="operator-sidebar-other-conversations">
+            <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-2">
+              Other Open ({length(@other_conversations)})
+            </div>
+            <div class="space-y-1.5">
+              <.link
+                :for={conv <- @other_conversations}
+                navigate={~p"/operator/conversations/#{conv.id}"}
+                class="block text-sm text-gray-700 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 truncate"
+                data-testid={"operator-other-conv-#{conv.id}"}
+              >
+                <span
+                  class="inline-block w-2 h-2 rounded-full mr-1.5"
+                  style={state_dot_color(conv.state)}
+                />
+                {conv.subject}
+              </.link>
+            </div>
           </div>
 
           <%!-- Neglect status --%>
@@ -972,6 +1004,20 @@ defmodule CustyardWeb.Operator.ConversationLive do
       {to_string(@tier)}
     </span>
     """
+  end
+
+  defp state_dot_color(state) do
+    color =
+      case state do
+        :new -> "#3B82F6"
+        :active -> "#22C55E"
+        :waiting -> "#EAB308"
+        :dormant -> "#9CA3AF"
+        :resolved -> "#D1D5DB"
+        _ -> "#9CA3AF"
+      end
+
+    "background-color: #{color}"
   end
 
   attr :state, :atom, required: true
