@@ -696,7 +696,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
             <div class="space-y-1.5">
               <.link
                 :for={conv <- @other_conversations}
-                navigate={~p"/operator/conversations/#{conv.id}"}
+                navigate={~p"/operator/conversation/#{conv.id}"}
                 class="block text-sm text-gray-700 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 truncate"
                 data-testid={"operator-other-conv-#{conv.id}"}
               >
