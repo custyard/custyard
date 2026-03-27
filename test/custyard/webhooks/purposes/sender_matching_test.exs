@@ -42,7 +42,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       contact = insert_contact(organization_id: org.id, email: "bob@acme.example.com")
 
       existing_conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
-      existing_msg = insert_message(conversation_id: existing_conv.id, message_id: "orig-msg@example.com")
+
+      existing_msg =
+        insert_message(conversation_id: existing_conv.id, message_id: "orig-msg@example.com")
 
       normalized = %{
         from: "bob@acme.example.com",
@@ -71,7 +73,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
 
       # Create existing conversation with a message
       existing_conv = insert_conversation(organization_id: org.id, subject: "Original")
-      _existing_msg = insert_message(conversation_id: existing_conv.id, message_id: "dup-msg@example.com")
+
+      _existing_msg =
+        insert_message(conversation_id: existing_conv.id, message_id: "dup-msg@example.com")
 
       # Try to process the same message_id again
       normalized = %{
@@ -147,7 +151,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
           subject: "Old issue"
         )
 
-      existing_msg = insert_message(conversation_id: dormant_conv.id, message_id: "old-msg@example.com")
+      existing_msg =
+        insert_message(conversation_id: dormant_conv.id, message_id: "old-msg@example.com")
 
       # Reply to dormant conversation
       normalized = %{

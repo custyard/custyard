@@ -109,7 +109,8 @@ defmodule CustyardWeb.Live.PortalAuthTest do
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
         |> Plug.Conn.put_session(:portal_org_id, org.id)
-        # Not setting portal_custom_domain
+
+      # Not setting portal_custom_domain
 
       {:ok, _view, html} = live(conn, "/p/#{org.token}")
 

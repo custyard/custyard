@@ -374,5 +374,4 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     </div>
     """
   end
-
 end

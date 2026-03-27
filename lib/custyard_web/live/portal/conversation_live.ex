@@ -112,7 +112,8 @@ defmodule CustyardWeb.Portal.ConversationLive do
                |> load_messages()}
 
             {:error, _changeset} ->
-              {:noreply, put_flash(socket, :error, "Failed to update conversation. Please try again.")}
+              {:noreply,
+               put_flash(socket, :error, "Failed to update conversation. Please try again.")}
           end
 
         {:error, _changeset} ->
@@ -306,8 +307,13 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
   # Conversation state styling and labels for customers
   defp state_color(:new), do: "bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300"
-  defp state_color(:active), do: "bg-green-100 dark:bg-green-950 text-green-800 dark:text-green-300"
-  defp state_color(:waiting), do: "bg-yellow-100 dark:bg-yellow-950 text-yellow-800 dark:text-yellow-300"
+
+  defp state_color(:active),
+    do: "bg-green-100 dark:bg-green-950 text-green-800 dark:text-green-300"
+
+  defp state_color(:waiting),
+    do: "bg-yellow-100 dark:bg-yellow-950 text-yellow-800 dark:text-yellow-300"
+
   defp state_color(_), do: "bg-gray-100 dark:bg-zinc-700 text-gray-800 dark:text-zinc-200"
 
   # Customer-friendly state labels

@@ -27,7 +27,11 @@ inactive_class =
     <% end %>
     <span
       class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight"
-      style={if assigns[:current_org] && @current_org.primary_color, do: "color: #{@current_org.primary_color}", else: nil}
+      style={
+        if assigns[:current_org] && @current_org.primary_color,
+          do: "color: #{@current_org.primary_color}",
+          else: nil
+      }
     >
       <%= if assigns[:current_org] && @current_org.name do %>
         {@current_org.name}
@@ -39,9 +43,13 @@ inactive_class =
     <.link
       navigate={@portal_home_path}
       class={
-        if nav_active?.([CustyardWeb.Portal.RequestListLive, CustyardWeb.Portal.ConversationLive, CustyardWeb.Portal.NewRequestLive]),
-          do: active_class,
-          else: inactive_class
+        if nav_active?.([
+             CustyardWeb.Portal.RequestListLive,
+             CustyardWeb.Portal.ConversationLive,
+             CustyardWeb.Portal.NewRequestLive
+           ]),
+           do: active_class,
+           else: inactive_class
       }
       data-testid="portal-nav-requests"
     >

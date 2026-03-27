@@ -48,7 +48,8 @@ defmodule Custyard.Webhooks.Adapters.ZendeskTest do
       # Timestamp from 10 minutes ago (beyond 5 minute skew)
       stale_timestamp = to_string(System.system_time(:second) - 600)
 
-      assert {:error, "stale timestamp" <> _} = Zendesk.verify_request(payload, stale_timestamp, signature, secret)
+      assert {:error, "stale timestamp" <> _} =
+               Zendesk.verify_request(payload, stale_timestamp, signature, secret)
     end
 
     test "returns error for invalid timestamp format" do
@@ -56,11 +57,13 @@ defmodule Custyard.Webhooks.Adapters.ZendeskTest do
       secret = "zendesk-secret"
       signature = :crypto.mac(:hmac, :sha256, secret, payload) |> Base.encode64()
 
-      assert {:error, "invalid timestamp format"} = Zendesk.verify_request(payload, "not-a-number", signature, secret)
+      assert {:error, "invalid timestamp format"} =
+               Zendesk.verify_request(payload, "not-a-number", signature, secret)
     end
 
     test "returns signature error before checking timestamp" do
-      assert {:error, "invalid signature"} = Zendesk.verify_request("payload", "123", "bad", "secret")
+      assert {:error, "invalid signature"} =
+               Zendesk.verify_request("payload", "123", "bad", "secret")
     end
   end
 

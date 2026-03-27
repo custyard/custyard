@@ -92,7 +92,12 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         New Request
       </h1>
 
-      <form phx-submit="submit" phx-change="validate" class="space-y-4" data-testid="portal-new-request-form">
+      <form
+        phx-submit="submit"
+        phx-change="validate"
+        class="space-y-4"
+        data-testid="portal-new-request-form"
+      >
         <div>
           <label
             for="subject"

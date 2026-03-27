@@ -195,7 +195,9 @@ if config_env() == :prod do
 
   session_encryption_salt =
     System.get_env("SESSION_ENCRYPTION_SALT") ||
-      Base.encode64(:crypto.hash(:sha256, "session_encryption:" <> secret_key_base), padding: false)
+      Base.encode64(:crypto.hash(:sha256, "session_encryption:" <> secret_key_base),
+        padding: false
+      )
 
   live_view_signing_salt =
     System.get_env("LIVE_VIEW_SIGNING_SALT") ||

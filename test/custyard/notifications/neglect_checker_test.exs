@@ -284,8 +284,7 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
         insert_conversation(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at:
-            DateTime.add(DateTime.utc_now(), -(critical_hours - 1), :hour)
+          last_operator_action_at: DateTime.add(DateTime.utc_now(), -(critical_hours - 1), :hour)
         )
 
       # First check should detect warning

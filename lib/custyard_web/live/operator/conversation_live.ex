@@ -202,7 +202,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
     {:noreply, assign(socket, :note_text, body)}
   end
 
-  def handle_event("set_state", %{"state" => state}, socket) when state in ~w(active waiting resolved) do
+  def handle_event("set_state", %{"state" => state}, socket)
+      when state in ~w(active waiting resolved) do
     conversation = socket.assigns.conversation
     new_state = String.to_existing_atom(state)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -509,8 +510,19 @@ defmodule CustyardWeb.Operator.ConversationLive do
             aria-label="Toggle details panel"
             data-testid="operator-sidebar-toggle"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
           </button>
         </div>
@@ -606,8 +618,19 @@ defmodule CustyardWeb.Operator.ConversationLive do
             aria-label="Close details panel"
             data-testid="operator-sidebar-close"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -834,9 +857,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
     bg_class =
       cond do
-        is_internal -> "bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-700"
-        is_operator -> "bg-indigo-50 dark:bg-indigo-900/30 border-indigo-100 dark:border-indigo-700"
-        true -> "bg-white dark:bg-zinc-800 border-gray-200 dark:border-zinc-700"
+        is_internal ->
+          "bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-700"
+
+        is_operator ->
+          "bg-indigo-50 dark:bg-indigo-900/30 border-indigo-100 dark:border-indigo-700"
+
+        true ->
+          "bg-white dark:bg-zinc-800 border-gray-200 dark:border-zinc-700"
       end
 
     assigns =

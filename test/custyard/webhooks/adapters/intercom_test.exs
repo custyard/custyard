@@ -20,7 +20,8 @@ defmodule Custyard.Webhooks.Adapters.IntercomTest do
     end
 
     test "returns error for invalid signature" do
-      assert {:error, "invalid signature"} = Intercom.verify_signature("payload", "sha1=bad", "secret")
+      assert {:error, "invalid signature"} =
+               Intercom.verify_signature("payload", "sha1=bad", "secret")
     end
   end
 
@@ -52,11 +53,13 @@ defmodule Custyard.Webhooks.Adapters.IntercomTest do
       # Timestamp from 10 minutes ago (beyond 5 minute skew)
       stale_timestamp = to_string(System.system_time(:second) - 600)
 
-      assert {:error, "stale timestamp" <> _} = Intercom.verify_request(payload, stale_timestamp, signature, secret)
+      assert {:error, "stale timestamp" <> _} =
+               Intercom.verify_request(payload, stale_timestamp, signature, secret)
     end
 
     test "returns signature error before checking timestamp" do
-      assert {:error, "invalid signature"} = Intercom.verify_request("payload", "123", "sha1=bad", "secret")
+      assert {:error, "invalid signature"} =
+               Intercom.verify_request("payload", "123", "sha1=bad", "secret")
     end
   end
 
