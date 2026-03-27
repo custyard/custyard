@@ -26,6 +26,8 @@ defmodule CustyardWeb.OriginValidator do
   - Any organization's custom_domain from the database
   """
   @spec check_origin?(URI.t(), keyword()) :: boolean()
+  def check_origin?(%URI{} = uri), do: check_origin?(uri, [])
+
   def check_origin?(%URI{host: host} = uri, _opts) when is_binary(host) do
     require Logger
     host_lower = String.downcase(host)

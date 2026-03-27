@@ -95,6 +95,10 @@ defmodule CustyardWeb.Endpoint do
     Plug.Session.call(conn, Plug.Session.init(session_options()))
   end
 
+  # Trust Fly.io proxy headers - rewrites conn.scheme/host/port from x-forwarded-*
+  # Required for check_origin validation (Origin scheme must match conn.scheme)
+  plug Plug.RewriteOn, [:x_forwarded_host, :x_forwarded_port, :x_forwarded_proto]
+
   # Custom domain support - rewrites paths for white-label portal domains
   plug CustyardWeb.Plugs.CustomDomain
 
