@@ -228,7 +228,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
           class="space-y-3"
           data-testid="operator-settings-weights-form"
         >
-          <div :for={{key, value} <- sorted_weights(@weights)} class="flex items-center justify-between">
+          <div
+            :for={{key, value} <- sorted_weights(@weights)}
+            class="flex items-center justify-between"
+          >
             <label class="text-sm text-gray-700 dark:text-zinc-300 capitalize" for={"weights_#{key}"}>
               {key}
             </label>
