@@ -168,9 +168,9 @@ defmodule CustyardWeb.CoreComponents do
       class={[
         "fixed top-2 right-2 mr-2 w-80 sm:w-96 z-50 rounded-lg p-3 ring-1",
         @kind == :info &&
-          "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 ring-emerald-500 fill-cyan-900 dark:fill-cyan-300",
+          "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 ring-emerald-500/40 dark:ring-emerald-400/30 fill-cyan-900 dark:fill-cyan-300",
         @kind == :error &&
-          "bg-rose-50 dark:bg-rose-950 text-rose-900 dark:text-rose-300 shadow-md ring-rose-500 fill-rose-900 dark:fill-rose-300"
+          "bg-rose-50 dark:bg-rose-950 text-rose-900 dark:text-rose-300 shadow-md ring-rose-500/40 dark:ring-rose-400/30 fill-rose-900 dark:fill-rose-300"
       ]}
       {@rest}
     >
@@ -179,7 +179,7 @@ defmodule CustyardWeb.CoreComponents do
         <.icon :if={@kind == :error} name="hero-exclamation-circle-mini" class="h-4 w-4" />
         {@title}
       </p>
-      <p class="mt-2 text-sm leading-5">{msg}</p>
+      <p class="mt-2 pl-[22px] text-sm leading-5">{msg}</p>
       <button
         type="button"
         class="group absolute top-1 right-1 p-2"
