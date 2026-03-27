@@ -72,6 +72,7 @@ defmodule CustyardWeb.Router do
       live "/", AttentionQueueLive, :index
       live "/conversation/:id", ConversationLive, :show
       live "/organizations", OrganizationsLive, :index
+      live "/organizations/:id", OrganizationDetailLive, :show
       live "/projects", ProjectsLive, :index
       live "/neglect", NeglectReportLive, :index
       live "/settings", SettingsLive, :index

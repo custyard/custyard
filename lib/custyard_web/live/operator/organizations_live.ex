@@ -577,29 +577,42 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
     >
       <div class="flex items-start justify-between">
         <div class="flex items-start gap-3">
-          <div :if={@org.logo_url} class="shrink-0">
+          <button
+            :if={@org.logo_url}
+            type="button"
+            phx-click="edit_org"
+            phx-value-id={@org.id}
+            class="shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+          >
             <img
               src={@org.logo_url}
               alt={"#{@org.name} logo"}
               class="w-10 h-10 rounded object-cover border border-gray-100 dark:border-zinc-700"
             />
-          </div>
-          <div
+          </button>
+          <button
             :if={!@org.logo_url}
-            class="shrink-0 w-10 h-10 rounded bg-gray-100 dark:bg-zinc-800 flex items-center justify-center"
+            type="button"
+            phx-click="edit_org"
+            phx-value-id={@org.id}
+            class="shrink-0 w-10 h-10 rounded bg-gray-100 dark:bg-zinc-800 flex items-center justify-center cursor-pointer hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors"
           >
             <span class="text-gray-400 dark:text-zinc-500 text-sm font-medium">
               {String.first(@org.name)}
             </span>
-          </div>
+          </button>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2 mb-1">
-              <span
-                class="font-semibold text-gray-900 dark:text-zinc-100 truncate"
+              <button
+                type="button"
+                phx-click="edit_org"
+                phx-value-id={@org.id}
+                class="font-semibold text-gray-900 dark:text-zinc-100 truncate hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer text-left"
                 data-testid="operator-org-name"
+                title="Click to view and edit organization details"
               >
                 {@org.name}
-              </span>
+              </button>
               <.tier_badge tier={@org.tier} />
             </div>
             <div

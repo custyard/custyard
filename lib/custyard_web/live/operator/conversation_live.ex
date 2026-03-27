@@ -649,7 +649,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
               Organization
             </div>
             <.link
-              navigate={~p"/operator/organizations"}
+              navigate={~p"/operator/organizations/#{@conversation.organization.id}"}
               class="text-sm text-indigo-600 hover:underline font-medium"
               data-testid="operator-sidebar-org-link"
             >

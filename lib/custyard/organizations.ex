@@ -91,6 +91,28 @@ defmodule Custyard.Organizations do
   end
 
   @doc """
+  Get an organization by ID with preloaded contacts.
+  """
+  def get_organization_with_contacts(id) do
+    from(o in Organization,
+      where: o.id == ^id,
+      preload: [:contacts]
+    )
+    |> Repo.one()
+  end
+
+  @doc """
+  List contacts for an organization.
+  """
+  def list_contacts(org_id) do
+    from(c in Contact,
+      where: c.organization_id == ^org_id,
+      order_by: [asc: c.name, asc: c.email]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Get an organization by token.
   """
   def get_organization_by_token(token) do

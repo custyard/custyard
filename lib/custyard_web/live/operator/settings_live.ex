@@ -375,29 +375,84 @@ defmodule CustyardWeb.Operator.SettingsLive do
         class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4"
         data-testid="operator-settings-score-calc"
       >
-        <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100 mb-4">Score Calculation</h2>
-        <p class="text-xs text-gray-500 dark:text-zinc-400 mb-2">
-          The attention score is calculated as:
-        </p>
-        <pre
-          class="text-xs text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 p-3 rounded overflow-x-auto"
-          data-testid="operator-settings-formula"
+        <button
+          type="button"
+          phx-click={
+            JS.toggle(to: "#score-calc-details")
+            |> JS.toggle(to: "#score-calc-chevron-down")
+            |> JS.toggle(to: "#score-calc-chevron-up")
+          }
+          class="w-full flex items-center justify-between text-left"
+          aria-expanded="false"
+          aria-controls="score-calc-details"
+          data-testid="operator-settings-score-calc-toggle"
         >
-          Score = (idle_weight * idle_score) +
-                  (state_weight * state_score) +
-                  (tier_weight * tier_score) +
-                  (urgency_weight * urgency_score) +
-                  (velocity_weight * velocity_score) +
-                  (neglect_weight * neglect_bonus)
-        </pre>
+          <div>
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">Score Calculation</h2>
+            <p class="text-xs text-gray-500 dark:text-zinc-400 mt-1">
+              Weighted sum of idle, state, tier, urgency, velocity, and neglect factors
+            </p>
+          </div>
+          <svg
+            id="score-calc-chevron-down"
+            class="h-5 w-5 text-gray-400 dark:text-zinc-500 flex-shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+          <svg
+            id="score-calc-chevron-up"
+            class="hidden h-5 w-5 text-gray-400 dark:text-zinc-500 flex-shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+          </svg>
+        </button>
 
-        <div class="mt-4 space-y-2 text-xs text-gray-500 dark:text-zinc-400">
-          <div><strong>idle_score:</strong> ln(hours + 1) * 10, capped at 40</div>
-          <div><strong>state_score:</strong> new=30, dormant=25, active=15, waiting/resolved=0</div>
-          <div><strong>tier_score:</strong> enterprise=20, standard=10, basic=5</div>
-          <div><strong>urgency_score:</strong> urgent=15, elevated=7, normal=0</div>
-          <div><strong>velocity_score:</strong> ln(messages_24h + 1) * 3, capped at 10</div>
-          <div><strong>neglect_bonus:</strong> critical=15, warning=7, ok=0</div>
+        <div id="score-calc-details" class="hidden mt-4">
+          <p class="text-xs text-gray-500 dark:text-zinc-400 mb-2">
+            The attention score is calculated as:
+          </p>
+          <pre
+            class="text-xs text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-900 p-3 rounded overflow-x-auto border border-gray-100 dark:border-zinc-700"
+            data-testid="operator-settings-formula"
+          >Score = (idle_weight * idle_score) +
+        (state_weight * state_score) +
+        (tier_weight * tier_score) +
+        (urgency_weight * urgency_score) +
+        (velocity_weight * velocity_score) +
+        (neglect_weight * neglect_bonus)</pre>
+
+          <div class="mt-4 space-y-2 text-xs text-gray-500 dark:text-zinc-400">
+            <div>
+              <strong class="text-gray-700 dark:text-zinc-300">idle_score:</strong>
+              ln(hours + 1) * 10, capped at 40
+            </div>
+            <div>
+              <strong class="text-gray-700 dark:text-zinc-300">state_score:</strong>
+              new=30, dormant=25, active=15, waiting/resolved=0
+            </div>
+            <div>
+              <strong class="text-gray-700 dark:text-zinc-300">tier_score:</strong>
+              enterprise=20, standard=10, basic=5
+            </div>
+            <div>
+              <strong class="text-gray-700 dark:text-zinc-300">urgency_score:</strong>
+              urgent=15, elevated=7, normal=0
+            </div>
+            <div>
+              <strong class="text-gray-700 dark:text-zinc-300">velocity_score:</strong>
+              ln(messages_24h + 1) * 3, capped at 10
+            </div>
+            <div>
+              <strong class="text-gray-700 dark:text-zinc-300">neglect_bonus:</strong>
+              critical=15, warning=7, ok=0
+            </div>
+          </div>
         </div>
       </div>
     </div>

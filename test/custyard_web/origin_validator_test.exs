@@ -110,6 +110,66 @@ defmodule CustyardWeb.OriginValidatorTest do
     end
   end
 
+  describe "check_origin?/2 (Phoenix MFA interface)" do
+    # Phoenix's socket config uses MFA callback with arity 2:
+    # websocket: [check_origin: {CustyardWeb.OriginValidator, :check_origin?, []}]
+    # Phoenix passes %URI{} struct and opts to this function.
+
+    test "accepts localhost URI in dev/test environment" do
+      uri = %URI{host: "localhost", scheme: "http", port: 4000}
+      assert OriginValidator.check_origin?(uri, [])
+    end
+
+    test "accepts localhost with arity-1 fallback" do
+      uri = %URI{host: "localhost", scheme: "http", port: 4000}
+      assert OriginValidator.check_origin?(uri)
+    end
+
+    test "accepts custom domain from organization" do
+      insert_organization(custom_domain: "support.widgets.io")
+
+      uri = %URI{host: "support.widgets.io", scheme: "https", port: 443}
+      assert OriginValidator.check_origin?(uri, [])
+    end
+
+    test "rejects unknown host" do
+      uri = %URI{host: "unknown.evil.com", scheme: "https", port: 443}
+      refute OriginValidator.check_origin?(uri, [])
+    end
+
+    test "case-insensitive host matching" do
+      insert_organization(custom_domain: "Portal.Example.Com")
+
+      uri_lower = %URI{host: "portal.example.com", scheme: "https"}
+      uri_upper = %URI{host: "PORTAL.EXAMPLE.COM", scheme: "https"}
+      uri_mixed = %URI{host: "PoRtAl.ExAmPlE.cOm", scheme: "https"}
+
+      assert OriginValidator.check_origin?(uri_lower, [])
+      assert OriginValidator.check_origin?(uri_upper, [])
+      assert OriginValidator.check_origin?(uri_mixed, [])
+    end
+
+    test "rejects URI with nil host" do
+      uri = %URI{host: nil, scheme: "https"}
+      refute OriginValidator.check_origin?(uri, [])
+    end
+
+    test "rejects non-URI struct" do
+      refute OriginValidator.check_origin?("not-a-uri", [])
+      refute OriginValidator.check_origin?(%{host: "localhost"}, [])
+      refute OriginValidator.check_origin?(nil, [])
+    end
+
+    test "opts parameter is accepted but unused" do
+      # Phoenix may pass various opts - verify they don't break the function
+      uri = %URI{host: "localhost", scheme: "http"}
+
+      assert OriginValidator.check_origin?(uri, transport: :websocket)
+      assert OriginValidator.check_origin?(uri, some_option: "value")
+      assert OriginValidator.check_origin?(uri, [])
+    end
+  end
+
   describe "edge cases" do
     test "handles multiple organizations with custom domains" do
       insert_organization(custom_domain: "portal-a.example.com")
