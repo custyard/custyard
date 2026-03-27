@@ -8,6 +8,8 @@ primary_region = "ams"
 dockerfile = "Containerfile"
 
 [env]
+PORT = "4000"
+PHX_HOST = "custyard.fly.dev"
 IMAP_ENABLED = "false"
 IMAP_FOLDER = "INBOX"
 IMAP_HOST = "imap.example.com"
@@ -19,6 +21,7 @@ LMTP_ENABLED = "false"
 LMTP_HOSTNAME = "localhost"
 LMTP_PORT = "2024"
 MAIL_ADAPTER = "lettermint"
+
 [http_service]
 internal_port = 4000
 force_https = true
