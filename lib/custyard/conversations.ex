@@ -12,7 +12,7 @@ defmodule Custyard.Conversations do
   Returns list of `%{conversation: conversation, message_count: count}` maps.
 
   Options:
-    - :filter - state filter ("all", "new", "active", "waiting", "dormant")
+    - :filter - state filter ("all", "new", "active", "waiting", "dormant", "snoozed")
     - :organization_id - scope to a specific organization (nil for all - super_admin only)
   """
   def list_for_attention_queue(opts \\ []) do
@@ -32,17 +32,26 @@ defmodule Custyard.Conversations do
         left_join: ct in assoc(c, :contact),
         left_join: mc in subquery(message_count_subquery),
         on: mc.conversation_id == c.id,
-        # Exclude resolved and snoozed conversations
+        # Exclude resolved conversations (snoozed filter handled separately)
         where: c.state != :resolved,
-        where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
         order_by: [desc: c.cached_score],
         preload: [organization: o, contact: ct],
         select: %{conversation: c, message_count: coalesce(mc.count, 0)}
 
     query
     |> apply_organization_filter(organization_id)
+    |> apply_snooze_filter(filter, now)
     |> apply_state_filter(filter)
     |> Repo.all()
+  end
+
+  # Filter for snoozed conversations - only show snoozed when explicitly filtered
+  defp apply_snooze_filter(query, "snoozed", now) do
+    from c in query, where: c.snoozed_until >= ^now
+  end
+
+  defp apply_snooze_filter(query, _filter, now) do
+    from c in query, where: is_nil(c.snoozed_until) or c.snoozed_until < ^now
   end
 
   defp apply_organization_filter(query, nil), do: query
@@ -238,6 +247,15 @@ defmodule Custyard.Conversations do
   end
 
   @doc """
+  Un-snooze a conversation, making it appear in the attention queue again.
+  """
+  def unsnooze(conversation) do
+    conversation
+    |> Conversation.snooze_changeset(nil)
+    |> Repo.update()
+  end
+
+  @doc """
   Update conversation with allowed changes (goes through changeset for validation).
   Note: cached_score and last_neglect_notification are not allowed - they are computed fields.
   """
@@ -245,6 +263,53 @@ defmodule Custyard.Conversations do
     conversation
     |> Conversation.changeset(attrs)
     |> Repo.update()
+  end
+
+  @doc """
+  Atomically transition a conversation from one state to another.
+
+  Uses a conditional UPDATE to prevent race conditions when multiple operators
+  access the same conversation simultaneously. Only updates if the conversation
+  is still in the expected `from_state`.
+
+  Returns:
+    - `{:ok, updated_conversation}` if the transition succeeded
+    - `{:ok, :already_transitioned}` if conversation was already in a different state
+    - `{:error, changeset}` if the update failed for other reasons
+
+  ## Examples
+
+      # Transition from :new to :active when operator views
+      transition_state(conversation, :new, :active, last_operator_action_at: now)
+
+  """
+  def transition_state(conversation, from_state, to_state, additional_attrs \\ []) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    attrs = Keyword.merge([state: to_state, updated_at: now], additional_attrs)
+
+    # Build the update query with a WHERE condition on current state
+    query =
+      from c in Conversation,
+        where: c.id == ^conversation.id and c.state == ^from_state
+
+    case Repo.update_all(query, set: attrs) do
+      {1, _} ->
+        # Successfully updated - reload to get fresh data
+        {:ok, Repo.get!(Conversation, conversation.id) |> Repo.preload([:organization, :contact])}
+
+      {0, _} ->
+        # No rows updated - state was already different, check current state
+        current =
+          Repo.get!(Conversation, conversation.id) |> Repo.preload([:organization, :contact])
+
+        if current.state == to_state do
+          # Already in target state - another operator transitioned it first
+          {:ok, :already_transitioned}
+        else
+          # In some other state - return the current conversation
+          {:ok, :already_transitioned}
+        end
+    end
   end
 
   @doc """

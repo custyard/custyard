@@ -129,6 +129,28 @@ defmodule CustyardWeb.Portal.ConversationLive do
     {:noreply, socket |> load_messages() |> load_tasks()}
   end
 
+  @impl true
+  def handle_info({:conversation_updated, _}, socket) do
+    # Reload conversation to get updated state, urgency, etc.
+    conv = socket.assigns.conversation
+    org = socket.assigns.current_org
+
+    case Conversations.get_conversation_for_organization(conv.id, org.id) do
+      {:ok, updated_conv} ->
+        {:noreply,
+         socket
+         |> assign(:conversation, updated_conv)
+         |> load_tasks()}
+
+      {:error, _} ->
+        # Conversation no longer accessible (deleted or org changed)
+        {:noreply,
+         socket
+         |> put_flash(:info, "This request has been closed or moved")
+         |> push_navigate(to: socket.assigns.portal_home_path)}
+    end
+  end
+
   # Catch-all for unexpected PubSub messages to prevent LiveView crashes
   @impl true
   def handle_info(_msg, socket) do

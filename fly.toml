@@ -19,8 +19,6 @@ LMTP_ENABLED = "false"
 LMTP_HOSTNAME = "localhost"
 LMTP_PORT = "2024"
 MAIL_ADAPTER = "lettermint"
-PHX_HOST = "custyard.fly.dev"
-
 [http_service]
 internal_port = 4000
 force_https = true

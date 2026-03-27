@@ -169,10 +169,10 @@ if config_env() == :prod do
   # If not configured, routed webhooks will reject requests in production.
   webhook_secrets =
     %{}
-    |> maybe_put_env_secret(:lettermint, "WEBHOOK_SECRET_LETTERMINT")
-    |> maybe_put_env_secret(:zendesk, "WEBHOOK_SECRET_ZENDESK")
-    |> maybe_put_env_secret(:intercom, "WEBHOOK_SECRET_INTERCOM")
-    |> maybe_put_env_secret(:slack, "WEBHOOK_SECRET_SLACK")
+    |> maybe_put_env_secret.(:lettermint, "WEBHOOK_SECRET_LETTERMINT")
+    |> maybe_put_env_secret.(:zendesk, "WEBHOOK_SECRET_ZENDESK")
+    |> maybe_put_env_secret.(:intercom, "WEBHOOK_SECRET_INTERCOM")
+    |> maybe_put_env_secret.(:slack, "WEBHOOK_SECRET_SLACK")
 
   if map_size(webhook_secrets) > 0 do
     config :custyard, :webhook_secrets, webhook_secrets

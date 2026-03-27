@@ -3,6 +3,9 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   alias Custyard.Settings
 
+  # Fixed display order for weight keys (maps don't guarantee iteration order)
+  @weight_display_order ~w(idle state tier urgency velocity neglect)a
+
   @impl true
   def mount(_params, _session, socket) do
     settings = Settings.get()
@@ -168,6 +171,13 @@ defmodule CustyardWeb.Operator.SettingsLive do
     end)
   end
 
+  # Sort weights according to fixed display order
+  defp sorted_weights(weights) do
+    @weight_display_order
+    |> Enum.filter(&Map.has_key?(weights, &1))
+    |> Enum.map(&{&1, Map.get(weights, &1)})
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -201,7 +211,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
         <div :if={not @editing_weights} class="space-y-3">
           <div
-            :for={{key, value} <- @weights}
+            :for={{key, value} <- sorted_weights(@weights)}
             class="flex items-center justify-between"
             data-testid={"operator-settings-weight-#{key}"}
           >
@@ -218,7 +228,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
           class="space-y-3"
           data-testid="operator-settings-weights-form"
         >
-          <div :for={{key, value} <- @weights} class="flex items-center justify-between">
+          <div :for={{key, value} <- sorted_weights(@weights)} class="flex items-center justify-between">
             <label class="text-sm text-gray-700 dark:text-zinc-300 capitalize" for={"weights_#{key}"}>
               {key}
             </label>

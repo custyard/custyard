@@ -69,7 +69,7 @@ inactive_class =
     <div class="ml-auto">
       <.link
         navigate={"#{@portal_path}/new"}
-        class="text-sm text-white px-3 py-1 rounded"
+        class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
         style={
           if assigns[:current_org] && @current_org.primary_color do
             "background-color: #{@current_org.primary_color}"

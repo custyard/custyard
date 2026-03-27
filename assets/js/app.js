@@ -15,10 +15,19 @@ Hooks.ScrollIntoView = {
 
 Hooks.ScrollBottom = {
   mounted() {
+    // Always scroll to bottom on initial mount
     this.scrollToBottom()
   },
   updated() {
-    this.scrollToBottom()
+    // Only auto-scroll if user is near the bottom (within 100px)
+    // This respects user intent when they've scrolled up to read older messages
+    if (this.isNearBottom()) {
+      this.scrollToBottom()
+    }
+  },
+  isNearBottom() {
+    const threshold = 100 // pixels from bottom
+    return (this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight) < threshold
   },
   scrollToBottom() {
     this.el.scrollTop = this.el.scrollHeight
@@ -38,6 +47,23 @@ Hooks.ResetOnSubmit = {
         }, 0)
       })
     }
+  }
+}
+
+// Submit form on Ctrl+Enter or Cmd+Enter
+// Useful for quick message sending in operator interfaces
+Hooks.CtrlEnterSubmit = {
+  mounted() {
+    this.el.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault()
+        const form = this.el.closest("form")
+        if (form) {
+          // Trigger form submission through LiveView
+          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+        }
+      }
+    })
   }
 }
 

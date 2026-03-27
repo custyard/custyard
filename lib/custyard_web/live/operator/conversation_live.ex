@@ -27,7 +27,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   import CustyardWeb.OperatorComponents
 
-  alias Custyard.{Conversations, Message, Scoring}
+  alias Custyard.{Conversation, Conversations, Message, Scoring}
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -47,45 +47,48 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   defp mount_conversation(socket, id, conversation) do
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      # Subscribe to org-scoped topic instead of global "conversations" to reduce
+      # unnecessary PubSub traffic. The global topic is only needed by the Attention Queue.
+      Phoenix.PubSub.subscribe(
+        Custyard.PubSub,
+        "conversations:org:#{conversation.organization_id}"
+      )
+
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
     end
 
-    # Transition new to active when operator views
+    # Atomically transition new->active when operator views (race-condition safe).
+    # Uses conditional UPDATE to prevent conflicts when multiple operators open simultaneously.
     conversation =
       if conversation.state == :new do
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-        case Conversations.update_conversation(conversation,
-               state: :active,
+        case Conversations.transition_state(conversation, :new, :active,
                last_operator_action_at: now
              ) do
-          {:ok, updated} ->
-            # Reload first to get fresh data before any broadcasts
-            reloaded = load_conversation(id)
+          {:ok, %Conversation{}} ->
+            # Transition succeeded - this operator was first
+            Scoring.calculate_and_cache(conversation.id)
 
-            # Calculate score with fresh data
-            Scoring.calculate_and_cache(updated.id)
-
-            # Broadcast after successful update and score calculation
+            # Broadcast the state change
             Phoenix.PubSub.broadcast(
               Custyard.PubSub,
               "conversations",
-              {:conversation_updated, updated.id}
+              {:conversation_updated, conversation.id}
             )
 
             Phoenix.PubSub.broadcast(
               Custyard.PubSub,
-              "conversations:org:#{updated.organization_id}",
-              {:conversation_updated, updated.id}
+              "conversations:org:#{conversation.organization_id}",
+              {:conversation_updated, conversation.id}
             )
 
-            reloaded
+            # Reload with all associations (messages, etc.)
+            load_conversation(id)
 
-          {:error, _changeset} ->
-            # If state transition fails, continue with original conversation
-            # The operator can still view and work with it
-            conversation
+          {:ok, :already_transitioned} ->
+            # Another operator already transitioned it - reload fresh data
+            load_conversation(id)
         end
       else
         conversation
@@ -131,10 +134,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
         # Update last_operator_action_at and ensure state is active
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-        case Conversations.update_conversation(conversation,
+        case Conversations.update_conversation(conversation, %{
                last_operator_action_at: now,
                state: :active
-             ) do
+             }) do
           {:ok, _} ->
             Scoring.calculate_and_cache(conversation.id)
 
@@ -278,6 +281,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
            |> assign(:new_task_due_at, "")
            |> assign(:new_task_portal_visible, true)
            |> assign(:show_task_form, false)
+           |> put_flash(:info, "Task created")
            |> reload_conversation()}
 
         {:error, _changeset} ->
@@ -486,7 +490,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-full" data-testid="operator-conversation-page">
+    <div class="flex flex-1 min-h-0" data-testid="operator-conversation-page">
       <%!-- Left: message thread --%>
       <div class="flex-1 flex flex-col min-w-0" data-testid="operator-conversation-thread">
         <div class="border-b border-gray-200 dark:border-zinc-700 px-4 py-3 flex items-center gap-3 bg-white dark:bg-zinc-800">
@@ -551,10 +555,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
               name="body"
               rows="2"
               phx-change="update_reply"
-              placeholder="Reply to customer..."
+              phx-hook="CtrlEnterSubmit"
+              id="operator-reply-textarea"
+              placeholder="Reply to customer... (Ctrl+Enter to send)"
               aria-label="Reply to customer"
               data-testid="operator-reply-input"
-              class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y"
+              class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y dark:bg-zinc-700 dark:text-zinc-100"
             >{@reply_text}</textarea>
             <button
               type="submit"
@@ -572,7 +578,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
               name="body"
               value={@note_text}
               phx-change="update_note"
-              placeholder="Internal note (not visible to customer)..."
+              phx-hook="CtrlEnterSubmit"
+              id="operator-note-input"
+              placeholder="Internal note (Ctrl+Enter to save)..."
               aria-label="Internal note (not visible to customer)"
               data-testid="operator-note-input"
               class="flex-1 border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 dark:text-zinc-100 rounded px-3 py-2 text-sm"
@@ -935,12 +943,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     diff_days = Date.diff(DateTime.to_date(now), DateTime.to_date(datetime))
 
-    time_str = Calendar.strftime(datetime, "%I:%M %p")
-
     cond do
-      diff_days == 0 -> time_str
-      diff_days == 1 -> "Yesterday #{time_str}"
-      diff_days < 7 -> "#{Calendar.strftime(datetime, "%a")} #{time_str}"
+      diff_days == 0 -> Calendar.strftime(datetime, "%I:%M %p")
+      diff_days == 1 -> Calendar.strftime(datetime, "Yesterday %I:%M %p")
+      diff_days < 7 -> Calendar.strftime(datetime, "%a %I:%M %p")
       true -> Calendar.strftime(datetime, "%b %d")
     end
   end

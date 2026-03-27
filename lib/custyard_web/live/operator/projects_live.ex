@@ -413,6 +413,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           <button
             type="button"
             phx-click="hide_form"
+            data-confirm="Discard unsaved changes?"
             class="text-gray-600 dark:text-zinc-400 text-sm px-4 py-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
             data-testid="operator-project-cancel-btn"
           >

@@ -92,6 +92,31 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     end
   end
 
+  def handle_event("unsnooze", %{"id" => id}, socket) do
+    with {id, ""} <- Integer.parse(id),
+         true <- queue_contains_conversation?(socket, id) do
+      conversation = Conversations.get_conversation!(id)
+
+      case Conversations.unsnooze(conversation) do
+        {:ok, _} ->
+          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations:org:#{conversation.organization_id}",
+            {:conversation_updated, id}
+          )
+
+          {:noreply, load_conversations(socket)}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to un-snooze conversation")}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   @impl true
   def handle_info({:conversation_updated, _id}, socket) do
     {:noreply, schedule_reload(socket)}
@@ -130,6 +155,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     filter = socket.assigns.filter
     # Scope to operator's organization (nil for super_admin = all orgs)
     org_id = socket.assigns[:scoped_organization_id]
+    now = DateTime.utc_now()
 
     conversations =
       Conversations.list_for_attention_queue(filter: filter, organization_id: org_id)
@@ -137,13 +163,15 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         neglect_status = Scoring.neglect_status(conv)
         breakdown = Scoring.breakdown(conv)
         hours_idle = hours_since(conv.last_operator_action_at || conv.inserted_at)
+        is_snoozed = conv.snoozed_until && DateTime.compare(conv.snoozed_until, now) == :gt
 
         %{
           conversation: conv,
           neglect_status: neglect_status,
           breakdown: breakdown,
           hours_idle: hours_idle,
-          message_count: message_count
+          message_count: message_count,
+          is_snoozed: is_snoozed
         }
       end)
 
@@ -178,6 +206,12 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   defp format_idle_time(hours) when hours < 24, do: "#{hours}h ago"
   defp format_idle_time(hours), do: "#{div(hours, 24)}d ago"
 
+  # Format snooze expiry time for display
+  @compile {:nowarn_unused_function, format_snooze_time: 1}
+  defp format_snooze_time(datetime) do
+    Calendar.strftime(datetime, "%b %d %H:%M")
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -205,6 +239,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         <.filter_button filter={@filter} value="active" label="active" />
         <.filter_button filter={@filter} value="waiting" label="waiting" />
         <.filter_button filter={@filter} value="dormant" label="dormant" />
+        <.filter_button filter={@filter} value="snoozed" label="snoozed" />
       </div>
 
       <div class="space-y-2">
@@ -329,43 +364,57 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           {if @show_score, do: "Hide score", else: "Why this rank?"}
         </button>
 
-        <div class="relative">
+        <%= if @item.is_snoozed do %>
           <button
-            phx-click="toggle_snooze"
+            phx-click="unsnooze"
             phx-value-id={@item.conversation.id}
-            aria-haspopup="menu"
-            aria-expanded={to_string(@show_snooze)}
-            class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
-            data-testid="operator-queue-snooze-btn"
+            class="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 px-2 py-1 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+            data-testid="operator-queue-unsnooze-btn"
           >
-            Snooze
+            Un-snooze
           </button>
-          <%= if @show_snooze do %>
-            <div
-              phx-click-away="toggle_snooze"
-              phx-key="escape"
-              phx-keydown="toggle_snooze"
+          <span class="text-xs text-gray-400 dark:text-zinc-500">
+            until {format_snooze_time(@item.conversation.snoozed_until)}
+          </span>
+        <% else %>
+          <div class="relative">
+            <button
+              phx-click="toggle_snooze"
               phx-value-id={@item.conversation.id}
-              role="menu"
-              aria-label="Snooze duration options"
-              class="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-10 p-1"
-              data-testid="operator-queue-snooze-menu"
+              aria-haspopup="menu"
+              aria-expanded={to_string(@show_snooze)}
+              class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
+              data-testid="operator-queue-snooze-btn"
             >
-              <%= for opt <- ["1h", "4h", "1d", "3d"] do %>
-                <button
-                  phx-click="snooze"
-                  phx-value-id={@item.conversation.id}
-                  phx-value-duration={opt}
-                  role="menuitem"
-                  class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded focus:outline-none focus:bg-gray-100 dark:focus:bg-zinc-700"
-                  data-testid={"operator-queue-snooze-opt-#{opt}"}
-                >
-                  {opt}
-                </button>
-              <% end %>
-            </div>
-          <% end %>
-        </div>
+              Snooze
+            </button>
+            <%= if @show_snooze do %>
+              <div
+                phx-click-away="toggle_snooze"
+                phx-key="escape"
+                phx-keydown="toggle_snooze"
+                phx-value-id={@item.conversation.id}
+                role="menu"
+                aria-label="Snooze duration options"
+                class="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-10 p-1"
+                data-testid="operator-queue-snooze-menu"
+              >
+                <%= for opt <- ["1h", "4h", "1d", "3d"] do %>
+                  <button
+                    phx-click="snooze"
+                    phx-value-id={@item.conversation.id}
+                    phx-value-duration={opt}
+                    role="menuitem"
+                    class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded focus:outline-none focus:bg-gray-100 dark:focus:bg-zinc-700"
+                    data-testid={"operator-queue-snooze-opt-#{opt}"}
+                  >
+                    {opt}
+                  </button>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
       </div>
 
       <%= if @show_score do %>

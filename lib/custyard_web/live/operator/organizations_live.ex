@@ -380,7 +380,10 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1">
+              <label
+                for={@uploads.logo.ref}
+                class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+              >
                 Logo
               </label>
               <div class="flex items-start gap-4">
@@ -433,32 +436,52 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
                   Primary Color
                 </label>
                 <div class="flex items-center gap-2">
-                  <input
-                    type="color"
-                    name="primary_color_picker"
-                    id="org-primary-color-picker"
-                    aria-label="Primary color picker"
-                    value={
-                      if(@form_data.primary_color != "",
-                        do: @form_data.primary_color,
-                        else: "#4f46e5"
-                      )
-                    }
-                    class="w-10 h-10 rounded border border-gray-300 dark:border-zinc-600 cursor-pointer"
-                    data-testid="operator-org-primary-color-picker"
-                  />
+                  <div class="relative">
+                    <input
+                      type="color"
+                      name="primary_color_picker"
+                      id="org-primary-color-picker"
+                      aria-label="Primary color picker"
+                      value={
+                        if(@form_data.primary_color != "",
+                          do: @form_data.primary_color,
+                          else: "#808080"
+                        )
+                      }
+                      class={[
+                        "w-10 h-10 rounded border cursor-pointer",
+                        if(@form_data.primary_color == "",
+                          do: "border-dashed border-gray-400 dark:border-zinc-500 opacity-50",
+                          else: "border-gray-300 dark:border-zinc-600"
+                        )
+                      ]}
+                      data-testid="operator-org-primary-color-picker"
+                    />
+                    <span
+                      :if={@form_data.primary_color == ""}
+                      class="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-zinc-500 text-xs pointer-events-none"
+                    >
+                      ?
+                    </span>
+                  </div>
                   <input
                     type="text"
                     name="primary_color"
                     id="org-primary-color"
                     value={@form_data.primary_color}
-                    placeholder="#4f46e5"
+                    placeholder="#4f46e5 (default)"
                     pattern="^#[0-9A-Fa-f]{6}$"
                     phx-debounce="300"
-                    class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+                    class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm dark:bg-zinc-700 dark:text-zinc-100"
                     data-testid="operator-org-primary-color-input"
                   />
                 </div>
+                <p
+                  :if={@form_data.primary_color == ""}
+                  class="text-xs text-gray-400 dark:text-zinc-500 mt-1"
+                >
+                  Uses default indigo if not set
+                </p>
               </div>
 
               <div>
@@ -469,32 +492,52 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
                   Secondary Color
                 </label>
                 <div class="flex items-center gap-2">
-                  <input
-                    type="color"
-                    name="secondary_color_picker"
-                    id="org-secondary-color-picker"
-                    aria-label="Secondary color picker"
-                    value={
-                      if(@form_data.secondary_color != "",
-                        do: @form_data.secondary_color,
-                        else: "#6366f1"
-                      )
-                    }
-                    class="w-10 h-10 rounded border border-gray-300 dark:border-zinc-600 cursor-pointer"
-                    data-testid="operator-org-secondary-color-picker"
-                  />
+                  <div class="relative">
+                    <input
+                      type="color"
+                      name="secondary_color_picker"
+                      id="org-secondary-color-picker"
+                      aria-label="Secondary color picker"
+                      value={
+                        if(@form_data.secondary_color != "",
+                          do: @form_data.secondary_color,
+                          else: "#808080"
+                        )
+                      }
+                      class={[
+                        "w-10 h-10 rounded border cursor-pointer",
+                        if(@form_data.secondary_color == "",
+                          do: "border-dashed border-gray-400 dark:border-zinc-500 opacity-50",
+                          else: "border-gray-300 dark:border-zinc-600"
+                        )
+                      ]}
+                      data-testid="operator-org-secondary-color-picker"
+                    />
+                    <span
+                      :if={@form_data.secondary_color == ""}
+                      class="absolute inset-0 flex items-center justify-center text-gray-400 dark:text-zinc-500 text-xs pointer-events-none"
+                    >
+                      ?
+                    </span>
+                  </div>
                   <input
                     type="text"
                     name="secondary_color"
                     id="org-secondary-color"
                     value={@form_data.secondary_color}
-                    placeholder="#6366f1"
+                    placeholder="#6366f1 (default)"
                     pattern="^#[0-9A-Fa-f]{6}$"
                     phx-debounce="300"
-                    class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+                    class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm dark:bg-zinc-700 dark:text-zinc-100"
                     data-testid="operator-org-secondary-color-input"
                   />
                 </div>
+                <p
+                  :if={@form_data.secondary_color == ""}
+                  class="text-xs text-gray-400 dark:text-zinc-500 mt-1"
+                >
+                  Uses default indigo if not set
+                </p>
               </div>
             </div>
           </div>
@@ -511,6 +554,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           <button
             type="button"
             phx-click="hide_form"
+            data-confirm="Discard unsaved changes?"
             class="text-gray-600 dark:text-zinc-400 text-sm px-4 py-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
             data-testid="operator-org-cancel-btn"
           >
@@ -548,17 +592,21 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
               {String.first(@org.name)}
             </span>
           </div>
-          <div>
+          <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2 mb-1">
               <span
-                class="font-semibold text-gray-900 dark:text-zinc-100"
+                class="font-semibold text-gray-900 dark:text-zinc-100 truncate"
                 data-testid="operator-org-name"
               >
                 {@org.name}
               </span>
               <.tier_badge tier={@org.tier} />
             </div>
-            <div :if={@org.domain} class="text-sm text-gray-500 dark:text-zinc-400 mb-2">
+            <div
+              :if={@org.domain}
+              class="text-sm text-gray-500 dark:text-zinc-400 mb-2 truncate"
+              title={@org.domain}
+            >
               {@org.domain}
             </div>
             <div
