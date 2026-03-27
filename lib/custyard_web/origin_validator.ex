@@ -27,12 +27,24 @@ defmodule CustyardWeb.OriginValidator do
   """
   @spec check_origin(String.t()) :: boolean()
   def check_origin(origin) when is_binary(origin) do
+    require Logger
+
     case extract_host(origin) do
       nil ->
+        Logger.warning("[OriginValidator] Could not extract host from origin: #{inspect(origin)}")
         false
 
       host ->
-        valid_host?(host)
+        result = valid_host?(host)
+
+        unless result do
+          Logger.warning(
+            "[OriginValidator] Rejected origin=#{inspect(origin)} host=#{inspect(host)} " <>
+              "primary_host=#{inspect(primary_host())} env=#{inspect(Application.get_env(:custyard, :env))}"
+          )
+        end
+
+        result
     end
   end
 

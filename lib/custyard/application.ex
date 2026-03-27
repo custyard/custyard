@@ -9,6 +9,15 @@ defmodule Custyard.Application do
 
   @impl true
   def start(_type, _args) do
+    # Log endpoint config for origin debugging (can remove after fixing)
+    endpoint_config = Application.get_env(:custyard, CustyardWeb.Endpoint, [])
+    url_config = Keyword.get(endpoint_config, :url, [])
+    check_origin = Keyword.get(endpoint_config, :check_origin)
+
+    Logger.info(
+      "[Startup] Endpoint url config: #{inspect(url_config)}, check_origin: #{inspect(check_origin)}"
+    )
+
     # Check for dangerous SQLite + ephemeral storage configuration
     warn_if_ephemeral_sqlite()
 
