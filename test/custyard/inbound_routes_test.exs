@@ -1,0 +1,254 @@
+defmodule Custyard.InboundRoutesTest do
+  use Custyard.DataCase, async: true
+
+  alias Custyard.InboundRoutes
+  alias Custyard.InboundRoute
+  alias Custyard.Factory
+
+  describe "route operations" do
+    test "list_for_organization returns routes for the given org" do
+      org = Factory.insert_organization()
+      other_org = Factory.insert_organization()
+
+      {:ok, route1} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, _route2} = InboundRoutes.create_route(%{organization_id: other_org.id, route_type: :general})
+
+      routes = InboundRoutes.list_for_organization(org.id)
+
+      assert length(routes) == 1
+      assert hd(routes).id == route1.id
+    end
+
+    test "get_route returns route with preloads" do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      fetched = InboundRoutes.get_route(route.id)
+
+      assert fetched.id == route.id
+      assert Ecto.assoc_loaded?(fetched.organization)
+      assert Ecto.assoc_loaded?(fetched.webhooks)
+    end
+
+    test "get_route returns nil for non-existent route" do
+      assert InboundRoutes.get_route(999_999) == nil
+    end
+
+    test "get_route! raises for non-existent route" do
+      assert_raise Ecto.NoResultsError, fn ->
+        InboundRoutes.get_route!(999_999)
+      end
+    end
+
+    test "get_by_callback_token finds route by token" do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      fetched = InboundRoutes.get_by_callback_token(route.callback_token)
+
+      assert fetched.id == route.id
+    end
+
+    test "get_by_callback_token returns nil for unknown token" do
+      assert InboundRoutes.get_by_callback_token("nonexistent-token") == nil
+    end
+
+    test "create_route generates callback_token if not provided" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.create_route(%{
+        organization_id: org.id,
+        route_type: :general
+      })
+
+      assert is_binary(route.callback_token)
+      assert String.length(route.callback_token) > 20
+    end
+
+    test "create_route accepts custom callback_token" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.create_route(%{
+        organization_id: org.id,
+        route_type: :general,
+        callback_token: "custom-token-123"
+      })
+
+      assert route.callback_token == "custom-token-123"
+    end
+
+    test "create_route validates project_id for project routes" do
+      org = Factory.insert_organization()
+
+      {:error, changeset} = InboundRoutes.create_route(%{
+        organization_id: org.id,
+        route_type: :project
+        # Missing project_id
+      })
+
+      assert %{project_id: ["is required for project routes"]} = errors_on(changeset)
+    end
+
+    test "update_route updates attributes" do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      {:ok, updated} = InboundRoutes.update_route(route, %{lettermint_route_id: "lm-123"})
+
+      assert updated.lettermint_route_id == "lm-123"
+    end
+
+    test "delete_route removes the route" do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      {:ok, _} = InboundRoutes.delete_route(route)
+
+      assert InboundRoutes.get_route(route.id) == nil
+    end
+
+    test "change_route returns changeset" do
+      changeset = InboundRoutes.change_route(%InboundRoute{})
+
+      assert %Ecto.Changeset{} = changeset
+    end
+  end
+
+  describe "webhook operations" do
+    setup do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route: route}
+    end
+
+    test "list_webhooks_for_route returns webhooks", %{route: route} do
+      {:ok, webhook} = InboundRoutes.create_webhook(%{
+        inbound_route_id: route.id,
+        purpose: :sender_matching
+      })
+
+      webhooks = InboundRoutes.list_webhooks_for_route(route.id)
+
+      assert length(webhooks) == 1
+      assert hd(webhooks).id == webhook.id
+    end
+
+    test "create_webhook creates with valid attrs", %{route: route} do
+      {:ok, webhook} = InboundRoutes.create_webhook(%{
+        inbound_route_id: route.id,
+        purpose: :enrichment,
+        endpoint_url: "https://example.com/hook"
+      })
+
+      assert webhook.purpose == :enrichment
+      assert webhook.endpoint_url == "https://example.com/hook"
+      assert webhook.enabled == true
+    end
+
+    test "create_webhook validates required fields" do
+      {:error, changeset} = InboundRoutes.create_webhook(%{})
+
+      assert %{purpose: ["can't be blank"], inbound_route_id: ["can't be blank"]} =
+               errors_on(changeset)
+    end
+
+    test "update_webhook updates attributes", %{route: route} do
+      {:ok, webhook} = InboundRoutes.create_webhook(%{
+        inbound_route_id: route.id,
+        purpose: :notification
+      })
+
+      {:ok, updated} = InboundRoutes.update_webhook(webhook, %{
+        endpoint_url: "https://new.example.com/hook"
+      })
+
+      assert updated.endpoint_url == "https://new.example.com/hook"
+    end
+
+    test "enable_webhook sets enabled to true", %{route: route} do
+      {:ok, webhook} = InboundRoutes.create_webhook(%{
+        inbound_route_id: route.id,
+        purpose: :audit,
+        enabled: false
+      })
+
+      {:ok, enabled} = InboundRoutes.enable_webhook(webhook)
+
+      assert enabled.enabled == true
+    end
+
+    test "disable_webhook sets enabled to false", %{route: route} do
+      {:ok, webhook} = InboundRoutes.create_webhook(%{
+        inbound_route_id: route.id,
+        purpose: :audit,
+        enabled: true
+      })
+
+      {:ok, disabled} = InboundRoutes.disable_webhook(webhook)
+
+      assert disabled.enabled == false
+    end
+
+    test "delete_webhook removes the webhook", %{route: route} do
+      {:ok, webhook} = InboundRoutes.create_webhook(%{
+        inbound_route_id: route.id,
+        purpose: :sender_matching
+      })
+
+      {:ok, _} = InboundRoutes.delete_webhook(webhook)
+
+      assert InboundRoutes.get_webhook(webhook.id) == nil
+    end
+  end
+
+  describe "convenience functions" do
+    test "find_or_create_general_route creates if not exists" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+
+      assert route.route_type == :general
+      assert route.organization_id == org.id
+    end
+
+    test "find_or_create_general_route returns existing route" do
+      org = Factory.insert_organization()
+      {:ok, existing} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+
+      assert route.id == existing.id
+    end
+
+    test "get_general_route returns general route" do
+      org = Factory.insert_organization()
+      {:ok, _route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      route = InboundRoutes.get_general_route(org.id)
+
+      assert route.route_type == :general
+    end
+
+    test "get_general_route returns nil when no general route exists" do
+      org = Factory.insert_organization()
+
+      assert InboundRoutes.get_general_route(org.id) == nil
+    end
+
+    test "get_project_route returns project route" do
+      org = Factory.insert_organization()
+      project = Factory.insert_project(organization_id: org.id)
+
+      {:ok, _route} = InboundRoutes.create_route(%{
+        organization_id: org.id,
+        route_type: :project,
+        project_id: project.id
+      })
+
+      route = InboundRoutes.get_project_route(project.id)
+
+      assert route.route_type == :project
+      assert route.project_id == project.id
+    end
+  end
+end

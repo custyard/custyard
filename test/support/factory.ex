@@ -137,6 +137,31 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Build operator account attributes.
+
+  Roles: "super_admin", "admin", "agent"
+  - super_admin: No organization_id (can access all)
+  - admin/agent: Requires organization_id
+
+  ## Examples
+
+      build_operator_account()
+      build_operator_account(role: "admin", organization_id: 1)
+  """
+  def build_operator_account(overrides \\ []) do
+    id = unique_id()
+
+    defaults = %{
+      email: "operator-#{id}@example.com",
+      password: "password123",
+      role: "super_admin",
+      organization_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
   Insert an organization into the database.
   """
   def insert_organization(overrides \\ []) do
@@ -207,6 +232,28 @@ defmodule Custyard.Factory do
 
     %Custyard.Task{}
     |> Custyard.Task.changeset(build_task(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
+  Insert an operator account into the database.
+  For admin/agent roles, requires organization_id or will create one.
+  """
+  def insert_operator_account(overrides \\ []) do
+    attrs = build_operator_account(overrides)
+    role = Map.get(attrs, :role, "super_admin")
+
+    # Ensure organization_id for non-super_admin roles
+    attrs =
+      if role in ["admin", "agent"] and is_nil(Map.get(attrs, :organization_id)) do
+        org = insert_organization()
+        Map.put(attrs, :organization_id, org.id)
+      else
+        attrs
+      end
+
+    %Custyard.OperatorAccount{}
+    |> Custyard.OperatorAccount.changeset(attrs)
     |> Custyard.Repo.insert!()
   end
 

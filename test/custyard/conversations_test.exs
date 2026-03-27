@@ -346,6 +346,61 @@ defmodule Custyard.ConversationsTest do
       assert {:ok, updated} = Conversations.update_state(conv, :active)
       assert updated.state == :active
     end
+
+    test "allows valid state transitions" do
+      # :new -> :active
+      conv = insert_conversation(state: :new)
+      assert {:ok, _} = Conversations.update_state(conv, :active)
+
+      # :active -> :waiting
+      conv = insert_conversation(state: :active)
+      assert {:ok, _} = Conversations.update_state(conv, :waiting)
+
+      # :waiting -> :dormant
+      conv = insert_conversation(state: :waiting)
+      assert {:ok, _} = Conversations.update_state(conv, :dormant)
+
+      # :dormant -> :active (reactivate)
+      conv = insert_conversation(state: :dormant)
+      assert {:ok, _} = Conversations.update_state(conv, :active)
+
+      # :active -> :resolved
+      conv = insert_conversation(state: :active)
+      assert {:ok, _} = Conversations.update_state(conv, :resolved)
+
+      # :resolved -> :active (reopen)
+      conv = insert_conversation(state: :resolved)
+      assert {:ok, _} = Conversations.update_state(conv, :active)
+    end
+
+    test "prevents invalid state transitions" do
+      # :new cannot go directly to :dormant
+      conv = insert_conversation(state: :new)
+      assert {:error, changeset} = Conversations.update_state(conv, :dormant)
+      assert %{state: [error_msg]} = errors_on(changeset)
+      assert error_msg =~ "cannot transition from new to dormant"
+
+      # :new cannot go to :waiting
+      conv = insert_conversation(state: :new)
+      assert {:error, changeset} = Conversations.update_state(conv, :waiting)
+      assert %{state: [_]} = errors_on(changeset)
+
+      # :resolved cannot go to :waiting
+      conv = insert_conversation(state: :resolved)
+      assert {:error, changeset} = Conversations.update_state(conv, :waiting)
+      assert %{state: [_]} = errors_on(changeset)
+
+      # :dormant cannot go to :waiting
+      conv = insert_conversation(state: :dormant)
+      assert {:error, changeset} = Conversations.update_state(conv, :waiting)
+      assert %{state: [_]} = errors_on(changeset)
+    end
+
+    test "allows same state (no-op)" do
+      conv = insert_conversation(state: :active)
+      assert {:ok, updated} = Conversations.update_state(conv, :active)
+      assert updated.state == :active
+    end
   end
 
   describe "snooze/2" do

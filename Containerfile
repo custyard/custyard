@@ -36,7 +36,10 @@ COPY priv/repo priv/repo
 RUN mix release
 
 # Runtime stage
-FROM debian:13-slim
+# Use Debian 12 (bookworm) to match the Elixir builder image base.
+# Avoids library version mismatches (libc, openssl) between build and runtime.
+# Debian 13 (trixie) is testing-branch and packages change unpredictably.
+FROM debian:12-slim
 
 LABEL org.opencontainers.image.source="https://github.com/onetimesecret/custyard"
 LABEL org.opencontainers.image.description="Custyard Service Platform"

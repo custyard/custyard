@@ -9,6 +9,9 @@ defmodule Custyard.Application do
 
   @impl true
   def start(_type, _args) do
+    # Check for dangerous SQLite + ephemeral storage configuration
+    warn_if_ephemeral_sqlite()
+
     children =
       [
         CustyardWeb.Telemetry,
@@ -121,12 +124,17 @@ defmodule Custyard.Application do
       hostname = Keyword.get(lmtp_config, :hostname, "localhost")
       tls_opts = Keyword.get(lmtp_config, :tls, [])
       max_received_count = Keyword.get(lmtp_config, :max_received_count, 3)
+      # Memory-bounded connection limits (each connection can buffer up to 25MB)
+      max_connections = Keyword.get(lmtp_config, :max_connections, 100)
+      num_acceptors = Keyword.get(lmtp_config, :num_acceptors, 5)
 
       opts = [
         port: port,
         hostname: hostname,
         tls: tls_opts,
-        max_received_count: max_received_count
+        max_received_count: max_received_count,
+        max_connections: max_connections,
+        num_acceptors: num_acceptors
       ]
 
       children ++ [{Custyard.Email.LMTPServer, opts}]
@@ -162,10 +170,38 @@ defmodule Custyard.Application do
   end
 
   defp setup_dev_operator do
-    alias Custyard.{OperatorAccount, Repo}
+    # Wait for Repo with exponential backoff instead of fixed sleep
+    wait_for_repo(5, 100)
+    do_setup_dev_operator()
+  rescue
+    e ->
+      Logger.warning("Failed to setup dev operator: #{inspect(e)}")
+  end
 
-    # Brief delay to ensure Repo is ready
-    Process.sleep(100)
+  # Poll for Repo availability with exponential backoff
+  # max_attempts=5, initial_delay_ms=100 gives delays: 100, 200, 400, 800, 1600 = ~3s total
+  defp wait_for_repo(0, _delay_ms), do: :ok
+
+  defp wait_for_repo(attempts_remaining, delay_ms) do
+    if repo_ready?() do
+      :ok
+    else
+      Process.sleep(delay_ms)
+      wait_for_repo(attempts_remaining - 1, delay_ms * 2)
+    end
+  end
+
+  defp repo_ready? do
+    alias Custyard.Repo
+    # Try a simple query - if it succeeds, Repo is ready
+    Repo.query("SELECT 1")
+    true
+  rescue
+    _ -> false
+  end
+
+  defp do_setup_dev_operator do
+    alias Custyard.{OperatorAccount, Repo}
 
     password = generate_password()
 
@@ -186,9 +222,6 @@ defmodule Custyard.Application do
 
         log_operator_credentials(@default_operator_email, password, :reset)
     end
-  rescue
-    e ->
-      Logger.warning("Failed to setup dev operator: #{inspect(e)}")
   end
 
   defp generate_password do
