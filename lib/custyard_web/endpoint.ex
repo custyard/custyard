@@ -69,8 +69,13 @@ defmodule CustyardWeb.Endpoint do
 
   plug Plug.MethodOverride
   plug Plug.Head
-  # Session plug - options resolved at runtime for production security
-  plug Plug.Session, {__MODULE__, :session_options_for_socket, []}
+  # Session plug - options resolved at runtime for production security.
+  # Using a callback wrapper to delay session options evaluation until request time.
+  plug :session_plug
+
+  defp session_plug(conn, _opts) do
+    Plug.Session.call(conn, Plug.Session.init(session_options()))
+  end
 
   # Custom domain support - rewrites paths for white-label portal domains
   plug CustyardWeb.Plugs.CustomDomain
