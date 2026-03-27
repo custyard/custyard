@@ -19,6 +19,20 @@ defmodule CustyardWeb.Plugs.CustomDomain do
     `conn.path_info` to inject the organization token. This is intentional and
     required for router matching. The original path is preserved in the
     rewritten URL structure (`/p/:token/original/path`).
+
+  - **Path rewriting concern (accepted risk)**: The plug rewrites request paths
+    based on custom_domain database lookups without an explicit domain allowlist.
+    This was analyzed and accepted because:
+
+    1. **Limited impact** - only affects public portal routes (no auth bypass)
+    2. **Attack requires knowledge** - attacker must know a valid configured custom_domain
+    3. **Additional protection** - org.token provides protection for route matching
+    4. **Infrastructure-level mitigation** - TLS SNI validation or reverse proxy
+       (Fly.io, nginx) should validate Host headers against its config
+
+    This is not traditional SSRF (no outbound requests to attacker-controlled URLs),
+    but a path-rewriting concern where untrusted Host headers could influence routing.
+    The proper fix is infrastructure-level Host header validation, not application code.
   """
   require Logger
 
