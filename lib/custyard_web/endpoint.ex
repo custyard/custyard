@@ -29,14 +29,14 @@ defmodule CustyardWeb.Endpoint do
   def session_options_for_socket, do: session_options()
 
   # LiveView socket - session options are resolved at runtime
-  # check_origin uses function capture (MFA tuples not supported)
+  # check_origin MFA must have arity 2: check_origin?(uri, opts)
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [
-      check_origin: &CustyardWeb.OriginValidator.check_origin/1,
+      check_origin: {CustyardWeb.OriginValidator, :check_origin?, []},
       connect_info: [session: {__MODULE__, :session_options_for_socket, []}]
     ],
     longpoll: [
-      check_origin: &CustyardWeb.OriginValidator.check_origin/1,
+      check_origin: {CustyardWeb.OriginValidator, :check_origin?, []},
       connect_info: [session: {__MODULE__, :session_options_for_socket, []}]
     ]
 

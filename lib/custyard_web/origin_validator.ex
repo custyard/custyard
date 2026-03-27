@@ -8,43 +8,52 @@ defmodule CustyardWeb.OriginValidator do
 
   This enables custom domain portals to use LiveView WebSockets.
 
-  ## Usage in Endpoint (Phoenix 1.8+ MFA tuple format)
+  ## Usage in Endpoint socket config (MFA with arity 2)
 
-      check_origin: {CustyardWeb.OriginValidator, :check_origin, []}
+      socket "/live", Phoenix.LiveView.Socket,
+        websocket: [check_origin: {CustyardWeb.OriginValidator, :check_origin?, []}],
+        longpoll: [check_origin: {CustyardWeb.OriginValidator, :check_origin?, []}]
   """
 
   alias Custyard.{Organization, Repo}
   import Ecto.Query
 
   @doc """
-  Check if the given origin is valid for WebSocket connections.
+  Check origin for socket connections (arity 2 for Phoenix MFA callback).
 
-  Returns true if the origin matches:
+  Phoenix passes a URI struct and opts. Returns true if the origin matches:
   - The configured PHX_HOST (or localhost in dev/test)
-  - Any organization's custom_domain
+  - Any organization's custom_domain from the database
+  """
+  @spec check_origin?(URI.t(), keyword()) :: boolean()
+  def check_origin?(%URI{host: host}, _opts) when is_binary(host) do
+    require Logger
+    host_lower = String.downcase(host)
+    result = valid_host?(host_lower)
 
-  The origin format is typically "https://example.com" or "http://localhost:4000".
+    unless result do
+      Logger.warning(
+        "[OriginValidator] Rejected host=#{inspect(host_lower)} " <>
+          "primary_host=#{inspect(primary_host())} env=#{inspect(Application.get_env(:custyard, :env))}"
+      )
+    end
+
+    result
+  end
+
+  def check_origin?(_uri, _opts), do: false
+
+  @doc """
+  Check origin from string (for testing and backwards compatibility).
   """
   @spec check_origin(String.t()) :: boolean()
   def check_origin(origin) when is_binary(origin) do
-    require Logger
+    case URI.parse(origin) do
+      %URI{host: host} when is_binary(host) and host != "" ->
+        check_origin?(%URI{host: host}, [])
 
-    case extract_host(origin) do
-      nil ->
-        Logger.warning("[OriginValidator] Could not extract host from origin: #{inspect(origin)}")
+      _ ->
         false
-
-      host ->
-        result = valid_host?(host)
-
-        unless result do
-          Logger.warning(
-            "[OriginValidator] Rejected origin=#{inspect(origin)} host=#{inspect(host)} " <>
-              "primary_host=#{inspect(primary_host())} env=#{inspect(Application.get_env(:custyard, :env))}"
-          )
-        end
-
-        result
     end
   end
 
@@ -73,17 +82,6 @@ defmodule CustyardWeb.OriginValidator do
       ["//localhost" | origins]
     else
       origins
-    end
-  end
-
-  # Extract the host from an origin URL (e.g., "https://example.com:443" -> "example.com")
-  defp extract_host(origin) do
-    case URI.parse(origin) do
-      %URI{host: host} when is_binary(host) and host != "" ->
-        String.downcase(host)
-
-      _ ->
-        nil
     end
   end
 
