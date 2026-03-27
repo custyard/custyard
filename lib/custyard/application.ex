@@ -9,15 +9,16 @@ defmodule Custyard.Application do
 
   @impl true
   def start(_type, _args) do
-    # Log endpoint config for origin debugging (can remove after fixing)
-    endpoint_config = Application.get_env(:custyard, CustyardWeb.Endpoint, [])
-    url_config = Keyword.get(endpoint_config, :url, [])
-    check_origin = Keyword.get(endpoint_config, :check_origin)
-
-    Logger.info(
-      "[Startup] Endpoint config - url: #{inspect(url_config)}, " <>
-        "check_origin: #{inspect(check_origin)} (type: #{origin_type(check_origin)})"
-    )
+    # Debug logging for check_origin config. Uncomment to trace.
+    # See: docs/lessons-learned/06-phoenix-check-origin-fly.md, PR #34
+    #
+    # endpoint_config = Application.get_env(:custyard, CustyardWeb.Endpoint, [])
+    # url_config = Keyword.get(endpoint_config, :url, [])
+    # check_origin = Keyword.get(endpoint_config, :check_origin)
+    # Logger.info(
+    #   "[Startup] Endpoint config - url: #{inspect(url_config)}, " <>
+    #     "check_origin: #{inspect(check_origin)} (type: #{origin_type(check_origin)})"
+    # )
 
     # Check for dangerous SQLite + ephemeral storage configuration
     warn_if_ephemeral_sqlite()
@@ -267,10 +268,10 @@ defmodule Custyard.Application do
     """)
   end
 
-  # Helper for startup logging
-  defp origin_type({m, f, a}) when is_atom(m) and is_atom(f) and is_list(a), do: "MFA"
-  defp origin_type(:conn), do: ":conn atom"
-  defp origin_type(list) when is_list(list), do: "static list"
-  defp origin_type(bool) when is_boolean(bool), do: "boolean"
-  defp origin_type(_), do: "unknown"
+  # Helper for startup logging (uncomment with debug block above)
+  # defp origin_type({m, f, a}) when is_atom(m) and is_atom(f) and is_list(a), do: "MFA"
+  # defp origin_type(:conn), do: ":conn atom"
+  # defp origin_type(list) when is_list(list), do: "static list"
+  # defp origin_type(bool) when is_boolean(bool), do: "boolean"
+  # defp origin_type(_), do: "unknown"
 end

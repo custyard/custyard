@@ -28,32 +28,25 @@ defmodule CustyardWeb.OriginValidator do
   @spec check_origin?(URI.t(), keyword()) :: boolean()
   def check_origin?(%URI{} = uri), do: check_origin?(uri, [])
 
-  def check_origin?(%URI{host: host} = uri, _opts) when is_binary(host) do
-    require Logger
+  def check_origin?(%URI{host: host}, _opts) when is_binary(host) do
     host_lower = String.downcase(host)
-
-    Logger.debug(
-      "[OriginValidator] Checking uri=#{inspect(uri)} host=#{inspect(host_lower)} " <>
-        "primary_host=#{inspect(primary_host())} env=#{inspect(Application.get_env(:custyard, :env))}"
-    )
-
-    result = valid_host?(host_lower)
-
-    unless result do
-      Logger.warning(
-        "[OriginValidator] Rejected host=#{inspect(host_lower)} " <>
-          "primary_host=#{inspect(primary_host())} env=#{inspect(Application.get_env(:custyard, :env))}"
-      )
-    end
-
-    result
+    valid_host?(host_lower)
+    # Debug logging for check_origin issues. Uncomment to trace.
+    # See: docs/lessons-learned/06-phoenix-check-origin-fly.md, PR #34
+    #
+    # require Logger
+    # Logger.debug(
+    #   "[OriginValidator] Checking uri=#{inspect(uri)} host=#{inspect(host_lower)} " <>
+    #     "primary_host=#{inspect(primary_host())} env=#{inspect(Application.get_env(:custyard, :env))}"
+    # )
+    # result = valid_host?(host_lower)
+    # unless result do
+    #   Logger.warning("[OriginValidator] Rejected host=#{inspect(host_lower)}")
+    # end
+    # result
   end
 
-  def check_origin?(uri, opts) do
-    require Logger
-    Logger.warning("[OriginValidator] Unexpected call: uri=#{inspect(uri)} opts=#{inspect(opts)}")
-    false
-  end
+  def check_origin?(_uri, _opts), do: false
 
   @doc """
   Check origin from string (for testing and backwards compatibility).
