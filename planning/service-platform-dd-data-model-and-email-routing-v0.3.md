@@ -132,3 +132,34 @@ inbound_route_webhooks
 - `contacts` unique constraint: change from `UNIQUE(email)` to `UNIQUE(email, organization_id)`
 - `organizations.domain`: add `UNIQUE WHERE domain IS NOT NULL` partial index
 - `organizations.custom_domain`: add `UNIQUE` constraint
+- `messages.delivery_status`: new enum (pending, sent, delivered, bounced, suppressed, failed) for outbound email tracking
+- `messages.lettermint_message_id`: external ID returned by Lettermint API, used to correlate webhook events
+
+---
+
+## Lettermint Outbound Email Status Webhooks
+
+**Decision:** Track email delivery status via Lettermint webhooks, stored on the Message record.
+
+**Rationale:** Lettermint sends webhook callbacks for email lifecycle events (created, sent, delivered, bounced, returned, suppressed). Without this visibility, operators cannot know if their replies reached the customer. Bounce information is operationally critical — it signals that the contact's email may be invalid.
+
+**Flow:**
+1. Operator sends reply → Swoosh delivers via Lettermint adapter → Lettermint returns `message_id`
+2. Store `lettermint_message_id` on Message, set `delivery_status: :pending`
+3. Lettermint POSTs status updates to `/webhook/email-status`
+4. Match incoming `message_id` to stored `lettermint_message_id`, update `delivery_status`
+5. Bounce/suppression events optionally flag the Contact for review
+
+**Endpoint:** `POST /webhook/email-status` — separate from inbound mail webhook (`/webhook/inbound`). Uses same `WEBHOOK_TOKEN` authentication or a dedicated token.
+
+**Status values:**
+| Lettermint Event | delivery_status |
+|------------------|-----------------|
+| created | pending |
+| sent | sent |
+| delivered | delivered |
+| bounced | bounced |
+| returned | bounced |
+| suppressed | suppressed |
+
+**UI implications:** Outbound messages in the conversation thread show a delivery indicator (checkmark, warning icon for bounces). Critical bounces surface in the attention queue or trigger operator notification.

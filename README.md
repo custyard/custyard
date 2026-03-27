@@ -9,6 +9,9 @@ mix setup
 overmind start -f Procfile.dev
 ```
 
+mix compile && mix fly.secrets 
+
+
 http://localhost:4000
 
 ## Phoenix.new / Remote VM Setup

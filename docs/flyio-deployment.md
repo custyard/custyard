@@ -102,8 +102,11 @@ On every deploy, the container entrypoint (`entrypoint.sh`) runs:
 ### Deploy commands
 
 ```bash
-# Deploy latest code
+# Deploy latest code ()
 fly deploy
+
+# Migrations are run automatically by the entrypoint, but you can also run them manually:
+# fly ssh console -C "bin/custyard eval 'Custyard.Release.migrate()'"
 
 # Deploy a specific commit/image
 fly deploy --image-ref <ref>
@@ -120,6 +123,10 @@ fly logs
 # SSH into a running machine
 fly ssh console
 ```
+
+https://fly.io/apps/custyard/monitoring
+
+https://custyard.fly.dev/
 
 See [fly deploy docs](https://fly.io/docs/launch/deploy/).
 
@@ -175,6 +182,15 @@ Remove the `[mounts]` section from `fly.toml` if you no longer need SQLite volum
 fly secrets set \
   DATABASE_URL="libsql://your-db.turso.io" \
   TURSO_AUTH_TOKEN="your-auth-token"
+```
+
+To get your database URL and token, install the [Turso CLI](https://docs.turso.tech/cli/installation):
+
+```bash
+brew install tursodatabase/tap/turso
+turso auth login
+turso db show <your-db-name>        # shows URL
+turso db tokens create <your-db-name>  # generates auth token
 ```
 
 No compile-time adapter change needed — keep `repo_adapter: Ecto.Adapters.SQLite3`. Requires `exqlite` with libSQL support. See [Turso Elixir SDK docs](https://docs.turso.tech/sdk/elixir).

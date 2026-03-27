@@ -327,6 +327,7 @@ A single communication within a Conversation.
 - Records source (email, portal, internal note)
 - Preserves email headers for threading and debugging
 - Internal notes are visible only to operators, not in the portal
+- For outbound messages sent via Lettermint: tracks delivery status (pending, sent, delivered, bounced, suppressed) and external message ID for webhook correlation
 
 **Attachment**
 
@@ -537,7 +538,11 @@ The platform sends outbound email directly. When the operator composes a respons
 - Both plain text and HTML parts are included
 - A footer links to the portal conversation (if the contact has portal access)
 
-Outbound sending uses SMTP, either direct or relayed through the operator's existing MTA.
+Outbound sending uses SMTP (direct or relayed through the operator's existing MTA) or a transactional email service like Lettermint.
+
+**Delivery Status Tracking (Lettermint)**
+
+When using Lettermint for outbound email, the platform receives webhook callbacks for email lifecycle events: sent, delivered, bounced, returned, suppressed. These events are stored against the originating Message record, giving operators visibility into whether their replies actually reached the customer. Bounce events can trigger visual indicators in the conversation view and optionally affect the contact's email validity status.
 
 **MVP Gap**
 

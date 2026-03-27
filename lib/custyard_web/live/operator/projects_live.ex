@@ -518,7 +518,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
     ~H"""
     <div class="relative w-12 h-12" data-testid="operator-project-progress">
       <svg
-        class="w-full h-full transform -rotate-90"
+        class="w-full h-full -rotate-90"
         viewBox="0 0 36 36"
         role="img"
         aria-label={"Progress: #{@progress.percentage}%"}

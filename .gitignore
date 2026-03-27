@@ -1,4 +1,9 @@
 *.txt
+.serena
+.claude
+.elixir_ls
+*.dump
+
 # The directory Mix will write compiled artifacts to.
 /_build/
 

@@ -51,7 +51,7 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
           class="block"
           data-testid={"portal-project-item-#{project.id}"}
         >
-          <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 hover:border-indigo-300 transition">
+          <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 hover:border-indigo-300 transition-colors">
             <div class="flex justify-between items-start mb-3">
               <div>
                 <h3
