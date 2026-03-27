@@ -29,14 +29,15 @@ defmodule CustyardWeb.Endpoint do
   def session_options_for_socket, do: session_options()
 
   # LiveView socket - session options are resolved at runtime
-  # check_origin MFA must have arity 2: check_origin?(uri, opts)
+  # Use :conn to accept origins matching the request host
+  # Custom domains work via CustomDomain plug rewriting the host
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [
-      check_origin: {CustyardWeb.OriginValidator, :check_origin?, []},
+      check_origin: :conn,
       connect_info: [session: {__MODULE__, :session_options_for_socket, []}]
     ],
     longpoll: [
-      check_origin: {CustyardWeb.OriginValidator, :check_origin?, []},
+      check_origin: :conn,
       connect_info: [session: {__MODULE__, :session_options_for_socket, []}]
     ]
 
