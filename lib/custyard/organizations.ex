@@ -3,7 +3,7 @@ defmodule Custyard.Organizations do
   Context for organization operations including custom domain management.
   """
 
-  alias Custyard.{Organization, Repo}
+  alias Custyard.{InboundRoutes, Organization, Repo}
   import Ecto.Query
 
   @doc """
@@ -121,9 +121,17 @@ defmodule Custyard.Organizations do
   Create a new organization.
   """
   def create_organization(attrs) do
-    %Organization{}
-    |> Organization.changeset(attrs)
-    |> Repo.insert()
+    Ecto.Multi.new()
+    |> Ecto.Multi.insert(:organization, Organization.changeset(%Organization{}, attrs))
+    |> Ecto.Multi.run(:default_route, fn _repo, %{organization: org} ->
+      InboundRoutes.create_route(org, :general)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{organization: org}} -> {:ok, org}
+      {:error, :organization, changeset, _changes} -> {:error, changeset}
+      {:error, :default_route, error, _changes} -> {:error, error}
+    end
   end
 
   @doc """

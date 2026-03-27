@@ -14,10 +14,15 @@ defmodule CustyardWeb.Live.OperatorAuth do
         {:halt, redirect(socket, to: "/operator/login")}
 
       operator_id ->
-        if Repo.get(OperatorAccount, operator_id) do
-          {:cont, assign(socket, :operator_id, operator_id)}
-        else
-          {:halt, redirect(socket, to: "/operator/login")}
+        case Repo.get(OperatorAccount, operator_id) do
+          nil ->
+            {:halt, redirect(socket, to: "/operator/login")}
+
+          operator ->
+            {:cont,
+             socket
+             |> assign(:operator_id, operator_id)
+             |> assign(:current_operator, operator)}
         end
     end
   end

@@ -2,18 +2,25 @@ defmodule Custyard.OperatorAccount do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @roles [:admin, :agent, :viewer]
+
   schema "operator_accounts" do
     field :email, :string
     field :password_hash, :string
     field :password, :string, virtual: true
+    field :role, Ecto.Enum, values: @roles, default: :admin
+
+    belongs_to :team, Custyard.Team
 
     timestamps(type: :utc_datetime)
   end
 
+  def roles, do: @roles
+
   @doc false
   def changeset(operator_account, attrs) do
     operator_account
-    |> cast(attrs, [:email, :password])
+    |> cast(attrs, [:email, :password, :role, :team_id])
     |> validate_required([:email, :password])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
       message: "must be a valid email address"

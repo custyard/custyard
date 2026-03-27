@@ -113,6 +113,17 @@ if imap_enabled do
     ssl: System.get_env("IMAP_SSL") != "false"
 end
 
+# Lettermint API configuration (route management)
+lettermint_api_url = System.get_env("LETTERMINT_API_URL")
+lettermint_api_key = System.get_env("LETTERMINT_API_KEY")
+
+if lettermint_api_url && lettermint_api_key do
+  config :custyard, :lettermint,
+    client: Custyard.Lettermint.HttpClient,
+    api_url: lettermint_api_url,
+    api_key: lettermint_api_key
+end
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
