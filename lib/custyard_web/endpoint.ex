@@ -29,9 +29,16 @@ defmodule CustyardWeb.Endpoint do
   def session_options_for_socket, do: session_options()
 
   # LiveView socket - session options are resolved at runtime
+  # check_origin MFA must be at socket level, not endpoint config level
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: {__MODULE__, :session_options_for_socket, []}]],
-    longpoll: [connect_info: [session: {__MODULE__, :session_options_for_socket, []}]]
+    websocket: [
+      check_origin: {CustyardWeb.OriginValidator, :check_origin, []},
+      connect_info: [session: {__MODULE__, :session_options_for_socket, []}]
+    ],
+    longpoll: [
+      check_origin: {CustyardWeb.OriginValidator, :check_origin, []},
+      connect_info: [session: {__MODULE__, :session_options_for_socket, []}]
+    ]
 
   plug Plug.Static,
     at: "/",

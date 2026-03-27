@@ -212,10 +212,8 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
       port: port
     ],
-    # Dynamic origin check: allows PHX_HOST and all organization custom_domains
-    # This enables LiveView WebSockets on custom domain portals
-    # Phoenix 1.8+ requires MFA tuple format, not function capture
-    check_origin: {CustyardWeb.OriginValidator, :check_origin, []},
+    # Note: check_origin MFA is configured at socket level in endpoint.ex
+    # Endpoint-level check_origin doesn't support MFA callbacks
     secret_key_base: secret_key_base,
     live_view: [signing_salt: live_view_signing_salt],
     # Session salts derived from secret_key_base for security
