@@ -53,6 +53,23 @@ defmodule CustyardWeb.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
+  # Temporary debug plug for origin header diagnosis (remove after fixing)
+  plug :log_origin_header
+
+  defp log_origin_header(conn, _opts) do
+    require Logger
+
+    origin = Plug.Conn.get_req_header(conn, "origin")
+    host_header = Plug.Conn.get_req_header(conn, "host")
+
+    Logger.debug(
+      "[OriginDebug] path=#{conn.request_path} origin=#{inspect(origin)} " <>
+        "host=#{inspect(host_header)} conn.host=#{inspect(conn.host)} conn.scheme=#{inspect(conn.scheme)}"
+    )
+
+    conn
+  end
+
   # Parsers for supported content types.
   # pass: restricts which additional content types pass through unparsed.
   # text/plain is allowed for some webhook providers that send text bodies.

@@ -26,9 +26,15 @@ defmodule CustyardWeb.OriginValidator do
   - Any organization's custom_domain from the database
   """
   @spec check_origin?(URI.t(), keyword()) :: boolean()
-  def check_origin?(%URI{host: host}, _opts) when is_binary(host) do
+  def check_origin?(%URI{host: host} = uri, _opts) when is_binary(host) do
     require Logger
     host_lower = String.downcase(host)
+
+    Logger.debug(
+      "[OriginValidator] Checking uri=#{inspect(uri)} host=#{inspect(host_lower)} " <>
+        "primary_host=#{inspect(primary_host())} env=#{inspect(Application.get_env(:custyard, :env))}"
+    )
+
     result = valid_host?(host_lower)
 
     unless result do
@@ -41,7 +47,11 @@ defmodule CustyardWeb.OriginValidator do
     result
   end
 
-  def check_origin?(_uri, _opts), do: false
+  def check_origin?(uri, opts) do
+    require Logger
+    Logger.warning("[OriginValidator] Unexpected call: uri=#{inspect(uri)} opts=#{inspect(opts)}")
+    false
+  end
 
   @doc """
   Check origin from string (for testing and backwards compatibility).

@@ -212,8 +212,9 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
       port: port
     ],
-    # Accept origins matching request host (works with custom domains via CustomDomain plug)
-    check_origin: :conn,
+    # MFA callback for dynamic origin validation (custom domains from DB)
+    # Note: [[]] passes empty list as 2nd arg to match check_origin?/2 arity
+    check_origin: {CustyardWeb.OriginValidator, :check_origin?, [[]]},
     secret_key_base: secret_key_base,
     live_view: [signing_salt: live_view_signing_salt],
     # Session salts derived from secret_key_base for security

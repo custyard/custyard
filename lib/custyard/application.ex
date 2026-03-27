@@ -15,7 +15,8 @@ defmodule Custyard.Application do
     check_origin = Keyword.get(endpoint_config, :check_origin)
 
     Logger.info(
-      "[Startup] Endpoint url config: #{inspect(url_config)}, check_origin: #{inspect(check_origin)}"
+      "[Startup] Endpoint config - url: #{inspect(url_config)}, " <>
+        "check_origin: #{inspect(check_origin)} (type: #{origin_type(check_origin)})"
     )
 
     # Check for dangerous SQLite + ephemeral storage configuration
@@ -265,4 +266,11 @@ defmodule Custyard.Application do
     ========================================
     """)
   end
+
+  # Helper for startup logging
+  defp origin_type({m, f, a}) when is_atom(m) and is_atom(f) and is_list(a), do: "MFA"
+  defp origin_type(:conn), do: ":conn atom"
+  defp origin_type(list) when is_list(list), do: "static list"
+  defp origin_type(bool) when is_boolean(bool), do: "boolean"
+  defp origin_type(_), do: "unknown"
 end
