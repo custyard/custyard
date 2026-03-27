@@ -212,8 +212,8 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
       port: port
     ],
-    # Note: check_origin MFA is configured at socket level in endpoint.ex
-    # Endpoint-level check_origin doesn't support MFA callbacks
+    # Accept origins matching request host (works with custom domains via CustomDomain plug)
+    check_origin: :conn,
     secret_key_base: secret_key_base,
     live_view: [signing_salt: live_view_signing_salt],
     # Session salts derived from secret_key_base for security
