@@ -92,7 +92,7 @@ defmodule Custyard.ContactTest do
       # 64 char local + 1 @ + 256 char domain = 321 chars
       long_local = String.duplicate("a", 64)
       # Build a domain with many subdomains to exceed 255 chars
-      domain_parts = Enum.map(1..32, fn _ -> "abcdefgh" end) |> Enum.join(".")
+      domain_parts = Enum.map_join(1..32, ".", fn _ -> "abcdefgh" end)
       email = "#{long_local}@#{domain_parts}"
 
       attrs = build_contact(email: email, organization_id: org.id)

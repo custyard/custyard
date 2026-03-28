@@ -160,10 +160,10 @@ defmodule Custyard.Application do
     imap_config = Application.get_env(:custyard, :imap, [])
 
     if Keyword.get(imap_config, :enabled, false) do
-      # Build credential_fetcher from password_env to avoid storing credentials
+      # Build credential_fetcher from env var name to avoid storing credentials
       # in Application config (visible in crash dumps and :sys.get_state).
-      password_env = Keyword.get(imap_config, :password_env, "IMAP_PASSWORD")
-      credential_fetcher = fn -> System.get_env(password_env) || "" end
+      cred_env_var = Keyword.get(imap_config, :credential_env_var, "IMAP_PASSWORD")
+      credential_fetcher = fn -> System.get_env(cred_env_var) || "" end
 
       opts = [
         host: Keyword.get(imap_config, :host, "localhost"),

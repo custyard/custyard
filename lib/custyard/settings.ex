@@ -223,14 +223,11 @@ defmodule Custyard.Settings do
     end
   end
 
-  # Check for NaN and Infinity
-  # In Elixir, NaN != NaN (self-comparison is false)
-  # Infinity compares as greater than any finite float
+  # Check for Infinity (NaN cannot occur from Elixir arithmetic)
+  # Values from external sources (JSON) would fail earlier in parsing
   defp is_nan_or_inf?(value) when is_float(value) do
-    # NaN self-comparison returns false
-    # Check for infinity by comparing to a very large number
-    value != value or
-      abs(value) > 1.0e308
+    # Check for infinity by comparing to maximum finite float
+    abs(value) > 1.0e308
   end
 
   defp is_nan_or_inf?(_), do: false

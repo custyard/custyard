@@ -120,10 +120,10 @@ if imap_enabled do
     host: System.get_env("IMAP_HOST") || "localhost",
     port: parse_int.("IMAP_PORT", 993),
     username: System.get_env("IMAP_USERNAME") || "",
-    # Store env var name instead of password value to prevent credential
-    # exposure in Application config, crash dumps, and :sys.get_state calls.
+    # Store env var name instead of actual credential to prevent exposure
+    # in Application config, crash dumps, and :sys.get_state calls.
     # The ImapPoller reads this at connection time via credential_fetcher.
-    password_env: "IMAP_PASSWORD",
+    credential_env_var: "IMAP_PASSWORD",
     folder: System.get_env("IMAP_FOLDER") || "INBOX",
     poll_interval: parse_int.("IMAP_POLL_INTERVAL", 60000),
     ssl: System.get_env("IMAP_SSL") != "false"

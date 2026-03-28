@@ -676,31 +676,32 @@ defmodule Custyard.Email.LMTPServer do
     max_recipients = Map.get(state, :max_recipients, @default_max_recipients)
 
     # Validate recipient domain before accepting
-    with :ok <- validate_recipient_domain(to) do
-      cond do
-        max_recipients == :infinity ->
-          {:ok, %{state | to: [to | state.to]}}
+    case validate_recipient_domain(to) do
+      :ok ->
+        cond do
+          max_recipients == :infinity ->
+            {:ok, %{state | to: [to | state.to]}}
 
-        current_count < max_recipients ->
-          {:ok, %{state | to: [to | state.to]}}
+          current_count < max_recipients ->
+            {:ok, %{state | to: [to | state.to]}}
 
-        true ->
-          # Emit telemetry for recipient limit exceeded
-          :telemetry.execute(
-            [:custyard, :lmtp, :recipient_limit, :exceeded],
-            %{count: 1},
-            %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
-          )
+          true ->
+            # Emit telemetry for recipient limit exceeded
+            :telemetry.execute(
+              [:custyard, :lmtp, :recipient_limit, :exceeded],
+              %{count: 1},
+              %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
+            )
 
-          Logger.warning("LMTP recipient limit exceeded",
-            current_count: current_count,
-            max_recipients: max_recipients,
-            sender: state[:from]
-          )
+            Logger.warning("LMTP recipient limit exceeded",
+              current_count: current_count,
+              max_recipients: max_recipients,
+              sender: state[:from]
+            )
 
-          {:error, "452 4.5.3 Too many recipients", state}
-      end
-    else
+            {:error, "452 4.5.3 Too many recipients", state}
+        end
+
       {:error, :invalid_domain} ->
         Logger.warning("LMTP rejecting unknown recipient domain",
           recipient: to,
