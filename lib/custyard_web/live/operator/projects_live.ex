@@ -3,7 +3,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
   import CustyardWeb.FormHelpers
 
-  alias Custyard.{Organizations, Projects}
+  alias Custyard.{Authorization, Organizations, Projects}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -94,15 +94,21 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   def handle_event("save_project", _params, socket) do
+    operator = socket.assigns.current_operator
     attrs = build_project_attrs(socket.assigns.form_data)
+    org_id = attrs[:organization_id]
 
-    result =
-      case socket.assigns.editing_project do
-        nil -> Projects.create_project(attrs)
-        project -> Projects.update_project(project, attrs)
-      end
+    if not Authorization.can_manage_project?(operator, org_id) do
+      {:noreply, put_flash(socket, :error, "You do not have permission to manage this project")}
+    else
+      result =
+        case socket.assigns.editing_project do
+          nil -> Projects.create_project(attrs)
+          project -> Projects.update_project(project, attrs)
+        end
 
-    handle_save_result(result, socket)
+      handle_save_result(result, socket)
+    end
   end
 
   def handle_event("delete_project", %{"id" => id}, socket) do
@@ -114,15 +120,23 @@ defmodule CustyardWeb.Operator.ProjectsLive do
          |> load_projects()}
 
       project ->
-        case Projects.delete_project(project) do
-          {:ok, _} ->
-            {:noreply,
-             socket
-             |> put_flash(:info, "Project deleted.")
-             |> load_projects()}
+        if not Authorization.can_manage_project?(
+             socket.assigns.current_operator,
+             project.organization_id
+           ) do
+          {:noreply,
+           put_flash(socket, :error, "You do not have permission to delete this project")}
+        else
+          case Projects.delete_project(project) do
+            {:ok, _} ->
+              {:noreply,
+               socket
+               |> put_flash(:info, "Project deleted.")
+               |> load_projects()}
 
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "Failed to delete project.")}
+            {:error, _} ->
+              {:noreply, put_flash(socket, :error, "Failed to delete project.")}
+          end
         end
     end
   end
@@ -167,18 +181,20 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   defp load_projects(socket) do
+    scoped_org_id = socket.assigns[:scoped_organization_id]
+
     projects =
       case socket.assigns.filter_org do
         nil ->
-          Projects.list_for_operator()
+          Projects.list_for_operator(organization_id: scoped_org_id)
 
         "" ->
-          Projects.list_for_operator()
+          Projects.list_for_operator(organization_id: scoped_org_id)
 
         org_id ->
           case Integer.parse(org_id) do
             {id, ""} -> Projects.list_for_organization(id)
-            _ -> Projects.list_for_operator()
+            _ -> Projects.list_for_operator(organization_id: scoped_org_id)
           end
       end
 

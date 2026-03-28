@@ -4,7 +4,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
   import CustyardWeb.OperatorComponents
   import CustyardWeb.FormHelpers
 
-  alias Custyard.{Organization, Organizations}
+  alias Custyard.{Authorization, Organization, Organizations}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -33,18 +33,22 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   @impl true
   def handle_event("show_form", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:show_form, true)
-     |> assign(:editing_org, nil)
-     |> assign(:form_data, %{
-       name: "",
-       domain: "",
-       tier: "standard",
-       primary_color: "",
-       secondary_color: "",
-       custom_domain: ""
-     })}
+    if not Authorization.can_create_organization?(socket.assigns.current_operator) do
+      {:noreply, put_flash(socket, :error, "Only super admins can create organizations")}
+    else
+      {:noreply,
+       socket
+       |> assign(:show_form, true)
+       |> assign(:editing_org, nil)
+       |> assign(:form_data, %{
+         name: "",
+         domain: "",
+         tier: "standard",
+         primary_color: "",
+         secondary_color: "",
+         custom_domain: ""
+       })}
+    end
   end
 
   def handle_event("hide_form", _params, socket) do
@@ -63,18 +67,23 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
          |> load_organizations()}
 
       org ->
-        {:noreply,
-         socket
-         |> assign(:show_form, true)
-         |> assign(:editing_org, org)
-         |> assign(:form_data, %{
-           name: org.name,
-           domain: org.domain || "",
-           tier: to_string(org.tier),
-           primary_color: org.primary_color || "",
-           secondary_color: org.secondary_color || "",
-           custom_domain: org.custom_domain || ""
-         })}
+        if not Authorization.can_manage_organization?(socket.assigns.current_operator, org.id) do
+          {:noreply,
+           put_flash(socket, :error, "You do not have permission to edit this organization")}
+        else
+          {:noreply,
+           socket
+           |> assign(:show_form, true)
+           |> assign(:editing_org, org)
+           |> assign(:form_data, %{
+             name: org.name,
+             domain: org.domain || "",
+             tier: to_string(org.tier),
+             primary_color: org.primary_color || "",
+             secondary_color: org.secondary_color || "",
+             custom_domain: org.custom_domain || ""
+           })}
+        end
     end
   end
 
@@ -108,15 +117,27 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
   end
 
   def handle_event("save_org", _params, socket) do
-    attrs = build_org_attrs(socket)
+    operator = socket.assigns.current_operator
 
-    result =
+    authorized? =
       case socket.assigns.editing_org do
-        nil -> Organizations.create_organization(attrs)
-        org -> Organizations.update_organization(org, attrs)
+        nil -> Authorization.can_create_organization?(operator)
+        org -> Authorization.can_manage_organization?(operator, org.id)
       end
 
-    handle_save_result(socket, result)
+    if not authorized? do
+      {:noreply, put_flash(socket, :error, "You do not have permission to perform this action")}
+    else
+      attrs = build_org_attrs(socket)
+
+      result =
+        case socket.assigns.editing_org do
+          nil -> Organizations.create_organization(attrs)
+          org -> Organizations.update_organization(org, attrs)
+        end
+
+      handle_save_result(socket, result)
+    end
   end
 
   @valid_tiers ~w(enterprise standard basic)

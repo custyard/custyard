@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Operator.SettingsLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.Settings
+  alias Custyard.{Authorization, Settings}
 
   # Fixed display order for weight keys (maps don't guarantee iteration order)
   @weight_display_order ~w(idle state tier urgency velocity neglect)a
@@ -38,32 +38,36 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   @impl true
   def handle_event("save_weights", %{"weights" => weight_params}, socket) do
-    parsed =
-      weight_params
-      |> Enum.map(fn {k, v} -> {k, parse_float(v)} end)
-
-    invalid_keys =
-      parsed
-      |> Enum.filter(fn {_k, v} -> v == :error end)
-      |> Enum.map(fn {k, _} -> k end)
-
-    if invalid_keys != [] do
-      {:noreply,
-       put_flash(socket, :error, "Invalid numeric values for: #{Enum.join(invalid_keys, ", ")}")}
+    if not Authorization.can_modify_settings?(socket.assigns.current_operator) do
+      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
     else
-      weights = Map.new(parsed)
+      parsed =
+        weight_params
+        |> Enum.map(fn {k, v} -> {k, parse_float(v)} end)
 
-      case Settings.update_weights(weights) do
-        {:ok, _settings} ->
-          {:noreply,
-           socket
-           |> assign(:weights, weights)
-           |> assign(:editing_weights, false)
-           |> assign(:weight_form, to_form(weights, as: "weights"))
-           |> put_flash(:info, "Weights updated successfully")}
+      invalid_keys =
+        parsed
+        |> Enum.filter(fn {_k, v} -> v == :error end)
+        |> Enum.map(fn {k, _} -> k end)
 
-        {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "Failed to update weights")}
+      if invalid_keys != [] do
+        {:noreply,
+         put_flash(socket, :error, "Invalid numeric values for: #{Enum.join(invalid_keys, ", ")}")}
+      else
+        weights = Map.new(parsed)
+
+        case Settings.update_weights(weights) do
+          {:ok, _settings} ->
+            {:noreply,
+             socket
+             |> assign(:weights, weights)
+             |> assign(:editing_weights, false)
+             |> assign(:weight_form, to_form(weights, as: "weights"))
+             |> put_flash(:info, "Weights updated successfully")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Failed to update weights")}
+        end
       end
     end
   end
@@ -80,6 +84,14 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   @impl true
   def handle_event("save_thresholds", %{"thresholds" => threshold_params}, socket) do
+    if not Authorization.can_modify_settings?(socket.assigns.current_operator) do
+      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
+    else
+      save_thresholds(threshold_params, socket)
+    end
+  end
+
+  defp save_thresholds(threshold_params, socket) do
     parsed_values = [
       {"enterprise_warning", parse_int(threshold_params["enterprise_warning"])},
       {"enterprise_critical", parse_int(threshold_params["enterprise_critical"])},
