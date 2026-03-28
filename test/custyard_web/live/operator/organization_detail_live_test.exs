@@ -165,7 +165,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       html = view |> element("a", "Routes") |> render_click()
 
       # Admin should see a button/link to create a new route
-      assert html =~ "Add route" or html =~ "New route" or html =~ "Create route"
+      assert html =~ "New Route"
     end
 
     test "super_admin can see create route button", %{conn: conn, org: org} do
@@ -176,7 +176,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       html = view |> element("a", "Routes") |> render_click()
 
-      assert html =~ "Add route" or html =~ "New route" or html =~ "Create route"
+      assert html =~ "New Route"
     end
 
     test "admin can open create route form", %{conn: conn, org: org} do
@@ -191,7 +191,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       # Click the create button to show the inline form
       html =
         view
-        |> element("[data-testid=show-create-route-form]")
+        |> element("[data-testid=create-route-btn]")
         |> render_click()
 
       # Form should appear with project select and source select
@@ -211,19 +211,17 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       # Open create form
       view
-      |> element("[data-testid=show-create-route-form]")
+      |> element("[data-testid=create-route-btn]")
       |> render_click()
 
       # Fill and submit the form
       html =
         view
-        |> element("[data-testid=create-route-form]")
+        |> element("[data-testid=create-route-form] form")
         |> render_submit(%{
-          "route" => %{
-            "route_type" => "project",
-            "project_id" => to_string(project.id),
-            "source" => "lettermint"
-          }
+          "route_type" => "project",
+          "project_id" => to_string(project.id),
+          "source" => "lettermint"
         })
 
       # New route should appear in the list
@@ -236,19 +234,13 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       assert length(project_routes) >= 1
     end
 
-    test "agent cannot see create route button", %{conn: conn, org: org} do
+    test "agent cannot access organization detail page", %{conn: conn, org: org} do
       agent = create_agent(org)
       conn = authenticate_conn(conn, agent)
 
-      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
-
-      html = view |> element("a", "Routes") |> render_click()
-
-      # Agent should not see any create/add route controls
-      refute html =~ "Add route"
-      refute html =~ "New route"
-      refute html =~ "Create route"
-      refute has_element?(view, "[data-testid=show-create-route-form]")
+      # Agents are redirected by the :operator_admin live_session (require_admin)
+      assert {:error, {:redirect, %{to: "/operator"}}} =
+               live(conn, ~p"/operator/organizations/#{org.id}")
     end
   end
 
@@ -275,7 +267,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       # Toggle the notification webhook on
       view
-      |> element("[data-testid=toggle-webhook-#{route.id}-notification]")
+      |> element("[data-testid=webhook-toggle-btn-notification]")
       |> render_click()
 
       # Verify webhook was enabled in database
@@ -298,7 +290,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       # Toggle the sender_matching webhook off (it was enabled in setup)
       view
-      |> element("[data-testid=toggle-webhook-#{route.id}-sender_matching]")
+      |> element("[data-testid=webhook-toggle-btn-sender_matching]")
       |> render_click()
 
       # Verify webhook was disabled in database
@@ -310,19 +302,16 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       assert sender_webhook.enabled == false
     end
 
-    test "agent sees read-only webhook toggles", %{conn: conn, org: org, route: route} do
+    test "agent cannot access organization detail page for webhook toggles", %{
+      conn: conn,
+      org: org
+    } do
       agent = create_agent(org)
       conn = authenticate_conn(conn, agent)
 
-      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
-
-      html = view |> element("a", "Routes") |> render_click()
-
-      # Agent should see webhook status but toggles should be disabled
-      assert html =~ "sender_matching" or html =~ "Sender Matching"
-
-      # The toggle elements for agents should be disabled or absent
-      refute has_element?(view, "[data-testid=toggle-webhook-#{route.id}-sender_matching]")
+      # Agents are redirected by the :operator_admin live_session (require_admin)
+      assert {:error, {:redirect, %{to: "/operator"}}} =
+               live(conn, ~p"/operator/organizations/#{org.id}")
     end
   end
 
@@ -388,8 +377,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       view |> element("a", "Routes") |> render_click()
 
-      # The delete button for the last general route should be disabled or absent
-      refute has_element?(view, "[data-testid=delete-route-#{general_route.id}]")
+      # The delete button for the last general route should be disabled
+      assert has_element?(view, "[data-testid=delete-route-#{general_route.id}][disabled]")
 
       # Verify the route still exists
       assert InboundRoutes.get_route(general_route.id) != nil
@@ -415,16 +404,16 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       assert has_element?(view, "[data-testid=delete-route-#{general_route.id}]")
     end
 
-    test "agent cannot see delete button", %{conn: conn, org: org, project_route: project_route} do
+    test "agent cannot access organization detail page for deletion", %{
+      conn: conn,
+      org: org
+    } do
       agent = create_agent(org)
       conn = authenticate_conn(conn, agent)
 
-      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
-
-      view |> element("a", "Routes") |> render_click()
-
-      # Agent should not see any delete buttons
-      refute has_element?(view, "[data-testid=delete-route-#{project_route.id}]")
+      # Agents are redirected by the :operator_admin live_session (require_admin)
+      assert {:error, {:redirect, %{to: "/operator"}}} =
+               live(conn, ~p"/operator/organizations/#{org.id}")
     end
   end
 
@@ -447,7 +436,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       view |> element("a", "Routes") |> render_click()
 
       # A copy button (using the CopyToClipboard JS hook) should be next to the URL
-      assert has_element?(view, "[data-testid=copy-callback-url-#{route.id}]")
+      assert has_element?(view, "[data-testid=copy-url-#{route.id}]")
     end
 
     test "callback URL contains the route's token", %{conn: conn, org: org, route: route} do
@@ -505,25 +494,19 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       html = view |> element("a", "Routes") |> render_click()
 
       # Admin should see create and toggle controls
-      assert has_element?(view, "[data-testid=show-create-route-form]")
+      assert has_element?(view, "[data-testid=create-route-btn]")
     end
 
-    test "agent can view organization detail but has no mutation controls", %{
+    test "agent is redirected from organization detail", %{
       conn: conn,
       org: org
     } do
       agent = create_agent(org)
       conn = authenticate_conn(conn, agent)
 
-      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
-
-      html = view |> element("a", "Routes") |> render_click()
-
-      # Agent can see route information
-      assert html =~ "general"
-
-      # But has no mutation controls
-      refute has_element?(view, "[data-testid=show-create-route-form]")
+      # Agents are redirected by the :operator_admin live_session (require_admin)
+      assert {:error, {:redirect, %{to: "/operator"}}} =
+               live(conn, ~p"/operator/organizations/#{org.id}")
     end
   end
 end

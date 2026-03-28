@@ -6,7 +6,10 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   import CustyardWeb.OperatorComponents
 
+  require Logger
+
   alias Custyard.{Conversations, Organizations, Projects, InboundRoutes, Authorization}
+  alias Custyard.{InboundRoute, InboundRouteWebhook}
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -63,11 +66,13 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     routes = InboundRoutes.list_for_organization(org.id)
     projects = Projects.list_for_organization(org.id)
     can_manage = Authorization.can_manage_organization?(socket.assigns.current_operator, org.id)
+    general_route_count = Enum.count(routes, &(&1.route_type == :general))
 
     socket
     |> assign(:routes, routes)
     |> assign(:available_projects, projects)
     |> assign(:can_manage_routes, can_manage)
+    |> assign(:general_route_count, general_route_count)
     |> assign(:show_create_route_form, false)
     |> assign(:confirm_delete_route_id, nil)
   end
@@ -83,6 +88,10 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     {:noreply, assign(socket, :show_create_route_form, false)}
   end
 
+  @valid_route_types Enum.map(InboundRoute.route_types(), &to_string/1)
+  @valid_sources Enum.map(InboundRoute.sources(), &to_string/1)
+  @valid_purposes Enum.map(InboundRouteWebhook.purposes(), &to_string/1)
+
   def handle_event(
         "create_route",
         %{"route_type" => route_type, "source" => source} = params,
@@ -91,41 +100,48 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     if not socket.assigns.can_manage_routes do
       {:noreply, put_flash(socket, :error, "You do not have permission to create routes")}
     else
-      org = socket.assigns.organization
+      with :ok <- validate_param(route_type, @valid_route_types, "route_type"),
+           :ok <- validate_param(source, @valid_sources, "source") do
+        org = socket.assigns.organization
 
-      attrs = %{
-        organization_id: org.id,
-        route_type: String.to_existing_atom(route_type),
-        source: String.to_existing_atom(source)
-      }
+        attrs = %{
+          organization_id: org.id,
+          route_type: String.to_existing_atom(route_type),
+          source: String.to_existing_atom(source)
+        }
 
-      attrs =
-        case params do
-          %{"project_id" => project_id} when project_id != "" ->
-            Map.put(attrs, :project_id, String.to_integer(project_id))
+        attrs =
+          case params do
+            %{"project_id" => project_id} when project_id != "" ->
+              Map.put(attrs, :project_id, String.to_integer(project_id))
 
-          _ ->
-            attrs
+            _ ->
+              attrs
+          end
+
+        case InboundRoutes.create_route(attrs) do
+          {:ok, _route} ->
+            socket =
+              socket
+              |> put_flash(:info, "Route created successfully")
+              |> load_tab_data(org, "routes")
+
+            {:noreply, socket}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            message =
+              Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+              |> Enum.map_join(", ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+
+            {:noreply, put_flash(socket, :error, "Failed to create route: #{message}")}
+
+          {:error, reason} ->
+            Logger.error("Failed to create route: #{inspect(reason)}")
+            {:noreply, put_flash(socket, :error, "Failed to create route")}
         end
-
-      case InboundRoutes.create_route(attrs) do
-        {:ok, _route} ->
-          socket =
-            socket
-            |> put_flash(:info, "Route created successfully")
-            |> load_tab_data(org, "routes")
-
-          {:noreply, socket}
-
-        {:error, %Ecto.Changeset{} = changeset} ->
-          message =
-            Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
-            |> Enum.map_join(", ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
-
-          {:noreply, put_flash(socket, :error, "Failed to create route: #{message}")}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Failed to create route: #{inspect(reason)}")}
+      else
+        {:error, message} ->
+          {:noreply, put_flash(socket, :error, message)}
       end
     end
   end
@@ -138,21 +154,27 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     if not socket.assigns.can_manage_routes do
       {:noreply, put_flash(socket, :error, "You do not have permission to manage webhooks")}
     else
-      route = InboundRoutes.get_route!(String.to_integer(route_id))
-      purpose_atom = String.to_existing_atom(purpose)
+      with :ok <- validate_param(purpose, @valid_purposes, "purpose") do
+        route = InboundRoutes.get_route!(String.to_integer(route_id))
+        purpose_atom = String.to_existing_atom(purpose)
 
-      result =
-        case enabled do
-          "true" -> InboundRoutes.enable_webhook(route, purpose_atom)
-          "false" -> InboundRoutes.disable_webhook(route, purpose_atom)
+        result =
+          case enabled do
+            "true" -> InboundRoutes.enable_webhook(route, purpose_atom)
+            "false" -> InboundRoutes.disable_webhook(route, purpose_atom)
+          end
+
+        case result do
+          {:ok, _webhook} ->
+            {:noreply, load_tab_data(socket, socket.assigns.organization, "routes")}
+
+          {:error, reason} ->
+            Logger.error("Failed to toggle webhook: #{inspect(reason)}")
+            {:noreply, put_flash(socket, :error, "Failed to toggle webhook")}
         end
-
-      case result do
-        {:ok, _webhook} ->
-          {:noreply, load_tab_data(socket, socket.assigns.organization, "routes")}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Failed to toggle webhook: #{inspect(reason)}")}
+      else
+        {:error, message} ->
+          {:noreply, put_flash(socket, :error, message)}
       end
     end
   end
@@ -190,7 +212,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             {:noreply, socket}
 
           {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Failed to delete route: #{inspect(reason)}")}
+            Logger.error("Failed to delete route: #{inspect(reason)}")
+            {:noreply, put_flash(socket, :error, "Failed to delete route")}
         end
       end
     end
@@ -300,6 +323,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
               show_create_form={@show_create_route_form}
               confirm_delete_route_id={@confirm_delete_route_id}
               organization={@organization}
+              general_route_count={@general_route_count}
             />
         <% end %>
       </div>
@@ -474,7 +498,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         <div class="flex items-start justify-between">
           <div class="flex-1 min-w-0">
             <div class="font-medium text-gray-900 dark:text-zinc-100">
-              {project.name}
+              {project.title}
             </div>
             <%= if project.description do %>
               <div class="text-sm text-gray-600 dark:text-zinc-400 mt-1 line-clamp-2">
@@ -499,6 +523,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   attr :show_create_form, :boolean, required: true
   attr :confirm_delete_route_id, :any, required: true
   attr :organization, :map, required: true
+  attr :general_route_count, :integer, required: true
 
   defp routes_tab(assigns) do
     ~H"""
@@ -563,7 +588,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
               >
                 <option value="">None</option>
                 <%= for project <- @available_projects do %>
-                  <option value={project.id}>{project.name}</option>
+                  <option value={project.id}>{project.title}</option>
                 <% end %>
               </select>
             </div>
@@ -627,7 +652,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
               :if={route.project}
               class="text-xs text-gray-500 dark:text-zinc-400"
             >
-              / {route.project.name}
+              / {route.project.title}
             </span>
           </div>
           <div :if={@can_manage} class="flex items-center gap-2">
@@ -650,7 +675,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
               </button>
             <% else %>
               <%!-- Disable delete for last general route --%>
-              <% is_last = InboundRoutes.is_last_general_route?(route) %>
+              <% is_last = route.route_type == :general and @general_route_count <= 1 %>
               <button
                 phx-click="confirm_delete_route"
                 phx-value-id={route.id}
@@ -716,5 +741,11 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
       </div>
     </div>
     """
+  end
+
+  defp validate_param(value, allowed, field_name) do
+    if value in allowed,
+      do: :ok,
+      else: {:error, "Invalid #{field_name}: #{value}"}
   end
 end
