@@ -1,4 +1,8 @@
 defmodule Custyard.Repo.Migrations.AddTeamsAndOperatorRoles do
+  # Note: Module name mentions "OperatorRoles" for historical reasons.
+  # The original design included role changes in this migration, but they
+  # were moved to a separate migration. Renaming would require re-running
+  # the migration everywhere, so the name is left as-is.
   use Ecto.Migration
 
   def change do

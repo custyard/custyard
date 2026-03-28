@@ -161,6 +161,13 @@ defmodule Custyard.InboundRoutes do
 
   @doc """
   Generate the full callback URL for a route.
+
+  The `source` query param is for logging/debugging convenience, not routing
+  logic — the callback_token uniquely identifies the route and adapter.
+
+  Currently hardcoded to `lettermint`. If multi-source routes become a real
+  use case (Zendesk, Intercom, Slack using this same callback pattern), this
+  can be derived from `route.source` instead.
   """
   def callback_url(%InboundRoute{} = route) do
     "#{CustyardWeb.Endpoint.url()}/api/webhook/route/#{route.callback_token}?source=lettermint"
