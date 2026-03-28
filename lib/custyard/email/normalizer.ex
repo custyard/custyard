@@ -38,7 +38,7 @@ defmodule Custyard.Email.Normalizer do
 
   def strip_html(html) do
     html
-    |> String.replace(~r/<[^>]+>/, "")
+    |> String.replace(~r/<[^>]+>/, " ")
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
   end
