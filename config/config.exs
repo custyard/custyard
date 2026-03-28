@@ -68,6 +68,12 @@ config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Local
 # Disable Swoosh API client (we don't need the API routes)
 config :swoosh, :api_client, false
 
+# Lettermint API client (route management)
+# MockClient only for dev/test; production requires LETTERMINT_API_URL/KEY via runtime.exs
+if config_env() in [:dev, :test] do
+  config :custyard, :lettermint, client: Custyard.Lettermint.MockClient
+end
+
 # LMTP server configuration (for receiving emails from MTA)
 # TLS options (certfile, keyfile, etc.) can be configured for STARTTLS support
 config :custyard, :lmtp,

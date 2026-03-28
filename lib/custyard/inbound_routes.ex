@@ -2,11 +2,22 @@ defmodule Custyard.InboundRoutes do
   @moduledoc """
   Context for inbound route management.
 
+  Routes are invisible infrastructure — operators never interact with them
+  directly. Route lifecycle is tied to organization and project lifecycle:
+  creating an org auto-provisions a general route via the Lettermint API.
+
+  Note: Deleting an organization cascades to its routes in the local database
+  via foreign key constraints, but does not call the Lettermint API to remove
+  remote routes. Use `delete_route/1` directly for explicit cleanup.
+
   Provides CRUD operations for InboundRoute and InboundRouteWebhook,
   following the context pattern used elsewhere in the application.
   """
 
+  require Logger
+
   alias Custyard.{InboundRoute, InboundRouteWebhook, Repo}
+  alias Custyard.Lettermint.Client
   import Ecto.Query
 
   # --- InboundRoute Operations ---
@@ -62,6 +73,9 @@ defmodule Custyard.InboundRoutes do
   @doc """
   Create a new inbound route.
 
+  Calls the Lettermint API to create the remote route, then stores
+  the local record with the returned `lettermint_route_id`.
+
   ## Examples
 
       create_route(%{
@@ -76,9 +90,27 @@ defmodule Custyard.InboundRoutes do
       })
   """
   def create_route(attrs) when is_map(attrs) do
-    %InboundRoute{}
-    |> InboundRoute.changeset(attrs)
-    |> Repo.insert()
+    # Validate changeset first to avoid orphaning remote routes on validation failure
+    changeset = InboundRoute.changeset(%InboundRoute{}, attrs)
+
+    if changeset.valid? do
+      lettermint_client = Client.client()
+
+      case lettermint_client.create_route(%{
+             organization_id: attrs[:organization_id] || attrs["organization_id"],
+             type: attrs[:route_type] || attrs["route_type"]
+           }) do
+        {:ok, remote} ->
+          changeset
+          |> Ecto.Changeset.put_change(:lettermint_route_id, remote["id"])
+          |> Repo.insert()
+
+        {:error, _reason} = error ->
+          error
+      end
+    else
+      {:error, changeset}
+    end
   end
 
   @doc """
@@ -92,10 +124,31 @@ defmodule Custyard.InboundRoutes do
 
   @doc """
   Delete an inbound route.
+
+  Calls the Lettermint API to remove the remote route (if a
+  `lettermint_route_id` is present), then deletes the local record.
   Associated webhooks are deleted via database cascade.
+
+  Returns `{:error, reason}` if remote deletion fails, leaving local
+  record intact to prevent orphaned remote routes.
   """
   def delete_route(%InboundRoute{} = route) do
-    Repo.delete(route)
+    with :ok <- delete_remote_route(route) do
+      Repo.delete(route)
+    end
+  end
+
+  defp delete_remote_route(%InboundRoute{lettermint_route_id: nil}), do: :ok
+
+  defp delete_remote_route(%InboundRoute{lettermint_route_id: route_id}) do
+    case Client.client().delete_route(route_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} = error ->
+        Logger.error("Failed to delete Lettermint route #{route_id}: #{inspect(reason)}")
+        error
+    end
   end
 
   @doc """
@@ -104,6 +157,20 @@ defmodule Custyard.InboundRoutes do
   """
   def change_route(%InboundRoute{} = route, attrs \\ %{}) do
     InboundRoute.changeset(route, attrs)
+  end
+
+  @doc """
+  Generate the full callback URL for a route.
+
+  The `source` query param is for logging/debugging convenience, not routing
+  logic — the callback_token uniquely identifies the route and adapter.
+
+  Currently hardcoded to `lettermint`. If multi-source routes become a real
+  use case (Zendesk, Intercom, Slack using this same callback pattern), this
+  can be derived from `route.source` instead.
+  """
+  def callback_url(%InboundRoute{} = route) do
+    "#{CustyardWeb.Endpoint.url()}/api/webhook/route/#{route.callback_token}?source=lettermint"
   end
 
   # --- InboundRouteWebhook Operations ---
@@ -168,17 +235,54 @@ defmodule Custyard.InboundRoutes do
   end
 
   @doc """
-  Enable a webhook.
+  Enable a webhook by struct.
   """
   def enable_webhook(%InboundRouteWebhook{} = webhook) do
     update_webhook(webhook, %{enabled: true})
   end
 
   @doc """
-  Disable a webhook.
+  Enable a webhook purpose on a route.
+
+  Uses upsert semantics to handle concurrent calls safely: if the webhook
+  already exists, sets `enabled: true`; otherwise creates a new one.
+  """
+  def enable_webhook(%InboundRoute{} = route, purpose) do
+    params = %{
+      inbound_route_id: route.id,
+      purpose: purpose,
+      enabled: true
+    }
+
+    %InboundRouteWebhook{}
+    |> InboundRouteWebhook.changeset(params)
+    |> Repo.insert(
+      on_conflict: [set: [enabled: true, updated_at: DateTime.utc_now()]],
+      conflict_target: [:inbound_route_id, :purpose],
+      returning: true
+    )
+  end
+
+  @doc """
+  Disable a webhook by struct.
   """
   def disable_webhook(%InboundRouteWebhook{} = webhook) do
     update_webhook(webhook, %{enabled: false})
+  end
+
+  @doc """
+  Disable a webhook purpose on a route.
+
+  Returns `{:error, :not_found}` if no webhook exists for this purpose.
+  """
+  def disable_webhook(%InboundRoute{} = route, purpose) do
+    case get_webhook_by_purpose(route, purpose) do
+      nil ->
+        {:error, :not_found}
+
+      webhook ->
+        disable_webhook(webhook)
+    end
   end
 
   @doc """
@@ -230,5 +334,14 @@ defmodule Custyard.InboundRoutes do
       preload: [:webhooks]
     )
     |> Repo.one()
+  end
+
+  # --- Private Helpers ---
+
+  defp get_webhook_by_purpose(%InboundRoute{} = route, purpose) do
+    Repo.get_by(InboundRouteWebhook,
+      inbound_route_id: route.id,
+      purpose: purpose
+    )
   end
 end

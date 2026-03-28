@@ -96,6 +96,21 @@ defmodule Custyard.OrganizationsTest do
       assert org.token != nil
     end
 
+    test "auto-provisions a default general inbound route" do
+      attrs = build_organization(name: "Auto Route Corp")
+
+      assert {:ok, org} = Organizations.create_organization(attrs)
+
+      routes = Custyard.InboundRoutes.list_for_organization(org.id)
+      assert length(routes) == 1
+
+      [route] = routes
+      assert route.route_type == :general
+      assert route.organization_id == org.id
+      assert route.callback_token != nil
+      assert route.lettermint_route_id != nil
+    end
+
     test "returns error changeset for invalid attributes" do
       attrs = %{tier: :standard}
 

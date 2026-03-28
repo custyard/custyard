@@ -3,6 +3,7 @@ defmodule Custyard.InboundRoutesTest do
 
   alias Custyard.InboundRoutes
   alias Custyard.InboundRoute
+  alias Custyard.InboundRouteWebhook
   alias Custyard.Factory
 
   describe "route operations" do
@@ -68,6 +69,19 @@ defmodule Custyard.InboundRoutesTest do
       assert String.length(route.callback_token) > 20
     end
 
+    test "create_route sets lettermint_route_id from API response" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+
+      assert route.lettermint_route_id != nil
+      assert String.starts_with?(route.lettermint_route_id, "lm_route_")
+    end
+
     test "create_route accepts custom callback_token" do
       org = Factory.insert_organization()
       # Token must be at least 32 chars for security
@@ -110,6 +124,33 @@ defmodule Custyard.InboundRoutesTest do
       assert %{project_id: ["is required for project routes"]} = errors_on(changeset)
     end
 
+    test "create_route creates project route with project_id" do
+      org = Factory.insert_organization()
+      project = Factory.insert_project(organization_id: org.id)
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :project,
+          project_id: project.id
+        })
+
+      assert route.route_type == :project
+      assert route.project_id == project.id
+    end
+
+    test "create_route creates disambiguation route" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :disambiguation
+        })
+
+      assert route.route_type == :disambiguation
+    end
+
     test "update_route updates attributes" do
       org = Factory.insert_organization()
       {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
@@ -128,10 +169,29 @@ defmodule Custyard.InboundRoutesTest do
       assert InboundRoutes.get_route(route.id) == nil
     end
 
+    test "delete_route cascades deletion to webhooks" do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, webhook} = InboundRoutes.enable_webhook(route, :sender_matching)
+
+      InboundRoutes.delete_route(route)
+
+      assert Custyard.Repo.get(InboundRouteWebhook, webhook.id) == nil
+    end
+
     test "change_route returns changeset" do
       changeset = InboundRoutes.change_route(%InboundRoute{})
 
       assert %Ecto.Changeset{} = changeset
+    end
+
+    test "callback_url returns URL with callback_token" do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      url = InboundRoutes.callback_url(route)
+      assert url =~ "/api/webhook/route/#{route.callback_token}"
+      assert url =~ "source=lettermint"
     end
   end
 
@@ -190,7 +250,7 @@ defmodule Custyard.InboundRoutesTest do
       assert updated.endpoint_url == "https://new.example.com/hook"
     end
 
-    test "enable_webhook sets enabled to true", %{route: route} do
+    test "enable_webhook/1 sets enabled to true", %{route: route} do
       {:ok, webhook} =
         InboundRoutes.create_webhook(%{
           inbound_route_id: route.id,
@@ -203,7 +263,30 @@ defmodule Custyard.InboundRoutesTest do
       assert enabled.enabled == true
     end
 
-    test "disable_webhook sets enabled to false", %{route: route} do
+    test "enable_webhook/2 creates webhook if not exists", %{route: route} do
+      {:ok, webhook} = InboundRoutes.enable_webhook(route, :sender_matching)
+
+      assert webhook.purpose == :sender_matching
+      assert webhook.enabled == true
+      assert webhook.inbound_route_id == route.id
+    end
+
+    test "enable_webhook/2 re-enables disabled webhook", %{route: route} do
+      {:ok, _} = InboundRoutes.enable_webhook(route, :notification)
+      {:ok, _} = InboundRoutes.disable_webhook(route, :notification)
+
+      {:ok, webhook} = InboundRoutes.enable_webhook(route, :notification)
+      assert webhook.enabled == true
+    end
+
+    test "enable_webhook/2 supports all webhook purposes", %{route: route} do
+      for purpose <- [:sender_matching, :enrichment, :notification, :audit, :disambiguation] do
+        {:ok, webhook} = InboundRoutes.enable_webhook(route, purpose)
+        assert webhook.purpose == purpose
+      end
+    end
+
+    test "disable_webhook/1 sets enabled to false", %{route: route} do
       {:ok, webhook} =
         InboundRoutes.create_webhook(%{
           inbound_route_id: route.id,
@@ -214,6 +297,17 @@ defmodule Custyard.InboundRoutesTest do
       {:ok, disabled} = InboundRoutes.disable_webhook(webhook)
 
       assert disabled.enabled == false
+    end
+
+    test "disable_webhook/2 disables existing webhook", %{route: route} do
+      {:ok, _} = InboundRoutes.enable_webhook(route, :sender_matching)
+
+      {:ok, webhook} = InboundRoutes.disable_webhook(route, :sender_matching)
+      assert webhook.enabled == false
+    end
+
+    test "disable_webhook/2 returns error when webhook does not exist", %{route: route} do
+      assert {:error, :not_found} = InboundRoutes.disable_webhook(route, :sender_matching)
     end
 
     test "delete_webhook removes the webhook", %{route: route} do
@@ -280,6 +374,187 @@ defmodule Custyard.InboundRoutesTest do
 
       assert route.route_type == :project
       assert route.project_id == project.id
+    end
+  end
+
+  describe "create_route validation-first behavior" do
+    test "returns changeset error without calling API when attrs are invalid" do
+      org = Factory.insert_organization()
+
+      # Use the FailingMockClient to detect if API was called
+      # If API is called, it would return an error tuple, not a changeset
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, original_config)
+      end)
+
+      # Missing organization_id - validation should fail before API call
+      {:error, changeset} = InboundRoutes.create_route(%{route_type: :general})
+
+      # Should be a changeset error (validation failed), not an API error
+      assert %Ecto.Changeset{} = changeset
+      assert %{organization_id: ["can't be blank"]} = errors_on(changeset)
+
+      # Verify no route was created
+      assert [] = InboundRoutes.list_for_organization(org.id)
+    end
+
+    test "returns changeset error for project route without project_id before calling API" do
+      org = Factory.insert_organization()
+
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, original_config)
+      end)
+
+      {:error, changeset} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :project
+          # Missing project_id
+        })
+
+      assert %Ecto.Changeset{} = changeset
+      assert %{project_id: ["is required for project routes"]} = errors_on(changeset)
+    end
+
+    test "returns changeset error for short callback_token before calling API" do
+      org = Factory.insert_organization()
+
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, original_config)
+      end)
+
+      {:error, changeset} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          callback_token: "too-short"
+        })
+
+      assert %Ecto.Changeset{} = changeset
+      assert %{callback_token: [msg]} = errors_on(changeset)
+      assert msg =~ "at least 32 characters"
+    end
+
+    test "returns API error when validation passes but API fails" do
+      org = Factory.insert_organization()
+
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, original_config)
+      end)
+
+      # Valid attrs - should pass validation and call API, which will fail
+      {:error, reason} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+
+      # Should be an API error tuple, not a changeset
+      assert {:api_error, 503, "Service Unavailable"} = reason
+    end
+  end
+
+  describe "delete_route failure handling" do
+    test "returns error and preserves local record when API deletion fails" do
+      org = Factory.insert_organization()
+
+      # First create a route with the normal mock client
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+
+      # Verify route exists with a lettermint_route_id
+      assert route.lettermint_route_id != nil
+      route_id = route.id
+
+      # Now switch to failing mock client for delete
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, original_config)
+      end)
+
+      # Attempt to delete - should fail
+      {:error, reason} = InboundRoutes.delete_route(route)
+
+      # Should return the API error
+      assert {:api_error, 503, "Service Unavailable"} = reason
+
+      # Local record should still exist
+      assert InboundRoutes.get_route(route_id) != nil
+    end
+
+    test "returns specific API error when remote deletion fails with custom error" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+
+      route_id = route.id
+
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, original_config)
+      end)
+
+      # Configure a specific error
+      Process.put(
+        {:failing_mock_client, :delete_route},
+        {:error, {:api_error, 500, "Internal Server Error"}}
+      )
+
+      {:error, reason} = InboundRoutes.delete_route(route)
+
+      assert {:api_error, 500, "Internal Server Error"} = reason
+      assert InboundRoutes.get_route(route_id) != nil
+    end
+
+    test "succeeds when route has no lettermint_route_id" do
+      org = Factory.insert_organization()
+
+      # Create a route directly in DB without lettermint_route_id
+      route =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{
+          organization_id: org.id,
+          route_type: :general,
+          lettermint_route_id: nil
+        })
+        |> Repo.insert!()
+
+      # Switch to failing mock - but it shouldn't be called
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, original_config)
+      end)
+
+      # Should succeed because no remote route to delete
+      {:ok, deleted} = InboundRoutes.delete_route(route)
+
+      assert deleted.id == route.id
+      assert InboundRoutes.get_route(route.id) == nil
     end
   end
 end

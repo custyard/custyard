@@ -260,6 +260,88 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Build inbound route attributes.
+
+  ## Examples
+
+      build_inbound_route()
+      build_inbound_route(route_type: :project, project_id: 1)
+  """
+  def build_inbound_route(overrides \\ []) do
+    defaults = %{
+      route_type: :general,
+      organization_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Insert an inbound route into the database.
+  Requires organization_id or will create one.
+  """
+  def insert_inbound_route(overrides \\ []) do
+    overrides = ensure_organization(overrides)
+
+    %Custyard.InboundRoute{}
+    |> Custyard.InboundRoute.changeset(build_inbound_route(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
+  Build inbound route webhook attributes.
+  """
+  def build_inbound_route_webhook(overrides \\ []) do
+    defaults = %{
+      purpose: :sender_matching,
+      enabled: true,
+      inbound_route_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Insert an inbound route webhook into the database.
+  Requires inbound_route_id or will create one.
+  """
+  def insert_inbound_route_webhook(overrides \\ []) do
+    overrides = ensure_inbound_route(overrides)
+
+    %Custyard.InboundRouteWebhook{}
+    |> Custyard.InboundRouteWebhook.changeset(build_inbound_route_webhook(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
+  Build team attributes.
+
+  ## Examples
+
+      build_team()
+      build_team(name: "Support Team")
+  """
+  def build_team(overrides \\ []) do
+    defaults = %{
+      name: "Team #{unique_id()}"
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Insert a team into the database.
+  Requires organization_id or will create one.
+  """
+  def insert_team(overrides \\ []) do
+    overrides = ensure_organization(overrides)
+
+    %Custyard.Team{}
+    |> Custyard.Team.changeset(build_team(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
   Insert an audit event into the database.
   """
   def insert_audit_event(overrides \\ []) do
@@ -324,6 +406,15 @@ defmodule Custyard.Factory do
     else
       project = insert_project()
       Keyword.put(overrides, :project_id, project.id)
+    end
+  end
+
+  defp ensure_inbound_route(overrides) do
+    if Keyword.has_key?(overrides, :inbound_route_id) do
+      overrides
+    else
+      route = insert_inbound_route()
+      Keyword.put(overrides, :inbound_route_id, route.id)
     end
   end
 end

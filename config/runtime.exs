@@ -129,6 +129,32 @@ if imap_enabled do
     ssl: System.get_env("IMAP_SSL") != "false"
 end
 
+# Lettermint API configuration (route management)
+lettermint_api_url = System.get_env("LETTERMINT_API_URL")
+lettermint_api_key = System.get_env("LETTERMINT_API_KEY")
+
+cond do
+  lettermint_api_url && lettermint_api_key ->
+    config :custyard, :lettermint,
+      client: Custyard.Lettermint.HttpClient,
+      api_url: lettermint_api_url,
+      api_key: lettermint_api_key
+
+  config_env() == :prod ->
+    raise """
+    Lettermint is not configured in production.
+
+    Route provisioning requires:
+      - LETTERMINT_API_URL
+      - LETTERMINT_API_KEY
+
+    Please set these environment variables.
+    """
+
+  true ->
+    :ok
+end
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||

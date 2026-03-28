@@ -19,8 +19,8 @@ defmodule Custyard.Repo.Migrations.MakeMessageIdUnique do
 
     # Create partial unique index (only enforced when message_id is not null)
     create unique_index(:messages, [:message_id],
-      where: "message_id IS NOT NULL",
-      name: :messages_message_id_unique_index
-    )
+             where: "message_id IS NOT NULL",
+             name: :messages_message_id_unique_index
+           )
   end
 end
