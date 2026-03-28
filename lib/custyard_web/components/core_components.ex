@@ -753,6 +753,81 @@ defmodule CustyardWeb.CoreComponents do
   end
 
   @doc """
+  Renders a banner/callout for persistent informational messages.
+
+  Unlike flash notices (which are dismissable and ephemeral), banners are
+  embedded in page layout to convey ongoing system state.
+
+  ## Examples
+
+      <.banner kind={:warning} title="Lettermint not configured">
+        Route provisioning is disabled. Set LETTERMINT_API_URL and LETTERMINT_API_KEY.
+      </.banner>
+
+      <.banner kind={:note}>
+        This is an informational note without a title.
+      </.banner>
+  """
+  attr :kind, :atom,
+    required: true,
+    values: [:note, :warning, :success, :error, :caution]
+
+  attr :title, :string, default: nil
+  attr :class, :string, default: nil
+  attr :rest, :global
+
+  slot :inner_block, required: true
+
+  def banner(assigns) do
+    ~H"""
+    <div
+      role="alert"
+      class={[
+        "rounded-lg p-4 text-sm ring-1",
+        banner_colors(@kind),
+        @class
+      ]}
+      data-testid={"banner-#{@kind}"}
+      {@rest}
+    >
+      <div class="flex gap-3">
+        <.icon name={banner_icon(@kind)} class="mt-0.5 h-5 w-5 flex-none" />
+        <div>
+          <p :if={@title} class="font-semibold">{@title}</p>
+          <p class={[@title && "mt-1"]}>{render_slot(@inner_block)}</p>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp banner_colors(:note),
+    do:
+      "bg-blue-50 dark:bg-blue-950 text-blue-800 dark:text-blue-300 ring-blue-500/30 dark:ring-blue-400/20"
+
+  defp banner_colors(:warning),
+    do:
+      "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-300 ring-amber-500/30 dark:ring-amber-400/20"
+
+  defp banner_colors(:success),
+    do:
+      "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 ring-emerald-500/30 dark:ring-emerald-400/20"
+
+  defp banner_colors(:error),
+    do:
+      "bg-rose-50 dark:bg-rose-950 text-rose-800 dark:text-rose-300 ring-rose-500/30 dark:ring-rose-400/20"
+
+  defp banner_colors(:caution),
+    do:
+      "bg-orange-50 dark:bg-orange-950 text-orange-800 dark:text-orange-300 ring-orange-500/30 dark:ring-orange-400/20"
+
+  defp banner_icon(:note), do: "hero-information-circle-mini"
+  defp banner_icon(:warning), do: "hero-exclamation-triangle-mini"
+  defp banner_icon(:success), do: "hero-check-circle-mini"
+  defp banner_icon(:error), do: "hero-x-circle-mini"
+  defp banner_icon(:caution), do: "hero-exclamation-circle-mini"
+
+  @doc """
   Renders a task state badge with consistent styling.
 
   ## Examples

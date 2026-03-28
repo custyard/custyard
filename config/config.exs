@@ -69,9 +69,10 @@ config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Local
 config :swoosh, :api_client, false
 
 # Lettermint API client (route management)
-# MockClient only for dev/test; production requires LETTERMINT_API_URL/KEY via runtime.exs
+# MockClient for dev/test by default; runtime.exs overrides when env vars are set
 if config_env() in [:dev, :test] do
   config :custyard, :lettermint, client: Custyard.Lettermint.MockClient
+  config :custyard, :lettermint_configured, false
 end
 
 # LMTP server configuration (for receiving emails from MTA)

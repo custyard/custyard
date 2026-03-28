@@ -291,13 +291,13 @@ defmodule Mix.Tasks.Fly.SecretsTest do
     test "handles values with equals signs" do
       content = """
       DATABASE_URL=postgres://localhost/db?pool_size=10&timeout=5000
-      LETTERMINT_BASE_URL=https://api.lettermint.co?version=v1
+      LETTERMINT_API_URL=https://api.lettermint.co?version=v1
       """
 
       vars = parse_env(content)
 
       assert {"DATABASE_URL", "postgres://localhost/db?pool_size=10&timeout=5000"} in vars
-      assert {"LETTERMINT_BASE_URL", "https://api.lettermint.co?version=v1"} in vars
+      assert {"LETTERMINT_API_URL", "https://api.lettermint.co?version=v1"} in vars
     end
 
     test "handles values with multiple equals signs in URL" do
@@ -484,7 +484,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
         IMAP_POLL_INTERVAL
         IMAP_SSL
         IMAP_USERNAME
-        LETTERMINT_BASE_URL
+        LETTERMINT_API_URL
         SMTP_HOST
         SMTP_PORT
         SMTP_USERNAME
@@ -1026,7 +1026,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       IMAP_POLL_INTERVAL
       IMAP_SSL
       IMAP_USERNAME
-      LETTERMINT_BASE_URL
+      LETTERMINT_API_URL
       SMTP_HOST
       SMTP_PORT
       SMTP_USERNAME

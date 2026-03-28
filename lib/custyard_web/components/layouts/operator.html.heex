@@ -199,6 +199,16 @@ inactive_class =
   <%!-- Flash messages --%>
   <.flash_group flash={@flash} />
 
+  <%!-- Lettermint configuration warning --%>
+  <.banner
+    :if={not Application.get_env(:custyard, :lettermint_configured, false)}
+    kind={:warning}
+    title="Lettermint not configured"
+    class="mx-4 mt-2"
+  >
+    Route provisioning is disabled. Set LETTERMINT_API_URL and LETTERMINT_API_KEY to enable it.
+  </.banner>
+
   <%!-- Content --%>
   <div class="flex-1 flex flex-col overflow-hidden" data-testid="operator-layout-content">
     {@inner_content}
