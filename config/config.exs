@@ -71,8 +71,7 @@ config :swoosh, :api_client, false
 
 # Lettermint API client (route management)
 # Uses MockClient by default; overridden in prod via runtime.exs
-config :custyard, :lettermint,
-  client: Custyard.Lettermint.MockClient
+config :custyard, :lettermint, client: Custyard.Lettermint.MockClient
 
 # LMTP server configuration (for receiving emails from MTA)
 # TLS options (certfile, keyfile, etc.) can be configured for STARTTLS support
