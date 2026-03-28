@@ -4,8 +4,11 @@ defmodule Custyard.InboundRoutes do
 
   Routes are invisible infrastructure — operators never interact with them
   directly. Route lifecycle is tied to organization and project lifecycle:
-  creating an org auto-provisions a general route via the Lettermint API,
-  and deleting an org cascades to its routes.
+  creating an org auto-provisions a general route via the Lettermint API.
+
+  Note: Deleting an organization cascades to its routes in the local database
+  via foreign key constraints, but does not call the Lettermint API to remove
+  remote routes. Use `delete_route/1` directly for explicit cleanup.
 
   Provides CRUD operations for InboundRoute and InboundRouteWebhook,
   following the context pattern used elsewhere in the application.
@@ -87,18 +90,26 @@ defmodule Custyard.InboundRoutes do
       })
   """
   def create_route(attrs) when is_map(attrs) do
-    lettermint_client = Client.client()
+    # Validate changeset first to avoid orphaning remote routes on validation failure
+    changeset = InboundRoute.changeset(%InboundRoute{}, attrs)
 
-    with {:ok, remote} <-
-           lettermint_client.create_route(%{
+    if changeset.valid? do
+      lettermint_client = Client.client()
+
+      case lettermint_client.create_route(%{
              organization_id: attrs[:organization_id] || attrs["organization_id"],
              type: attrs[:route_type] || attrs["route_type"]
            }) do
-      attrs_with_lettermint = Map.put(attrs, :lettermint_route_id, remote["id"])
+        {:ok, remote} ->
+          changeset
+          |> Ecto.Changeset.put_change(:lettermint_route_id, remote["id"])
+          |> Repo.insert()
 
-      %InboundRoute{}
-      |> InboundRoute.changeset(attrs_with_lettermint)
-      |> Repo.insert()
+        {:error, _reason} = error ->
+          error
+      end
+    else
+      {:error, changeset}
     end
   end
 
@@ -117,21 +128,27 @@ defmodule Custyard.InboundRoutes do
   Calls the Lettermint API to remove the remote route (if a
   `lettermint_route_id` is present), then deletes the local record.
   Associated webhooks are deleted via database cascade.
+
+  Returns `{:error, reason}` if remote deletion fails, leaving local
+  record intact to prevent orphaned remote routes.
   """
   def delete_route(%InboundRoute{} = route) do
-    if route.lettermint_route_id do
-      case Client.client().delete_route(route.lettermint_route_id) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.error(
-            "Failed to delete Lettermint route #{route.lettermint_route_id}: #{inspect(reason)}"
-          )
-      end
+    with :ok <- delete_remote_route(route) do
+      Repo.delete(route)
     end
+  end
 
-    Repo.delete(route)
+  defp delete_remote_route(%InboundRoute{lettermint_route_id: nil}), do: :ok
+
+  defp delete_remote_route(%InboundRoute{lettermint_route_id: route_id}) do
+    case Client.client().delete_route(route_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} = error ->
+        Logger.error("Failed to delete Lettermint route #{route_id}: #{inspect(reason)}")
+        error
+    end
   end
 
   @doc """
