@@ -38,21 +38,30 @@ defmodule CustyardWeb.Live.PortalAuth do
                |> assign(:site_name, org.name)
                |> assign_portal_paths(org, is_custom_domain)}
             else
-              # URL token doesn't match session - redirect to correct portal
-              {:halt, Phoenix.LiveView.redirect(socket, to: "/p/#{url_token}")}
+              # URL token doesn't match session - redirect to session org's portal
+              # (not the URL token, which would create a loop or wrong-org confusion)
+              {:halt, Phoenix.LiveView.redirect(socket, to: "/p/#{org.token}")}
             end
         end
     end
   end
 
-  # Always use token-based paths. Custom domain path rewriting (/ instead of
-  # /p/:token) requires a CustomDomain plug + router scope that don't exist yet.
-  # When that lands, this function can branch on is_custom_domain again.
-  defp assign_portal_paths(socket, org, _is_custom_domain) do
-    token_path = "/p/#{org.token}"
+  # Generate portal navigation paths based on domain type.
+  # Custom domains get root-relative paths (/) to preserve white-label branding.
+  # Standard access gets token-prefixed paths (/p/:token).
+  defp assign_portal_paths(socket, org, is_custom_domain) do
+    if is_custom_domain do
+      # Custom domain: use root-relative paths to avoid exposing org token
+      socket
+      |> assign(:portal_path, "/")
+      |> assign(:portal_home_path, "/")
+    else
+      # Standard access: use token-prefixed paths
+      token_path = "/p/#{org.token}"
 
-    socket
-    |> assign(:portal_path, token_path)
-    |> assign(:portal_home_path, token_path)
+      socket
+      |> assign(:portal_path, token_path)
+      |> assign(:portal_home_path, token_path)
+    end
   end
 end

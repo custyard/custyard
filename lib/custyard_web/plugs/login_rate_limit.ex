@@ -131,11 +131,31 @@ defmodule CustyardWeb.Plugs.LoginRateLimit do
   end
 
   # Extract the real client IP from proxy headers or fall back to remote_ip.
-  # Order of preference:
+  #
+  # SECURITY: Proxy headers (X-Forwarded-For) are only trusted when the request
+  # comes from a known proxy. If trust_proxy is not enabled, we use remote_ip
+  # directly to prevent attackers from spoofing their IP to bypass rate limits.
+  #
+  # Order of preference (when behind trusted proxy):
   # 1. Fly-Client-IP: Fly.io sets this to the original client IP, most reliable
   # 2. X-Forwarded-For: Standard proxy header, use leftmost (original client)
   # 3. conn.remote_ip: Direct connection, no proxy
   defp get_client_ip(conn) do
+    # Check if we should trust proxy headers
+    # In production on Fly.io, RemoteIp plug handles this and conn.remote_ip is correct
+    # Trust proxy headers only when explicitly configured
+    trust_proxy = Application.get_env(:custyard, :trust_proxy_headers, false)
+
+    if trust_proxy do
+      get_client_ip_from_headers(conn)
+    else
+      # Don't trust headers - use the connection's remote_ip directly
+      # RemoteIp plug should have already extracted the real IP if behind proxy
+      conn.remote_ip |> :inet.ntoa() |> to_string()
+    end
+  end
+
+  defp get_client_ip_from_headers(conn) do
     cond do
       fly_ip = get_req_header(conn, "fly-client-ip") |> List.first() ->
         # Fly.io provides a single trusted IP

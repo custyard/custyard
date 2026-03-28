@@ -166,6 +166,17 @@ defmodule CustyardWeb.Plugs.LoginRateLimitTest do
   end
 
   describe "IP extraction" do
+    setup do
+      # Enable proxy header trust for these tests
+      Application.put_env(:custyard, :trust_proxy_headers, true)
+
+      on_exit(fn ->
+        Application.delete_env(:custyard, :trust_proxy_headers)
+      end)
+
+      :ok
+    end
+
     test "extracts IP from Fly-Client-IP header" do
       opts = LoginRateLimit.init(max_attempts: 3, window_ms: 60_000)
       fly_ip = "203.0.113.42"
@@ -311,6 +322,44 @@ defmodule CustyardWeb.Plugs.LoginRateLimitTest do
       result = LoginRateLimit.call(conn, opts)
 
       assert result.halted
+    end
+  end
+
+  describe "IP extraction security" do
+    test "ignores proxy headers when trust_proxy_headers is false (default)" do
+      # Ensure trust_proxy_headers is false (the secure default)
+      Application.delete_env(:custyard, :trust_proxy_headers)
+
+      opts = LoginRateLimit.init(max_attempts: 3, window_ms: 60_000)
+      spoofed_ip = "198.51.100.10"
+      real_ip = "127.0.0.1"
+
+      # Insert attempts for the spoofed IP (from X-Forwarded-For)
+      now = System.monotonic_time(:millisecond)
+
+      :ets.insert(@table, {spoofed_ip, now})
+      :ets.insert(@table, {spoofed_ip, now - 1000})
+      :ets.insert(@table, {spoofed_ip, now - 2000})
+
+      # Attacker sends fake X-Forwarded-For header trying to get blocked
+      # (or more commonly, to bypass rate limit by pretending to be a different IP)
+      conn =
+        conn(:get, "/")
+        |> put_req_header("x-forwarded-for", spoofed_ip)
+
+      result = LoginRateLimit.call(conn, opts)
+
+      # Should NOT be blocked because proxy headers are ignored,
+      # real IP (127.0.0.1 from conn) has no attempts
+      refute result.halted
+
+      # Now verify blocking works on the real IP
+      :ets.insert(@table, {real_ip, now})
+      :ets.insert(@table, {real_ip, now - 1000})
+      :ets.insert(@table, {real_ip, now - 2000})
+
+      result2 = LoginRateLimit.call(conn(:get, "/"), opts)
+      assert result2.halted
     end
   end
 

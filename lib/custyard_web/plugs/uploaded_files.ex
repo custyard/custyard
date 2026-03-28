@@ -57,9 +57,11 @@ defmodule CustyardWeb.Plugs.UploadedFiles do
 
   def call(conn, _opts), do: conn
 
-  # Check for path traversal attempts
+  # Check for path traversal attempts or absolute paths
   defp path_traversal?(path) do
-    String.contains?(path, "..") or
+    # Reject absolute paths (Path.join ignores base when path is absolute)
+    String.starts_with?(path, "/") or
+      String.contains?(path, "..") or
       String.contains?(path, "%2e%2e") or
       String.contains?(path, "%2E%2E")
   end
@@ -73,20 +75,31 @@ defmodule CustyardWeb.Plugs.UploadedFiles do
   # Serve the file with appropriate security headers
   defp serve_file(conn, upload_dir, subpath) do
     file_path = Path.join(upload_dir, subpath)
+    # Expand to absolute path and verify it's still under upload_dir
+    # This is a belt-and-suspenders check after path_traversal? validation
+    expanded_path = Path.expand(file_path)
+    expanded_base = Path.expand(upload_dir)
 
-    if File.exists?(file_path) do
-      content_type = MIME.from_path(subpath)
+    cond do
+      # Path escaped upload_dir (shouldn't happen after path_traversal? check)
+      not String.starts_with?(expanded_path, expanded_base <> "/") ->
+        send_resp(conn, 400, "Invalid path") |> halt()
 
-      conn
-      |> put_resp_content_type(content_type)
-      |> put_resp_header("x-content-type-options", "nosniff")
-      # Prevent script execution in SVG files
-      |> put_resp_header("content-security-policy", "script-src 'none'")
-      |> maybe_add_disposition_header(content_type)
-      |> send_file(200, file_path)
-      |> halt()
-    else
-      conn
+      not File.exists?(file_path) ->
+        # File not found - let Plug.Static or next plug handle 404
+        conn
+
+      true ->
+        content_type = MIME.from_path(subpath)
+
+        conn
+        |> put_resp_content_type(content_type)
+        |> put_resp_header("x-content-type-options", "nosniff")
+        # Prevent script execution in SVG files
+        |> put_resp_header("content-security-policy", "script-src 'none'")
+        |> maybe_add_disposition_header(content_type)
+        |> send_file(200, file_path)
+        |> halt()
     end
   end
 
