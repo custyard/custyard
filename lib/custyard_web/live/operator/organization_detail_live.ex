@@ -26,6 +26,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           |> assign(:page_title, org.name)
           |> assign(:organization, org)
           |> assign(:tab, "conversations")
+          |> assign(:can_manage_routes, false)
           |> load_tab_data(org, "conversations")
 
         {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
@@ -81,11 +82,19 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   @impl true
   def handle_event("show_create_route_form", _, socket) do
-    {:noreply, assign(socket, :show_create_route_form, true)}
+    if socket.assigns.can_manage_routes do
+      {:noreply, assign(socket, :show_create_route_form, true)}
+    else
+      {:noreply, put_flash(socket, :error, "You do not have permission to create routes")}
+    end
   end
 
   def handle_event("hide_create_route_form", _, socket) do
-    {:noreply, assign(socket, :show_create_route_form, false)}
+    if socket.assigns.can_manage_routes do
+      {:noreply, assign(socket, :show_create_route_form, false)}
+    else
+      {:noreply, socket}
+    end
   end
 
   @valid_route_types Enum.map(InboundRoute.route_types(), &to_string/1)
@@ -111,7 +120,10 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         attrs =
           case params do
             %{"project_id" => project_id} when project_id != "" ->
-              Map.put(attrs, :project_id, String.to_integer(project_id))
+              case parse_id(project_id) do
+                {:ok, id} -> Map.put(attrs, :project_id, id)
+                :error -> attrs
+              end
 
             _ ->
               attrs
@@ -152,28 +164,42 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         socket
       ) do
     if socket.assigns.can_manage_routes do
-      case validate_param(purpose, @valid_purposes, "purpose") do
-        :ok ->
-          route = InboundRoutes.get_route!(String.to_integer(route_id))
+      with :ok <- validate_param(purpose, @valid_purposes, "purpose"),
+           {:ok, id} <- parse_id(route_id) do
+        org = socket.assigns.organization
+        route = InboundRoutes.get_route!(id)
+
+        if route.organization_id != org.id do
+          Logger.warning(
+            "Unauthorized webhook toggle on route #{route.id} by operator in org #{org.id}"
+          )
+
+          {:noreply, put_flash(socket, :error, "You do not have permission to manage this route")}
+        else
           purpose_atom = String.to_existing_atom(purpose)
 
           result =
             case enabled do
               "true" -> InboundRoutes.enable_webhook(route, purpose_atom)
               "false" -> InboundRoutes.disable_webhook(route, purpose_atom)
+              _ -> {:error, :invalid_enabled_value}
             end
 
           case result do
             {:ok, _webhook} ->
-              {:noreply, load_tab_data(socket, socket.assigns.organization, "routes")}
+              {:noreply, load_tab_data(socket, org, "routes")}
 
             {:error, reason} ->
               Logger.error("Failed to toggle webhook: #{inspect(reason)}")
               {:noreply, put_flash(socket, :error, "Failed to toggle webhook")}
           end
-
-        {:error, message} ->
+        end
+      else
+        {:error, message} when is_binary(message) ->
           {:noreply, put_flash(socket, :error, message)}
+
+        :error ->
+          {:noreply, put_flash(socket, :error, "Invalid route ID")}
       end
     else
       {:noreply, put_flash(socket, :error, "You do not have permission to manage webhooks")}
@@ -181,7 +207,10 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   end
 
   def handle_event("confirm_delete_route", %{"id" => route_id}, socket) do
-    {:noreply, assign(socket, :confirm_delete_route_id, String.to_integer(route_id))}
+    case parse_id(route_id) do
+      {:ok, id} -> {:noreply, assign(socket, :confirm_delete_route_id, id)}
+      :error -> {:noreply, put_flash(socket, :error, "Invalid route ID")}
+    end
   end
 
   def handle_event("cancel_delete_route", _, socket) do
@@ -190,30 +219,46 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   def handle_event("delete_route", %{"id" => route_id}, socket) do
     if socket.assigns.can_manage_routes do
-      route = InboundRoutes.get_route!(String.to_integer(route_id))
+      case parse_id(route_id) do
+        {:ok, id} ->
+          org = socket.assigns.organization
+          route = InboundRoutes.get_route!(id)
 
-      if InboundRoutes.is_last_general_route?(route) do
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "Cannot delete the last general route for this organization"
-         )}
-      else
-        case InboundRoutes.delete_route(route) do
-          {:ok, _} ->
-            socket =
-              socket
-              |> put_flash(:info, "Route deleted")
-              |> assign(:confirm_delete_route_id, nil)
-              |> load_tab_data(socket.assigns.organization, "routes")
+          if route.organization_id != org.id do
+            Logger.warning(
+              "Unauthorized delete on route #{route.id} by operator in org #{org.id}"
+            )
 
-            {:noreply, socket}
+            {:noreply,
+             put_flash(socket, :error, "You do not have permission to manage this route")}
+          else
+            if InboundRoutes.is_last_general_route?(route) do
+              {:noreply,
+               put_flash(
+                 socket,
+                 :error,
+                 "Cannot delete the last general route for this organization"
+               )}
+            else
+              case InboundRoutes.delete_route(route) do
+                {:ok, _} ->
+                  socket =
+                    socket
+                    |> put_flash(:info, "Route deleted")
+                    |> assign(:confirm_delete_route_id, nil)
+                    |> load_tab_data(org, "routes")
 
-          {:error, reason} ->
-            Logger.error("Failed to delete route: #{inspect(reason)}")
-            {:noreply, put_flash(socket, :error, "Failed to delete route")}
-        end
+                  {:noreply, socket}
+
+                {:error, reason} ->
+                  Logger.error("Failed to delete route: #{inspect(reason)}")
+                  {:noreply, put_flash(socket, :error, "Failed to delete route")}
+              end
+            end
+          end
+
+        :error ->
+          {:noreply, put_flash(socket, :error, "Invalid route ID")}
       end
     else
       {:noreply, put_flash(socket, :error, "You do not have permission to delete routes")}
@@ -748,5 +793,12 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     if value in allowed,
       do: :ok,
       else: {:error, "Invalid #{field_name}: #{value}"}
+  end
+
+  defp parse_id(value) do
+    case Integer.parse(value) do
+      {id, ""} -> {:ok, id}
+      _ -> :error
+    end
   end
 end

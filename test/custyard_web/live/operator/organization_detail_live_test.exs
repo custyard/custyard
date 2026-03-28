@@ -1,18 +1,19 @@
 defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
   @moduledoc """
-  Tests for the Routes tab on the Organization Detail LiveView.
+  Tests for the Routes tab on the Organization Detail LiveView
+  (`CustyardWeb.Operator.OrganizationDetailLive`).
 
-  These tests are written ahead of implementation (Phase 1b, issue #27).
-  They will fail until OrganizationDetailLive is implemented with:
-  - Routes tab showing route cards with callback URLs, badges, webhook toggles
+  These tests cover:
+  - Display of route cards with callback URLs, badges, and webhook toggles
   - Inline create form for project routes (admin/super_admin only)
-  - Delete with confirmation, disabled for last general route
+  - Delete behavior with confirmation, including restrictions on deleting the
+    last general route
   - View-only mode for agents (no mutation controls)
 
-  Note: The current router places OrganizationDetailLive under :operator_admin
-  (require_admin). Phase 1b may need to move it to :operator so agents can
-  access it in view-only mode, or implement role-based rendering within the
-  admin-only session.
+  Note: The current router places OrganizationDetailLive under the
+  `:operator_admin` (require_admin) pipeline. These tests assume access via an
+  admin or super_admin session and exercise role-based rendering where
+  applicable.
   """
   use CustyardWeb.ConnCase, async: true
 
