@@ -133,11 +133,26 @@ end
 lettermint_api_url = System.get_env("LETTERMINT_API_URL")
 lettermint_api_key = System.get_env("LETTERMINT_API_KEY")
 
-if lettermint_api_url && lettermint_api_key do
-  config :custyard, :lettermint,
-    client: Custyard.Lettermint.HttpClient,
-    api_url: lettermint_api_url,
-    api_key: lettermint_api_key
+cond do
+  lettermint_api_url && lettermint_api_key ->
+    config :custyard, :lettermint,
+      client: Custyard.Lettermint.HttpClient,
+      api_url: lettermint_api_url,
+      api_key: lettermint_api_key
+
+  config_env() == :prod ->
+    raise """
+    Lettermint is not configured in production.
+
+    Route provisioning requires:
+      - LETTERMINT_API_URL
+      - LETTERMINT_API_KEY
+
+    Please set these environment variables.
+    """
+
+  true ->
+    :ok
 end
 
 if config_env() == :prod do
