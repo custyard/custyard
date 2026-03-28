@@ -107,5 +107,47 @@ defmodule Custyard.Webhooks.DispatcherTest do
       assert conversation.subject == "Legacy webhook"
       assert conversation.organization_id == org.id
     end
+
+    test "emits [:custyard, :webhook, :legacy, :stop] telemetry event" do
+      org = insert_organization(domain: "acme.example.com")
+      _contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+
+      # Attach a telemetry handler that sends a message to the test process
+      test_pid = self()
+      handler_id = "test-legacy-telemetry-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:custyard, :webhook, :legacy, :stop],
+        fn event_name, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_event, event_name, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      normalized = %{
+        from: "alice@acme.example.com",
+        to: "support@custyard.test",
+        subject: "Telemetry test",
+        body: "Testing telemetry emission",
+        message_id: nil,
+        in_reply_to: nil,
+        references: nil,
+        headers: %{},
+        source: :email,
+        metadata: %{}
+      }
+
+      Dispatcher.dispatch_legacy(normalized)
+
+      assert_receive {:telemetry_event, [:custyard, :webhook, :legacy, :stop], measurements,
+                      metadata}
+
+      assert is_integer(measurements.duration)
+      assert measurements.duration >= 0
+      assert Map.has_key?(metadata, :result)
+    end
   end
 end
