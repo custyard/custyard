@@ -160,14 +160,17 @@ defmodule CustyardWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
+      phx-hook={@kind == :info && "AutoDismiss"}
+      data-dismiss-timeout="5000"
+      data-flash-kind={@kind}
       role="alert"
       data-testid={"flash-#{@kind}"}
       class={[
         "fixed top-2 right-2 mr-2 w-80 sm:w-96 z-50 rounded-lg p-3 ring-1",
         @kind == :info &&
-          "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 ring-emerald-500 fill-cyan-900 dark:fill-cyan-300",
+          "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 ring-emerald-500/40 dark:ring-emerald-400/30 fill-cyan-900 dark:fill-cyan-300",
         @kind == :error &&
-          "bg-rose-50 dark:bg-rose-950 text-rose-900 dark:text-rose-300 shadow-md ring-rose-500 fill-rose-900 dark:fill-rose-300"
+          "bg-rose-50 dark:bg-rose-950 text-rose-900 dark:text-rose-300 shadow-md ring-rose-500/40 dark:ring-rose-400/30 fill-rose-900 dark:fill-rose-300"
       ]}
       {@rest}
     >
@@ -176,7 +179,7 @@ defmodule CustyardWeb.CoreComponents do
         <.icon :if={@kind == :error} name="hero-exclamation-circle-mini" class="h-4 w-4" />
         {@title}
       </p>
-      <p class="mt-2 text-sm leading-5">{msg}</p>
+      <p class="mt-2 pl-[22px] text-sm leading-5">{msg}</p>
       <button
         type="button"
         class="group absolute top-1 right-1 p-2"
@@ -747,5 +750,41 @@ defmodule CustyardWeb.CoreComponents do
   """
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
+  end
+
+  @doc """
+  Renders a task state badge with consistent styling.
+
+  ## Examples
+
+      <.task_state_badge state={:open} />
+      <.task_state_badge state={:in_progress} />
+      <.task_state_badge state={:done} />
+  """
+  attr :state, :atom, required: true
+
+  def task_state_badge(assigns) do
+    {bg_color, text_color, label} =
+      case assigns.state do
+        :done -> {"bg-green-100", "text-green-800", "Done"}
+        :in_progress -> {"bg-blue-100", "text-blue-800", "In Progress"}
+        :open -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
+        _ -> {"bg-gray-100 dark:bg-zinc-700", "text-gray-600 dark:text-zinc-400", "Open"}
+      end
+
+    assigns =
+      assigns
+      |> assign(:bg_color, bg_color)
+      |> assign(:text_color, text_color)
+      |> assign(:label, label)
+
+    ~H"""
+    <span
+      class={"text-xs px-2 py-1 rounded #{@bg_color} #{@text_color}"}
+      data-testid={"task-badge-#{@state}"}
+    >
+      {@label}
+    </span>
+    """
   end
 end

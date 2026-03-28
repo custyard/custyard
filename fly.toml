@@ -20,6 +20,7 @@ LMTP_HOSTNAME = "localhost"
 LMTP_PORT = "2024"
 MAIL_ADAPTER = "lettermint"
 PHX_HOST = "custyard.fly.dev"
+PORT = "4000"
 
 [http_service]
 internal_port = 4000
@@ -35,7 +36,9 @@ soft_limit = 150
 
 [[vm]]
 size = "shared-cpu-1x"
-memory = "512mb"
+# 1GB for BEAM VM (~100MB baseline) + LMTP/IMAP (email parsing up to 25MB),
+# scoring recalculator batch processing, and LiveView connections
+memory = "1gb"
 
 # Not needed when using Turso
 # [mounts]

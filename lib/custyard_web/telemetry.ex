@@ -105,11 +105,102 @@ defmodule CustyardWeb.Telemetry do
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),
       summary("vm.total_run_queue_lengths.cpu"),
-      summary("vm.total_run_queue_lengths.io")
+      summary("vm.total_run_queue_lengths.io"),
+
+      # LMTP Server Metrics (events emitted by LMTPServer)
+      counter("custyard.lmtp.connection.open.count",
+        description: "Total LMTP connections opened"
+      ),
+      counter("custyard.lmtp.connection.close.count",
+        description: "Total LMTP connections closed"
+      ),
+      counter("custyard.lmtp.connection.rejected.count",
+        tags: [:reason],
+        description: "LMTP connections rejected (IP not allowed, etc)"
+      ),
+      summary("custyard.lmtp.email.stop.duration",
+        unit: {:native, :millisecond},
+        tags: [:result],
+        description: "Email processing duration in LMTP pipeline"
+      ),
+      counter("custyard.lmtp.rate_limit.exceeded.count",
+        tags: [:limit_type],
+        description: "Rate limit exceeded events by type"
+      ),
+
+      # Webhook Pipeline Metrics (events to be emitted by Dispatcher)
+      summary("custyard.webhook.dispatch.stop.duration",
+        unit: {:native, :millisecond},
+        tags: [:adapter, :result],
+        description: "Webhook processing duration by adapter"
+      ),
+      counter("custyard.webhook.dispatch.exception.count",
+        tags: [:adapter, :error_type],
+        description: "Webhook processing exceptions"
+      ),
+
+      # Scoring System Metrics (events to be emitted by Scoring)
+      summary("custyard.scoring.calculate.stop.duration",
+        unit: {:native, :millisecond},
+        description: "Single conversation score calculation duration"
+      ),
+      summary("custyard.scoring.batch.stop.duration",
+        unit: {:native, :millisecond},
+        description: "Batch score recalculation duration"
+      ),
+      last_value("custyard.scoring.batch.count",
+        description: "Number of conversations in last batch recalculation"
+      ),
+
+      # Sender Matching Metrics (events to be emitted by SenderMatching)
+      summary("custyard.sender_matching.process.stop.duration",
+        unit: {:native, :millisecond},
+        tags: [:result],
+        description: "Sender matching and conversation creation duration"
+      ),
+      counter("custyard.conversation.created.count",
+        description: "Total conversations created"
+      ),
+      counter("custyard.message.created.count",
+        tags: [:source],
+        description: "Total messages created by source"
+      )
     ]
   end
 
   defp periodic_measurements do
-    []
+    [
+      # Periodic measurement for active conversation count
+      {__MODULE__, :measure_conversation_counts, []}
+    ]
+  end
+
+  @doc false
+  def measure_conversation_counts do
+    # Import Ecto.Query for this measurement function
+    import Ecto.Query, only: [from: 2]
+
+    try do
+      # Count active (non-resolved) conversations by state
+      counts =
+        from(c in Custyard.Conversation,
+          where: c.state != :resolved,
+          group_by: c.state,
+          select: {c.state, count(c.id)}
+        )
+        |> Custyard.Repo.all()
+        |> Map.new()
+
+      total = Enum.sum(Map.values(counts))
+
+      :telemetry.execute(
+        [:custyard, :conversations, :active],
+        %{count: total},
+        %{by_state: counts}
+      )
+    rescue
+      # Don't crash periodic measurement if repo is unavailable
+      _ -> :ok
+    end
   end
 end

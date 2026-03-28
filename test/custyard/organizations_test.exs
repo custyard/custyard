@@ -35,10 +35,12 @@ defmodule Custyard.OrganizationsTest do
   end
 
   describe "get_organization_by_token/1" do
-    test "returns organization by token" do
-      org = insert_organization(token: "test-token-abc")
+    @valid_token "test-token-abc-1234567890-abcdefghij"
 
-      assert result = Organizations.get_organization_by_token("test-token-abc")
+    test "returns organization by token" do
+      org = insert_organization(token: @valid_token)
+
+      assert result = Organizations.get_organization_by_token(@valid_token)
       assert result.id == org.id
     end
 
@@ -136,6 +138,26 @@ defmodule Custyard.OrganizationsTest do
       assert {:ok, deleted} = Organizations.delete_organization(org)
       assert deleted.id == org.id
       assert Organizations.get_organization(org.id) == nil
+    end
+  end
+
+  describe "regenerate_portal_token/1" do
+    test "generates a new token" do
+      org = insert_organization()
+      original_token = org.token
+
+      assert {:ok, updated} = Organizations.regenerate_portal_token(org)
+      assert updated.token != original_token
+      assert String.length(updated.token) >= 32
+    end
+
+    test "invalidates the old token" do
+      org = insert_organization()
+      original_token = org.token
+
+      {:ok, _updated} = Organizations.regenerate_portal_token(org)
+
+      assert Organizations.get_organization_by_token(original_token) == nil
     end
   end
 

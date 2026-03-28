@@ -18,11 +18,11 @@ fly launch --no-deploy
 # Create a persistent volume for SQLite (pick the same region as your app)
 fly volumes create custyard_data --region <your-region> --size 1
 
-# Set required secrets
-fly secrets set \
-  SECRET_KEY_BASE=$(mix phx.gen.secret) \
-  LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32) \
-  OPERATOR_PASSWORD="<GENERATE_A_STRONG_PASSWORD>"
+# Set required secret (deployment fails without this)
+fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
+
+# Optional: set operator password (auto-generated if not set)
+fly secrets set OPERATOR_PASSWORD="<GENERATE_A_STRONG_PASSWORD>"
 
 # Deploy
 fly deploy
@@ -50,9 +50,13 @@ Edit `PHX_HOST` in `fly.toml` `[env]` to match your domain (or `<app-name>.fly.d
 Manage secrets with [`fly secrets`](https://fly.io/docs/apps/secrets/):
 
 ```bash
-# Required
+# Required (deployment will fail without SECRET_KEY_BASE)
 fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
+
+# Optional (derived from SECRET_KEY_BASE if not set)
 fly secrets set LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32)
+
+# Optional (auto-generated on each start if not set)
 fly secrets set OPERATOR_PASSWORD="..."
 
 # Inbound webhooks/email — set to enable /api/webhook/inbound (omit to disable)
@@ -94,10 +98,12 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 
 On every deploy, the container entrypoint (`entrypoint.sh`) runs:
 
-1. Generates `SECRET_KEY_BASE` if not set (not recommended — set it as a secret)
+1. Validates `SECRET_KEY_BASE` is set (fails fast if missing)
 2. Runs Ecto migrations
 3. Sets up the operator account
 4. Starts the Phoenix server
+
+> **Important:** `SECRET_KEY_BASE` must be set via `fly secrets set` before deploying. The entrypoint will refuse to start without it. This prevents session/LiveView invalidation when machines restart (which happens regularly with `auto_stop_machines`).
 
 ### Deploy commands
 
@@ -214,6 +220,7 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 
 | Symptom | Fix |
 |---------|-----|
+| "ERROR: SECRET_KEY_BASE is not set" | Run `fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)` |
 | App won't start | Check `fly logs`; verify `SECRET_KEY_BASE` is set via `fly secrets list` |
 | Health check fails | Ensure port 4000 matches `internal_port` in `fly.toml` |
 | Database errors | Confirm volume is mounted: `fly ssh console -C "ls -la /data"` |

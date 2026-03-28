@@ -29,6 +29,14 @@ defmodule Custyard.Email.ImapPoller do
   @default_folder "INBOX"
   @default_port 993
 
+  # Backoff settings for error handling
+  # Max 15 minutes between retries
+  @max_backoff_interval 15 * 60_000
+  # Double delay on each failure
+  @backoff_multiplier 2
+  # Log error after this many consecutive failures
+  @circuit_breaker_threshold 10
+
   # Client API
 
   def start_link(opts) do
@@ -62,17 +70,27 @@ defmodule Custyard.Email.ImapPoller do
 
   @impl true
   def init(opts) do
+    # Store a credential fetcher function instead of the raw password.
+    # This prevents password exposure in crash dumps and :sys.get_state calls.
+    credential_fetcher =
+      Keyword.get_lazy(opts, :credential_fetcher, fn ->
+        password = Keyword.fetch!(opts, :password)
+        fn -> password end
+      end)
+
     state = %{
       host: Keyword.fetch!(opts, :host),
       port: Keyword.get(opts, :port, @default_port),
       username: Keyword.fetch!(opts, :username),
-      password: Keyword.fetch!(opts, :password),
+      credential_fetcher: credential_fetcher,
       folder: Keyword.get(opts, :folder, @default_folder),
       poll_interval: Keyword.get(opts, :poll_interval, @default_poll_interval),
       ssl: Keyword.get(opts, :ssl, true),
       last_poll: nil,
       messages_processed: 0,
-      errors: 0
+      errors: 0,
+      consecutive_errors: 0,
+      current_backoff: Keyword.get(opts, :poll_interval, @default_poll_interval)
     }
 
     Logger.info("IMAP poller starting for #{state.host}:#{state.port}")
@@ -92,14 +110,15 @@ defmodule Custyard.Email.ImapPoller do
   @impl true
   def handle_call(:get_state, _from, state) do
     # Return state without sensitive data
-    safe_state = Map.drop(state, [:password])
+    safe_state = Map.drop(state, [:credential_fetcher])
     {:reply, safe_state, state}
   end
 
   @impl true
   def handle_info(:poll, state) do
     new_state = do_poll(state)
-    schedule_poll(state.poll_interval)
+    # Use backoff interval for scheduling (may be longer if there are consecutive errors)
+    schedule_poll(new_state.current_backoff)
     {:noreply, new_state}
   end
 
@@ -122,15 +141,52 @@ defmodule Custyard.Email.ImapPoller do
       {:ok, processed_count} ->
         Logger.info("IMAP poll complete: #{processed_count} messages processed")
 
+        # Success: reset backoff and consecutive error counter
         %{
           state
           | last_poll: DateTime.utc_now(),
-            messages_processed: state.messages_processed + processed_count
+            messages_processed: state.messages_processed + processed_count,
+            consecutive_errors: 0,
+            current_backoff: state.poll_interval
         }
 
       {:error, reason} ->
-        Logger.warning("IMAP poll failed: #{inspect(reason)}")
-        %{state | errors: state.errors + 1}
+        consecutive = state.consecutive_errors + 1
+
+        # Calculate backoff with exponential increase, capped at max
+        new_backoff =
+          min(
+            state.current_backoff * @backoff_multiplier,
+            @max_backoff_interval
+          )
+
+        # Log at warning level, but upgrade to error for circuit breaker
+        if consecutive >= @circuit_breaker_threshold do
+          Logger.error(
+            "IMAP poll failing repeatedly (#{consecutive} consecutive failures): #{inspect(reason)}. " <>
+              "Connection to #{state.host}:#{state.port} may be down. " <>
+              "Next retry in #{div(new_backoff, 1000)} seconds."
+          )
+
+          # Emit telemetry for alerting
+          :telemetry.execute(
+            [:custyard, :imap, :circuit_breaker],
+            %{consecutive_errors: consecutive},
+            %{host: state.host, port: state.port, reason: inspect(reason)}
+          )
+        else
+          Logger.warning(
+            "IMAP poll failed: #{inspect(reason)}. " <>
+              "Retry #{consecutive}/#{@circuit_breaker_threshold} in #{div(new_backoff, 1000)}s."
+          )
+        end
+
+        %{
+          state
+          | errors: state.errors + 1,
+            consecutive_errors: consecutive,
+            current_backoff: new_backoff
+        }
     end
   end
 
@@ -138,7 +194,10 @@ defmodule Custyard.Email.ImapPoller do
     case connect(state) do
       {:ok, conn} ->
         try do
-          with {:ok, _} <- Plover.login(conn, state.username, state.password),
+          # Fetch password on-demand to avoid storing in state
+          password = state.credential_fetcher.()
+
+          with {:ok, _} <- Plover.login(conn, state.username, password),
                {:ok, _} <- Plover.select(conn, state.folder),
                {:ok, messages} <- fetch_unseen(conn),
                processed <- process_messages(conn, messages) do
@@ -196,18 +255,24 @@ defmodule Custyard.Email.ImapPoller do
 
     Logger.debug("Processing IMAP message UID: #{uid}")
 
-    with {:ok, raw_email} <- fetch_raw_email(conn, uid),
-         {:ok, parsed} <- Parser.parse(raw_email),
-         {:ok, _conversation} <- Processor.process(parsed) do
-      # Mark as seen after successful processing
-      mark_as_seen(conn, uid)
-      Logger.debug("Successfully processed IMAP message UID: #{uid}")
-      :ok
-    else
-      {:error, reason} ->
-        Logger.warning("Failed to process IMAP message UID #{uid}: #{inspect(reason)}")
-        {:error, reason}
-    end
+    result =
+      with {:ok, raw_email} <- fetch_raw_email(conn, uid),
+           {:ok, parsed} <- Parser.parse(raw_email),
+           {:ok, _conversation} <- Processor.process(parsed) do
+        Logger.debug("Successfully processed IMAP message UID: #{uid}")
+        :ok
+      else
+        {:error, reason} ->
+          Logger.warning("Failed to process IMAP message UID #{uid}: #{inspect(reason)}")
+          {:error, reason}
+      end
+
+    # Always mark as seen to prevent infinite retry loops on messages that
+    # consistently fail processing. Failed messages are logged but won't block
+    # the poller from advancing.
+    mark_as_seen(conn, uid)
+
+    result
   end
 
   defp fetch_raw_email(conn, uid) do

@@ -3,9 +3,13 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
   Webhook adapter for Lettermint email service.
 
   Lettermint provides per-project inbound/outbound routes with HMAC-SHA256
-  signature verification. This is the primary adapter for email ingestion.
+  signature verification. Includes optional timestamp-based replay protection
+  when the X-Lettermint-Timestamp header is present.
   """
   @behaviour Custyard.Webhooks.Adapter
+
+  # Maximum allowed time skew for timestamp validation (5 minutes)
+  @max_timestamp_skew 60 * 5
 
   @impl true
   def source_name, do: :lettermint
@@ -29,16 +33,66 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
 
   def verify_signature(_payload, nil, _secret), do: {:error, "missing signature header"}
 
+  @doc """
+  Verify request with replay protection.
+
+  If a timestamp is provided, validates it's within the allowed skew window
+  to prevent replay attacks. Falls back to signature-only verification if
+  no timestamp is provided (for backward compatibility).
+  """
+  @impl true
+  def verify_request(_raw_body, _timestamp, _signature, nil), do: {:error, "no secret configured"}
+
+  def verify_request(raw_body, timestamp, signature, secret) do
+    # First verify the signature
+    case verify_signature(raw_body, signature, secret) do
+      :ok ->
+        # Then validate timestamp if provided
+        validate_timestamp(timestamp)
+
+      error ->
+        error
+    end
+  end
+
+  defp validate_timestamp(nil) do
+    # No timestamp provided - accept for backward compatibility
+    # Replay protection relies on message_id deduplication in this case
+    :ok
+  end
+
+  defp validate_timestamp(timestamp_str) when is_binary(timestamp_str) do
+    case Integer.parse(timestamp_str) do
+      {timestamp, ""} ->
+        now = System.system_time(:second)
+
+        if abs(now - timestamp) <= @max_timestamp_skew do
+          :ok
+        else
+          {:error, "stale timestamp - request may be a replay attack"}
+        end
+
+      _ ->
+        {:error, "invalid timestamp format"}
+    end
+  end
+
+  # Conversation.changeset validates subject max 500 chars
+  @max_subject_length 500
+  # Message.changeset validates body max 100,000 chars
+  @max_body_length 100_000
+
   @impl true
   def normalize(params) do
     headers = params["headers"] || %{}
+    body = params["text"] || strip_html(params["html"]) || ""
 
     {:ok,
      %{
        from: params["from"] || params["sender"],
        to: params["to"] || params["recipient"],
-       subject: params["subject"] || "(no subject)",
-       body: params["text"] || strip_html(params["html"]) || "",
+       subject: truncate(params["subject"] || "(no subject)", @max_subject_length),
+       body: truncate(body, @max_body_length),
        message_id: get_header(headers, "message-id"),
        in_reply_to: get_header(headers, "in-reply-to"),
        references: get_header(headers, "references"),
@@ -67,5 +121,12 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
     |> String.replace(~r/<[^>]+>/, "")
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
+  end
+
+  defp truncate(nil, _max_length), do: ""
+  defp truncate(text, max_length) when byte_size(text) <= max_length, do: text
+
+  defp truncate(text, max_length) do
+    String.slice(text, 0, max_length - 3) <> "..."
   end
 end

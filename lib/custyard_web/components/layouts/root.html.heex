@@ -12,12 +12,12 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Custyard" />
-    <meta name="application-name" content="Custyard" />
+    <meta name="apple-mobile-web-app-title" content={assigns[:site_name] || "Custyard"} />
+    <meta name="application-name" content={assigns[:site_name] || "Custyard"} />
     <%!-- Open Graph --%>
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Custyard" />
-    <meta property="og:title" content={assigns[:page_title] || "Custyard"} />
+    <meta property="og:site_name" content={assigns[:site_name] || "Custyard"} />
+    <meta property="og:title" content={assigns[:page_title] || assigns[:site_name] || "Custyard"} />
     <meta property="og:description" content="Customer service and support platform" />
     <meta property="og:image" content={~p"/images/og-image.png"} />
     <meta property="og:image:width" content="1200" />
@@ -25,18 +25,21 @@
     <meta property="og:image:alt" content="Custyard — Customer service and support platform" />
     <%!-- Twitter Card --%>
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content={assigns[:page_title] || "Custyard"} />
+    <meta
+      name="twitter:title"
+      content={assigns[:page_title] || assigns[:site_name] || "Custyard"}
+    />
     <meta name="twitter:description" content="Customer service and support platform" />
     <meta name="twitter:image" content={~p"/images/og-image.png"} />
     <meta name="twitter:image:alt" content="Custyard — Customer service and support platform" />
-    <.live_title suffix=" · Custyard">
-      {assigns[:page_title] || "Custyard"}
+    <.live_title suffix={" · " <> (assigns[:site_name] || "Custyard")}>
+      {assigns[:page_title] || assigns[:site_name] || "Custyard"}
     </.live_title>
     <%!-- Favicon & icons --%>
     <link rel="icon" href={~p"/favicon.svg"} type="image/svg+xml" />
     <link rel="icon" href={~p"/favicon.ico"} sizes="32x32" />
     <link rel="apple-touch-icon" href={~p"/images/apple-touch-icon.png"} />
-    <link rel="manifest" href={~p"/site.webmanifest"} />
+    <link rel="manifest" href="/site.webmanifest" />
     <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
     </script>

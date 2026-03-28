@@ -6,14 +6,17 @@ config :custyard, Custyard.Repo,
   database: Path.expand("../priv/repo/custyard_dev.db", __DIR__),
   pool_size: 5,
   stacktrace: true,
-  show_sensitive_data_on_connection_error: true
+  show_sensitive_data_on_connection_error: true,
+  journal_mode: :wal,
+  busy_timeout: 5000
 
 config :custyard, CustyardWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4000],
-  check_origin: false,
+  check_origin: ["//localhost:4000", "//127.0.0.1:4000"],
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "dev_secret_key_base_that_is_at_least_64_bytes_long_for_development_only",
+  live_view: [signing_salt: "dev_only_signing_salt_for_local_development"],
   watchers: [
     esbuild: {Esbuild, :install_and_run, [:custyard, ~w(--sourcemap=inline --watch)]},
     tailwind: {Tailwind, :install_and_run, [:custyard, ~w(--watch)]}

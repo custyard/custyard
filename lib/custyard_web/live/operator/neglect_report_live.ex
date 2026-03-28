@@ -5,6 +5,8 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
   """
   use CustyardWeb, :live_view
 
+  import CustyardWeb.OperatorComponents
+
   alias Custyard.{Conversations, Scoring}
 
   @impl true
@@ -31,8 +33,16 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
     {:noreply, load_neglected(socket)}
   end
 
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  @impl true
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
   defp load_neglected(socket) do
-    conversations = Conversations.list_neglected()
+    # Scope to operator's organization (nil for super_admin = all orgs)
+    org_id = socket.assigns[:scoped_organization_id]
+    conversations = Conversations.list_neglected(organization_id: org_id)
 
     # Filter to only neglected items and enrich with status
     neglected =
@@ -185,48 +195,4 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
   defp border_color(:critical), do: "border-l-red-500"
   defp border_color(:warning), do: "border-l-amber-400"
   defp border_color(_), do: "border-l-transparent"
-
-  attr :tier, :atom, required: true
-
-  defp tier_badge(assigns) do
-    colors =
-      case assigns.tier do
-        :enterprise -> "text-purple-700 bg-purple-50"
-        :standard -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-        :basic -> "text-gray-400 dark:text-zinc-500 bg-gray-50 dark:bg-zinc-800"
-        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-      end
-
-    assigns = assign(assigns, :colors, colors)
-
-    ~H"""
-    <span
-      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
-      data-testid={"operator-tier-badge-#{@tier}"}
-    >
-      {to_string(@tier)}
-    </span>
-    """
-  end
-
-  attr :level, :atom, required: true
-
-  defp neglect_badge(assigns) do
-    ~H"""
-    <span
-      :if={@level == :critical}
-      class="text-xs px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300"
-      data-testid="operator-neglect-badge-critical"
-    >
-      NEGLECTED
-    </span>
-    <span
-      :if={@level == :warning}
-      class="text-xs px-1.5 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300"
-      data-testid="operator-neglect-badge-warning"
-    >
-      aging
-    </span>
-    """
-  end
 end

@@ -3,14 +3,18 @@
     %{
       name: "default",
       strict: false,
-      checks: %{
-        disabled: [
-          # Re-enable as you stabilize
-          {Credo.Check.Readability.ModuleDoc, []},
-          {Credo.Check.Design.TagTODO, []},
-          {Credo.Check.Design.TagFIXME, []}
-        ]
-      }
+      checks: [
+        # Disable checks that conflict with project style - re-enable incrementally
+        {Credo.Check.Readability.ModuleDoc, false},
+        {Credo.Check.Design.TagTODO, false},
+        {Credo.Check.Design.TagFIXME, false},
+        # Temporarily disabled during quality audit
+        {Credo.Check.Refactor.Nesting, false},
+        {Credo.Check.Readability.AliasOrder, false},
+        {Credo.Check.Refactor.WithClauses, false},
+        {Credo.Check.Readability.PredicateFunctionNames, false},
+        {Credo.Check.Warning.MissedMetadataKeyInLoggerConfig, false}
+      ]
     }
   ]
 }

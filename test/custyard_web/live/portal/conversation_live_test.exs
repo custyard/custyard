@@ -95,6 +95,39 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       assert html =~ "Operator reply"
       assert html =~ "border-indigo"
     end
+
+    test "shows 'Support Team' label for operator messages", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        body: "Hello from support",
+        source: :operator,
+        sender_email: "operator@internal.example.com"
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+
+      assert html =~ "Support Team"
+      refute html =~ "operator@internal.example.com"
+    end
+
+    test "shows sender email for customer messages", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        body: "Customer question",
+        source: :email,
+        sender_email: "customer@example.com"
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+
+      assert html =~ "customer@example.com"
+    end
   end
 
   describe "reply submission" do

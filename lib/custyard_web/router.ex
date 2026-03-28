@@ -1,15 +1,29 @@
 defmodule CustyardWeb.Router do
   use CustyardWeb, :router
 
+  # Content Security Policy restricts XSS impact by controlling script sources.
+  # - default-src 'self': restrict all resources to same origin by default
+  # - script-src 'self': only allow scripts from same origin (no inline/eval)
+  # - style-src 'self' 'unsafe-inline': allow same-origin styles + inline (for LiveView)
+  # - img-src 'self' data: https:: images from self, data URIs, and any HTTPS source
+  # - connect-src 'self' wss:: allow same-origin fetch + WebSocket connections for LiveView
+  # - frame-ancestors 'none': prevent clickjacking (supplements X-Frame-Options)
+  @csp_header "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' wss:; frame-ancestors 'none'"
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
     plug :put_root_layout, html: {CustyardWeb.Layouts, :root}
     plug :protect_from_forgery
-    plug :put_secure_browser_headers
+    plug :put_secure_browser_headers, %{"content-security-policy" => @csp_header}
   end
 
+  # API pipeline intentionally omits CSRF protection (:protect_from_forgery) because:
+  # - Webhook endpoints use signature verification (HMAC) or callback tokens for auth
+  # - Health endpoint is read-only
+  # - API authentication is token-based, not session-based
+  # If adding new state-mutating API endpoints, ensure they have appropriate auth.
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -58,6 +72,7 @@ defmodule CustyardWeb.Router do
       live "/", AttentionQueueLive, :index
       live "/conversation/:id", ConversationLive, :show
       live "/organizations", OrganizationsLive, :index
+      live "/organizations/:id", OrganizationDetailLive, :show
       live "/projects", ProjectsLive, :index
       live "/neglect", NeglectReportLive, :index
       live "/settings", SettingsLive, :index
@@ -69,7 +84,8 @@ defmodule CustyardWeb.Router do
     pipe_through [:browser, :portal_auth]
 
     live_session :portal,
-      on_mount: [{CustyardWeb.Live.PortalAuth, :default}] do
+      on_mount: [{CustyardWeb.Live.PortalAuth, :default}],
+      layout: {CustyardWeb.Layouts, :portal} do
       live "/", RequestListLive, :index
       live "/request/:id", ConversationLive, :show
       live "/new", NewRequestLive, :new

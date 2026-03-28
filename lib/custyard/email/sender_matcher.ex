@@ -13,6 +13,7 @@ defmodule Custyard.Email.SenderMatcher do
   4. Domain match (catchall, unknown sender)
   """
 
+  require Logger
   alias Custyard.{Contact, Organization, Repo}
   import Ecto.Query
 
@@ -30,12 +31,22 @@ defmodule Custyard.Email.SenderMatcher do
         org = Repo.get!(Organization, contact.organization_id)
         {:ok, org, contact}
 
-      [contact | _rest] ->
-        # Multiple contacts across orgs — use the first match for now.
+      [contact | rest] ->
+        # Multiple contacts across orgs — use the oldest contact (first relationship).
         # Route-context matching (match_within_org/2) is the preferred path
         # to avoid this ambiguity. Disambiguation DM flow handles this in
         # the catchall route via the disambiguation webhook purpose.
         org = Repo.get!(Organization, contact.organization_id)
+
+        # Log warning for visibility into multi-org routing decisions
+        other_org_ids = Enum.map(rest, & &1.organization_id)
+
+        Logger.warning(
+          "Multi-org sender ambiguity: email #{email} exists in #{length(rest) + 1} organizations. " <>
+            "Routing to org #{org.id} (#{org.name}). Other org IDs: #{inspect(other_org_ids)}. " <>
+            "Consider using route-context matching to avoid ambiguity."
+        )
+
         {:ok, org, contact}
     end
   end
@@ -77,7 +88,10 @@ defmodule Custyard.Email.SenderMatcher do
   end
 
   defp find_contacts_by_email(email) do
-    from(c in Contact, where: c.email == ^email)
+    # Order by inserted_at to ensure deterministic behavior when the same email
+    # exists in multiple organizations. Oldest contact (first relationship) wins.
+    # This is a fallback for when route-context matching isn't available.
+    from(c in Contact, where: c.email == ^email, order_by: [asc: c.inserted_at])
     |> Repo.all()
   end
 
@@ -141,13 +155,33 @@ defmodule Custyard.Email.SenderMatcher do
         {:ok, org}
 
       nil ->
-        %Organization{}
-        |> Organization.changeset(%{
+        # Race condition handling: if a concurrent request creates the org
+        # between our check and insert, catch the constraint error and re-query.
+        attrs = %{
           name: "Unmatched Senders",
           domain: "_unmatched_",
           tier: :basic
-        })
+        }
+
+        %Organization{}
+        |> Organization.changeset(attrs)
         |> Repo.insert()
+        |> case do
+          {:ok, org} ->
+            {:ok, org}
+
+          {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+            # Check if error is due to unique constraint on domain
+            if Keyword.has_key?(errors, :domain) do
+              # Concurrent insert won - fetch the existing record
+              case Repo.get_by(Organization, domain: "_unmatched_") do
+                %Organization{} = org -> {:ok, org}
+                nil -> {:error, changeset}
+              end
+            else
+              {:error, changeset}
+            end
+        end
     end
   end
 end

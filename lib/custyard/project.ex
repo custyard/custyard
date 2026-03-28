@@ -37,9 +37,17 @@ defmodule Custyard.Project do
     # Template flag - templates are used to create new projects
     field :is_template, :boolean, default: false
 
+    # Virtual field for computed progress data (set by Projects.with_progress/1)
+    # Contains %{total: integer, done: integer, percentage: integer}
+    field :progress, :map, virtual: true
+
     belongs_to :organization, Custyard.Organization
+    # Single linked conversation (e.g., initial onboarding request)
     belongs_to :conversation, Custyard.Conversation
+    # All conversations associated with this project
+    has_many :conversations, Custyard.Conversation
     has_many :tasks, Custyard.Task
+    has_many :inbound_routes, Custyard.InboundRoute
 
     timestamps(type: :utc_datetime)
   end

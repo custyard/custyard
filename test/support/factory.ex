@@ -137,6 +137,55 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Build audit event attributes.
+
+  Event types: :webhook_received, :webhook_processed, :webhook_error
+
+  ## Examples
+
+      build_audit_event()
+      build_audit_event(event_type: :webhook_error, source: "zendesk")
+  """
+  def build_audit_event(overrides \\ []) do
+    defaults = %{
+      event_type: :webhook_received,
+      source: "email",
+      message_id: "audit-mid-#{unique_id()}",
+      payload: %{"test" => "data"},
+      conversation_id: nil,
+      organization_id: nil,
+      project_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Build operator account attributes.
+
+  Roles: "super_admin", "admin", "agent"
+  - super_admin: No organization_id (can access all)
+  - admin/agent: Requires organization_id
+
+  ## Examples
+
+      build_operator_account()
+      build_operator_account(role: "admin", organization_id: 1)
+  """
+  def build_operator_account(overrides \\ []) do
+    id = unique_id()
+
+    defaults = %{
+      email: "operator-#{id}@example.com",
+      password: "password123",
+      role: "super_admin",
+      organization_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
   Insert an organization into the database.
   """
   def insert_organization(overrides \\ []) do
@@ -163,9 +212,14 @@ defmodule Custyard.Factory do
   """
   def insert_conversation(overrides \\ []) do
     overrides = ensure_organization(overrides)
+    attrs = build_conversation(overrides)
+
+    # Extract cached_score (not in changeset cast list for security)
+    {cached_score, attrs} = Map.pop(attrs, :cached_score, 0)
 
     %Custyard.Conversation{}
-    |> Custyard.Conversation.changeset(build_conversation(overrides))
+    |> Custyard.Conversation.changeset(attrs)
+    |> Ecto.Changeset.change(cached_score: cached_score)
     |> Custyard.Repo.insert!()
   end
 
@@ -202,6 +256,37 @@ defmodule Custyard.Factory do
 
     %Custyard.Task{}
     |> Custyard.Task.changeset(build_task(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
+  Insert an audit event into the database.
+  """
+  def insert_audit_event(overrides \\ []) do
+    %Custyard.AuditEvent{}
+    |> Custyard.AuditEvent.changeset(build_audit_event(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
+  Insert an operator account into the database.
+  For admin/agent roles, requires organization_id or will create one.
+  """
+  def insert_operator_account(overrides \\ []) do
+    attrs = build_operator_account(overrides)
+    role = Map.get(attrs, :role, "super_admin")
+
+    # Ensure organization_id for non-super_admin roles
+    attrs =
+      if role in ["admin", "agent"] and is_nil(Map.get(attrs, :organization_id)) do
+        org = insert_organization()
+        Map.put(attrs, :organization_id, org.id)
+      else
+        attrs
+      end
+
+    %Custyard.OperatorAccount{}
+    |> Custyard.OperatorAccount.changeset(attrs)
     |> Custyard.Repo.insert!()
   end
 
