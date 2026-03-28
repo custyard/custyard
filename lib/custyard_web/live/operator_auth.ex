@@ -20,21 +20,16 @@ defmodule CustyardWeb.Live.OperatorAuth do
   end
 
   def on_mount(:require_admin, _params, session, socket) do
-    with {:cont, socket} <- authenticate(session, socket) do
-      if Authorization.has_minimum_role?(socket.assigns.current_operator, "admin") do
-        {:cont, socket}
-      else
-        {:halt,
-         socket
-         |> put_flash(:error, "Insufficient permissions")
-         |> redirect(to: "/operator")}
-      end
-    end
+    authorize_role(session, socket, "admin")
   end
 
   def on_mount(:require_super_admin, _params, session, socket) do
+    authorize_role(session, socket, "super_admin")
+  end
+
+  defp authorize_role(session, socket, required_role) do
     with {:cont, socket} <- authenticate(session, socket) do
-      if Authorization.has_minimum_role?(socket.assigns.current_operator, "super_admin") do
+      if Authorization.has_minimum_role?(socket.assigns.current_operator, required_role) do
         {:cont, socket}
       else
         {:halt,

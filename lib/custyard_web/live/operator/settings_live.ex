@@ -41,34 +41,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
     if not Authorization.can_modify_settings?(socket.assigns.current_operator) do
       {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
     else
-      parsed =
-        weight_params
-        |> Enum.map(fn {k, v} -> {k, parse_float(v)} end)
-
-      invalid_keys =
-        parsed
-        |> Enum.filter(fn {_k, v} -> v == :error end)
-        |> Enum.map(fn {k, _} -> k end)
-
-      if invalid_keys != [] do
-        {:noreply,
-         put_flash(socket, :error, "Invalid numeric values for: #{Enum.join(invalid_keys, ", ")}")}
-      else
-        weights = Map.new(parsed)
-
-        case Settings.update_weights(weights) do
-          {:ok, _settings} ->
-            {:noreply,
-             socket
-             |> assign(:weights, weights)
-             |> assign(:editing_weights, false)
-             |> assign(:weight_form, to_form(weights, as: "weights"))
-             |> put_flash(:info, "Weights updated successfully")}
-
-          {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, "Failed to update weights")}
-        end
-      end
+      do_save_weights(weight_params, socket)
     end
   end
 
@@ -88,6 +61,37 @@ defmodule CustyardWeb.Operator.SettingsLive do
       {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
     else
       save_thresholds(threshold_params, socket)
+    end
+  end
+
+  defp do_save_weights(weight_params, socket) do
+    parsed =
+      weight_params
+      |> Enum.map(fn {k, v} -> {k, parse_float(v)} end)
+
+    invalid_keys =
+      parsed
+      |> Enum.filter(fn {_k, v} -> v == :error end)
+      |> Enum.map(fn {k, _} -> k end)
+
+    if invalid_keys != [] do
+      {:noreply,
+       put_flash(socket, :error, "Invalid numeric values for: #{Enum.join(invalid_keys, ", ")}")}
+    else
+      weights = Map.new(parsed)
+
+      case Settings.update_weights(weights) do
+        {:ok, _settings} ->
+          {:noreply,
+           socket
+           |> assign(:weights, weights)
+           |> assign(:editing_weights, false)
+           |> assign(:weight_form, to_form(weights, as: "weights"))
+           |> put_flash(:info, "Weights updated successfully")}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to update weights")}
+      end
     end
   end
 

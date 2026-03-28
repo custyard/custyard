@@ -53,8 +53,8 @@ defmodule Custyard.Authorization do
   """
   def can_manage_project?(%OperatorAccount{role: "super_admin"}, _org_id), do: true
 
-  def can_manage_project?(%OperatorAccount{role: "admin", organization_id: op_org_id}, org_id)
-      when op_org_id == org_id,
+  def can_manage_project?(%OperatorAccount{role: "admin", organization_id: org_id}, org_id)
+      when is_integer(org_id),
       do: true
 
   def can_manage_project?(_, _), do: false
