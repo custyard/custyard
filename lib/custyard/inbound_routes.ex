@@ -125,7 +125,9 @@ defmodule Custyard.InboundRoutes do
           :ok
 
         {:error, reason} ->
-          Logger.error("Failed to delete Lettermint route #{route.lettermint_route_id}: #{inspect(reason)}")
+          Logger.error(
+            "Failed to delete Lettermint route #{route.lettermint_route_id}: #{inspect(reason)}"
+          )
       end
     end
 
