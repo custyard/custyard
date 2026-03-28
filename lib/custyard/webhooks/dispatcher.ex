@@ -79,7 +79,18 @@ defmodule Custyard.Webhooks.Dispatcher do
   Used for backward compatibility with the existing `POST /api/webhook/inbound`.
   """
   def dispatch_legacy(normalized) do
-    Purposes.SenderMatching.process(normalized, %{})
+    start_time = System.monotonic_time()
+    result = Purposes.SenderMatching.process(normalized, %{})
+    duration = System.monotonic_time() - start_time
+    result_tag = if match?({:ok, _}, result), do: :ok, else: :error
+
+    :telemetry.execute(
+      [:custyard, :webhook, :legacy, :stop],
+      %{duration: duration},
+      %{result: result_tag}
+    )
+
+    result
   end
 
   defp get_enabled_purposes(route) do
