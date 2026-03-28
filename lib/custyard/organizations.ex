@@ -142,19 +142,50 @@ defmodule Custyard.Organizations do
 
   @doc """
   Create a new organization.
+
+  Creates the organization in the database, then provisions a default inbound
+  route via the Lettermint API. If route provisioning fails, the organization
+  is deleted (compensating transaction pattern).
+
+  Returns `{:ok, organization}` or `{:error, changeset}`.
   """
   def create_organization(attrs) do
-    Ecto.Multi.new()
-    |> Ecto.Multi.insert(:organization, Organization.changeset(%Organization{}, attrs))
-    |> Ecto.Multi.run(:default_route, fn _repo, %{organization: org} ->
-      InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
-    end)
-    |> Repo.transaction()
-    |> case do
-      {:ok, %{organization: org}} -> {:ok, org}
-      {:error, :organization, changeset, _changes} -> {:error, changeset}
-      {:error, :default_route, error, _changes} -> {:error, error}
+    changeset = Organization.changeset(%Organization{}, attrs)
+
+    case Repo.insert(changeset) do
+      {:ok, org} ->
+        case InboundRoutes.create_route(%{organization_id: org.id, route_type: :general}) do
+          {:ok, _route} ->
+            {:ok, org}
+
+          {:error, reason} ->
+            # Compensate: delete the org if route provisioning failed
+            Repo.delete(org)
+            {:error, wrap_route_error(changeset, reason)}
+        end
+
+      {:error, changeset} ->
+        {:error, changeset}
     end
+  end
+
+  # Wrap non-changeset errors into a changeset with a :base error for consistent return types
+  defp wrap_route_error(changeset, {:api_error, message}) when is_binary(message) do
+    Ecto.Changeset.add_error(changeset, :base, "Route provisioning failed: #{message}")
+  end
+
+  defp wrap_route_error(changeset, {:api_error, reason}) do
+    Ecto.Changeset.add_error(changeset, :base, "Route provisioning failed: #{inspect(reason)}")
+  end
+
+  defp wrap_route_error(changeset, %Ecto.Changeset{} = error_changeset) do
+    # If the route creation returned a changeset error, merge errors into base
+    errors = Ecto.Changeset.traverse_errors(error_changeset, fn {msg, _opts} -> msg end)
+    Ecto.Changeset.add_error(changeset, :base, "Route provisioning failed: #{inspect(errors)}")
+  end
+
+  defp wrap_route_error(changeset, reason) do
+    Ecto.Changeset.add_error(changeset, :base, "Route provisioning failed: #{inspect(reason)}")
   end
 
   @doc """

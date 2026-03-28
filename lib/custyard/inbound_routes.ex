@@ -237,21 +237,23 @@ defmodule Custyard.InboundRoutes do
   @doc """
   Enable a webhook purpose on a route.
 
-  If a webhook record already exists for this purpose, sets `enabled: true`.
-  If none exists, creates a new one.
+  Uses upsert semantics to handle concurrent calls safely: if the webhook
+  already exists, sets `enabled: true`; otherwise creates a new one.
   """
   def enable_webhook(%InboundRoute{} = route, purpose) do
-    case get_webhook_by_purpose(route, purpose) do
-      nil ->
-        create_webhook(%{
-          inbound_route_id: route.id,
-          purpose: purpose,
-          enabled: true
-        })
+    params = %{
+      inbound_route_id: route.id,
+      purpose: purpose,
+      enabled: true
+    }
 
-      webhook ->
-        enable_webhook(webhook)
-    end
+    %InboundRouteWebhook{}
+    |> InboundRouteWebhook.changeset(params)
+    |> Repo.insert(
+      on_conflict: [set: [enabled: true, updated_at: DateTime.utc_now()]],
+      conflict_target: [:inbound_route_id, :purpose],
+      returning: true
+    )
   end
 
   @doc """
