@@ -4,35 +4,19 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   ## Authorization Model
 
-  Currently, any authenticated operator can access any conversation. This is
-  intentional for small teams where all operators are trusted staff. If the
-  system is extended to support:
-
-  - Multi-tenancy (operators scoped to specific organizations)
-  - Role-based access (e.g., read-only operators)
-  - Team assignment (operators see only assigned conversations)
-
-  Authorization checks should be added in `mount/3` after loading the conversation
-  to verify the operator has access. Example:
-
-      with {:ok, conversation} <- load_conversation(id),
-           :ok <- authorize_operator(socket.assigns.current_operator, conversation) do
-        # proceed
-      end
-
-  The `authorize_operator/2` function would check organization membership,
-  team assignment, or role permissions as appropriate.
+  Access is controlled by `Custyard.Authorization`:
+  - super_admin can access any conversation
+  - admin/agent can only access conversations in their organization
+  - Only admin+ can change conversation state (active/waiting/resolved)
   """
   use CustyardWeb, :live_view
 
   import CustyardWeb.OperatorComponents
 
-  alias Custyard.{Conversation, Conversations, Message, Scoring}
+  alias Custyard.{Authorization, Conversation, Conversations, Message, Scoring}
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
-    # TODO: Add authorization check here if implementing multi-tenancy or RBAC
-    # See moduledoc for guidance
     case load_conversation(id) do
       nil ->
         {:ok,
@@ -41,7 +25,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
          |> redirect(to: ~p"/operator")}
 
       conversation ->
-        mount_conversation(socket, id, conversation)
+        if Authorization.can_access_conversation?(socket.assigns.current_operator, conversation) do
+          mount_conversation(socket, id, conversation)
+        else
+          {:ok,
+           socket
+           |> put_flash(:error, "You do not have access to this conversation")
+           |> redirect(to: ~p"/operator")}
+        end
     end
   end
 
@@ -207,33 +198,37 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   def handle_event("set_state", %{"state" => state}, socket)
       when state in ~w(active waiting resolved) do
-    conversation = socket.assigns.conversation
-    new_state = String.to_existing_atom(state)
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    if not Authorization.can_set_conversation_state?(socket.assigns.current_operator) do
+      {:noreply, put_flash(socket, :error, "Only admins can change conversation state")}
+    else
+      conversation = socket.assigns.conversation
+      new_state = String.to_existing_atom(state)
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    case Conversations.update_conversation(conversation, %{
-           state: new_state,
-           last_operator_action_at: now
-         }) do
-      {:ok, _} ->
-        Scoring.calculate_and_cache(conversation.id)
+      case Conversations.update_conversation(conversation, %{
+             state: new_state,
+             last_operator_action_at: now
+           }) do
+        {:ok, _} ->
+          Scoring.calculate_and_cache(conversation.id)
 
-        Phoenix.PubSub.broadcast(
-          Custyard.PubSub,
-          "conversations",
-          {:conversation_updated, conversation.id}
-        )
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations",
+            {:conversation_updated, conversation.id}
+          )
 
-        Phoenix.PubSub.broadcast(
-          Custyard.PubSub,
-          "conversations:org:#{conversation.organization_id}",
-          {:conversation_updated, conversation.id}
-        )
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations:org:#{conversation.organization_id}",
+            {:conversation_updated, conversation.id}
+          )
 
-        {:noreply, reload_conversation(socket)}
+          {:noreply, reload_conversation(socket)}
 
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to update state")}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to update state")}
+      end
     end
   end
 

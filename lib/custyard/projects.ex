@@ -7,16 +7,28 @@ defmodule Custyard.Projects do
   import Ecto.Query
 
   @doc """
-  List all projects for operator view, with organization preloaded.
+  List projects for operator view, with organization preloaded.
+
+  ## Options
+
+  - `:organization_id` - when set, filters to only projects in that org.
+    When `nil`, returns all projects (super_admin behavior).
   """
-  def list_for_operator do
-    from(p in Project,
-      where: p.is_template == false,
-      order_by: [desc: p.inserted_at],
-      preload: [:tasks, :organization]
-    )
-    |> Repo.all()
-    |> Enum.map(&with_progress/1)
+  def list_for_operator(opts \\ []) do
+    query =
+      from(p in Project,
+        where: p.is_template == false,
+        order_by: [desc: p.inserted_at],
+        preload: [:tasks, :organization]
+      )
+
+    query =
+      case Keyword.get(opts, :organization_id) do
+        nil -> query
+        org_id -> from(p in query, where: p.organization_id == ^org_id)
+      end
+
+    query |> Repo.all() |> Enum.map(&with_progress/1)
   end
 
   @doc """

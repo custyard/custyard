@@ -67,15 +67,21 @@ defmodule CustyardWeb.Router do
   scope "/operator", CustyardWeb.Operator, as: :operator do
     pipe_through [:browser, :require_operator]
 
+    # All authenticated operators
     live_session :operator,
       on_mount: [{CustyardWeb.Live.OperatorAuth, :default}] do
       live "/", AttentionQueueLive, :index
       live "/conversation/:id", ConversationLive, :show
-      live "/organizations", OrganizationsLive, :index
-      live "/organizations/:id", OrganizationDetailLive, :show
       live "/projects", ProjectsLive, :index
       live "/neglect", NeglectReportLive, :index
       live "/settings", SettingsLive, :index
+    end
+
+    # Admin+ only
+    live_session :operator_admin,
+      on_mount: [{CustyardWeb.Live.OperatorAuth, :require_admin}] do
+      live "/organizations", OrganizationsLive, :index
+      live "/organizations/:id", OrganizationDetailLive, :show
     end
   end
 
