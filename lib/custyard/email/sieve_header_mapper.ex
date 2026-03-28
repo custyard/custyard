@@ -43,6 +43,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
       # => %{tier: :enterprise, urgency: :urgent}
   """
 
+  alias Custyard.Email.Normalizer
   alias Custyard.Settings
 
   # Allowed properties and their valid values
@@ -73,19 +74,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
 
   def extract_properties(_), do: %{}
 
-  # Get header value, case-insensitive for header name
-  defp get_header(headers, name) do
-    # Try exact match first, fall back to case-insensitive lookup
-    headers[name] || find_header_case_insensitive(headers, name)
-  end
-
-  defp find_header_case_insensitive(headers, name) do
-    lowercase_name = String.downcase(name)
-
-    Enum.find_value(headers, fn {k, v} ->
-      if String.downcase(k) == lowercase_name, do: v
-    end)
-  end
+  defp get_header(headers, name), do: Normalizer.get_header(headers, name)
 
   # Map a header value to a property using the config
   defp map_header_to_property(nil, _config), do: nil

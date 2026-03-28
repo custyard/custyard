@@ -1,11 +1,11 @@
 defmodule CustyardWeb.WebhookController do
   use CustyardWeb, :controller
 
-  alias Custyard.Email.Processor
   alias Custyard.InboundRoute
   alias Custyard.Repo
   alias Custyard.Webhooks.Adapters.Slack, as: SlackAdapter
   alias Custyard.Webhooks.Dispatcher
+  alias Custyard.Webhooks.Normalizer
   alias Custyard.Webhooks.Registry
   alias Custyard.Webhooks.Signature
 
@@ -53,16 +53,20 @@ defmodule CustyardWeb.WebhookController do
   For new integrations, use routed webhooks with proper HMAC secrets configured.
   """
   def inbound(conn, params) do
-    case Processor.process(params) do
-      {:ok, conversation} ->
-        json(conn, %{status: "ok", conversation_id: conversation.id})
+    require Logger
+    Logger.info("Legacy webhook endpoint used -- consider migrating to routed webhooks")
 
+    with {:ok, normalized} <- Normalizer.normalize_legacy(params),
+         {:ok, conversation} <- Dispatcher.dispatch_legacy(normalized) do
+      conn
+      |> put_resp_header("x-deprecated", "true")
+      |> json(%{status: "ok", conversation_id: conversation.id})
+    else
       {:error, reason} ->
-        # Log detailed error internally but return generic message
-        require Logger
         Logger.warning("Legacy webhook processing failed: #{inspect(reason)}")
 
         conn
+        |> put_resp_header("x-deprecated", "true")
         |> put_status(422)
         |> json(%{status: "error", reason: "processing failed"})
     end

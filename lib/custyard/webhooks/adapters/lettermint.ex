@@ -77,56 +77,26 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
     end
   end
 
-  # Conversation.changeset validates subject max 500 chars
-  @max_subject_length 500
-  # Message.changeset validates body max 100,000 chars
-  @max_body_length 100_000
+  alias Custyard.Email.Normalizer
 
   @impl true
   def normalize(params) do
     headers = params["headers"] || %{}
-    body = params["text"] || strip_html(params["html"]) || ""
+    body = params["text"] || Normalizer.strip_html(params["html"]) || ""
 
     {:ok,
      %{
        from: params["from"] || params["sender"],
        to: params["to"] || params["recipient"],
-       subject: truncate(params["subject"] || "(no subject)", @max_subject_length),
-       body: truncate(body, @max_body_length),
-       message_id: get_header(headers, "message-id"),
-       in_reply_to: get_header(headers, "in-reply-to"),
-       references: get_header(headers, "references"),
+       subject:
+         Normalizer.truncate(params["subject"] || "(no subject)", Normalizer.max_subject_length()),
+       body: Normalizer.truncate(body, Normalizer.max_body_length()),
+       message_id: Normalizer.get_header(headers, "message-id"),
+       in_reply_to: Normalizer.get_header(headers, "in-reply-to"),
+       references: Normalizer.get_header(headers, "references"),
        headers: headers,
        source: :lettermint,
        metadata: %{}
      }}
-  end
-
-  defp get_header(headers, name) do
-    headers[name] || find_header_case_insensitive(headers, name)
-  end
-
-  defp find_header_case_insensitive(headers, name) do
-    lowercase_name = String.downcase(name)
-
-    Enum.find_value(headers, fn {k, v} ->
-      if String.downcase(to_string(k)) == lowercase_name, do: v
-    end)
-  end
-
-  defp strip_html(nil), do: nil
-
-  defp strip_html(html) do
-    html
-    |> String.replace(~r/<[^>]+>/, "")
-    |> String.replace(~r/\s+/, " ")
-    |> String.trim()
-  end
-
-  defp truncate(nil, _max_length), do: ""
-  defp truncate(text, max_length) when byte_size(text) <= max_length, do: text
-
-  defp truncate(text, max_length) do
-    String.slice(text, 0, max_length - 3) <> "..."
   end
 end
