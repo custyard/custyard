@@ -145,9 +145,9 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
       conn = login(conn, agent)
 
-      # Settings is an admin-only route once the split live_session is in place
+      # Organizations is an admin-only route
       assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/settings")
+               live(conn, ~p"/operator/organizations")
     end
 
     test "allows admin to access admin-only routes", %{conn: conn} do
@@ -163,7 +163,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
       conn = login(conn, admin)
 
-      {:ok, _view, _html} = live(conn, ~p"/operator/settings")
+      {:ok, _view, _html} = live(conn, ~p"/operator/organizations")
     end
 
     test "allows super_admin to access admin-only routes", %{conn: conn} do
@@ -176,7 +176,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
       conn = login(conn, super_admin)
 
-      {:ok, _view, _html} = live(conn, ~p"/operator/settings")
+      {:ok, _view, _html} = live(conn, ~p"/operator/organizations")
     end
   end
 
