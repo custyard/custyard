@@ -17,6 +17,7 @@ defmodule Custyard.Email.LMTPServerTest do
   @test_port 2525
 
   # Ensure any leftover servers are stopped before each test
+  # and create the custyard.test organization for recipient validation
   setup do
     # Stop any server that might be running on the test port
     server_name = LMTPServer.server_name_for_port(@test_port)
@@ -33,7 +34,11 @@ defmodule Custyard.Email.LMTPServerTest do
       _, _ -> :ok
     end
 
-    :ok
+    # Create organizations for test domains so recipient validation passes
+    test_org = insert_organization(domain: "custyard.test")
+    example_org = insert_organization(domain: "example.com")
+
+    {:ok, test_org: test_org, example_org: example_org}
   end
 
   # Sample email for testing - must use CRLF line endings for SMTP/LMTP
@@ -208,10 +213,9 @@ defmodule Custyard.Email.LMTPServerTest do
   end
 
   describe "email processing flow" do
-    setup do
+    setup %{example_org: org} do
       {:ok, pid} = LMTPServer.start_link(port: @test_port)
-      # Create test org/contact for email processing
-      org = insert_organization(domain: "example.com")
+      # Create contact for email processing (org comes from global setup)
       _contact = insert_contact(organization_id: org.id, email: "alice@example.com")
 
       on_exit(fn -> LMTPServer.stop(pid) end)
@@ -429,9 +433,8 @@ defmodule Custyard.Email.LMTPServerTest do
   end
 
   describe "RSET command" do
-    setup do
+    setup %{example_org: org} do
       {:ok, pid} = LMTPServer.start_link(port: @test_port)
-      org = insert_organization(domain: "example.com")
       _contact = insert_contact(organization_id: org.id, email: "alice@example.com")
 
       on_exit(fn -> LMTPServer.stop(pid) end)
@@ -820,8 +823,7 @@ defmodule Custyard.Email.LMTPServerTest do
   end
 
   describe "rate limiting" do
-    setup do
-      org = insert_organization(domain: "example.com")
+    setup %{example_org: org} do
       _contact = insert_contact(organization_id: org.id, email: "alice@example.com")
       {:ok, org: org}
     end
@@ -1094,8 +1096,7 @@ defmodule Custyard.Email.LMTPServerTest do
   end
 
   describe "mail loop detection" do
-    setup do
-      org = insert_organization(domain: "example.com")
+    setup %{example_org: org} do
       _contact = insert_contact(organization_id: org.id, email: "alice@example.com")
       {:ok, org: org}
     end
@@ -1995,8 +1996,7 @@ defmodule Custyard.Email.LMTPServerTest do
       LMTPServer.stop(pid)
     end
 
-    setup do
-      org = insert_organization(domain: "example.com")
+    setup %{example_org: org} do
       _contact = insert_contact(organization_id: org.id, email: "alice@example.com")
       {:ok, org: org}
     end
