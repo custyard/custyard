@@ -6,21 +6,16 @@ defmodule Custyard.Conversations.DormancyChecker do
   customer action beyond the tier-based dormancy threshold. This prevents
   abandoned conversations from cluttering the attention queue.
 
-  Dormancy thresholds match the neglect critical thresholds from Scoring:
-  - Enterprise: 8 hours
-  - Standard: 48 hours
-  - Basic: 72 hours
+  Dormancy thresholds use the neglect critical thresholds from Settings:
+  - Enterprise: default 8 hours
+  - Standard: default 48 hours
+  - Basic: default 72 hours
+
+  These thresholds are database-configurable via the Settings module.
   """
 
   import Ecto.Query
-  alias Custyard.{Conversation, Repo}
-
-  # Dormancy thresholds in hours (same as neglect critical thresholds)
-  @dormancy_thresholds %{
-    enterprise: 8,
-    standard: 48,
-    basic: 72
-  }
+  alias Custyard.{Conversation, Repo, Settings}
 
   @doc """
   Find and transition all stale waiting conversations to dormant.
@@ -35,11 +30,21 @@ defmodule Custyard.Conversations.DormancyChecker do
 
   @doc """
   Query conversations in :waiting state that have exceeded their dormancy threshold.
+
+  Uses the critical threshold from Settings.get_neglect_thresholds/0 as the
+  dormancy cutoff for each tier.
   """
   def stale_conversations do
-    enterprise_cutoff = hours_ago(@dormancy_thresholds.enterprise)
-    standard_cutoff = hours_ago(@dormancy_thresholds.standard)
-    basic_cutoff = hours_ago(@dormancy_thresholds.basic)
+    # Get thresholds from Settings (database-configurable)
+    # Use the critical threshold as the dormancy cutoff
+    thresholds = Settings.get_neglect_thresholds()
+    {_, enterprise_critical} = thresholds.enterprise
+    {_, standard_critical} = thresholds.standard
+    {_, basic_critical} = thresholds.basic
+
+    enterprise_cutoff = hours_ago(enterprise_critical)
+    standard_cutoff = hours_ago(standard_critical)
+    basic_cutoff = hours_ago(basic_critical)
 
     from(c in Conversation,
       join: o in assoc(c, :organization),

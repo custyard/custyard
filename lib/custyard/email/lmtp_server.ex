@@ -129,6 +129,31 @@ defmodule Custyard.Email.LMTPServer do
     When exceeded, the server returns a 452 temporary error.
     Set to `:infinity` to disable recipient limits (not recommended).
 
+  ## IP Access Control
+
+  By default, the LMTP server only accepts connections from localhost (127.0.0.1
+  and ::1) for security. In a containerized deployment or when the MTA is on a
+  different host, configure allowed IPs explicitly:
+
+      config :custyard, :lmtp,
+        enabled: true,
+        port: 2024,
+        hostname: "localhost",
+        allowed_ips: [
+          {127, 0, 0, 1},           # IPv4 localhost
+          {0, 0, 0, 0, 0, 0, 0, 1}, # IPv6 localhost
+          {10, 0, 0, 5}             # MTA host IP
+        ]
+
+  - `allowed_ips` - List of IP address tuples permitted to connect. Each IP must
+    be an Erlang-style tuple (e.g., `{192, 168, 1, 100}` for IPv4 or
+    `{0, 0, 0, 0, 0, 0, 0, 1}` for IPv6). Connections from non-allowed IPs are
+    rejected immediately with a 554 error.
+
+  To allow all IPs (not recommended for production):
+
+      allowed_ips: :any
+
   ## Telemetry Events
 
   The LMTP server emits telemetry events for monitoring and metrics collection.
@@ -143,6 +168,10 @@ defmodule Custyard.Email.LMTPServer do
   - `[:custyard, :lmtp, :connection, :close]` - Emitted when a connection closes
     - Measurements: `%{duration: native_time()}`
     - Metadata: `%{peer: tuple(), reason: term(), messages_processed: integer()}`
+
+  - `[:custyard, :lmtp, :connection, :rejected]` - Emitted when a connection is rejected
+    - Measurements: `%{count: 1}`
+    - Metadata: `%{peer: tuple(), reason: :ip_not_allowed}`
 
   ### Email Processing Events
 
@@ -191,6 +220,10 @@ defmodule Custyard.Email.LMTPServer do
   # Default maximum recipients per message
   @default_max_recipients 100
 
+  # Default allowed IPs - localhost only for security
+  # This restricts connections to local MTA unless explicitly configured otherwise
+  @default_allowed_ips [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}]
+
   # ETS table name for global rate limiting
   @rate_limit_table :lmtp_rate_limits
 
@@ -218,6 +251,7 @@ defmodule Custyard.Email.LMTPServer do
     max_connections = Keyword.get(opts, :max_connections, 1024)
     num_acceptors = Keyword.get(opts, :num_acceptors, 10)
     rate_limit = Keyword.get(opts, :rate_limit, [])
+    allowed_ips = Keyword.get(opts, :allowed_ips, @default_allowed_ips)
 
     max_received_count =
       Keyword.get(opts, :max_received_count, @default_max_received_count)
@@ -239,7 +273,8 @@ defmodule Custyard.Email.LMTPServer do
              rate_limit: rate_limit,
              max_received_count: max_received_count,
              max_message_size: max_message_size,
-             max_recipients: max_recipients
+             max_recipients: max_recipients,
+             allowed_ips: allowed_ips
            ]
          ]},
       type: :worker,
@@ -260,6 +295,7 @@ defmodule Custyard.Email.LMTPServer do
     max_connections = Keyword.get(opts, :max_connections, 1024)
     num_acceptors = Keyword.get(opts, :num_acceptors, 10)
     rate_limit = Keyword.get(opts, :rate_limit, [])
+    allowed_ips = Keyword.get(opts, :allowed_ips, @default_allowed_ips)
 
     max_received_count =
       Keyword.get(opts, :max_received_count, @default_max_received_count)
@@ -281,7 +317,8 @@ defmodule Custyard.Email.LMTPServer do
         rate_limit,
         max_received_count,
         max_recipients,
-        max_message_size
+        max_message_size,
+        allowed_ips
       )
 
     # Ranch options for connection limits
@@ -313,7 +350,8 @@ defmodule Custyard.Email.LMTPServer do
          rate_limit,
          max_received_count,
          max_recipients,
-         max_message_size
+         max_message_size,
+         allowed_ips
        ) do
     # Build rate limit config with defaults
     rate_limit_config = [
@@ -331,7 +369,8 @@ defmodule Custyard.Email.LMTPServer do
         rate_limit: rate_limit_config,
         max_received_count: max_received_count,
         max_recipients: max_recipients,
-        max_message_size: max_message_size
+        max_message_size: max_message_size,
+        allowed_ips: allowed_ips
       ]
     ]
 
@@ -409,10 +448,77 @@ defmodule Custyard.Email.LMTPServer do
   """
   def server_name_for_port(port), do: :"lmtp_server_#{port}"
 
+  @doc """
+  Clean up expired rate limit entries from the ETS table.
+
+  This should be called periodically (e.g., by a scheduler) to prevent
+  unbounded growth of the rate limit table during low-traffic periods.
+
+  Returns the number of entries deleted, or 0 if the table doesn't exist.
+  """
+  @spec cleanup_rate_limits() :: non_neg_integer()
+  def cleanup_rate_limits do
+    cleanup_rate_limits(@default_window_seconds)
+  end
+
+  @doc """
+  Clean up rate limit entries older than the specified window.
+  """
+  @spec cleanup_rate_limits(pos_integer()) :: non_neg_integer()
+  def cleanup_rate_limits(window_seconds) do
+    case :ets.whereis(@rate_limit_table) do
+      :undefined ->
+        0
+
+      _tid ->
+        now = System.system_time(:second)
+        window_start = now - window_seconds
+
+        try do
+          :ets.foldl(
+            fn
+              {{:count, timestamp}, _count}, deleted when timestamp <= window_start ->
+                :ets.delete(@rate_limit_table, {:count, timestamp})
+                deleted + 1
+
+              _, deleted ->
+                deleted
+            end,
+            0,
+            @rate_limit_table
+          )
+        rescue
+          ArgumentError -> 0
+        end
+    end
+  end
+
   # gen_smtp_server_session callbacks
 
   @impl true
   def init(hostname, _session_count, peer_address, options) do
+    allowed_ips = Keyword.get(options, :allowed_ips, @default_allowed_ips)
+
+    # Check IP access control before accepting connection
+    if ip_allowed?(peer_address, allowed_ips) do
+      init_accepted(hostname, peer_address, options)
+    else
+      Logger.warning("LMTP connection rejected: IP not in allowlist",
+        peer: inspect(peer_address)
+      )
+
+      # Emit telemetry for rejected connections
+      :telemetry.execute(
+        [:custyard, :lmtp, :connection, :rejected],
+        %{count: 1},
+        %{peer: peer_address, reason: :ip_not_allowed}
+      )
+
+      {:stop, :normal, "554 5.7.1 Connection refused - IP not authorized"}
+    end
+  end
+
+  defp init_accepted(hostname, peer_address, options) do
     banner = [hostname, " Custyard LMTP server ready"]
     tls_enabled = Keyword.get(options, :tls_enabled, false)
     rate_limit = Keyword.get(options, :rate_limit, [])
@@ -459,6 +565,29 @@ defmodule Custyard.Email.LMTPServer do
     }
 
     {:ok, banner, state}
+  end
+
+  # Check if peer IP is in the allowed list
+  defp ip_allowed?(_peer_address, :any), do: true
+
+  # gen_smtp may pass peer_address as {ip, port} tuple or just the IP tuple
+  defp ip_allowed?({ip, port}, allowed_ips) when is_list(allowed_ips) and is_integer(port) do
+    Enum.member?(allowed_ips, ip)
+  end
+
+  # Handle direct IP tuple (IPv4: 4-element, IPv6: 8-element)
+  defp ip_allowed?(ip, allowed_ips)
+       when is_list(allowed_ips) and is_tuple(ip) and tuple_size(ip) in [4, 8] do
+    Enum.member?(allowed_ips, ip)
+  end
+
+  defp ip_allowed?(peer_address, allowed_ips) when is_list(allowed_ips) do
+    # Fallback for unexpected peer_address formats
+    Logger.debug("Unexpected peer_address format in ip_allowed?",
+      peer: inspect(peer_address)
+    )
+
+    false
   end
 
   @impl true
@@ -546,29 +675,81 @@ defmodule Custyard.Email.LMTPServer do
     current_count = length(state.to)
     max_recipients = Map.get(state, :max_recipients, @default_max_recipients)
 
-    cond do
-      max_recipients == :infinity ->
-        {:ok, %{state | to: [to | state.to]}}
+    # Validate recipient domain before accepting
+    case validate_recipient_domain(to) do
+      :ok ->
+        cond do
+          max_recipients == :infinity ->
+            {:ok, %{state | to: [to | state.to]}}
 
-      current_count < max_recipients ->
-        {:ok, %{state | to: [to | state.to]}}
+          current_count < max_recipients ->
+            {:ok, %{state | to: [to | state.to]}}
 
-      true ->
-        # Emit telemetry for recipient limit exceeded
-        :telemetry.execute(
-          [:custyard, :lmtp, :recipient_limit, :exceeded],
-          %{count: 1},
-          %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
-        )
+          true ->
+            # Emit telemetry for recipient limit exceeded
+            :telemetry.execute(
+              [:custyard, :lmtp, :recipient_limit, :exceeded],
+              %{count: 1},
+              %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
+            )
 
-        Logger.warning("LMTP recipient limit exceeded",
-          current_count: current_count,
-          max_recipients: max_recipients,
+            Logger.warning("LMTP recipient limit exceeded",
+              current_count: current_count,
+              max_recipients: max_recipients,
+              sender: state[:from]
+            )
+
+            {:error, "452 4.5.3 Too many recipients", state}
+        end
+
+      {:error, :invalid_domain} ->
+        Logger.warning("LMTP rejecting unknown recipient domain",
+          recipient: to,
           sender: state[:from]
         )
 
-        {:error, "452 4.5.3 Too many recipients", state}
+        {:error, "550 5.1.1 Unknown recipient domain", state}
     end
+  end
+
+  # Validate that the recipient domain is one we serve
+  # Prevents open relay by rejecting mail for unknown domains
+  defp validate_recipient_domain(recipient) when is_binary(recipient) do
+    case extract_domain(recipient) do
+      nil ->
+        {:error, :invalid_domain}
+
+      domain ->
+        # Check if domain matches any organization's domain or custom_domain
+        if known_domain?(domain) do
+          :ok
+        else
+          {:error, :invalid_domain}
+        end
+    end
+  end
+
+  defp validate_recipient_domain(_), do: {:error, :invalid_domain}
+
+  defp extract_domain(email) do
+    case String.split(to_string(email), "@") do
+      [_, domain] -> String.downcase(domain)
+      _ -> nil
+    end
+  end
+
+  # Check if domain is known (matches an organization)
+  defp known_domain?(domain) do
+    import Ecto.Query
+
+    # Check both domain and custom_domain fields
+    query =
+      from(o in Custyard.Organization,
+        where: o.domain == ^domain or o.custom_domain == ^domain,
+        limit: 1
+      )
+
+    Custyard.Repo.exists?(query)
   end
 
   @impl true
@@ -910,6 +1091,9 @@ defmodule Custyard.Email.LMTPServer do
 
   defp check_global_limit(%{messages_per_minute: limit, window_seconds: window}) do
     if limit == :infinity do
+      # Still clean up old entries periodically even when rate limiting is disabled
+      # This prevents unbounded ETS table growth
+      maybe_cleanup_stale_entries(window)
       :ok
     else
       current_count = get_global_message_count(window)
@@ -918,6 +1102,33 @@ defmodule Custyard.Email.LMTPServer do
         :ok
       else
         {:error, :global_limit}
+      end
+    end
+  end
+
+  # Clean up stale entries approximately every 100 messages to avoid memory leak
+  # when rate limiting is disabled (limit == :infinity)
+  defp maybe_cleanup_stale_entries(window_seconds) do
+    # Only clean up 1% of the time to avoid overhead
+    if :rand.uniform(100) == 1 do
+      now = System.system_time(:second)
+      window_start = now - window_seconds
+
+      try do
+        :ets.foldl(
+          fn
+            {{:count, timestamp}, _count}, acc when timestamp <= window_start ->
+              :ets.delete(@rate_limit_table, {:count, timestamp})
+              acc
+
+            _, acc ->
+              acc
+          end,
+          :ok,
+          @rate_limit_table
+        )
+      rescue
+        ArgumentError -> :ok
       end
     end
   end

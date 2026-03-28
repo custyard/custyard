@@ -11,12 +11,5 @@ defmodule Custyard.Repo.Migrations.AddTeamsAndOperatorRoles do
 
     create unique_index(:teams, [:organization_id, :name])
     create index(:teams, [:organization_id])
-
-    alter table(:operator_accounts) do
-      add :role, :string, null: false, default: "admin"
-      add :team_id, references(:teams, on_delete: :nilify_all)
-    end
-
-    create index(:operator_accounts, [:team_id])
   end
 end

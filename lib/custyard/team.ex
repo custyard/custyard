@@ -12,7 +12,6 @@ defmodule Custyard.Team do
     field :name, :string
 
     belongs_to :organization, Custyard.Organization
-    has_many :operator_accounts, Custyard.OperatorAccount
 
     timestamps(type: :utc_datetime)
   end

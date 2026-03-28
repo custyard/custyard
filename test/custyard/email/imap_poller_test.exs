@@ -202,12 +202,12 @@ defmodule Custyard.Email.ImapPollerTest do
     end
 
     test "continues polling after failure" do
-      # Use short interval
-      config = Keyword.put(@valid_config, :poll_interval, 50)
+      # Use short interval - must allow enough time for backoff (multiplies each failure)
+      config = Keyword.put(@valid_config, :poll_interval, 10)
       {:ok, pid} = ImapPoller.start_link(config)
 
-      # Wait for a few poll cycles
-      Process.sleep(200)
+      # Wait for several poll cycles (accounting for exponential backoff: 10, 20, 40, 80...)
+      Process.sleep(300)
 
       # Process should still be alive and have attempted multiple polls
       assert Process.alive?(pid)

@@ -164,4 +164,182 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       assert html =~ "active"
     end
   end
+
+  describe "organization scoping (RBAC)" do
+    test "super_admin sees conversations from all organizations", %{conn: conn} do
+      # The default setup creates a super_admin operator
+      org1 = insert_organization(name: "Org One")
+      org2 = insert_organization(name: "Org Two")
+
+      conv1 = insert_conversation(organization_id: org1.id, state: :new)
+      conv2 = insert_conversation(organization_id: org2.id, state: :new)
+
+      Scoring.calculate_and_cache(conv1.id)
+      Scoring.calculate_and_cache(conv2.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      # Super admin should see both conversations
+      assert html =~ conv1.subject
+      assert html =~ conv2.subject
+      assert html =~ "Org One"
+      assert html =~ "Org Two"
+    end
+
+    test "admin only sees conversations from their organization" do
+      # Create an organization and an admin operator for that org
+      org = insert_organization(name: "Admin's Org")
+      other_org = insert_organization(name: "Other Org")
+
+      {:ok, admin_operator} =
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{
+          email: "admin@example.com",
+          password: "password123",
+          role: "admin",
+          organization_id: org.id
+        })
+        |> Repo.insert()
+
+      # Create conversations in both orgs (both must be in attention-worthy states)
+      own_conv = insert_conversation(organization_id: org.id, state: :active, subject: "Own Conv")
+
+      other_conv =
+        insert_conversation(organization_id: other_org.id, state: :active, subject: "Other Conv")
+
+      Scoring.calculate_and_cache(own_conv.id)
+      Scoring.calculate_and_cache(other_conv.id)
+
+      # Debug: verify conversations exist and have scores
+      own_reloaded = Repo.get!(Custyard.Conversation, own_conv.id)
+      assert own_reloaded.cached_score > 0, "Own conversation should have score"
+
+      # Connect as admin
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.init_test_session(%{})
+        |> Plug.Conn.put_session(:operator_id, admin_operator.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      # Debug: check what the view is showing
+      refute html =~ "Nothing needs attention", "Should have conversations to show"
+
+      # Admin should see their org's conversation and not others
+      # Test subjects first (more specific than org names which might not be in truncated output)
+      assert html =~ "Own Conv", "Admin should see their org's conversation"
+      refute html =~ "Other Conv", "Admin should NOT see other org's conversation"
+    end
+
+    test "agent only sees conversations from their organization" do
+      # Create an organization and an agent operator for that org
+      org = insert_organization(name: "Agent Org")
+      other_org = insert_organization(name: "Different Org")
+
+      {:ok, agent_operator} =
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{
+          email: "agent@example.com",
+          password: "password123",
+          role: "agent",
+          organization_id: org.id
+        })
+        |> Repo.insert()
+
+      # Create conversations in both orgs (use active state for scoring)
+      # Avoid apostrophes in subjects - they get HTML-escaped
+      own_conv =
+        insert_conversation(organization_id: org.id, state: :active, subject: "Agent Own Conv")
+
+      other_conv =
+        insert_conversation(
+          organization_id: other_org.id,
+          state: :active,
+          subject: "Different Org Conv"
+        )
+
+      Scoring.calculate_and_cache(own_conv.id)
+      Scoring.calculate_and_cache(other_conv.id)
+
+      # Connect as agent
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.init_test_session(%{})
+        |> Plug.Conn.put_session(:operator_id, agent_operator.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      # Agent should only see their org's conversation
+      assert html =~ "Agent Own Conv", "Agent should see their org's conversation"
+      refute html =~ "Different Org Conv", "Agent should NOT see other org's conversation"
+    end
+
+    test "admin snooze action only affects their organization's conversations" do
+      org = insert_organization()
+
+      {:ok, admin_operator} =
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{
+          email: "admin2@example.com",
+          password: "password123",
+          role: "admin",
+          organization_id: org.id
+        })
+        |> Repo.insert()
+
+      conv = insert_conversation(organization_id: org.id, state: :new)
+      Scoring.calculate_and_cache(conv.id)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.init_test_session(%{})
+        |> Plug.Conn.put_session(:operator_id, admin_operator.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator")
+
+      # Toggle snooze menu
+      view
+      |> element("[phx-click=toggle_snooze][phx-value-id=\"#{conv.id}\"]")
+      |> render_click()
+
+      # Snooze the conversation
+      view
+      |> element(~s([phx-click=snooze][phx-value-id="#{conv.id}"][phx-value-duration="1h"]))
+      |> render_click()
+
+      # Conversation should be snoozed
+      html = render(view)
+      refute html =~ conv.subject
+    end
+
+    test "scoped operator sees empty state when their org has no conversations" do
+      org = insert_organization()
+
+      {:ok, agent_operator} =
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{
+          email: "agent2@example.com",
+          password: "password123",
+          role: "agent",
+          organization_id: org.id
+        })
+        |> Repo.insert()
+
+      # Create conversation in a different org
+      other_org = insert_organization()
+      conv = insert_conversation(organization_id: other_org.id, state: :new)
+      Scoring.calculate_and_cache(conv.id)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.init_test_session(%{})
+        |> Plug.Conn.put_session(:operator_id, agent_operator.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      # Should see empty state, not the other org's conversation
+      assert html =~ "Nothing needs attention right now"
+      refute html =~ conv.subject
+    end
+  end
 end

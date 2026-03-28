@@ -382,16 +382,31 @@ defmodule Mix.Tasks.Fly.Secrets do
   defp maybe_add_stage_arg(args, true), do: args ++ ["--stage"]
 
   defp run_fly_secrets_import(args, secrets_input) do
-    case System.cmd("fly", args, stdin: secrets_input, stderr_to_stdout: true) do
-      {output, 0} ->
-        log_output(output, :info)
-        Mix.shell().info("Secrets set successfully")
+    # Write secrets to a temp file and pipe to fly secrets import
+    # (Elixir 1.19 removed the :stdin option from System.cmd)
+    tmp_path = Path.join(System.tmp_dir!(), "fly_secrets_#{:rand.uniform(999_999)}")
 
-      {output, code} ->
-        log_output(output, :error)
-        Mix.shell().error("fly secrets import failed with exit code #{code}")
-        exit({:shutdown, code})
+    try do
+      File.write!(tmp_path, secrets_input)
+      args_str = Enum.map_join(args, " ", &shell_escape/1)
+
+      case System.shell("fly #{args_str} < #{shell_escape(tmp_path)}", stderr_to_stdout: true) do
+        {output, 0} ->
+          log_output(output, :info)
+          Mix.shell().info("Secrets set successfully")
+
+        {output, code} ->
+          log_output(output, :error)
+          Mix.shell().error("fly secrets import failed with exit code #{code}")
+          exit({:shutdown, code})
+      end
+    after
+      File.rm(tmp_path)
     end
+  end
+
+  defp shell_escape(arg) do
+    "'" <> String.replace(arg, "'", "'\\''") <> "'"
   end
 
   defp log_output("", _level), do: :ok

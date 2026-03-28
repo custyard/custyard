@@ -7,6 +7,32 @@ defmodule CustyardWeb.Plugs.CustomDomain do
 
   This plug should be called early in the pipeline (in endpoint.ex) to allow
   route matching to work correctly with custom domains.
+
+  ## Security Notes
+
+  - **Host header trust**: This plug trusts the Host header for domain matching.
+    Organizations must explicitly configure their custom_domain in settings.
+    An attacker pointing arbitrary DNS at the server would need to guess an
+    existing configured custom_domain, and would only access the public portal.
+
+  - **Path rewriting**: This plug directly modifies `conn.request_path` and
+    `conn.path_info` to inject the organization token. This is intentional and
+    required for router matching. The original path is preserved in the
+    rewritten URL structure (`/p/:token/original/path`).
+
+  - **Path rewriting concern (accepted risk)**: The plug rewrites request paths
+    based on custom_domain database lookups without an explicit domain allowlist.
+    This was analyzed and accepted because:
+
+    1. **Limited impact** - only affects public portal routes (no auth bypass)
+    2. **Attack requires knowledge** - attacker must know a valid configured custom_domain
+    3. **Additional protection** - org.token provides protection for route matching
+    4. **Infrastructure-level mitigation** - TLS SNI validation or reverse proxy
+       (Fly.io, nginx) should validate Host headers against its config
+
+    This is not traditional SSRF (no outbound requests to attacker-controlled URLs),
+    but a path-rewriting concern where untrusted Host headers could influence routing.
+    The proper fix is infrastructure-level Host header validation, not application code.
   """
   require Logger
 

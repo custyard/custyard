@@ -17,20 +17,29 @@ COPY mix.exs mix.lock ./
 COPY config config
 RUN mix deps.get --only prod && mix deps.compile
 
-# Copy assets and compile
+# Copy application source
+COPY lib lib
+
+# Copy assets and static files for asset build (NOT migrations yet - they change frequently)
 COPY assets assets
-COPY priv priv
+COPY priv/static priv/static
+COPY priv/gettext priv/gettext
 RUN mix assets.deploy
 
-# Copy lib and compile
-COPY lib lib
+# Compile application
 RUN mix compile
+
+# Copy migrations and seeds (after compile - changes here won't invalidate compile cache)
+COPY priv/repo priv/repo
 
 # Build release
 RUN mix release
 
 # Runtime stage
-FROM debian:13-slim
+# Use Debian 12 (bookworm) to match the Elixir builder image base.
+# Avoids library version mismatches (libc, openssl) between build and runtime.
+# Debian 13 (trixie) is testing-branch and packages change unpredictably.
+FROM debian:12-slim
 
 LABEL org.opencontainers.image.source="https://github.com/onetimesecret/custyard"
 LABEL org.opencontainers.image.description="Custyard Service Platform"

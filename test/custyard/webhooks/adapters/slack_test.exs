@@ -77,30 +77,23 @@ defmodule Custyard.Webhooks.Adapters.SlackTest do
   end
 
   describe "verify_signature/3" do
-    test "returns :ok for valid signature" do
-      payload = "test-payload"
-      secret = "test-secret"
+    # Slack requires timestamp in signature verification (v0:{timestamp}:{body})
+    # The simplified verify_signature/3 callback cannot correctly verify Slack
+    # signatures, so it always returns an error directing to verify_request/4
 
-      hmac =
-        :crypto.mac(:hmac, :sha256, secret, payload)
-        |> Base.encode16(case: :lower)
-
-      signature = "v0=" <> hmac
-
-      assert :ok = Slack.verify_signature(payload, signature, secret)
+    test "returns error directing to use verify_request/4" do
+      assert {:error, msg} = Slack.verify_signature("payload", "v0=signature", "secret")
+      assert msg =~ "verify_request/4"
     end
 
-    test "returns error for invalid signature" do
-      assert {:error, "invalid signature"} = Slack.verify_signature("payload", "v0=bad", "secret")
+    test "returns same error for nil signature" do
+      assert {:error, msg} = Slack.verify_signature("payload", nil, "secret")
+      assert msg =~ "verify_request/4"
     end
 
-    test "returns error for missing signature" do
-      assert {:error, "missing signature header"} =
-               Slack.verify_signature("payload", nil, "secret")
-    end
-
-    test "returns error for no secret" do
-      assert {:error, "no secret configured"} = Slack.verify_signature("payload", "sig", nil)
+    test "returns same error for nil secret" do
+      assert {:error, msg} = Slack.verify_signature("payload", "sig", nil)
+      assert msg =~ "verify_request/4"
     end
   end
 

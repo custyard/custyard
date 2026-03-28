@@ -1,7 +1,13 @@
 defmodule CustyardWeb.Operator.AttentionQueueLive do
   use CustyardWeb, :live_view
 
+  import CustyardWeb.OperatorComponents
+
   alias Custyard.{Conversations, Scoring}
+
+  # Debounce delay for PubSub-triggered reloads (milliseconds)
+  # This prevents N+1 query storms when multiple conversations update rapidly
+  @reload_debounce_ms 500
 
   @impl true
   def mount(_params, _session, socket) do
@@ -11,9 +17,11 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
     socket =
       socket
+      |> assign(:page_title, "Attention Queue")
       |> assign(:filter, "all")
       |> assign(:show_score_breakdown, nil)
       |> assign(:show_snooze_menu, nil)
+      |> assign(:reload_timer, nil)
       |> load_conversations()
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
@@ -64,17 +72,46 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       conversation = Conversations.get_conversation!(id)
       until = calculate_snooze_until(duration)
 
-      {:ok, _} = Conversations.snooze(conversation, until)
+      case Conversations.snooze(conversation, until) do
+        {:ok, _} ->
+          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
 
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations:org:#{conversation.organization_id}",
+            {:conversation_updated, id}
+          )
 
-      Phoenix.PubSub.broadcast(
-        Custyard.PubSub,
-        "conversations:org:#{conversation.organization_id}",
-        {:conversation_updated, id}
-      )
+          {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_conversations()}
 
-      {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_conversations()}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to snooze conversation")}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("unsnooze", %{"id" => id}, socket) do
+    with {id, ""} <- Integer.parse(id),
+         true <- queue_contains_conversation?(socket, id) do
+      conversation = Conversations.get_conversation!(id)
+
+      case Conversations.unsnooze(conversation) do
+        {:ok, _} ->
+          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+
+          Phoenix.PubSub.broadcast(
+            Custyard.PubSub,
+            "conversations:org:#{conversation.organization_id}",
+            {:conversation_updated, id}
+          )
+
+          {:noreply, load_conversations(socket)}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to un-snooze conversation")}
+      end
     else
       _ -> {:noreply, socket}
     end
@@ -82,29 +119,59 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   @impl true
   def handle_info({:conversation_updated, _id}, socket) do
-    {:noreply, load_conversations(socket)}
+    {:noreply, schedule_reload(socket)}
   end
 
   def handle_info({:conversation_created, _id}, socket) do
-    {:noreply, load_conversations(socket)}
+    {:noreply, schedule_reload(socket)}
+  end
+
+  # Debounced reload timer fired - perform the actual reload
+  def handle_info(:debounced_reload, socket) do
+    {:noreply,
+     socket
+     |> assign(:reload_timer, nil)
+     |> load_conversations()}
+  end
+
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
+  # Schedule a debounced reload - cancel any pending timer first
+  defp schedule_reload(socket) do
+    # Cancel existing timer if any
+    if timer = socket.assigns[:reload_timer] do
+      Process.cancel_timer(timer)
+    end
+
+    # Schedule new reload
+    timer = Process.send_after(self(), :debounced_reload, @reload_debounce_ms)
+    assign(socket, :reload_timer, timer)
   end
 
   defp load_conversations(socket) do
     filter = socket.assigns.filter
+    # Scope to operator's organization (nil for super_admin = all orgs)
+    org_id = socket.assigns[:scoped_organization_id]
+    now = DateTime.utc_now()
 
     conversations =
-      Conversations.list_for_attention_queue(filter: filter)
+      Conversations.list_for_attention_queue(filter: filter, organization_id: org_id)
       |> Enum.map(fn %{conversation: conv, message_count: message_count} ->
         neglect_status = Scoring.neglect_status(conv)
         breakdown = Scoring.breakdown(conv)
         hours_idle = hours_since(conv.last_operator_action_at || conv.inserted_at)
+        is_snoozed = conv.snoozed_until && DateTime.compare(conv.snoozed_until, now) == :gt
 
         %{
           conversation: conv,
           neglect_status: neglect_status,
           breakdown: breakdown,
           hours_idle: hours_idle,
-          message_count: message_count
+          message_count: message_count,
+          is_snoozed: is_snoozed
         }
       end)
 
@@ -139,6 +206,12 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   defp format_idle_time(hours) when hours < 24, do: "#{hours}h ago"
   defp format_idle_time(hours), do: "#{div(hours, 24)}d ago"
 
+  # Format snooze expiry time for display
+  @compile {:nowarn_unused_function, format_snooze_time: 1}
+  defp format_snooze_time(datetime) do
+    Calendar.strftime(datetime, "%b %d %H:%M")
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -151,16 +224,22 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           What needs attention
         </h1>
         <span class="text-xs text-gray-400 dark:text-zinc-500" data-testid="operator-queue-count">
-          {length(@conversations)} items
+          {length(@conversations)} {if length(@conversations) == 1, do: "item", else: "items"}
         </span>
       </div>
 
-      <div class="flex gap-2 mb-4" data-testid="operator-queue-filters">
+      <div
+        class="flex gap-2 mb-4"
+        role="group"
+        aria-label="Filter by status"
+        data-testid="operator-queue-filters"
+      >
         <.filter_button filter={@filter} value="all" label="all" />
         <.filter_button filter={@filter} value="new" label="new" />
         <.filter_button filter={@filter} value="active" label="active" />
         <.filter_button filter={@filter} value="waiting" label="waiting" />
         <.filter_button filter={@filter} value="dormant" label="dormant" />
+        <.filter_button filter={@filter} value="snoozed" label="snoozed" />
       </div>
 
       <div class="space-y-2">
@@ -194,6 +273,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     <button
       phx-click="filter"
       phx-value-filter={@value}
+      aria-pressed={to_string(@filter == @value)}
       data-testid={"operator-queue-filter-#{@value}"}
       class={[
         "text-xs px-2.5 py-1 rounded",
@@ -284,175 +364,61 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           {if @show_score, do: "Hide score", else: "Why this rank?"}
         </button>
 
-        <div class="relative">
+        <%= if @item.is_snoozed do %>
           <button
-            phx-click="toggle_snooze"
+            phx-click="unsnooze"
             phx-value-id={@item.conversation.id}
-            class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
-            data-testid="operator-queue-snooze-btn"
+            class="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 px-2 py-1 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+            data-testid="operator-queue-unsnooze-btn"
           >
-            Snooze
+            Un-snooze
           </button>
-          <%= if @show_snooze do %>
-            <div
-              phx-click-away="toggle_snooze"
+          <span class="text-xs text-gray-400 dark:text-zinc-500">
+            until {format_snooze_time(@item.conversation.snoozed_until)}
+          </span>
+        <% else %>
+          <div class="relative">
+            <button
+              phx-click="toggle_snooze"
               phx-value-id={@item.conversation.id}
-              class="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-10 p-1"
-              data-testid="operator-queue-snooze-menu"
+              aria-haspopup="menu"
+              aria-expanded={to_string(@show_snooze)}
+              class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
+              data-testid="operator-queue-snooze-btn"
             >
-              <%= for opt <- ["1h", "4h", "1d", "3d"] do %>
-                <button
-                  phx-click="snooze"
-                  phx-value-id={@item.conversation.id}
-                  phx-value-duration={opt}
-                  class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded"
-                  data-testid={"operator-queue-snooze-opt-#{opt}"}
-                >
-                  {opt}
-                </button>
-              <% end %>
-            </div>
-          <% end %>
-        </div>
+              Snooze
+            </button>
+            <%= if @show_snooze do %>
+              <div
+                phx-click-away="toggle_snooze"
+                phx-key="escape"
+                phx-keydown="toggle_snooze"
+                phx-value-id={@item.conversation.id}
+                role="menu"
+                aria-label="Snooze duration options"
+                class="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-10 p-1"
+                data-testid="operator-queue-snooze-menu"
+              >
+                <%= for opt <- ["1h", "4h", "1d", "3d"] do %>
+                  <button
+                    phx-click="snooze"
+                    phx-value-id={@item.conversation.id}
+                    phx-value-duration={opt}
+                    role="menuitem"
+                    class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded focus:outline-none focus:bg-gray-100 dark:focus:bg-zinc-700"
+                    data-testid={"operator-queue-snooze-opt-#{opt}"}
+                  >
+                    {opt}
+                  </button>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
       </div>
 
       <%= if @show_score do %>
-        <.score_breakdown breakdown={@item.breakdown} />
-      <% end %>
-    </div>
-    """
-  end
-
-  attr :tier, :atom, required: true
-
-  defp tier_badge(assigns) do
-    colors =
-      case assigns.tier do
-        :enterprise -> "text-purple-700 bg-purple-50"
-        :standard -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-        :basic -> "text-gray-400 dark:text-zinc-500 bg-gray-50 dark:bg-zinc-800"
-        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-      end
-
-    assigns = assign(assigns, :colors, colors)
-
-    ~H"""
-    <span
-      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
-      data-testid={"operator-tier-badge-#{@tier}"}
-    >
-      {to_string(@tier)}
-    </span>
-    """
-  end
-
-  attr :level, :atom, required: true
-
-  defp neglect_badge(assigns) do
-    ~H"""
-    <%= case @level do %>
-      <% :critical -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300"
-          data-testid="operator-neglect-badge-critical"
-        >
-          NEGLECTED
-        </span>
-      <% :warning -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded border bg-amber-100 text-amber-800 border-amber-300"
-          data-testid="operator-neglect-badge-warning"
-        >
-          aging
-        </span>
-      <% _ -> %>
-    <% end %>
-    """
-  end
-
-  attr :state, :atom, required: true
-
-  defp state_badge(assigns) do
-    colors =
-      case assigns.state do
-        :new -> "bg-blue-100 text-blue-800"
-        :active -> "bg-green-100 text-green-800"
-        :waiting -> "bg-yellow-100 text-yellow-800"
-        :dormant -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
-        :resolved -> "bg-gray-100 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500"
-        _ -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
-      end
-
-    assigns = assign(assigns, :colors, colors)
-
-    ~H"""
-    <span
-      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
-      data-testid={"operator-state-badge-#{@state}"}
-    >
-      {to_string(@state)}
-    </span>
-    """
-  end
-
-  attr :urgency, :atom, required: true
-
-  defp urgency_badge(assigns) do
-    ~H"""
-    <%= case @urgency do %>
-      <% :urgent -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-800"
-          data-testid="operator-urgency-badge-urgent"
-        >
-          urgent
-        </span>
-      <% :elevated -> %>
-        <span
-          class="text-xs px-1.5 py-0.5 rounded font-medium bg-orange-100 text-orange-800"
-          data-testid="operator-urgency-badge-elevated"
-        >
-          elevated
-        </span>
-      <% _ -> %>
-    <% end %>
-    """
-  end
-
-  attr :breakdown, :map, required: true
-
-  defp score_breakdown(assigns) do
-    entries =
-      [
-        {"idle", assigns.breakdown.idle},
-        {"state", assigns.breakdown.state},
-        {"tier", assigns.breakdown.tier},
-        {"urgency", assigns.breakdown.urgency},
-        {"velocity", assigns.breakdown.velocity},
-        {"neglect", assigns.breakdown.neglect_bonus}
-      ]
-      |> Enum.filter(fn {_, v} -> v > 0 end)
-
-    total = Enum.sum(Enum.map(entries, fn {_, v} -> v end))
-    assigns = assign(assigns, :entries, entries) |> assign(:total, total)
-
-    ~H"""
-    <div
-      class="mt-2 p-2 bg-gray-50 dark:bg-zinc-800 rounded text-xs space-y-1"
-      data-testid="operator-score-breakdown"
-    >
-      <div class="font-medium text-gray-700 dark:text-zinc-300 mb-1">Score breakdown</div>
-      <%= for {key, val} <- @entries do %>
-        <div class="flex items-center gap-2">
-          <span class="w-20 text-gray-500 dark:text-zinc-400">{key}</span>
-          <div class="flex-1 bg-gray-200 dark:bg-zinc-600 rounded-full h-1.5">
-            <div
-              class="bg-indigo-400 h-1.5 rounded-full"
-              style={"width: #{if @total > 0, do: (val / @total) * 100, else: 0}%"}
-            />
-          </div>
-          <span class="w-6 text-right text-gray-600 dark:text-zinc-400">{val}</span>
-        </div>
+        <.score_breakdown breakdown={@item.breakdown} show_total={false} />
       <% end %>
     </div>
     """

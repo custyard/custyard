@@ -14,6 +14,7 @@ defmodule Custyard.Scoring.Scheduler do
   require Logger
 
   alias Custyard.Conversations.DormancyChecker
+  alias Custyard.Email.LMTPServer
   alias Custyard.Notifications.NeglectChecker
   alias Custyard.Scoring.Recalculator
 
@@ -41,18 +42,24 @@ defmodule Custyard.Scoring.Scheduler do
   end
 
   defp run_recalculate do
+    # Run all checks in parallel Tasks to avoid blocking the GenServer
+    # This prevents long-running recalculations from blocking dormancy/neglect checks
+    Task.start(fn -> run_recalculate_task() end)
+    Task.start(fn -> run_dormancy_check() end)
+    Task.start(fn -> run_neglect_notifications() end)
+    Task.start(fn -> run_lmtp_cleanup() end)
+  end
+
+  defp run_recalculate_task do
     Logger.info("Scoring.Scheduler: starting recalculation")
 
     case safe_recalculate() do
-      :ok ->
-        Logger.info("Scoring.Scheduler: recalculation complete")
+      {:ok, count} ->
+        Logger.info("Scoring.Scheduler: recalculated #{count} conversations")
 
       {:error, reason} ->
         Logger.error("Scoring.Scheduler: recalculation failed: #{inspect(reason)}")
     end
-
-    run_dormancy_check()
-    run_neglect_notifications()
   end
 
   defp run_dormancy_check do
@@ -82,8 +89,8 @@ defmodule Custyard.Scoring.Scheduler do
   end
 
   defp safe_recalculate do
-    Recalculator.recalculate_all()
-    :ok
+    count = Recalculator.recalculate_all()
+    {:ok, count}
   rescue
     e -> {:error, e}
   catch
@@ -101,6 +108,28 @@ defmodule Custyard.Scoring.Scheduler do
 
   defp safe_neglect_check do
     NeglectChecker.check_and_notify()
+  rescue
+    e -> {:error, e}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp run_lmtp_cleanup do
+    case safe_lmtp_cleanup() do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.debug("Scoring.Scheduler: cleaned up #{count} LMTP rate limit entries")
+
+      {:error, reason} ->
+        Logger.error("Scoring.Scheduler: LMTP rate limit cleanup failed: #{inspect(reason)}")
+    end
+  end
+
+  defp safe_lmtp_cleanup do
+    count = LMTPServer.cleanup_rate_limits()
+    {:ok, count}
   rescue
     e -> {:error, e}
   catch

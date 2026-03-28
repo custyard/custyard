@@ -3,7 +3,8 @@ defmodule Custyard.Organizations do
   Context for organization operations including custom domain management.
   """
 
-  alias Custyard.{InboundRoutes, Organization, Repo}
+  require Logger
+  alias Custyard.{Contact, Conversation, InboundRoutes, Organization, Repo}
   import Ecto.Query
 
   @doc """
@@ -90,6 +91,28 @@ defmodule Custyard.Organizations do
   end
 
   @doc """
+  Get an organization by ID with preloaded contacts.
+  """
+  def get_organization_with_contacts(id) do
+    from(o in Organization,
+      where: o.id == ^id,
+      preload: [:contacts]
+    )
+    |> Repo.one()
+  end
+
+  @doc """
+  List contacts for an organization.
+  """
+  def list_contacts(org_id) do
+    from(c in Contact,
+      where: c.organization_id == ^org_id,
+      order_by: [asc: c.name, asc: c.email]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Get an organization by token.
   """
   def get_organization_by_token(token) do
@@ -124,7 +147,7 @@ defmodule Custyard.Organizations do
     Ecto.Multi.new()
     |> Ecto.Multi.insert(:organization, Organization.changeset(%Organization{}, attrs))
     |> Ecto.Multi.run(:default_route, fn _repo, %{organization: org} ->
-      InboundRoutes.create_route(org, :general)
+      InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
     end)
     |> Repo.transaction()
     |> case do
@@ -152,9 +175,53 @@ defmodule Custyard.Organizations do
 
   @doc """
   Delete an organization.
+
+  WARNING: This is a hard delete that cascades to all associated contacts and
+  conversations. This action is irreversible. Deletion is logged for audit purposes.
+
+  Returns `{:ok, organization}` or `{:error, changeset}`.
   """
   def delete_organization(%Organization{} = org) do
-    Repo.delete(org)
+    # Count associated records for audit logging
+    contact_count =
+      Repo.aggregate(from(c in Contact, where: c.organization_id == ^org.id), :count)
+
+    conversation_count =
+      Repo.aggregate(from(c in Conversation, where: c.organization_id == ^org.id), :count)
+
+    # Log deletion details before executing
+    Logger.warning(
+      "Deleting organization",
+      organization_id: org.id,
+      organization_name: org.name,
+      organization_domain: org.domain,
+      contacts_to_delete: contact_count,
+      conversations_to_delete: conversation_count
+    )
+
+    result = Repo.delete(org)
+
+    case result do
+      {:ok, deleted} ->
+        Logger.info(
+          "Organization deleted successfully",
+          organization_id: deleted.id,
+          organization_name: deleted.name
+        )
+
+        # Emit telemetry for monitoring
+        :telemetry.execute(
+          [:custyard, :organization, :deleted],
+          %{count: 1, contacts: contact_count, conversations: conversation_count},
+          %{organization_id: org.id, organization_name: org.name}
+        )
+
+        {:ok, deleted}
+
+      {:error, _} = error ->
+        Logger.error("Failed to delete organization", organization_id: org.id)
+        error
+    end
   end
 
   @doc """
@@ -162,5 +229,19 @@ defmodule Custyard.Organizations do
   """
   def get_organization_by_custom_domain(domain) when is_binary(domain) do
     Repo.get_by(Organization, custom_domain: domain)
+  end
+
+  @doc """
+  Regenerate the portal access token for an organization.
+
+  This invalidates any existing portal links using the old token.
+  Returns `{:ok, organization}` or `{:error, changeset}`.
+  """
+  def regenerate_portal_token(%Organization{} = org) do
+    new_token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+
+    org
+    |> Ecto.Changeset.change(token: new_token)
+    |> Repo.update()
   end
 end

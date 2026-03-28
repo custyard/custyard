@@ -101,13 +101,31 @@ defmodule Custyard.ConversationTest do
       assert get_change(changeset, :state) == :active
     end
 
-    test "allows transition through all states" do
-      for state <- Conversation.states() do
-        conv = %Conversation{state: :new}
-        changeset = Conversation.state_changeset(conv, state)
+    test "validates state transitions according to state machine" do
+      # Test valid transitions from each state
+      for {from_state, allowed_to_states} <- Conversation.valid_transitions() do
+        for to_state <- allowed_to_states do
+          conv = %Conversation{state: from_state}
+          changeset = Conversation.state_changeset(conv, to_state)
 
-        assert changeset.valid?, "Expected transition to #{state} to be valid"
+          assert changeset.valid?,
+                 "Expected #{from_state} -> #{to_state} to be valid"
+        end
       end
+    end
+
+    test "rejects invalid state transitions" do
+      # :new cannot go to :waiting or :dormant
+      conv = %Conversation{state: :new}
+      changeset = Conversation.state_changeset(conv, :waiting)
+      refute changeset.valid?
+      assert %{state: [error_msg]} = errors_on(changeset)
+      assert error_msg =~ "cannot transition"
+
+      # :resolved can only go to :active
+      conv = %Conversation{state: :resolved}
+      changeset = Conversation.state_changeset(conv, :waiting)
+      refute changeset.valid?
     end
 
     test "rejects invalid state value" do

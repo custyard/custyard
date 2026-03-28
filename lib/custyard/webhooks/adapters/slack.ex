@@ -17,29 +17,12 @@ defmodule Custyard.Webhooks.Adapters.Slack do
   def source_name, do: :slack
 
   @impl true
-  def verify_signature(_payload, _signature, nil), do: {:error, "no secret configured"}
-
-  def verify_signature(payload, signature, secret)
-      when is_binary(signature) and is_binary(secret) do
-    # Simplified verification without timestamp — used only for basic
-    # signature checks. The controller uses verify_request/4 instead,
-    # which includes proper timestamp validation and replay protection.
-    body = if is_binary(payload), do: payload, else: Jason.encode!(payload)
-
-    hmac =
-      :crypto.mac(:hmac, :sha256, secret, body)
-      |> Base.encode16(case: :lower)
-
-    expected = "v0=" <> hmac
-
-    if Plug.Crypto.secure_compare(expected, String.downcase(signature)) do
-      :ok
-    else
-      {:error, "invalid signature"}
-    end
+  def verify_signature(_payload, _signature, _secret) do
+    # Slack requires timestamp in signature verification (v0:{timestamp}:{body})
+    # The simplified verify_signature/3 callback cannot correctly verify Slack
+    # signatures without the timestamp. Use verify_request/4 instead.
+    {:error, "Slack requires verify_request/4 with timestamp for proper verification"}
   end
-
-  def verify_signature(_payload, nil, _secret), do: {:error, "missing signature header"}
 
   @doc """
   Verify a Slack request using the full signing protocol with timestamp.
@@ -47,6 +30,7 @@ defmodule Custyard.Webhooks.Adapters.Slack do
   This is the preferred verification method that validates both the
   signature and the timestamp for replay protection.
   """
+  @impl true
   def verify_request(raw_body, timestamp_str, signature, secret) do
     with {:ok, timestamp} <- parse_timestamp(timestamp_str),
          :ok <- validate_timestamp(timestamp) do

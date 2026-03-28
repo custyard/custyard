@@ -72,7 +72,7 @@ defmodule Custyard.InboundRouteTest do
         |> InboundRoute.changeset(%{
           organization_id: org.id,
           route_type: :general,
-          callback_token: "unique-token"
+          callback_token: "unique-token-secure-32-chars-xyz"
         })
         |> Repo.insert!()
 

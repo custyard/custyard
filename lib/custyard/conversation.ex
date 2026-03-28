@@ -8,6 +8,18 @@ defmodule Custyard.Conversation do
 
   @neglect_levels [:ok, :warning, :critical]
 
+  # Valid state transitions: from_state => [allowed_to_states]
+  # Transitions follow this logic:
+  # - :new -> :active (operator or customer action), :resolved (resolve without activity)
+  # Valid state transitions
+  @valid_transitions %{
+    new: [:active, :resolved],
+    active: [:waiting, :resolved],
+    waiting: [:active, :dormant, :resolved],
+    dormant: [:active, :resolved],
+    resolved: [:active]
+  }
+
   schema "conversations" do
     field :subject, :string
     field :state, Ecto.Enum, values: @states, default: :new
@@ -43,7 +55,8 @@ defmodule Custyard.Conversation do
       :state,
       :urgency,
       :source,
-      :cached_score,
+      # Note: :cached_score is computed by Scoring.calculate_and_cache/1
+      # Note: :last_neglect_notification is managed by NeglectChecker
       :last_operator_action_at,
       :last_customer_action_at,
       :snoozed_until,
@@ -54,21 +67,66 @@ defmodule Custyard.Conversation do
     |> validate_required_organization()
     |> validate_required([:subject])
     |> validate_length(:subject, max: 500)
-    |> validate_inclusion(:state, @states)
-    |> validate_inclusion(:urgency, @urgencies)
-    |> validate_inclusion(:source, @sources)
+    # Note: :state, :urgency, :source use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:contact_id)
     |> foreign_key_constraint(:project_id)
   end
 
   @doc """
+  Returns the map of valid state transitions.
+  """
+  def valid_transitions, do: @valid_transitions
+
+  @doc """
+  Check if a state transition is valid.
+
+  ## Examples
+
+      valid_transition?(:new, :active)     # true
+      valid_transition?(:new, :dormant)    # false
+      valid_transition?(:resolved, :active) # true (reopen)
+  """
+  def valid_transition?(from_state, to_state) do
+    case Map.get(@valid_transitions, from_state) do
+      nil -> false
+      allowed -> to_state in allowed
+    end
+  end
+
+  @doc """
   Changeset for transitioning conversation state.
+
+  Validates that the transition is allowed according to the state machine.
+  Invalid transitions will add an error to the changeset.
   """
   def state_changeset(conversation, new_state) do
-    conversation
-    |> cast(%{state: new_state}, [:state])
-    |> validate_inclusion(:state, @states)
+    changeset =
+      conversation
+      |> cast(%{state: new_state}, [:state])
+
+    current_state = conversation.state
+
+    # If state hasn't changed, no validation needed
+    if current_state == new_state do
+      changeset
+    else
+      validate_state_transition(changeset, current_state, new_state)
+    end
+  end
+
+  defp validate_state_transition(changeset, from_state, to_state) do
+    if valid_transition?(from_state, to_state) do
+      changeset
+    else
+      allowed = Map.get(@valid_transitions, from_state, [])
+
+      add_error(
+        changeset,
+        :state,
+        "cannot transition from #{from_state} to #{to_state}. Allowed: #{Enum.join(allowed, ", ")}"
+      )
+    end
   end
 
   @doc """
@@ -77,6 +135,26 @@ defmodule Custyard.Conversation do
   def snooze_changeset(conversation, until) do
     conversation
     |> cast(%{snoozed_until: until}, [:snoozed_until])
+  end
+
+  @doc """
+  Internal changeset for system-managed fields.
+
+  This changeset allows updating fields that are managed by internal
+  processes (NeglectChecker, Scoring, etc.) and should NOT be exposed
+  to external/user input.
+
+  Fields included:
+  - `:cached_score` - computed by Scoring.calculate_and_cache/1
+  - `:last_neglect_notification` - managed by NeglectChecker
+
+  This separation ensures the public changeset/2 remains safe for
+  user-provided input while allowing internal processes to update
+  computed/system fields.
+  """
+  def internal_changeset(conversation, attrs) do
+    conversation
+    |> cast(attrs, [:cached_score, :last_neglect_notification])
   end
 
   # Disambiguation conversations can have nil organization_id

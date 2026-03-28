@@ -1,15 +1,17 @@
 defmodule Custyard.Repo.Migrations.AddDomainUniquenessToOrganizations do
   use Ecto.Migration
 
-  def change do
-    # Drop the existing non-unique domain index first
-    drop_if_exists index(:organizations, [:domain], name: :organizations_domain_index)
+  @doc """
+  This migration is intentionally a no-op.
 
-    # Create unique partial index: domain must be unique where not NULL
-    # Use explicit name to avoid collision with the dropped index
-    create_if_not_exists unique_index(:organizations, [:domain],
-      name: :organizations_domain_unique_index,
-      where: "domain IS NOT NULL"
-    )
+  The unique partial index on organizations.domain was already created by
+  migration 20260323050016_add_unique_index_on_organizations_domain.exs.
+
+  This migration existed to ensure domain uniqueness but was created after
+  the fix was already applied in migration 016. Keeping as no-op to avoid
+  breaking existing deployments that have this migration in schema_migrations.
+  """
+  def change do
+    # Intentionally empty - work done in migration 016
   end
 end

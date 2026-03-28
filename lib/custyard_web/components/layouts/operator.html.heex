@@ -1,65 +1,206 @@
+<%!-- Helper to determine if a nav link is active --%>
+<% # Get current path from socket URI or assigns
+current_path =
+  case assigns do
+    %{socket: %{host_uri: %{path: path}}} when is_binary(path) -> path
+    # LiveView - use live_action instead
+    %{live_action: _} -> nil
+    _ -> nil
+  end
+
+# Check if current view matches the nav item
+# For LiveViews, we can check the view module
+current_view = assigns[:socket] && assigns.socket.view
+
+nav_active? = fn target_path, target_views ->
+  path_match = current_path && String.starts_with?(current_path, target_path)
+  view_match = is_list(target_views) && current_view in target_views
+  path_match || view_match
+end
+
+active_class =
+  "text-sm font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2 py-1 rounded-md border-b-2 border-indigo-600 dark:border-indigo-400"
+
+inactive_class =
+  "text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200 px-2 py-1 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-800" %>
 <div class="h-screen flex flex-col bg-gray-100 dark:bg-zinc-900" data-testid="operator-layout">
   <%!-- Top nav --%>
   <div
-    class="bg-white dark:bg-zinc-800 border-b border-gray-200 dark:border-zinc-700 px-4 py-2 flex items-center gap-4"
+    class="bg-white dark:bg-zinc-800 border-b border-gray-200 dark:border-zinc-700 px-4 py-2"
     data-testid="operator-layout-nav"
   >
-    <span class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight">
-      Service Platform
-    </span>
-    <span class="text-gray-300 dark:text-zinc-600">|</span>
-    <.link
-      navigate={~p"/operator"}
-      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-      data-testid="operator-nav-queue"
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <span class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight">
+          Service Platform
+        </span>
+        <span class="hidden md:inline text-gray-300 dark:text-zinc-600">|</span>
+        <%!-- Desktop nav links - hidden on mobile --%>
+        <nav class="hidden md:flex items-center gap-4">
+          <.link
+            navigate={~p"/operator"}
+            class={
+              if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) &&
+                   !nav_active?.("/operator/", []),
+                 do: active_class,
+                 else: inactive_class
+            }
+            data-testid="operator-nav-queue"
+          >
+            Attention Queue
+          </.link>
+          <.link
+            navigate={~p"/operator/neglect"}
+            class={
+              if nav_active?.("/operator/neglect", [CustyardWeb.Operator.NeglectReportLive]),
+                do: active_class,
+                else: inactive_class
+            }
+            data-testid="operator-nav-neglect"
+          >
+            Neglect Report
+          </.link>
+          <.link
+            navigate={~p"/operator/organizations"}
+            class={
+              if nav_active?.("/operator/organizations", [
+                   CustyardWeb.Operator.OrganizationsLive,
+                   CustyardWeb.Operator.OrganizationDetailLive
+                 ]),
+                 do: active_class,
+                 else: inactive_class
+            }
+            data-testid="operator-nav-orgs"
+          >
+            Organizations
+          </.link>
+          <.link
+            navigate={~p"/operator/projects"}
+            class={
+              if nav_active?.("/operator/projects", [CustyardWeb.Operator.ProjectsLive]),
+                do: active_class,
+                else: inactive_class
+            }
+            data-testid="operator-nav-projects"
+          >
+            Projects
+          </.link>
+          <.link
+            navigate={~p"/operator/settings"}
+            class={
+              if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
+                do: active_class,
+                else: inactive_class
+            }
+            data-testid="operator-nav-settings"
+          >
+            Settings
+          </.link>
+        </nav>
+      </div>
+      <%!-- Desktop logout - hidden on mobile --%>
+      <div class="hidden md:block">
+        <.link
+          href={~p"/operator/logout"}
+          method="delete"
+          class="text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
+          data-testid="operator-nav-logout"
+        >
+          Log out
+        </.link>
+      </div>
+      <%!-- Mobile menu button --%>
+      <button
+        type="button"
+        class="md:hidden p-2 text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
+        phx-click={JS.toggle(to: "#mobile-menu")}
+        aria-label="Toggle navigation menu"
+        data-testid="operator-nav-mobile-toggle"
+      >
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 6h16M4 12h16M4 18h16"
+          />
+        </svg>
+      </button>
+    </div>
+    <%!-- Mobile menu - hidden by default, toggled by button --%>
+    <nav
+      id="mobile-menu"
+      class="hidden md:hidden mt-2 pb-2 border-t border-gray-200 dark:border-zinc-700 pt-2 flex flex-col gap-2"
     >
-      Attention Queue
-    </.link>
-    <.link
-      navigate={~p"/operator/neglect"}
-      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-      data-testid="operator-nav-neglect"
-    >
-      Neglect Report
-    </.link>
-    <.link
-      navigate={~p"/operator/organizations"}
-      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-      data-testid="operator-nav-orgs"
-    >
-      Organizations
-    </.link>
-    <.link
-      navigate={~p"/operator/projects"}
-      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-      data-testid="operator-nav-projects"
-    >
-      Projects
-    </.link>
-    <.link
-      navigate={~p"/operator/settings"}
-      class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-      data-testid="operator-nav-settings"
-    >
-      Settings
-    </.link>
-    <div class="ml-auto">
+      <.link
+        navigate={~p"/operator"}
+        class={
+          if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) &&
+               !nav_active?.("/operator/", []),
+             do: active_class,
+             else: inactive_class
+        }
+      >
+        Attention Queue
+      </.link>
+      <.link
+        navigate={~p"/operator/neglect"}
+        class={
+          if nav_active?.("/operator/neglect", [CustyardWeb.Operator.NeglectReportLive]),
+            do: active_class,
+            else: inactive_class
+        }
+      >
+        Neglect Report
+      </.link>
+      <.link
+        navigate={~p"/operator/organizations"}
+        class={
+          if nav_active?.("/operator/organizations", [
+               CustyardWeb.Operator.OrganizationsLive,
+               CustyardWeb.Operator.OrganizationDetailLive
+             ]),
+             do: active_class,
+             else: inactive_class
+        }
+      >
+        Organizations
+      </.link>
+      <.link
+        navigate={~p"/operator/projects"}
+        class={
+          if nav_active?.("/operator/projects", [CustyardWeb.Operator.ProjectsLive]),
+            do: active_class,
+            else: inactive_class
+        }
+      >
+        Projects
+      </.link>
+      <.link
+        navigate={~p"/operator/settings"}
+        class={
+          if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
+            do: active_class,
+            else: inactive_class
+        }
+      >
+        Settings
+      </.link>
       <.link
         href={~p"/operator/logout"}
         method="delete"
-        class="text-sm text-gray-500 hover:text-gray-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-        data-testid="operator-nav-logout"
+        class="text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
       >
         Log out
       </.link>
-    </div>
+    </nav>
   </div>
 
   <%!-- Flash messages --%>
   <.flash_group flash={@flash} />
 
   <%!-- Content --%>
-  <div class="flex-1 overflow-auto" data-testid="operator-layout-content">
+  <div class="flex-1 flex flex-col overflow-hidden" data-testid="operator-layout-content">
     {@inner_content}
   </div>
 </div>
