@@ -557,4 +557,84 @@ defmodule Custyard.InboundRoutesTest do
       assert InboundRoutes.get_route(route.id) == nil
     end
   end
+
+  describe "is_last_general_route?/1" do
+    test "returns true when route is the only general route for its org" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      assert InboundRoutes.is_last_general_route?(route)
+    end
+
+    test "returns false when there are multiple general routes for the org" do
+      org = Factory.insert_organization()
+
+      {:ok, route1} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      {:ok, route2} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      refute InboundRoutes.is_last_general_route?(route1)
+      refute InboundRoutes.is_last_general_route?(route2)
+    end
+
+    test "returns false for project routes" do
+      org = Factory.insert_organization()
+      project = Factory.insert_project(organization_id: org.id)
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :project,
+          project_id: project.id
+        })
+
+      refute InboundRoutes.is_last_general_route?(route)
+    end
+
+    test "returns false for disambiguation routes" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :disambiguation})
+
+      refute InboundRoutes.is_last_general_route?(route)
+    end
+
+    test "does not count general routes from other organizations" do
+      org1 = Factory.insert_organization()
+      org2 = Factory.insert_organization()
+
+      {:ok, route1} =
+        InboundRoutes.create_route(%{organization_id: org1.id, route_type: :general})
+
+      {:ok, route2} =
+        InboundRoutes.create_route(%{organization_id: org2.id, route_type: :general})
+
+      # Each org has exactly one general route, so each is the "last" one
+      assert InboundRoutes.is_last_general_route?(route1)
+      assert InboundRoutes.is_last_general_route?(route2)
+    end
+
+    test "does not count project routes when determining last general route" do
+      org = Factory.insert_organization()
+      project = Factory.insert_project(organization_id: org.id)
+
+      {:ok, general_route} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      {:ok, _project_route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :project,
+          project_id: project.id
+        })
+
+      # The general route is still the only general route despite having a project route
+      assert InboundRoutes.is_last_general_route?(general_route)
+    end
+  end
 end
