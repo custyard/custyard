@@ -6,15 +6,17 @@ defmodule Custyard.TeamTest do
   import Custyard.Factory
 
   describe "changeset/2" do
-    test "valid with name" do
-      changeset = Team.changeset(%Team{}, %{name: "Support Team"})
+    test "valid with name and organization_id" do
+      org = insert_organization()
+      changeset = Team.changeset(%Team{}, %{name: "Support Team", organization_id: org.id})
       assert changeset.valid?
     end
 
-    test "requires name" do
+    test "requires name and organization_id" do
       changeset = Team.changeset(%Team{}, %{})
       refute changeset.valid?
       assert "can't be blank" in errors_on(changeset).name
+      assert "can't be blank" in errors_on(changeset).organization_id
     end
 
     test "enforces unique name within an organization" do

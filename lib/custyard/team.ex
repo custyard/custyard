@@ -20,7 +20,7 @@ defmodule Custyard.Team do
   def changeset(team, attrs) do
     team
     |> cast(attrs, [:name, :organization_id])
-    |> validate_required([:name])
+    |> validate_required([:name, :organization_id])
     |> unique_constraint([:organization_id, :name])
     |> foreign_key_constraint(:organization_id)
   end

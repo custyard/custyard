@@ -11,6 +11,8 @@ defmodule Custyard.InboundRoutes do
   following the context pattern used elsewhere in the application.
   """
 
+  require Logger
+
   alias Custyard.{InboundRoute, InboundRouteWebhook, Repo}
   alias Custyard.Lettermint.Client
   import Ecto.Query
@@ -118,8 +120,13 @@ defmodule Custyard.InboundRoutes do
   """
   def delete_route(%InboundRoute{} = route) do
     if route.lettermint_route_id do
-      lettermint_client = Client.client()
-      lettermint_client.delete_route(route.lettermint_route_id)
+      case Client.client().delete_route(route.lettermint_route_id) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error("Failed to delete Lettermint route #{route.lettermint_route_id}: #{inspect(reason)}")
+      end
     end
 
     Repo.delete(route)
