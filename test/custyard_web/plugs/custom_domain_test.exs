@@ -38,46 +38,64 @@ defmodule CustyardWeb.Plugs.CustomDomainTest do
     end
 
     test "rewrites root path for known custom domain" do
-      org = insert_organization(custom_domain: "support.acme.com", token: "acme-token")
+      org =
+        insert_organization(
+          custom_domain: "support.acme.com",
+          token: "acme-test-token-secure-32-chars-x"
+        )
+
       conn = conn(:get, "/") |> Map.put(:host, "support.acme.com")
 
       result = CustomDomain.call(conn, [])
 
-      assert result.request_path == "/p/acme-token/"
-      assert result.path_info == ["p", "acme-token"]
+      assert result.request_path == "/p/acme-test-token-secure-32-chars-x/"
+      assert result.path_info == ["p", "acme-test-token-secure-32-chars-x"]
       assert result.assigns.organization.id == org.id
       assert result.assigns.custom_domain_request == true
       assert result.private[:custyard_custom_domain] == true
     end
 
     test "rewrites subpath for known custom domain" do
-      org = insert_organization(custom_domain: "help.example.org", token: "example-org")
+      org =
+        insert_organization(
+          custom_domain: "help.example.org",
+          token: "example-org-secure-token-32chars"
+        )
+
       conn = conn(:get, "/request/123") |> Map.put(:host, "help.example.org")
 
       result = CustomDomain.call(conn, [])
 
-      assert result.request_path == "/p/example-org/request/123"
-      assert result.path_info == ["p", "example-org", "request", "123"]
+      assert result.request_path == "/p/example-org-secure-token-32chars/request/123"
+      assert result.path_info == ["p", "example-org-secure-token-32chars", "request", "123"]
       assert result.assigns.organization.id == org.id
     end
 
     test "rewrites /new path for custom domain" do
-      insert_organization(custom_domain: "portal.test.io", token: "test-io-token")
+      insert_organization(
+        custom_domain: "portal.test.io",
+        token: "test-io-token-secure-32-chars-xyz"
+      )
+
       conn = conn(:get, "/new") |> Map.put(:host, "portal.test.io")
 
       result = CustomDomain.call(conn, [])
 
-      assert result.request_path == "/p/test-io-token/new"
-      assert result.path_info == ["p", "test-io-token", "new"]
+      assert result.request_path == "/p/test-io-token-secure-32-chars-xyz/new"
+      assert result.path_info == ["p", "test-io-token-secure-32-chars-xyz", "new"]
     end
 
     test "does not double-prefix paths already starting with /p/" do
-      insert_organization(custom_domain: "support.acme.com", token: "acme-token")
+      insert_organization(
+        custom_domain: "support.acme.com",
+        token: "acme-test-token-secure-32-chars-x"
+      )
+
       conn = conn(:get, "/p/other-token/request/1") |> Map.put(:host, "support.acme.com")
 
       result = CustomDomain.call(conn, [])
 
-      # Should not become /p/acme-token/p/other-token/request/1
+      # Should not become /p/acme-test-token-secure-32-chars-x/p/other-token/request/1
       assert result.request_path == "/p/other-token/request/1"
       assert result.path_info == ["p", "other-token", "request", "1"]
       # Still assigns the org for the custom domain

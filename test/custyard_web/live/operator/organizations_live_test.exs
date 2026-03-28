@@ -55,11 +55,11 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
     end
 
     test "shows portal token link", %{conn: conn} do
-      insert_organization(token: "test-portal-token")
+      insert_organization(token: "test-portal-token-secure-32-chars")
 
       {:ok, _view, html} = live(conn, ~p"/operator/organizations")
 
-      assert html =~ "/p/test-portal-token"
+      assert html =~ "/p/test-portal-token-secure-32-chars"
     end
   end
 
@@ -112,7 +112,7 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
 
       html =
         view
-        |> element("[phx-click=edit_org][phx-value-id=\"#{org.id}\"]")
+        |> element("[data-testid=operator-org-edit-#{org.id}]")
         |> render_click()
 
       assert html =~ "Edit organization"
@@ -180,7 +180,7 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
 
       # Click edit
       view
-      |> element("[phx-click=edit_org][phx-value-id=\"#{org.id}\"]")
+      |> element("[data-testid=operator-org-edit-#{org.id}]")
       |> render_click()
 
       # Change name
@@ -247,7 +247,7 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
 
       html =
         view
-        |> element("[phx-click=edit_org][phx-value-id=\"#{org.id}\"]")
+        |> element("[data-testid=operator-org-edit-#{org.id}]")
         |> render_click()
 
       assert html =~ "/uploads/logos/existing.png"
