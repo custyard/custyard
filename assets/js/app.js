@@ -88,6 +88,27 @@ Hooks.AutoDismiss = {
   }
 }
 
+Hooks.CopyToClipboard = {
+  mounted() {
+    this.handler = () => {
+      const text = this.el.dataset.clipboardText
+      if (text && navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+          const original = this.el.textContent
+          this.el.textContent = "Copied!"
+          setTimeout(() => { this.el.textContent = original }, 1500)
+        }).catch(err => {
+          console.error("Failed to copy text: ", err)
+        })
+      }
+    }
+    this.el.addEventListener("click", this.handler)
+  },
+  destroyed() {
+    this.el.removeEventListener("click", this.handler)
+  }
+}
+
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,

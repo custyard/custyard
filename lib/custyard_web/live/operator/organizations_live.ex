@@ -33,9 +33,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   @impl true
   def handle_event("show_form", _params, socket) do
-    if not Authorization.can_create_organization?(socket.assigns.current_operator) do
-      {:noreply, put_flash(socket, :error, "Only super admins can create organizations")}
-    else
+    if Authorization.can_create_organization?(socket.assigns.current_operator) do
       {:noreply,
        socket
        |> assign(:show_form, true)
@@ -48,6 +46,8 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
          secondary_color: "",
          custom_domain: ""
        })}
+    else
+      {:noreply, put_flash(socket, :error, "Only super admins can create organizations")}
     end
   end
 
@@ -67,10 +67,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
          |> load_organizations()}
 
       org ->
-        if not Authorization.can_manage_organization?(socket.assigns.current_operator, org.id) do
-          {:noreply,
-           put_flash(socket, :error, "You do not have permission to edit this organization")}
-        else
+        if Authorization.can_manage_organization?(socket.assigns.current_operator, org.id) do
           {:noreply,
            socket
            |> assign(:show_form, true)
@@ -83,6 +80,9 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
              secondary_color: org.secondary_color || "",
              custom_domain: org.custom_domain || ""
            })}
+        else
+          {:noreply,
+           put_flash(socket, :error, "You do not have permission to edit this organization")}
         end
     end
   end
@@ -125,9 +125,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
         org -> Authorization.can_manage_organization?(operator, org.id)
       end
 
-    if not authorized? do
-      {:noreply, put_flash(socket, :error, "You do not have permission to perform this action")}
-    else
+    if authorized? do
       attrs = build_org_attrs(socket)
 
       result =
@@ -137,6 +135,8 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
         end
 
       handle_save_result(socket, result)
+    else
+      {:noreply, put_flash(socket, :error, "You do not have permission to perform this action")}
     end
   end
 

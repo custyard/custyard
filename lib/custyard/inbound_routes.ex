@@ -336,6 +336,25 @@ defmodule Custyard.InboundRoutes do
     |> Repo.one()
   end
 
+  @doc """
+  Returns true if this is the only general route for its organization.
+
+  Used to prevent deletion of the last general route, which would leave
+  the organization without a catch-all inbound route.
+  """
+  def is_last_general_route?(%InboundRoute{route_type: :general, organization_id: org_id}) do
+    count =
+      from(r in InboundRoute,
+        where: r.organization_id == ^org_id and r.route_type == :general,
+        select: count(r.id)
+      )
+      |> Repo.one()
+
+    count <= 1
+  end
+
+  def is_last_general_route?(_), do: false
+
   # --- Private Helpers ---
 
   defp get_webhook_by_purpose(%InboundRoute{} = route, purpose) do

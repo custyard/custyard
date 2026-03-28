@@ -19,9 +19,12 @@ defmodule Custyard.Authorization do
   @doc """
   Returns true if the operator has at least the given role level.
   """
-  def has_minimum_role?(%OperatorAccount{role: role}, required_role) do
-    Map.get(@role_rank, role, 0) >= Map.get(@role_rank, required_role, 0)
+  def has_minimum_role?(%OperatorAccount{role: role}, required_role)
+      when is_map_key(@role_rank, role) and is_map_key(@role_rank, required_role) do
+    @role_rank[role] >= @role_rank[required_role]
   end
+
+  def has_minimum_role?(%OperatorAccount{}, _required_role), do: false
 
   def has_minimum_role?(_, _), do: false
 

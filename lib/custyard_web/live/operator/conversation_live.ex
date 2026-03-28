@@ -198,9 +198,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   def handle_event("set_state", %{"state" => state}, socket)
       when state in ~w(active waiting resolved) do
-    if not Authorization.can_set_conversation_state?(socket.assigns.current_operator) do
-      {:noreply, put_flash(socket, :error, "Only admins can change conversation state")}
-    else
+    if Authorization.can_set_conversation_state?(socket.assigns.current_operator) do
       conversation = socket.assigns.conversation
       new_state = String.to_existing_atom(state)
       now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -229,6 +227,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
         {:error, _changeset} ->
           {:noreply, put_flash(socket, :error, "Failed to update state")}
       end
+    else
+      {:noreply, put_flash(socket, :error, "Only admins can change conversation state")}
     end
   end
 

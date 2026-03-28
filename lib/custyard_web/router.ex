@@ -74,7 +74,6 @@ defmodule CustyardWeb.Router do
       live "/conversation/:id", ConversationLive, :show
       live "/projects", ProjectsLive, :index
       live "/neglect", NeglectReportLive, :index
-      live "/settings", SettingsLive, :index
     end
 
     # Admin+ only
@@ -82,6 +81,12 @@ defmodule CustyardWeb.Router do
       on_mount: [{CustyardWeb.Live.OperatorAuth, :require_admin}] do
       live "/organizations", OrganizationsLive, :index
       live "/organizations/:id", OrganizationDetailLive, :show
+    end
+
+    # Super admin only
+    live_session :operator_super_admin,
+      on_mount: [{CustyardWeb.Live.OperatorAuth, :require_super_admin}] do
+      live "/settings", SettingsLive, :index
     end
   end
 

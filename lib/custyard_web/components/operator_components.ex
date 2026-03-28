@@ -136,6 +136,108 @@ defmodule CustyardWeb.OperatorComponents do
   end
 
   @doc """
+  Renders a route type badge (general/project/disambiguation).
+
+  ## Examples
+
+      <.route_type_badge type={:general} />
+  """
+  attr :type, :atom, required: true
+
+  def route_type_badge(assigns) do
+    colors =
+      case assigns.type do
+        :general -> "text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950"
+        :project -> "text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950"
+        :disambiguation -> "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950"
+        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
+      end
+
+    assigns = assign(assigns, :colors, colors)
+
+    ~H"""
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
+      data-testid={"route-type-badge-#{@type}"}
+    >
+      {to_string(@type)}
+    </span>
+    """
+  end
+
+  @doc """
+  Renders a source badge (lettermint/zendesk/intercom/slack).
+
+  ## Examples
+
+      <.source_badge source={:lettermint} />
+  """
+  attr :source, :atom, required: true
+
+  def source_badge(assigns) do
+    colors =
+      case assigns.source do
+        :lettermint -> "text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950"
+        :zendesk -> "text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950"
+        :intercom -> "text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950"
+        :slack -> "text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950"
+        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
+      end
+
+    assigns = assign(assigns, :colors, colors)
+
+    ~H"""
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
+      data-testid={"source-badge-#{@source}"}
+    >
+      {to_string(@source)}
+    </span>
+    """
+  end
+
+  @doc """
+  Renders a webhook purpose toggle switch.
+
+  ## Examples
+
+      <.webhook_purpose_toggle purpose={:sender_matching} enabled={true} route_id={1} />
+  """
+  attr :purpose, :atom, required: true
+  attr :enabled, :boolean, required: true
+  attr :route_id, :integer, required: true
+  attr :disabled, :boolean, default: false
+
+  def webhook_purpose_toggle(assigns) do
+    ~H"""
+    <div class="flex items-center justify-between py-1" data-testid={"webhook-toggle-#{@purpose}"}>
+      <span class="text-sm text-gray-700 dark:text-zinc-300 capitalize">
+        {to_string(@purpose) |> String.replace("_", " ")}
+      </span>
+      <button
+        type="button"
+        phx-click="toggle_webhook"
+        phx-value-route-id={@route_id}
+        phx-value-purpose={@purpose}
+        phx-value-enabled={to_string(!@enabled)}
+        disabled={@disabled}
+        class={[
+          "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
+          if(@enabled, do: "bg-indigo-600", else: "bg-gray-200 dark:bg-zinc-600"),
+          if(@disabled, do: "opacity-50 cursor-not-allowed", else: "")
+        ]}
+        data-testid={"webhook-toggle-btn-#{@purpose}"}
+      >
+        <span class={[
+          "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform duration-200",
+          if(@enabled, do: "translate-x-4", else: "translate-x-0")
+        ]} />
+      </button>
+    </div>
+    """
+  end
+
+  @doc """
   Renders a score breakdown visualization.
 
   Shows a bar chart of scoring factors with their relative contributions.
