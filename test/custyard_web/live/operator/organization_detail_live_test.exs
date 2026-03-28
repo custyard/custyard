@@ -231,7 +231,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       # Verify route was created in database
       routes = InboundRoutes.list_for_organization(org.id)
       project_routes = Enum.filter(routes, &(&1.route_type == :project))
-      assert length(project_routes) >= 1
+      assert project_routes != []
     end
 
     test "agent cannot access organization detail page", %{conn: conn, org: org} do

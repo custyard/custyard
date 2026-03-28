@@ -98,9 +98,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
     attrs = build_project_attrs(socket.assigns.form_data)
     org_id = attrs[:organization_id]
 
-    if not Authorization.can_manage_project?(operator, org_id) do
-      {:noreply, put_flash(socket, :error, "You do not have permission to manage this project")}
-    else
+    if Authorization.can_manage_project?(operator, org_id) do
       result =
         case socket.assigns.editing_project do
           nil -> Projects.create_project(attrs)
@@ -108,6 +106,8 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         end
 
       handle_save_result(result, socket)
+    else
+      {:noreply, put_flash(socket, :error, "You do not have permission to manage this project")}
     end
   end
 
@@ -120,13 +120,10 @@ defmodule CustyardWeb.Operator.ProjectsLive do
          |> load_projects()}
 
       project ->
-        if not Authorization.can_manage_project?(
+        if Authorization.can_manage_project?(
              socket.assigns.current_operator,
              project.organization_id
            ) do
-          {:noreply,
-           put_flash(socket, :error, "You do not have permission to delete this project")}
-        else
           case Projects.delete_project(project) do
             {:ok, _} ->
               {:noreply,
@@ -137,6 +134,9 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             {:error, _} ->
               {:noreply, put_flash(socket, :error, "Failed to delete project.")}
           end
+        else
+          {:noreply,
+           put_flash(socket, :error, "You do not have permission to delete this project")}
         end
     end
   end

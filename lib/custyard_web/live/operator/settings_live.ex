@@ -38,10 +38,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   @impl true
   def handle_event("save_weights", %{"weights" => weight_params}, socket) do
-    if not Authorization.can_modify_settings?(socket.assigns.current_operator) do
-      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
-    else
+    if Authorization.can_modify_settings?(socket.assigns.current_operator) do
       do_save_weights(weight_params, socket)
+    else
+      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
     end
   end
 
@@ -57,10 +57,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   @impl true
   def handle_event("save_thresholds", %{"thresholds" => threshold_params}, socket) do
-    if not Authorization.can_modify_settings?(socket.assigns.current_operator) do
-      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
-    else
+    if Authorization.can_modify_settings?(socket.assigns.current_operator) do
       save_thresholds(threshold_params, socket)
+    else
+      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
     end
   end
 

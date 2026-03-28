@@ -97,9 +97,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         %{"route_type" => route_type, "source" => source} = params,
         socket
       ) do
-    if not socket.assigns.can_manage_routes do
-      {:noreply, put_flash(socket, :error, "You do not have permission to create routes")}
-    else
+    if socket.assigns.can_manage_routes do
       with :ok <- validate_param(route_type, @valid_route_types, "route_type"),
            :ok <- validate_param(source, @valid_sources, "source") do
         org = socket.assigns.organization
@@ -143,6 +141,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         {:error, message} ->
           {:noreply, put_flash(socket, :error, message)}
       end
+    else
+      {:noreply, put_flash(socket, :error, "You do not have permission to create routes")}
     end
   end
 
@@ -151,31 +151,32 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         %{"route-id" => route_id, "purpose" => purpose, "enabled" => enabled},
         socket
       ) do
-    if not socket.assigns.can_manage_routes do
-      {:noreply, put_flash(socket, :error, "You do not have permission to manage webhooks")}
-    else
-      with :ok <- validate_param(purpose, @valid_purposes, "purpose") do
-        route = InboundRoutes.get_route!(String.to_integer(route_id))
-        purpose_atom = String.to_existing_atom(purpose)
+    if socket.assigns.can_manage_routes do
+      case validate_param(purpose, @valid_purposes, "purpose") do
+        :ok ->
+          route = InboundRoutes.get_route!(String.to_integer(route_id))
+          purpose_atom = String.to_existing_atom(purpose)
 
-        result =
-          case enabled do
-            "true" -> InboundRoutes.enable_webhook(route, purpose_atom)
-            "false" -> InboundRoutes.disable_webhook(route, purpose_atom)
+          result =
+            case enabled do
+              "true" -> InboundRoutes.enable_webhook(route, purpose_atom)
+              "false" -> InboundRoutes.disable_webhook(route, purpose_atom)
+            end
+
+          case result do
+            {:ok, _webhook} ->
+              {:noreply, load_tab_data(socket, socket.assigns.organization, "routes")}
+
+            {:error, reason} ->
+              Logger.error("Failed to toggle webhook: #{inspect(reason)}")
+              {:noreply, put_flash(socket, :error, "Failed to toggle webhook")}
           end
 
-        case result do
-          {:ok, _webhook} ->
-            {:noreply, load_tab_data(socket, socket.assigns.organization, "routes")}
-
-          {:error, reason} ->
-            Logger.error("Failed to toggle webhook: #{inspect(reason)}")
-            {:noreply, put_flash(socket, :error, "Failed to toggle webhook")}
-        end
-      else
         {:error, message} ->
           {:noreply, put_flash(socket, :error, message)}
       end
+    else
+      {:noreply, put_flash(socket, :error, "You do not have permission to manage webhooks")}
     end
   end
 
@@ -188,9 +189,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   end
 
   def handle_event("delete_route", %{"id" => route_id}, socket) do
-    if not socket.assigns.can_manage_routes do
-      {:noreply, put_flash(socket, :error, "You do not have permission to delete routes")}
-    else
+    if socket.assigns.can_manage_routes do
       route = InboundRoutes.get_route!(String.to_integer(route_id))
 
       if InboundRoutes.is_last_general_route?(route) do
@@ -216,6 +215,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             {:noreply, put_flash(socket, :error, "Failed to delete route")}
         end
       end
+    else
+      {:noreply, put_flash(socket, :error, "You do not have permission to delete routes")}
     end
   end
 
