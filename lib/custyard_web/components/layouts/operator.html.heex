@@ -41,7 +41,9 @@ inactive_class =
             navigate={~p"/operator"}
             class={
               if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) &&
-                   !nav_active?.("/operator/", []), do: active_class, else: inactive_class
+                   !nav_active?.("/operator/", []),
+                 do: active_class,
+                 else: inactive_class
             }
             data-testid="operator-nav-queue"
           >
@@ -134,7 +136,9 @@ inactive_class =
         navigate={~p"/operator"}
         class={
           if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) &&
-               !nav_active?.("/operator/", []), do: active_class, else: inactive_class
+               !nav_active?.("/operator/", []),
+             do: active_class,
+             else: inactive_class
         }
       >
         Attention Queue
