@@ -25,8 +25,12 @@ defmodule Custyard.Lettermint.Client do
 
   @doc """
   Returns the configured Lettermint client module.
+
+  Raises if `:custyard, :lettermint` config is missing or has no `:client` key.
   """
   def client do
-    Application.get_env(:custyard, :lettermint)[:client]
+    :custyard
+    |> Application.get_env(:lettermint, [])
+    |> Keyword.fetch!(:client)
   end
 end

@@ -16,7 +16,13 @@ defmodule Custyard.Lettermint.HttpClient do
     case request(:post, url, body) do
       {:ok, %Finch.Response{status: status, body: response_body}}
       when status in [200, 201] ->
-        {:ok, Jason.decode!(response_body)}
+        case Jason.decode(response_body) do
+          {:ok, decoded} ->
+            {:ok, decoded}
+
+          {:error, decode_error} ->
+            {:error, {:decode_failed, decode_error, response_body}}
+        end
 
       {:ok, %Finch.Response{status: status, body: response_body}} ->
         {:error, {:api_error, status, response_body}}
