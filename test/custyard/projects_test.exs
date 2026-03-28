@@ -75,6 +75,81 @@ defmodule Custyard.ProjectsTest do
     end
   end
 
+  # -------------------------------------------------------------------
+  # Phase 1a: list_for_operator/1 with organization_id: keyword
+  # -------------------------------------------------------------------
+  # The existing list_for_operator/0 returns all non-template projects.
+  # Phase 1a adds an optional keyword argument so org-scoped operators
+  # only see their own organization's projects:
+  #   list_for_operator(organization_id: org_id)
+
+  describe "list_for_operator/1 with organization_id filter" do
+    test "returns only projects for the specified organization" do
+      org1 = insert_organization(name: "Org A")
+      org2 = insert_organization(name: "Org B")
+      create_project(%{title: "Org A Project", organization_id: org1.id})
+      create_project(%{title: "Org B Project", organization_id: org2.id})
+
+      result = Projects.list_for_operator(organization_id: org1.id)
+
+      assert length(result) == 1
+      assert hd(result).title == "Org A Project"
+    end
+
+    test "excludes template projects when filtering by org" do
+      org = insert_organization()
+      create_project(%{title: "Normal", organization_id: org.id, is_template: false})
+      create_project(%{title: "Template", organization_id: org.id, is_template: true})
+
+      result = Projects.list_for_operator(organization_id: org.id)
+
+      assert length(result) == 1
+      assert hd(result).title == "Normal"
+    end
+
+    test "returns empty list when org has no projects" do
+      org = insert_organization()
+      other_org = insert_organization()
+      create_project(%{title: "Other Project", organization_id: other_org.id})
+
+      result = Projects.list_for_operator(organization_id: org.id)
+
+      assert result == []
+    end
+
+    test "includes progress calculation when filtering by org" do
+      org = insert_organization()
+      project = create_project(%{title: "With Tasks", organization_id: org.id})
+      create_task(%{title: "Done", project_id: project.id, state: :done})
+      create_task(%{title: "Open", project_id: project.id, state: :open})
+
+      [result] = Projects.list_for_operator(organization_id: org.id)
+
+      assert result.progress.total == 2
+      assert result.progress.done == 1
+      assert result.progress.percentage == 50
+    end
+
+    test "preloads organization when filtering by org" do
+      org = insert_organization(name: "Preload Check")
+      create_project(%{title: "Test", organization_id: org.id})
+
+      [result] = Projects.list_for_operator(organization_id: org.id)
+
+      assert result.organization.name == "Preload Check"
+    end
+
+    test "calling with empty keyword list behaves like list_for_operator/0" do
+      org = insert_organization()
+      create_project(%{title: "Project 1", organization_id: org.id})
+
+      all_result = Projects.list_for_operator()
+      keyword_result = Projects.list_for_operator([])
+
+      assert length(all_result) == length(keyword_result)
+    end
+  end
+
   describe "list_for_organization/1" do
     test "returns projects for specific organization" do
       org1 = insert_organization(name: "Org1")
