@@ -66,6 +66,8 @@ if [ -f .env ]; then
   set +a
 fi
 
+mix ecto.migrate
+
 # Default port is 4000 for Phoenix
 PORT="${PORT_OVERRIDE:-${PORT:-4000}}"
 
