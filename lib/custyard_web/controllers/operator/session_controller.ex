@@ -2,28 +2,64 @@ defmodule CustyardWeb.Operator.SessionController do
   use CustyardWeb, :controller
 
   alias Custyard.{OperatorAccount, Repo}
+  alias Custyard.Auth.LoginEmail
+
+  require Logger
 
   plug CustyardWeb.Plugs.LoginRateLimit,
        [max_attempts: 5, window_ms: 60_000] when action == :create
 
   def new(conn, _params) do
-    render(conn, :new, error: nil, email: nil, layout: {CustyardWeb.Layouts, :root})
+    render(conn, :new, error: nil, email: nil, info: nil, layout: {CustyardWeb.Layouts, :root})
   end
 
-  def create(conn, %{"email" => email, "password" => password}) do
+  def create(conn, %{"email" => email}) do
     case Repo.get_by(OperatorAccount, email: email) do
       nil ->
-        # Timing attack protection
-        OperatorAccount.verify_password(nil, password)
+        # Don't reveal whether the email exists — always show success message
+        Logger.debug("Login attempt for non-existent email: #{email}")
 
-        render(conn, :new,
-          error: "Invalid email or password",
+        render(conn, :sent,
           email: email,
           layout: {CustyardWeb.Layouts, :root}
         )
 
       operator ->
-        if OperatorAccount.verify_password(operator, password) do
+        changeset = OperatorAccount.login_token_changeset(operator)
+
+        case Repo.update(changeset) do
+          {:ok, updated_operator} ->
+            login_url = url(conn, ~p"/operator/login/verify/#{updated_operator.login_token}")
+            LoginEmail.deliver_login_link(updated_operator, login_url)
+
+          {:error, reason} ->
+            Logger.error("Failed to generate login token: #{inspect(reason)}")
+        end
+
+        render(conn, :sent,
+          email: email,
+          layout: {CustyardWeb.Layouts, :root}
+        )
+    end
+  end
+
+  def verify(conn, %{"token" => token}) do
+    case Repo.get_by(OperatorAccount, login_token: token) do
+      nil ->
+        render(conn, :new,
+          error: "Invalid or expired login link. Please request a new one.",
+          email: nil,
+          info: nil,
+          layout: {CustyardWeb.Layouts, :root}
+        )
+
+      operator ->
+        if OperatorAccount.verify_login_token(operator, token) do
+          # Clear the token so it can't be reused
+          operator
+          |> OperatorAccount.clear_login_token_changeset()
+          |> Repo.update!()
+
           conn
           |> configure_session(renew: true)
           |> put_session(:operator_id, operator.id)
@@ -31,8 +67,9 @@ defmodule CustyardWeb.Operator.SessionController do
           |> redirect(to: ~p"/operator")
         else
           render(conn, :new,
-            error: "Invalid email or password",
-            email: email,
+            error: "This login link has expired. Please request a new one.",
+            email: nil,
+            info: nil,
             layout: {CustyardWeb.Layouts, :root}
           )
         end

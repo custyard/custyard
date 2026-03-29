@@ -1,62 +1,34 @@
 defmodule Mix.Tasks.Dev.ResetOperatorPassword do
   @moduledoc """
-  Reset the password for a dev operator account.
+  This task is deprecated. Custyard now uses email-only authentication
+  with magic links. Operators log in by requesting a login link via email.
 
-  ## Usage
+  To create a new operator account, use:
+
+      mix dev.create_operator --email operator@example.com
+
+  ## Usage (legacy, kept for compatibility)
 
       mix dev.reset_operator_password [password] [--email EMAIL]
-
-  If no password is provided, generates a random one.
-  If no email is provided, uses admin@custyard.local.
-
-  ## Examples
-
-      mix dev.reset_operator_password
-      mix dev.reset_operator_password mysecretpassword
-      mix dev.reset_operator_password --email other@example.com
   """
 
   use Mix.Task
 
-  @shortdoc "Reset dev operator password"
-
-  @default_email "admin@custyard.local"
+  @shortdoc "Deprecated: Custyard now uses email-only auth"
 
   @impl Mix.Task
-  def run(args) do
-    {opts, positional, _} = OptionParser.parse(args, strict: [email: :string])
+  def run(_args) do
+    Mix.shell().info("""
 
-    email = Keyword.get(opts, :email, @default_email)
-    password = List.first(positional) || generate_password()
+    ========================================
+    DEPRECATED
+    ========================================
+    Custyard now uses email-only authentication.
+    Operators log in via magic link — no passwords needed.
 
-    Mix.Task.run("app.start")
-
-    alias Custyard.{OperatorAccount, Repo}
-
-    case Repo.get_by(OperatorAccount, email: email) do
-      nil ->
-        Mix.shell().error("No operator account found with email: #{email}")
-
-      operator ->
-        operator
-        |> OperatorAccount.changeset(%{password: password})
-        |> Repo.update!()
-
-        Mix.shell().info("""
-
-        ========================================
-        OPERATOR PASSWORD RESET
-        ========================================
-        Email:    #{email}
-        Password: #{password}
-
-        Login at: /operator/login
-        ========================================
-        """)
-    end
-  end
-
-  defp generate_password do
-    :crypto.strong_rand_bytes(12) |> Base.url_encode64() |> binary_part(0, 16)
+    To create a new operator account:
+      mix dev.create_operator --email operator@example.com
+    ========================================
+    """)
   end
 end

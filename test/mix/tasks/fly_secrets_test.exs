@@ -408,7 +408,6 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       defined_secrets = ~w(
         SECRET_KEY_BASE
         LIVE_VIEW_SIGNING_SALT
-        OPERATOR_PASSWORD
         DATABASE_URL
         TURSO_AUTH_TOKEN
         LETTERMINT_API_TOKEN
@@ -958,7 +957,6 @@ defmodule Mix.Tasks.Fly.SecretsTest do
     ~w(
       SECRET_KEY_BASE
       LIVE_VIEW_SIGNING_SALT
-      OPERATOR_PASSWORD
       DATABASE_URL
       TURSO_AUTH_TOKEN
       LETTERMINT_API_TOKEN
