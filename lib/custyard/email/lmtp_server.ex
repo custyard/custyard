@@ -4,7 +4,8 @@ defmodule Custyard.Email.LMTPServer do
   LMTP server for receiving emails from MTAs.
 
   Uses gen_smtp's server callback behavior to accept incoming mail.
-  Parses raw RFC 5322 email and forwards to Processor for handling.
+  Parses raw RFC 5322 email and dispatches through the pipeline:
+  Parser → Adapters.Email.normalize → Dispatcher.dispatch.
 
   Note: This module implements the :gen_smtp_server_session behaviour which
   requires callback names like handle_HELO, handle_DATA, etc. These names
@@ -682,14 +683,26 @@ defmodule Custyard.Email.LMTPServer do
     # Validate recipient domain and resolve organization before accepting
     case validate_recipient_domain(to) do
       {:ok, org} ->
-        cond do
-          max_recipients == :infinity ->
-            {:ok, %{state | to: [to | state.to], organization: org}}
+        # Guard: all recipients in an LMTP session must belong to the same org.
+        # If we already have an org set and the new recipient resolves to a
+        # different one, reject — LMTP sessions should not span orgs.
+        if state.organization != nil and state.organization.id != org.id do
+          Logger.warning("LMTP rejecting recipient from different organization",
+            recipient: to,
+            existing_org_id: state.organization.id,
+            new_org_id: org.id
+          )
 
-          current_count < max_recipients ->
-            {:ok, %{state | to: [to | state.to], organization: org}}
+          {:error, "550 5.1.1 All recipients must belong to the same organization", state}
+        else
+          cond do
+            max_recipients == :infinity ->
+              {:ok, %{state | to: [to | state.to], organization: org}}
 
-          true ->
+            current_count < max_recipients ->
+              {:ok, %{state | to: [to | state.to], organization: org}}
+
+            true ->
             # Emit telemetry for recipient limit exceeded
             :telemetry.execute(
               [:custyard, :lmtp, :recipient_limit, :exceeded],
@@ -704,6 +717,7 @@ defmodule Custyard.Email.LMTPServer do
             )
 
             {:error, "452 4.5.3 Too many recipients", state}
+          end
         end
 
       {:error, :invalid_domain} ->
@@ -1003,19 +1017,12 @@ defmodule Custyard.Email.LMTPServer do
   end
 
   # Resolve the inbound route for an organization, creating one if needed.
-  # find_or_create_general_route calls Lettermint API as a side-effect when
-  # creating a new route — acceptable here because it only happens once per org.
+  # find_or_create_general_route already short-circuits when a route exists
+  # and handles creation (with Lettermint API call) only once per org.
   defp resolve_route(nil), do: {:error, :no_organization}
 
   defp resolve_route(org) do
-    case InboundRoutes.get_general_route(org.id) do
-      nil ->
-        # Side-effect: calls Lettermint API to create remote route
-        InboundRoutes.find_or_create_general_route(org.id)
-
-      route ->
-        {:ok, route}
-    end
+    InboundRoutes.find_or_create_general_route(org.id, source: :email)
   end
 
   # Mail loop detection functions

@@ -169,13 +169,9 @@ defmodule Custyard.InboundRoutes do
 
   The `source` query param is for logging/debugging convenience, not routing
   logic — the callback_token uniquely identifies the route and adapter.
-
-  Currently hardcoded to `lettermint`. If multi-source routes become a real
-  use case (Zendesk, Intercom, Slack using this same callback pattern), this
-  can be derived from `route.source` instead.
   """
   def callback_url(%InboundRoute{} = route) do
-    "#{CustyardWeb.Endpoint.url()}/api/webhook/route/#{route.callback_token}?source=lettermint"
+    "#{CustyardWeb.Endpoint.url()}/api/webhook/route/#{route.callback_token}?source=#{route.source}"
   end
 
   # --- InboundRouteWebhook Operations ---
@@ -303,14 +299,23 @@ defmodule Custyard.InboundRoutes do
   @doc """
   Find or create the general (catch-all) route for an organization.
   Returns {:ok, route} or {:error, changeset}.
+
+  ## Options
+
+    * `:source` - The source to set on a newly created route (default: `:lettermint`).
+      Has no effect when a route already exists.
   """
-  def find_or_create_general_route(organization_id) when is_integer(organization_id) do
+  def find_or_create_general_route(organization_id, opts \\ [])
+      when is_integer(organization_id) do
+    source = Keyword.get(opts, :source, :lettermint)
+
     case get_general_route(organization_id) do
       nil ->
         with {:ok, route} <-
                create_route(%{
                  organization_id: organization_id,
-                 route_type: :general
+                 route_type: :general,
+                 source: source
                }) do
           seed_default_webhooks(route)
           {:ok, Repo.preload(route, :webhooks, force: true)}
@@ -325,11 +330,22 @@ defmodule Custyard.InboundRoutes do
   # fire correctly. Without these, Dispatcher.get_enabled_purposes/1 returns
   # an empty MapSet and skips notification/enrichment.
   defp seed_default_webhooks(%InboundRoute{} = route) do
-    for purpose <- [:sender_matching, :notification] do
-      # Use enable_webhook/2 which has upsert semantics — safe if records
-      # already exist (e.g., from a concurrent call).
-      enable_webhook(route, purpose)
+    results =
+      for purpose <- [:sender_matching, :notification] do
+        # Use enable_webhook/2 which has upsert semantics — safe if records
+        # already exist (e.g., from a concurrent call).
+        enable_webhook(route, purpose)
+      end
+
+    failures = Enum.filter(results, &match?({:error, _}, &1))
+
+    if failures != [] do
+      Logger.warning(
+        "Failed to seed #{length(failures)} default webhook(s) for route #{route.id}: #{inspect(failures)}"
+      )
     end
+
+    results
   end
 
   @doc """

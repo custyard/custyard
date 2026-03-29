@@ -84,6 +84,15 @@ defmodule Custyard.Email.ImapPollerTest do
                  organization_id: 1,
                  poll_interval: 600_000
                )
+
+      # Missing organization_id
+      assert {:error, {%KeyError{key: :organization_id}, _stacktrace}} =
+               ImapPoller.start_link(
+                 host: "imap.example.com",
+                 username: "test",
+                 password: "pass",
+                 poll_interval: 600_000
+               )
     end
 
     test "uses default values for optional configuration" do

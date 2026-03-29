@@ -434,6 +434,101 @@ defmodule Custyard.Email.LMTPServerTest do
     end
   end
 
+  describe "multi-RCPT cross-organization rejection" do
+    setup do
+      {:ok, pid} = LMTPServer.start_link(port: @test_port)
+      on_exit(fn -> LMTPServer.stop(pid) end)
+      {:ok, server: pid}
+    end
+
+    test "rejects second RCPT TO when it resolves to a different organization" do
+      # The global setup creates test_org (custyard.test) and example_org (example.com).
+      # Sending RCPT TO for both domains in the same session should fail on the second.
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # First RCPT TO — resolves to test_org (custyard.test)
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support@custyard.test>\r\n")
+      {:ok, rcpt1_resp} = :gen_tcp.recv(socket, 0, 5000)
+      assert rcpt1_resp =~ "250"
+
+      # Second RCPT TO — resolves to example_org (example.com), different org
+      :ok = :gen_tcp.send(socket, "RCPT TO:<alice@example.com>\r\n")
+      {:ok, rcpt2_resp} = :gen_tcp.recv(socket, 0, 5000)
+
+      assert rcpt2_resp =~ "550"
+      assert rcpt2_resp =~ "same organization"
+
+      :gen_tcp.close(socket)
+    end
+
+    test "accepts multiple RCPT TO addresses within the same organization" do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Both recipients belong to custyard.test org — should both succeed
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support@custyard.test>\r\n")
+      {:ok, rcpt1_resp} = :gen_tcp.recv(socket, 0, 5000)
+      assert rcpt1_resp =~ "250"
+
+      :ok = :gen_tcp.send(socket, "RCPT TO:<team@custyard.test>\r\n")
+      {:ok, rcpt2_resp} = :gen_tcp.recv(socket, 0, 5000)
+      assert rcpt2_resp =~ "250"
+
+      :gen_tcp.close(socket)
+    end
+  end
+
+  describe "nil organization handling" do
+    setup do
+      {:ok, pid} = LMTPServer.start_link(port: @test_port)
+      on_exit(fn -> LMTPServer.stop(pid) end)
+      {:ok, server: pid}
+    end
+
+    test "RCPT TO rejects recipient whose domain has no matching organization" do
+      # The nil-organization defensive branch in process_email returns
+      # {:error, :permanent, :no_organization}. In practice, handle_RCPT
+      # guards against this by rejecting unknown domains at RCPT stage.
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@example.com>\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Send RCPT TO with a domain that has no organization in the DB
+      :ok = :gen_tcp.send(socket, "RCPT TO:<user@nonexistent-domain.example>\r\n")
+      {:ok, rcpt_resp} = :gen_tcp.recv(socket, 0, 5000)
+
+      # Should be rejected with 550 (unknown recipient domain)
+      assert rcpt_resp =~ "550"
+      assert rcpt_resp =~ "Unknown recipient domain"
+
+      :gen_tcp.close(socket)
+    end
+  end
+
   describe "RSET command" do
     setup %{example_org: sender_org, test_org: recipient_org} do
       {:ok, pid} = LMTPServer.start_link(port: @test_port)
@@ -2126,7 +2221,10 @@ defmodule Custyard.Email.LMTPServerTest do
       :gen_tcp.close(socket)
     end
 
-    test "accepts multiple recipients on known domains", %{org1: _org1, org2: _org2} do
+    test "rejects second recipient when on a different organization's domain",
+         %{org1: _org1, org2: _org2} do
+      # Multi-RCPT across orgs is now rejected: all recipients in an LMTP
+      # session must belong to the same organization.
       {:ok, socket} =
         :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
 
@@ -2138,15 +2236,16 @@ defmodule Custyard.Email.LMTPServerTest do
       :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
       {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
 
-      # First recipient on org1's domain
+      # First recipient on org1's domain — accepted
       :ok = :gen_tcp.send(socket, "RCPT TO:<user1@acme.example.com>\r\n")
       {:ok, rcpt_resp1} = :gen_tcp.recv(socket, 0, 5000)
       assert rcpt_resp1 =~ "250"
 
-      # Second recipient on org2's domain
+      # Second recipient on org2's domain — rejected (different org)
       :ok = :gen_tcp.send(socket, "RCPT TO:<user2@widgets.example.com>\r\n")
       {:ok, rcpt_resp2} = :gen_tcp.recv(socket, 0, 5000)
-      assert rcpt_resp2 =~ "250"
+      assert rcpt_resp2 =~ "550"
+      assert rcpt_resp2 =~ "same organization"
 
       :gen_tcp.close(socket)
     end

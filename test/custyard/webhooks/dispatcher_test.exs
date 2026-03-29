@@ -6,6 +6,28 @@ defmodule Custyard.Webhooks.DispatcherTest do
 
   import Custyard.Factory
 
+  # Polls a function until it returns {:ok, value} or raises after max attempts.
+  # Replaces fixed Process.sleep for async assertions.
+  defp poll_until(fun, opts \\ []) do
+    interval = Keyword.get(opts, :interval, 10)
+    max_attempts = Keyword.get(opts, :max_attempts, 50)
+
+    result =
+      Enum.reduce_while(1..max_attempts, :timeout, fn _i, _acc ->
+        case fun.() do
+          {:ok, value} -> {:halt, {:ok, value}}
+          :retry ->
+            Process.sleep(interval)
+            {:cont, :timeout}
+        end
+      end)
+
+    case result do
+      {:ok, value} -> value
+      :timeout -> flunk("poll_until exceeded #{max_attempts} attempts (#{max_attempts * interval}ms)")
+    end
+  end
+
   describe "dispatch/2" do
     test "creates conversation via routed webhook" do
       org = insert_organization(domain: "acme.example.com")
@@ -204,18 +226,21 @@ defmodule Custyard.Webhooks.DispatcherTest do
       assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
       assert conversation.organization_id == org.id
 
-      # Allow async tasks to complete
-      Process.sleep(100)
-
-      # Verify audit event was created (audit purpose writes to DB)
+      # Poll the DB for the audit event created by the async audit purpose,
+      # rather than using a fixed Process.sleep.
       import Ecto.Query
 
       audit_events =
-        from(ae in Custyard.AuditEvent,
-          where: ae.conversation_id == ^conversation.id,
-          where: ae.event_type == :webhook_received
-        )
-        |> Repo.all()
+        poll_until(fn ->
+          events =
+            from(ae in Custyard.AuditEvent,
+              where: ae.conversation_id == ^conversation.id,
+              where: ae.event_type == :webhook_received
+            )
+            |> Repo.all()
+
+          if length(events) >= 1, do: {:ok, events}, else: :retry
+        end)
 
       assert length(audit_events) >= 1
 

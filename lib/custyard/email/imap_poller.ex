@@ -3,7 +3,7 @@ defmodule Custyard.Email.ImapPoller do
   GenServer that polls an IMAP mailbox for new emails.
 
   Periodically connects to the configured IMAP server, fetches UNSEEN messages,
-  processes them through the existing email pipeline (Parser -> Processor),
+  dispatches them through the pipeline (Parser → Adapters.Email.normalize → Dispatcher.dispatch),
   and marks them as SEEN.
 
   Configuration (in config/runtime.exs):
@@ -290,13 +290,10 @@ defmodule Custyard.Email.ImapPoller do
   end
 
   # Resolve the inbound route for the poller's organization.
-  # find_or_create_general_route calls Lettermint API as a side-effect when
-  # creating a new route — acceptable because it only happens once per org.
+  # find_or_create_general_route already short-circuits when a route exists
+  # and handles creation (with Lettermint API call) only once per org.
   defp resolve_route(organization_id) do
-    case InboundRoutes.get_general_route(organization_id) do
-      nil -> InboundRoutes.find_or_create_general_route(organization_id)
-      route -> {:ok, route}
-    end
+    InboundRoutes.find_or_create_general_route(organization_id, source: :email)
   end
 
   defp fetch_raw_email(conn, uid) do
