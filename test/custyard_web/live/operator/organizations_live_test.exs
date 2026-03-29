@@ -74,7 +74,8 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
 
       assert html =~ "New organization"
       assert html =~ "Name"
-      assert html =~ "Domain"
+      assert html =~ "Email domain"
+      assert html =~ "Custom domain"
       assert html =~ "Tier"
     end
   end

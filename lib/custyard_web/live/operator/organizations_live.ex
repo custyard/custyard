@@ -109,6 +109,9 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
         ["secondary_color_picker"] ->
           %{form_data | secondary_color: Map.get(params, "secondary_color_picker", "")}
 
+        ["custom_domain"] ->
+          maybe_default_email_domain(form_data)
+
         _ ->
           form_data
       end
@@ -183,6 +186,28 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   defp empty_to_nil(""), do: nil
   defp empty_to_nil(value), do: value
+
+  defp maybe_default_email_domain(%{domain: domain} = form_data) when domain in ["", nil] do
+    case registrable_domain(form_data.custom_domain) do
+      nil -> form_data
+      reg_domain -> %{form_data | domain: reg_domain}
+    end
+  end
+
+  defp maybe_default_email_domain(form_data), do: form_data
+
+  defp registrable_domain(nil), do: nil
+  defp registrable_domain(""), do: nil
+
+  defp registrable_domain(custom_domain) do
+    case Domainatrex.parse(custom_domain) do
+      {:ok, %{domain: domain, tld: tld}} when domain != "" and tld != "" ->
+        "#{domain}.#{tld}"
+
+      _ ->
+        nil
+    end
+  end
 
   defp maybe_add_logo(attrs, nil), do: attrs
   defp maybe_add_logo(attrs, logo_url), do: Map.put(attrs, :logo_url, logo_url)
@@ -338,29 +363,10 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
         <div>
           <label
-            for="org-domain"
-            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
-          >
-            Domain
-          </label>
-          <input
-            type="text"
-            name="domain"
-            id="org-domain"
-            value={@form_data.domain}
-            placeholder="example.com"
-            phx-debounce="300"
-            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
-            data-testid="operator-org-domain-input"
-          />
-        </div>
-
-        <div>
-          <label
             for="org-custom-domain"
             class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
           >
-            Custom Domain
+            Custom domain
           </label>
           <input
             type="text"
@@ -375,6 +381,25 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           <p class="text-xs text-gray-500 dark:text-zinc-400 mt-1">
             White-label portal domain. Requires CNAME pointing to app host.
           </p>
+        </div>
+
+        <div>
+          <label
+            for="org-domain"
+            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
+            Email domain
+          </label>
+          <input
+            type="text"
+            name="domain"
+            id="org-domain"
+            value={@form_data.domain}
+            placeholder="example.com"
+            phx-debounce="300"
+            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
+            data-testid="operator-org-domain-input"
+          />
         </div>
 
         <div>
