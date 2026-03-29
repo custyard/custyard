@@ -14,122 +14,120 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
   describe "run/1 preview mode" do
     setup do
-      # Create temp files for testing
-      env_file =
-        Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.env")
-
-      toml_file =
-        Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.toml")
+      test_dir = Path.join(@tmp_dir, "fly_secrets_preview_#{:erlang.unique_integer([:positive])}")
+      File.mkdir_p!(test_dir)
+      original_dir = File.cwd!()
+      File.cd!(test_dir)
 
       on_exit(fn ->
-        File.rm(env_file)
-        File.rm(toml_file)
+        File.cd!(original_dir)
+        File.rm_rf(test_dir)
       end)
 
-      {:ok, env_file: env_file, toml_file: toml_file}
+      {:ok, test_dir: test_dir}
     end
 
-    test "shows preview of changes without --apply", %{env_file: env_file} do
-      File.write!(env_file, """
+    test "shows preview of config from .env", %{test_dir: test_dir} do
+      File.write!(Path.join(test_dir, ".env"), """
       PHX_HOST=example.com
-      SECRET_KEY_BASE=supersecretkey123456
+      PORT=4000
       """)
 
       output =
         ExUnit.CaptureIO.capture_io(fn ->
-          Secrets.run(["--env", env_file])
+          Secrets.run([])
         end)
 
-      assert output =~ "Config vars"
+      assert output =~ "Config"
       assert output =~ "PHX_HOST"
-      assert output =~ "Secrets"
-      assert output =~ "SECRET_KEY_BASE"
       assert output =~ "Run with --apply to make changes"
     end
 
-    test "shows message when no recognized variables found", %{env_file: env_file} do
-      File.write!(env_file, """
-      UNKNOWN_VAR=some-value
-      ANOTHER_UNKNOWN=another-value
-      """)
-
+    test "shows nothing to sync when no env files exist" do
       output =
         ExUnit.CaptureIO.capture_io(fn ->
-          Secrets.run(["--env", env_file])
+          Secrets.run([])
         end)
 
-      assert output =~ "No recognized variables found"
+      assert output =~ "Nothing to sync"
     end
 
-    test "masks secret values in preview", %{env_file: env_file} do
-      File.write!(env_file, """
+    test "masks secret values in preview", %{test_dir: test_dir} do
+      File.write!(Path.join(test_dir, ".env.secrets"), """
       SECRET_KEY_BASE=verylongsecretkeythatshouldbepartiallymasked
       """)
 
       output =
         ExUnit.CaptureIO.capture_io(fn ->
-          Secrets.run(["--env", env_file])
+          Secrets.run([])
         end)
 
-      # Should show masked value, not the full secret
       refute output =~ "verylongsecretkeythatshouldbepartiallymasked"
       assert output =~ "very...sked"
     end
   end
 
   describe "run/1 error handling" do
-    test "exits with error when env file not found" do
-      assert catch_exit(
-               ExUnit.CaptureIO.capture_io(:stderr, fn ->
-                 Secrets.run(["--env", "/nonexistent/path/.env"])
-               end)
-             ) == {:shutdown, 1}
+    setup do
+      test_dir =
+        Path.join(@tmp_dir, "fly_secrets_error_#{:erlang.unique_integer([:positive])}")
+
+      File.mkdir_p!(test_dir)
+      original_dir = File.cwd!()
+      File.cd!(test_dir)
+
+      on_exit(fn ->
+        File.cd!(original_dir)
+        File.rm_rf(test_dir)
+      end)
+
+      {:ok, test_dir: test_dir}
     end
 
-    test "shows helpful message when env file missing" do
+    test "gracefully handles missing env files" do
+      # No .env or .env.secrets in test_dir
       output =
-        ExUnit.CaptureIO.capture_io(:stderr, fn ->
-          catch_exit(Secrets.run(["--env", "/nonexistent/path/.env"]))
+        ExUnit.CaptureIO.capture_io(fn ->
+          Secrets.run([])
         end)
 
-      assert output =~ "not found"
-      assert output =~ "Copy .env.sample"
+      assert output =~ "No .env found"
+      assert output =~ "Nothing to sync"
+    end
+
+    test "apply with no files does nothing" do
+      output =
+        ExUnit.CaptureIO.capture_io(fn ->
+          Secrets.run(["--apply"])
+        end)
+
+      assert output =~ "Nothing to apply"
     end
   end
 
   describe "run/1 apply mode with fly.toml update" do
     setup do
-      env_file =
-        Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.env")
-
-      toml_file =
-        Path.join(@tmp_dir, "fly_secrets_test_#{:erlang.unique_integer([:positive])}.toml")
-
-      # Change to temp dir so fly.toml is found
+      test_dir = Path.join(@tmp_dir, "fly_secrets_apply_#{:erlang.unique_integer([:positive])}")
+      File.mkdir_p!(test_dir)
       original_dir = File.cwd!()
+      File.cd!(test_dir)
 
       on_exit(fn ->
         File.cd!(original_dir)
-        File.rm(env_file)
-        File.rm(toml_file)
+        File.rm_rf(test_dir)
       end)
 
-      {:ok, env_file: env_file, toml_file: toml_file, original_dir: original_dir}
+      {:ok, test_dir: test_dir}
     end
 
-    test "updates fly.toml [env] section with config vars", %{
-      env_file: env_file,
-      toml_file: toml_file,
-      original_dir: original_dir
-    } do
-      # Only config vars, no secrets (to avoid fly CLI call)
-      File.write!(env_file, """
+    test "updates fly.toml [env] section with config vars", %{test_dir: test_dir} do
+      File.write!(Path.join(test_dir, ".env"), """
       PHX_HOST=example.com
       PORT=4000
       MAIL_ADAPTER=lettermint
       """)
 
-      File.write!(toml_file, """
+      File.write!(Path.join(test_dir, "fly.toml"), """
       app = "custyard"
 
       [build]
@@ -139,66 +137,36 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       internal_port = 4000
       """)
 
-      File.cd!(Path.dirname(toml_file))
-
-      # Rename toml to fly.toml for the task
-      fly_toml = Path.join(Path.dirname(toml_file), "fly.toml")
-      File.rename!(toml_file, fly_toml)
-
       output =
         ExUnit.CaptureIO.capture_io(fn ->
-          Secrets.run(["--apply", "--env", env_file])
+          Secrets.run(["--apply"])
         end)
-
-      # Restore for cleanup
-      File.cd!(original_dir)
 
       assert output =~ "Updated fly.toml"
       assert output =~ "3 variable(s)"
 
-      # Verify toml was updated
-      updated_content = File.read!(fly_toml)
+      updated_content = File.read!(Path.join(test_dir, "fly.toml"))
       assert updated_content =~ "[env]"
       assert updated_content =~ "PHX_HOST = \"example.com\""
       assert updated_content =~ "PORT = \"4000\""
       assert updated_content =~ "MAIL_ADAPTER = \"lettermint\""
-
-      # Clean up
-      File.rm(fly_toml)
     end
 
-    test "shows 'No changes to apply' when env file has no recognized vars", %{
-      env_file: env_file,
-      original_dir: original_dir
-    } do
-      File.write!(env_file, """
-      UNKNOWN_VAR=value
-      """)
-
-      File.cd!(@tmp_dir)
-
+    test "shows 'Nothing to apply' when no env files present" do
       output =
         ExUnit.CaptureIO.capture_io(fn ->
-          Secrets.run(["--apply", "--env", env_file])
+          Secrets.run(["--apply"])
         end)
 
-      File.cd!(original_dir)
-
-      assert output =~ "No changes to apply"
+      assert output =~ "Nothing to apply"
     end
 
-    test "errors when fly.toml [env] section has unexpected format", %{
-      env_file: env_file,
-      toml_file: toml_file,
-      original_dir: original_dir
-    } do
-      # Config vars to trigger fly.toml update
-      File.write!(env_file, """
+    test "errors when fly.toml [env] section has unexpected format", %{test_dir: test_dir} do
+      File.write!(Path.join(test_dir, ".env"), """
       PHX_HOST=example.com
       """)
 
-      # fly.toml with non-standard [env] format (lowercase var name)
-      File.write!(toml_file, """
+      File.write!(Path.join(test_dir, "fly.toml"), """
       app = "custyard"
 
       [env]
@@ -208,18 +176,11 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       internal_port = 4000
       """)
 
-      File.cd!(Path.dirname(toml_file))
-      fly_toml = Path.join(Path.dirname(toml_file), "fly.toml")
-      File.rename!(toml_file, fly_toml)
-
       assert catch_exit(
                ExUnit.CaptureIO.capture_io(:stderr, fn ->
-                 Secrets.run(["--apply", "--env", env_file])
+                 Secrets.run(["--apply"])
                end)
              ) == {:shutdown, 1}
-
-      File.cd!(original_dir)
-      File.rm(fly_toml)
     end
   end
 
