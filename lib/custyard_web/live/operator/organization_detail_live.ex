@@ -775,12 +775,24 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           <div class="space-y-0.5">
             <%= for purpose <- Custyard.InboundRouteWebhook.purposes() do %>
               <% webhook = Enum.find(route.webhooks, fn w -> w.purpose == purpose end) %>
-              <.webhook_purpose_toggle
-                purpose={purpose}
-                enabled={webhook != nil and webhook.enabled}
-                route_id={route.id}
-                disabled={not @can_manage}
-              />
+              <%= if purpose == :sender_matching do %>
+                <%!-- sender_matching always runs regardless of toggle state (see Dispatcher @moduledoc) --%>
+                <div title="Sender matching always runs — it is required to create conversations">
+                  <.webhook_purpose_toggle
+                    purpose={purpose}
+                    enabled={webhook != nil and webhook.enabled}
+                    route_id={route.id}
+                    disabled={true}
+                  />
+                </div>
+              <% else %>
+                <.webhook_purpose_toggle
+                  purpose={purpose}
+                  enabled={webhook != nil and webhook.enabled}
+                  route_id={route.id}
+                  disabled={not @can_manage}
+                />
+              <% end %>
             <% end %>
           </div>
         </div>

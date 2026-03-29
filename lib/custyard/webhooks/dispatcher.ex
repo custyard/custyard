@@ -15,6 +15,16 @@ defmodule Custyard.Webhooks.Dispatcher do
   - max_children: 100 (backpressure limit)
   - Proper error tracking via Logger
   - Graceful shutdown during application stop
+
+  ## Architectural invariant: sender_matching always runs
+
+  `sender_matching` executes unconditionally regardless of its enabled flag
+  in the webhook_purposes table. It is the step that resolves sender identity
+  and creates the conversation record — without it, no downstream purpose
+  has anything to operate on. The toggle exposed in the operator UI for
+  sender_matching is cosmetic: it controls audit visibility and reporting,
+  not execution. This is intentional and must not be changed without
+  reworking the entire dispatch pipeline.
   """
 
   require Logger
@@ -80,8 +90,10 @@ defmodule Custyard.Webhooks.Dispatcher do
     |> MapSet.new()
   end
 
+  # Runs unconditionally — see "Architectural invariant" in @moduledoc.
+  # The _enabled_purposes argument is accepted for interface consistency
+  # but intentionally ignored.
   defp run_sender_matching(normalized, route_context, _enabled_purposes) do
-    # Always run sender matching — it's required to create the conversation
     Purposes.SenderMatching.process(normalized, route_context)
   end
 

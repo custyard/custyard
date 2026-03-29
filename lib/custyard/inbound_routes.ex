@@ -274,12 +274,14 @@ defmodule Custyard.InboundRoutes do
   @doc """
   Disable a webhook purpose on a route.
 
-  Returns `{:error, :not_found}` if no webhook exists for this purpose.
+  Idempotent: if no webhook record exists for this purpose, returns
+  `{:ok, nil}` (already disabled). Mirrors the upsert semantics of
+  `enable_webhook/2` so both directions are safe for concurrent callers.
   """
   def disable_webhook(%InboundRoute{} = route, purpose) do
     case get_webhook_by_purpose(route, purpose) do
       nil ->
-        {:error, :not_found}
+        {:ok, nil}
 
       webhook ->
         disable_webhook(webhook)
