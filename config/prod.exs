@@ -19,10 +19,15 @@ config :custyard, :health_check, path: "/api/health"
 config :custyard, CustyardWeb.Endpoint,
   server: true,
   cache_static_manifest: "priv/static/cache_manifest.json",
-  # Force SSL, trust Fly.io proxy headers, and exclude health check path
+  # Force SSL, trust Fly.io proxy headers, and exclude health check path.
+  # Custom exclude replaces Plug.SSL's default [hosts: ["localhost", "127.0.0.1"]],
+  # so we restore it explicitly here.
   force_ssl: [
     rewrite_on: [:x_forwarded_host, :x_forwarded_port, :x_forwarded_proto],
-    exclude: [conn: {CustyardWeb.HealthCheck, :skip_ssl?, []}]
+    exclude: [
+      hosts: ["localhost", "127.0.0.1"],
+      conn: {CustyardWeb.HealthCheck, :skip_ssl?, []}
+    ]
   ]
 
 config :logger, level: :info
