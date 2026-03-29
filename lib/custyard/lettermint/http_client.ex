@@ -10,8 +10,14 @@ defmodule Custyard.Lettermint.HttpClient do
 
   @impl true
   def create_route(params) do
-    url = api_url("/routes")
-    body = Jason.encode!(params)
+    project_id = Map.fetch!(params, :lettermint_project_id)
+    url = api_url("/projects/#{project_id}/routes")
+
+    body =
+      Jason.encode!(%{
+        name: Map.fetch!(params, :name),
+        route_type: Map.fetch!(params, :route_type)
+      })
 
     case request(:post, url, body) do
       {:ok, %Finch.Response{status: status, body: response_body}}

@@ -16,6 +16,9 @@ defmodule Custyard.Organization do
     # Custom domain for white-label portal (e.g., support.acme.com)
     field :custom_domain, :string
 
+    # Lettermint project ID for route provisioning
+    field :lettermint_project_id, :string
+
     has_many :contacts, Custyard.Contact
     has_many :conversations, Custyard.Conversation
     has_many :projects, Custyard.Project
@@ -37,7 +40,8 @@ defmodule Custyard.Organization do
       :logo_url,
       :primary_color,
       :secondary_color,
-      :custom_domain
+      :custom_domain,
+      :lettermint_project_id
     ])
     |> maybe_generate_token()
     |> validate_required([:name, :token])

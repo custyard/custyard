@@ -97,7 +97,7 @@ defmodule Custyard.OrganizationsTest do
     end
 
     test "auto-provisions a default general inbound route" do
-      attrs = build_organization(name: "Auto Route Corp")
+      attrs = build_organization(name: "Auto Route Corp", lettermint_project_id: "lm_proj_test")
 
       assert {:ok, org} = Organizations.create_organization(attrs)
 
