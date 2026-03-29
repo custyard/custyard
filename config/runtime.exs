@@ -65,7 +65,7 @@ if config_env() == :prod do
         config :custyard, Custyard.Mailer,
           adapter: Swoosh.Adapters.Lettermint,
           api_token: System.get_env("LETTERMINT_API_TOKEN"),
-          base_url: System.get_env("LETTERMINT_BASE_URL")
+          base_url: System.get_env("LETTERMINT_API_URL")
 
       _ ->
         # Unknown adapter, keep Local
@@ -133,26 +133,28 @@ end
 lettermint_api_url = System.get_env("LETTERMINT_API_URL")
 lettermint_api_key = System.get_env("LETTERMINT_API_KEY")
 
-cond do
-  lettermint_api_url && lettermint_api_key ->
-    config :custyard, :lettermint,
-      client: Custyard.Lettermint.HttpClient,
-      api_url: lettermint_api_url,
-      api_key: lettermint_api_key
+if lettermint_api_url && lettermint_api_key do
+  config :custyard, :lettermint,
+    client: Custyard.Lettermint.HttpClient,
+    api_url: lettermint_api_url,
+    api_key: lettermint_api_key
 
-  config_env() == :prod ->
-    raise """
-    Lettermint is not configured in production.
+  config :custyard, :lettermint_configured, true
+else
+  if config_env() == :prod do
+    IO.warn("""
+    Lettermint is not configured. Route provisioning will be disabled.
 
-    Route provisioning requires:
+    To enable, set these environment variables:
       - LETTERMINT_API_URL
       - LETTERMINT_API_KEY
 
-    Please set these environment variables.
-    """
+    Falling back to MockClient.
+    """)
 
-  true ->
-    :ok
+    config :custyard, :lettermint, client: Custyard.Lettermint.MockClient
+    config :custyard, :lettermint_configured, false
+  end
 end
 
 if config_env() == :prod do
@@ -184,14 +186,6 @@ if config_env() == :prod do
 
   host = System.get_env("PHX_HOST") || "localhost"
   port = parse_int.("PORT", 4000)
-
-  # Legacy webhook authentication token (for POST /api/webhook/inbound)
-  # Note: Consider using routed webhooks instead which have per-source HMAC secrets
-  webhook_token = System.get_env("WEBHOOK_TOKEN")
-
-  if webhook_token do
-    config :custyard, :webhook_token, webhook_token
-  end
 
   # Per-source webhook HMAC secrets for routed webhooks (POST /api/webhook/route/:token)
   # These enable signature verification on incoming webhook requests.

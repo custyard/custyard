@@ -6,7 +6,6 @@ defmodule Custyard.Webhooks.Normalizer do
   common post-processing (HTML stripping, subject defaults, etc.).
   """
 
-  alias Custyard.Webhooks.Adapters.Lettermint
   alias Custyard.Webhooks.Registry
 
   @doc """
@@ -19,15 +18,5 @@ defmodule Custyard.Webhooks.Normalizer do
       nil -> {:error, "unknown source: #{source}"}
       adapter -> adapter.normalize(params)
     end
-  end
-
-  @doc """
-  Normalize a raw params map using the legacy Lettermint format.
-
-  This provides backward compatibility with the existing `POST /api/webhook/inbound`
-  endpoint that predates the routed webhook system.
-  """
-  def normalize_legacy(params) do
-    Lettermint.normalize(params)
   end
 end

@@ -33,9 +33,6 @@ config :custyard, CustyardWeb.Endpoint,
 
 config :custyard, dev_routes: true
 
-# Webhook token for development
-config :custyard, :webhook_token, "dev_webhook_token"
-
 # Allow ?as=<contact_id> param for testing contact impersonation
 config :custyard, allow_contact_impersonation: true
 
