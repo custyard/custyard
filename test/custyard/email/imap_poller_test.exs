@@ -25,6 +25,7 @@ defmodule Custyard.Email.ImapPollerTest do
     port: 993,
     username: "test@example.com",
     password: "secret",
+    organization_id: 1,
     folder: "INBOX",
     poll_interval: 60_000,
     ssl: true
@@ -59,13 +60,19 @@ defmodule Custyard.Email.ImapPollerTest do
 
       # Missing host
       assert {:error, {%KeyError{key: :host}, _stacktrace}} =
-               ImapPoller.start_link(username: "test", password: "pass", poll_interval: 600_000)
+               ImapPoller.start_link(
+                 username: "test",
+                 password: "pass",
+                 organization_id: 1,
+                 poll_interval: 600_000
+               )
 
       # Missing username
       assert {:error, {%KeyError{key: :username}, _stacktrace}} =
                ImapPoller.start_link(
                  host: "imap.example.com",
                  password: "pass",
+                 organization_id: 1,
                  poll_interval: 600_000
                )
 
@@ -74,6 +81,7 @@ defmodule Custyard.Email.ImapPollerTest do
                ImapPoller.start_link(
                  host: "imap.example.com",
                  username: "test",
+                 organization_id: 1,
                  poll_interval: 600_000
                )
     end
@@ -83,6 +91,7 @@ defmodule Custyard.Email.ImapPollerTest do
         host: "imap.example.com",
         username: "test@example.com",
         password: "secret",
+        organization_id: 1,
         poll_interval: 600_000
       ]
 
@@ -259,6 +268,7 @@ defmodule Custyard.Email.ImapPollerTest do
         host: "imap.example.com",
         username: "test@example.com",
         password: "secret",
+        organization_id: 1,
         poll_interval: 600_000
       ]
 

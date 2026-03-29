@@ -377,6 +377,42 @@ defmodule Custyard.InboundRoutesTest do
     end
   end
 
+  describe "find_or_create_general_route webhook seeding" do
+    test "creates sender_matching and notification webhook records on new route" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+
+      webhooks = InboundRoutes.list_webhooks_for_route(route.id)
+      purposes = Enum.map(webhooks, & &1.purpose) |> Enum.sort()
+
+      assert :sender_matching in purposes
+      assert :notification in purposes
+
+      # All seeded webhooks should be enabled
+      assert Enum.all?(webhooks, & &1.enabled)
+    end
+
+    test "calling find_or_create_general_route again does not duplicate webhook records" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+      initial_webhooks = InboundRoutes.list_webhooks_for_route(route.id)
+
+      # Call again -- should return the same route with the same webhooks
+      {:ok, same_route} = InboundRoutes.find_or_create_general_route(org.id)
+      assert same_route.id == route.id
+
+      later_webhooks = InboundRoutes.list_webhooks_for_route(route.id)
+      assert length(later_webhooks) == length(initial_webhooks)
+
+      # Same webhook IDs
+      initial_ids = Enum.map(initial_webhooks, & &1.id) |> Enum.sort()
+      later_ids = Enum.map(later_webhooks, & &1.id) |> Enum.sort()
+      assert initial_ids == later_ids
+    end
+  end
+
   describe "create_route validation-first behavior" do
     test "returns changeset error without calling API when attrs are invalid" do
       org = Factory.insert_organization()

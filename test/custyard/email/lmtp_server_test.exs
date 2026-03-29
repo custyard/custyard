@@ -213,13 +213,13 @@ defmodule Custyard.Email.LMTPServerTest do
   end
 
   describe "email processing flow" do
-    setup %{example_org: org} do
+    setup %{example_org: sender_org, test_org: recipient_org} do
       {:ok, pid} = LMTPServer.start_link(port: @test_port)
       # Create contact for email processing (org comes from global setup)
-      _contact = insert_contact(organization_id: org.id, email: "alice@example.com")
+      _contact = insert_contact(organization_id: sender_org.id, email: "alice@example.com")
 
       on_exit(fn -> LMTPServer.stop(pid) end)
-      {:ok, server: pid, org: org}
+      {:ok, server: pid, org: sender_org, recipient_org: recipient_org}
     end
 
     test "accepts MAIL FROM command", %{org: _org} do
@@ -307,7 +307,7 @@ defmodule Custyard.Email.LMTPServerTest do
       :gen_tcp.close(socket)
     end
 
-    test "creates conversation from processed email", %{org: org} do
+    test "creates conversation from processed email", %{recipient_org: recipient_org} do
       {:ok, socket} =
         :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
 
@@ -330,8 +330,10 @@ defmodule Custyard.Email.LMTPServerTest do
 
       :gen_tcp.close(socket)
 
-      # Verify conversation was created
-      conversations = Custyard.Conversations.list_for_organization(org.id)
+      # Conversation is created under the recipient's org (resolved from RCPT TO domain),
+      # not the sender's org. This is the correct behavior — the inbound route belongs
+      # to the org that owns the recipient domain.
+      conversations = Custyard.Conversations.list_for_organization(recipient_org.id)
       assert conversations != []
 
       [conv | _] = conversations
@@ -433,12 +435,12 @@ defmodule Custyard.Email.LMTPServerTest do
   end
 
   describe "RSET command" do
-    setup %{example_org: org} do
+    setup %{example_org: sender_org, test_org: recipient_org} do
       {:ok, pid} = LMTPServer.start_link(port: @test_port)
-      _contact = insert_contact(organization_id: org.id, email: "alice@example.com")
+      _contact = insert_contact(organization_id: sender_org.id, email: "alice@example.com")
 
       on_exit(fn -> LMTPServer.stop(pid) end)
-      {:ok, server: pid, org: org}
+      {:ok, server: pid, org: sender_org, recipient_org: recipient_org}
     end
 
     test "RSET resets transaction state", %{org: _org} do
@@ -465,7 +467,7 @@ defmodule Custyard.Email.LMTPServerTest do
       :gen_tcp.close(socket)
     end
 
-    test "can send multiple messages via separate connections", %{org: org} do
+    test "can send multiple messages via separate connections", %{recipient_org: recipient_org} do
       # First message
       {:ok, socket1} =
         :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
@@ -486,8 +488,9 @@ defmodule Custyard.Email.LMTPServerTest do
       send_email_via_socket(socket2, "alice@example.com", "Second message via LMTP")
       :gen_tcp.close(socket2)
 
-      # Should have created conversations for both messages
-      conversations = Custyard.Conversations.list_for_organization(org.id)
+      # Conversations are created under the recipient's org (custyard.test),
+      # not the sender's org, because the inbound route resolves from RCPT TO domain.
+      conversations = Custyard.Conversations.list_for_organization(recipient_org.id)
       assert Enum.count(conversations) >= 2
     end
 
