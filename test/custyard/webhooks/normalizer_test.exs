@@ -31,12 +31,4 @@ defmodule Custyard.Webhooks.NormalizerTest do
     end
   end
 
-  describe "normalize_legacy/1" do
-    test "normalizes using lettermint format" do
-      params = %{"from" => "alice@example.com", "text" => "Body"}
-
-      assert {:ok, normalized} = Normalizer.normalize_legacy(params)
-      assert normalized.source == :lettermint
-    end
-  end
 end

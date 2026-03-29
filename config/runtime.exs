@@ -151,10 +151,10 @@ else
 
     Falling back to MockClient.
     """)
-  end
 
-  config :custyard, :lettermint, client: Custyard.Lettermint.MockClient
-  config :custyard, :lettermint_configured, false
+    config :custyard, :lettermint, client: Custyard.Lettermint.MockClient
+    config :custyard, :lettermint_configured, false
+  end
 end
 
 if config_env() == :prod do
@@ -186,14 +186,6 @@ if config_env() == :prod do
 
   host = System.get_env("PHX_HOST") || "localhost"
   port = parse_int.("PORT", 4000)
-
-  # Legacy webhook authentication token (for POST /api/webhook/inbound)
-  # Note: Consider using routed webhooks instead which have per-source HMAC secrets
-  webhook_token = System.get_env("WEBHOOK_TOKEN")
-
-  if webhook_token do
-    config :custyard, :webhook_token, webhook_token
-  end
 
   # Per-source webhook HMAC secrets for routed webhooks (POST /api/webhook/route/:token)
   # These enable signature verification on incoming webhook requests.

@@ -5,7 +5,6 @@ defmodule CustyardWeb.WebhookController do
   alias Custyard.Repo
   alias Custyard.Webhooks.Adapters.Slack, as: SlackAdapter
   alias Custyard.Webhooks.Dispatcher
-  alias Custyard.Webhooks.Normalizer
   alias Custyard.Webhooks.Registry
   alias Custyard.Webhooks.Signature
 
@@ -21,56 +20,6 @@ defmodule CustyardWeb.WebhookController do
     lettermint: "x-lettermint-timestamp",
     slack: "x-slack-request-timestamp"
   }
-
-  # Bearer token auth for legacy inbound endpoint
-  plug CustyardWeb.Plugs.WebhookAuth when action in [:inbound]
-
-  @doc """
-  Legacy inbound webhook endpoint.
-
-  Maintains backward compatibility with the existing Lettermint integration.
-  Delegates to the email Processor directly.
-
-  ## Deprecation Notice
-
-  This endpoint uses a single global WEBHOOK_TOKEN for all organizations. Consider
-  migrating to routed webhooks (`POST /api/webhook/route/:callback_token`) which
-  provide:
-
-  - Per-route callback tokens (can be rotated independently)
-  - Per-source signature verification (HMAC)
-  - Project/organization context from the route
-  - Multi-purpose webhook pipeline (enrichment, notifications, audit)
-
-  ## Security Limitations
-
-  With the legacy endpoint:
-
-  - A leaked WEBHOOK_TOKEN exposes all organizations
-  - No HMAC signature verification (bearer token only)
-  - SenderMatcher may auto-create contacts and organizations
-
-  For new integrations, use routed webhooks with proper HMAC secrets configured.
-  """
-  def inbound(conn, params) do
-    require Logger
-    Logger.info("Legacy webhook endpoint used -- consider migrating to routed webhooks")
-
-    with {:ok, normalized} <- Normalizer.normalize_legacy(params),
-         {:ok, conversation} <- Dispatcher.dispatch_legacy(normalized) do
-      conn
-      |> put_resp_header("x-deprecated", "true")
-      |> json(%{status: "ok", conversation_id: conversation.id})
-    else
-      {:error, reason} ->
-        Logger.warning("Legacy webhook processing failed: #{inspect(reason)}")
-
-        conn
-        |> put_resp_header("x-deprecated", "true")
-        |> put_status(422)
-        |> json(%{status: "error", reason: "processing failed"})
-    end
-  end
 
   @doc """
   Routed webhook endpoint — dispatched via callback_token.

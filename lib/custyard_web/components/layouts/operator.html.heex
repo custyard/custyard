@@ -209,6 +209,22 @@ inactive_class =
     Route provisioning is disabled. Set LETTERMINT_API_URL and LETTERMINT_API_KEY to enable it.
   </.banner>
 
+  <%!-- Webhook secrets warning --%>
+  <% webhook_secrets = Application.get_env(:custyard, :webhook_secrets, %{})
+
+  secrets_configured? =
+    map_size(webhook_secrets) > 0 and
+      Enum.any?(webhook_secrets, fn {_k, v} -> is_binary(v) and v != "" end)
+  %>
+  <.banner
+    :if={not secrets_configured?}
+    kind={:caution}
+    title="Webhook secrets not configured"
+    class="mx-4 mt-2"
+  >
+    Signature verification is disabled. Set webhook secrets for your sources in environment variables.
+  </.banner>
+
   <%!-- Content --%>
   <div class="flex-1 flex flex-col overflow-hidden" data-testid="operator-layout-content">
     {@inner_content}
