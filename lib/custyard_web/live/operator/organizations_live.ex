@@ -331,7 +331,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             value={@form_data.name}
             required
             phx-debounce="300"
-            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             data-testid="operator-org-name-input"
           />
         </div>
@@ -350,7 +350,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             value={@form_data.domain}
             placeholder="example.com"
             phx-debounce="300"
-            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             data-testid="operator-org-domain-input"
           />
         </div>
@@ -369,7 +369,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
             value={@form_data.custom_domain}
             placeholder="support.example.com"
             phx-debounce="300"
-            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             data-testid="operator-org-custom-domain-input"
           />
           <p class="text-xs text-gray-500 dark:text-zinc-400 mt-1">
@@ -387,7 +387,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           <select
             name="tier"
             id="org-tier"
-            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             data-testid="operator-org-tier-select"
           >
             <option value="basic" selected={@form_data.tier == "basic"}>Basic</option>
