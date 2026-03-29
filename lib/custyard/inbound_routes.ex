@@ -307,13 +307,28 @@ defmodule Custyard.InboundRoutes do
   def find_or_create_general_route(organization_id) when is_integer(organization_id) do
     case get_general_route(organization_id) do
       nil ->
-        create_route(%{
-          organization_id: organization_id,
-          route_type: :general
-        })
+        with {:ok, route} <-
+               create_route(%{
+                 organization_id: organization_id,
+                 route_type: :general
+               }) do
+          seed_default_webhooks(route)
+          {:ok, Repo.preload(route, :webhooks, force: true)}
+        end
 
       route ->
         {:ok, route}
+    end
+  end
+
+  # Seed the minimum webhook purpose records so Dispatcher's async purposes
+  # fire correctly. Without these, Dispatcher.get_enabled_purposes/1 returns
+  # an empty MapSet and skips notification/enrichment.
+  defp seed_default_webhooks(%InboundRoute{} = route) do
+    for purpose <- [:sender_matching, :notification] do
+      # Use enable_webhook/2 which has upsert semantics — safe if records
+      # already exist (e.g., from a concurrent call).
+      enable_webhook(route, purpose)
     end
   end
 

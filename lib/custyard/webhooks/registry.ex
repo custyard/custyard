@@ -11,7 +11,8 @@ defmodule Custyard.Webhooks.Registry do
     lettermint: Adapters.Lettermint,
     zendesk: Adapters.Zendesk,
     intercom: Adapters.Intercom,
-    slack: Adapters.Slack
+    slack: Adapters.Slack,
+    email: Adapters.Email
   }
 
   @doc "Returns the adapter module for the given source name, or nil."
