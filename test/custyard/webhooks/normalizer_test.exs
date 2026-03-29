@@ -30,5 +30,4 @@ defmodule Custyard.Webhooks.NormalizerTest do
       assert {:error, _} = Normalizer.normalize(:unknown, %{})
     end
   end
-
 end

@@ -34,4 +34,3 @@ config :phoenix_live_view,
 
 # Use test adapter for Swoosh to capture emails in tests
 config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Test
-

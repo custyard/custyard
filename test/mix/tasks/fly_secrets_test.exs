@@ -451,7 +451,6 @@ defmodule Mix.Tasks.Fly.SecretsTest do
         DATABASE_URL
         TURSO_AUTH_TOKEN
         LETTERMINT_API_TOKEN
-        WEBHOOK_TOKEN
         MAILGUN_API_KEY
         SENDGRID_API_KEY
         POSTMARK_API_KEY
@@ -1002,7 +1001,6 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       DATABASE_URL
       TURSO_AUTH_TOKEN
       LETTERMINT_API_TOKEN
-      WEBHOOK_TOKEN
       MAILGUN_API_KEY
       SENDGRID_API_KEY
       POSTMARK_API_KEY

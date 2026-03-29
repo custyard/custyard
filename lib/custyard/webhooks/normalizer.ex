@@ -19,5 +19,4 @@ defmodule Custyard.Webhooks.Normalizer do
       adapter -> adapter.normalize(params)
     end
   end
-
 end

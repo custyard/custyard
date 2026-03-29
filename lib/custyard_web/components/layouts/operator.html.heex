@@ -214,8 +214,7 @@ inactive_class =
 
   secrets_configured? =
     map_size(webhook_secrets) > 0 and
-      Enum.any?(webhook_secrets, fn {_k, v} -> is_binary(v) and v != "" end)
-  %>
+      Enum.any?(webhook_secrets, fn {_k, v} -> is_binary(v) and v != "" end) %>
   <.banner
     :if={not secrets_configured?}
     kind={:caution}
