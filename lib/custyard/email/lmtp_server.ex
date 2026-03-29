@@ -236,7 +236,10 @@ defmodule Custyard.Email.LMTPServer do
 
   @behaviour :gen_smtp_server_session
 
-  alias Custyard.Email.{Parser, Processor}
+  alias Custyard.Email.Parser
+  alias Custyard.InboundRoutes
+  alias Custyard.Webhooks.Adapters.Email, as: EmailAdapter
+  alias Custyard.Webhooks.Dispatcher
 
   # Client API
 
@@ -544,6 +547,7 @@ defmodule Custyard.Email.LMTPServer do
       from: nil,
       to: [],
       data: nil,
+      organization: nil,
       tls_enabled: tls_enabled,
       peer_address: peer_address,
       connected_at: System.monotonic_time(),
@@ -675,15 +679,15 @@ defmodule Custyard.Email.LMTPServer do
     current_count = length(state.to)
     max_recipients = Map.get(state, :max_recipients, @default_max_recipients)
 
-    # Validate recipient domain before accepting
+    # Validate recipient domain and resolve organization before accepting
     case validate_recipient_domain(to) do
-      :ok ->
+      {:ok, org} ->
         cond do
           max_recipients == :infinity ->
-            {:ok, %{state | to: [to | state.to]}}
+            {:ok, %{state | to: [to | state.to], organization: org}}
 
           current_count < max_recipients ->
-            {:ok, %{state | to: [to | state.to]}}
+            {:ok, %{state | to: [to | state.to], organization: org}}
 
           true ->
             # Emit telemetry for recipient limit exceeded
@@ -712,19 +716,17 @@ defmodule Custyard.Email.LMTPServer do
     end
   end
 
-  # Validate that the recipient domain is one we serve
-  # Prevents open relay by rejecting mail for unknown domains
+  # Validate that the recipient domain is one we serve and resolve the org.
+  # Returns {:ok, org} or {:error, :invalid_domain}.
   defp validate_recipient_domain(recipient) when is_binary(recipient) do
     case extract_domain(recipient) do
       nil ->
         {:error, :invalid_domain}
 
       domain ->
-        # Check if domain matches any organization's domain or custom_domain
-        if known_domain?(domain) do
-          :ok
-        else
-          {:error, :invalid_domain}
+        case find_org_by_domain(domain) do
+          {:ok, org} -> {:ok, org}
+          :not_found -> {:error, :invalid_domain}
         end
     end
   end
@@ -738,19 +740,23 @@ defmodule Custyard.Email.LMTPServer do
     end
   end
 
-  # Check if domain is known (matches an organization)
-  defp known_domain?(domain) do
+  # Look up organization by domain (matches domain or custom_domain).
+  # Returns {:ok, org} or :not_found.
+  defp find_org_by_domain(domain) do
     import Ecto.Query
 
-    # Check both domain and custom_domain fields
     query =
       from(o in Custyard.Organization,
         where: o.domain == ^domain or o.custom_domain == ^domain,
         limit: 1
       )
 
-    Custyard.Repo.exists?(query)
+    case Custyard.Repo.one(query) do
+      nil -> :not_found
+      org -> {:ok, org}
+    end
   end
+
 
   @impl true
   def handle_RCPT_extension(extension, state) do
@@ -851,7 +857,7 @@ defmodule Custyard.Email.LMTPServer do
       metadata
     )
 
-    case process_email(data) do
+    case process_email(data, state) do
       :ok ->
         # Emit stop event with duration
         duration = System.monotonic_time() - start_time
@@ -901,7 +907,7 @@ defmodule Custyard.Email.LMTPServer do
 
   @impl true
   def handle_RSET(state) do
-    {:ok, %{state | from: nil, to: [], data: nil, declared_size: nil}}
+    {:ok, %{state | from: nil, to: [], data: nil, declared_size: nil, organization: nil}}
   end
 
   @impl true
@@ -968,9 +974,13 @@ defmodule Custyard.Email.LMTPServer do
 
   # Internal functions
 
-  defp process_email(raw_data) do
+  defp process_email(raw_data, state) do
+    org = state[:organization]
+
     with {:ok, parsed} <- Parser.parse(raw_data),
-         {:ok, _conversation} <- Processor.process(parsed) do
+         {:ok, normalized} <- EmailAdapter.normalize(parsed),
+         {:ok, route} <- resolve_route(org),
+         {:ok, _conversation} <- Dispatcher.dispatch(route, normalized) do
       :ok
     else
       {:error, {:parse_failed, reason}} ->
@@ -983,9 +993,28 @@ defmodule Custyard.Email.LMTPServer do
       {:error, :organization_not_found} ->
         {:error, :permanent, :organization_not_found}
 
+      {:error, :no_organization} ->
+        {:error, :permanent, :no_organization}
+
       {:error, reason} ->
         # Default to temporary for unknown errors (allows retry)
         {:error, :temporary, reason}
+    end
+  end
+
+  # Resolve the inbound route for an organization, creating one if needed.
+  # find_or_create_general_route calls Lettermint API as a side-effect when
+  # creating a new route — acceptable here because it only happens once per org.
+  defp resolve_route(nil), do: {:error, :no_organization}
+
+  defp resolve_route(org) do
+    case InboundRoutes.get_general_route(org.id) do
+      nil ->
+        # Side-effect: calls Lettermint API to create remote route
+        InboundRoutes.find_or_create_general_route(org.id)
+
+      route ->
+        {:ok, route}
     end
   end
 
