@@ -8,6 +8,10 @@ primary_region = "ams"
 dockerfile = "Containerfile"
 
 [env]
+BASE_URL = "https://custyard.fly.dev/"
+EMAIL_FROM_ADDRESS = "alerts@onetime.dev"
+EMAIL_FROM_NAME = "Custyard Alerts"
+EMAIL_NOTIFICATIONS_ENABLED = "true"
 IMAP_ENABLED = "false"
 IMAP_FOLDER = "INBOX"
 IMAP_HOST = "imap.example.com"
@@ -19,8 +23,10 @@ LMTP_ENABLED = "false"
 LMTP_HOSTNAME = "localhost"
 LMTP_PORT = "2024"
 MAIL_ADAPTER = "lettermint"
+OPERATOR_NOTIFICATION_EMAIL = "custyard@onetime.dev"
 PHX_HOST = "custyard.fly.dev"
 PORT = "4000"
+
 [http_service]
 internal_port = 4000
 force_https = true

@@ -154,18 +154,25 @@ defmodule Custyard.Organizations do
 
     case Repo.insert(changeset) do
       {:ok, org} ->
-        case InboundRoutes.create_route(%{organization_id: org.id, route_type: :general}) do
-          {:ok, _route} ->
-            {:ok, org}
-
-          {:error, reason} ->
-            # Compensate: delete the org if route provisioning failed
-            Repo.delete(org)
-            {:error, wrap_route_error(changeset, reason)}
-        end
+        maybe_provision_route(org, changeset)
 
       {:error, changeset} ->
         {:error, changeset}
+    end
+  end
+
+  defp maybe_provision_route(%Organization{lettermint_project_id: nil} = org, _changeset) do
+    {:ok, org}
+  end
+
+  defp maybe_provision_route(org, changeset) do
+    case InboundRoutes.create_route(%{organization_id: org.id, route_type: :general}) do
+      {:ok, _route} ->
+        {:ok, org}
+
+      {:error, reason} ->
+        Repo.delete(org)
+        {:error, wrap_route_error(changeset, reason)}
     end
   end
 

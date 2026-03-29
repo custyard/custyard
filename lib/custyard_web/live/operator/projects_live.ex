@@ -340,7 +340,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             value={@form_data.title}
             required
             phx-debounce="300"
-            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             data-testid="operator-project-title-input"
           />
         </div>
@@ -357,7 +357,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
             id="project-description"
             rows="3"
             phx-debounce="300"
-            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             data-testid="operator-project-desc-input"
           >{@form_data.description}</textarea>
         </div>
@@ -372,7 +372,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           <select
             name="organization_id"
             id="project-organization"
-            class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+            class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             data-testid="operator-project-org-select"
           >
             <option value="">Internal project (no organization)</option>
@@ -399,7 +399,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
               name="start_date"
               id="project-start-date"
               value={@form_data.start_date}
-              class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+              class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
               data-testid="operator-project-start-date"
             />
           </div>
@@ -415,7 +415,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
               name="target_completion_date"
               id="project-target-date"
               value={@form_data.target_completion_date}
-              class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+              class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
               data-testid="operator-project-target-date"
             />
           </div>

@@ -94,11 +94,16 @@ defmodule Custyard.InboundRoutes do
     changeset = InboundRoute.changeset(%InboundRoute{}, attrs)
 
     if changeset.valid? do
+      org_id = attrs[:organization_id] || attrs["organization_id"]
+      org = Repo.get!(Custyard.Organization, org_id)
+      route_type = attrs[:route_type] || attrs["route_type"]
+
       lettermint_client = Client.client()
 
       case lettermint_client.create_route(%{
-             organization_id: attrs[:organization_id] || attrs["organization_id"],
-             type: attrs[:route_type] || attrs["route_type"]
+             lettermint_project_id: org.lettermint_project_id,
+             name: "#{org.name} #{route_type}",
+             route_type: "inbound"
            }) do
         {:ok, remote} ->
           changeset

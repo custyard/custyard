@@ -12,10 +12,22 @@ config :custyard, Custyard.Repo,
   # Important for the Scoring.Recalculator which runs bulk updates
   busy_timeout: 5000
 
+# Health check path accessible over plain HTTP for Fly.io machine-level probes.
+# These probes bypass the proxy (no x-forwarded-proto), so Plug.SSL must skip them.
+config :custyard, :health_check, path: "/api/health"
+
 config :custyard, CustyardWeb.Endpoint,
   server: true,
   cache_static_manifest: "priv/static/cache_manifest.json",
-  # Force SSL and trust Fly.io proxy headers (compile-time config required)
-  force_ssl: [rewrite_on: [:x_forwarded_host, :x_forwarded_port, :x_forwarded_proto]]
+  # Force SSL, trust Fly.io proxy headers, and exclude health check path.
+  # Custom exclude replaces Plug.SSL's default [hosts: ["localhost", "127.0.0.1"]],
+  # so we restore it explicitly here.
+  force_ssl: [
+    rewrite_on: [:x_forwarded_host, :x_forwarded_port, :x_forwarded_proto],
+    exclude: [
+      hosts: ["localhost", "127.0.0.1"],
+      conn: {CustyardWeb.HealthCheck, :skip_ssl?, []}
+    ]
+  ]
 
 config :logger, level: :info

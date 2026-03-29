@@ -55,6 +55,7 @@ defmodule Custyard.MixProject do
       {:swoosh, "~> 1.5"},
       {:gen_smtp, "~> 1.2"},
       {:plover, "~> 0.6"},
+      {:domainatrex, "~> 3.2"},
 
       # QA tools
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
