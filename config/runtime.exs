@@ -64,7 +64,7 @@ if config_env() == :prod do
         # Swoosh.Adapters.Lettermint available since swoosh 1.17+
         config :custyard, Custyard.Mailer,
           adapter: Swoosh.Adapters.Lettermint,
-          api_token: System.get_env("LETTERMINT_API_TOKEN"),
+          api_token: System.get_env("LETTERMINT_API_KEY"),
           base_url: System.get_env("LETTERMINT_API_URL")
 
       _ ->

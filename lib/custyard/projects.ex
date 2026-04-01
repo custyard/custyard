@@ -276,4 +276,80 @@ defmodule Custyard.Projects do
     # Use struct syntax to properly assign the virtual field
     %{project | progress: %{total: total, done: done, percentage: percentage}}
   end
+
+  # Task management
+
+  @doc """
+  Create a task for a project.
+  Broadcasts an update to project subscribers.
+  """
+  def create_task(project, attrs) do
+    attrs = Map.put(attrs, :project_id, project.id)
+
+    result =
+      %Task{}
+      |> Task.changeset(attrs)
+      |> Repo.insert()
+
+    case result do
+      {:ok, task} ->
+        broadcast_project_update(project.id)
+        {:ok, task}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Update a task's state.
+  Broadcasts an update to project subscribers.
+  """
+  def update_task_state(%Task{} = task, new_state) do
+    result =
+      task
+      |> Task.state_changeset(new_state)
+      |> Repo.update()
+
+    case result do
+      {:ok, task} ->
+        if task.project_id, do: broadcast_project_update(task.project_id)
+        {:ok, task}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Delete a task.
+  Broadcasts an update to project subscribers.
+  """
+  def delete_task(%Task{} = task) do
+    project_id = task.project_id
+
+    case Repo.delete(task) do
+      {:ok, _} = result ->
+        if project_id, do: broadcast_project_update(project_id)
+        result
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Get a task by ID.
+  """
+  def get_task(id) do
+    Repo.get(Task, id)
+  end
+
+  defp broadcast_project_update(project_id) do
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "project:#{project_id}",
+      {:project_updated, project_id}
+    )
+  end
 end

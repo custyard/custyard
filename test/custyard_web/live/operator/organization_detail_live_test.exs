@@ -306,6 +306,46 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       assert notification_webhook.enabled == false
     end
 
+    test "sender_matching toggle renders as disabled", %{conn: conn, org: org} do
+      admin = create_admin(org)
+      conn = authenticate_conn(conn, admin)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
+
+      view |> element("a", "Routes") |> render_click()
+
+      # The sender_matching toggle button should have the disabled attribute
+      assert has_element?(view, "[data-testid=webhook-toggle-btn-sender_matching][disabled]")
+    end
+
+    test "sender_matching toggle has tooltip explaining it always runs", %{
+      conn: conn,
+      org: org
+    } do
+      admin = create_admin(org)
+      conn = authenticate_conn(conn, admin)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
+
+      html = view |> element("a", "Routes") |> render_click()
+
+      # The wrapping div should contain a title attribute with the explanation
+      assert html =~ "Sender matching always runs"
+      assert html =~ "required to create conversations"
+    end
+
+    test "notification toggle is not disabled for admin", %{conn: conn, org: org} do
+      admin = create_admin(org)
+      conn = authenticate_conn(conn, admin)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
+
+      view |> element("a", "Routes") |> render_click()
+
+      # The notification toggle should NOT be disabled for admin users
+      refute has_element?(view, "[data-testid=webhook-toggle-btn-notification][disabled]")
+    end
+
     test "agent cannot access organization detail page for webhook toggles", %{
       conn: conn,
       org: org

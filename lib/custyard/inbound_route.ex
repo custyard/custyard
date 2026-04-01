@@ -29,6 +29,9 @@ defmodule Custyard.InboundRoute do
     # Source determines which webhook adapter processes requests to this route.
     # This is a security control - prevents attackers from selecting adapters.
     field :source, Ecto.Enum, values: @sources, default: :lettermint
+    # The email address outbound replies should come from for this route.
+    # Ensures customer replies flow back through the same webhook/route.
+    field :from_address, :string
 
     belongs_to :organization, Custyard.Organization
     belongs_to :project, Custyard.Project
@@ -48,6 +51,7 @@ defmodule Custyard.InboundRoute do
       :callback_token,
       :route_type,
       :source,
+      :from_address,
       :organization_id,
       :project_id
     ])
@@ -55,6 +59,9 @@ defmodule Custyard.InboundRoute do
     |> validate_required([:callback_token, :route_type, :organization_id])
     |> validate_inclusion(:route_type, @route_types)
     |> validate_token_strength()
+    |> validate_format(:from_address, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
+      message: "must be a valid email address"
+    )
     |> unique_constraint(:callback_token)
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:project_id)

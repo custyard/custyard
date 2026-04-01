@@ -89,7 +89,9 @@ defmodule Custyard.Factory do
       is_internal_note: false,
       message_id: "mid-#{unique_id()}",
       in_reply_to: nil,
-      conversation_id: nil
+      conversation_id: nil,
+      delivery_status: nil,
+      lettermint_message_id: nil
     }
 
     Map.merge(defaults, Map.new(overrides))

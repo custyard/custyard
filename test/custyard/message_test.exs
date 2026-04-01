@@ -52,6 +52,162 @@ defmodule Custyard.MessageTest do
       refute changeset.valid?
       assert "should be at most 100000 character(s)" in errors_on(changeset).body
     end
+
+    test "accepts delivery_status in cast" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      attrs = build_message(conversation_id: conv.id, delivery_status: :pending)
+      changeset = Message.changeset(%Message{}, attrs)
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :delivery_status) == :pending
+    end
+
+    test "delivery_status defaults to nil for inbound messages" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      attrs = build_message(conversation_id: conv.id)
+      changeset = Message.changeset(%Message{}, attrs)
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :delivery_status) == nil
+    end
+
+    test "rejects invalid delivery_status" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      attrs = build_message(conversation_id: conv.id, delivery_status: :invalid_status)
+      changeset = Message.changeset(%Message{}, attrs)
+
+      refute changeset.valid?
+      assert "is invalid" in errors_on(changeset).delivery_status
+    end
+  end
+
+  describe "delivery_status_changeset/2" do
+    test "sets a valid delivery status" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, delivery_status: :pending)
+
+      for status <- [:sent, :failed, :bounced] do
+        changeset = Message.delivery_status_changeset(message, status)
+        assert changeset.valid?, "expected #{status} to be valid"
+        assert Ecto.Changeset.get_change(changeset, :delivery_status) == status
+      end
+    end
+
+    test "rejects invalid delivery status" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, delivery_status: :pending)
+
+      changeset = Message.delivery_status_changeset(message, :invalid)
+      refute changeset.valid?
+      assert "is invalid" in errors_on(changeset).delivery_status
+    end
+
+    test "requires delivery_status" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id)
+
+      changeset = Message.delivery_status_changeset(message, nil)
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).delivery_status
+    end
+  end
+
+  describe "delivery_statuses/0" do
+    test "returns expected list" do
+      assert Message.delivery_statuses() == [:pending, :sent, :failed, :bounced]
+    end
+  end
+
+  describe "lettermint_message_id field" do
+    test "changeset accepts lettermint_message_id" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      attrs = build_message(conversation_id: conv.id, lettermint_message_id: "lm-12345")
+      changeset = Message.changeset(%Message{}, attrs)
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :lettermint_message_id) == "lm-12345"
+    end
+
+    test "lettermint_message_id is stored and retrievable" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, lettermint_message_id: "lm-persist-test")
+
+      reloaded = Custyard.Repo.get!(Message, message.id)
+      assert reloaded.lettermint_message_id == "lm-persist-test"
+    end
+
+    test "lettermint_message_id defaults to nil" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id)
+
+      assert message.lettermint_message_id == nil
+    end
+
+    test "insert_idempotent/1 works with lettermint_message_id set" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      attrs =
+        build_message(
+          conversation_id: conv.id,
+          message_id: "unique-lm-test-#{System.unique_integer()}",
+          lettermint_message_id: "lm-idempotent-test"
+        )
+
+      assert {:ok, message} = Message.insert_idempotent(attrs)
+      assert message.lettermint_message_id == "lm-idempotent-test"
+    end
+  end
+
+  describe "updated_at behavior" do
+    test "updated_at is set on insert" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id)
+
+      assert message.updated_at != nil
+      assert message.inserted_at != nil
+      # On insert, updated_at should equal inserted_at (or be very close)
+      assert DateTime.diff(message.updated_at, message.inserted_at, :second) == 0
+    end
+
+    test "updated_at changes when delivery_status is updated" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, delivery_status: :pending)
+
+      original_updated_at = message.updated_at
+
+      # Small delay to ensure timestamp differs
+      Process.sleep(1100)
+
+      {:ok, updated} =
+        message
+        |> Message.delivery_status_changeset(:sent)
+        |> Repo.update()
+
+      assert updated.delivery_status == :sent
+      assert DateTime.compare(updated.updated_at, original_updated_at) == :gt
+    end
+
+    test "updated_at is persisted in the database" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id)
+
+      reloaded = Repo.get!(Message, message.id)
+      assert reloaded.updated_at != nil
+      assert reloaded.updated_at == message.updated_at
+    end
   end
 
   describe "insert_idempotent/1" do

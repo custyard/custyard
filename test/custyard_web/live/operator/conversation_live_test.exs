@@ -85,6 +85,73 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert hd(messages).source == :operator
     end
 
+    test "reply message has delivery_status pending", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Outbound reply")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      # deliver_async is a no-op in :test env, so status stays :pending
+      assert message.delivery_status == :pending
+    end
+
+    test "reply message has a generated RFC 5322 message_id", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Reply with message ID")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      assert message.message_id != nil
+      # RFC 5322 Message-ID format: <unique.cN@domain>
+      assert message.message_id =~ ~r/^<.+\.c\d+@.+>$/
+    end
+
+    test "reply message has in_reply_to from last customer message", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      # Insert a customer message with a known message_id
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<customer-msg-123@example.com>",
+        body: "Customer question"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Reply to thread")
+      |> render_submit()
+
+      messages = Conversations.list_public_messages(conv.id)
+      reply = Enum.find(messages, &(&1.source == :operator))
+      assert reply.in_reply_to == "<customer-msg-123@example.com>"
+    end
+
+    test "reply message in_reply_to is nil when no prior customer messages", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "First message in thread")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      assert message.in_reply_to == nil
+    end
+
     test "clears reply input after sending", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
@@ -99,6 +166,20 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       # Message appears in thread and input is empty (value="")
       assert html =~ "Reply content"
       assert html =~ ~s(value="")
+    end
+
+    test "empty body does not create a message", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "")
+      |> render_submit()
+
+      messages = Conversations.list_public_messages(conv.id)
+      assert messages == []
     end
   end
 
