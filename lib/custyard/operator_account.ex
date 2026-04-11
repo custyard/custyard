@@ -50,7 +50,9 @@ defmodule Custyard.OperatorAccount do
   # Only validate password if one is provided
   defp maybe_validate_password(changeset) do
     case get_change(changeset, :password) do
-      nil -> changeset
+      nil ->
+        changeset
+
       _ ->
         validate_length(changeset, :password,
           min: 8,
@@ -113,6 +115,7 @@ defmodule Custyard.OperatorAccount do
   """
   def login_token_changeset(operator_account) do
     token = generate_login_token()
+
     expires_at =
       DateTime.utc_now()
       |> DateTime.add(@login_token_ttl_minutes * 60, :second)
