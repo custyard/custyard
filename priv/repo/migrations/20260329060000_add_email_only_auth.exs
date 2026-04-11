@@ -11,7 +11,7 @@ defmodule Custyard.Repo.Migrations.AddEmailOnlyAuth do
 
   def up do
     # 1. Create new table with nullable password_hash and login token fields
-    execute("""
+    execute """
     CREATE TABLE operator_accounts_new (
       id INTEGER PRIMARY KEY,
       email TEXT NOT NULL,
@@ -23,32 +23,32 @@ defmodule Custyard.Repo.Migrations.AddEmailOnlyAuth do
       inserted_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
-    """)
+    """
 
     # 2. Copy existing data
-    execute("""
+    execute """
     INSERT INTO operator_accounts_new (id, email, password_hash, role, organization_id, inserted_at, updated_at)
     SELECT id, email, password_hash, role, organization_id, inserted_at, updated_at
     FROM operator_accounts
-    """)
+    """
 
     # 3. Drop old table
-    execute("DROP TABLE operator_accounts")
+    execute "DROP TABLE operator_accounts"
 
     # 4. Rename new table
-    execute("ALTER TABLE operator_accounts_new RENAME TO operator_accounts")
+    execute "ALTER TABLE operator_accounts_new RENAME TO operator_accounts"
 
     # 5. Recreate indexes
-    create(unique_index(:operator_accounts, [:email]))
-    create(index(:operator_accounts, [:organization_id]))
-    create(index(:operator_accounts, [:role]))
-    create(unique_index(:operator_accounts, [:login_token]))
+    create unique_index(:operator_accounts, [:email])
+    create index(:operator_accounts, [:organization_id])
+    create index(:operator_accounts, [:role])
+    create unique_index(:operator_accounts, [:login_token])
   end
 
   def down do
     # Reverse: remove login token fields and make password_hash NOT NULL again
     # This will fail if any rows have null password_hash
-    execute("""
+    execute """
     CREATE TABLE operator_accounts_new (
       id INTEGER PRIMARY KEY,
       email TEXT NOT NULL,
@@ -58,20 +58,20 @@ defmodule Custyard.Repo.Migrations.AddEmailOnlyAuth do
       inserted_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
-    """)
+    """
 
-    execute("""
+    execute """
     INSERT INTO operator_accounts_new (id, email, password_hash, role, organization_id, inserted_at, updated_at)
     SELECT id, email, password_hash, role, organization_id, inserted_at, updated_at
     FROM operator_accounts
     WHERE password_hash IS NOT NULL
-    """)
+    """
 
-    execute("DROP TABLE operator_accounts")
-    execute("ALTER TABLE operator_accounts_new RENAME TO operator_accounts")
+    execute "DROP TABLE operator_accounts"
+    execute "ALTER TABLE operator_accounts_new RENAME TO operator_accounts"
 
-    create(unique_index(:operator_accounts, [:email]))
-    create(index(:operator_accounts, [:organization_id]))
-    create(index(:operator_accounts, [:role]))
+    create unique_index(:operator_accounts, [:email])
+    create index(:operator_accounts, [:organization_id])
+    create index(:operator_accounts, [:role])
   end
 end
