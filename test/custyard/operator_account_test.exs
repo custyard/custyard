@@ -157,7 +157,10 @@ defmodule Custyard.OperatorAccountTest do
       assert changeset.changes[:login_token]
       assert changeset.changes[:login_token_expires_at]
       assert String.length(changeset.changes[:login_token]) > 20
-      assert DateTime.compare(changeset.changes[:login_token_expires_at], DateTime.utc_now()) == :gt
+      assert DateTime.compare(
+               changeset.changes[:login_token_expires_at],
+               DateTime.utc_now()
+             ) == :gt
     end
   end
 

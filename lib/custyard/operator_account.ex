@@ -51,7 +51,12 @@ defmodule Custyard.OperatorAccount do
   defp maybe_validate_password(changeset) do
     case get_change(changeset, :password) do
       nil -> changeset
-      _ -> validate_length(changeset, :password, min: 8, max: 72, message: "must be between 8 and 72 characters")
+      _ ->
+        validate_length(changeset, :password,
+          min: 8,
+          max: 72,
+          message: "must be between 8 and 72 characters"
+        )
     end
   end
 
@@ -108,7 +113,10 @@ defmodule Custyard.OperatorAccount do
   """
   def login_token_changeset(operator_account) do
     token = generate_login_token()
-    expires_at = DateTime.utc_now() |> DateTime.add(@login_token_ttl_minutes * 60, :second) |> DateTime.truncate(:second)
+    expires_at =
+      DateTime.utc_now()
+      |> DateTime.add(@login_token_ttl_minutes * 60, :second)
+      |> DateTime.truncate(:second)
 
     operator_account
     |> change(%{login_token: token, login_token_expires_at: expires_at})
@@ -125,7 +133,10 @@ defmodule Custyard.OperatorAccount do
   @doc """
   Verifies a login token is valid and not expired.
   """
-  def verify_login_token(%__MODULE__{login_token: token, login_token_expires_at: expires_at}, provided_token)
+  def verify_login_token(
+        %__MODULE__{login_token: token, login_token_expires_at: expires_at},
+        provided_token
+      )
       when is_binary(token) and is_binary(provided_token) do
     token_matches = Plug.Crypto.secure_compare(token, provided_token)
     not_expired = DateTime.compare(expires_at, DateTime.utc_now()) == :gt
