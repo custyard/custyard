@@ -47,9 +47,7 @@ defmodule CustyardWeb.Operator.SessionController do
   end
 
   def verify(conn, %{"token" => token}) do
-    if not String.match?(token, @token_pattern) do
-      render_invalid_token(conn)
-    else
+    if String.match?(token, @token_pattern) do
       case Repo.get_by(OperatorAccount, login_token: token) do
         nil ->
           render_invalid_token(conn)
@@ -75,6 +73,8 @@ defmodule CustyardWeb.Operator.SessionController do
             )
           end
       end
+    else
+      render_invalid_token(conn)
     end
   end
 
