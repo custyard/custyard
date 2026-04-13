@@ -46,8 +46,22 @@ defmodule Custyard.Repo.Migrations.AddEmailOnlyAuth do
   end
 
   def down do
-    # Reverse: remove login token fields and make password_hash NOT NULL again
-    # This will fail if any rows have null password_hash
+    # Reverse: remove login token fields and make password_hash NOT NULL again.
+    #
+    # Fail loudly if any operators were created under email-only auth
+    # (password_hash IS NULL). Silently dropping these accounts would lock
+    # real operators out. Remediate by either setting passwords on those
+    # accounts or deleting them before rolling back.
+    %{rows: [[null_count]]} =
+      repo().query!("SELECT COUNT(*) FROM operator_accounts WHERE password_hash IS NULL")
+
+    if null_count > 0 do
+      raise """
+      Cannot roll back: #{null_count} operator_accounts row(s) have NULL password_hash.
+      Set passwords on these accounts or delete them before rolling back this migration.
+      """
+    end
+
     execute """
     CREATE TABLE operator_accounts_new (
       id INTEGER PRIMARY KEY,
@@ -64,7 +78,6 @@ defmodule Custyard.Repo.Migrations.AddEmailOnlyAuth do
     INSERT INTO operator_accounts_new (id, email, password_hash, role, organization_id, inserted_at, updated_at)
     SELECT id, email, password_hash, role, organization_id, inserted_at, updated_at
     FROM operator_accounts
-    WHERE password_hash IS NOT NULL
     """
 
     execute "DROP TABLE operator_accounts"

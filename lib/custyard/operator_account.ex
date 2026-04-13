@@ -142,7 +142,14 @@ defmodule Custyard.OperatorAccount do
       )
       when is_binary(token) and is_binary(provided_token) do
     token_matches = Plug.Crypto.secure_compare(token, provided_token)
-    not_expired = DateTime.compare(expires_at, DateTime.utc_now()) == :gt
+
+    not_expired =
+      if is_struct(expires_at, DateTime) do
+        DateTime.compare(expires_at, DateTime.utc_now()) == :gt
+      else
+        false
+      end
+
     token_matches and not_expired
   end
 

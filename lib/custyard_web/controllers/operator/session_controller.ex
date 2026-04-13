@@ -16,16 +16,11 @@ defmodule CustyardWeb.Operator.SessionController do
     render(conn, :new, error: nil, email: nil, info: nil, layout: {CustyardWeb.Layouts, :root})
   end
 
-  def create(conn, %{"email" => email}) do
+  def create(conn, %{"email" => email}) when is_binary(email) and email != "" do
     case Repo.get_by(OperatorAccount, email: email) do
       nil ->
-        # Don't reveal whether the email exists — always show success message
+        # Don't reveal whether the email exists — always show success page
         Logger.debug("Login attempt for non-existent email: #{email}")
-
-        render(conn, :sent,
-          email: email,
-          layout: {CustyardWeb.Layouts, :root}
-        )
 
       operator ->
         updated_operator =
@@ -38,12 +33,30 @@ defmodule CustyardWeb.Operator.SessionController do
             ~p"/operator/login/verify/#{updated_operator.login_token}"
 
         LoginEmail.deliver_login_link(updated_operator, login_url)
-
-        render(conn, :sent,
-          email: email,
-          layout: {CustyardWeb.Layouts, :root}
-        )
     end
+
+    # Use Post/Redirect/Get so the rate limiter sees a successful redirect
+    # (it counts non-3xx responses as failed attempts).
+    conn
+    |> put_session(:login_sent_email, email)
+    |> redirect(to: ~p"/operator/login/sent")
+  end
+
+  def create(conn, _params) do
+    render(conn, :new,
+      error: "Email is required.",
+      email: nil,
+      info: nil,
+      layout: {CustyardWeb.Layouts, :root}
+    )
+  end
+
+  def sent(conn, _params) do
+    email = get_session(conn, :login_sent_email)
+
+    conn
+    |> delete_session(:login_sent_email)
+    |> render(:sent, email: email || "", layout: {CustyardWeb.Layouts, :root})
   end
 
   def verify(conn, %{"token" => token}) do

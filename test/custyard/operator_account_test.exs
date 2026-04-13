@@ -209,6 +209,17 @@ defmodule Custyard.OperatorAccountTest do
 
       refute OperatorAccount.verify_login_token(operator, "any-token")
     end
+
+    test "returns false when token is set but expires_at is nil" do
+      operator = Factory.insert_operator_account()
+
+      {:ok, operator} =
+        operator
+        |> Ecto.Changeset.change(%{login_token: "some-token", login_token_expires_at: nil})
+        |> Custyard.Repo.update()
+
+      refute OperatorAccount.verify_login_token(operator, "some-token")
+    end
   end
 
   describe "clear_login_token_changeset/1" do
