@@ -6,7 +6,11 @@ defmodule Mix.Tasks.Fly.SecretsTest do
   Tests cover parsing, classification, quote handling, and TOML updates.
   External CLI calls are tested via process capture.
   """
-  use ExUnit.Case, async: true
+  # async: false because tests use File.cd! which mutates the VM's working
+  # directory. Running concurrently with other tests can cause file
+  # resolution failures during parallel compilation (see issue with
+  # relative path `require_file` resolving against a /tmp preview dir).
+  use ExUnit.Case, async: false
 
   alias Mix.Tasks.Fly.Secrets
 
