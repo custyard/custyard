@@ -99,5 +99,22 @@ defmodule Custyard.Email.NormalizerTest do
     test "returns empty string for nil input" do
       assert Normalizer.truncate(nil, 100) == ""
     end
+
+    test "handles max_length less than 4" do
+      # For max_length < 4, returns slice without ellipsis
+      assert Normalizer.truncate("hello", 3) == "hel"
+      assert Normalizer.truncate("hello", 2) == "he"
+      assert Normalizer.truncate("hello", 1) == "h"
+      assert Normalizer.truncate("hello", 0) == ""
+    end
+
+    test "handles multi-byte UTF-8 characters correctly" do
+      # "café" has 4 graphemes but 5 bytes (é is 2 bytes)
+      assert Normalizer.truncate("café", 10) == "café"
+
+      # Emoji handling - the emoji is truncated but result length respects limit
+      result = Normalizer.truncate("café🎉test", 6)
+      assert String.length(result) <= 6
+    end
   end
 end

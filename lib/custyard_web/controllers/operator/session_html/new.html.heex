@@ -18,10 +18,23 @@
         </div>
       <% end %>
 
+      <%= if @info do %>
+        <div
+          class="mb-4 p-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded text-sm text-blue-800 dark:text-blue-300"
+          data-testid="auth-info"
+        >
+          {@info}
+        </div>
+      <% end %>
+
+      <p class="text-sm text-gray-600 dark:text-zinc-400 mb-4">
+        Enter your email address and we'll send you a login link.
+      </p>
+
       <form action={~p"/operator/login"} method="post" data-testid="auth-form">
         <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
 
-        <div class="mb-4">
+        <div class="mb-6">
           <label
             for="email"
             class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
@@ -40,30 +53,12 @@
           />
         </div>
 
-        <div class="mb-6">
-          <label
-            for="password"
-            class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
-          >
-            Password
-          </label>
-          <input
-            type="password"
-            name="password"
-            id="password"
-            autocomplete="current-password"
-            required
-            data-testid="auth-password-input"
-            class="w-full px-3 py-2 border border-gray-300 dark:border-zinc-600 rounded-md shadow-sm bg-white dark:bg-zinc-700 text-gray-900 dark:text-zinc-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-          />
-        </div>
-
         <button
           type="submit"
           class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-800 font-medium"
           data-testid="auth-submit"
         >
-          Log in
+          Send login link
         </button>
       </form>
     </div>

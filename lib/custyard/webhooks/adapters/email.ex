@@ -54,6 +54,6 @@ defmodule Custyard.Webhooks.Adapters.Email do
      }}
   end
 
-  # Parser output mixes atom and string keys (see Parser moduledoc)
+  # Parser output carries both atom and string keys; prefer the atom form.
   defp field(parsed, key), do: parsed[key] || parsed[Atom.to_string(key)]
 end
