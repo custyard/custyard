@@ -677,6 +677,69 @@ defmodule Custyard.ConversationsTest do
       assert message.sender_email == "support@acme.com"
     end
 
+    test "prefers project route from_address for project-routed conversations", %{
+      org: org,
+      contact: contact
+    } do
+      project = insert_project(organization_id: org.id)
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          project_id: project.id,
+          subject: "Project thread"
+        )
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :general,
+        from_address: "support@acme.com"
+      )
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :project,
+        project_id: project.id,
+        from_address: "projects@acme.com"
+      )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Project reply")
+
+      assert message.sender_email == "projects@acme.com"
+    end
+
+    test "falls back to the general route when the project route has no from_address", %{
+      org: org,
+      contact: contact
+    } do
+      project = insert_project(organization_id: org.id)
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          project_id: project.id,
+          subject: "Project thread"
+        )
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :general,
+        from_address: "support@acme.com"
+      )
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :project,
+        project_id: project.id
+      )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Project reply")
+
+      assert message.sender_email == "support@acme.com"
+    end
+
     test "returns error on empty body", %{conversation: conv} do
       # Empty body should fail validation since body is required
       result = Conversations.send_reply(conv, "")

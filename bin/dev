@@ -72,5 +72,4 @@ mix ecto.migrate
 # Default port is 4000 for Phoenix
 PORT="${PORT_OVERRIDE:-${PORT:-4000}}"
 
-echo "DEBUG: WEBHOOK_SECRET_LETTERMINT=${WEBHOOK_SECRET_LETTERMINT:-(not set)}"
 exec env PORT="$PORT" overmind start -f "$PROCFILE" "${ARGS[@]}"

@@ -528,20 +528,27 @@ defmodule Custyard.Conversations do
     end
   end
 
+  # Prefer the project-specific route so replies flow back through the same
+  # webhook/route the conversation arrived on; fall back to the org's
+  # general route.
   defp lookup_route_from_address(conversation) do
-    alias Custyard.InboundRoutes
-
-    case conversation.organization_id do
-      nil ->
-        nil
-
-      org_id ->
-        case InboundRoutes.get_general_route(org_id) do
-          %{from_address: addr} when is_binary(addr) and addr != "" -> addr
-          _ -> nil
-        end
-    end
+    project_route_from_address(conversation) || general_route_from_address(conversation)
   end
+
+  defp project_route_from_address(%{project_id: project_id}) when is_integer(project_id) do
+    project_id |> Custyard.InboundRoutes.get_project_route() |> route_from_address()
+  end
+
+  defp project_route_from_address(_conversation), do: nil
+
+  defp general_route_from_address(%{organization_id: org_id}) when is_integer(org_id) do
+    org_id |> Custyard.InboundRoutes.get_general_route() |> route_from_address()
+  end
+
+  defp general_route_from_address(_conversation), do: nil
+
+  defp route_from_address(%{from_address: addr}) when is_binary(addr) and addr != "", do: addr
+  defp route_from_address(_route), do: nil
 
   # Generate a unique Message-ID for outbound emails following RFC 5322.
   defp generate_outbound_message_id(conversation) do
