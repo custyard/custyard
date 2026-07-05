@@ -336,7 +336,9 @@ defmodule Custyard.InboundRoutesTest do
       assert webhook.enabled == false
     end
 
-    test "disable_webhook/2 is idempotent when no webhook record exists (returns ok)", %{route: route} do
+    test "disable_webhook/2 is idempotent when no webhook record exists (returns ok)", %{
+      route: route
+    } do
       assert {:ok, nil} = InboundRoutes.disable_webhook(route, :sender_matching)
     end
 
