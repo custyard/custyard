@@ -32,6 +32,67 @@ defmodule Custyard.ConversationTest do
     end
   end
 
+  describe "organization requirement by source" do
+    test "nil organization is allowed only for :disambiguation and :public_intake" do
+      for source <- [:disambiguation, :public_intake] do
+        attrs = build_conversation(source: source, organization_id: nil)
+        changeset = Conversation.changeset(%Conversation{}, attrs)
+
+        assert changeset.valid?, "expected nil org to be allowed for #{source}"
+      end
+    end
+
+    test "organization is still required for every other source (regression)" do
+      for source <- [:email, :lettermint, :zendesk, :intercom, :slack, :portal] do
+        attrs = build_conversation(source: source, organization_id: nil)
+        changeset = Conversation.changeset(%Conversation{}, attrs)
+
+        refute changeset.valid?, "expected org to be required for #{source}"
+        assert "can't be blank" in errors_on(changeset).organization_id
+      end
+    end
+  end
+
+  describe "intake_source_key" do
+    test "is not castable via the operator-facing changeset/2" do
+      attrs = build_conversation(organization_id: insert_organization().id)
+      changeset = Conversation.changeset(%Conversation{}, Map.put(attrs, :intake_source_key, "x"))
+
+      assert get_change(changeset, :intake_source_key) == nil
+    end
+
+    test "cannot be changed on an existing conversation via changeset/2" do
+      conv = insert_conversation(source: :public_intake, intake_source_key: "original")
+
+      changeset = Conversation.changeset(conv, %{intake_source_key: "tampered"})
+      {:ok, updated} = Repo.update(changeset)
+
+      assert updated.intake_source_key == "original"
+    end
+
+    test "intake_changeset/2 casts and format-validates it" do
+      attrs =
+        build_conversation(source: :public_intake, organization_id: nil)
+        |> Map.put(:intake_source_key, "landing-page_2")
+
+      changeset = Conversation.intake_changeset(%Conversation{}, attrs)
+      assert changeset.valid?
+      assert get_change(changeset, :intake_source_key) == "landing-page_2"
+    end
+
+    test "intake_changeset/2 rejects malformed keys" do
+      for key <- ["Bad Key", "-lead", String.duplicate("k", 51)] do
+        attrs =
+          build_conversation(source: :public_intake, organization_id: nil)
+          |> Map.put(:intake_source_key, key)
+
+        changeset = Conversation.intake_changeset(%Conversation{}, attrs)
+        refute changeset.valid?, "expected key #{inspect(key)} to be rejected"
+        assert "has invalid format" in errors_on(changeset).intake_source_key
+      end
+    end
+  end
+
   describe "state enum" do
     test "accepts valid state values" do
       org = insert_organization()

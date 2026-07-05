@@ -960,4 +960,67 @@ defmodule Custyard.ConversationsTest do
       refute_received {:conversation_updated, 7}
     end
   end
+
+  describe "reply_channel/1" do
+    test "prefers the linked contact's email" do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "customer@example.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      assert Conversations.reply_channel(conv) == {:contact, "customer@example.com"}
+    end
+
+    test "contact email wins over a captured prospect email" do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "customer@example.com")
+      conv = insert_conversation(source: :public_intake, contact_id: contact.id)
+
+      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+
+      assert Conversations.reply_channel(conv) == {:contact, "customer@example.com"}
+    end
+
+    test "falls back to a captured, non-revoked prospect email" do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+
+      assert Conversations.reply_channel(conv) == {:prospect, "prospect@example.com"}
+    end
+
+    test "returns :none when the prospect email is revoked" do
+      conv = insert_conversation(source: :public_intake)
+
+      insert_prospect(
+        conversation_id: conv.id,
+        email: "prospect@example.com",
+        revoked_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      )
+
+      assert Conversations.reply_channel(conv) == :none
+    end
+
+    test "returns :none when the prospect has no email" do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id)
+
+      assert Conversations.reply_channel(conv) == :none
+    end
+
+    test "returns :none with neither contact nor prospect" do
+      conv = insert_conversation(source: :public_intake)
+
+      assert Conversations.reply_channel(conv) == :none
+    end
+
+    test "list_for_attention_queue/1 preloads the prospect for reply_channel" do
+      conv = insert_conversation(source: :public_intake, state: :new)
+      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+
+      [%{conversation: loaded}] = Conversations.list_for_attention_queue()
+
+      assert Ecto.assoc_loaded?(loaded.prospect)
+      assert Ecto.assoc_loaded?(loaded.contact)
+      assert Conversations.reply_channel(loaded) == {:prospect, "prospect@example.com"}
+    end
+  end
 end

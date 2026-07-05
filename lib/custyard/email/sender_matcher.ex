@@ -52,6 +52,55 @@ defmodule Custyard.Email.SenderMatcher do
   end
 
   @doc """
+  Lookup-only sender resolution for the public intake flow.
+
+  Same priority as `match/1` — exact contact match (oldest contact wins on
+  multi-org ambiguity, with a logged warning), then organization-by-domain —
+  but it never creates rows and never resolves to the `"_unmatched_"` sentinel
+  organization: contacts auto-created inside the sentinel org by `match/1`'s
+  catchall fallback are excluded from the contact lookup (falling through to
+  domain resolution), and the sentinel is excluded from the domain path. The
+  webhook pipeline and its auto-creating `match/1` are untouched.
+
+  Returns `{:contact, contact}` | `{:organization, organization}` | `:none`.
+  """
+  def resolve(from_address) do
+    email = extract_email(from_address)
+    domain = extract_domain(email)
+
+    case find_linkable_contacts_by_email(email) do
+      [] ->
+        resolve_org_by_domain(domain)
+
+      [contact] ->
+        {:contact, contact}
+
+      [contact | rest] ->
+        # Oldest contact (first relationship) wins — same tie-break as match/1.
+        other_org_ids = Enum.map(rest, & &1.organization_id)
+
+        Logger.warning(
+          "Multi-org sender ambiguity: email #{email} exists in #{length(rest) + 1} organizations. " <>
+            "Resolving to oldest contact #{contact.id} (org #{contact.organization_id}). " <>
+            "Other org IDs: #{inspect(other_org_ids)}."
+        )
+
+        {:contact, contact}
+    end
+  end
+
+  # The "_unmatched_" sentinel org is an artifact of the webhook pipeline's
+  # auto-creation fallback; it must never be offered as a resolution target.
+  defp resolve_org_by_domain("_unmatched_"), do: :none
+
+  defp resolve_org_by_domain(domain) do
+    case find_org_by_domain(domain) do
+      {:ok, org} -> {:organization, org}
+      :not_found -> :none
+    end
+  end
+
+  @doc """
   Match a sender within a specific organization (route-context matching).
 
   The organization is already known from the inbound route. We only need
@@ -92,6 +141,20 @@ defmodule Custyard.Email.SenderMatcher do
     # exists in multiple organizations. Oldest contact (first relationship) wins.
     # This is a fallback for when route-context matching isn't available.
     from(c in Contact, where: c.email == ^email, order_by: [asc: c.inserted_at])
+    |> Repo.all()
+  end
+
+  # Contact lookup for resolve/1: same ordering as find_contacts_by_email/1,
+  # but excludes contacts inside the "_unmatched_" sentinel org — resolve/1
+  # must never offer the sentinel as a link target through either path. The
+  # is_nil branch keeps contacts in domain-less organizations eligible.
+  defp find_linkable_contacts_by_email(email) do
+    from(c in Contact,
+      join: o in Organization,
+      on: o.id == c.organization_id,
+      where: c.email == ^email and (is_nil(o.domain) or o.domain != "_unmatched_"),
+      order_by: [asc: c.inserted_at]
+    )
     |> Repo.all()
   end
 

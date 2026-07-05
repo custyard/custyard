@@ -30,15 +30,17 @@ defmodule Custyard.Conversations do
 
     query =
       from c in Conversation,
-        # Left join: disambiguation conversations have nil organization_id
+        # Left join: disambiguation/public-intake conversations have nil organization_id
         left_join: o in assoc(c, :organization),
         left_join: ct in assoc(c, :contact),
+        # Prospect preload feeds reply_channel/1 without N+1 queries
+        left_join: p in assoc(c, :prospect),
         left_join: mc in subquery(message_count_subquery),
         on: mc.conversation_id == c.id,
         # Exclude resolved conversations (snoozed filter handled separately)
         where: c.state != :resolved,
         order_by: [desc: c.cached_score],
-        preload: [organization: o, contact: ct],
+        preload: [organization: o, contact: ct, prospect: p],
         select: %{conversation: c, message_count: coalesce(mc.count, 0)}
 
     query
@@ -323,6 +325,48 @@ defmodule Custyard.Conversations do
   def reload!(conversation) do
     Repo.reload!(conversation)
   end
+
+  @doc """
+  Derive the reply channel for a conversation.
+
+  Returns `{:contact, email}` when the linked contact has an email (always
+  preferred), `{:prospect, email}` when a prospect captured an email and
+  resume access has not been revoked, and `:none` otherwise.
+
+  The "no reply channel" state is derived, never stored — capturing an email
+  clears it with zero clearing code. Contact and prospect are preloaded only
+  when not already loaded, so preloading callers (the attention queue) pay no
+  extra queries.
+  """
+  def reply_channel(%Conversation{} = conversation) do
+    conversation = preload_reply_channel_assocs(conversation)
+
+    cond do
+      email = contact_email(conversation.contact) -> {:contact, email}
+      email = prospect_email(conversation.prospect) -> {:prospect, email}
+      true -> :none
+    end
+  end
+
+  defp preload_reply_channel_assocs(conversation) do
+    if Ecto.assoc_loaded?(conversation.contact) and Ecto.assoc_loaded?(conversation.prospect) do
+      conversation
+    else
+      Repo.preload(conversation, [:contact, :prospect])
+    end
+  end
+
+  defp contact_email(%Custyard.Contact{email: email}) when is_binary(email) and email != "",
+    do: email
+
+  defp contact_email(_contact), do: nil
+
+  # Prospect email counts only while resume access is not revoked
+  defp prospect_email(%Custyard.Prospect{email: email, revoked_at: nil})
+       when is_binary(email) and email != "",
+       do: email
+
+  defp prospect_email(_prospect), do: nil
 
   @doc """
   Broadcast a PubSub message on the org-scoped conversations topic

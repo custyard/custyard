@@ -170,7 +170,9 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           breakdown: breakdown,
           hours_idle: hours_idle,
           message_count: message_count,
-          is_snoozed: is_snoozed
+          is_snoozed: is_snoozed,
+          # Derived from preloaded contact/prospect — no extra queries
+          reply_channel: Conversations.reply_channel(conv)
         }
       end)
 
@@ -347,6 +349,15 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           <.state_badge state={@item.conversation.state} />
           <.urgency_badge urgency={@item.conversation.urgency} />
           <.source_badge source={@item.conversation.source} />
+          <.intake_source_tag
+            :if={@item.conversation.intake_source_key}
+            source_key={@item.conversation.intake_source_key}
+          />
+          <%!-- Flag only public-intake conversations: email/portal conversations
+               derive their reply channel elsewhere. A badge, never a filter. --%>
+          <.no_reply_channel_badge :if={
+            @item.conversation.source == :public_intake and @item.reply_channel == :none
+          } />
           <span
             class="text-xs text-gray-400 dark:text-zinc-500 ml-auto"
             data-testid="operator-queue-msg-count"

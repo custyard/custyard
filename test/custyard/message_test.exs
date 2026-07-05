@@ -292,4 +292,34 @@ defmodule Custyard.MessageTest do
       assert msg2.body == "Message 2"
     end
   end
+
+  describe "prospect source and public_intake origin" do
+    test "accepts source :prospect with origin :public_intake" do
+      conv = insert_conversation(source: :public_intake)
+
+      attrs =
+        build_message(
+          conversation_id: conv.id,
+          source: :prospect,
+          origin: :public_intake,
+          sender_email: nil,
+          message_id: nil,
+          delivery_status: nil
+        )
+
+      changeset = Message.changeset(%Message{}, attrs)
+      assert changeset.valid?
+
+      {:ok, message} = Repo.insert(changeset)
+      assert message.source == :prospect
+      assert message.origin == :public_intake
+      assert message.delivery_status == nil
+      assert message.sender_email == nil
+    end
+
+    test "sources/0 and origins/0 include the new values" do
+      assert :prospect in Message.sources()
+      assert :public_intake in Message.origins()
+    end
+  end
 end

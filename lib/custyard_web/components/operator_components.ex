@@ -179,21 +179,9 @@ defmodule CustyardWeb.OperatorComponents do
   attr :source, :atom, required: true
 
   def source_badge(assigns) do
-    colors =
-      case assigns.source do
-        :lettermint -> "text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950"
-        :zendesk -> "text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950"
-        :intercom -> "text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950"
-        :slack -> "text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950"
-        :email -> "text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950"
-        :portal -> "text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-950"
-        :disambiguation -> "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950"
-        _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-      end
-
     assigns =
       assigns
-      |> assign(:colors, colors)
+      |> assign(:colors, source_colors(assigns.source))
       |> assign(:label, source_label(assigns.source))
 
     ~H"""
@@ -206,6 +194,29 @@ defmodule CustyardWeb.OperatorComponents do
     """
   end
 
+  defp source_colors(:lettermint),
+    do: "text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950"
+
+  defp source_colors(:zendesk),
+    do: "text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950"
+
+  defp source_colors(:intercom),
+    do: "text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950"
+
+  defp source_colors(:slack),
+    do: "text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950"
+
+  defp source_colors(:email), do: "text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950"
+  defp source_colors(:portal), do: "text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-950"
+
+  defp source_colors(:disambiguation),
+    do: "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950"
+
+  defp source_colors(:public_intake),
+    do: "text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950"
+
+  defp source_colors(_other), do: "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
+
   defp source_label(:email), do: "Email"
   defp source_label(:lettermint), do: "Lettermint"
   defp source_label(:zendesk), do: "Zendesk"
@@ -213,9 +224,53 @@ defmodule CustyardWeb.OperatorComponents do
   defp source_label(:slack), do: "Slack"
   defp source_label(:portal), do: "Portal"
   defp source_label(:disambiguation), do: "Needs routing"
+  defp source_label(:public_intake), do: "Public intake"
 
   defp source_label(other) do
     other |> to_string() |> String.replace("_", " ") |> String.capitalize()
+  end
+
+  @doc """
+  Renders a tag-style badge for a conversation's intake source key (CTA
+  provenance).
+
+  ## Examples
+
+      <.intake_source_tag source_key="landing-page" />
+  """
+  attr :source_key, :string, required: true
+
+  def intake_source_tag(assigns) do
+    ~H"""
+    <span
+      class="text-xs px-1.5 py-0.5 rounded font-mono text-gray-600 dark:text-zinc-300 bg-gray-100 dark:bg-zinc-700"
+      data-testid="intake-source-tag"
+    >
+      {@source_key}
+    </span>
+    """
+  end
+
+  @doc """
+  Renders an amber badge flagging a public-intake conversation with no reply
+  channel (no linked contact email and no captured prospect email).
+
+  A badge, never a filter — flagged conversations stay fully visible in the
+  attention queue.
+
+  ## Examples
+
+      <.no_reply_channel_badge />
+  """
+  def no_reply_channel_badge(assigns) do
+    ~H"""
+    <span
+      class="text-xs px-1.5 py-0.5 rounded text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950"
+      data-testid="no-reply-channel-badge"
+    >
+      No reply channel
+    </span>
+    """
   end
 
   @doc """

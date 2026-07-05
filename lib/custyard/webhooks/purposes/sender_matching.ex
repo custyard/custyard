@@ -202,6 +202,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp message_source(:intercom), do: :portal
   defp message_source(:slack), do: :portal
   defp message_source(:disambiguation), do: :email
+  defp message_source(:public_intake), do: :prospect
   defp message_source(source) when source in [:email, :portal, :operator], do: source
 
   defp message_source(other) do

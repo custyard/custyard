@@ -192,11 +192,11 @@ defmodule CustyardWeb.OperatorComponentsTest do
     end
 
     test "renders unknown source atoms with a humanized label and neutral styling" do
-      # New source values (e.g. :public_intake) must render without changes here
-      html = render_component(&OperatorComponents.source_badge/1, source: :public_intake)
+      # New source values must render without changes here
+      html = render_component(&OperatorComponents.source_badge/1, source: :carrier_pigeon)
 
-      assert html =~ "Public intake"
-      assert html =~ ~s(data-testid="source-badge-public_intake")
+      assert html =~ "Carrier pigeon"
+      assert html =~ ~s(data-testid="source-badge-carrier_pigeon")
       assert html =~ "text-gray-600"
     end
   end
@@ -302,6 +302,35 @@ defmodule CustyardWeb.OperatorComponentsTest do
 
       # Each should be 50% width
       assert html =~ "width: 50.0%"
+    end
+  end
+
+  describe "source_badge/1 for public intake" do
+    test "renders the public_intake source with rose styling" do
+      html = render_component(&OperatorComponents.source_badge/1, source: :public_intake)
+
+      assert html =~ "Public intake"
+      assert html =~ "text-rose-700"
+      assert html =~ ~s(data-testid="source-badge-public_intake")
+    end
+  end
+
+  describe "intake_source_tag/1" do
+    test "renders the intake source key as a tag" do
+      html = render_component(&OperatorComponents.intake_source_tag/1, source_key: "landing-page")
+
+      assert html =~ "landing-page"
+      assert html =~ ~s(data-testid="intake-source-tag")
+    end
+  end
+
+  describe "no_reply_channel_badge/1" do
+    test "renders the amber no-reply-channel badge" do
+      html = render_component(&OperatorComponents.no_reply_channel_badge/1, [])
+
+      assert html =~ "No reply channel"
+      assert html =~ "text-amber-700"
+      assert html =~ ~s(data-testid="no-reply-channel-badge")
     end
   end
 

@@ -3,11 +3,21 @@ defmodule Custyard.Message do
   import Ecto.Changeset
 
   # Message types: how the message was sent
-  @sources [:email, :portal, :operator]
+  # :prospect — anonymous public-intake submission or resume-link reply
+  @sources [:email, :portal, :operator, :prospect]
 
   # Origins: which adapter/integration the message came from (for audit/reporting)
   # Aligns with Conversation.@sources for consistent tracking
-  @origins [:email, :lettermint, :zendesk, :intercom, :slack, :portal, :disambiguation]
+  @origins [
+    :email,
+    :lettermint,
+    :zendesk,
+    :intercom,
+    :slack,
+    :portal,
+    :disambiguation,
+    :public_intake
+  ]
 
   # Delivery status for outbound messages (nil for inbound)
   @delivery_statuses [:pending, :sent, :failed, :bounced]

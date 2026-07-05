@@ -450,4 +450,69 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       assert html =~ "Needs routing"
     end
   end
+
+  describe "public intake badges" do
+    test "queue card shows the intake source key as a tag badge", %{conn: conn} do
+      conv =
+        insert_conversation(
+          source: :public_intake,
+          intake_source_key: "landing-page",
+          state: :new
+        )
+
+      Scoring.calculate_and_cache(conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      assert html =~ ~s(data-testid="source-badge-public_intake")
+      assert html =~ ~s(data-testid="intake-source-tag")
+      assert html =~ "landing-page"
+    end
+
+    test "shows the amber No reply channel badge for intake conversations without a channel",
+         %{conn: conn} do
+      conv = insert_conversation(source: :public_intake, state: :new)
+      insert_prospect(conversation_id: conv.id)
+      Scoring.calculate_and_cache(conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      assert html =~ ~s(data-testid="no-reply-channel-badge")
+      assert html =~ "No reply channel"
+    end
+
+    test "hides the badge once the prospect captured an email", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake, state: :new)
+      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+      Scoring.calculate_and_cache(conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      refute html =~ ~s(data-testid="no-reply-channel-badge")
+    end
+
+    test "does not flag non-intake conversations that lack a contact email", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, source: :email, state: :new)
+      Scoring.calculate_and_cache(conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      refute html =~ ~s(data-testid="no-reply-channel-badge")
+    end
+
+    test "badges never filter: flagged intake conversations stay in every applicable view",
+         %{conn: conn} do
+      conv =
+        insert_conversation(source: :public_intake, state: :new, subject: "Flagged intake conv")
+
+      insert_prospect(conversation_id: conv.id)
+      Scoring.calculate_and_cache(conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator?filter=new")
+
+      assert html =~ "Flagged intake conv"
+      assert html =~ ~s(data-testid="no-reply-channel-badge")
+    end
+  end
 end
