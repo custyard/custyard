@@ -20,6 +20,7 @@ defmodule Custyard.Email.Outbound do
 
   require Logger
 
+  alias Custyard.Email.ThreadHeaders
   alias Custyard.{Message, Repo}
   import Swoosh.Email
 
@@ -57,32 +58,14 @@ defmodule Custyard.Email.Outbound do
   Useful for previewing or testing email composition.
   """
   def compose(%Message{} = message, conversation, recipient, from_address) do
-    subject = compose_subject(conversation)
-
-    email =
-      new()
-      |> to(recipient)
-      |> from(from_address)
-      |> subject(subject)
-      |> text_body(message.body)
-      |> html_body(wrap_html(message.body))
-
-    # Add threading headers if the message has in_reply_to
-    email =
-      if message.in_reply_to do
-        email
-        |> header("In-Reply-To", message.in_reply_to)
-        |> header("References", build_references(message))
-      else
-        email
-      end
-
-    # Set Message-ID header if message has one
-    if message.message_id do
-      header(email, "Message-ID", message.message_id)
-    else
-      email
-    end
+    new()
+    |> to(recipient)
+    |> from(from_address)
+    |> subject(compose_subject(conversation))
+    |> text_body(message.body)
+    |> html_body(wrap_html(message.body))
+    |> put_threading_headers(message)
+    |> put_message_id_header(message)
   end
 
   # --- Private ---
@@ -107,21 +90,82 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
+  # Threading headers per RFC 5322 section 3.6.4: In-Reply-To points at the
+  # parent (the last customer message), References carries the chain of prior
+  # Message-IDs in the thread. Values that don't normalize to a real msg-id
+  # (synthetic webhook ids, header-injection attempts) are dropped.
+  defp put_threading_headers(email, message) do
+    case ThreadHeaders.normalize_msg_id(message.in_reply_to) do
+      nil ->
+        email
+
+      in_reply_to ->
+        email
+        |> header("In-Reply-To", in_reply_to)
+        |> header("References", build_references(message, in_reply_to))
+    end
+  end
+
+  defp put_message_id_header(email, message) do
+    case ThreadHeaders.normalize_msg_id(message.message_id) do
+      nil -> email
+      message_id -> header(email, "Message-ID", message_id)
+    end
+  end
+
+  # Full chain of prior msg-ids in the thread, excluding the reply's own
+  # Message-ID (a message must not reference itself). Falls back to the
+  # parent id alone when no other stored ids qualify.
+  defp build_references(message, in_reply_to) do
+    message.conversation_id
+    |> ThreadHeaders.for_conversation(exclude_message_id: message.message_id)
+    |> Map.get("References", in_reply_to)
+  end
+
   defp from_name(conversation) do
-    case conversation.organization do
-      %{name: name} when is_binary(name) and name != "" -> name
-      _ -> "Custyard"
+    name =
+      case conversation.organization do
+        %{name: name} when is_binary(name) and name != "" -> name
+        _ -> "Custyard"
+      end
+
+    name |> sanitize_header_text() |> quote_display_name()
+  end
+
+  # RFC 5322 display names containing specials (comma, parens, quotes, ...)
+  # must be quoted-string wrapped, or "Acme, Inc. <a@b>" parses as two
+  # addresses. Plain atext-and-space names pass through unquoted.
+  defp quote_display_name(name) do
+    if name =~ ~r/^[a-zA-Z0-9!#$%&'*+\/=?^_`{|}~. -]*$/ do
+      name
+    else
+      escaped = String.replace(name, ~r/["\\]/, fn char -> "\\" <> char end)
+      "\"#{escaped}\""
     end
   end
 
   defp compose_subject(conversation) do
-    base = conversation.subject || "Your conversation"
-    # Prefix with Re: if not already present
-    if String.starts_with?(base, "Re: ") do
+    base =
+      case sanitize_header_text(conversation.subject || "") do
+        "" -> "Your conversation"
+        subject -> subject
+      end
+
+    # Prefix with Re: unless a reply prefix (any casing) is already present
+    if base =~ ~r/^re:/i do
       base
     else
       "Re: #{base}"
     end
+  end
+
+  # Header values must never contain CR/LF or other control characters
+  # (CWE-93 header injection); inbound subjects can carry them through the
+  # webhook JSON path, and Swoosh does not sanitize header values.
+  defp sanitize_header_text(text) do
+    text
+    |> String.replace(~r/[\x00-\x1F\x7F]+/, " ")
+    |> String.trim()
   end
 
   defp wrap_html(text_body) do
@@ -138,13 +182,6 @@ defmodule Custyard.Email.Outbound do
     </body>
     </html>
     """
-  end
-
-  defp build_references(message) do
-    # For now, just use in_reply_to as the reference chain.
-    # A more complete implementation would build the full chain from
-    # all prior messages in the thread.
-    message.in_reply_to || ""
   end
 
   defp mark_status(message, status) do

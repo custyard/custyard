@@ -111,6 +111,73 @@ defmodule Custyard.Email.ThreadHeadersTest do
       assert headers["In-Reply-To"] == "<only@example.com>"
       assert headers["References"] == "<only@example.com>"
     end
+
+    test "excludes the given message id from the chain", %{conversation: conv} do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<parent@example.com>"
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :operator,
+        message_id: "<reply@custyard.local>"
+      )
+
+      headers =
+        ThreadHeaders.for_conversation(conv.id, exclude_message_id: "<reply@custyard.local>")
+
+      assert headers["In-Reply-To"] == "<parent@example.com>"
+      assert headers["References"] == "<parent@example.com>"
+    end
+
+    test "skips synthetic non-RFC message ids", %{conversation: conv} do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "zendesk-123@zendesk.webhook"
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<real@example.com>"
+      )
+
+      headers = ThreadHeaders.for_conversation(conv.id)
+
+      assert headers["In-Reply-To"] == "<real@example.com>"
+      assert headers["References"] == "<real@example.com>"
+    end
+
+    test "returns empty map when only synthetic ids exist", %{conversation: conv} do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "slack-C1-1712.34@slack.webhook"
+      )
+
+      assert ThreadHeaders.for_conversation(conv.id) == %{}
+    end
+  end
+
+  describe "normalize_msg_id/1" do
+    test "accepts bracketed msg-ids" do
+      assert ThreadHeaders.normalize_msg_id("<abc@example.com>") == "<abc@example.com>"
+    end
+
+    test "trims surrounding whitespace" do
+      assert ThreadHeaders.normalize_msg_id("  <abc@example.com> ") == "<abc@example.com>"
+    end
+
+    test "rejects values that are not RFC 5322 msg-ids" do
+      assert ThreadHeaders.normalize_msg_id("zendesk-123@zendesk.webhook") == nil
+      assert ThreadHeaders.normalize_msg_id("<evil@x>\r\nX-Injected: 1") == nil
+      assert ThreadHeaders.normalize_msg_id("<no-at-sign>") == nil
+      assert ThreadHeaders.normalize_msg_id("") == nil
+      assert ThreadHeaders.normalize_msg_id(nil) == nil
+    end
   end
 
   describe "apply_to_email/2" do

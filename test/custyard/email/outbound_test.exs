@@ -169,6 +169,24 @@ defmodule Custyard.Email.OutboundTest do
       assert email.subject == "Re: Already replied"
     end
 
+    test "does not add Re: prefix when present with different casing", %{
+      org: org,
+      contact: contact,
+      operator_msg: msg
+    } do
+      re_conv =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          subject: "RE: Invoice 42"
+        )
+        |> Repo.preload([:organization, :contact])
+
+      email = Outbound.compose(msg, re_conv, "alice@customer.com", {"Acme", "support@acme.com"})
+
+      assert email.subject == "RE: Invoice 42"
+    end
+
     test "omits threading headers when in_reply_to is nil", %{conversation: conv} do
       msg =
         insert_message(
@@ -204,6 +222,128 @@ defmodule Custyard.Email.OutboundTest do
     end
   end
 
+  describe "threading headers" do
+    test "References carries the full chain of prior message ids", %{org: org} do
+      contact = insert_contact(organization_id: org.id, email: "chain@customer.com")
+
+      conversation =
+        insert_conversation(organization_id: org.id, contact_id: contact.id, subject: "Chain")
+        |> Repo.preload([:organization, :contact])
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :email,
+        message_id: "<a@customer.com>",
+        body: "First question"
+      )
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :operator,
+        message_id: "<b@custyard.local>",
+        in_reply_to: "<a@customer.com>",
+        body: "First answer",
+        delivery_status: :sent
+      )
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :email,
+        message_id: "<c@customer.com>",
+        body: "Follow-up"
+      )
+
+      reply =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :operator,
+          message_id: "<d@custyard.local>",
+          in_reply_to: "<c@customer.com>",
+          body: "Second answer",
+          delivery_status: :pending
+        )
+
+      email =
+        Outbound.compose(reply, conversation, "chain@customer.com", {"Acme", "support@acme.com"})
+
+      headers = Map.new(email.headers)
+      assert headers["In-Reply-To"] == "<c@customer.com>"
+      assert headers["References"] == "<a@customer.com> <b@custyard.local> <c@customer.com>"
+      # A message must not reference itself
+      refute headers["References"] =~ "<d@custyard.local>"
+    end
+
+    test "omits threading headers for synthetic non-RFC message ids", %{org: org} do
+      contact = insert_contact(organization_id: org.id, email: "zd@customer.com")
+
+      conversation =
+        insert_conversation(organization_id: org.id, contact_id: contact.id, subject: "Zendesk")
+        |> Repo.preload([:organization, :contact])
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :email,
+        message_id: "zendesk-123@zendesk.webhook",
+        body: "Via Zendesk"
+      )
+
+      reply =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :operator,
+          message_id: "<r1@custyard.local>",
+          in_reply_to: "zendesk-123@zendesk.webhook",
+          body: "Reply",
+          delivery_status: :pending
+        )
+
+      email =
+        Outbound.compose(reply, conversation, "zd@customer.com", {"Acme", "support@acme.com"})
+
+      headers = Map.new(email.headers)
+      refute Map.has_key?(headers, "In-Reply-To")
+      refute Map.has_key?(headers, "References")
+      assert headers["Message-ID"] == "<r1@custyard.local>"
+    end
+
+    test "neutralizes CRLF injection in subject and msg-id fields", %{org: org} do
+      contact = insert_contact(organization_id: org.id, email: "victim@customer.com")
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          subject: "Help\r\nBcc: attacker@evil.com"
+        )
+        |> Repo.preload([:organization, :contact])
+
+      msg =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :operator,
+          body: "Reply",
+          message_id: "<ok@custyard.local>\r\nX-Injected: 1",
+          in_reply_to: "<parent@customer.com>\r\nX-Injected: 2",
+          delivery_status: :pending
+        )
+
+      email =
+        Outbound.compose(msg, conversation, "victim@customer.com", {"Acme", "support@acme.com"})
+
+      assert email.subject == "Re: Help Bcc: attacker@evil.com"
+
+      headers = Map.new(email.headers)
+      refute Map.has_key?(headers, "Message-ID")
+      refute Map.has_key?(headers, "In-Reply-To")
+      refute Map.has_key?(headers, "References")
+
+      Enum.each(email.headers, fn {name, value} ->
+        refute name =~ ~r/[\r\n]/
+        refute value =~ ~r/[\r\n]/
+      end)
+    end
+  end
+
   describe "from_name resolution" do
     test "uses organization name when present", %{operator_msg: msg} do
       {:ok, _} = Outbound.deliver(msg)
@@ -211,6 +351,30 @@ defmodule Custyard.Email.OutboundTest do
       assert_email_sent(fn email ->
         {from_name, _from_email} = email.from
         assert from_name == "Acme Support"
+      end)
+    end
+
+    test "quotes display names containing RFC 5322 specials" do
+      org = insert_organization(name: "Acme, Inc.")
+      contact = insert_contact(organization_id: org.id, email: "quoted@customer.com")
+
+      conversation =
+        insert_conversation(organization_id: org.id, contact_id: contact.id, subject: "Quoting")
+        |> Repo.preload([:organization, :contact])
+
+      msg =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :operator,
+          sender_email: "support@acme.com",
+          body: "Reply",
+          delivery_status: :pending
+        )
+
+      {:ok, _} = Outbound.deliver(msg)
+
+      assert_email_sent(fn email ->
+        assert email.from == {~s("Acme, Inc."), "support@acme.com"}
       end)
     end
 
