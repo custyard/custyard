@@ -98,14 +98,12 @@ defmodule Custyard.Email.Outbound do
   end
 
   defp resolve_from_address(message, conversation) do
-    # Priority: message sender_email > route from_address > app config fallback
-    cond do
-      is_binary(message.sender_email) and message.sender_email != "" ->
-        {:ok, {from_name(conversation), message.sender_email}}
-
-      true ->
-        fallback = Application.get_env(:custyard, :email_from_address, "support@custyard.local")
-        {:ok, {from_name(conversation), fallback}}
+    # Priority: message sender_email > app config fallback
+    if is_binary(message.sender_email) and message.sender_email != "" do
+      {:ok, {from_name(conversation), message.sender_email}}
+    else
+      fallback = Application.get_env(:custyard, :email_from_address, "support@custyard.local")
+      {:ok, {from_name(conversation), fallback}}
     end
   end
 

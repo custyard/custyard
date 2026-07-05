@@ -43,7 +43,14 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
   # Sample RFC 5322 email
   defp sample_email(from, to, opts \\ []) do
     subject = Keyword.get(opts, :subject, "IMAP polled email")
-    message_id = Keyword.get(opts, :message_id, "<imap-int-#{System.unique_integer([:positive])}@example.com>")
+
+    message_id =
+      Keyword.get(
+        opts,
+        :message_id,
+        "<imap-int-#{System.unique_integer([:positive])}@example.com>"
+      )
+
     body = Keyword.get(opts, :body, "Email body fetched via IMAP.")
 
     "From: #{from}\r\n" <>
@@ -72,9 +79,10 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
       # This route represents what the IMAP poller would resolve from its org_id config
       route = create_route_with_webhook(%{organization_id: org.id, route_type: :general})
 
-      raw = sample_email("sender@external.com", "inbox@polled-org.example.com",
-        subject: "Via IMAP poller"
-      )
+      raw =
+        sample_email("sender@external.com", "inbox@polled-org.example.com",
+          subject: "Via IMAP poller"
+        )
 
       assert {:ok, conversation} = parse_normalize_dispatch(raw, route)
       assert conversation.organization_id == org.id
@@ -93,9 +101,10 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
           route_type: :project
         })
 
-      raw = sample_email("sender@external.com", "inbox@polled-org.example.com",
-        subject: "Project-scoped IMAP email"
-      )
+      raw =
+        sample_email("sender@external.com", "inbox@polled-org.example.com",
+          subject: "Project-scoped IMAP email"
+        )
 
       assert {:ok, conversation} = parse_normalize_dispatch(raw, route)
       assert conversation.project_id == project.id

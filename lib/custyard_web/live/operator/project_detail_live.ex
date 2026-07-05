@@ -322,7 +322,11 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
           <span :if={@task.due_at} data-testid="operator-task-due">
             Due: {format_due_at(@task.due_at)}
           </span>
-          <span :if={not @task.portal_visible} class="text-xs text-amber-600" title="Not visible in portal">
+          <span
+            :if={not @task.portal_visible}
+            class="text-xs text-amber-600"
+            title="Not visible in portal"
+          >
             <.icon name="hero-eye-slash" class="w-3 h-3 inline" /> Hidden
           </span>
         </div>

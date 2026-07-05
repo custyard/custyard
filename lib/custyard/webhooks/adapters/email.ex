@@ -33,16 +33,16 @@ defmodule Custyard.Webhooks.Adapters.Email do
   """
   @impl true
   def normalize(parsed) when is_map(parsed) do
-    headers = parsed[:headers] || parsed["headers"] || %{}
-    subject = parsed[:subject] || parsed["subject"] || "(no subject)"
+    headers = field(parsed, :headers) || %{}
+    subject = field(parsed, :subject) || "(no subject)"
 
     # Collapse text/html into single body — same logic as Processor.parse_payload
-    body = parsed[:text] || parsed["text"] || Normalizer.strip_html(parsed[:html] || parsed["html"]) || ""
+    body = field(parsed, :text) || Normalizer.strip_html(field(parsed, :html)) || ""
 
     {:ok,
      %{
-       from: parsed[:from] || parsed["from"],
-       to: parsed[:to] || parsed["to"],
+       from: field(parsed, :from),
+       to: field(parsed, :to),
        subject: Normalizer.truncate(subject, Normalizer.max_subject_length()),
        body: Normalizer.truncate(body, Normalizer.max_body_length()),
        message_id: parsed[:message_id] || Normalizer.get_header(headers, "message-id"),
@@ -53,4 +53,7 @@ defmodule Custyard.Webhooks.Adapters.Email do
        metadata: %{}
      }}
   end
+
+  # Parser output mixes atom and string keys (see Parser moduledoc)
+  defp field(parsed, key), do: parsed[key] || parsed[Atom.to_string(key)]
 end

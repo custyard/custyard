@@ -106,7 +106,8 @@ defmodule Custyard.Email.OutboundTest do
 
     test "marks status as :failed when conversation has no contact", %{conversation: conv} do
       # Create a conversation without a contact (e.g., disambiguation)
-      no_contact_conv = insert_conversation(organization_id: conv.organization_id, contact_id: nil)
+      no_contact_conv =
+        insert_conversation(organization_id: conv.organization_id, contact_id: nil)
 
       msg =
         insert_message(
@@ -150,7 +151,11 @@ defmodule Custyard.Email.OutboundTest do
       assert_no_email_sent()
     end
 
-    test "does not add Re: prefix when already present", %{org: org, contact: contact, operator_msg: msg} do
+    test "does not add Re: prefix when already present", %{
+      org: org,
+      contact: contact,
+      operator_msg: msg
+    } do
       re_conv =
         insert_conversation(
           organization_id: org.id,
@@ -241,7 +246,8 @@ defmodule Custyard.Email.OutboundTest do
 
     test "pending -> failed when delivery fails", %{conversation: conv} do
       # Create a conversation without a contact to trigger delivery failure
-      no_contact_conv = insert_conversation(organization_id: conv.organization_id, contact_id: nil)
+      no_contact_conv =
+        insert_conversation(organization_id: conv.organization_id, contact_id: nil)
 
       msg =
         insert_message(

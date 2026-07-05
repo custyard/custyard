@@ -6,8 +6,6 @@ defmodule Custyard.Conversations do
   alias Custyard.{Conversation, Message, Repo}
   import Ecto.Query
 
-  @env Mix.env()
-
   @doc """
   List conversations for the operator attention queue.
   Excludes resolved and currently-snoozed conversations, ordered by cached_score descending.
@@ -381,7 +379,12 @@ defmodule Custyard.Conversations do
 
   """
   def send_reply(conversation, body, opts \\ []) do
-    conversation = Repo.preload(conversation, [:contact, :organization, messages: from(m in Message, order_by: [desc: m.inserted_at])])
+    conversation =
+      Repo.preload(conversation, [
+        :contact,
+        :organization,
+        messages: from(m in Message, order_by: [desc: m.inserted_at])
+      ])
 
     Repo.transaction(fn ->
       with {:ok, message} <- insert_reply_message(conversation, body, opts),
@@ -412,14 +415,19 @@ defmodule Custyard.Conversations do
 
   # Fire-and-forget delivery via a supervised task.
   # Failures are logged by Email.Outbound and reflected in delivery_status.
-  # Skipped in :test env to avoid sandbox ownership issues with async tasks.
-  defp deliver_async(%Message{} = _message) when @env == :test, do: :ok
-
+  # Disabled in config/test.exs to avoid sandbox ownership issues with async
+  # tasks; tests exercise Email.Outbound.deliver/1 directly.
   defp deliver_async(%Message{} = message) do
-    Task.Supervisor.start_child(
-      Custyard.TaskSupervisor,
-      fn -> Custyard.Email.Outbound.deliver(message) end
-    )
+    alias Custyard.Email.Outbound
+
+    if Application.get_env(:custyard, :deliver_replies_async?, true) do
+      Task.Supervisor.start_child(
+        Custyard.TaskSupervisor,
+        fn -> Outbound.deliver(message) end
+      )
+    end
+
+    :ok
   end
 
   # Build and insert the operator reply message with email metadata.
@@ -521,7 +529,9 @@ defmodule Custyard.Conversations do
     alias Custyard.InboundRoutes
 
     case conversation.organization_id do
-      nil -> nil
+      nil ->
+        nil
+
       org_id ->
         case InboundRoutes.get_general_route(org_id) do
           %{from_address: addr} when is_binary(addr) and addr != "" -> addr

@@ -96,7 +96,7 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       |> render_submit()
 
       [message] = Conversations.list_public_messages(conv.id)
-      # deliver_async is a no-op in :test env, so status stays :pending
+      # async delivery is disabled via test config, so status stays :pending
       assert message.delivery_status == :pending
     end
 
