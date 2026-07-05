@@ -84,3 +84,19 @@ sub-issues.
 Related existing issues (not part of the epic): #25 (Lettermint delivery-status
 webhooks, downstream of #26), #26 (outbound replies), #27 (route management,
 closed).
+
+## Execution log (2026-07-05, same day)
+
+The epic was executed by a multi-agent session. Outcomes, in landing order:
+
+| Item | Outcome |
+|---|---|
+| #49 / PR #46 | Merged (`5203eb7`). |
+| #50 / PR #45 | Merged (`97c806b`). All four claimed thread fixes verified in code (all in `009b60a`) by independent agents before merging; 5 threads resolved with evidence. The migration-rollback "judgment call" was moot — `down()` had already been changed to raise loudly on NULL `password_hash` rather than silently skip. |
+| #51 / PR #42 | Merged (`72144c0`). Root cause of the March test-job failure was **not** LMTP tests (full suite: 1179/0 locally) but `mix format --check-formatted` (5 files) + `mix credo --strict` (4 issues) — fixed in `5a4663c`, CI green. |
+| #52 / PR #43 | Merged (`48b2d33`) after auto-retarget to main, a main merge-back (`be85bae`), one format fix (`ef386fa`), and its first-ever green test/security run. |
+| #53 / 26-outbound | PR #57 opened with main merged in. The unreviewed `c4fef98` received a 6-dimension, adversarially-verified multi-agent review: 14 confirmed findings (1 critical, 6 major — incl. wrong-message threading, dead `ThreadHeaders`, `lettermint_message_id` never captured, invisible delivery failures, missing org scoping + IDOR in `ProjectDetailLive`), all fixed on the PR with 29 regression tests. **Awaiting human review/merge** — session guardrails correctly refuse self-merge of self-reviewed work. |
+| #54 | Blocked in the remote environment (proxy forbids ref deletion). One-liner posted on the issue. |
+| #55 | Full CI gate (compile/format/test/credo/sobelow) run locally on the exact prospective main tree: 1299 tests, 0 failures. Shared-file semantic check clean; note `LETTERMINT_API_TOKEN` → `LETTERMINT_API_KEY` rename requires the new fly secret. Final main CI run pending PR #57 merge. |
+
+Corrections to the audit: the "2 pre-existing LMTP test failures" theory was wrong (see #51 above), and `claude/email-only-auth-VP2JG` × `feature/26-outbound` textual cleanliness held all the way through, including after the new format commits.
