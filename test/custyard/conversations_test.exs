@@ -545,4 +545,331 @@ defmodule Custyard.ConversationsTest do
       assert ids == [first.id, second.id]
     end
   end
+
+  describe "send_reply/3" do
+    setup do
+      org = insert_organization(name: "Reply Corp")
+      contact = insert_contact(organization_id: org.id, email: "customer@example.com")
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          subject: "Need help",
+          state: :waiting
+        )
+
+      # Add a customer message to thread against
+      _customer_msg =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :email,
+          sender_email: "customer@example.com",
+          message_id: "<inbound-123@customer.com>",
+          body: "Please help me"
+        )
+
+      {:ok, org: org, contact: contact, conversation: conversation}
+    end
+
+    test "creates a message with correct attributes", %{conversation: conv} do
+      {:ok, message} = Conversations.send_reply(conv, "Here is your answer")
+
+      assert message.source == :operator
+      assert message.body == "Here is your answer"
+      assert message.is_internal_note == false
+      assert message.conversation_id == conv.id
+      assert message.delivery_status == :pending
+    end
+
+    test "sets in_reply_to from last customer message", %{conversation: conv} do
+      {:ok, message} = Conversations.send_reply(conv, "Following up")
+
+      assert message.in_reply_to == "<inbound-123@customer.com>"
+    end
+
+    test "threads in_reply_to to the latest customer message when messages were preloaded ascending",
+         %{conversation: conv} do
+      # Backdate the setup message so the newer one wins on inserted_at
+      backdated =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(m in Custyard.Message, where: m.conversation_id == ^conv.id),
+        set: [inserted_at: backdated]
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<inbound-456@customer.com>",
+        body: "Any update?"
+      )
+
+      # get_with_messages/1 preloads messages ascending — the same shape the
+      # LiveView passes in. Regression: the already-loaded association must
+      # not decide which message gets threaded.
+      preloaded = Conversations.get_with_messages(conv.id)
+
+      {:ok, message} = Conversations.send_reply(preloaded, "Reply to the follow-up")
+
+      assert message.in_reply_to == "<inbound-456@customer.com>"
+    end
+
+    test "breaks inserted_at ties for in_reply_to by message id", %{conversation: conv} do
+      # Inserted within the same second as the setup message
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<inbound-tie@customer.com>",
+        body: "Second message, same second"
+      )
+
+      {:ok, message} = Conversations.send_reply(conv, "Tiebreak reply")
+
+      assert message.in_reply_to == "<inbound-tie@customer.com>"
+    end
+
+    test "generates a unique outbound message_id", %{conversation: conv} do
+      {:ok, message} = Conversations.send_reply(conv, "Reply one")
+
+      assert message.message_id != nil
+      assert String.starts_with?(message.message_id, "<")
+      assert String.ends_with?(message.message_id, ">")
+      assert message.message_id =~ ~r/c#{conv.id}@/
+    end
+
+    test "transitions conversation state to :active", %{conversation: conv} do
+      assert conv.state == :waiting
+
+      {:ok, _message} = Conversations.send_reply(conv, "On it")
+
+      reloaded = Repo.get!(Custyard.Conversation, conv.id)
+      assert reloaded.state == :active
+    end
+
+    test "updates last_operator_action_at", %{conversation: conv} do
+      assert conv.last_operator_action_at == nil
+
+      {:ok, _message} = Conversations.send_reply(conv, "Done")
+
+      reloaded = Repo.get!(Custyard.Conversation, conv.id)
+      assert reloaded.last_operator_action_at != nil
+    end
+
+    test "uses operator_email option for sender when no route from_address", %{conversation: conv} do
+      {:ok, message} = Conversations.send_reply(conv, "Reply", operator_email: "agent@corp.com")
+
+      assert message.sender_email == "agent@corp.com"
+    end
+
+    test "prefers route from_address over operator_email", %{conversation: conv, org: org} do
+      # Create a route with a from_address for this org
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :general,
+        from_address: "support@acme.com"
+      )
+
+      {:ok, message} =
+        Conversations.send_reply(conv, "Reply", operator_email: "agent@corp.com")
+
+      assert message.sender_email == "support@acme.com"
+    end
+
+    test "prefers project route from_address for project-routed conversations", %{
+      org: org,
+      contact: contact
+    } do
+      project = insert_project(organization_id: org.id)
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          project_id: project.id,
+          subject: "Project thread"
+        )
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :general,
+        from_address: "support@acme.com"
+      )
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :project,
+        project_id: project.id,
+        from_address: "projects@acme.com"
+      )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Project reply")
+
+      assert message.sender_email == "projects@acme.com"
+    end
+
+    test "falls back to the general route when the project route has no from_address", %{
+      org: org,
+      contact: contact
+    } do
+      project = insert_project(organization_id: org.id)
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          project_id: project.id,
+          subject: "Project thread"
+        )
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :general,
+        from_address: "support@acme.com"
+      )
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :project,
+        project_id: project.id
+      )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Project reply")
+
+      assert message.sender_email == "support@acme.com"
+    end
+
+    test "returns error on empty body", %{conversation: conv} do
+      # Empty body should fail validation since body is required
+      result = Conversations.send_reply(conv, "")
+
+      assert {:error, _reason} = result
+    end
+
+    test "sets origin to :email for email-sourced conversation", %{conversation: conv} do
+      # Default conversation source is :email
+      {:ok, message} = Conversations.send_reply(conv, "Reply to email thread")
+
+      assert message.origin == :email
+    end
+
+    test "sets origin to :lettermint for lettermint-sourced conversation" do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "lm-customer@example.com")
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          subject: "Lettermint thread",
+          source: :lettermint
+        )
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :email,
+        message_id: "<lm-msg@lettermint.test>",
+        body: "Hello from lettermint"
+      )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Lettermint reply")
+
+      assert message.origin == :lettermint
+    end
+
+    test "sets origin to :portal for portal-sourced conversation" do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "portal-user@example.com")
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          subject: "Portal thread",
+          source: :portal
+        )
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :portal,
+        body: "Portal message"
+      )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Portal reply")
+
+      assert message.origin == :portal
+    end
+
+    test "defaults origin to :email for disambiguation-sourced conversation" do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "ambig@example.com")
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          subject: "Disambiguation thread",
+          source: :disambiguation
+        )
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :email,
+        body: "Disambiguated message"
+      )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Disambiguation reply")
+
+      assert message.origin == :email
+    end
+
+    test "broadcasts PubSub events on success", %{conversation: conv} do
+      conv_id = conv.id
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:#{conv.organization_id}")
+
+      {:ok, _message} = Conversations.send_reply(conv, "Broadcast test")
+
+      assert_received {:message_added, ^conv_id}
+      assert_received {:conversation_updated, ^conv_id}
+      assert_received {:conversation_updated, ^conv_id}
+    end
+
+    test "sender_email is nil when no route and no operator_email", %{conversation: conv} do
+      {:ok, message} = Conversations.send_reply(conv, "No sender")
+
+      assert message.sender_email == nil
+    end
+
+    test "message and conversation update are atomic", %{conversation: conv} do
+      # Verify both the message insert and conversation update happen together
+      before_count =
+        Repo.one(
+          from m in Custyard.Message,
+            where: m.conversation_id == ^conv.id and m.source == :operator,
+            select: count()
+        )
+
+      {:ok, message} = Conversations.send_reply(conv, "Atomic test")
+
+      after_count =
+        Repo.one(
+          from m in Custyard.Message,
+            where: m.conversation_id == ^conv.id and m.source == :operator,
+            select: count()
+        )
+
+      # Exactly one operator message was created
+      assert after_count == before_count + 1
+
+      # Both the message and conversation update succeeded
+      reloaded_conv = Repo.get!(Custyard.Conversation, conv.id)
+      assert reloaded_conv.state == :active
+      assert reloaded_conv.last_operator_action_at != nil
+      assert message.conversation_id == conv.id
+    end
+  end
 end

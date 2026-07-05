@@ -64,6 +64,61 @@ defmodule Custyard.InboundRouteTest do
       assert changeset.valid?
     end
 
+    test "accepts from_address with valid email" do
+      org = insert_organization()
+
+      changeset =
+        InboundRoute.changeset(%InboundRoute{}, %{
+          organization_id: org.id,
+          route_type: :general,
+          from_address: "support@example.com"
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :from_address) == "support@example.com"
+    end
+
+    test "from_address is optional (nil is allowed)" do
+      org = insert_organization()
+
+      changeset =
+        InboundRoute.changeset(%InboundRoute{}, %{
+          organization_id: org.id,
+          route_type: :general
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :from_address) == nil
+    end
+
+    test "rejects from_address without @ sign" do
+      org = insert_organization()
+
+      changeset =
+        InboundRoute.changeset(%InboundRoute{}, %{
+          organization_id: org.id,
+          route_type: :general,
+          from_address: "not-an-email"
+        })
+
+      refute changeset.valid?
+      assert "must be a valid email address" in errors_on(changeset).from_address
+    end
+
+    test "rejects from_address with spaces" do
+      org = insert_organization()
+
+      changeset =
+        InboundRoute.changeset(%InboundRoute{}, %{
+          organization_id: org.id,
+          route_type: :general,
+          from_address: "bad email@example.com"
+        })
+
+      refute changeset.valid?
+      assert "must be a valid email address" in errors_on(changeset).from_address
+    end
+
     test "enforces unique callback_token" do
       org = insert_organization()
 

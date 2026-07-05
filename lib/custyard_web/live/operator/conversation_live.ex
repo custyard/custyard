@@ -114,49 +114,26 @@ defmodule CustyardWeb.Operator.ConversationLive do
   @impl true
   def handle_event("send_reply", %{"body" => body}, socket) when byte_size(body) > 0 do
     conversation = socket.assigns.conversation
+    operator = socket.assigns.current_operator
 
-    case Conversations.create_message(%{
-           source: :operator,
-           body: body,
-           is_internal_note: false,
-           conversation_id: conversation.id
-         }) do
+    case Conversations.send_reply(conversation, body, operator_email: operator.email) do
       {:ok, _message} ->
-        # Update last_operator_action_at and ensure state is active
-        now = DateTime.utc_now() |> DateTime.truncate(:second)
+        socket = socket |> assign(:reply_text, "") |> reload_conversation()
 
-        case Conversations.update_conversation(conversation, %{
-               last_operator_action_at: now,
-               state: :active
-             }) do
-          {:ok, _} ->
-            Scoring.calculate_and_cache(conversation.id)
-
-            Phoenix.PubSub.broadcast(
-              Custyard.PubSub,
-              "conversation:#{conversation.id}",
-              {:message_added, conversation.id}
+        socket =
+          if deliverable_recipient?(conversation) do
+            socket
+          else
+            put_flash(
+              socket,
+              :error,
+              "Reply saved, but the contact has no email address so it cannot be delivered"
             )
+          end
 
-            Phoenix.PubSub.broadcast(
-              Custyard.PubSub,
-              "conversations",
-              {:conversation_updated, conversation.id}
-            )
+        {:noreply, socket}
 
-            Phoenix.PubSub.broadcast(
-              Custyard.PubSub,
-              "conversations:org:#{conversation.organization_id}",
-              {:conversation_updated, conversation.id}
-            )
-
-            {:noreply, socket |> assign(:reply_text, "") |> reload_conversation()}
-
-          {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, "Failed to update conversation")}
-        end
-
-      {:error, _changeset} ->
+      {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "Failed to send reply")}
     end
   end
@@ -379,6 +356,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
     {:noreply, reload_conversation(socket)}
   end
 
+  # Broadcast by Email.Outbound when async delivery resolves, so the
+  # pending/sent/failed indicator updates without a manual refresh.
+  def handle_info({:message_updated, _id}, socket) do
+    {:noreply, reload_conversation(socket)}
+  end
+
   def handle_info({:conversation_updated, id}, socket) do
     if id == socket.assigns.conversation.id do
       {:noreply, reload_conversation(socket)}
@@ -403,6 +386,15 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
 
     task
+  end
+
+  # A reply is recorded in the thread even without a contact email, but the
+  # async delivery will fail — warn the operator up front.
+  defp deliverable_recipient?(conversation) do
+    case conversation.contact do
+      %{email: email} when is_binary(email) and email != "" -> true
+      _ -> false
+    end
   end
 
   defp load_conversation(id) do
@@ -909,6 +901,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             {format_time(@message.inserted_at)}
           </span>
+          <.delivery_indicator
+            :if={@is_operator and not @is_internal and @message.delivery_status}
+            status={@message.delivery_status}
+          />
         </div>
         <div
           class="text-sm text-gray-800 dark:text-zinc-200 whitespace-pre-wrap break-words"
@@ -918,6 +914,97 @@ defmodule CustyardWeb.Operator.ConversationLive do
         </div>
       </div>
     </div>
+    """
+  end
+
+  attr :status, :atom, required: true, values: [:pending, :sent, :failed, :bounced]
+
+  defp delivery_indicator(%{status: :pending} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-gray-400 dark:text-zinc-500"
+      title="Sending..."
+      data-testid="delivery-status-pending"
+    >
+      <svg
+        class="h-3.5 w-3.5 animate-spin"
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        viewBox="0 0 24 24"
+      >
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      </svg>
+    </span>
+    """
+  end
+
+  defp delivery_indicator(%{status: :sent} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-green-500 dark:text-green-400"
+      title="Sent"
+      data-testid="delivery-status-sent"
+    >
+      <svg
+        class="h-3.5 w-3.5"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
+    """
+  end
+
+  defp delivery_indicator(%{status: :failed} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-red-500 dark:text-red-400"
+      title="Delivery failed"
+      data-testid="delivery-status-failed"
+    >
+      <svg
+        class="h-3.5 w-3.5"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
+    """
+  end
+
+  defp delivery_indicator(%{status: :bounced} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-amber-500 dark:text-amber-400"
+      title="Email bounced"
+      data-testid="delivery-status-bounced"
+    >
+      <svg
+        class="h-3.5 w-3.5"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
     """
   end
 

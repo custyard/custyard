@@ -4,6 +4,7 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
+  alias Custyard.Email.Outbound
   alias Custyard.{Conversations, OperatorAccount, Repo, Scoring}
 
   setup %{conn: conn} do
@@ -85,6 +86,102 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert hd(messages).source == :operator
     end
 
+    test "reply message has delivery_status pending", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Outbound reply")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      # async delivery is disabled via test config, so status stays :pending
+      assert message.delivery_status == :pending
+    end
+
+    test "reply message has a generated RFC 5322 message_id", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Reply with message ID")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      assert message.message_id != nil
+      # RFC 5322 Message-ID format: <unique.cN@domain>
+      assert message.message_id =~ ~r/^<.+\.c\d+@.+>$/
+    end
+
+    test "reply message has in_reply_to from last customer message", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      # Insert a customer message with a known message_id
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<customer-msg-123@example.com>",
+        body: "Customer question"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Reply to thread")
+      |> render_submit()
+
+      messages = Conversations.list_public_messages(conv.id)
+      reply = Enum.find(messages, &(&1.source == :operator))
+      assert reply.in_reply_to == "<customer-msg-123@example.com>"
+    end
+
+    test "reply threads to the latest of multiple customer messages", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<older-msg@example.com>",
+        body: "First question"
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<newer-msg@example.com>",
+        body: "Follow-up question"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Answering the follow-up")
+      |> render_submit()
+
+      messages = Conversations.list_public_messages(conv.id)
+      reply = Enum.find(messages, &(&1.source == :operator))
+      assert reply.in_reply_to == "<newer-msg@example.com>"
+    end
+
+    test "reply message in_reply_to is nil when no prior customer messages", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "First message in thread")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      assert message.in_reply_to == nil
+    end
+
     test "clears reply input after sending", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
@@ -99,6 +196,80 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       # Message appears in thread and input is empty (value="")
       assert html =~ "Reply content"
       assert html =~ ~s(value="")
+    end
+
+    test "empty body does not create a message", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "")
+      |> render_submit()
+
+      messages = Conversations.list_public_messages(conv.id)
+      assert messages == []
+    end
+
+    test "warns the operator when the contact has no email address", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, contact_id: nil)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      html =
+        view
+        |> form("form[phx-submit=send_reply]", body: "Reply into the void")
+        |> render_submit()
+
+      # The reply is still recorded, but the operator sees the warning
+      assert html =~ "no email address"
+      assert [_message] = Conversations.list_public_messages(conv.id)
+    end
+  end
+
+  describe "delivery status updates" do
+    test "delivery indicator updates live when async delivery resolves", %{conn: conn} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "live@customer.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      html =
+        view
+        |> form("form[phx-submit=send_reply]", body: "Watch me get delivered")
+        |> render_submit()
+
+      assert html =~ "delivery-status-pending"
+
+      # Resolve the delivery the async task would normally perform; the
+      # message_updated broadcast must refresh the indicator in the view.
+      [message] = Conversations.list_public_messages(conv.id)
+      {:ok, _} = Outbound.deliver(message)
+
+      html = render(view)
+      refute html =~ "delivery-status-pending"
+      assert html =~ "delivery-status-sent"
+    end
+
+    test "delivery indicator shows failed when delivery fails", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, contact_id: nil)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Undeliverable")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      {:error, :no_recipient_email, _} = Outbound.deliver(message)
+
+      html = render(view)
+      refute html =~ "delivery-status-pending"
+      assert html =~ "delivery-status-failed"
     end
   end
 

@@ -354,6 +354,213 @@ defmodule Custyard.Conversations do
     message
   end
 
+  @doc """
+  Send an operator reply to a conversation.
+
+  Creates the outbound message with email metadata (sender_email, in_reply_to,
+  message_id, delivery_status), updates conversation state and timestamps,
+  recalculates the attention score, and broadcasts PubSub events.
+
+  The entire operation runs inside a transaction so the message and conversation
+  update succeed or fail atomically.
+
+  ## Options
+
+    * `:operator_email` - email of the operator sending the reply (optional)
+
+  ## Returns
+
+    * `{:ok, message}` on success
+    * `{:error, reason}` on failure (changeset or atom)
+
+  ## Examples
+
+      send_reply(conversation, "Thanks for reaching out!", operator_email: "agent@co.com")
+
+  """
+  def send_reply(conversation, body, opts \\ []) do
+    conversation = Repo.preload(conversation, [:contact, :organization])
+
+    Repo.transaction(fn ->
+      with {:ok, message} <- insert_reply_message(conversation, body, opts),
+           {:ok, _conv} <- update_conversation_after_reply(conversation) do
+        # Side effects outside the transaction boundary aren't critical —
+        # a failed broadcast doesn't warrant rolling back the message.
+        message
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, message} ->
+        # Post-transaction side effects: scoring + broadcasts
+        perform_reply_side_effects(conversation)
+
+        # Deliver the email asynchronously so we don't block the caller.
+        # The message is already persisted with delivery_status: :pending;
+        # Email.Outbound.deliver/1 will update it to :sent or :failed.
+        deliver_async(message)
+
+        {:ok, message}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  # Fire-and-forget delivery via a supervised task.
+  # Failures are logged by Email.Outbound and reflected in delivery_status.
+  # Disabled in config/test.exs to avoid sandbox ownership issues with async
+  # tasks; tests exercise Email.Outbound.deliver/1 directly.
+  defp deliver_async(%Message{} = message) do
+    alias Custyard.Email.Outbound
+
+    if Application.get_env(:custyard, :deliver_replies_async?, true) do
+      Task.Supervisor.start_child(
+        Custyard.TaskSupervisor,
+        fn -> Outbound.deliver(message) end
+      )
+    end
+
+    :ok
+  end
+
+  # Build and insert the operator reply message with email metadata.
+  defp insert_reply_message(conversation, body, opts) do
+    last_customer_msg = find_last_customer_message(conversation.id)
+
+    attrs = %{
+      source: :operator,
+      origin: resolve_outbound_origin(conversation),
+      body: body,
+      is_internal_note: false,
+      conversation_id: conversation.id,
+      delivery_status: :pending,
+      message_id: generate_outbound_message_id(conversation),
+      in_reply_to: last_customer_msg && last_customer_msg.message_id,
+      sender_email: resolve_sender_email(conversation, opts)
+    }
+
+    %Message{}
+    |> Message.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  # Update conversation state and timestamps after an operator reply.
+  # Uses state_changeset/2 to respect the state machine:
+  #   - Already :active -> no-op on state (just updates timestamps)
+  #   - :new, :waiting, :dormant, :resolved -> transitions to :active
+  defp update_conversation_after_reply(conversation) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # First, build the state transition changeset (validates or no-ops)
+    state_cs = Conversation.state_changeset(conversation, :active)
+
+    # Merge in the operator action timestamp via the regular changeset
+    state_cs
+    |> Ecto.Changeset.cast(%{last_operator_action_at: now}, [:last_operator_action_at])
+    |> Repo.update()
+  end
+
+  # Recalculate score and broadcast events after a successful reply.
+  defp perform_reply_side_effects(conversation) do
+    alias Custyard.Scoring
+    Scoring.calculate_and_cache(conversation.id)
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversation:#{conversation.id}",
+      {:message_added, conversation.id}
+    )
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations",
+      {:conversation_updated, conversation.id}
+    )
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations:org:#{conversation.organization_id}",
+      {:conversation_updated, conversation.id}
+    )
+
+    :ok
+  end
+
+  # Find the most recent non-operator message to thread In-Reply-To.
+  # Queried directly rather than through the caller's (possibly stale,
+  # possibly ascending-ordered) preloaded messages; the id ordering breaks
+  # ties between rows sharing the same second-precision inserted_at.
+  defp find_last_customer_message(conversation_id) do
+    from(m in Message,
+      where: m.conversation_id == ^conversation_id,
+      where: m.source != :operator,
+      where: m.is_internal_note == false,
+      order_by: [desc: m.inserted_at, desc: m.id],
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  # Determine the from address for outbound email.
+  # Priority: inbound route from_address > operator_email option > fallback
+  defp resolve_sender_email(conversation, opts) do
+    route_address = lookup_route_from_address(conversation)
+    operator_email = Keyword.get(opts, :operator_email)
+
+    route_address || operator_email
+  end
+
+  # Determine origin for outbound replies based on the conversation's source.
+  # The origin reflects which integration/adapter the reply is routed through,
+  # matching the channel the conversation originally arrived on.
+  defp resolve_outbound_origin(conversation) do
+    case conversation.source do
+      :lettermint -> :lettermint
+      :email -> :email
+      :zendesk -> :zendesk
+      :intercom -> :intercom
+      :slack -> :slack
+      :portal -> :portal
+      # For disambiguation or unknown sources, default to :email
+      _ -> :email
+    end
+  end
+
+  # Prefer the project-specific route so replies flow back through the same
+  # webhook/route the conversation arrived on; fall back to the org's
+  # general route.
+  defp lookup_route_from_address(conversation) do
+    project_route_from_address(conversation) || general_route_from_address(conversation)
+  end
+
+  defp project_route_from_address(%{project_id: project_id}) when is_integer(project_id) do
+    project_id |> Custyard.InboundRoutes.get_project_route() |> route_from_address()
+  end
+
+  defp project_route_from_address(_conversation), do: nil
+
+  defp general_route_from_address(%{organization_id: org_id}) when is_integer(org_id) do
+    org_id |> Custyard.InboundRoutes.get_general_route() |> route_from_address()
+  end
+
+  defp general_route_from_address(_conversation), do: nil
+
+  defp route_from_address(%{from_address: addr}) when is_binary(addr) and addr != "", do: addr
+  defp route_from_address(_route), do: nil
+
+  # Generate a unique Message-ID for outbound emails following RFC 5322.
+  defp generate_outbound_message_id(conversation) do
+    unique = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+    domain = outbound_domain()
+    "<#{unique}.c#{conversation.id}@#{domain}>"
+  end
+
+  defp outbound_domain do
+    Application.get_env(:custyard, :outbound_email_domain, "custyard.local")
+  end
+
   # Update conversation's updated_at without changing any other fields
   defp touch_conversation_updated_at(nil), do: :ok
 

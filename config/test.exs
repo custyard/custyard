@@ -24,6 +24,10 @@ config :logger, level: :warning
 # Disable scoring scheduler in tests to avoid sandbox conflicts
 config :custyard, start_scheduler: false
 
+# Skip async email delivery of operator replies; the supervised task would
+# outlive the SQL sandbox owner. Tests exercise Email.Outbound.deliver/1 directly.
+config :custyard, deliver_replies_async?: false
+
 # Allow ?as=<contact_id> param for testing contact impersonation
 config :custyard, allow_contact_impersonation: true
 

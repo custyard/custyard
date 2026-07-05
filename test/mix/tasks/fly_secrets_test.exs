@@ -414,7 +414,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
         LIVE_VIEW_SIGNING_SALT
         DATABASE_URL
         TURSO_AUTH_TOKEN
-        LETTERMINT_API_TOKEN
+        LETTERMINT_API_KEY
         MAILGUN_API_KEY
         SENDGRID_API_KEY
         POSTMARK_API_KEY
@@ -963,7 +963,7 @@ defmodule Mix.Tasks.Fly.SecretsTest do
       LIVE_VIEW_SIGNING_SALT
       DATABASE_URL
       TURSO_AUTH_TOKEN
-      LETTERMINT_API_TOKEN
+      LETTERMINT_API_KEY
       MAILGUN_API_KEY
       SENDGRID_API_KEY
       POSTMARK_API_KEY

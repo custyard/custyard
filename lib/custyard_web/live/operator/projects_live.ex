@@ -471,12 +471,13 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       <div class="flex items-start justify-between">
         <div class="flex-1">
           <div class="flex items-center gap-2 mb-1">
-            <span
-              class="font-semibold text-gray-900 dark:text-zinc-100"
+            <.link
+              navigate={~p"/operator/projects/#{@project.id}"}
+              class="font-semibold text-gray-900 dark:text-zinc-100 hover:text-indigo-600"
               data-testid="operator-project-title"
             >
               {@project.title}
-            </span>
+            </.link>
             <.project_type_badge type={@project.project_type} />
             <span
               :if={not @project.portal_visible}
@@ -515,6 +516,13 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       </div>
 
       <div class="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-zinc-700">
+        <.link
+          navigate={~p"/operator/projects/#{@project.id}"}
+          class="text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50"
+          data-testid={"operator-project-view-#{@project.id}"}
+        >
+          View
+        </.link>
         <button
           phx-click="edit_project"
           phx-value-id={@project.id}

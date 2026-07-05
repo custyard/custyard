@@ -9,6 +9,9 @@ defmodule Custyard.Message do
   # Aligns with Conversation.@sources for consistent tracking
   @origins [:email, :lettermint, :zendesk, :intercom, :slack, :portal, :disambiguation]
 
+  # Delivery status for outbound messages (nil for inbound)
+  @delivery_statuses [:pending, :sent, :failed, :bounced]
+
   schema "messages" do
     field :source, Ecto.Enum, values: @sources
     # Origin tracks the original adapter source for audit/reporting
@@ -19,14 +22,18 @@ defmodule Custyard.Message do
     field :is_internal_note, :boolean, default: false
     field :message_id, :string
     field :in_reply_to, :string
+    field :lettermint_message_id, :string
+    # Delivery status tracks outbound message lifecycle (nil for inbound messages)
+    field :delivery_status, Ecto.Enum, values: @delivery_statuses
 
     belongs_to :conversation, Custyard.Conversation
 
-    timestamps(type: :utc_datetime, updated_at: false)
+    timestamps(type: :utc_datetime)
   end
 
   def sources, do: @sources
   def origins, do: @origins
+  def delivery_statuses, do: @delivery_statuses
 
   @doc false
   def changeset(message, attrs) do
@@ -39,6 +46,8 @@ defmodule Custyard.Message do
       :is_internal_note,
       :message_id,
       :in_reply_to,
+      :lettermint_message_id,
+      :delivery_status,
       :conversation_id
     ])
     |> validate_required([:source, :body, :conversation_id])
@@ -50,6 +59,21 @@ defmodule Custyard.Message do
     # error messages sometimes report just _index due to how Exqlite parses errors)
     |> unique_constraint(:message_id, name: :messages_message_id_unique_index)
     |> unique_constraint(:message_id, name: :messages_message_id_index)
+  end
+
+  @doc """
+  Changeset for updating delivery status on an existing outbound message.
+
+  `extra_attrs` optionally carries `:lettermint_message_id` so the provider
+  message id from a successful delivery can be recorded alongside the status.
+  """
+  def delivery_status_changeset(message, status, extra_attrs \\ %{}) do
+    message
+    |> cast(Map.put(extra_attrs, :delivery_status, status), [
+      :delivery_status,
+      :lettermint_message_id
+    ])
+    |> validate_required([:delivery_status])
   end
 
   @doc """

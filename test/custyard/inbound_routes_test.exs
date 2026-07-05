@@ -160,6 +160,41 @@ defmodule Custyard.InboundRoutesTest do
       assert updated.lettermint_route_id == "lm-123"
     end
 
+    test "create_route accepts from_address" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          from_address: "support@example.com"
+        })
+
+      assert route.from_address == "support@example.com"
+    end
+
+    test "create_route rejects invalid from_address" do
+      org = Factory.insert_organization()
+
+      {:error, changeset} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          from_address: "not-valid"
+        })
+
+      assert "must be a valid email address" in errors_on(changeset).from_address
+    end
+
+    test "update_route can set from_address" do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      {:ok, updated} = InboundRoutes.update_route(route, %{from_address: "reply@acme.com"})
+
+      assert updated.from_address == "reply@acme.com"
+    end
+
     test "delete_route removes the route" do
       org = Factory.insert_organization()
       {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})

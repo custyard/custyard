@@ -63,6 +63,7 @@ done
 if [ -f .env ]; then
   set -a
   source .env
+  [ -f .env.secrets ] && source .env.secrets
   set +a
 fi
 
