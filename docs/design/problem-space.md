@@ -1,6 +1,6 @@
 # Problem Space: Relationship-Driven Service Platform
 
-**Version:** 0.4 — Supplements SDD v0.3 and Design Decisions v0.3
+**Version:** 0.4 — Supplements SDD v0.4 and the email-routing design decisions v0.3
 **Date:** 2026-07-05
 
 ---
@@ -63,7 +63,7 @@ This loop is specified in the [Prospect Conversation Loop feature specification]
 
 ## 7. Document Map
 
-All design documents live in `docs/design/`. Filenames are stable; versions are tracked in each document's header. Wireframe prototypes and screenshots remain in `planning/`.
+All design documents live in `docs/design/`. Filenames are stable; versions are tracked in each document's header. Wireframe prototypes and screenshots remain in `wireframes/`.
 
 | Document | Covers |
 |----------|--------|
@@ -73,6 +73,7 @@ All design documents live in `docs/design/`. Filenames are stable; versions are 
 | [sdd-status.md](sdd-status.md) | Implementation status against the SDD |
 | [spec-conversation-loop.md](spec-conversation-loop.md) | Feature specification for the end-to-end MVP loop |
 | [spec-public-intake.md](spec-public-intake.md) | Feature specification for pricing-page CTA intake: anonymous-first conversations, slug claim, resume access |
+| [design-decisions-public-intake.md](design-decisions-public-intake.md) | Implementation decisions for public intake: slug registry, hashed tokens, prospect record, consent-gated outbound, nine-PR delivery stack |
 | This document | Problem framing, product thesis, MVP bar |
 
 **Reconciled in SDD v0.4:** SDD §5.2 (outbound) and §7 (activation flow, definition of done) now describe routed-webhook-first intake and platform-native outbound, matching the design decisions document and the conversation-loop spec; §3.3 and §4.1 were adjusted to match. The deeper architecture and data-model reconciliation — inbound-route entities, multi-webhook fan-out, per-project routes — remains in [design-decisions-email-routing.md](design-decisions-email-routing.md) and is not yet folded into SDD §3–§4.
