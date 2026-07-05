@@ -1,3 +1,5 @@
+# docs/qa-tools.md
+---
 # QA Tools for Phoenix/Elixir Projects
 
 For a scrappy project with real customers, focus on tools that catch real bugs without slowing iteration. Here's a pragmatic stack:

@@ -156,6 +156,6 @@ Best-guess resolutions of the prior open questions, recorded 2026-07-05, pending
 
 ## Deferred Work
 
-- SDD v0.4 revision: align §5.2 (outbound) and §7 (activation flow, definition of done) with routed-webhook-first intake and platform-native outbound.
+- ~~SDD v0.4 revision: align §5.2 (outbound) and §7 (activation flow, definition of done) with routed-webhook-first intake and platform-native outbound.~~ Done — SDD is now v0.4; §3.3 and §4.1 adjusted to match.
 - Per-contact portal authentication with admin/member visibility scoping: direction agreed (SDD US-7), separate effort.
 - Per-project routes and disambiguation flow: designed in the Design Decisions document, awaiting the project entity's v2 scope.

@@ -69,7 +69,7 @@ Security:
 | Cross-Organization Isolation | All portal queries filter by org_id from authenticated session                                            | Done    |
 | Email as Untrusted Input     | HTML stripped to plain text, Phoenix template escaping prevents XSS                                       | Done    |
 | Data at Rest Encryption      | Not implemented — using SQLite for MVP                                                                    | Not Yet |
-| Outbound Email (v1.1)        | Not implemented — operator responds via own email client per MVP design                                   | Not Yet |
+| Outbound Email               | Not implemented — platform-native outbound is now in the v0.4 MVP design (SDD §5.2); tracked in #26/#25    | Not Yet |
 
 ### Data Model (SDD §4)
 
@@ -237,7 +237,7 @@ Security measures in place:
 - **Portal Account entity** (SDD §4.1) - Per-contact authentication with Rodauth. Currently using org-level token auth instead of individual contact accounts.
 - **Activity Log entity** (SDD §4.1) - Append-only log for organization timeline and audit trail. Organization timeline view exists but without dedicated log table.
 - **Attachment entity** (SDD §4.1) - File upload infrastructure exists but no Attachment schema linked to Message.
-- **Outbound Email** (SDD §5.2, v1.1) - Platform does not send email. Operator responds via own email client per MVP design.
+- **Outbound Email** (SDD §5.2) - Platform does not yet send email. Platform-native outbound is in the v0.4 MVP design (composed in-platform, sent as threaded email, delivery-tracked); implementation tracked in #26/#25.
 - **Task effort estimate / description fields** (SDD §4.1) - Task schema has title, state, due_at, portal_visible but not effort_estimate or description.
 - **Organization notes and custom fields** (SDD §4.1) - Not on Organization schema.
 - **Organization-scoped search** (SDD US-9) - No search implementation.
