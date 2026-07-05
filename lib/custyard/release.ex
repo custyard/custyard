@@ -22,14 +22,12 @@ defmodule Custyard.Release do
   end
 
   @doc """
-  Creates or updates an operator account in the database.
+  Creates an operator account in the database if one doesn't already exist.
 
-  Reads password from the OPERATOR_PASSWORD environment variable to avoid
-  exposing it in the process list. Optionally accepts an email override.
+  Email-only auth means no password is needed. Operators log in via magic link.
 
   ## Examples
 
-      # In a release eval (reads OPERATOR_PASSWORD from env):
       Custyard.Release.setup_operator()
       Custyard.Release.setup_operator("ops@example.com")
   """
@@ -38,23 +36,16 @@ defmodule Custyard.Release do
 
     {:ok, _} = Application.ensure_all_started(@app)
 
-    # Read password from environment to avoid exposing it in the process list
-    password =
-      System.get_env("OPERATOR_PASSWORD") ||
-        raise "OPERATOR_PASSWORD environment variable is not set"
-
     alias Custyard.{OperatorAccount, Repo}
 
     case Repo.get_by(OperatorAccount, email: email) do
       nil ->
         %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: email, password: password})
+        |> OperatorAccount.changeset(%{email: email})
         |> Repo.insert!()
 
-      existing ->
-        existing
-        |> OperatorAccount.password_changeset(%{password: password})
-        |> Repo.update!()
+      _existing ->
+        :already_exists
     end
 
     :ok

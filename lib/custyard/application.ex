@@ -223,49 +223,26 @@ defmodule Custyard.Application do
 
     case Repo.get_by(OperatorAccount, email: @default_operator_email) do
       nil ->
-        # First startup: create operator with random password
-        # Password is only generated and logged once, not on every restart
-        password = generate_password()
-
         %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: @default_operator_email, password: password})
+        |> OperatorAccount.changeset(%{email: @default_operator_email})
         |> Repo.insert!()
 
-        log_operator_credentials(@default_operator_email, password)
+        Logger.info("""
+
+        ========================================
+        DEV OPERATOR ACCOUNT CREATED
+        ========================================
+        Email: #{@default_operator_email}
+
+        Login at: /operator/login
+        A magic link will be sent to your email.
+        (In dev, check the Swoosh local mailbox at /dev/mailbox)
+        ========================================
+        """)
 
       _operator ->
-        # Operator already exists - don't reset password or log credentials
-        # This prevents password leakage via log aggregation and keeps password
-        # stable across restarts. Use `mix dev.reset_operator_password` if needed.
-        Logger.debug("Dev operator account exists, skipping password reset")
+        Logger.debug("Dev operator account exists, skipping creation")
     end
-  end
-
-  defp generate_password do
-    :crypto.strong_rand_bytes(12) |> Base.url_encode64() |> binary_part(0, 16)
-  end
-
-  defp log_operator_credentials(email, password) do
-    # Note: This only logs once on first creation, not on every restart.
-    # For production-like testing without password in logs, set a password
-    # via the mix task: mix dev.reset_operator_password <password>
-    Logger.info("""
-
-    ========================================
-    DEV OPERATOR ACCOUNT CREATED
-    ========================================
-    Created dev operator account:
-
-      Email:    #{email}
-      Password: #{password}
-
-    Login at: /operator/login
-
-    NOTE: This password is only shown once on first database creation.
-          It persists across restarts. To reset, delete the database
-          or run: mix dev.reset_operator_password <new_password>
-    ========================================
-    """)
   end
 
   # Helper for startup logging (uncomment with debug block above)
