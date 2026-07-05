@@ -8,7 +8,7 @@ defmodule Custyard.OperatorAccountTest do
     test "validates required fields" do
       changeset = OperatorAccount.changeset(%OperatorAccount{}, %{})
 
-      assert %{email: ["can't be blank"], password: ["can't be blank"]} = errors_on(changeset)
+      assert %{email: ["can't be blank"]} = errors_on(changeset)
     end
 
     test "validates email format" do
@@ -18,7 +18,15 @@ defmodule Custyard.OperatorAccountTest do
       assert %{email: ["must be a valid email address"]} = errors_on(changeset)
     end
 
-    test "validates password length" do
+    test "accepts email without password (email-only auth)" do
+      attrs = Factory.build_operator_account() |> Map.delete(:password)
+      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
+
+      assert changeset.valid?,
+             "Should accept email without password, errors: #{inspect(errors_on(changeset))}"
+    end
+
+    test "validates password length when password is provided" do
       attrs = Factory.build_operator_account(password: "short")
       changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
 
@@ -70,8 +78,8 @@ defmodule Custyard.OperatorAccountTest do
                errors_on(changeset)
     end
 
-    test "hashes password" do
-      attrs = Factory.build_operator_account()
+    test "hashes password when provided" do
+      attrs = Factory.build_operator_account(password: "password123")
       changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
 
       assert changeset.changes[:password_hash]
@@ -137,6 +145,96 @@ defmodule Custyard.OperatorAccountTest do
       changeset = OperatorAccount.password_changeset(operator, %{password: "short"})
 
       assert %{password: ["must be between 8 and 72 characters"]} = errors_on(changeset)
+    end
+  end
+
+  describe "login_token_changeset/1" do
+    test "generates a login token and expiration" do
+      operator = Factory.insert_operator_account()
+
+      changeset = OperatorAccount.login_token_changeset(operator)
+
+      assert changeset.changes[:login_token]
+      assert changeset.changes[:login_token_expires_at]
+      assert String.length(changeset.changes[:login_token]) > 20
+
+      assert DateTime.compare(
+               changeset.changes[:login_token_expires_at],
+               DateTime.utc_now()
+             ) == :gt
+    end
+  end
+
+  describe "verify_login_token/2" do
+    test "returns true for valid unexpired token" do
+      operator = Factory.insert_operator_account()
+
+      {:ok, operator} =
+        operator
+        |> OperatorAccount.login_token_changeset()
+        |> Custyard.Repo.update()
+
+      assert OperatorAccount.verify_login_token(operator, operator.login_token)
+    end
+
+    test "returns false for wrong token" do
+      operator = Factory.insert_operator_account()
+
+      {:ok, operator} =
+        operator
+        |> OperatorAccount.login_token_changeset()
+        |> Custyard.Repo.update()
+
+      refute OperatorAccount.verify_login_token(operator, "wrong-token")
+    end
+
+    test "returns false for expired token" do
+      operator = Factory.insert_operator_account()
+
+      expired_at = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
+
+      {:ok, operator} =
+        operator
+        |> Ecto.Changeset.change(%{
+          login_token: "some-token",
+          login_token_expires_at: expired_at
+        })
+        |> Custyard.Repo.update()
+
+      refute OperatorAccount.verify_login_token(operator, "some-token")
+    end
+
+    test "returns false for nil token fields" do
+      operator = Factory.insert_operator_account()
+
+      refute OperatorAccount.verify_login_token(operator, "any-token")
+    end
+
+    test "returns false when token is set but expires_at is nil" do
+      operator = Factory.insert_operator_account()
+
+      {:ok, operator} =
+        operator
+        |> Ecto.Changeset.change(%{login_token: "some-token", login_token_expires_at: nil})
+        |> Custyard.Repo.update()
+
+      refute OperatorAccount.verify_login_token(operator, "some-token")
+    end
+  end
+
+  describe "clear_login_token_changeset/1" do
+    test "clears token and expiration" do
+      operator = Factory.insert_operator_account()
+
+      {:ok, operator} =
+        operator
+        |> OperatorAccount.login_token_changeset()
+        |> Custyard.Repo.update()
+
+      changeset = OperatorAccount.clear_login_token_changeset(operator)
+
+      assert changeset.changes[:login_token] == nil
+      assert changeset.changes[:login_token_expires_at] == nil
     end
   end
 

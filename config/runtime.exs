@@ -165,24 +165,8 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  # OPERATOR_PASSWORD is required in production for admin access.
-  # The entrypoint.sh auto-generates it if not set, but if someone bypasses
-  # the entrypoint (e.g., direct bin/custyard start), we must fail loudly.
-  operator_password =
-    System.get_env("OPERATOR_PASSWORD") ||
-      raise """
-      environment variable OPERATOR_PASSWORD is missing.
-
-      This is required for operator authentication in production.
-      Either:
-        1. Set OPERATOR_PASSWORD environment variable, OR
-        2. Use the entrypoint.sh script which auto-generates one
-
-      To generate a password manually:
-        export OPERATOR_PASSWORD=$(openssl rand -base64 12)
-      """
-
-  config :custyard, :operator_password, operator_password
+  # Email-only auth: operators log in via magic link, no password needed.
+  # OPERATOR_PASSWORD is no longer required.
 
   host = System.get_env("PHX_HOST") || "localhost"
   port = parse_int.("PORT", 4000)

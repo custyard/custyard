@@ -12,6 +12,10 @@ defmodule Custyard.Email.Normalizer do
   # Message.changeset validates body max 100,000 chars
   @max_body_length 100_000
 
+  # Pre-compiled regexes for strip_html/1
+  @html_tag_regex ~r/<[^>]+>/
+  @whitespace_regex ~r/\s+/
+
   @doc "Maximum allowed subject length (500 characters)."
   def max_subject_length, do: @max_subject_length
 
@@ -38,8 +42,8 @@ defmodule Custyard.Email.Normalizer do
 
   def strip_html(html) do
     html
-    |> String.replace(~r/<[^>]+>/, " ")
-    |> String.replace(~r/\s+/, " ")
+    |> String.replace(@html_tag_regex, " ")
+    |> String.replace(@whitespace_regex, " ")
     |> String.trim()
   end
 
@@ -50,10 +54,15 @@ defmodule Custyard.Email.Normalizer do
   """
   @spec truncate(String.t() | nil, non_neg_integer()) :: String.t()
   def truncate(nil, _max_length), do: ""
-  def truncate(text, max_length) when byte_size(text) <= max_length, do: text
+  def truncate(_text, max_length) when max_length == 0, do: ""
+  def truncate(text, max_length) when max_length < 4, do: String.slice(text, 0, max_length)
 
-  def truncate(text, max_length) do
-    String.slice(text, 0, max_length - 3) <> "..."
+  def truncate(text, max_length) when is_binary(text) do
+    if String.length(text) <= max_length do
+      text
+    else
+      String.slice(text, 0, max_length - 3) <> "..."
+    end
   end
 
   # -- private ----------------------------------------------------------------
