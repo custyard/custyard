@@ -43,7 +43,14 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
   # Sample RFC 5322 email for testing (CRLF line endings)
   defp sample_email(from, to, opts \\ []) do
     subject = Keyword.get(opts, :subject, "Test email")
-    message_id = Keyword.get(opts, :message_id, "<lmtp-int-#{System.unique_integer([:positive])}@example.com>")
+
+    message_id =
+      Keyword.get(
+        opts,
+        :message_id,
+        "<lmtp-int-#{System.unique_integer([:positive])}@example.com>"
+      )
+
     in_reply_to = Keyword.get(opts, :in_reply_to)
     body = Keyword.get(opts, :body, "This is a test email body.")
 
@@ -103,9 +110,10 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
           route_type: :project
         })
 
-      raw = sample_email("alice@acme.example.com", "support@custyard.test",
-        subject: "Project-scoped email"
-      )
+      raw =
+        sample_email("alice@acme.example.com", "support@custyard.test",
+          subject: "Project-scoped email"
+        )
 
       assert {:ok, conversation} = parse_normalize_dispatch(raw, route)
       assert conversation.project_id == project.id
@@ -141,9 +149,10 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
       route_a = create_route_with_webhook(%{organization_id: org_a.id, route_type: :general})
 
       # Alice sends email, dispatched through org_a's route
-      raw = sample_email("alice@alpha.example.com", "support@custyard.test",
-        subject: "Org-A scoped message"
-      )
+      raw =
+        sample_email("alice@alpha.example.com", "support@custyard.test",
+          subject: "Org-A scoped message"
+        )
 
       assert {:ok, conversation} = parse_normalize_dispatch(raw, route_a)
       assert conversation.organization_id == org_a.id
@@ -161,12 +170,15 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
       route_a = create_route_with_webhook(%{organization_id: org_a.id, route_type: :general})
       route_b = create_route_with_webhook(%{organization_id: org_b.id, route_type: :general})
 
-      raw_a = sample_email("shared@external.com", "support-a@custyard.test",
-        subject: "Message for org A"
-      )
-      raw_b = sample_email("shared@external.com", "support-b@custyard.test",
-        subject: "Message for org B"
-      )
+      raw_a =
+        sample_email("shared@external.com", "support-a@custyard.test",
+          subject: "Message for org A"
+        )
+
+      raw_b =
+        sample_email("shared@external.com", "support-b@custyard.test",
+          subject: "Message for org B"
+        )
 
       assert {:ok, conv_a} = parse_normalize_dispatch(raw_a, route_a)
       assert {:ok, conv_b} = parse_normalize_dispatch(raw_b, route_b)
@@ -185,21 +197,24 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
 
       # Create initial conversation via the pipeline
       original_msg_id = "<original-#{System.unique_integer([:positive])}@acme.example.com>"
-      raw_original = sample_email("alice@acme.example.com", "support@custyard.test",
-        subject: "Original thread",
-        message_id: original_msg_id,
-        body: "Initial message"
-      )
+
+      raw_original =
+        sample_email("alice@acme.example.com", "support@custyard.test",
+          subject: "Original thread",
+          message_id: original_msg_id,
+          body: "Initial message"
+        )
 
       assert {:ok, original_conv} = parse_normalize_dispatch(raw_original, route)
 
       # Send a reply referencing the original
-      raw_reply = sample_email("alice@acme.example.com", "support@custyard.test",
-        subject: "Re: Original thread",
-        message_id: "<reply-#{System.unique_integer([:positive])}@acme.example.com>",
-        in_reply_to: original_msg_id,
-        body: "This is my reply"
-      )
+      raw_reply =
+        sample_email("alice@acme.example.com", "support@custyard.test",
+          subject: "Re: Original thread",
+          message_id: "<reply-#{System.unique_integer([:positive])}@acme.example.com>",
+          in_reply_to: original_msg_id,
+          body: "This is my reply"
+        )
 
       assert {:ok, reply_conv} = parse_normalize_dispatch(raw_reply, route)
 

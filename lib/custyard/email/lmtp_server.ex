@@ -703,20 +703,20 @@ defmodule Custyard.Email.LMTPServer do
               {:ok, %{state | to: [to | state.to], organization: org}}
 
             true ->
-            # Emit telemetry for recipient limit exceeded
-            :telemetry.execute(
-              [:custyard, :lmtp, :recipient_limit, :exceeded],
-              %{count: 1},
-              %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
-            )
+              # Emit telemetry for recipient limit exceeded
+              :telemetry.execute(
+                [:custyard, :lmtp, :recipient_limit, :exceeded],
+                %{count: 1},
+                %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
+              )
 
-            Logger.warning("LMTP recipient limit exceeded",
-              current_count: current_count,
-              max_recipients: max_recipients,
-              sender: state[:from]
-            )
+              Logger.warning("LMTP recipient limit exceeded",
+                current_count: current_count,
+                max_recipients: max_recipients,
+                sender: state[:from]
+              )
 
-            {:error, "452 4.5.3 Too many recipients", state}
+              {:error, "452 4.5.3 Too many recipients", state}
           end
         end
 
@@ -770,7 +770,6 @@ defmodule Custyard.Email.LMTPServer do
       org -> {:ok, org}
     end
   end
-
 
   @impl true
   def handle_RCPT_extension(extension, state) do

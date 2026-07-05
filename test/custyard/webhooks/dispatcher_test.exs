@@ -15,7 +15,9 @@ defmodule Custyard.Webhooks.DispatcherTest do
     result =
       Enum.reduce_while(1..max_attempts, :timeout, fn _i, _acc ->
         case fun.() do
-          {:ok, value} -> {:halt, {:ok, value}}
+          {:ok, value} ->
+            {:halt, {:ok, value}}
+
           :retry ->
             Process.sleep(interval)
             {:cont, :timeout}
@@ -23,8 +25,11 @@ defmodule Custyard.Webhooks.DispatcherTest do
       end)
 
     case result do
-      {:ok, value} -> value
-      :timeout -> flunk("poll_until exceeded #{max_attempts} attempts (#{max_attempts * interval}ms)")
+      {:ok, value} ->
+        value
+
+      :timeout ->
+        flunk("poll_until exceeded #{max_attempts} attempts (#{max_attempts * interval}ms)")
     end
   end
 
@@ -239,10 +244,10 @@ defmodule Custyard.Webhooks.DispatcherTest do
             )
             |> Repo.all()
 
-          if length(events) >= 1, do: {:ok, events}, else: :retry
+          if events != [], do: {:ok, events}, else: :retry
         end)
 
-      assert length(audit_events) >= 1
+      assert audit_events != []
 
       [event] = audit_events
       assert event.source == "email"
