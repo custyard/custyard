@@ -15,7 +15,7 @@ defmodule Custyard.Conversations.DormancyChecker do
   """
 
   import Ecto.Query
-  alias Custyard.{Conversation, Repo, Settings}
+  alias Custyard.{Conversation, Conversations, Repo, Settings}
 
   @doc """
   Find and transition all stale waiting conversations to dormant.
@@ -76,9 +76,8 @@ defmodule Custyard.Conversations.DormancyChecker do
           {:conversation_updated, updated.id}
         )
 
-        Phoenix.PubSub.broadcast(
-          Custyard.PubSub,
-          "conversations:org:#{updated.organization_id}",
+        Conversations.broadcast_to_org(
+          updated.organization_id,
           {:conversation_updated, updated.id}
         )
 

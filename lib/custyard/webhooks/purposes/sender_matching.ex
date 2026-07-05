@@ -10,7 +10,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   sender matching when no route context is provided.
   """
 
-  alias Custyard.{Conversation, Message, Repo, Scoring}
+  alias Custyard.{Conversation, Conversations, Message, Repo, Scoring}
   alias Custyard.Email.{SenderMatcher, SieveHeaderMapper, ThreadMatcher}
 
   require Logger
@@ -56,12 +56,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     event = if is_new, do: :conversation_created, else: :conversation_updated
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
 
-    # Broadcast to org-scoped topic for portal LiveViews
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "conversations:org:#{conversation.organization_id}",
-      {event, conversation.id}
-    )
+    # Broadcast to org-scoped topic for portal LiveViews (skipped for nil org)
+    Conversations.broadcast_to_org(conversation.organization_id, {event, conversation.id})
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,

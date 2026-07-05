@@ -6,7 +6,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   Access is controlled by `Custyard.Authorization`:
   - super_admin can access any conversation
-  - admin/agent can only access conversations in their organization
+  - admin/agent can access conversations in their organization, plus unlinked
+    (nil-org) conversations — mirroring `Custyard.Authorization.can_access_conversation?/2`
   - Only admin+ can change conversation state (active/waiting/resolved)
   """
   use CustyardWeb, :live_view
@@ -39,11 +40,18 @@ defmodule CustyardWeb.Operator.ConversationLive do
   defp mount_conversation(socket, id, conversation) do
     if connected?(socket) do
       # Subscribe to org-scoped topic instead of global "conversations" to reduce
-      # unnecessary PubSub traffic. The global topic is only needed by the Attention Queue.
-      Phoenix.PubSub.subscribe(
-        Custyard.PubSub,
-        "conversations:org:#{conversation.organization_id}"
-      )
+      # unnecessary PubSub traffic. Unlinked (nil-org) conversations have no org
+      # topic, and their state changes are only published on the global topic
+      # (the "conversation:{id}" topic carries message events, not state changes),
+      # so fall back to the global topic; handle_info filters by conversation id.
+      if conversation.organization_id do
+        Phoenix.PubSub.subscribe(
+          Custyard.PubSub,
+          "conversations:org:#{conversation.organization_id}"
+        )
+      else
+        Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      end
 
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
     end
@@ -68,9 +76,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
               {:conversation_updated, conversation.id}
             )
 
-            Phoenix.PubSub.broadcast(
-              Custyard.PubSub,
-              "conversations:org:#{conversation.organization_id}",
+            Conversations.broadcast_to_org(
+              conversation.organization_id,
               {:conversation_updated, conversation.id}
             )
 
@@ -193,9 +200,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
             {:conversation_updated, conversation.id}
           )
 
-          Phoenix.PubSub.broadcast(
-            Custyard.PubSub,
-            "conversations:org:#{conversation.organization_id}",
+          Conversations.broadcast_to_org(
+            conversation.organization_id,
             {:conversation_updated, conversation.id}
           )
 
@@ -424,6 +430,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
+  # Unlinked (nil-org) conversations have no sibling org conversations to list.
+  defp fetch_other_org_conversations(%{organization_id: nil}), do: []
+
   defp fetch_other_org_conversations(conversation) do
     conversation.organization_id
     |> Conversations.list_for_organization(include_resolved: false)
@@ -494,6 +503,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             {@conversation.subject}
           </span>
+          <.source_badge source={@conversation.source} />
           <.state_badge state={@conversation.state} />
           <button
             phx-click="toggle_sidebar"
@@ -635,16 +645,25 @@ defmodule CustyardWeb.Operator.ConversationLive do
             <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-1">
               Organization
             </div>
-            <.link
-              navigate={~p"/operator/organizations/#{@conversation.organization.id}"}
-              class="text-sm text-indigo-600 hover:underline font-medium"
-              data-testid="operator-sidebar-org-link"
-            >
-              {@conversation.organization.name}
-            </.link>
-            <div class="mt-1">
-              <.tier_badge tier={@conversation.organization.tier} />
-            </div>
+            <%= if @conversation.organization do %>
+              <.link
+                navigate={~p"/operator/organizations/#{@conversation.organization.id}"}
+                class="text-sm text-indigo-600 hover:underline font-medium"
+                data-testid="operator-sidebar-org-link"
+              >
+                {@conversation.organization.name}
+              </.link>
+              <div class="mt-1">
+                <.tier_badge tier={@conversation.organization.tier} />
+              </div>
+            <% else %>
+              <div
+                class="text-sm font-medium text-gray-800 dark:text-zinc-200"
+                data-testid="operator-sidebar-org-unlinked"
+              >
+                Unlinked prospect
+              </div>
+            <% end %>
           </div>
 
           <%!-- Contact --%>

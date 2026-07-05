@@ -76,9 +76,8 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         {:ok, _} ->
           Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
 
-          Phoenix.PubSub.broadcast(
-            Custyard.PubSub,
-            "conversations:org:#{conversation.organization_id}",
+          Conversations.broadcast_to_org(
+            conversation.organization_id,
             {:conversation_updated, id}
           )
 
@@ -101,9 +100,8 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         {:ok, _} ->
           Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
 
-          Phoenix.PubSub.broadcast(
-            Custyard.PubSub,
-            "conversations:org:#{conversation.organization_id}",
+          Conversations.broadcast_to_org(
+            conversation.organization_id,
             {:conversation_updated, id}
           )
 
@@ -153,7 +151,8 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   defp load_conversations(socket) do
     filter = socket.assigns.filter
-    # Scope to operator's organization (nil for super_admin = all orgs)
+    # Scope to operator's organization (nil for super_admin = all orgs).
+    # Org scoping also includes unlinked (nil-org) conversations.
     org_id = socket.assigns[:scoped_organization_id]
     now = DateTime.utc_now()
 
@@ -313,9 +312,14 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
               class="font-semibold text-gray-900 dark:text-zinc-100"
               data-testid="operator-queue-org-name"
             >
-              {@item.conversation.organization.name}
+              {if @item.conversation.organization,
+                do: @item.conversation.organization.name,
+                else: "Unlinked prospect"}
             </span>
-            <.tier_badge tier={@item.conversation.organization.tier} />
+            <.tier_badge
+              :if={@item.conversation.organization}
+              tier={@item.conversation.organization.tier}
+            />
             <.neglect_badge level={@item.neglect_status} />
           </div>
           <span
@@ -342,6 +346,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         <div class="flex items-center gap-2 flex-wrap">
           <.state_badge state={@item.conversation.state} />
           <.urgency_badge urgency={@item.conversation.urgency} />
+          <.source_badge source={@item.conversation.source} />
           <span
             class="text-xs text-gray-400 dark:text-zinc-500 ml-auto"
             data-testid="operator-queue-msg-count"

@@ -342,4 +342,112 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       refute html =~ conv.subject
     end
   end
+
+  describe "nil-organization conversations" do
+    test "renders an unlinked prospect card without crashing", %{conn: conn} do
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          state: :new,
+          subject: "Anonymous inquiry"
+        )
+
+      Scoring.calculate_and_cache(conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      assert html =~ "Anonymous inquiry"
+      assert html =~ "Unlinked prospect"
+      # No organization means no tier badge on the card
+      refute html =~ "operator-tier-badge"
+    end
+
+    test "org-scoped operator sees own-org and nil-org rows but not other orgs" do
+      org = insert_organization(name: "Scoped Org")
+      other_org = insert_organization(name: "Foreign Org")
+
+      {:ok, agent_operator} =
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{
+          email: "scoped-agent@example.com",
+          password: "password123",
+          role: "agent",
+          organization_id: org.id
+        })
+        |> Repo.insert()
+
+      own_conv =
+        insert_conversation(organization_id: org.id, state: :active, subject: "Scoped Own Conv")
+
+      other_conv =
+        insert_conversation(
+          organization_id: other_org.id,
+          state: :active,
+          subject: "Foreign Org Conv"
+        )
+
+      unlinked_conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          state: :new,
+          subject: "Unlinked Intake Conv"
+        )
+
+      Scoring.calculate_and_cache(own_conv.id)
+      Scoring.calculate_and_cache(other_conv.id)
+      Scoring.calculate_and_cache(unlinked_conv.id)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.init_test_session(%{})
+        |> Plug.Conn.put_session(:operator_id, agent_operator.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      assert html =~ "Scoped Own Conv"
+      assert html =~ "Unlinked Intake Conv"
+      refute html =~ "Foreign Org Conv"
+    end
+
+    test "super_admin queue includes nil-org rows alongside org rows", %{conn: conn} do
+      org = insert_organization(name: "Some Org")
+      org_conv = insert_conversation(organization_id: org.id, state: :new)
+
+      unlinked_conv =
+        insert_conversation(organization_id: nil, source: :disambiguation, state: :new)
+
+      Scoring.calculate_and_cache(org_conv.id)
+      Scoring.calculate_and_cache(unlinked_conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      assert html =~ org_conv.subject
+      assert html =~ unlinked_conv.subject
+    end
+  end
+
+  describe "source badge" do
+    test "queue card shows a human-labeled source badge", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, source: :portal, state: :new)
+      Scoring.calculate_and_cache(conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      assert html =~ ~s(data-testid="source-badge-portal")
+      assert html =~ "Portal"
+    end
+
+    test "disambiguation source renders as Needs routing", %{conn: conn} do
+      conv = insert_conversation(organization_id: nil, source: :disambiguation, state: :new)
+      Scoring.calculate_and_cache(conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator")
+
+      assert html =~ ~s(data-testid="source-badge-disambiguation")
+      assert html =~ "Needs routing"
+    end
+  end
 end
