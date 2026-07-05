@@ -3,7 +3,7 @@ defmodule Custyard.Email.ImapPoller do
   GenServer that polls an IMAP mailbox for new emails.
 
   Periodically connects to the configured IMAP server, fetches UNSEEN messages,
-  processes them through the existing email pipeline (Parser -> Processor),
+  dispatches them through the pipeline (Parser → Adapters.Email.normalize → Dispatcher.dispatch),
   and marks them as SEEN.
 
   Configuration (in config/runtime.exs):
@@ -14,16 +14,23 @@ defmodule Custyard.Email.ImapPoller do
         port: 993,
         username: "user@example.com",
         password: "secret",
+        organization_id: 1,
         folder: "INBOX",
         poll_interval: 60_000,
         ssl: true
+
+  The `organization_id` is required -- it determines which org's inbound route
+  is used for dispatching messages through the webhook pipeline.
   """
 
   use GenServer
 
   require Logger
 
-  alias Custyard.Email.{Parser, Processor}
+  alias Custyard.Email.Parser
+  alias Custyard.InboundRoutes
+  alias Custyard.Webhooks.Adapters.Email, as: EmailAdapter
+  alias Custyard.Webhooks.Dispatcher
 
   @default_poll_interval 60_000
   @default_folder "INBOX"
@@ -78,11 +85,16 @@ defmodule Custyard.Email.ImapPoller do
         fn -> password end
       end)
 
+    # organization_id is required so the poller can resolve the inbound route
+    # for dispatching through Webhooks.Dispatcher with proper org/project context.
+    organization_id = Keyword.fetch!(opts, :organization_id)
+
     state = %{
       host: Keyword.fetch!(opts, :host),
       port: Keyword.get(opts, :port, @default_port),
       username: Keyword.fetch!(opts, :username),
       credential_fetcher: credential_fetcher,
+      organization_id: organization_id,
       folder: Keyword.get(opts, :folder, @default_folder),
       poll_interval: Keyword.get(opts, :poll_interval, @default_poll_interval),
       ssl: Keyword.get(opts, :ssl, true),
@@ -200,7 +212,7 @@ defmodule Custyard.Email.ImapPoller do
           with {:ok, _} <- Plover.login(conn, state.username, password),
                {:ok, _} <- Plover.select(conn, state.folder),
                {:ok, messages} <- fetch_unseen(conn),
-               processed <- process_messages(conn, messages) do
+               processed <- process_messages(conn, messages, state.organization_id) do
             {:ok, processed}
           else
             {:error, reason} ->
@@ -242,15 +254,15 @@ defmodule Custyard.Email.ImapPoller do
     end
   end
 
-  defp process_messages(_conn, []), do: 0
+  defp process_messages(_conn, [], _organization_id), do: 0
 
-  defp process_messages(conn, messages) do
+  defp process_messages(conn, messages, organization_id) do
     messages
-    |> Enum.map(fn msg -> process_single_message(conn, msg) end)
+    |> Enum.map(fn msg -> process_single_message(conn, msg, organization_id) end)
     |> Enum.count(&(&1 == :ok))
   end
 
-  defp process_single_message(conn, msg) do
+  defp process_single_message(conn, msg, organization_id) do
     uid = msg.attrs[:uid]
 
     Logger.debug("Processing IMAP message UID: #{uid}")
@@ -258,7 +270,9 @@ defmodule Custyard.Email.ImapPoller do
     result =
       with {:ok, raw_email} <- fetch_raw_email(conn, uid),
            {:ok, parsed} <- Parser.parse(raw_email),
-           {:ok, _conversation} <- Processor.process(parsed) do
+           {:ok, normalized} <- EmailAdapter.normalize(parsed),
+           {:ok, route} <- resolve_route(organization_id),
+           {:ok, _conversation} <- Dispatcher.dispatch(route, normalized) do
         Logger.debug("Successfully processed IMAP message UID: #{uid}")
         :ok
       else
@@ -273,6 +287,13 @@ defmodule Custyard.Email.ImapPoller do
     mark_as_seen(conn, uid)
 
     result
+  end
+
+  # Resolve the inbound route for the poller's organization.
+  # find_or_create_general_route already short-circuits when a route exists
+  # and handles creation (with Lettermint API call) only once per org.
+  defp resolve_route(organization_id) do
+    InboundRoutes.find_or_create_general_route(organization_id, source: :email)
   end
 
   defp fetch_raw_email(conn, uid) do

@@ -20,7 +20,7 @@ defmodule Custyard.InboundRoute do
 
   @route_types [:general, :project, :disambiguation]
   # Sources must match adapter registry - see Custyard.Webhooks.Registry
-  @sources [:lettermint, :zendesk, :intercom, :slack]
+  @sources [:lettermint, :zendesk, :intercom, :slack, :email]
 
   schema "inbound_routes" do
     field :lettermint_route_id, :string

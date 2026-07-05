@@ -193,6 +193,36 @@ defmodule Custyard.InboundRoutesTest do
       assert url =~ "/api/webhook/route/#{route.callback_token}"
       assert url =~ "source=lettermint"
     end
+
+    test "callback_url includes source=email for routes with source: :email" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :email
+        })
+
+      url = InboundRoutes.callback_url(route)
+      assert url =~ "/api/webhook/route/#{route.callback_token}"
+      assert url =~ "source=email"
+    end
+
+    test "callback_url includes source=lettermint for routes with source: :lettermint" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :lettermint
+        })
+
+      url = InboundRoutes.callback_url(route)
+      assert url =~ "/api/webhook/route/#{route.callback_token}"
+      assert url =~ "source=lettermint"
+    end
   end
 
   describe "webhook operations" do
@@ -374,6 +404,76 @@ defmodule Custyard.InboundRoutesTest do
 
       assert route.route_type == :project
       assert route.project_id == project.id
+    end
+  end
+
+  describe "find_or_create_general_route with source parameter" do
+    test "creates route with source: :email when passed as option" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id, source: :email)
+
+      assert route.route_type == :general
+      assert route.organization_id == org.id
+      assert route.source == :email
+    end
+
+    test "defaults to source: :lettermint when no source option is given" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+
+      assert route.route_type == :general
+      assert route.organization_id == org.id
+      assert route.source == :lettermint
+    end
+
+    test "returns existing route regardless of source option" do
+      org = Factory.insert_organization()
+
+      # Create route without explicit source (defaults to :lettermint)
+      {:ok, existing} = InboundRoutes.find_or_create_general_route(org.id)
+
+      # Calling again with source: :email should return the same existing route
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id, source: :email)
+
+      assert route.id == existing.id
+    end
+  end
+
+  describe "find_or_create_general_route webhook seeding" do
+    test "creates sender_matching and notification webhook records on new route" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+
+      webhooks = InboundRoutes.list_webhooks_for_route(route.id)
+      purposes = Enum.map(webhooks, & &1.purpose) |> Enum.sort()
+
+      assert :sender_matching in purposes
+      assert :notification in purposes
+
+      # All seeded webhooks should be enabled
+      assert Enum.all?(webhooks, & &1.enabled)
+    end
+
+    test "calling find_or_create_general_route again does not duplicate webhook records" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+      initial_webhooks = InboundRoutes.list_webhooks_for_route(route.id)
+
+      # Call again -- should return the same route with the same webhooks
+      {:ok, same_route} = InboundRoutes.find_or_create_general_route(org.id)
+      assert same_route.id == route.id
+
+      later_webhooks = InboundRoutes.list_webhooks_for_route(route.id)
+      assert length(later_webhooks) == length(initial_webhooks)
+
+      # Same webhook IDs
+      initial_ids = Enum.map(initial_webhooks, & &1.id) |> Enum.sort()
+      later_ids = Enum.map(later_webhooks, & &1.id) |> Enum.sort()
+      assert initial_ids == later_ids
     end
   end
 

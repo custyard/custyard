@@ -1,23 +1,25 @@
 defmodule Custyard.Email.Processor do
   @moduledoc """
-  Process inbound emails from legacy Lettermint webhook and direct LMTP/IMAP paths.
+  Legacy module -- use Webhooks.Dispatcher for all new integrations.
+  LMTP and IMAP paths now route through Dispatcher directly.
 
-  Handles email parsing then delegates to SenderMatching for the actual processing.
-  This module exists to maintain backward compatibility with the legacy webhook
-  endpoint and direct email paths (LMTP, IMAP).
-
-  For new integrations, use Webhooks.Dispatcher which routes through adapters
-  and provides richer context (project assignment, multi-source support).
+  Retained for backward compatibility with existing tests and the legacy
+  Lettermint webhook endpoint. No new callers should be added.
   """
 
   alias Custyard.Email.Normalizer
   alias Custyard.Webhooks.Purposes.SenderMatching
 
   @doc """
-  Process raw email payload from LMTP, IMAP, or legacy webhook.
+  Process raw email payload from legacy webhook path.
 
-  Parses the payload into normalized format and delegates to SenderMatching.
+  Parses the payload into normalized format and delegates to SenderMatching
+  with an empty route context (no org/project scoping).
+
+  Deprecated: Use `Webhooks.Adapters.Email.normalize/1` followed by
+  `Webhooks.Dispatcher.dispatch/2` instead.
   """
+  @deprecated "Use Webhooks.Dispatcher with Adapters.Email instead"
   def process(params) do
     with {:ok, normalized} <- parse_payload(params) do
       # Delegate to SenderMatching with empty route context (no project routing)
