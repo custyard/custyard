@@ -156,6 +156,31 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       assert html =~ conv.subject
     end
 
+    test "renders unlinked prospect group for nil-org conversations without crashing", %{
+      conn: conn
+    } do
+      # Disambiguation is currently the only source that permits a nil organization
+      past_time =
+        DateTime.utc_now()
+        |> DateTime.add(-25 * 3600, :second)
+        |> DateTime.truncate(:second)
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          state: :new,
+          last_operator_action_at: past_time
+        )
+
+      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+
+      assert html =~ "Unlinked prospect"
+      assert html =~ conv.subject
+      # No organization means no tier badge for the group
+      refute html =~ "operator-tier-badge"
+    end
+
     test "shows warning and critical counts", %{conn: conn} do
       org = insert_organization(tier: :standard)
       # 30 hours idle = warning for standard tier (24-48 hours)

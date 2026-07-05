@@ -122,5 +122,39 @@ defmodule Custyard.Notifications.EmailTest do
         assert email.html_body =~ "anon@example.com"
       end)
     end
+
+    test "renders neutral label for conversations without an organization" do
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          subject: "Anonymous intake question"
+        )
+        |> Repo.preload([:organization, :contact])
+
+      Application.put_env(:custyard, :email_enabled, true)
+
+      on_exit(fn ->
+        Application.delete_env(:custyard, :email_enabled)
+      end)
+
+      assert Email.deliver_neglect_alert(conv, :critical) == :ok
+
+      assert_email_sent(fn email ->
+        assert email.subject =~ "Anonymous intake question"
+        assert email.html_body =~ "Unlinked prospect"
+        assert email.text_body =~ "Unlinked prospect"
+      end)
+    end
+
+    test "logs alert without crashing for conversations without an organization" do
+      conv =
+        insert_conversation(organization_id: nil, source: :disambiguation)
+        |> Repo.preload([:organization, :contact])
+
+      # Default config has email_enabled=false, so this exercises the log stub
+      assert Email.deliver_neglect_alert(conv, :warning) == :ok
+      assert_no_email_sent()
+    end
   end
 end

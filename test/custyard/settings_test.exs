@@ -266,6 +266,96 @@ defmodule Custyard.SettingsTest do
     end
   end
 
+  describe "get_intake_config/0" do
+    test "returns defaults when nothing is stored" do
+      config = Settings.get_intake_config()
+
+      assert config.unlinked_tier_score == 10
+      assert config.slug_claim_ttl_hours == 72
+    end
+
+    test "skips malformed values and uses defaults" do
+      # First ensure settings exist
+      Settings.get()
+
+      # Directly update with invalid data
+      Repo.update_all(Settings,
+        set: [intake_config: %{"unlinked_tier_score" => "high", "slug_claim_ttl_hours" => 24}]
+      )
+
+      config = Settings.get_intake_config()
+
+      # "high" should be skipped, default 10 used
+      assert config.unlinked_tier_score == 10
+      # valid entry preserved
+      assert config.slug_claim_ttl_hours == 24
+    end
+
+    test "skips out-of-range values and unknown keys" do
+      Settings.get()
+
+      Repo.update_all(Settings,
+        set: [intake_config: %{"unlinked_tier_score" => 500, "surprise" => 1}]
+      )
+
+      config = Settings.get_intake_config()
+
+      assert config.unlinked_tier_score == 10
+      refute Map.has_key?(config, :surprise)
+    end
+  end
+
+  describe "update_intake_config/1" do
+    test "round-trips valid values" do
+      assert {:ok, _} =
+               Settings.update_intake_config(%{
+                 unlinked_tier_score: 25,
+                 slug_claim_ttl_hours: 48
+               })
+
+      config = Settings.get_intake_config()
+      assert config.unlinked_tier_score == 25
+      assert config.slug_claim_ttl_hours == 48
+    end
+
+    test "rejects out-of-range unlinked_tier_score" do
+      assert {:error, changeset} =
+               Settings.update_intake_config(%{
+                 unlinked_tier_score: 101,
+                 slug_claim_ttl_hours: 72
+               })
+
+      assert [error] = errors_on(changeset).intake_config
+      assert error =~ "unlinked_tier_score"
+    end
+
+    test "rejects out-of-range slug_claim_ttl_hours" do
+      assert {:error, _} =
+               Settings.update_intake_config(%{unlinked_tier_score: 10, slug_claim_ttl_hours: 0})
+
+      assert {:error, _} =
+               Settings.update_intake_config(%{
+                 unlinked_tier_score: 10,
+                 slug_claim_ttl_hours: 721
+               })
+    end
+
+    test "rejects non-integer values" do
+      assert {:error, _} =
+               Settings.update_intake_config(%{
+                 unlinked_tier_score: 10.5,
+                 slug_claim_ttl_hours: 72
+               })
+    end
+
+    test "rejects unknown keys" do
+      assert {:error, changeset} = Settings.update_intake_config(%{bogus: 1})
+
+      assert [error] = errors_on(changeset).intake_config
+      assert error =~ "bogus"
+    end
+  end
+
   describe "changeset/2" do
     test "validates weights structure" do
       settings = Settings.get()
@@ -289,6 +379,19 @@ defmodule Custyard.SettingsTest do
 
       refute changeset.valid?
       assert "invalid threshold format" in errors_on(changeset).neglect_thresholds
+    end
+
+    test "validates intake config structure" do
+      settings = Settings.get()
+
+      changeset =
+        Settings.changeset(settings, %{
+          intake_config: %{"unlinked_tier_score" => -1}
+        })
+
+      refute changeset.valid?
+      assert [error] = errors_on(changeset).intake_config
+      assert error =~ "unlinked_tier_score"
     end
   end
 end

@@ -66,9 +66,10 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
       neglected
       |> Enum.group_by(fn item -> item.conversation.organization end)
       |> Enum.sort_by(fn {org, items} ->
-        # Sort orgs by most critical items first, then by name
+        # Sort orgs by most critical items first, then by name.
+        # org is nil for unlinked prospect conversations (e.g. disambiguation).
         critical_count = Enum.count(items, &(&1.neglect_status == :critical))
-        {-critical_count, org.name}
+        {-critical_count, (org && org.name) || ""}
       end)
 
     total_count = length(neglected)
@@ -143,9 +144,9 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
               class="text-sm font-medium text-gray-700 dark:text-zinc-300"
               data-testid="operator-neglect-org-name"
             >
-              {org.name}
+              {if org, do: org.name, else: "Unlinked prospect"}
             </span>
-            <.tier_badge tier={org.tier} />
+            <.tier_badge :if={org} tier={org.tier} />
             <span class="text-xs text-gray-400 dark:text-zinc-500">{length(items)} items</span>
           </div>
 

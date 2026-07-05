@@ -1,6 +1,7 @@
 defmodule Custyard.Settings do
   @moduledoc """
-  Application settings for scoring weights and neglect thresholds.
+  Application settings for scoring weights, neglect thresholds, and
+  public intake configuration.
 
   Uses a single-row pattern - there's only ever one settings record.
   """
@@ -24,6 +25,13 @@ defmodule Custyard.Settings do
     basic: {48, 72}
   }
 
+  # unlinked_tier_score deliberately equals the standard tier score:
+  # unknown value scores as average (net-not-filter).
+  @default_intake_config %{
+    unlinked_tier_score: 10,
+    slug_claim_ttl_hours: 72
+  }
+
   @valid_weight_keys Map.keys(@default_weights) |> Enum.map(&to_string/1)
   @valid_threshold_keys Map.keys(@default_thresholds) |> Enum.map(&to_string/1)
 
@@ -38,6 +46,10 @@ defmodule Custyard.Settings do
     # Format: %{header_name => %{property => property_name, mapping => %{value => property_value}}}
     # Example: %{"X-Customer-Tier" => %{"property" => "tier", "mapping" => %{"ent" => "enterprise"}}}
     field :sieve_header_mappings, :map, default: %{}
+
+    # Public intake configuration (stored as map in JSON column)
+    # Keys: "unlinked_tier_score" (integer 0..100), "slug_claim_ttl_hours" (integer 1..720)
+    field :intake_config, :map, default: %{}
 
     # Singleton constraint - always true, unique constraint ensures only one row
     field :singleton, :boolean, default: true
@@ -153,6 +165,44 @@ defmodule Custyard.Settings do
   end
 
   @doc """
+  Get public intake configuration as a map with atom keys.
+
+  Malformed entries (non-integer or out-of-range values) are silently
+  skipped and the default for that key is used instead.
+
+  Keys:
+  - `:unlinked_tier_score` - tier-equivalent score for conversations without
+    an organization (0..100, default 10 = standard tier)
+  - `:slug_claim_ttl_hours` - lifetime of an unconfirmed slug claim
+    (1..720, default 72)
+  """
+  def get_intake_config do
+    settings = get()
+
+    parsed_config =
+      (settings.intake_config || %{})
+      |> Enum.filter(fn {k, v} -> valid_intake_config_entry?(k, v) end)
+      |> Enum.map(fn {k, v} -> {String.to_existing_atom(k), v} end)
+      |> Map.new()
+
+    Map.merge(@default_intake_config, parsed_config)
+  end
+
+  @doc """
+  Update public intake configuration.
+  Returns `{:ok, settings}` or `{:error, changeset}` if validation fails.
+  """
+  def update_intake_config(config) when is_map(config) do
+    settings = get()
+    stringified = stringify_keys(config)
+
+    settings
+    |> cast(%{intake_config: stringified}, [:intake_config])
+    |> validate_intake_config()
+    |> Repo.update()
+  end
+
+  @doc """
   Update Sieve header mappings.
 
   Each mapping should be: %{header_name => %{"property" => name, "mapping" => %{value => property_value}}}
@@ -174,11 +224,12 @@ defmodule Custyard.Settings do
   @doc false
   def changeset(settings, attrs) do
     settings
-    |> cast(attrs, [:score_weights, :neglect_thresholds, :sieve_header_mappings])
+    |> cast(attrs, [:score_weights, :neglect_thresholds, :sieve_header_mappings, :intake_config])
     |> validate_weights()
     |> validate_weight_values()
     |> validate_thresholds()
     |> validate_sieve_header_mappings()
+    |> validate_intake_config()
   end
 
   defp validate_weights(changeset) do
@@ -292,6 +343,42 @@ defmodule Custyard.Settings do
   end
 
   defp valid_sieve_mapping?(_), do: false
+
+  defp validate_intake_config(changeset) do
+    case get_change(changeset, :intake_config) do
+      nil ->
+        changeset
+
+      config when is_map(config) ->
+        invalid_keys =
+          config
+          |> Enum.reject(fn {k, v} -> valid_intake_config_entry?(k, v) end)
+          |> Enum.map(fn {k, _v} -> k end)
+
+        if Enum.empty?(invalid_keys) do
+          changeset
+        else
+          add_error(
+            changeset,
+            :intake_config,
+            "contains invalid entries for: #{Enum.join(invalid_keys, ", ")}. " <>
+              "unlinked_tier_score must be an integer between 0 and 100; " <>
+              "slug_claim_ttl_hours must be an integer between 1 and 720."
+          )
+        end
+
+      _ ->
+        add_error(changeset, :intake_config, "must be a map")
+    end
+  end
+
+  defp valid_intake_config_entry?("unlinked_tier_score", value),
+    do: is_integer(value) and value in 0..100
+
+  defp valid_intake_config_entry?("slug_claim_ttl_hours", value),
+    do: is_integer(value) and value in 1..720
+
+  defp valid_intake_config_entry?(_key, _value), do: false
 
   defp create_defaults do
     # Handle race condition: multiple processes may call this concurrently on first access.

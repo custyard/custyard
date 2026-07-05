@@ -273,6 +273,37 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert first_count >= second_count
     end
 
+    test "neither crashes nor notifies for nil-org conversations with neglect status" do
+      # Nil-org conversations (disambiguation source) now accrue neglect status
+      # via Scoring.neglect_status/2, but list_notification_candidates inner-joins
+      # organizations, so they are excluded from the sweep. This pins the current
+      # boundary; a later PR will deliberately widen it.
+      thresholds = Settings.get_neglect_thresholds()
+      {warning_hours, _critical_hours} = thresholds.standard
+
+      old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          state: :new,
+          last_operator_action_at: old_action_time
+        )
+
+      # Premise: the conversation has accrued neglect status
+      preloaded = Repo.preload(conv, [:organization])
+      assert Custyard.Scoring.neglect_status(preloaded, thresholds) == :warning
+
+      # But the sweep excludes it and dispatches nothing
+      refute Enum.any?(
+               NeglectChecker.list_notification_candidates(thresholds),
+               &(&1.id == conv.id)
+             )
+
+      assert {:ok, 0} = NeglectChecker.check_and_notify()
+    end
+
     test "sends new notification when severity escalates" do
       thresholds = Settings.get_neglect_thresholds()
       {_warning_hours, critical_hours} = thresholds.standard
