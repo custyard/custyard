@@ -345,6 +345,14 @@ defmodule Custyard.Projects do
     Repo.get(Task, id)
   end
 
+  @doc """
+  Get a task by ID, scoped to a project.
+  Returns nil when the task does not belong to the given project.
+  """
+  def get_project_task(project_id, task_id) do
+    Repo.get_by(Task, id: task_id, project_id: project_id)
+  end
+
   defp broadcast_project_update(project_id) do
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,

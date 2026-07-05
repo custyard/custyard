@@ -5,7 +5,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
-    case Projects.get_project(id) do
+    case fetch_project(id, socket.assigns.scoped_organization_id) do
       nil ->
         {:ok,
          socket
@@ -27,6 +27,23 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
          |> assign(:new_task_portal_visible, true)}
     end
   end
+
+  # Load the project only when the operator's org scope allows it; org-scoped
+  # operators (admin/agent) must not see or modify other organizations'
+  # projects. Non-integer ids fall through to the not-found redirect instead
+  # of raising Ecto.Query.CastError.
+  defp fetch_project(id, scoped_org_id) do
+    with {int_id, ""} <- Integer.parse(id),
+         %{} = project <- Projects.get_project(int_id),
+         true <- can_access_project?(project, scoped_org_id) do
+      project
+    else
+      _ -> nil
+    end
+  end
+
+  defp can_access_project?(_project, nil), do: true
+  defp can_access_project?(project, scoped_org_id), do: project.organization_id == scoped_org_id
 
   @impl true
   def handle_info({:project_updated, _id}, socket) do
@@ -80,7 +97,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   def handle_event("cycle_task_state", %{"id" => task_id}, socket) do
-    task = Projects.get_task(task_id)
+    task = get_project_task(socket, task_id)
 
     if task do
       next_state = next_task_state(task.state)
@@ -99,7 +116,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   def handle_event("delete_task", %{"id" => task_id}, socket) do
-    task = Projects.get_task(task_id)
+    task = get_project_task(socket, task_id)
 
     if task do
       case Projects.delete_task(task) do
@@ -112,6 +129,15 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
       end
     else
       {:noreply, socket}
+    end
+  end
+
+  # phx-value-id is client-controlled; only accept tasks that belong to the
+  # mounted project so crafted events can't mutate foreign tasks.
+  defp get_project_task(socket, task_id) do
+    case Integer.parse(to_string(task_id)) do
+      {int_id, ""} -> Projects.get_project_task(socket.assigns.project.id, int_id)
+      _ -> nil
     end
   end
 
@@ -154,8 +180,6 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
           </div>
           <.link
             navigate={~p"/operator/projects"}
-            phx-click="edit_project"
-            phx-value-id={@project.id}
             class="text-sm text-gray-500 hover:text-gray-700"
           >
             Edit

@@ -226,5 +226,109 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       assert html =~ "My Project"
       assert html =~ "Back to projects"
     end
+
+    test "edit link navigates to the projects list without pushing an event", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Nav Test", organization_id: org.id})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+
+      assert {:error, {:live_redirect, %{to: "/operator/projects"}}} =
+               view |> element("a", "Edit") |> render_click()
+    end
+  end
+
+  describe "organization scoping" do
+    defp insert_scoped_operator(org) do
+      {:ok, operator} =
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{
+          email: "agent-#{org.id}@example.com",
+          password: "password123",
+          role: "agent",
+          organization_id: org.id
+        })
+        |> Repo.insert()
+
+      operator
+    end
+
+    test "org-scoped operator can view a project in their own organization", %{conn: conn} do
+      org = insert_organization(name: "Own Org")
+      project = create_project(%{title: "Own Project", organization_id: org.id})
+      operator = insert_scoped_operator(org)
+
+      conn = Plug.Conn.put_session(conn, :operator_id, operator.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+
+      assert html =~ "Own Project"
+    end
+
+    test "org-scoped operator cannot view another organization's project", %{conn: conn} do
+      org_a = insert_organization(name: "Org A")
+      org_b = insert_organization(name: "Org B")
+      foreign_project = create_project(%{title: "Foreign Project", organization_id: org_b.id})
+      operator = insert_scoped_operator(org_a)
+
+      conn = Plug.Conn.put_session(conn, :operator_id, operator.id)
+
+      {:error, {:live_redirect, %{to: redirect_path}}} =
+        live(conn, ~p"/operator/projects/#{foreign_project.id}")
+
+      assert redirect_path == "/operator/projects"
+    end
+
+    test "redirects for non-integer project ids", %{conn: conn} do
+      {:error, {:live_redirect, %{to: redirect_path}}} =
+        live(conn, ~p"/operator/projects/abc")
+
+      assert redirect_path == "/operator/projects"
+    end
+  end
+
+  describe "task id scoping" do
+    test "cycle_task_state ignores task ids from other projects", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Mine", organization_id: org.id})
+
+      other_org = insert_organization()
+      other_project = create_project(%{title: "Theirs", organization_id: other_org.id})
+
+      foreign_task =
+        create_task(%{title: "Foreign task", project_id: other_project.id, state: :open})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+
+      render_click(view, "cycle_task_state", %{"id" => to_string(foreign_task.id)})
+
+      assert Repo.get!(Task, foreign_task.id).state == :open
+    end
+
+    test "delete_task ignores task ids from other projects", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Mine", organization_id: org.id})
+
+      other_org = insert_organization()
+      other_project = create_project(%{title: "Theirs", organization_id: other_org.id})
+      foreign_task = create_task(%{title: "Foreign task", project_id: other_project.id})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+
+      render_click(view, "delete_task", %{"id" => to_string(foreign_task.id)})
+
+      assert Repo.get(Task, foreign_task.id) != nil
+    end
+
+    test "task mutations ignore non-integer ids", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Mine", organization_id: org.id})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+
+      # Must not raise
+      render_click(view, "cycle_task_state", %{"id" => "not-a-number"})
+      render_click(view, "delete_task", %{"id" => "not-a-number"})
+    end
   end
 end
