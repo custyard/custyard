@@ -118,7 +118,20 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
     case Conversations.send_reply(conversation, body, operator_email: operator.email) do
       {:ok, _message} ->
-        {:noreply, socket |> assign(:reply_text, "") |> reload_conversation()}
+        socket = socket |> assign(:reply_text, "") |> reload_conversation()
+
+        socket =
+          if deliverable_recipient?(conversation) do
+            socket
+          else
+            put_flash(
+              socket,
+              :error,
+              "Reply saved, but the contact has no email address so it cannot be delivered"
+            )
+          end
+
+        {:noreply, socket}
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "Failed to send reply")}
@@ -343,6 +356,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
     {:noreply, reload_conversation(socket)}
   end
 
+  # Broadcast by Email.Outbound when async delivery resolves, so the
+  # pending/sent/failed indicator updates without a manual refresh.
+  def handle_info({:message_updated, _id}, socket) do
+    {:noreply, reload_conversation(socket)}
+  end
+
   def handle_info({:conversation_updated, id}, socket) do
     if id == socket.assigns.conversation.id do
       {:noreply, reload_conversation(socket)}
@@ -367,6 +386,15 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
 
     task
+  end
+
+  # A reply is recorded in the thread even without a contact email, but the
+  # async delivery will fail — warn the operator up front.
+  defp deliverable_recipient?(conversation) do
+    case conversation.contact do
+      %{email: email} when is_binary(email) and email != "" -> true
+      _ -> false
+    end
   end
 
   defp load_conversation(id) do

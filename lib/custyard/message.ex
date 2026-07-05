@@ -63,11 +63,16 @@ defmodule Custyard.Message do
 
   @doc """
   Changeset for updating delivery status on an existing outbound message.
-  Only allows transitioning the delivery_status field.
+
+  `extra_attrs` optionally carries `:lettermint_message_id` so the provider
+  message id from a successful delivery can be recorded alongside the status.
   """
-  def delivery_status_changeset(message, status) do
+  def delivery_status_changeset(message, status, extra_attrs \\ %{}) do
     message
-    |> cast(%{delivery_status: status}, [:delivery_status])
+    |> cast(Map.put(extra_attrs, :delivery_status, status), [
+      :delivery_status,
+      :lettermint_message_id
+    ])
     |> validate_required([:delivery_status])
   end
 

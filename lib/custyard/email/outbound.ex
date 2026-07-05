@@ -41,15 +41,20 @@ defmodule Custyard.Email.Outbound do
     with {:ok, recipient} <- resolve_recipient(conversation),
          {:ok, from_addr} <- resolve_from_address(message, conversation),
          email <- compose(message, conversation, recipient, from_addr),
-         {:ok, _metadata} <- Custyard.Mailer.deliver(email) do
-      {:ok, mark_status(message, :sent)}
+         {:ok, metadata} <- Custyard.Mailer.deliver(email) do
+      updated =
+        message
+        |> mark_status(:sent, provider_attrs(metadata))
+        |> broadcast_delivery_update()
+
+      {:ok, updated}
     else
       {:error, reason} ->
         Logger.error(
           "Outbound email delivery failed for message #{message.id}: #{inspect(reason)}"
         )
 
-        {:error, reason, mark_status(message, :failed)}
+        {:error, reason, message |> mark_status(:failed) |> broadcast_delivery_update()}
     end
   end
 
@@ -184,9 +189,9 @@ defmodule Custyard.Email.Outbound do
     """
   end
 
-  defp mark_status(message, status) do
+  defp mark_status(message, status, extra_attrs \\ %{}) do
     case message
-         |> Message.delivery_status_changeset(status)
+         |> Message.delivery_status_changeset(status, extra_attrs)
          |> Repo.update() do
       {:ok, updated} ->
         updated
@@ -199,5 +204,23 @@ defmodule Custyard.Email.Outbound do
         # Return the message with the status set in memory even if DB update fails
         %{message | delivery_status: status}
     end
+  end
+
+  # Swoosh.Adapters.Lettermint returns {:ok, %{id: message_id, status: status}}.
+  # Persist the id so provider status webhooks (delivered/bounced) can be
+  # correlated back to this message. Other adapters may not include an id.
+  defp provider_attrs(%{id: id}) when is_binary(id), do: %{lettermint_message_id: id}
+  defp provider_attrs(_metadata), do: %{}
+
+  # Nudge subscribed LiveViews (ConversationLive) to refresh the delivery
+  # indicator once the async delivery lands on :sent or :failed.
+  defp broadcast_delivery_update(%Message{} = message) do
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversation:#{message.conversation_id}",
+      {:message_updated, message.conversation_id}
+    )
+
+    message
   end
 end

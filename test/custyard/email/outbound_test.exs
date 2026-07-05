@@ -1,3 +1,15 @@
+defmodule Custyard.Email.OutboundTest.LettermintStub do
+  @moduledoc """
+  Stand-in for Swoosh.Adapters.Lettermint returning the same success shape,
+  {:ok, %{id: message_id, status: status}}, without hitting the network.
+  """
+  use Swoosh.Adapter
+
+  def deliver(_email, _config) do
+    {:ok, %{id: "lm-provider-123", status: "queued"}}
+  end
+end
+
 defmodule Custyard.Email.OutboundTest do
   use Custyard.DataCase, async: false
 
@@ -5,6 +17,7 @@ defmodule Custyard.Email.OutboundTest do
   import Swoosh.TestAssertions
 
   alias Custyard.Email.Outbound
+  alias Custyard.Email.OutboundTest.LettermintStub
   alias Custyard.{Message, Repo}
 
   setup do
@@ -57,6 +70,51 @@ defmodule Custyard.Email.OutboundTest do
       # Verify persisted in DB
       reloaded = Repo.get!(Message, msg.id)
       assert reloaded.delivery_status == :sent
+      # Swoosh.Adapters.Test returns no provider id
+      assert reloaded.lettermint_message_id == nil
+    end
+
+    test "captures the provider message id from the delivery response", %{operator_msg: msg} do
+      original = Application.get_env(:custyard, Custyard.Mailer)
+      Application.put_env(:custyard, Custyard.Mailer, adapter: LettermintStub)
+      on_exit(fn -> Application.put_env(:custyard, Custyard.Mailer, original) end)
+
+      assert {:ok, updated} = Outbound.deliver(msg)
+      assert updated.lettermint_message_id == "lm-provider-123"
+
+      reloaded = Repo.get!(Message, msg.id)
+      assert reloaded.lettermint_message_id == "lm-provider-123"
+      assert reloaded.delivery_status == :sent
+    end
+
+    test "broadcasts message_updated on successful delivery", %{operator_msg: msg} do
+      conv_id = msg.conversation_id
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
+
+      {:ok, _} = Outbound.deliver(msg)
+
+      assert_received {:message_updated, ^conv_id}
+    end
+
+    test "broadcasts message_updated on failed delivery", %{conversation: conv} do
+      no_contact_conv =
+        insert_conversation(organization_id: conv.organization_id, contact_id: nil)
+
+      conv_id = no_contact_conv.id
+
+      msg =
+        insert_message(
+          conversation_id: conv_id,
+          source: :operator,
+          body: "Will fail",
+          delivery_status: :pending
+        )
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
+
+      assert {:error, _reason, _updated} = Outbound.deliver(msg)
+
+      assert_received {:message_updated, ^conv_id}
     end
 
     test "sends email to the contact's address", %{operator_msg: msg} do

@@ -210,6 +210,66 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       messages = Conversations.list_public_messages(conv.id)
       assert messages == []
     end
+
+    test "warns the operator when the contact has no email address", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, contact_id: nil)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      html =
+        view
+        |> form("form[phx-submit=send_reply]", body: "Reply into the void")
+        |> render_submit()
+
+      # The reply is still recorded, but the operator sees the warning
+      assert html =~ "no email address"
+      assert [_message] = Conversations.list_public_messages(conv.id)
+    end
+  end
+
+  describe "delivery status updates" do
+    test "delivery indicator updates live when async delivery resolves", %{conn: conn} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "live@customer.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      html =
+        view
+        |> form("form[phx-submit=send_reply]", body: "Watch me get delivered")
+        |> render_submit()
+
+      assert html =~ "delivery-status-pending"
+
+      # Resolve the delivery the async task would normally perform; the
+      # message_updated broadcast must refresh the indicator in the view.
+      [message] = Conversations.list_public_messages(conv.id)
+      {:ok, _} = Custyard.Email.Outbound.deliver(message)
+
+      html = render(view)
+      refute html =~ "delivery-status-pending"
+      assert html =~ "delivery-status-sent"
+    end
+
+    test "delivery indicator shows failed when delivery fails", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, contact_id: nil)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Undeliverable")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      {:error, :no_recipient_email, _} = Custyard.Email.Outbound.deliver(message)
+
+      html = render(view)
+      refute html =~ "delivery-status-pending"
+      assert html =~ "delivery-status-failed"
+    end
   end
 
   describe "handle_event add_note" do
