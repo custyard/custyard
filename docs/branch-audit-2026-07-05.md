@@ -63,3 +63,24 @@ by both lines of work, so a semantic double-check is cheap insurance.
 - CI logs for the March runs are expired; the #42 failure diagnosis is inferred
   from timing (job died after 22s — setup/compile-stage fast-fail) and delano's
   contemporaneous notes, not from the log itself.
+
+## Tracking
+
+This audit is broken out into GitHub issues. The epic tracks all of them as
+sub-issues.
+
+- **Epic:** #48 — Land the MVP branch/PR stack (2026-07-05 audit)
+
+| # | Leaf issue | Section |
+|---|---|---|
+| #49 | Merge PR #46 — normalizer improvements | Merge now |
+| #50 | Resolve review threads & merge PR #45 — email-only operator auth | Merge now |
+| #51 | Re-trigger CI & land PR #42 — processor consolidation (`feature/26-prep`) | Review / continue |
+| #52 | Land PR #43 — route-management hardening (`feature/27-routes`) | Review / continue |
+| #53 | Open PR & review `feature/26-outbound` — outbound replies (bulk of #26) | Review / continue |
+| #54 | Delete stale/superseded branches (`delano/next2`, `single-auth-method-config`) | Drop / close |
+| #55 | Post-merge full-suite + semantic double-check on shared files | Verification |
+
+Related existing issues (not part of the epic): #25 (Lettermint delivery-status
+webhooks, downstream of #26), #26 (outbound replies), #27 (route management,
+closed).
