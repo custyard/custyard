@@ -1,4 +1,4 @@
-# planning/service-platform-sdd-v0.3-status.md
+# SDD v0.3 Implementation Status
 
 Planning & Implementation State
 
@@ -6,9 +6,9 @@ Planning & Implementation State
 
 Planning Artifacts:
 
-- planning/service-platform-sdd-v0.3.md - Complete SDD with US-1 through US-11 specs, technical architecture, data model, and activation flow
-- planning/operator-wireframe.jsx - Interactive operator interface prototype
-- planning/portal-wireframe.jsx - Client portal prototype
+- docs/design/sdd.md - Complete SDD (v0.3) with US-1 through US-11 specs, technical architecture, data model, and activation flow
+- planning/operator-wireframe-v0.3.jsx - Interactive operator interface prototype
+- planning/portal-wireframe-v0.3.jsx - Client portal prototype
 - planning/\*.png (6 files) - Implementation screenshots from Mar 22
 
 Core Implementation:

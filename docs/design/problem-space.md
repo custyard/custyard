@@ -59,17 +59,19 @@ The core object is the **conversation**: a five-state machine (New, Active, Wait
 
 The platform proves its value when one loop works end-to-end: a prospect's pricing-page action or email becomes an identified conversation in an organization's queue; an operator replies from the queue and the reply arrives as a properly threaded email; delivery is tracked so a silent failure cannot burn a high-value prospect; the prospect follows the thread in the portal.
 
-This loop is specified in the [Prospect Conversation Loop feature specification](service-platform-spec-conversation-loop-v0.4.md).
+This loop is specified in the [Prospect Conversation Loop feature specification](spec-conversation-loop.md).
 
 ## 7. Document Map
 
+All design documents live in `docs/design/`. Filenames are stable; versions are tracked in each document's header. Wireframe prototypes and screenshots remain in `planning/`.
+
 | Document | Covers |
 |----------|--------|
-| [service-platform-sdd-v0.3.md](service-platform-sdd-v0.3.md) | Full system design: user stories US-1–US-11, architecture, data model, scoring algorithm, activation flow |
-| [service-platform-pp-v0.3.md](service-platform-pp-v0.3.md) | Product principles: open intake, portal identity, operator workflow, scoring configuration |
-| [service-platform-dd-data-model-and-email-routing-v0.3.md](service-platform-dd-data-model-and-email-routing-v0.3.md) | Design decisions: per-project routes, sender-resolution priority, uniqueness constraints, multi-webhook fan-out, delivery-status tracking |
-| [service-platform-sdd-v0.3-status.md](service-platform-sdd-v0.3-status.md) | Implementation status against the SDD |
-| [service-platform-spec-conversation-loop-v0.4.md](service-platform-spec-conversation-loop-v0.4.md) | Feature specification for the end-to-end MVP loop |
+| [sdd.md](sdd.md) | Full system design: user stories US-1–US-11, architecture, data model, scoring algorithm, activation flow |
+| [product-principles.md](product-principles.md) | Product principles: open intake, portal identity, operator workflow, scoring configuration |
+| [design-decisions-email-routing.md](design-decisions-email-routing.md) | Design decisions: per-project routes, sender-resolution priority, uniqueness constraints, multi-webhook fan-out, delivery-status tracking |
+| [sdd-status.md](sdd-status.md) | Implementation status against the SDD |
+| [spec-conversation-loop.md](spec-conversation-loop.md) | Feature specification for the end-to-end MVP loop |
 | This document | Problem framing, product thesis, MVP bar |
 
 **Known drift:** SDD §5.2 and §7 describe outbound email as deferred (operator replies from a personal mail client with CC/BCC capture) and ingestion as MTA-first. The design decisions document and subsequent implementation moved to routed-webhook-first intake with platform-native outbound sending. An SDD v0.4 revision reconciling these sections is pending.
