@@ -157,6 +157,17 @@ else
   end
 end
 
+# Rate limiting keys on the client IP. Behind Fly's edge proxy every
+# request arrives from the proxy address, so without header trust all
+# visitors would collapse into one shared bucket. FLY_APP_NAME is set by
+# the Fly platform itself; trust is never enabled off-Fly, where the
+# spoofable headers would come straight from clients. CustyardWeb.ClientIP
+# only honors proxy-authoritative values (Fly-Client-IP, rightmost
+# X-Forwarded-For), so enabling trust here does not open a spoof bypass.
+if config_env() == :prod and System.get_env("FLY_APP_NAME") do
+  config :custyard, :trust_proxy_headers, true
+end
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
