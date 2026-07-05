@@ -1,7 +1,7 @@
 # Software Design Document: Relationship-Driven Service Platform (aka Customer onboarding platform)
 
 **Working title:** TBD (referred to as "the platform" throughout)
-**Version:** 0.1 — MVP specification
+**Version:** 0.3 — MVP specification
 **Date:** 2026-03-20
 
 ---
