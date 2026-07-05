@@ -285,22 +285,25 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       admin = create_admin(org)
       conn = authenticate_conn(conn, admin)
 
+      # Enable notification webhook so we can toggle it off
+      {:ok, _} = InboundRoutes.enable_webhook(route, :notification)
+
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
       view |> element("a", "Routes") |> render_click()
 
-      # Toggle the sender_matching webhook off (it was enabled in setup)
+      # Toggle the notification webhook off (sender_matching is always disabled in UI)
       view
-      |> element("[data-testid=webhook-toggle-btn-sender_matching]")
+      |> element("[data-testid=webhook-toggle-btn-notification]")
       |> render_click()
 
       # Verify webhook was disabled in database
       webhooks = InboundRoutes.list_webhooks_for_route(route.id)
 
-      sender_webhook =
-        Enum.find(webhooks, &(&1.purpose == :sender_matching))
+      notification_webhook =
+        Enum.find(webhooks, &(&1.purpose == :notification))
 
-      assert sender_webhook.enabled == false
+      assert notification_webhook.enabled == false
     end
 
     test "agent cannot access organization detail page for webhook toggles", %{

@@ -254,4 +254,144 @@ defmodule Custyard.Webhooks.DispatcherTest do
       assert event.organization_id == org.id
     end
   end
+
+  describe "sender_matching runs regardless of webhook enabled flag" do
+    test "conversation is created even when sender_matching webhook is disabled" do
+      # The Dispatcher always runs sender_matching synchronously to create
+      # the conversation, regardless of whether a sender_matching webhook
+      # record exists or is enabled. This is by design: run_sender_matching/3
+      # ignores _enabled_purposes and calls SenderMatching.process directly.
+      org = insert_organization(domain: "disabled-sm.example.com")
+      _contact = insert_contact(organization_id: org.id, email: "bob@disabled-sm.example.com")
+
+      route =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+        |> Repo.insert!()
+
+      # Create a sender_matching webhook but disable it
+      %InboundRouteWebhook{}
+      |> InboundRouteWebhook.changeset(%{
+        inbound_route_id: route.id,
+        purpose: :sender_matching,
+        enabled: false
+      })
+      |> Repo.insert!()
+
+      normalized = %{
+        from: "bob@disabled-sm.example.com",
+        to: "support@custyard.test",
+        subject: "Disabled webhook test",
+        body: "Sender matching should still run",
+        message_id: "<disabled-sm-#{System.unique_integer([:positive])}@example.com>",
+        in_reply_to: nil,
+        references: nil,
+        headers: %{},
+        source: :email,
+        metadata: %{}
+      }
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert conversation.subject == "Disabled webhook test"
+      assert conversation.organization_id == org.id
+    end
+
+    test "conversation is created when no sender_matching webhook record exists at all" do
+      # Even with zero webhook records on the route, the dispatcher still
+      # runs sender_matching because it is hardcoded in the dispatch pipeline.
+      org = insert_organization(domain: "no-webhook.example.com")
+      _contact = insert_contact(organization_id: org.id, email: "carol@no-webhook.example.com")
+
+      route =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+        |> Repo.insert!()
+
+      # No webhook records at all — route.webhooks will be empty
+      assert [] =
+               from(w in InboundRouteWebhook, where: w.inbound_route_id == ^route.id)
+               |> Repo.all()
+
+      normalized = %{
+        from: "carol@no-webhook.example.com",
+        to: "support@custyard.test",
+        subject: "No webhook records test",
+        body: "Should still create a conversation",
+        message_id: "<no-wh-#{System.unique_integer([:positive])}@example.com>",
+        in_reply_to: nil,
+        references: nil,
+        headers: %{},
+        source: :email,
+        metadata: %{}
+      }
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert conversation.subject == "No webhook records test"
+      assert conversation.organization_id == org.id
+    end
+
+    test "async purposes do not fire when their webhooks are disabled" do
+      # Counterpart test: while sender_matching always runs, the async
+      # purposes (enrichment, notification, audit) only fire when their
+      # webhook records exist and are enabled. This test creates a route
+      # with sender_matching disabled and no other webhook records, then
+      # verifies no audit events are created (proving async purposes
+      # respected the enabled flag).
+      org = insert_organization(domain: "async-off.example.com")
+      _contact = insert_contact(organization_id: org.id, email: "dave@async-off.example.com")
+
+      route =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+        |> Repo.insert!()
+
+      # Only sender_matching exists, disabled. No audit/notification/enrichment.
+      %InboundRouteWebhook{}
+      |> InboundRouteWebhook.changeset(%{
+        inbound_route_id: route.id,
+        purpose: :sender_matching,
+        enabled: false
+      })
+      |> Repo.insert!()
+
+      normalized = %{
+        from: "dave@async-off.example.com",
+        to: "support@custyard.test",
+        subject: "No async purposes test",
+        body: "Async purposes should not fire",
+        message_id: "<async-off-#{System.unique_integer([:positive])}@example.com>",
+        in_reply_to: nil,
+        references: nil,
+        headers: %{},
+        source: :email,
+        metadata: %{}
+      }
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+
+      # Give async tasks a brief window to complete (if any were started)
+      Process.sleep(100)
+
+      # No audit events should exist for this conversation since no audit
+      # webhook was enabled
+      import Ecto.Query
+
+      audit_events =
+        from(ae in Custyard.AuditEvent,
+          where: ae.conversation_id == ^conversation.id
+        )
+        |> Repo.all()
+
+      assert audit_events == []
+    end
+  end
 end

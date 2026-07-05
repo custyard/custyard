@@ -336,8 +336,23 @@ defmodule Custyard.InboundRoutesTest do
       assert webhook.enabled == false
     end
 
-    test "disable_webhook/2 returns error when webhook does not exist", %{route: route} do
-      assert {:error, :not_found} = InboundRoutes.disable_webhook(route, :sender_matching)
+    test "disable_webhook/2 is idempotent when no webhook record exists (returns ok)", %{
+      route: route
+    } do
+      assert {:ok, nil} = InboundRoutes.disable_webhook(route, :sender_matching)
+    end
+
+    test "disable_webhook/2 is idempotent on repeated calls for same purpose", %{route: route} do
+      # First enable, then disable, then disable again — the second disable
+      # should succeed idempotently even though the webhook is already disabled.
+      {:ok, _} = InboundRoutes.enable_webhook(route, :enrichment)
+      {:ok, disabled} = InboundRoutes.disable_webhook(route, :enrichment)
+      assert disabled.enabled == false
+
+      # Disable again — should still succeed (idempotent update)
+      {:ok, still_disabled} = InboundRoutes.disable_webhook(route, :enrichment)
+      assert still_disabled.enabled == false
+      assert still_disabled.id == disabled.id
     end
 
     test "delete_webhook removes the webhook", %{route: route} do
@@ -474,6 +489,78 @@ defmodule Custyard.InboundRoutesTest do
       initial_ids = Enum.map(initial_webhooks, & &1.id) |> Enum.sort()
       later_ids = Enum.map(later_webhooks, & &1.id) |> Enum.sort()
       assert initial_ids == later_ids
+    end
+
+    test "route is returned successfully even when no webhooks were seeded" do
+      # Simulates the aftermath of a seeding failure: a general route exists
+      # in the DB but has zero webhook records. Calling find_or_create_general_route
+      # should still return {:ok, route} because seeding failures are non-fatal.
+      #
+      # The production code logs a warning on seeding failures (see
+      # seed_default_webhooks/1) but always returns the route from the `with`
+      # chain in find_or_create_general_route/2.
+      org = Factory.insert_organization()
+
+      # Create route directly (bypasses seed_default_webhooks entirely)
+      {:ok, bare_route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+
+      # Manually delete any webhooks that may have been auto-created
+      # to simulate a state where seeding failed completely
+      webhooks = InboundRoutes.list_webhooks_for_route(bare_route.id)
+
+      for wh <- webhooks do
+        InboundRoutes.delete_webhook(wh)
+      end
+
+      assert InboundRoutes.list_webhooks_for_route(bare_route.id) == []
+
+      # Now find_or_create_general_route should find the existing route and
+      # return it, regardless of missing webhooks
+      {:ok, found_route} = InboundRoutes.find_or_create_general_route(org.id)
+
+      assert found_route.id == bare_route.id
+      assert found_route.route_type == :general
+
+      # The route is returned successfully; webhooks may or may not be present
+      # depending on whether the "find" path re-seeds. The key guarantee is
+      # that {:ok, route} is returned, not an error.
+      assert %Custyard.InboundRoute{} = found_route
+    end
+
+    test "find_or_create_general_route returns {:ok, route} with partial webhook seeding" do
+      # Verifies the structural guarantee: even if only some webhook purposes
+      # were seeded (partial failure), the route is still returned successfully.
+      org = Factory.insert_organization()
+
+      # Create route directly and seed only one of the two default purposes
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general
+        })
+
+      # Remove all webhooks first
+      for wh <- InboundRoutes.list_webhooks_for_route(route.id) do
+        InboundRoutes.delete_webhook(wh)
+      end
+
+      # Manually seed only sender_matching (simulating notification seeding failure)
+      {:ok, _} = InboundRoutes.enable_webhook(route, :sender_matching)
+
+      webhooks = InboundRoutes.list_webhooks_for_route(route.id)
+      assert length(webhooks) == 1
+      assert hd(webhooks).purpose == :sender_matching
+
+      # find_or_create_general_route should return the route even with
+      # incomplete webhook seeding
+      {:ok, found_route} = InboundRoutes.find_or_create_general_route(org.id)
+
+      assert found_route.id == route.id
+      assert found_route.route_type == :general
     end
   end
 

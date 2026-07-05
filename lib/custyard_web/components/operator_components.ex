@@ -166,7 +166,7 @@ defmodule CustyardWeb.OperatorComponents do
   end
 
   @doc """
-  Renders a source badge (lettermint/zendesk/intercom/slack).
+  Renders a source badge (lettermint/zendesk/intercom/slack/email).
 
   ## Examples
 
@@ -181,6 +181,7 @@ defmodule CustyardWeb.OperatorComponents do
         :zendesk -> "text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950"
         :intercom -> "text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950"
         :slack -> "text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950"
+        :email -> "text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950"
         _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
       end
 
