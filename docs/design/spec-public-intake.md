@@ -1,7 +1,9 @@
 # Public Intake and Slug Claim
 
-**Version:** 0.1 — Supplements SDD v0.4 and the Prospect Conversation Loop spec
+**Version:** 0.2 — Supplements SDD v0.4 and the Prospect Conversation Loop spec
 **Date:** 2026-07-05
+
+**Revision note:** The two open questions from the prior draft are resolved — intake presentation modes (active/passive per CTA) and prospect-controlled reply notification — and folded into the requirements and [Resolved Decisions](#resolved-decisions).
 
 ## Summary
 
@@ -39,7 +41,10 @@ The existing rule "portal-sourced conversations are never anonymous" is unchange
 ### Intake Page
 
 - Each CTA links to a public intake page identified by an intake source key (e.g., waitlist, quote); the key determines the conversation's initial tags and copy variant.
-- The intake page presents one required field: the prospect's message. Submitting it creates a conversation.
+- An intake page has one of two presentation modes, selected by the operator per intake source key:
+  - **Active** — the full intake flow: message field, then the slug claim with its email anchor. Fits high-intent CTAs ("Join the Waitlist").
+  - **Passive** — a lighter page that answers a short set of operator-configured prospect questions, offers an email-only prompt, and links to the active flow. Fits low-intent CTAs ("Learn more," "Contact us for a quote").
+- In either mode, the message field is the only required field; submitting it creates a conversation. Viewing a passive page's informational content creates nothing.
 - The page carries the operator's branding and no platform branding beyond what the operator chooses to show.
 - Submission requires no authentication and no fields beyond the message.
 
@@ -72,6 +77,12 @@ The existing rule "portal-sourced conversations are never anonymous" is unchange
 - A resolved match links the conversation to the existing contact and organization. No match creates nothing automatically beyond recording the email on the conversation; contact and organization creation remain operator actions or conversion outcomes.
 - Once an email is captured, operator replies to the conversation are delivered to it through the platform-native outbound path (threading, delivery tracking, and failure semantics per the Prospect Conversation Loop spec).
 - The no-reply-channel flag clears when an email is captured.
+
+### Reply Notification
+
+- At email capture, the prospect chooses whether operator replies generate a notification email. The choice belongs to the prospect, not the platform; no notification is sent without opt-in.
+- A reply on a non-opted-in conversation is visible in the thread via the resume URL only. A prospect returning after any interval — including months later — sees the full thread; unprompted return is a supported, expected path, not a failure mode.
+- The prospect can change the notification choice from the conversation view at any time.
 
 ### Conversion
 
@@ -126,6 +137,8 @@ The existing rule "portal-sourced conversations are never anonymous" is unchange
 - A conversation with no captured email displays a no-reply-channel flag; capturing an email clears it.
 - After the operator converts the prospect to an organization, the confirmed slug serves as that organization's portal slug and the original conversation appears in the organization's history.
 - A burst of submissions from one address beyond the rate limit receives structured rejections and creates no further conversations.
+- A submission from a passive-mode page enters the attention queue with the same treatment as an active-mode submission; viewing the passive page's informational content creates no records.
+- An operator reply on a conversation without notification opt-in sends no email to the prospect; the same reply on an opted-in conversation delivers a notification.
 
 ## Rejected Alternatives
 
@@ -148,11 +161,8 @@ Recorded 2026-07-05, pending ratification.
 | Conversation addressing | Path-based under a single wildcard domain | Public CAs do not issue two-level wildcards; per-org certificates are avoidable cost |
 | No-email conversations | Kept in the queue, flagged; only the slug reservation expires | Open intake — the message may be valuable even when unreachable |
 | Claim expiry | Configurable, default 72 hours | Matches the disambiguation TTL precedent |
-
-## Open Questions
-
-- Claim-offer copy and weight per CTA: whether the quote path presents the full slug claim or a lighter email prompt is a conversion question; closing it requires operator judgment or live comparison.
-- Prospect notification on operator reply: whether a reply to a resumed-but-unclaimed conversation (email captured, no slug) sends a notification email or relies on the prospect returning; interacts with the portal-notification open question in SDD Appendix A.
+| Claim-offer weight per CTA | Two intake modes — active (full slug claim) and passive (informational + email prompt, linking to active) — selected by the operator per CTA | A full-claim-only flow over-asks low-intent prospects and loses them; the passive mode captures interest that would otherwise remain unstructured inbox email |
+| Prospect notification on operator reply | Prospect opt-in at email capture; never sent without consent | Consent stays with the prospect (anti-spam legislation); unprompted long-tail return is by design — the platform exists to get conversations out of email |
 
 ## Deferred Work
 
