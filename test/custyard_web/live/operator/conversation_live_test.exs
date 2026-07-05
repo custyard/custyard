@@ -4,6 +4,7 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
+  alias Custyard.Email.Outbound
   alias Custyard.{Conversations, OperatorAccount, Repo, Scoring}
 
   setup %{conn: conn} do
@@ -246,7 +247,7 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       # Resolve the delivery the async task would normally perform; the
       # message_updated broadcast must refresh the indicator in the view.
       [message] = Conversations.list_public_messages(conv.id)
-      {:ok, _} = Custyard.Email.Outbound.deliver(message)
+      {:ok, _} = Outbound.deliver(message)
 
       html = render(view)
       refute html =~ "delivery-status-pending"
@@ -264,7 +265,7 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       |> render_submit()
 
       [message] = Conversations.list_public_messages(conv.id)
-      {:error, :no_recipient_email, _} = Custyard.Email.Outbound.deliver(message)
+      {:error, :no_recipient_email, _} = Outbound.deliver(message)
 
       html = render(view)
       refute html =~ "delivery-status-pending"
