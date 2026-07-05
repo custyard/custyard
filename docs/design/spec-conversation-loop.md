@@ -3,6 +3,8 @@
 **Version:** 0.4 — Supplements SDD v0.3; supersedes SDD §5.2 MVP outbound behavior
 **Date:** 2026-07-05
 
+**Revision note:** The five open questions from the prior draft are resolved with the best-guess decisions recorded in [Resolved Decisions](#resolved-decisions), pending ratification. Their consequences are folded into the requirements below.
+
 ## Summary
 
 The end-to-end path from a prospect's first inbound contact to a tracked, threaded operator reply visible in the customer portal. Covers routed intake, sender identity resolution, platform-native outbound email, delivery-status tracking, and portal visibility. This loop is the platform's proof of value.
@@ -39,7 +41,13 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Outbound email carries threading headers: In-Reply-To names the most recent customer message; References lists all thread ancestors.
 - Delivery is asynchronous; composing and sending does not block the operator interface.
 - Sending a reply transitions the conversation state through validated state-machine transitions, not direct attribute writes.
-- The reply From address is a sending identity configured for the organization.
+- Each organization has a configured reply-from address; an outbound reply uses its conversation's organization reply-from address as the From identity.
+- A reply-from address is valid only if it corresponds to a verified sending domain registered with the email service.
+
+### Sender Verification
+
+- Setting or changing an organization's reply-from address validates it against the email service's verified sending domains; an unverified address is rejected at configuration time.
+- An outbound reply whose reply-from address is unverified is not dispatched. The message is recorded with delivery status `failed` and surfaced to the operator. Delivery failure is never silent.
 
 ### Delivery Tracking
 
@@ -47,7 +55,15 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Delivery status values: pending, sent, delivered, bounced, suppressed, failed.
 - A dedicated status webhook endpoint — separate from the inbound-message pipeline — receives delivery lifecycle events and updates the corresponding message, correlated by external message identifier.
 - Status events are authenticated with the same signature scheme as inbound webhooks.
+- Delivery statuses are ranked: pending precedes sent precedes delivered; bounced, suppressed, and failed are terminal. An incoming status event updates a message only if its rank exceeds the current status or it is a terminal state. Lower-ranked, equal, or duplicate events are ignored, so out-of-order event delivery does not regress a message's status.
 - Each outbound message in the conversation thread displays a delivery indicator; bounce and suppression states are visually distinct.
+
+### Bounce and Suppression Handling
+
+- A bounce or suppression event sets the associated contact's email-validity status (valid, bounced, suppressed).
+- A contact with a bounced or suppressed email-validity status is visibly flagged in the operator interface.
+- A bounce or suppression on an outbound reply raises operator attention through notification, the attention queue, or both.
+- An email-validity flag does not automatically block future sends to the contact; dispatch remains at operator discretion.
 
 ### Portal
 
@@ -93,6 +109,14 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Single self-hosted application; operator and portal surfaces are route partitions, not separate services.
 - The email service integration remains replaceable; LMTP and IMAP ingestion paths against operator-controlled mail infrastructure continue to function.
 
+## Data Model Impact
+
+- Delivery status is a mutable attribute of the outbound message record, not a separate entity. Message body and threading metadata remain fixed after insertion; only the status field advances.
+- Each delivery-status transition produces an append-only activity-log entry, preserving an immutable history of the delivery lifecycle without duplicating message content.
+- The organization record holds the reply-from address.
+- The contact record holds an email-validity status (valid, bounced, suppressed).
+- The delivery-status value set is `pending, sent, delivered, bounced, suppressed, failed`.
+
 ## Acceptance Criteria
 
 - A message delivered to an organization's route URL appears in the attention queue as a conversation linked to that organization and, when the sender is resolvable, to the correct contact.
@@ -103,20 +127,32 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - A bounced reply is visually distinguishable in the conversation thread.
 - A contact with portal access sees the operator's reply in the portal thread without email access.
 - An operator without the admin role cannot create, modify, or delete routes or settings.
+- Setting an organization reply-from address that is not a verified sending domain is rejected at configuration time.
+- Attempting to send a reply from an unverified address produces a message with status `failed`, visible to the operator, and no silently dropped mail.
+- A status event ranked at or below a message's current status leaves the status unchanged; a delivered event received before a sent event still results in delivered status.
+- A bounce event marks the recipient contact as bounced and flags the contact in the operator interface.
 
 ## Rejected Alternatives
 
 - CC/BCC capture of replies sent from the operator's personal mail client: portal-visible latency makes operator responses invisible to portal-active customers.
 - Extending the inbound dispatcher to carry status events: the dispatcher is coupled to inbound-message shape; a dedicated endpoint is cleaner.
 - Global uniqueness on contact email: per-organization composite uniqueness supports multi-organization contacts resolved via route context.
+- Reply-from address on the inbound route: one sending identity per organization matches the single-relationship model; route-level override is unnecessary until per-project routes exist.
+- Strict monotonic status transitions rejecting any regression: out-of-order webhook delivery would drop legitimate later events; rank-with-terminal-wins tolerates reordering.
+- Separate delivery-receipts table for status: message body is fixed while only status advances, so a mutable status column plus the activity log is sufficient.
+- Automatic send-blocking on a bounced contact: preserves operator discretion in the white-glove relationship; the flag informs rather than gates.
 
-## Open Questions
+## Resolved Decisions
 
-- **From-address modeling:** Neither the organization nor the inbound route stores the verified reply-from identity. Closing this requires a schema decision on where the sending identity lives.
-- **Verified-sender validation:** Behavior when the configured From address is not a verified sending domain is unspecified; the failure mode is silent SMTP rejection. Closing this requires a validation point (configuration time, send time, or both).
-- **Delivery-status transition ordering:** Whether regressive transitions (for example, sent → pending) are rejected is unspecified.
-- **Bounce-driven contact flagging:** Whether and how bounce or suppression events change a contact's email-validity status is unspecified.
-- **Message immutability:** Messages are immutable by design, while delivery status mutates over time. The resolution — mutable status column, separate delivery-receipts table, or event records — is unsettled.
+Best-guess resolutions of the prior open questions, recorded 2026-07-05, pending ratification.
+
+| Question                                | Decision                                                                                  | Load-bearing reason                                                                     |
+| --------------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Where the reply-from identity lives     | On the organization record                                                                | Routing context is org-scoped; one relationship, one sending address                    |
+| Verified-sender validation point        | Configuration time (reject unverified) and send time (fail closed)                        | Prevents silent SMTP rejection at both the earliest and last opportunity                |
+| Delivery-status transition ordering     | Rank-based; higher rank or terminal state wins, lower or equal ignored                    | Tolerates out-of-order status webhooks without regressing state                         |
+| Bounce or suppression effect on contact | Sets a contact email-validity flag; surfaces and notifies; does not auto-block sends      | Bounces are operationally critical to see, but send decisions stay with the operator    |
+| Message immutability vs. mutable status | Mutable status column on the message; activity log holds the immutable transition history | Body stays fixed; status is inherently lifecycle state; append-only log preserves audit |
 
 ## Deferred Work
 
