@@ -138,6 +138,35 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert reply.in_reply_to == "<customer-msg-123@example.com>"
     end
 
+    test "reply threads to the latest of multiple customer messages", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<older-msg@example.com>",
+        body: "First question"
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<newer-msg@example.com>",
+        body: "Follow-up question"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Answering the follow-up")
+      |> render_submit()
+
+      messages = Conversations.list_public_messages(conv.id)
+      reply = Enum.find(messages, &(&1.source == :operator))
+      assert reply.in_reply_to == "<newer-msg@example.com>"
+    end
+
     test "reply message in_reply_to is nil when no prior customer messages", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)

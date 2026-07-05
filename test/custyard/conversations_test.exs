@@ -588,6 +588,48 @@ defmodule Custyard.ConversationsTest do
       assert message.in_reply_to == "<inbound-123@customer.com>"
     end
 
+    test "threads in_reply_to to the latest customer message when messages were preloaded ascending",
+         %{conversation: conv} do
+      # Backdate the setup message so the newer one wins on inserted_at
+      backdated =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(m in Custyard.Message, where: m.conversation_id == ^conv.id),
+        set: [inserted_at: backdated]
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<inbound-456@customer.com>",
+        body: "Any update?"
+      )
+
+      # get_with_messages/1 preloads messages ascending — the same shape the
+      # LiveView passes in. Regression: the already-loaded association must
+      # not decide which message gets threaded.
+      preloaded = Conversations.get_with_messages(conv.id)
+
+      {:ok, message} = Conversations.send_reply(preloaded, "Reply to the follow-up")
+
+      assert message.in_reply_to == "<inbound-456@customer.com>"
+    end
+
+    test "breaks inserted_at ties for in_reply_to by message id", %{conversation: conv} do
+      # Inserted within the same second as the setup message
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<inbound-tie@customer.com>",
+        body: "Second message, same second"
+      )
+
+      {:ok, message} = Conversations.send_reply(conv, "Tiebreak reply")
+
+      assert message.in_reply_to == "<inbound-tie@customer.com>"
+    end
+
     test "generates a unique outbound message_id", %{conversation: conv} do
       {:ok, message} = Conversations.send_reply(conv, "Reply one")
 

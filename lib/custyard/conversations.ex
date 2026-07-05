@@ -379,12 +379,7 @@ defmodule Custyard.Conversations do
 
   """
   def send_reply(conversation, body, opts \\ []) do
-    conversation =
-      Repo.preload(conversation, [
-        :contact,
-        :organization,
-        messages: from(m in Message, order_by: [desc: m.inserted_at])
-      ])
+    conversation = Repo.preload(conversation, [:contact, :organization])
 
     Repo.transaction(fn ->
       with {:ok, message} <- insert_reply_message(conversation, body, opts),
@@ -432,7 +427,7 @@ defmodule Custyard.Conversations do
 
   # Build and insert the operator reply message with email metadata.
   defp insert_reply_message(conversation, body, opts) do
-    last_customer_msg = find_last_customer_message(conversation.messages)
+    last_customer_msg = find_last_customer_message(conversation.id)
 
     attrs = %{
       source: :operator,
@@ -494,10 +489,18 @@ defmodule Custyard.Conversations do
   end
 
   # Find the most recent non-operator message to thread In-Reply-To.
-  defp find_last_customer_message(messages) do
-    Enum.find(messages, fn msg ->
-      msg.source != :operator and not msg.is_internal_note
-    end)
+  # Queried directly rather than through the caller's (possibly stale,
+  # possibly ascending-ordered) preloaded messages; the id ordering breaks
+  # ties between rows sharing the same second-precision inserted_at.
+  defp find_last_customer_message(conversation_id) do
+    from(m in Message,
+      where: m.conversation_id == ^conversation_id,
+      where: m.source != :operator,
+      where: m.is_internal_note == false,
+      order_by: [desc: m.inserted_at, desc: m.id],
+      limit: 1
+    )
+    |> Repo.one()
   end
 
   # Determine the from address for outbound email.
