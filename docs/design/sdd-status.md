@@ -1,4 +1,4 @@
-# SDD v0.3 Implementation Status
+# SDD v0.4 Implementation Status
 
 Planning & Implementation State
 
@@ -6,10 +6,10 @@ Planning & Implementation State
 
 Planning Artifacts:
 
-- docs/design/sdd.md - Complete SDD (v0.3) with US-1 through US-11 specs, technical architecture, data model, and activation flow
-- planning/operator-wireframe-v0.3.jsx - Interactive operator interface prototype
-- planning/portal-wireframe-v0.3.jsx - Client portal prototype
-- planning/\*.png (6 files) - Implementation screenshots from Mar 22
+- docs/design/sdd.md - Complete SDD (v0.4) with US-1 through US-11 specs, technical architecture, data model, and activation flow
+- wireframes/operator-wireframe-v0.3.jsx - Interactive operator interface prototype
+- wireframes/portal-wireframe-v0.3.jsx - Client portal prototype
+- wireframes/\*.png (6 files) - Implementation screenshots from Mar 22
 
 Core Implementation:
 
@@ -69,7 +69,7 @@ Security:
 | Cross-Organization Isolation | All portal queries filter by org_id from authenticated session                                            | Done    |
 | Email as Untrusted Input     | HTML stripped to plain text, Phoenix template escaping prevents XSS                                       | Done    |
 | Data at Rest Encryption      | Not implemented — using SQLite for MVP                                                                    | Not Yet |
-| Outbound Email               | Not implemented — platform-native outbound is now in the v0.4 MVP design (SDD §5.2); tracked in #26/#25    | Not Yet |
+| Outbound Email               | Platform-native outbound implemented (#26 merged): operator replies compose in-platform, send threaded via Lettermint, tracked send-side (pending/sent/failed). Provider status webhook (bounced/delivered) still open in #25. | Partial |
 
 ### Data Model (SDD §4)
 
@@ -77,7 +77,7 @@ Security:
 | ----------------- | ---------------------------------------------------------------------------------------------- | ------- |
 | Organization      | name, domain, tier, token, branding fields, custom_domain. Unique indices on token/domain.     | Done    |
 | Contact           | email, name, is_admin. Composite unique (email, org_id). No portal account yet.                | Done    |
-| Conversation      | Full state model, urgency, cached_score, snoozed_until, last_neglect_notification.             | Done    |
+| Conversation      | Full state model, urgency, cached_score, snoozed_until, last_neglect_notification. No tags substrate (SDD §4.1 freeform labels). | Partial |
 | Message           | source, sender_email, body, is_internal_note, message_id, in_reply_to. No updated_at.          | Done    |
 | Attachment        | Upload plug exists (Plug.Static for /uploads/), but no Attachment schema/migration per SDD §4. | Partial |
 | Task              | title, state, portal_visible, due_at. FK to conversation and project.                          | Done    |
@@ -228,7 +228,7 @@ Security measures in place:
 
 1. [#10](https://github.com/onetimesecret/custyard/issues/10) **Email Infrastructure** - LMTP/IMAP code exists but needs MTA hookup for real deployment
 2. [#11](https://github.com/onetimesecret/custyard/issues/11) **Production Deployment** - Containerfile exists but untested
-3. [#12](https://github.com/onetimesecret/custyard/issues/12) **Team Support** - Multi-operator roles and permissions
+3. [#12](https://github.com/onetimesecret/custyard/issues/12) **Team Support** - Role schema (super_admin/admin/agent) and org scoping exist; team management UI and full role enforcement pending
 4. [#13](https://github.com/onetimesecret/custyard/issues/13) **Webhook Ingestion** - Controller exists, needs full integration
 5. [#14](https://github.com/onetimesecret/custyard/issues/14) **Encryption at Rest** - Architecture defined, using SQLite for MVP
 
@@ -237,11 +237,11 @@ Security measures in place:
 - **Portal Account entity** (SDD §4.1) - Per-contact authentication with Rodauth. Currently using org-level token auth instead of individual contact accounts.
 - **Activity Log entity** (SDD §4.1) - Append-only log for organization timeline and audit trail. Organization timeline view exists but without dedicated log table.
 - **Attachment entity** (SDD §4.1) - File upload infrastructure exists but no Attachment schema linked to Message.
-- **Outbound Email** (SDD §5.2) - Platform does not yet send email. Platform-native outbound is in the v0.4 MVP design (composed in-platform, sent as threaded email, delivery-tracked); implementation tracked in #26/#25.
+- **Outbound delivery-status webhook** (SDD §5.2) - Platform-native outbound landed with #26 (composed in-platform, sent as threaded email, send-side delivery tracking). The provider-side status webhook (delivered/bounced) remains open in #25; nothing sets `delivery_status: :bounced` today.
 - **Task effort estimate / description fields** (SDD §4.1) - Task schema has title, state, due_at, portal_visible but not effort_estimate or description.
 - **Organization notes and custom fields** (SDD §4.1) - Not on Organization schema.
 - **Organization-scoped search** (SDD US-9) - No search implementation.
-- **Tag filtering in attention queue** (SDD US-5) - Tags exist on conversations but no filter UI in queue.
+- **Tag filtering in attention queue** (SDD US-5) - Conversations have no tags substrate (tags exist only on projects) and the queue has no filter UI.
 
 ## Recent Commits (Last 10)
 

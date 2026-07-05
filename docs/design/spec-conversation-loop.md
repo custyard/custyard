@@ -1,6 +1,6 @@
 # Prospect Conversation Loop
 
-**Version:** 0.4 — Supplements SDD v0.3; supersedes SDD §5.2 MVP outbound behavior
+**Version:** 0.4 — Supplements SDD v0.4; supersedes SDD §5.2 MVP outbound behavior
 **Date:** 2026-07-05
 
 **Revision note:** The five open questions from the prior draft are resolved with the best-guess decisions recorded in [Resolved Decisions](#resolved-decisions), pending ratification. Their consequences are folded into the requirements below.
@@ -95,7 +95,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 
 - Per-project routes and the disambiguation DM flow (designed in the Design Decisions document; not required for this loop).
 - Per-contact portal authentication accounts (portal access via organization token suffices for this loop).
-- Automatic contact-validity management from bounce events (see Open Questions).
+- Automatic contact-validity management from bounce events (see Resolved Decisions).
 - Attachment handling on outbound replies.
 - Conversation merging.
 
