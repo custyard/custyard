@@ -68,18 +68,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           {:ok, %Conversation{}} ->
             # Transition succeeded - this operator was first
             Scoring.calculate_and_cache(conversation.id)
-
-            # Broadcast the state change
-            Phoenix.PubSub.broadcast(
-              Custyard.PubSub,
-              "conversations",
-              {:conversation_updated, conversation.id}
-            )
-
-            Conversations.broadcast_to_org(
-              conversation.organization_id,
-              {:conversation_updated, conversation.id}
-            )
+            broadcast_conversation_update(conversation.id, conversation.organization_id)
 
             # Reload with all associations (messages, etc.)
             load_conversation(id)
@@ -193,17 +182,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
            }) do
         {:ok, _} ->
           Scoring.calculate_and_cache(conversation.id)
-
-          Phoenix.PubSub.broadcast(
-            Custyard.PubSub,
-            "conversations",
-            {:conversation_updated, conversation.id}
-          )
-
-          Conversations.broadcast_to_org(
-            conversation.organization_id,
-            {:conversation_updated, conversation.id}
-          )
+          broadcast_conversation_update(conversation.id, conversation.organization_id)
 
           {:noreply, reload_conversation(socket)}
 
@@ -386,6 +365,11 @@ defmodule CustyardWeb.Operator.ConversationLive do
   # Catch-all for unexpected PubSub messages to prevent LiveView crashes
   def handle_info(_msg, socket) do
     {:noreply, socket}
+  end
+
+  defp broadcast_conversation_update(id, organization_id) do
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+    Conversations.broadcast_to_org(organization_id, {:conversation_updated, id})
   end
 
   defp get_scoped_task!(socket, task_id) when is_binary(task_id) do
