@@ -57,4 +57,9 @@ defmodule Custyard.EmailAddress do
   def normalize(email) when is_binary(email) do
     email |> String.trim() |> String.downcase()
   end
+
+  # Non-binary input (e.g. a forged list/map param) passes through
+  # unchanged so cast/validate_required surfaces an ordinary invalid-type
+  # changeset error instead of raising here.
+  def normalize(email), do: email
 end

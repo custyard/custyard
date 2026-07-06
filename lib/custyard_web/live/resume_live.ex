@@ -308,12 +308,12 @@ defmodule CustyardWeb.ResumeLive do
       {:allow, _count} ->
         case Slugs.rotate_confirmation_token(claim) do
           {:ok, slug, confirmation_token} ->
-            send_confirmation_email(socket, slug, confirmation_token)
+            send_result = send_confirmation_email(socket, slug, confirmation_token)
 
             {:noreply,
              socket
              |> assign(:slug_claim, slug)
-             |> put_flash(:info, "Confirmation email sent.")}
+             |> put_resend_flash(send_result)}
 
           # Confirmed or expired underneath us — refresh the panel.
           {:error, :invalid} ->
@@ -325,6 +325,21 @@ defmodule CustyardWeb.ResumeLive do
              )}
         end
     end
+  end
+
+  # Same "honest flash vs false success" discipline as put_claim_flash/2:
+  # the token already rotated either way, so only the flash differs on
+  # whether an email actually went out (or was queued).
+  defp put_resend_flash(socket, {:ok, _delivered_or_queued}) do
+    put_flash(socket, :info, "Confirmation email sent.")
+  end
+
+  defp put_resend_flash(socket, {:error, _reason}) do
+    put_flash(
+      socket,
+      :error,
+      "Could not send the confirmation email right now. Please try again."
+    )
   end
 
   defp toggle_notifications(socket, notify?) do
