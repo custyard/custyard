@@ -184,9 +184,6 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
   defp parse_tier(tier) when tier in @valid_tiers, do: String.to_existing_atom(tier)
   defp parse_tier(_), do: :standard
 
-  defp empty_to_nil(""), do: nil
-  defp empty_to_nil(value), do: value
-
   defp maybe_default_email_domain(%{domain: domain} = form_data) when domain in ["", nil] do
     case registrable_domain(form_data.custom_domain) do
       nil -> form_data

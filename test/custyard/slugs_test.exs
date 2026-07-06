@@ -290,7 +290,8 @@ defmodule Custyard.SlugsTest do
       {:ok, _confirmed} = Slugs.confirm(token)
       org = insert_organization()
 
-      assert {:ok, promoted} = Slugs.promote(conversation, org)
+      assert {:ok, :provisioned} = Slugs.promote(conversation, org)
+      promoted = Repo.get_by!(Slug, conversation_id: conversation.id)
       assert promoted.status == :provisioned
       assert promoted.organization_id == org.id
     end

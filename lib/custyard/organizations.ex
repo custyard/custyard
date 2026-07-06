@@ -12,6 +12,7 @@ defmodule Custyard.Organizations do
     Conversations,
     InboundRoutes,
     Organization,
+    OperatorAccount,
     Prospect,
     Repo,
     Scoring,
@@ -300,19 +301,23 @@ defmodule Custyard.Organizations do
   Convert an unlinked public-intake conversation into a brand-new
   organization. Caller-gated: mirrors `create_organization/1`, which enforces
   no role check of its own — the LiveView checks
-  `Authorization.can_create_organization?/1` before calling this.
+  `Authorization.can_create_organization?/1` before calling this. `operator`
+  is recorded on the `:prospect_converted` audit event, not used for
+  authorization.
 
   Step 1: `create_organization/1` unchanged — a Lettermint provisioning
   failure already compensates by deleting the org before this function ever
   sees it.
 
-  Step 2, one transaction: race-safe conditional promotion of the
-  conversation's confirmed slug claim (`Slugs.promote/2` — `{:error,
-  :not_found}` is not a failure, a prospect can convert without ever having
-  claimed a slug), a contact created from the prospect's captured email when
-  present, then a conditional link (`WHERE id AND organization_id IS NULL`)
-  so a conversation converted by a concurrent call is never silently
-  re-linked. `source` stays `:public_intake` as provenance.
+  Step 2, one transaction: the prospect is read inside the transaction (not
+  before it) so a concurrent email capture can't race the read; race-safe
+  conditional promotion of the conversation's confirmed slug claim
+  (`Slugs.promote/2` — `{:error, :not_found}` is not a failure, a prospect
+  can convert without ever having claimed a slug), a contact created from
+  the prospect's captured email when present, then a conditional link
+  (`WHERE id AND organization_id IS NULL`) so a conversation converted by a
+  concurrent call is never silently re-linked. `source` stays
+  `:public_intake` as provenance.
 
   Any step-2 failure — the conditional link losing its race, or a real
   error — compensates by deleting the organization: it is conversation-free
@@ -328,25 +333,27 @@ defmodule Custyard.Organizations do
   """
   def convert_prospect(
         %Conversation{organization_id: nil, source: :public_intake} = conversation,
-        org_attrs
+        org_attrs,
+        %OperatorAccount{} = operator
       ) do
     case create_organization(org_attrs) do
       {:ok, organization} ->
         conversation
         |> do_convert(organization)
-        |> handle_convert_result(organization)
+        |> handle_convert_result(organization, operator)
 
       {:error, changeset} ->
         {:error, changeset}
     end
   end
 
-  def convert_prospect(%Conversation{}, _org_attrs), do: {:error, :not_convertible}
+  def convert_prospect(%Conversation{}, _org_attrs, %OperatorAccount{}),
+    do: {:error, :not_convertible}
 
   defp do_convert(conversation, organization) do
-    prospect = Repo.get_by(Prospect, conversation_id: conversation.id)
-
     Repo.transaction(fn ->
+      prospect = Repo.get_by(Prospect, conversation_id: conversation.id)
+
       case Slugs.promote(conversation, organization) do
         {:ok, _slug} -> :ok
         {:error, :not_found} -> :ok
@@ -387,7 +394,7 @@ defmodule Custyard.Organizations do
   defp maybe_put_contact(set, nil), do: set
   defp maybe_put_contact(set, %Contact{id: id}), do: Keyword.put(set, :contact_id, id)
 
-  defp handle_convert_result({:ok, conversation}, organization) do
+  defp handle_convert_result({:ok, conversation}, organization, operator) do
     Scoring.calculate_and_cache(conversation.id)
 
     Phoenix.PubSub.broadcast(
@@ -401,26 +408,29 @@ defmodule Custyard.Organizations do
       {:conversation_updated, conversation.id}
     )
 
-    record_conversion_audit(conversation, organization)
+    record_conversion_audit(conversation, organization, operator)
 
     {:ok, conversation}
   end
 
-  defp handle_convert_result({:error, reason}, organization) do
+  defp handle_convert_result({:error, reason}, organization, _operator) do
     delete_organization(organization)
     {:error, reason}
   end
 
   # Append-only audit trail for the conversion (AuditEvent.create pattern,
-  # same as the slug-release audit write). A logging failure never blocks
-  # the conversion — it already committed.
-  defp record_conversion_audit(conversation, organization) do
+  # same as the slug-release audit write, including operator attribution).
+  # A logging failure never blocks the conversion — it already committed.
+  # organization_id is deliberately omitted from the payload: it is already
+  # the row's schema column.
+  defp record_conversion_audit(conversation, organization, operator) do
     case AuditEvent.create(%{
            event_type: :prospect_converted,
            source: "operator",
            payload: %{
-             "organization_id" => organization.id,
-             "organization_name" => organization.name
+             "organization_name" => organization.name,
+             "operator_id" => operator.id,
+             "operator_email" => operator.email
            },
            conversation_id: conversation.id,
            organization_id: organization.id

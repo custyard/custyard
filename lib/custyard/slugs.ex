@@ -236,6 +236,10 @@ defmodule Custyard.Slugs do
   `{:error, :not_found}`, which the caller treats as "nothing to promote,"
   not a conversion failure: a prospect can convert without ever having
   claimed a slug.
+
+  Returns `{:ok, :provisioned}` rather than the updated row — the sole
+  caller only needs to know whether the promotion happened, so this skips
+  the extra `SELECT` a re-fetch would cost on every conversion.
   """
   def promote(%Conversation{id: conversation_id}, %Organization{id: organization_id}) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -247,7 +251,7 @@ defmodule Custyard.Slugs do
       )
 
     case count do
-      1 -> {:ok, Repo.get_by!(Slug, conversation_id: conversation_id)}
+      1 -> {:ok, :provisioned}
       0 -> {:error, :not_found}
     end
   end

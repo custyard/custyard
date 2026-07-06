@@ -264,14 +264,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   def handle_event("convert_prospect", params, socket) do
-    if Authorization.can_create_organization?(socket.assigns.current_operator) do
+    operator = socket.assigns.current_operator
+
+    if Authorization.can_create_organization?(operator) do
       attrs = %{
         name: Map.get(params, "name", ""),
         domain: empty_to_nil(Map.get(params, "domain", ""))
       }
 
       socket.assigns.conversation
-      |> Organizations.convert_prospect(attrs)
+      |> Organizations.convert_prospect(attrs, operator)
       |> handle_convert_result(socket)
     else
       {:noreply, put_flash(socket, :error, "Only super admins can convert prospects")}
@@ -480,9 +482,6 @@ defmodule CustyardWeb.Operator.ConversationLive do
       _ -> ""
     end
   end
-
-  defp empty_to_nil(""), do: nil
-  defp empty_to_nil(value), do: value
 
   defp get_scoped_task!(socket, task_id) when is_binary(task_id) do
     case Integer.parse(task_id) do
