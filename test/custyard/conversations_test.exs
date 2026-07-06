@@ -1236,6 +1236,22 @@ defmodule Custyard.ConversationsTest do
       assert Repo.get(Custyard.Conversation, conversation.id) == nil
     end
 
+    test "purges resolved conversations with a NULL source column at the standard bound" do
+      # The DB column has no NOT NULL constraint (only the Ecto schema
+      # default), so a legacy row or a bypass-the-schema insert can leave
+      # source NULL. Force it directly, bypassing the changeset default.
+      conversation = insert_conversation(state: :resolved)
+      backdate_updated_at(conversation, 91)
+
+      Repo.update_all(
+        from(c in Custyard.Conversation, where: c.id == ^conversation.id),
+        set: [source: nil]
+      )
+
+      assert Conversations.cleanup_resolved_conversations(90) == 1
+      assert Repo.get(Custyard.Conversation, conversation.id) == nil
+    end
+
     test "dry run counts the retention split without deleting" do
       org = insert_organization()
       non_intake = insert_conversation(organization_id: org.id, state: :resolved)

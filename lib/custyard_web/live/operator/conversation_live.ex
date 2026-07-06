@@ -125,17 +125,23 @@ defmodule CustyardWeb.Operator.ConversationLive do
     operator = socket.assigns.current_operator
 
     case Conversations.send_reply(conversation, body, operator_email: operator.email) do
-      {:ok, _message} ->
+      {:ok, message} ->
         socket = socket |> assign(:reply_text, "") |> reload_conversation()
 
         socket =
           cond do
+            # Ground truth for this message: :withheld is only ever set by the
+            # public-intake consent gate at send time, so this can't be fooled
+            # by a consent flip that happens before the reload below runs.
+            message.delivery_status == :withheld ->
+              socket
+
             socket.assigns.reply_will_email? ->
               socket
 
             # The reply-box advisory already explains the withheld delivery
             # for public-intake conversations; no flash needed.
-            conversation.source == :public_intake ->
+            socket.assigns.conversation.source == :public_intake ->
               socket
 
             true ->

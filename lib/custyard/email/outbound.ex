@@ -163,7 +163,7 @@ defmodule Custyard.Email.Outbound do
     name =
       case conversation.organization do
         %{name: name} when is_binary(name) and name != "" -> name
-        _ -> branding_name()
+        _ -> "Custyard"
       end
 
     header_safe_name(name)
@@ -171,8 +171,8 @@ defmodule Custyard.Email.Outbound do
 
   defp header_safe_name(name), do: name |> sanitize_header_text() |> quote_display_name()
 
-  # Instance branding display name for prospect-facing and nil-org mail;
-  # "Custyard" when no branding name is configured.
+  # Instance branding display name for public-intake mail; "Custyard" when no
+  # branding name is configured.
   defp branding_name do
     case Settings.get_branding() do
       %{name: name} when is_binary(name) and name != "" -> name
