@@ -486,6 +486,58 @@ defmodule Custyard.Email.OutboundTest do
       end)
     end
 
+    test "sanitizes CRLF and quotes RFC specials in a hostile branding name" do
+      # Settings.valid_branding_entry? only checks non-blank + max length, so
+      # a stored branding name can carry commas and CRLF — header_safe_name
+      # is the sole injection defense on this branch.
+      {:ok, _settings} = Settings.update_branding(%{name: "Acme, Inc.\r\nX-Evil: 1"})
+
+      {_conversation, _prospect, message} =
+        intake_message_fixture(email: "prospect@example.com", notify_on_reply: true)
+
+      {:ok, _updated} = Outbound.deliver(message)
+
+      assert_email_sent(fn email ->
+        # CRLF collapses to a single space (header-injection defense) and the
+        # comma forces RFC 5322 quoted-string wrapping.
+        assert email.from == {~s("Acme, Inc. X-Evil: 1"), "support@custyard.local"}
+      end)
+    end
+
+    test "a second operator reply threads off the prospect's web reply" do
+      conversation = insert_conversation(source: :public_intake, subject: "Thread check")
+
+      insert_prospect(
+        conversation_id: conversation.id,
+        email: "prospect@example.com",
+        notify_on_reply: true
+      )
+
+      {:ok, first} = Conversations.send_reply(conversation, "First operator reply")
+
+      {:ok, %{message: prospect_msg}} =
+        Intake.add_prospect_reply(conversation, "Prospect web reply")
+
+      # Prospect web messages get a synthetic RFC 5322 Message-ID at insert
+      # so operator replies can thread off them.
+      assert prospect_msg.message_id =~ ~r/^<.+@.+>$/
+
+      {:ok, second} = Conversations.send_reply(conversation, "Second operator reply")
+      assert second.in_reply_to == prospect_msg.message_id
+
+      {:ok, _delivered} = Outbound.deliver(second)
+
+      prospect_message_id = prospect_msg.message_id
+      first_message_id = first.message_id
+
+      assert_email_sent(fn email ->
+        headers = Map.new(email.headers)
+        assert headers["In-Reply-To"] == prospect_message_id
+        assert headers["References"] =~ prospect_message_id
+        assert headers["References"] =~ first_message_id
+      end)
+    end
+
     test "withholds delivery without prospect opt-in and sends nothing" do
       {_conversation, _prospect, message} =
         intake_message_fixture(email: "prospect@example.com", notify_on_reply: false)

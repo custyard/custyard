@@ -335,6 +335,19 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       refute html =~ "operator-reply-consent-advisory"
     end
 
+    test "advisory is absent when no email was captured", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+
+      # Prospect row without a captured email: there is no opt-in to speak
+      # of, so the opt-in advisory would misstate the cause — the "no reply
+      # channel" state is conveyed by the reply-channel badge instead.
+      insert_prospect(conversation_id: conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute html =~ "operator-reply-consent-advisory"
+    end
+
     test "advisory is absent on non-intake conversations", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)

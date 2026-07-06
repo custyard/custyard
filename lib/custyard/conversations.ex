@@ -371,6 +371,41 @@ defmodule Custyard.Conversations do
   defp prospect_email(_prospect), do: nil
 
   @doc """
+  Classify how an operator reply on this conversation would be delivered.
+
+  Returns one of:
+
+    * `:contact` — the linked contact has an email; delivers unconditionally
+      (established-customer path)
+    * `:prospect_opted_in` — a prospect email was captured with the
+      reply-notification opt-in; delivers
+    * `:prospect_no_consent` — a prospect email was captured but the prospect
+      has not opted into email replies; the consent-advisory state
+    * `:none` — no recipient at all (no email captured, or resume access
+      revoked)
+
+  The operator UI keys the consent advisory on `:prospect_no_consent`
+  specifically — the `:none` states are conveyed by the reply-channel badge,
+  not the opt-in wording.
+  """
+  def reply_delivery(%Conversation{} = conversation) do
+    conversation = preload_reply_channel_assocs(conversation)
+
+    case reply_channel(conversation) do
+      {:contact, _email} ->
+        :contact
+
+      {:prospect, _email} ->
+        if conversation.prospect.notify_on_reply,
+          do: :prospect_opted_in,
+          else: :prospect_no_consent
+
+      :none ->
+        :none
+    end
+  end
+
+  @doc """
   Whether an operator reply on this conversation will be emailed.
 
   Contact recipients deliver unconditionally — the established-customer path,
@@ -379,19 +414,14 @@ defmodule Custyard.Conversations do
   reply-notification opt-in; `reply_channel/1` already treats revoked
   prospects as having no channel. `:none` means there is no recipient at all.
 
-  `send_reply/3` uses this as the primary consent gate: a non-deliverable
-  reply is persisted with `delivery_status: :withheld` and never handed to
-  delivery. `Custyard.Email.Outbound.deliver/1` independently re-checks
-  (defense in depth), so no caller can bypass the policy.
+  `send_reply/3` uses this as the primary consent gate for public-intake
+  conversations: a non-deliverable public-intake reply is persisted with
+  `delivery_status: :withheld` and never handed to delivery.
+  `Custyard.Email.Outbound.deliver/1` independently re-checks (defense in
+  depth), so no caller can bypass the policy.
   """
   def reply_deliverable?(%Conversation{} = conversation) do
-    conversation = preload_reply_channel_assocs(conversation)
-
-    case reply_channel(conversation) do
-      {:contact, _email} -> true
-      {:prospect, _email} -> conversation.prospect.notify_on_reply
-      :none -> false
-    end
+    reply_delivery(conversation) in [:contact, :prospect_opted_in]
   end
 
   @doc """
@@ -457,12 +487,17 @@ defmodule Custyard.Conversations do
   The entire operation runs inside a transaction so the message and conversation
   update succeed or fail atomically.
 
-  Consent gate (primary layer): the recipient class is computed before the
-  insert via `reply_deliverable?/1`. When the reply channel is the prospect
-  email without the prospect's reply-notification opt-in, or there is no
-  recipient at all, the reply is persisted with `delivery_status: :withheld`
-  and delivery is skipped entirely — it reaches the prospect only via the
-  resume link. Contact recipients deliver unconditionally.
+  Consent gate (primary layer, public-intake only): the recipient class is
+  computed before the insert via `reply_deliverable?/1`, reading committed
+  consent state (associations are force-preloaded, so a stale prospect on the
+  caller's struct cannot mask a consent flip). When a public-intake
+  conversation's reply channel is the prospect email without the prospect's
+  reply-notification opt-in, or there is no recipient at all, the reply is
+  persisted with `delivery_status: :withheld` and delivery is skipped
+  entirely — it reaches the prospect only via the resume link. Non-intake
+  replies always go to delivery, so a missing recipient surfaces as the
+  visible `:pending` -> `:failed` path rather than a silent withhold.
+  Contact recipients deliver unconditionally.
 
   ## Options
 
@@ -481,11 +516,22 @@ defmodule Custyard.Conversations do
 
   """
   def send_reply(conversation, body, opts \\ []) do
-    conversation = Repo.preload(conversation, [:contact, :organization, :prospect])
+    # force: true — callers (ConversationLive) pass conversations whose
+    # prospect was preloaded at page load; a plain preload skips loaded
+    # associations, and the primary consent gate must see committed consent
+    # state, not the socket's snapshot.
+    conversation =
+      Repo.preload(conversation, [:contact, :organization, :prospect], force: true)
+
     deliverable? = reply_deliverable?(conversation)
 
+    # :withheld is reserved for the public-intake consent gate. A non-intake
+    # reply with no recipient still goes to delivery so it lands on the
+    # visible :pending -> :failed path instead of a false calm.
+    attempt_delivery? = deliverable? or conversation.source != :public_intake
+
     Repo.transaction(fn ->
-      with {:ok, message} <- insert_reply_message(conversation, body, deliverable?, opts),
+      with {:ok, message} <- insert_reply_message(conversation, body, attempt_delivery?, opts),
            {:ok, _conv} <- update_conversation_after_reply(conversation) do
         # Side effects outside the transaction boundary aren't critical —
         # a failed broadcast doesn't warrant rolling back the message.
@@ -503,7 +549,7 @@ defmodule Custyard.Conversations do
         # The message is already persisted with delivery_status: :pending;
         # Email.Outbound.deliver/1 will update it to :sent or :failed.
         # A :withheld reply is never handed to delivery.
-        if deliverable?, do: deliver_async(message)
+        if attempt_delivery?, do: deliver_async(message)
 
         {:ok, message}
 
@@ -530,7 +576,7 @@ defmodule Custyard.Conversations do
   end
 
   # Build and insert the operator reply message with email metadata.
-  defp insert_reply_message(conversation, body, deliverable?, opts) do
+  defp insert_reply_message(conversation, body, attempt_delivery?, opts) do
     last_customer_msg = find_last_customer_message(conversation.id)
 
     attrs = %{
@@ -539,9 +585,10 @@ defmodule Custyard.Conversations do
       body: body,
       is_internal_note: false,
       conversation_id: conversation.id,
-      # Consent gate, primary layer: no consenting recipient -> :withheld
-      # (see reply_deliverable?/1); delivery is skipped by the caller.
-      delivery_status: if(deliverable?, do: :pending, else: :withheld),
+      # Consent gate, primary layer: a public-intake reply with no consenting
+      # recipient -> :withheld (see send_reply/3); delivery is skipped by the
+      # caller. Non-intake replies always start :pending.
+      delivery_status: if(attempt_delivery?, do: :pending, else: :withheld),
       message_id: generate_outbound_message_id(conversation),
       in_reply_to: last_customer_msg && last_customer_msg.message_id,
       sender_email: resolve_sender_email(conversation, opts)

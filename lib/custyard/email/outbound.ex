@@ -28,10 +28,12 @@ defmodule Custyard.Email.Outbound do
   @doc """
   Deliver an outbound email for a message.
 
-  The message is preloaded with the conversation's contact, organization,
-  and prospect. Recipient resolution falls back contact.email ->
-  prospect.email -> no recipient; the prospect channel additionally requires
-  the prospect's reply-notification opt-in (consent gate, secondary layer —
+  The message's conversation, contact, organization, and prospect are
+  force-preloaded, so the consent re-check always reads current DB state even
+  when a caller passes a message with stale associations already loaded.
+  Recipient resolution falls back contact.email -> prospect.email -> no
+  recipient; the prospect channel additionally requires the prospect's
+  reply-notification opt-in (consent gate, secondary layer —
   `Conversations.send_reply/3` is the primary). A prospect-channel recipient
   without opt-in marks the message `:withheld` and returns
   `{:error, :no_consent, updated_message}`, so no caller can bypass policy.
@@ -40,7 +42,12 @@ defmodule Custyard.Email.Outbound do
   `{:error, reason, updated_message}` on failure.
   """
   def deliver(%Message{} = message) do
-    message = Repo.preload(message, conversation: [:contact, :organization, :prospect])
+    # force: true — the consent re-check must read committed consent state;
+    # without it a caller passing a preloaded conversation would silently
+    # turn this defense-in-depth layer into a stale-read no-op.
+    message =
+      Repo.preload(message, [conversation: [:contact, :organization, :prospect]], force: true)
+
     conversation = message.conversation
 
     with {:ok, recipient} <- resolve_recipient(conversation),

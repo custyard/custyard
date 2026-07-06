@@ -1080,6 +1080,22 @@ defmodule Custyard.ConversationsTest do
       assert_no_email_sent()
     end
 
+    test "non-intake conversation with no recipient keeps the visible failure path" do
+      org = insert_organization()
+      conversation = insert_conversation(organization_id: org.id, contact_id: nil)
+
+      {:ok, message} = Conversations.send_reply(conversation, "No recipient anywhere")
+
+      # :withheld is reserved for the public-intake consent gate — a
+      # non-intake no-recipient reply stays :pending and delivery records
+      # the failure visibly.
+      assert message.delivery_status == :pending
+
+      assert {:error, :no_recipient_email, failed} = Outbound.deliver(message)
+      assert failed.delivery_status == :failed
+      assert_no_email_sent()
+    end
+
     test "contact channel delivers unconditionally even when the prospect has not opted in" do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "matched@example.com")

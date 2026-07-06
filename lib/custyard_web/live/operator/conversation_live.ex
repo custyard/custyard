@@ -100,7 +100,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       socket
       |> assign(:page_title, truncate_subject(conversation.subject))
       |> assign(:conversation, conversation)
-      |> assign(:reply_will_email?, Conversations.reply_deliverable?(conversation))
+      |> assign_reply_delivery(conversation)
       |> assign(:breakdown, breakdown)
       |> assign(:neglect_status, neglect_status)
       |> assign(:other_conversations, other_conversations)
@@ -423,11 +423,23 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
         socket
         |> assign(:conversation, conversation)
-        |> assign(:reply_will_email?, Conversations.reply_deliverable?(conversation))
+        |> assign_reply_delivery(conversation)
         |> assign(:breakdown, breakdown)
         |> assign(:neglect_status, neglect_status)
         |> assign(:other_conversations, other_conversations)
     end
+  end
+
+  # The consent advisory keys on :prospect_no_consent specifically — a
+  # public-intake conversation with no captured email (or revoked resume
+  # access) has no opt-in to speak of, and that state is conveyed by the
+  # reply-channel badge instead.
+  defp assign_reply_delivery(socket, conversation) do
+    reply_delivery = Conversations.reply_delivery(conversation)
+
+    socket
+    |> assign(:reply_delivery, reply_delivery)
+    |> assign(:reply_will_email?, reply_delivery in [:contact, :prospect_opted_in])
   end
 
   # Unlinked (nil-org) conversations have no sibling org conversations to list.
@@ -547,11 +559,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
         </div>
 
         <div class="border-t border-gray-200 dark:border-zinc-700 p-3 space-y-2 bg-white dark:bg-zinc-800">
-          <%!-- Consent advisory: the reply still saves and stays visible via
-          the resume link, so sending is never blocked — the operator just
-          knows up front that no email goes out. --%>
+          <%!-- Consent advisory: shown only when a prospect email was
+          captured without the reply-notification opt-in. The reply still
+          saves and stays visible via the resume link, so sending is never
+          blocked — the operator just knows up front that no email goes
+          out. No-email and revoked states are covered by the reply-channel
+          badge, not this opt-in wording. --%>
           <p
-            :if={@conversation.source == :public_intake and not @reply_will_email?}
+            :if={@reply_delivery == :prospect_no_consent}
             class="text-xs text-amber-600 dark:text-amber-400"
             data-testid="operator-reply-consent-advisory"
           >

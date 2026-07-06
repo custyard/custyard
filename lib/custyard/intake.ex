@@ -161,12 +161,14 @@ defmodule Custyard.Intake do
     |> Multi.insert(:message, fn %{conversation: conversation} ->
       # sender_email and delivery_status are deliberately nil: there is no
       # sender identity yet, and inbound messages never carry delivery state.
+      # message_id is synthetic — see generate_prospect_message_id/1.
       Message.changeset(%Message{}, %{
         conversation_id: conversation.id,
         source: :prospect,
         origin: :public_intake,
         body: body,
-        is_internal_note: false
+        is_internal_note: false,
+        message_id: generate_prospect_message_id(conversation.id)
       })
     end)
     |> Repo.transaction()
@@ -335,7 +337,8 @@ defmodule Custyard.Intake do
         source: :prospect,
         origin: :public_intake,
         body: body,
-        is_internal_note: false
+        is_internal_note: false,
+        message_id: generate_prospect_message_id(conversation.id)
       })
 
     Multi.new()
@@ -362,6 +365,17 @@ defmodule Custyard.Intake do
       {:ok, presented} -> presented == current
       :error -> true
     end
+  end
+
+  # Synthetic RFC 5322 Message-ID for prospect web messages. The intake
+  # surface has no real email Message-ID, but operator replies thread
+  # In-Reply-To/References off the last customer message's message_id
+  # (Email.Outbound), so a nil id here would break threading in the
+  # prospect's inbox. Mirrors Conversations.generate_outbound_message_id/1.
+  defp generate_prospect_message_id(conversation_id) do
+    unique = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+    domain = Application.get_env(:custyard, :outbound_email_domain, "custyard.local")
+    "<#{unique}.c#{conversation_id}@#{domain}>"
   end
 
   # A customer action on a waiting/dormant/resolved conversation reactivates
@@ -471,6 +485,11 @@ defmodule Custyard.Intake do
   missing ones — revocation removes write access entirely. Accepts the same
   `:token_hash` option as `add_prospect_reply/3`: a stale hash (rotated
   token) is refused as `{:error, :no_prospect}`.
+
+  A successful flip broadcasts `{:conversation_updated, id}` on the
+  conversation topic so already-mounted operator views recompute reply
+  deliverability (consent advisory, delivery expectations) without a manual
+  refresh.
   """
   def set_notification(%Conversation{} = conversation, notify?, opts \\ [])
       when is_boolean(notify?) do
@@ -486,11 +505,29 @@ defmodule Custyard.Intake do
           prospect
           |> Prospect.notification_changeset(notify?)
           |> Repo.update()
+          |> broadcast_notification_change(conversation.id)
         else
           {:error, :no_prospect}
         end
     end
   end
+
+  # A consent flip must reach already-mounted operator views: ConversationLive
+  # handles {:conversation_updated, id} on the conversation topic by reloading,
+  # which recomputes the reply-deliverability assigns. The consent gates in
+  # Conversations.send_reply/3 and Email.Outbound.deliver/1 re-read the DB
+  # regardless — this broadcast keeps the UI honest, not the policy.
+  defp broadcast_notification_change({:ok, prospect}, conversation_id) do
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversation:#{conversation_id}",
+      {:conversation_updated, conversation_id}
+    )
+
+    {:ok, prospect}
+  end
+
+  defp broadcast_notification_change(error, _conversation_id), do: error
 
   ## Email capture and linking ------------------------------------------------
 
