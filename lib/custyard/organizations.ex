@@ -4,7 +4,20 @@ defmodule Custyard.Organizations do
   """
 
   require Logger
-  alias Custyard.{Contact, Conversation, InboundRoutes, Organization, Repo}
+
+  alias Custyard.{
+    AuditEvent,
+    Contact,
+    Conversation,
+    Conversations,
+    InboundRoutes,
+    Organization,
+    Prospect,
+    Repo,
+    Scoring,
+    Slugs
+  }
+
   import Ecto.Query
 
   @doc """
@@ -281,5 +294,146 @@ defmodule Custyard.Organizations do
     org
     |> Ecto.Changeset.change(token: new_token)
     |> Repo.update()
+  end
+
+  @doc """
+  Convert an unlinked public-intake conversation into a brand-new
+  organization. Caller-gated: mirrors `create_organization/1`, which enforces
+  no role check of its own — the LiveView checks
+  `Authorization.can_create_organization?/1` before calling this.
+
+  Step 1: `create_organization/1` unchanged — a Lettermint provisioning
+  failure already compensates by deleting the org before this function ever
+  sees it.
+
+  Step 2, one transaction: race-safe conditional promotion of the
+  conversation's confirmed slug claim (`Slugs.promote/2` — `{:error,
+  :not_found}` is not a failure, a prospect can convert without ever having
+  claimed a slug), a contact created from the prospect's captured email when
+  present, then a conditional link (`WHERE id AND organization_id IS NULL`)
+  so a conversation converted by a concurrent call is never silently
+  re-linked. `source` stays `:public_intake` as provenance.
+
+  Any step-2 failure — the conditional link losing its race, or a real
+  error — compensates by deleting the organization: it is conversation-free
+  until this transaction commits, so the delete is cascade-safe.
+
+  Post-commit: rescore, `"conversations"` + org-scoped broadcasts, a
+  `:prospect_converted` audit event. Resume access is untouched — conversion
+  neither revokes nor rotates the prospect's resume token.
+
+  Returns `{:ok, conversation}`, `{:error, :not_convertible}` (already
+  linked, or not a public-intake conversation), `{:error, :already_converted}`
+  (lost the race to a concurrent conversion), or `{:error, changeset}`.
+  """
+  def convert_prospect(
+        %Conversation{organization_id: nil, source: :public_intake} = conversation,
+        org_attrs
+      ) do
+    case create_organization(org_attrs) do
+      {:ok, organization} ->
+        conversation
+        |> do_convert(organization)
+        |> handle_convert_result(organization)
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  def convert_prospect(%Conversation{}, _org_attrs), do: {:error, :not_convertible}
+
+  defp do_convert(conversation, organization) do
+    prospect = Repo.get_by(Prospect, conversation_id: conversation.id)
+
+    Repo.transaction(fn ->
+      case Slugs.promote(conversation, organization) do
+        {:ok, _slug} -> :ok
+        {:error, :not_found} -> :ok
+      end
+
+      contact = maybe_create_contact(prospect, organization)
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      set = [organization_id: organization.id, updated_at: now] |> maybe_put_contact(contact)
+
+      {count, _} =
+        Repo.update_all(
+          from(c in Conversation, where: c.id == ^conversation.id and is_nil(c.organization_id)),
+          set: set
+        )
+
+      case count do
+        1 ->
+          Repo.get!(Conversation, conversation.id) |> Repo.preload([:organization, :contact])
+
+        0 ->
+          Repo.rollback(:already_converted)
+      end
+    end)
+  end
+
+  defp maybe_create_contact(%Prospect{email: email}, organization) when is_binary(email) do
+    case %Contact{}
+         |> Contact.changeset(%{email: email, organization_id: organization.id})
+         |> Repo.insert() do
+      {:ok, contact} -> contact
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp maybe_create_contact(_prospect, _organization), do: nil
+
+  defp maybe_put_contact(set, nil), do: set
+  defp maybe_put_contact(set, %Contact{id: id}), do: Keyword.put(set, :contact_id, id)
+
+  defp handle_convert_result({:ok, conversation}, organization) do
+    Scoring.calculate_and_cache(conversation.id)
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations",
+      {:conversation_updated, conversation.id}
+    )
+
+    Conversations.broadcast_to_org(
+      conversation.organization_id,
+      {:conversation_updated, conversation.id}
+    )
+
+    record_conversion_audit(conversation, organization)
+
+    {:ok, conversation}
+  end
+
+  defp handle_convert_result({:error, reason}, organization) do
+    delete_organization(organization)
+    {:error, reason}
+  end
+
+  # Append-only audit trail for the conversion (AuditEvent.create pattern,
+  # same as the slug-release audit write). A logging failure never blocks
+  # the conversion — it already committed.
+  defp record_conversion_audit(conversation, organization) do
+    case AuditEvent.create(%{
+           event_type: :prospect_converted,
+           source: "operator",
+           payload: %{
+             "organization_id" => organization.id,
+             "organization_name" => organization.name
+           },
+           conversation_id: conversation.id,
+           organization_id: organization.id
+         }) do
+      {:ok, _event} ->
+        :ok
+
+      {:error, changeset} ->
+        Logger.error(
+          "Failed to record prospect conversion audit event: #{inspect(changeset.errors)}"
+        )
+
+        :ok
+    end
   end
 end
