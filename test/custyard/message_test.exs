@@ -120,7 +120,17 @@ defmodule Custyard.MessageTest do
 
   describe "delivery_statuses/0" do
     test "returns expected list" do
-      assert Message.delivery_statuses() == [:pending, :sent, :failed, :bounced]
+      assert Message.delivery_statuses() == [:pending, :sent, :failed, :bounced, :withheld]
+    end
+
+    test "delivery_status_changeset accepts :withheld" do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, delivery_status: :pending)
+
+      changeset = Message.delivery_status_changeset(message, :withheld)
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :delivery_status) == :withheld
     end
   end
 
