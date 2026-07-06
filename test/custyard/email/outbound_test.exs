@@ -18,7 +18,7 @@ defmodule Custyard.Email.OutboundTest do
 
   alias Custyard.Email.Outbound
   alias Custyard.Email.OutboundTest.LettermintStub
-  alias Custyard.{Message, Repo}
+  alias Custyard.{Conversations, Intake, Message, Repo, Settings}
 
   setup do
     org = insert_organization(name: "Acme Support")
@@ -459,6 +459,155 @@ defmodule Custyard.Email.OutboundTest do
     end
   end
 
+  describe "prospect-channel delivery (public intake)" do
+    test "delivers to a consenting prospect from the platform address" do
+      {_conversation, _prospect, message} =
+        intake_message_fixture(email: "prospect@example.com", notify_on_reply: true)
+
+      assert {:ok, updated} = Outbound.deliver(message)
+      assert updated.delivery_status == :sent
+
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "prospect@example.com"}]
+        assert email.from == {"Custyard", "support@custyard.local"}
+      end)
+    end
+
+    test "uses the instance branding name as the From display name" do
+      {:ok, _settings} = Settings.update_branding(%{name: "Helpdesk North"})
+
+      {_conversation, _prospect, message} =
+        intake_message_fixture(email: "prospect@example.com", notify_on_reply: true)
+
+      {:ok, _updated} = Outbound.deliver(message)
+
+      assert_email_sent(fn email ->
+        assert email.from == {"Helpdesk North", "support@custyard.local"}
+      end)
+    end
+
+    test "withholds delivery without prospect opt-in and sends nothing" do
+      {_conversation, _prospect, message} =
+        intake_message_fixture(email: "prospect@example.com", notify_on_reply: false)
+
+      conv_id = message.conversation_id
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
+
+      assert {:error, :no_consent, updated} = Outbound.deliver(message)
+      assert updated.delivery_status == :withheld
+      assert Repo.get!(Message, message.id).delivery_status == :withheld
+      assert_no_email_sent()
+
+      # The indicator refresh broadcast fires for :withheld too
+      assert_received {:message_updated, ^conv_id}
+    end
+
+    test "a revoked prospect is no recipient at all" do
+      revoked_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {_conversation, _prospect, message} =
+        intake_message_fixture(
+          email: "prospect@example.com",
+          notify_on_reply: true,
+          revoked_at: revoked_at
+        )
+
+      assert {:error, :no_recipient_email, updated} = Outbound.deliver(message)
+      assert updated.delivery_status == :failed
+      assert_no_email_sent()
+    end
+  end
+
+  describe "public-intake From identity (leak regression)" do
+    test "From is the platform address and branding name, never the operator's personal email, even after org linking" do
+      org = insert_organization(name: "Acme Support")
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :general,
+        from_address: "support@acme.com"
+      )
+
+      conversation =
+        insert_conversation(
+          source: :public_intake,
+          organization_id: org.id,
+          subject: "Linked intake thread"
+        )
+
+      insert_prospect(
+        conversation_id: conversation.id,
+        email: "prospect@example.com",
+        notify_on_reply: true
+      )
+
+      {:ok, message} =
+        Conversations.send_reply(conversation, "Reply",
+          operator_email: "operator-personal@example.com"
+        )
+
+      assert message.sender_email == nil
+
+      {:ok, _updated} = Outbound.deliver(message)
+
+      assert_email_sent(fn email ->
+        # Source-keyed rule: branding display name + platform fallback
+        # address — not the org name, the org route address, or the
+        # replying operator's personal address.
+        assert email.from == {"Custyard", "support@custyard.local"}
+      end)
+    end
+  end
+
+  describe "prospect-facing header discipline" do
+    test "neutralizes header injection in a prospect-submitted subject" do
+      conversation =
+        insert_conversation(
+          source: :public_intake,
+          subject: "Help\r\nBcc: attacker@evil.com"
+        )
+
+      insert_prospect(
+        conversation_id: conversation.id,
+        email: "prospect@example.com",
+        notify_on_reply: true
+      )
+
+      message =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :operator,
+          sender_email: nil,
+          body: "Reply",
+          message_id: "<pi-inject@custyard.local>",
+          delivery_status: :pending
+        )
+
+      {:ok, _updated} = Outbound.deliver(message)
+
+      assert_email_sent(fn email ->
+        assert email.subject == "Re: Help Bcc: attacker@evil.com"
+
+        Enum.each(email.headers, fn {name, value} ->
+          refute name =~ ~r/[\r\n]/
+          refute value =~ ~r/[\r\n]/
+        end)
+      end)
+    end
+
+    test "a header-injection email address never captures, so Outbound never sees it" do
+      conversation = insert_conversation(source: :public_intake)
+      prospect = insert_prospect(conversation_id: conversation.id)
+
+      # The capture boundary is the sanitizer for the recipient value:
+      # control characters are rejected outright (EmailAddress.validate_email).
+      assert {:error, %Ecto.Changeset{}} =
+               Intake.capture_email(conversation, "victim@example.com\r\nbcc: evil@example.com")
+
+      assert Repo.get!(Custyard.Prospect, prospect.id).email == nil
+    end
+  end
+
   describe "delivery_status transitions" do
     test "pending -> sent on successful delivery", %{operator_msg: msg} do
       assert msg.delivery_status == :pending
@@ -486,5 +635,29 @@ defmodule Custyard.Email.OutboundTest do
       reloaded = Repo.get!(Message, msg.id)
       assert reloaded.delivery_status == :failed
     end
+  end
+
+  # --- helpers ---
+
+  # Public-intake conversation with a prospect row and a pending operator
+  # reply carrying no sender_email (the shape send_reply/3 produces for
+  # public-intake conversations).
+  defp intake_message_fixture(prospect_overrides) do
+    conversation = insert_conversation(source: :public_intake, subject: "Intake question")
+
+    prospect =
+      insert_prospect(Keyword.merge([conversation_id: conversation.id], prospect_overrides))
+
+    message =
+      insert_message(
+        conversation_id: conversation.id,
+        source: :operator,
+        sender_email: nil,
+        body: "Reply to prospect",
+        message_id: "<intake-reply-#{System.unique_integer([:positive])}@custyard.local>",
+        delivery_status: :pending
+      )
+
+    {conversation, prospect, message}
   end
 end
