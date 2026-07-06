@@ -1,0 +1,23 @@
+<%!-- Minimal root layout for the public intake surfaces (/i, /r).
+     No operator chrome, no portal chrome, and no platform branding beyond
+     the operator's Settings.branding choice. Falls back safely when
+     :branding is unassigned (e.g. rate-limit 429 renders). --%>
+<!DOCTYPE html>
+<html lang="en" class="[scrollbar-gutter:stable]">
+  <head>
+    <% branding = assigns[:branding] || %{name: nil, logo_url: nil, primary_color: nil} %>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <meta name="color-scheme" content="light dark" />
+    <.live_title>
+      {assigns[:page_title] || branding.name || "Custyard"}
+    </.live_title>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
+    </script>
+  </head>
+  <body class="bg-white dark:bg-zinc-900 antialiased" data-testid="intake-layout-body">
+    {@inner_content}
+  </body>
+</html>

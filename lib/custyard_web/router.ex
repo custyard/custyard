@@ -36,10 +36,51 @@ defmodule CustyardWeb.Router do
     plug CustyardWeb.Plugs.PortalAuth
   end
 
+  # Public intake surfaces (/i, /r — and /c when the slug claim lands):
+  # anonymous, hammerable, and carrying bearer tokens in the path. The
+  # resume URL must never leak via the Referer header, and the pages render
+  # the sparse operator-branded :intake layout instead of the app chrome.
+  pipeline :public_intake do
+    plug CustyardWeb.Plugs.NoReferrer
+    plug :put_root_layout, html: {CustyardWeb.Layouts, :intake_root}
+  end
+
+  pipeline :resume_cookie do
+    plug CustyardWeb.Plugs.ResumeCookie
+  end
+
   scope "/", CustyardWeb do
     pipe_through :browser
 
     live "/", HomeLive, :index
+  end
+
+  # Public intake pages — anonymous dead views, one per operator-configured
+  # intake source key. Served on the application host only: on a custom
+  # domain the CustomDomain plug rewrites /i/* into the portal scope, where
+  # it 404s (intake is an operator surface, never a customer-portal one).
+  scope "/i", CustyardWeb do
+    pipe_through [:browser, :public_intake]
+
+    get "/:source_key", IntakeController, :show
+    post "/:source_key", IntakeController, :create
+  end
+
+  # Resume access — the token in the URL is the credential; every mount
+  # re-authenticates it (nothing lives in the session). The uniform
+  # "conversation unavailable" page is a dead view so invalid tokens never
+  # cost a LiveView socket; it must be declared before the catch-all live
+  # route ("unavailable" is not a valid token shape, but order still matters).
+  scope "/r", CustyardWeb do
+    pipe_through [:browser, :public_intake, :resume_cookie]
+
+    get "/unavailable", ResumeController, :unavailable
+
+    live_session :intake_resume,
+      on_mount: [{CustyardWeb.Live.ResumeAuth, :default}],
+      layout: {CustyardWeb.Layouts, :intake} do
+      live "/:token", ResumeLive, :show
+    end
   end
 
   scope "/api", CustyardWeb do

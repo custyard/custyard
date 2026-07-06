@@ -192,9 +192,145 @@ defmodule Custyard.IntakeTest do
       conversation = insert_conversation()
       assert {:error, :no_prospect} = Intake.rotate_resume_token(conversation)
     end
+
+    test "broadcasts resume_access_changed on the conversation topic", %{
+      conversation: conversation
+    } do
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conversation.id}")
+
+      assert {:ok, _result} = Intake.rotate_resume_token(conversation)
+
+      conversation_id = conversation.id
+      assert_receive {:resume_access_changed, ^conversation_id}
+    end
   end
 
-  describe "set_notification/2" do
+  describe "resume_token_valid?/1" do
+    setup do
+      insert_intake_source(key: "cta")
+      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      %{conversation: result.conversation, token: result.resume_token}
+    end
+
+    test "true for a live token", %{token: token} do
+      assert Intake.resume_token_valid?(token)
+    end
+
+    test "false for unknown and non-binary tokens" do
+      refute Intake.resume_token_valid?("bogus")
+      refute Intake.resume_token_valid?(nil)
+    end
+
+    test "false once revoked", %{conversation: conversation, token: token} do
+      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
+      refute Intake.resume_token_valid?(token)
+    end
+
+    test "false for the old token after rotation", %{conversation: conversation, token: token} do
+      assert {:ok, %{resume_token: new_token}} = Intake.rotate_resume_token(conversation)
+
+      refute Intake.resume_token_valid?(token)
+      assert Intake.resume_token_valid?(new_token)
+    end
+  end
+
+  describe "token rotation strips access from handles under the old token" do
+    setup do
+      insert_intake_source(key: "cta")
+      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      old_hash = Token.hash(result.resume_token)
+
+      {:ok, %{resume_token: new_token}} = Intake.rotate_resume_token(result.conversation)
+
+      %{
+        conversation: result.conversation,
+        old_hash: old_hash,
+        new_hash: Token.hash(new_token)
+      }
+    end
+
+    test "add_prospect_reply refuses a stale token hash", %{
+      conversation: conversation,
+      old_hash: old_hash,
+      new_hash: new_hash
+    } do
+      assert {:error, :no_prospect} =
+               Intake.add_prospect_reply(conversation, "Still me?", token_hash: old_hash)
+
+      assert Repo.aggregate(Message, :count) == 1
+
+      assert {:ok, _result} =
+               Intake.add_prospect_reply(conversation, "Current bearer", token_hash: new_hash)
+    end
+
+    test "set_notification refuses a stale token hash", %{
+      conversation: conversation,
+      old_hash: old_hash,
+      new_hash: new_hash
+    } do
+      assert {:error, :no_prospect} =
+               Intake.set_notification(conversation, true, token_hash: old_hash)
+
+      assert {:ok, %Prospect{notify_on_reply: true}} =
+               Intake.set_notification(conversation, true, token_hash: new_hash)
+    end
+
+    test "capture_email refuses a stale hash without revealing capture state", %{
+      conversation: conversation,
+      old_hash: old_hash,
+      new_hash: new_hash
+    } do
+      assert {:error, :no_prospect} =
+               Intake.capture_email(conversation, "a@example.com", token_hash: old_hash)
+
+      assert {:ok, _conversation} =
+               Intake.capture_email(conversation, "a@example.com", token_hash: new_hash)
+
+      # Still :no_prospect, never :already_captured — a rotated-out handle
+      # cannot learn that an email has since been captured.
+      assert {:error, :no_prospect} =
+               Intake.capture_email(conversation, "b@example.com", token_hash: old_hash)
+    end
+
+    test "callers without a token hash are unaffected", %{conversation: conversation} do
+      assert {:ok, _result} = Intake.add_prospect_reply(conversation, "From the intake POST")
+    end
+  end
+
+  describe "add_prospect_reply/3 revocation guard" do
+    setup do
+      insert_intake_source(key: "cta")
+      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      %{conversation: result.conversation}
+    end
+
+    test "refuses the write once resume access is revoked", %{conversation: conversation} do
+      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
+
+      assert {:error, :no_prospect} = Intake.add_prospect_reply(conversation, "Still here?")
+      assert Repo.aggregate(Message, :count) == 1
+    end
+  end
+
+  describe "first_enabled_active_source/0" do
+    test "returns the first enabled active-mode source ordered by key" do
+      insert_intake_source(key: "zz-active", mode: :active)
+      insert_intake_source(key: "aa-disabled", mode: :active, enabled: false)
+      insert_intake_source(key: "bb-passive", mode: :passive)
+      insert_intake_source(key: "mm-active", mode: :active)
+
+      assert %IntakeSource{key: "mm-active"} = Intake.first_enabled_active_source()
+    end
+
+    test "returns nil when no enabled active source exists" do
+      insert_intake_source(key: "only-passive", mode: :passive)
+      insert_intake_source(key: "off", mode: :active, enabled: false)
+
+      assert Intake.first_enabled_active_source() == nil
+    end
+  end
+
+  describe "set_notification/3" do
     setup do
       insert_intake_source(key: "cta")
       {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
