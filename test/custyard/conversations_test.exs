@@ -2,9 +2,12 @@ defmodule Custyard.ConversationsTest do
   # SQLite doesn't support async tests due to database locking
   use Custyard.DataCase, async: false
 
-  alias Custyard.Conversations
+  alias Custyard.Auth.Token
+  alias Custyard.Email.Outbound
+  alias Custyard.{Conversations, Intake, Prospect}
 
   import Custyard.Factory
+  import Swoosh.TestAssertions
 
   describe "list_neglected/1" do
     test "returns conversations excluding resolved" do
@@ -1022,5 +1025,283 @@ defmodule Custyard.ConversationsTest do
       assert Ecto.assoc_loaded?(loaded.contact)
       assert Conversations.reply_channel(loaded) == {:prospect, "prospect@example.com"}
     end
+  end
+
+  describe "send_reply/3 consent gate (public intake)" do
+    test "prospect with opt-in: reply is pending and delivers to the prospect email" do
+      {conversation, _prospect} =
+        intake_fixture(email: "prospect@example.com", notify_on_reply: true)
+
+      {:ok, message} = Conversations.send_reply(conversation, "Happy to help")
+      assert message.delivery_status == :pending
+
+      # Async delivery is disabled in test config; exercise delivery directly.
+      {:ok, delivered} = Outbound.deliver(message)
+      assert delivered.delivery_status == :sent
+
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "prospect@example.com"}]
+      end)
+    end
+
+    test "prospect without opt-in: reply is withheld and delivery is skipped" do
+      {conversation, _prospect} =
+        intake_fixture(email: "prospect@example.com", notify_on_reply: false)
+
+      {:ok, message} = Conversations.send_reply(conversation, "Saved but not emailed")
+
+      assert message.delivery_status == :withheld
+      assert Repo.get!(Custyard.Message, message.id).delivery_status == :withheld
+      assert_no_email_sent()
+    end
+
+    test "no captured email at all: reply is withheld" do
+      {conversation, _prospect} = intake_fixture([])
+
+      {:ok, message} = Conversations.send_reply(conversation, "No recipient anywhere")
+
+      assert message.delivery_status == :withheld
+      assert_no_email_sent()
+    end
+
+    test "revoked prospect has no reply channel: reply is withheld" do
+      revoked_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {conversation, _prospect} =
+        intake_fixture(
+          email: "prospect@example.com",
+          notify_on_reply: true,
+          revoked_at: revoked_at
+        )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Revoked prospect")
+
+      assert message.delivery_status == :withheld
+      assert_no_email_sent()
+    end
+
+    test "contact channel delivers unconditionally even when the prospect has not opted in" do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "matched@example.com")
+
+      conversation =
+        insert_conversation(
+          source: :public_intake,
+          organization_id: org.id,
+          contact_id: contact.id,
+          subject: "Matched an existing contact at capture"
+        )
+
+      insert_prospect(
+        conversation_id: conversation.id,
+        email: "prospect@example.com",
+        notify_on_reply: false
+      )
+
+      {:ok, message} = Conversations.send_reply(conversation, "Established customer path")
+      assert message.delivery_status == :pending
+
+      {:ok, delivered} = Outbound.deliver(message)
+      assert delivered.delivery_status == :sent
+
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "matched@example.com"}]
+      end)
+    end
+
+    test "public-intake replies never carry the operator's personal address" do
+      {conversation, _prospect} =
+        intake_fixture(email: "prospect@example.com", notify_on_reply: true)
+
+      {:ok, message} =
+        Conversations.send_reply(conversation, "Reply",
+          operator_email: "operator-personal@example.com"
+        )
+
+      assert message.sender_email == nil
+    end
+
+    test "public-intake sender stays platform-addressed after linking to an org with a route" do
+      org = insert_organization()
+
+      insert_inbound_route(
+        organization_id: org.id,
+        route_type: :general,
+        from_address: "support@acme.com"
+      )
+
+      conversation =
+        insert_conversation(
+          source: :public_intake,
+          organization_id: org.id,
+          subject: "Linked intake thread"
+        )
+
+      insert_prospect(
+        conversation_id: conversation.id,
+        email: "prospect@example.com",
+        notify_on_reply: true
+      )
+
+      {:ok, message} =
+        Conversations.send_reply(conversation, "Reply",
+          operator_email: "operator-personal@example.com"
+        )
+
+      # Source-keyed rule: neither the org route address nor the operator's
+      # personal address — nil selects Outbound's platform fallback.
+      assert message.sender_email == nil
+    end
+
+    test "sets origin to :email for public-intake conversations" do
+      {conversation, _prospect} =
+        intake_fixture(email: "prospect@example.com", notify_on_reply: true)
+
+      {:ok, message} = Conversations.send_reply(conversation, "Origin check")
+
+      assert message.origin == :email
+    end
+
+    test "toggling notify_on_reply between replies flips delivery" do
+      {conversation, prospect} =
+        intake_fixture(email: "prospect@example.com", notify_on_reply: false)
+
+      {:ok, first} = Conversations.send_reply(fresh(conversation), "First reply")
+      assert first.delivery_status == :withheld
+
+      {:ok, _} = prospect |> Prospect.notification_changeset(true) |> Repo.update()
+
+      {:ok, second} = Conversations.send_reply(fresh(conversation), "Second reply")
+      assert second.delivery_status == :pending
+
+      {:ok, delivered} = Outbound.deliver(second)
+      assert delivered.delivery_status == :sent
+
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "prospect@example.com"}]
+      end)
+
+      {:ok, _} =
+        Repo.get!(Prospect, prospect.id)
+        |> Prospect.notification_changeset(false)
+        |> Repo.update()
+
+      {:ok, third} = Conversations.send_reply(fresh(conversation), "Third reply")
+      assert third.delivery_status == :withheld
+    end
+  end
+
+  describe "cleanup_resolved_conversations/2" do
+    test "purges resolved non-intake conversations after 90 days and keeps younger ones" do
+      org = insert_organization()
+      old = insert_conversation(organization_id: org.id, state: :resolved)
+      young = insert_conversation(organization_id: org.id, state: :resolved)
+      backdate_updated_at(old, 91)
+      backdate_updated_at(young, 89)
+
+      assert Conversations.cleanup_resolved_conversations(90) == 1
+      assert Repo.get(Custyard.Conversation, old.id) == nil
+      assert Repo.get(Custyard.Conversation, young.id)
+    end
+
+    test "keeps resolved public-intake conversations well past the 90-day bound" do
+      conversation = insert_conversation(source: :public_intake, state: :resolved)
+      backdate_updated_at(conversation, 364)
+
+      assert Conversations.cleanup_resolved_conversations(90) == 0
+      assert Repo.get(Custyard.Conversation, conversation.id)
+    end
+
+    test "purges resolved public-intake conversations after 365 days" do
+      conversation = insert_conversation(source: :public_intake, state: :resolved)
+      backdate_updated_at(conversation, 366)
+
+      assert Conversations.cleanup_resolved_conversations(90) == 1
+      assert Repo.get(Custyard.Conversation, conversation.id) == nil
+    end
+
+    test "dry run counts the retention split without deleting" do
+      org = insert_organization()
+      non_intake = insert_conversation(organization_id: org.id, state: :resolved)
+      intake_young = insert_conversation(source: :public_intake, state: :resolved)
+      intake_old = insert_conversation(source: :public_intake, state: :resolved)
+      backdate_updated_at(non_intake, 91)
+      backdate_updated_at(intake_young, 120)
+      backdate_updated_at(intake_old, 366)
+
+      assert Conversations.cleanup_resolved_conversations(90, dry_run: true) == 2
+      assert Repo.get(Custyard.Conversation, non_intake.id)
+      assert Repo.get(Custyard.Conversation, intake_young.id)
+      assert Repo.get(Custyard.Conversation, intake_old.id)
+    end
+
+    test "purging cascades to the prospect so the resume token stops resolving" do
+      {token, hash} = Token.generate()
+      conversation = insert_conversation(source: :public_intake, state: :resolved)
+      prospect = insert_prospect(conversation_id: conversation.id, resume_token_hash: hash)
+      backdate_updated_at(conversation, 366)
+
+      assert {:ok, _conversation} = Intake.get_conversation_by_resume_token(token)
+
+      assert Conversations.cleanup_resolved_conversations(90) == 1
+
+      assert Repo.get(Prospect, prospect.id) == nil
+      assert Intake.get_conversation_by_resume_token(token) == {:error, :not_found}
+    end
+
+    # dry_run: the non-dry path of run_cleanup/1 also invokes
+    # cleanup_orphaned_contacts/1, whose DELETE-with-JOIN is unsupported on
+    # SQLite (pre-existing, unrelated to the retention split).
+    test "run_cleanup applies the public-intake retention split" do
+      intake_old = insert_conversation(source: :public_intake, state: :resolved)
+      intake_young = insert_conversation(source: :public_intake, state: :resolved)
+      backdate_updated_at(intake_old, 366)
+      backdate_updated_at(intake_young, 120)
+
+      %{resolved_conversations: count} = Conversations.run_cleanup(dry_run: true)
+      assert count == 1
+    end
+  end
+
+  # --- helpers ---
+
+  # Public-intake conversation with a prospect message and a prospect row.
+  defp intake_fixture(prospect_overrides) do
+    conversation = insert_conversation(source: :public_intake, subject: "Intake question")
+
+    insert_message(
+      conversation_id: conversation.id,
+      source: :prospect,
+      sender_email: nil,
+      body: "Hello, can you help me?"
+    )
+
+    prospect =
+      insert_prospect(
+        Keyword.merge(
+          [
+            conversation_id: conversation.id,
+            email_captured_at: DateTime.utc_now() |> DateTime.truncate(:second)
+          ],
+          prospect_overrides
+        )
+      )
+
+    {conversation, prospect}
+  end
+
+  # Re-read without preloaded associations so send_reply sees fresh consent.
+  defp fresh(conversation), do: Conversations.get_conversation!(conversation.id)
+
+  defp backdate_updated_at(conversation, days) do
+    backdated =
+      DateTime.utc_now()
+      |> DateTime.add(-days * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
+    Repo.update_all(
+      from(c in Custyard.Conversation, where: c.id == ^conversation.id),
+      set: [updated_at: backdated]
+    )
   end
 end
