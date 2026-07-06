@@ -633,6 +633,36 @@ defmodule CustyardWeb.ResumeLiveTest do
     end
   end
 
+  describe "retention purge" do
+    test "a purged conversation's resume URL lands on the uniform unavailable page" do
+      %{conversation: conversation, resume_token: token} = create_intake!()
+
+      {:ok, _conversation} = Conversations.update_conversation(conversation, %{state: :resolved})
+
+      # Past the 365-day public-intake retention bound
+      backdated =
+        DateTime.utc_now()
+        |> DateTime.add(-366 * 24 * 60 * 60, :second)
+        |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(c in Conversation, where: c.id == ^conversation.id),
+        set: [updated_at: backdated]
+      )
+
+      assert Conversations.cleanup_resolved_conversations(90) == 1
+
+      # The prospect cascaded away with the conversation, so the token no
+      # longer resolves...
+      assert Intake.get_conversation_by_resume_token(token) == {:error, :not_found}
+
+      # ...and the resume URL renders the same unavailable page as an
+      # invalid token — no validity oracle.
+      assert {:error, {:redirect, %{to: @unavailable}}} =
+               live(build_conn(), ~p"/r/#{token}")
+    end
+  end
+
   # Strips the per-socket identifiers LiveView bakes into the DOM so two
   # renders can be compared byte-for-byte on content.
   defp normalize_live_html(html) do
