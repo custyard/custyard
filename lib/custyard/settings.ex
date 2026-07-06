@@ -32,6 +32,19 @@ defmodule Custyard.Settings do
     slug_claim_ttl_hours: 72
   }
 
+  # All-nil defaults: consumers (intake layout, prospect-facing mail) fall
+  # back to "Custyard" for the name and render nothing for logo/color.
+  @default_branding %{
+    name: nil,
+    logo_url: nil,
+    primary_color: nil
+  }
+
+  @branding_name_max_length 100
+
+  # \A/\z (not ^/$): $ can match before a trailing newline.
+  @branding_color_format ~r/\A#[0-9a-fA-F]{6}\z/
+
   @valid_weight_keys Map.keys(@default_weights) |> Enum.map(&to_string/1)
   @valid_threshold_keys Map.keys(@default_thresholds) |> Enum.map(&to_string/1)
 
@@ -50,6 +63,11 @@ defmodule Custyard.Settings do
     # Public intake configuration (stored as map in JSON column)
     # Keys: "unlinked_tier_score" (integer 0..100), "slug_claim_ttl_hours" (integer 1..720)
     field :intake_config, :map, default: %{}
+
+    # Instance branding for the public intake surface (stored as map in JSON column)
+    # Keys: "name" (string, max 100), "logo_url" (/uploads/ path),
+    # "primary_color" (hex color like #1a2b3c)
+    field :branding, :map, default: %{}
 
     # Singleton constraint - always true, unique constraint ensures only one row
     field :singleton, :boolean, default: true
@@ -203,6 +221,50 @@ defmodule Custyard.Settings do
   end
 
   @doc """
+  Get instance branding as a map with atom keys.
+
+  Malformed entries (wrong type, bad hex color, non-uploads logo path) and
+  unknown keys are silently skipped and the default for that key (nil) is
+  used instead.
+
+  Keys:
+  - `:name` - display name shown on the public intake surface and used as
+    the From display name on prospect-facing mail (max 100 chars; consumers
+    fall back to "Custyard" when nil)
+  - `:logo_url` - same-origin `/uploads/` path
+  - `:primary_color` - hex color like `#1a2b3c`
+  """
+  def get_branding do
+    settings = get()
+
+    parsed_branding =
+      (settings.branding || %{})
+      |> Enum.filter(fn {k, v} -> valid_branding_entry?(k, v) end)
+      |> Enum.map(fn {k, v} -> {String.to_existing_atom(k), v} end)
+      |> Map.new()
+
+    Map.merge(@default_branding, parsed_branding)
+  end
+
+  @doc """
+  Update instance branding.
+
+  The given map replaces the stored one, so omitting a key clears it back
+  to its default. Returns `{:ok, settings}` or `{:error, changeset}` if
+  validation fails (unknown keys, bad hex color, non-`/uploads/` or
+  traversal-carrying logo path, blank or over-long name).
+  """
+  def update_branding(branding) when is_map(branding) do
+    settings = get()
+    stringified = stringify_keys(branding)
+
+    settings
+    |> cast(%{branding: stringified}, [:branding])
+    |> validate_branding()
+    |> Repo.update()
+  end
+
+  @doc """
   Update Sieve header mappings.
 
   Each mapping should be: %{header_name => %{"property" => name, "mapping" => %{value => property_value}}}
@@ -224,12 +286,19 @@ defmodule Custyard.Settings do
   @doc false
   def changeset(settings, attrs) do
     settings
-    |> cast(attrs, [:score_weights, :neglect_thresholds, :sieve_header_mappings, :intake_config])
+    |> cast(attrs, [
+      :score_weights,
+      :neglect_thresholds,
+      :sieve_header_mappings,
+      :intake_config,
+      :branding
+    ])
     |> validate_weights()
     |> validate_weight_values()
     |> validate_thresholds()
     |> validate_sieve_header_mappings()
     |> validate_intake_config()
+    |> validate_branding()
   end
 
   defp validate_weights(changeset) do
@@ -379,6 +448,50 @@ defmodule Custyard.Settings do
     do: is_integer(value) and value in 1..720
 
   defp valid_intake_config_entry?(_key, _value), do: false
+
+  defp validate_branding(changeset) do
+    case get_change(changeset, :branding) do
+      nil ->
+        changeset
+
+      branding when is_map(branding) ->
+        invalid_keys =
+          branding
+          |> Enum.reject(fn {k, v} -> valid_branding_entry?(k, v) end)
+          |> Enum.map(fn {k, _v} -> k end)
+
+        if Enum.empty?(invalid_keys) do
+          changeset
+        else
+          add_error(
+            changeset,
+            :branding,
+            "contains invalid entries for: #{Enum.join(invalid_keys, ", ")}. " <>
+              "name must be a non-blank string of at most #{@branding_name_max_length} characters; " <>
+              "logo_url must be an /uploads/ path without traversal sequences; " <>
+              "primary_color must be a hex color like #1a2b3c."
+          )
+        end
+
+      _ ->
+        add_error(changeset, :branding, "must be a map")
+    end
+  end
+
+  # Blank names are rejected, never stored: consumers fall back to "Custyard"
+  # only on nil, so a stored "" or "   " would render a blank brand name.
+  defp valid_branding_entry?("name", value),
+    do:
+      is_binary(value) and String.trim(value) != "" and
+        String.length(value) <= @branding_name_max_length
+
+  defp valid_branding_entry?("logo_url", value),
+    do: Custyard.UploadPath.valid?(value)
+
+  defp valid_branding_entry?("primary_color", value),
+    do: is_binary(value) and Regex.match?(@branding_color_format, value)
+
+  defp valid_branding_entry?(_key, _value), do: false
 
   defp create_defaults do
     # Handle race condition: multiple processes may call this concurrently on first access.

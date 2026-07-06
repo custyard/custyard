@@ -1,6 +1,8 @@
 defmodule CustyardWeb.Operator.SettingsLive do
   use CustyardWeb, :live_view
 
+  import CustyardWeb.FormHelpers, only: [format_changeset_errors: 1]
+
   alias Custyard.{Authorization, Settings}
 
   # Fixed display order for weight keys (maps don't guarantee iteration order)
@@ -19,9 +21,11 @@ defmodule CustyardWeb.Operator.SettingsLive do
       |> assign(:weights, weights)
       |> assign(:thresholds, thresholds)
       |> assign(:intake_config, Settings.get_intake_config())
+      |> assign(:branding, Settings.get_branding())
       |> assign(:editing_weights, false)
       |> assign(:editing_thresholds, false)
       |> assign(:editing_intake, false)
+      |> assign(:editing_branding, false)
       |> assign(:weight_form, to_form(weights, as: "weights"))
       |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
 
@@ -80,6 +84,25 @@ defmodule CustyardWeb.Operator.SettingsLive do
   def handle_event("save_intake", %{"intake" => intake_params}, socket) do
     if Authorization.can_modify_settings?(socket.assigns.current_operator) do
       save_intake(intake_params, socket)
+    else
+      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
+    end
+  end
+
+  @impl true
+  def handle_event("edit_branding", _params, socket) do
+    {:noreply, assign(socket, :editing_branding, true)}
+  end
+
+  @impl true
+  def handle_event("cancel_branding", _params, socket) do
+    {:noreply, assign(socket, :editing_branding, false)}
+  end
+
+  @impl true
+  def handle_event("save_branding", %{"branding" => branding_params}, socket) do
+    if Authorization.can_modify_settings?(socket.assigns.current_operator) do
+      save_branding(branding_params, socket)
     else
       {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
     end
@@ -213,6 +236,37 @@ defmodule CustyardWeb.Operator.SettingsLive do
              "Failed to update intake settings. Unlinked tier score must be 0-100 and slug claim TTL must be 1-720 hours."
            )}
       end
+    end
+  end
+
+  # Blank (empty or whitespace-only) fields are omitted rather than stored:
+  # update_branding replaces the whole map, so an omitted key reads back as
+  # its default (nil). Settings.valid_branding_entry?/2 independently rejects
+  # blank names, so direct context callers cannot store them either.
+  defp save_branding(branding_params, socket) do
+    branding =
+      branding_params
+      |> Map.take(["name", "logo_url", "primary_color"])
+      |> Enum.reject(fn {_key, value} ->
+        not is_binary(value) or String.trim(value) == ""
+      end)
+      |> Map.new()
+
+    case Settings.update_branding(branding) do
+      {:ok, _settings} ->
+        {:noreply,
+         socket
+         |> assign(:branding, Settings.get_branding())
+         |> assign(:editing_branding, false)
+         |> put_flash(:info, "Branding updated successfully")}
+
+      {:error, changeset} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Failed to update branding: #{format_changeset_errors(changeset)}"
+         )}
     end
   end
 
@@ -539,6 +593,132 @@ defmodule CustyardWeb.Operator.SettingsLive do
               type="submit"
               class="text-xs text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded"
               data-testid="operator-settings-save-intake"
+            >
+              Save
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div
+        class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 mb-4"
+        data-testid="operator-settings-branding"
+      >
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">Branding</h2>
+          <button
+            :if={not @editing_branding}
+            phx-click="edit_branding"
+            class="text-xs text-blue-600 hover:text-blue-800"
+            data-testid="operator-settings-edit-branding"
+          >
+            Edit
+          </button>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
+          Instance branding for the public intake pages and prospect-facing email.
+          The name falls back to "Custyard" when unset. The logo must be an
+          /uploads/ path; the color a hex value like #1a2b3c. Leave a field blank
+          to clear it.
+        </p>
+
+        <div :if={not @editing_branding} class="space-y-3">
+          <div
+            class="flex items-center justify-between"
+            data-testid="operator-settings-branding-name"
+          >
+            <span class="text-sm text-gray-700 dark:text-zinc-300">Name</span>
+            <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded">
+              {@branding.name || "not set"}
+            </span>
+          </div>
+          <div
+            class="flex items-center justify-between"
+            data-testid="operator-settings-branding-logo-url"
+          >
+            <span class="text-sm text-gray-700 dark:text-zinc-300">Logo URL</span>
+            <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded break-all">
+              {@branding.logo_url || "not set"}
+            </span>
+          </div>
+          <div
+            class="flex items-center justify-between"
+            data-testid="operator-settings-branding-primary-color"
+          >
+            <span class="text-sm text-gray-700 dark:text-zinc-300">Primary color</span>
+            <span class="flex items-center gap-2">
+              <span
+                :if={@branding.primary_color}
+                class="inline-block w-4 h-4 rounded border border-gray-300 dark:border-zinc-600"
+                style={"background-color: #{@branding.primary_color}"}
+              />
+              <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded">
+                {@branding.primary_color || "not set"}
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <form
+          :if={@editing_branding}
+          phx-submit="save_branding"
+          class="space-y-3"
+          data-testid="operator-settings-branding-form"
+        >
+          <div class="flex items-center justify-between gap-4">
+            <label class="text-sm text-gray-700 dark:text-zinc-300" for="branding_name">
+              Name
+            </label>
+            <input
+              type="text"
+              maxlength="100"
+              name="branding[name]"
+              id="branding_name"
+              value={@branding.name}
+              placeholder="Custyard (default)"
+              class="w-64 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div class="flex items-center justify-between gap-4">
+            <label class="text-sm text-gray-700 dark:text-zinc-300" for="branding_logo_url">
+              Logo URL
+            </label>
+            <input
+              type="text"
+              name="branding[logo_url]"
+              id="branding_logo_url"
+              value={@branding.logo_url}
+              placeholder="/uploads/logos/logo.png"
+              class="w-64 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div class="flex items-center justify-between gap-4">
+            <label class="text-sm text-gray-700 dark:text-zinc-300" for="branding_primary_color">
+              Primary color
+            </label>
+            <input
+              type="text"
+              name="branding[primary_color]"
+              id="branding_primary_color"
+              value={@branding.primary_color}
+              placeholder="#1a2b3c"
+              pattern="^#[0-9a-fA-F]{6}$"
+              class="w-64 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-zinc-700">
+            <button
+              type="button"
+              phx-click="cancel_branding"
+              class="text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200 px-3 py-1"
+              data-testid="operator-settings-cancel-branding"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="text-xs text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded"
+              data-testid="operator-settings-save-branding"
             >
               Save
             </button>

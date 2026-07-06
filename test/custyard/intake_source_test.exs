@@ -102,6 +102,32 @@ defmodule Custyard.IntakeSourceTest do
     end
   end
 
+  describe "update_changeset/2" do
+    test "never casts the key" do
+      source = insert_intake_source(key: "original")
+
+      for attrs <- [%{key: "other", name: "Renamed"}, %{"key" => "other", "name" => "Renamed"}] do
+        changeset = IntakeSource.update_changeset(source, attrs)
+
+        assert changeset.valid?
+        refute Map.has_key?(changeset.changes, :key)
+        assert Ecto.Changeset.fetch_field!(changeset, :key) == "original"
+      end
+    end
+
+    test "still enforces content validations" do
+      source = insert_intake_source()
+
+      changeset = IntakeSource.update_changeset(source, %{name: nil})
+      assert "can't be blank" in errors_on(changeset).name
+
+      changeset =
+        IntakeSource.update_changeset(source, %{headline: String.duplicate("h", 201)})
+
+      assert "should be at most 200 character(s)" in errors_on(changeset).headline
+    end
+  end
+
   describe "questions validation" do
     test "accepts a valid Q&A list and round-trips through the database" do
       questions = [

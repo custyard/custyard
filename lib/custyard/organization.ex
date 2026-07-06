@@ -122,31 +122,17 @@ defmodule Custyard.Organization do
     |> validate_logo_url()
   end
 
+  # Upload-path discipline (uploads-only, traversal/null-byte rejection) is
+  # shared with instance branding via Custyard.UploadPath.
   defp validate_logo_url(changeset) do
     case get_change(changeset, :logo_url) do
       nil ->
         changeset
 
       url when is_binary(url) ->
-        cond do
-          # Only allow /uploads/ paths - no external URLs to prevent tracking/SSRF
-          not String.starts_with?(url, "/uploads/") ->
-            add_error(changeset, :logo_url, "must start with /uploads/")
-
-          # Reject path traversal sequences
-          String.contains?(url, "..") ->
-            add_error(changeset, :logo_url, "must not contain path traversal sequences")
-
-          # Reject URL-encoded path traversal (%2e = .)
-          String.contains?(String.downcase(url), "%2e") ->
-            add_error(changeset, :logo_url, "must not contain encoded path traversal")
-
-          # Reject null bytes
-          String.contains?(url, "\0") or String.contains?(String.downcase(url), "%00") ->
-            add_error(changeset, :logo_url, "must not contain null bytes")
-
-          true ->
-            changeset
+        case Custyard.UploadPath.validate(url) do
+          :ok -> changeset
+          {:error, message} -> add_error(changeset, :logo_url, message)
         end
     end
   end

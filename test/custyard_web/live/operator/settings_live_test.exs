@@ -106,4 +106,129 @@ defmodule CustyardWeb.Operator.SettingsLiveTest do
       assert Settings.get_intake_config().unlinked_tier_score == 10
     end
   end
+
+  describe "branding card" do
+    test "renders branding defaults", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/operator/settings")
+
+      assert html =~ "operator-settings-branding"
+      assert html =~ "Logo URL"
+      assert html =~ "Primary color"
+    end
+
+    test "super admin can edit and save branding", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/operator/settings")
+
+      view |> element("[data-testid=operator-settings-edit-branding]") |> render_click()
+
+      view
+      |> form("[data-testid=operator-settings-branding-form]", %{
+        "branding" => %{
+          "name" => "Acme Support",
+          "logo_url" => "/uploads/logos/acme.png",
+          "primary_color" => "#1a2b3c"
+        }
+      })
+      |> render_submit()
+
+      assert render(view) =~ "Branding updated successfully"
+
+      branding = Settings.get_branding()
+      assert branding.name == "Acme Support"
+      assert branding.logo_url == "/uploads/logos/acme.png"
+      assert branding.primary_color == "#1a2b3c"
+    end
+
+    test "blank fields clear branding values", %{conn: conn} do
+      {:ok, _} = Settings.update_branding(%{name: "Acme", primary_color: "#112233"})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/settings")
+
+      view |> element("[data-testid=operator-settings-edit-branding]") |> render_click()
+
+      view
+      |> form("[data-testid=operator-settings-branding-form]", %{
+        "branding" => %{"name" => "Acme", "logo_url" => "", "primary_color" => ""}
+      })
+      |> render_submit()
+
+      branding = Settings.get_branding()
+      assert branding.name == "Acme"
+      assert branding.primary_color == nil
+    end
+
+    test "whitespace-only fields clear rather than store blanks", %{conn: conn} do
+      {:ok, _} = Settings.update_branding(%{name: "Acme", primary_color: "#112233"})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/settings")
+
+      view |> element("[data-testid=operator-settings-edit-branding]") |> render_click()
+
+      view
+      |> form("[data-testid=operator-settings-branding-form]", %{
+        "branding" => %{"name" => "   ", "logo_url" => "", "primary_color" => "#112233"}
+      })
+      |> render_submit()
+
+      # A whitespace name is treated as blank: cleared to nil, never stored,
+      # so consumers' nil -> "Custyard" fallback still applies.
+      branding = Settings.get_branding()
+      assert branding.name == nil
+      assert branding.primary_color == "#112233"
+    end
+
+    test "rejects a traversal logo path with a flash error", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/operator/settings")
+
+      view |> element("[data-testid=operator-settings-edit-branding]") |> render_click()
+
+      view
+      |> form("[data-testid=operator-settings-branding-form]", %{
+        "branding" => %{
+          "name" => "",
+          "logo_url" => "/uploads/../secrets",
+          "primary_color" => ""
+        }
+      })
+      |> render_submit()
+
+      assert render(view) =~ "Failed to update branding"
+      assert Settings.get_branding().logo_url == nil
+    end
+
+    test "rejects a malformed color with a flash error", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/operator/settings")
+
+      view |> element("[data-testid=operator-settings-edit-branding]") |> render_click()
+
+      view
+      |> form("[data-testid=operator-settings-branding-form]", %{
+        "branding" => %{"name" => "", "logo_url" => "", "primary_color" => "blue"}
+      })
+      |> render_submit()
+
+      assert render(view) =~ "Failed to update branding"
+      assert Settings.get_branding().primary_color == nil
+    end
+
+    test "non-super-admin operator cannot save branding" do
+      # Same defense-in-depth precedent as the intake card: the route is
+      # mount-gated, so the double-gate branch is exercised directly.
+      operator = insert_operator_account(role: "admin")
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{__changed__: %{}, flash: %{}, current_operator: operator}
+      }
+
+      {:noreply, socket} =
+        SettingsLive.handle_event(
+          "save_branding",
+          %{"branding" => %{"name" => "Hijacked"}},
+          socket
+        )
+
+      assert socket.assigns.flash["error"] == "Only super admins can modify settings"
+      assert Settings.get_branding().name == nil
+    end
+  end
 end

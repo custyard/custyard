@@ -86,6 +86,19 @@ inactive_class =
             Projects
           </.link>
           <.link
+            navigate={~p"/operator/intake-sources"}
+            class={
+              if nav_active?.("/operator/intake-sources", [
+                   CustyardWeb.Operator.IntakeSourcesLive
+                 ]),
+                 do: active_class,
+                 else: inactive_class
+            }
+            data-testid="operator-nav-intake-sources"
+          >
+            Intake Sources
+          </.link>
+          <.link
             navigate={~p"/operator/settings"}
             class={
               if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
@@ -175,6 +188,18 @@ inactive_class =
         }
       >
         Projects
+      </.link>
+      <.link
+        navigate={~p"/operator/intake-sources"}
+        class={
+          if nav_active?.("/operator/intake-sources", [
+               CustyardWeb.Operator.IntakeSourcesLive
+             ]),
+             do: active_class,
+             else: inactive_class
+        }
+      >
+        Intake Sources
       </.link>
       <.link
         navigate={~p"/operator/settings"}
