@@ -376,6 +376,18 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
+  # Nil-org conversations subscribe to the global "conversations" topic (see
+  # mount_conversation/3), which also carries :conversation_created for every
+  # new inbound email — never relevant to an already-open conversation.
+  def handle_info({:conversation_created, _id}, socket) do
+    {:noreply, socket}
+  end
+
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
   defp get_scoped_task!(socket, task_id) when is_binary(task_id) do
     case Integer.parse(task_id) do
       {int_id, ""} -> get_scoped_task!(socket, int_id)
