@@ -16,15 +16,16 @@ defmodule Custyard.Slugs do
   hash-only via `Custyard.Auth.Token`; the plaintext leaves this module
   exactly once per generation.
 
-  Promotion to `provisioned` (prospect conversion) is deliberately NOT
-  implemented here — it arrives with the conversion work and is the only
-  path allowed to write `organization_id`.
+  Promotion to `provisioned` (`promote/2`) is the only path allowed to write
+  `organization_id`; it is called exclusively from
+  `Custyard.Organizations.convert_prospect/2`, inside the conversion
+  transaction.
   """
 
   import Ecto.Query
 
   alias Custyard.Auth.Token
-  alias Custyard.{Conversation, Repo, Settings, Slug}
+  alias Custyard.{Conversation, Organization, Repo, Settings, Slug}
 
   @max_live_claims_per_email 3
 
@@ -222,6 +223,33 @@ defmodule Custyard.Slugs do
       Repo.delete_all(from s in Slug, where: s.id == ^id and s.status in [:claimed, :confirmed])
 
     if count == 1, do: {:ok, slug}, else: {:error, :not_found}
+  end
+
+  @doc """
+  Promote a conversation's confirmed claim to `provisioned`, linking it to
+  `organization`. Called only from `Custyard.Organizations.convert_prospect/2`,
+  inside its conversion transaction.
+
+  Race-safe conditional UPDATE: `WHERE conversation_id = ? AND status =
+  'confirmed'`. A claim that was released, expired away, never confirmed, or
+  already promoted between load and this call updates zero rows —
+  `{:error, :not_found}`, which the caller treats as "nothing to promote,"
+  not a conversion failure: a prospect can convert without ever having
+  claimed a slug.
+  """
+  def promote(%Conversation{id: conversation_id}, %Organization{id: organization_id}) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {count, _} =
+      Repo.update_all(
+        from(s in Slug, where: s.conversation_id == ^conversation_id and s.status == :confirmed),
+        set: [status: :provisioned, organization_id: organization_id, updated_at: now]
+      )
+
+    case count do
+      1 -> {:ok, Repo.get_by!(Slug, conversation_id: conversation_id)}
+      0 -> {:error, :not_found}
+    end
   end
 
   @doc """
