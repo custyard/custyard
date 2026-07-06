@@ -620,4 +620,73 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert message.source == :operator
     end
   end
+
+  describe "convert prospect" do
+    test "super_admin converts an unlinked public-intake prospect into a new organization", %{
+      conn: conn
+    } do
+      conv = insert_conversation(organization_id: nil, source: :public_intake)
+
+      insert_prospect(
+        conversation_id: conv.id,
+        email: "buyer@acme.com",
+        email_captured_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      )
+
+      {:ok, view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      assert html =~ "operator-convert-prospect-btn"
+
+      html =
+        view
+        |> element("[data-testid=operator-convert-prospect-btn]")
+        |> render_click()
+
+      # Prefilled from the prospect's captured email domain.
+      assert html =~ ~s(value="acme.com")
+
+      view
+      |> form("[data-testid=operator-convert-form]", name: "Acme Corp", domain: "acme.com")
+      |> render_submit()
+
+      converted = Conversations.get_conversation!(conv.id) |> Repo.preload(:organization)
+      assert converted.organization.name == "Acme Corp"
+      assert converted.source == :public_intake
+    end
+
+    test "the convert button is hidden for a conversation already linked to an organization", %{
+      conn: conn
+    } do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, source: :public_intake)
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute html =~ "operator-convert-prospect-btn"
+    end
+
+    test "admin operators do not see the convert button on a nil-org prospect" do
+      org = insert_organization()
+      operator = insert_scoped_operator(org.id, "admin")
+      conv = insert_conversation(organization_id: nil, source: :public_intake)
+
+      conn = conn_for_operator(operator)
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute html =~ "operator-convert-prospect-btn"
+    end
+
+    test "a direct convert_prospect event from a non-super-admin is refused" do
+      org = insert_organization()
+      operator = insert_scoped_operator(org.id, "admin")
+      conv = insert_conversation(organization_id: nil, source: :public_intake)
+
+      conn = conn_for_operator(operator)
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      html = render_click(view, "convert_prospect", %{"name" => "Sneaky Corp"})
+
+      assert html =~ "Only super admins can convert prospects"
+      assert Conversations.get_conversation!(conv.id).organization_id == nil
+    end
+  end
 end
