@@ -49,7 +49,7 @@ defmodule CustyardWeb.Plugs.ResumeCookie do
   @impl true
   def call(%Plug.Conn{method: "GET"} = conn, _opts) do
     with token when is_binary(token) <- conn.path_params["token"],
-         {:allow, _count} <- RateLimit.peek(:resume_mount, ClientIP.from_conn(conn)),
+         {:allow, _count} <- RateLimit.peek(:resume_mount, ClientIP.from_conn(conn) || "unknown"),
          true <- Intake.resume_token_valid?(token) do
       put_resume_cookie(conn, token)
     else
@@ -61,8 +61,9 @@ defmodule CustyardWeb.Plugs.ResumeCookie do
 
   @doc """
   Sets the signed resume cookie with the canonical attributes: signed value
-  (raw token, never readable client side without the signature), one-year
-  max-age, HTTP-only, `SameSite=Lax`, and `Secure` in production.
+  (tamper-evident, but not confidential — the token is base64-encoded and
+  readable as-is, same as the `/r/:token` URL it mirrors), one-year max-age,
+  HTTP-only, `SameSite=Lax`, and `Secure` in production.
   """
   def put_resume_cookie(conn, token) when is_binary(token) do
     put_resp_cookie(conn, @cookie_name, token,
