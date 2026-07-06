@@ -1,6 +1,3 @@
-# README.md
----
-
 # Custyard
 
 Customer onboarding platform with email ingestion via LMTP/IMAP.
