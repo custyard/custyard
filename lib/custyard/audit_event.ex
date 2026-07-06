@@ -10,7 +10,13 @@ defmodule Custyard.AuditEvent do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @event_types [:webhook_received, :webhook_processed, :webhook_error, :slug_released]
+  @event_types [
+    :webhook_received,
+    :webhook_processed,
+    :webhook_error,
+    :slug_released,
+    :prospect_converted
+  ]
 
   schema "audit_events" do
     field :event_type, Ecto.Enum, values: @event_types

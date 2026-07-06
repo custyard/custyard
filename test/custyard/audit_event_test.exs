@@ -11,7 +11,8 @@ defmodule Custyard.AuditEventTest do
                :webhook_received,
                :webhook_processed,
                :webhook_error,
-               :slug_released
+               :slug_released,
+               :prospect_converted
              ]
     end
   end
