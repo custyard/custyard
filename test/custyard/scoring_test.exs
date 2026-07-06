@@ -607,9 +607,8 @@ defmodule Custyard.ScoringTest do
       assert updated_conv2.cached_score == 42
     end
 
-    test "handles nil organization gracefully (returns 0 score)" do
+    test "scores nil-organization conversations with the unlinked tier score" do
       # Create a disambiguation conversation with nil organization
-      # Need to insert directly to bypass changeset validation
       {:ok, conv} =
         %Custyard.Conversation{}
         |> Custyard.Conversation.changeset(%{
@@ -624,9 +623,10 @@ defmodule Custyard.ScoringTest do
 
       assert updated_count == 1
 
-      # Verify score is 0 for nil organization
+      # Unlinked conversations score with all components:
+      # new(30) + unlinked tier(10) = 40
       updated = Custyard.Repo.get!(Custyard.Conversation, conv.id)
-      assert updated.cached_score == 0
+      assert updated.cached_score == 40
     end
 
     test "returns count of updated conversations" do
@@ -718,6 +718,135 @@ defmodule Custyard.ScoringTest do
       updated = Custyard.Repo.get!(Custyard.Conversation, conv.id)
       # new(30) + standard(10) + velocity(0) = 40
       assert updated.cached_score == 40
+    end
+  end
+
+  describe "scoring path equivalence" do
+    test "calculate/1, breakdown/1 total, and the batch path agree for org-linked and unlinked conversations" do
+      org = insert_organization(tier: :enterprise)
+
+      combos = [
+        {org.id, :email, :new, :normal, 0, 0},
+        {org.id, :email, :active, :elevated, 30, 3},
+        {nil, :disambiguation, :new, :urgent, 5, 2},
+        {nil, :disambiguation, :dormant, :normal, 80, 0}
+      ]
+
+      for {org_id, source, state, urgency, hours_idle, msg_count} <- combos do
+        conv =
+          insert_conversation(
+            organization_id: org_id,
+            source: source,
+            state: state,
+            urgency: urgency,
+            last_operator_action_at: DateTime.add(DateTime.utc_now(), -hours_idle, :hour)
+          )
+
+        for _ <- 1..msg_count//1, do: insert_message(conversation_id: conv.id)
+
+        calculated = Scoring.calculate(conv)
+        breakdown_total = Scoring.breakdown(conv).total
+
+        assert Scoring.calculate_and_cache_batch([conv.id]) == 1
+        cached = Custyard.Repo.get!(Custyard.Conversation, conv.id).cached_score
+
+        label = inspect({org_id && :linked, state, urgency, hours_idle, msg_count})
+
+        assert calculated == breakdown_total,
+               "calculate/1 (#{calculated}) and breakdown/1 total (#{breakdown_total}) diverge for #{label}"
+
+        assert calculated == cached,
+               "calculate/1 (#{calculated}) and batch path (#{cached}) diverge for #{label}"
+      end
+    end
+  end
+
+  describe "unlinked (nil organization) scoring" do
+    test "calculate_and_cache/1 scores a nil-organization conversation above zero" do
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          state: :new,
+          last_operator_action_at: DateTime.utc_now()
+        )
+
+      assert {:ok, score} = Scoring.calculate_and_cache(conv.id)
+
+      # new(30) + unlinked tier(10) = 40
+      assert score == 40
+      assert Custyard.Repo.get!(Custyard.Conversation, conv.id).cached_score == 40
+    end
+
+    test "nil-organization conversation scores identically to a standard-tier org conversation" do
+      org = insert_organization(tier: :standard)
+      last_operator_action_at = DateTime.add(DateTime.utc_now(), -10, :hour)
+
+      linked =
+        insert_conversation(
+          organization_id: org.id,
+          state: :new,
+          urgency: :elevated,
+          last_operator_action_at: last_operator_action_at
+        )
+
+      unlinked =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          state: :new,
+          urgency: :elevated,
+          last_operator_action_at: last_operator_action_at
+        )
+
+      assert Scoring.calculate(unlinked) == Scoring.calculate(linked)
+      assert Scoring.breakdown(unlinked) == Scoring.breakdown(linked)
+    end
+
+    test "tier component reads intake_config unlinked_tier_score" do
+      {:ok, _} = Custyard.Settings.update_intake_config(%{unlinked_tier_score: 42})
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          last_operator_action_at: DateTime.utc_now()
+        )
+
+      breakdown = Scoring.breakdown(conv)
+      assert breakdown.tier == 42
+    end
+
+    test "neglect accrues on standard-tier thresholds" do
+      fresh =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          last_operator_action_at: DateTime.utc_now()
+        )
+
+      warning =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          last_operator_action_at: DateTime.add(DateTime.utc_now(), -25, :hour)
+        )
+
+      critical =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          last_operator_action_at: DateTime.add(DateTime.utc_now(), -49, :hour)
+        )
+
+      # Standard-tier thresholds are {24, 48} hours
+      assert Scoring.neglect_status(fresh) == :ok
+      assert Scoring.neglect_status(warning) == :warning
+      assert Scoring.neglect_status(critical) == :critical
+
+      # The neglect bonus flows into the score breakdown
+      assert Scoring.breakdown(warning).neglect_bonus == 7
+      assert Scoring.breakdown(critical).neglect_bonus == 15
     end
   end
 end

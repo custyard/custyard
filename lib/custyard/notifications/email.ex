@@ -37,7 +37,7 @@ defmodule Custyard.Notifications.Email do
     [Email stub] Neglect alert would be sent:
       Level: #{level}
       Conversation: #{conversation.id} - #{conversation.subject}
-      Organization: #{conversation.organization.name}
+      Organization: #{organization_display(conversation.organization)}
       Contact: #{contact_display(conversation.contact)}
     """)
 
@@ -71,7 +71,7 @@ defmodule Custyard.Notifications.Email do
 
   defp neglect_alert_html(conversation, level) do
     safe_subject = html_escape(conversation.subject)
-    safe_org_name = html_escape(conversation.organization.name)
+    safe_org_name = html_escape(organization_display(conversation.organization))
     safe_contact = html_escape(contact_display(conversation.contact))
 
     """
@@ -100,7 +100,7 @@ defmodule Custyard.Notifications.Email do
     #{String.upcase(to_string(level))} NEGLECT ALERT
 
     Conversation: #{conversation.subject}
-    Organization: #{conversation.organization.name}
+    Organization: #{organization_display(conversation.organization)}
     Contact: #{contact_display(conversation.contact)}
     Last activity: #{format_datetime(last_activity(conversation))}
 
@@ -124,6 +124,11 @@ defmodule Custyard.Notifications.Email do
 
   defp contact_display(nil), do: "Unknown"
   defp contact_display(contact), do: contact.name || contact.email
+
+  # Conversations without an organization (unlinked prospects) can now reach
+  # neglect notifications; render a neutral label instead of crashing.
+  defp organization_display(nil), do: "Unlinked prospect"
+  defp organization_display(organization), do: organization.name
 
   defp html_escape(value) when is_binary(value) do
     # Use Phoenix.HTML.html_escape/1 which returns {:safe, iodata}

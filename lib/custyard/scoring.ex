@@ -5,6 +5,11 @@ defmodule Custyard.Scoring do
   Score = (idle_weight * idle_score) + (state_weight * state_score) +
           (tier_weight * tier_score) + (urgency_weight * urgency_score) +
           (velocity_weight * velocity_score) + neglect_bonus
+
+  Conversations without an organization (unlinked prospects) score with all
+  components: the tier component comes from the configurable
+  `intake_config.unlinked_tier_score` setting (default equal to the standard
+  tier) and neglect tracking uses the standard-tier thresholds.
   """
 
   require Logger
@@ -129,25 +134,11 @@ defmodule Custyard.Scoring do
     updated_count
   end
 
-  # Internal: Calculate score with pre-fetched message count
-  # Returns 0 for conversations with nil organization (e.g., disambiguation conversations)
+  # Internal: Calculate score with pre-fetched message count (batch path)
   defp calculate_with_message_count(conversation, message_count) do
-    conversation = ensure_preloaded(conversation, :organization)
-
-    if is_nil(conversation.organization) do
-      0
-    else
-      weights = get_weights()
-
-      idle = idle_score(conversation) * weights.idle
-      state = state_score(conversation) * weights.state
-      tier = tier_score(conversation) * weights.tier
-      urgency = urgency_score(conversation) * weights.urgency
-      velocity = velocity_score_from_count(message_count) * weights.velocity
-      neglect = neglect_bonus(conversation) * weights.neglect
-
-      round(idle + state + tier + urgency + velocity + neglect)
-    end
+    conversation
+    |> components(message_count)
+    |> components_total()
   end
 
   defp velocity_score_from_count(count) do
@@ -157,78 +148,65 @@ defmodule Custyard.Scoring do
 
   @doc """
   Calculate score without caching (for display/debugging).
-
-  Returns 0 for conversations with nil organization (e.g., disambiguation conversations).
   """
   def calculate(conversation) do
-    conversation = ensure_preloaded(conversation, :organization)
-
-    # Disambiguation conversations have nil organization - return 0 score
-    if is_nil(conversation.organization) do
-      0
-    else
-      weights = get_weights()
-
-      idle = idle_score(conversation) * weights.idle
-      state = state_score(conversation) * weights.state
-      tier = tier_score(conversation) * weights.tier
-      urgency = urgency_score(conversation) * weights.urgency
-      velocity = velocity_score(conversation) * weights.velocity
-      neglect = neglect_bonus(conversation) * weights.neglect
-
-      round(idle + state + tier + urgency + velocity + neglect)
-    end
+    conversation
+    |> components(nil)
+    |> components_total()
   end
 
   @doc """
   Get score breakdown for transparency UI.
-
-  Returns all zeros for conversations with nil organization (e.g., disambiguation conversations).
   """
   def breakdown(conversation) do
+    components = components(conversation, nil)
+
+    %{
+      idle: round(components.idle),
+      state: round(components.state),
+      tier: round(components.tier),
+      urgency: round(components.urgency),
+      velocity: round(components.velocity),
+      neglect_bonus: round(components.neglect),
+      total: components_total(components)
+    }
+  end
+
+  # Single source of truth for the six weighted score components.
+  # `message_count` overrides the 24h message-count query for the batch path;
+  # pass nil to compute velocity from the database.
+  defp components(conversation, message_count) do
     conversation = ensure_preloaded(conversation, :organization)
+    weights = get_weights()
 
-    if is_nil(conversation.organization) do
-      %{
-        idle: 0,
-        state: 0,
-        tier: 0,
-        urgency: 0,
-        velocity: 0,
-        neglect_bonus: 0,
-        total: 0
-      }
-    else
-      # Fetch weights once for consistent calculation
-      weights = get_weights()
+    velocity =
+      case message_count do
+        nil -> velocity_score(conversation)
+        count -> velocity_score_from_count(count)
+      end
 
-      # Calculate each weighted component
-      idle = idle_score(conversation) * weights.idle
-      state = state_score(conversation) * weights.state
-      tier = tier_score(conversation) * weights.tier
-      urgency = urgency_score(conversation) * weights.urgency
-      velocity = velocity_score(conversation) * weights.velocity
-      neglect = neglect_bonus(conversation) * weights.neglect
+    %{
+      idle: idle_score(conversation) * weights.idle,
+      state: state_score(conversation) * weights.state,
+      tier: tier_score(conversation) * weights.tier,
+      urgency: urgency_score(conversation) * weights.urgency,
+      velocity: velocity * weights.velocity,
+      neglect: neglect_bonus(conversation) * weights.neglect
+    }
+  end
 
-      # Compute total from the already-calculated components (avoiding recalculation)
-      total = round(idle + state + tier + urgency + velocity + neglect)
-
-      %{
-        idle: round(idle),
-        state: round(state),
-        tier: round(tier),
-        urgency: round(urgency),
-        velocity: round(velocity),
-        neglect_bonus: round(neglect),
-        total: total
-      }
-    end
+  defp components_total(components) do
+    components
+    |> Map.values()
+    |> Enum.sum()
+    |> round()
   end
 
   @doc """
   Get neglect status for a conversation.
 
-  Returns :ok for conversations with nil organization (e.g., disambiguation conversations).
+  Conversations without an organization (unlinked prospects) are tracked
+  on the standard-tier thresholds.
 
   Optionally accepts pre-loaded thresholds to avoid repeated Settings lookups
   when checking multiple conversations.
@@ -238,22 +216,19 @@ defmodule Custyard.Scoring do
   def neglect_status(conversation, thresholds) do
     conversation = ensure_preloaded(conversation, :organization)
 
-    # Disambiguation conversations have nil organization - always :ok status
-    if is_nil(conversation.organization) do
-      :ok
-    else
-      hours_idle = hours_since_operator_action(conversation)
-      tier = conversation.organization.tier
-      thresholds = thresholds || get_neglect_thresholds()
-      {warning, critical} = Map.get(thresholds, tier, {24, 48})
+    hours_idle = hours_since_operator_action(conversation)
+    thresholds = thresholds || get_neglect_thresholds()
+    {warning, critical} = Map.get(thresholds, neglect_tier(conversation), {24, 48})
 
-      cond do
-        hours_idle >= critical -> :critical
-        hours_idle >= warning -> :warning
-        true -> :ok
-      end
+    cond do
+      hours_idle >= critical -> :critical
+      hours_idle >= warning -> :warning
+      true -> :ok
     end
   end
+
+  defp neglect_tier(%{organization: nil}), do: :standard
+  defp neglect_tier(conversation), do: conversation.organization.tier
 
   # Private functions
 
@@ -265,6 +240,12 @@ defmodule Custyard.Scoring do
 
   defp state_score(conversation) do
     Map.get(@state_scores, conversation.state, 0)
+  end
+
+  # Conversations without an organization (unlinked prospects) get the
+  # configurable tier-equivalent score from intake_config.
+  defp tier_score(%{organization: nil}) do
+    get_unlinked_tier_score()
   end
 
   defp tier_score(conversation) do
@@ -339,6 +320,35 @@ defmodule Custyard.Scoring do
 
       emit_settings_error_telemetry(:weights, e)
       @default_weights
+  end
+
+  @default_unlinked_tier_score 10
+
+  defp get_unlinked_tier_score do
+    Settings.get_intake_config().unlinked_tier_score
+  rescue
+    e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
+      # Expected errors during first boot or if Settings row doesn't exist yet
+      Logger.warning("Settings not available for intake config, using defaults: #{inspect(e)}")
+      @default_unlinked_tier_score
+
+    e in [DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->
+      # Database connectivity issues - this is more serious
+      Logger.error(
+        "DATABASE ERROR loading intake config, using defaults. This may indicate DB issues: #{inspect(e)}"
+      )
+
+      emit_settings_error_telemetry(:intake_config, e)
+      @default_unlinked_tier_score
+
+    e ->
+      # Unexpected error - log and emit telemetry for investigation
+      Logger.error(
+        "Unexpected error loading intake config, using defaults: #{Exception.format(:error, e)}"
+      )
+
+      emit_settings_error_telemetry(:intake_config, e)
+      @default_unlinked_tier_score
   end
 
   defp get_neglect_thresholds do

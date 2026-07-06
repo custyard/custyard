@@ -18,8 +18,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
       |> assign(:page_title, "Settings")
       |> assign(:weights, weights)
       |> assign(:thresholds, thresholds)
+      |> assign(:intake_config, Settings.get_intake_config())
       |> assign(:editing_weights, false)
       |> assign(:editing_thresholds, false)
+      |> assign(:editing_intake, false)
       |> assign(:weight_form, to_form(weights, as: "weights"))
       |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
 
@@ -59,6 +61,25 @@ defmodule CustyardWeb.Operator.SettingsLive do
   def handle_event("save_thresholds", %{"thresholds" => threshold_params}, socket) do
     if Authorization.can_modify_settings?(socket.assigns.current_operator) do
       save_thresholds(threshold_params, socket)
+    else
+      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
+    end
+  end
+
+  @impl true
+  def handle_event("edit_intake", _params, socket) do
+    {:noreply, assign(socket, :editing_intake, true)}
+  end
+
+  @impl true
+  def handle_event("cancel_intake", _params, socket) do
+    {:noreply, assign(socket, :editing_intake, false)}
+  end
+
+  @impl true
+  def handle_event("save_intake", %{"intake" => intake_params}, socket) do
+    if Authorization.can_modify_settings?(socket.assigns.current_operator) do
+      save_intake(intake_params, socket)
     else
       {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
     end
@@ -155,6 +176,42 @@ defmodule CustyardWeb.Operator.SettingsLive do
           {:error, _changeset} ->
             {:noreply, put_flash(socket, :error, "Failed to update thresholds")}
         end
+      end
+    end
+  end
+
+  defp save_intake(intake_params, socket) do
+    parsed_values = [
+      {"unlinked_tier_score", parse_int(intake_params["unlinked_tier_score"])},
+      {"slug_claim_ttl_hours", parse_int(intake_params["slug_claim_ttl_hours"])}
+    ]
+
+    invalid_fields =
+      parsed_values
+      |> Enum.filter(fn {_k, v} -> v == :error end)
+      |> Enum.map(fn {k, _} -> k end)
+
+    if invalid_fields != [] do
+      {:noreply,
+       put_flash(socket, :error, "Invalid numeric values for: #{Enum.join(invalid_fields, ", ")}")}
+    else
+      config = Map.new(parsed_values)
+
+      case Settings.update_intake_config(config) do
+        {:ok, _settings} ->
+          {:noreply,
+           socket
+           |> assign(:intake_config, Settings.get_intake_config())
+           |> assign(:editing_intake, false)
+           |> put_flash(:info, "Intake settings updated successfully")}
+
+        {:error, _changeset} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             "Failed to update intake settings. Unlinked tier score must be 0-100 and slug claim TTL must be 1-720 hours."
+           )}
       end
     end
   end
@@ -380,6 +437,108 @@ defmodule CustyardWeb.Operator.SettingsLive do
               type="submit"
               class="text-xs text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded"
               data-testid="operator-settings-save-thresholds"
+            >
+              Save
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div
+        class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 mb-4"
+        data-testid="operator-settings-intake"
+      >
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">Intake</h2>
+          <button
+            :if={not @editing_intake}
+            phx-click="edit_intake"
+            class="text-xs text-blue-600 hover:text-blue-800"
+            data-testid="operator-settings-edit-intake"
+          >
+            Edit
+          </button>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
+          Public intake behavior. The unlinked tier score is the tier-equivalent score
+          for conversations without an organization (0-100). The slug claim TTL is how
+          long an unconfirmed slug claim lives (1-720 hours).
+        </p>
+
+        <div :if={not @editing_intake} class="space-y-3">
+          <div
+            class="flex items-center justify-between"
+            data-testid="operator-settings-intake-unlinked-tier-score"
+          >
+            <span class="text-sm text-gray-700 dark:text-zinc-300">Unlinked tier score</span>
+            <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded">
+              {@intake_config.unlinked_tier_score}
+            </span>
+          </div>
+          <div
+            class="flex items-center justify-between"
+            data-testid="operator-settings-intake-slug-claim-ttl"
+          >
+            <span class="text-sm text-gray-700 dark:text-zinc-300">Slug claim TTL (hours)</span>
+            <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded">
+              {@intake_config.slug_claim_ttl_hours}
+            </span>
+          </div>
+        </div>
+
+        <form
+          :if={@editing_intake}
+          phx-submit="save_intake"
+          class="space-y-3"
+          data-testid="operator-settings-intake-form"
+        >
+          <div class="flex items-center justify-between">
+            <label
+              class="text-sm text-gray-700 dark:text-zinc-300"
+              for="intake_unlinked_tier_score"
+            >
+              Unlinked tier score
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              name="intake[unlinked_tier_score]"
+              id="intake_unlinked_tier_score"
+              value={@intake_config.unlinked_tier_score}
+              class="w-20 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div class="flex items-center justify-between">
+            <label
+              class="text-sm text-gray-700 dark:text-zinc-300"
+              for="intake_slug_claim_ttl_hours"
+            >
+              Slug claim TTL (hours)
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="720"
+              name="intake[slug_claim_ttl_hours]"
+              id="intake_slug_claim_ttl_hours"
+              value={@intake_config.slug_claim_ttl_hours}
+              class="w-20 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-zinc-700">
+            <button
+              type="button"
+              phx-click="cancel_intake"
+              class="text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200 px-3 py-1"
+              data-testid="operator-settings-cancel-intake"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="text-xs text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded"
+              data-testid="operator-settings-save-intake"
             >
               Save
             </button>
