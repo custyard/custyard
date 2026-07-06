@@ -108,7 +108,14 @@ defmodule Custyard.RateLimitTest do
         tiny_bucket: [limit: 2, window_ms: 60_000]
       )
 
-      on_exit(fn -> Application.put_env(:custyard, :rate_limit_buckets, original) end)
+      on_exit(fn ->
+        if original do
+          Application.put_env(:custyard, :rate_limit_buckets, original)
+        else
+          Application.delete_env(:custyard, :rate_limit_buckets)
+        end
+      end)
+
       :ok
     end
 

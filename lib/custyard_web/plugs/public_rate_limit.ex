@@ -6,10 +6,11 @@ defmodule CustyardWeb.Plugs.PublicRateLimit do
 
       plug CustyardWeb.Plugs.PublicRateLimit, bucket: :intake_post
 
-  The limit and window resolve at request time from
-  `config :custyard, :rate_limit_buckets` via
-  `Custyard.RateLimit.bucket_config!/1` — an unconfigured bucket fails
-  fast and loud. The key is the client IP under the
+  The bucket is validated against `config :custyard, :rate_limit_buckets`
+  at `init/1` (boot time), and the limit and window resolve again at
+  request time via `Custyard.RateLimit.bucket_config!/1` — an
+  unconfigured bucket fails fast and loud rather than 500ing on first
+  request. The key is the client IP under the
   `CustyardWeb.ClientIP` trust discipline; malformed request input never
   raises (garbage headers fall back to the peer address).
 
@@ -29,7 +30,9 @@ defmodule CustyardWeb.Plugs.PublicRateLimit do
 
   @impl true
   def init(opts) do
-    %{bucket: Keyword.fetch!(opts, :bucket)}
+    bucket = Keyword.fetch!(opts, :bucket)
+    RateLimit.bucket_config!(bucket)
+    %{bucket: bucket}
   end
 
   @impl true
