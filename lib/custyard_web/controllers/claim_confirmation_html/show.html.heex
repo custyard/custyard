@@ -1,0 +1,31 @@
+<%!-- The GET peek: renders the slug and a Confirm button, zero state
+     change. The token is consumed only by the explicit POST below, so
+     mail-scanner prefetch never burns it. --%>
+<div class="py-8" data-testid="claim-confirm-page">
+  <h1 class="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+    Confirm your claim
+  </h1>
+  <p class="mt-4 text-zinc-600 dark:text-zinc-400">
+    You claimed the name <span
+      class="font-mono font-semibold text-zinc-900 dark:text-zinc-100"
+      data-testid="claim-confirm-slug"
+    >{@slug.slug}</span>.
+    Press confirm to hold it.
+  </p>
+  <.form
+    for={%{}}
+    action={~p"/c/#{@token}/confirm"}
+    method="post"
+    class="mt-6"
+    data-testid="claim-confirm-form"
+  >
+    <button
+      type="submit"
+      class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
+      style={"background-color: #{@branding.primary_color || "#4f46e5"}"}
+      data-testid="claim-confirm-submit"
+    >
+      Confirm claim
+    </button>
+  </.form>
+</div>

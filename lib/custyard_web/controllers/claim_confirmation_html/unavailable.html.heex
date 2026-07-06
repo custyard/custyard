@@ -1,0 +1,11 @@
+<%!-- One identical page for every confirmation failure class (invalid,
+     expired, already-used, purged) — no validity oracle. Keep it static. --%>
+<div class="py-16 text-center" data-testid="claim-unavailable">
+  <h1 class="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+    Confirmation unavailable
+  </h1>
+  <p class="mt-4 text-zinc-600 dark:text-zinc-400">
+    This confirmation link is not available. If you requested a newer confirmation email, use the
+    link in the most recent message.
+  </p>
+</div>

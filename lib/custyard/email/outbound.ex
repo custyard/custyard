@@ -20,7 +20,7 @@ defmodule Custyard.Email.Outbound do
 
   require Logger
 
-  alias Custyard.Email.ThreadHeaders
+  alias Custyard.Email.{Headers, ThreadHeaders}
   alias Custyard.{Message, Repo}
   import Swoosh.Email
 
@@ -137,17 +137,9 @@ defmodule Custyard.Email.Outbound do
     name |> sanitize_header_text() |> quote_display_name()
   end
 
-  # RFC 5322 display names containing specials (comma, parens, quotes, ...)
-  # must be quoted-string wrapped, or "Acme, Inc. <a@b>" parses as two
-  # addresses. Plain atext-and-space names pass through unquoted.
-  defp quote_display_name(name) do
-    if name =~ ~r/^[a-zA-Z0-9!#$%&'*+\/=?^_`{|}~. -]*$/ do
-      name
-    else
-      escaped = String.replace(name, ~r/["\\]/, fn char -> "\\" <> char end)
-      "\"#{escaped}\""
-    end
-  end
+  # Delegates to the shared Custyard.Email.Headers (extracted from this
+  # module's privates; behavior byte-identical).
+  defp quote_display_name(name), do: Headers.quote_display_name(name)
 
   defp compose_subject(conversation) do
     base =
@@ -164,14 +156,9 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
-  # Header values must never contain CR/LF or other control characters
-  # (CWE-93 header injection); inbound subjects can carry them through the
-  # webhook JSON path, and Swoosh does not sanitize header values.
-  defp sanitize_header_text(text) do
-    text
-    |> String.replace(~r/[\x00-\x1F\x7F]+/, " ")
-    |> String.trim()
-  end
+  # Delegates to the shared Custyard.Email.Headers (extracted from this
+  # module's privates; behavior byte-identical).
+  defp sanitize_header_text(text), do: Headers.sanitize_header_text(text)
 
   defp wrap_html(text_body) do
     escaped =

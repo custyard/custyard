@@ -441,6 +441,47 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Build slug registry row attributes.
+
+  ## Examples
+
+      build_slug()
+      build_slug(slug: "acme", status: :confirmed)
+  """
+  def build_slug(overrides \\ []) do
+    id = unique_id()
+
+    defaults = %{
+      slug: "org-#{id}",
+      status: :claimed,
+      email: "claimant-#{id}@example.com",
+      conversation_id: nil,
+      organization_id: nil,
+      confirmation_token_hash: Token.generate() |> elem(1),
+      expires_at: DateTime.utc_now() |> DateTime.add(72, :hour) |> DateTime.truncate(:second),
+      confirmed_at: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Insert a slug registry row into the database.
+
+  Requires conversation_id or will create an org-less :public_intake
+  conversation. Inserted as a raw struct (no changeset) so tests can build
+  confirmed/provisioned rows directly; the database CHECK constraints
+  still apply (provisioned requires organization_id and vice versa).
+  """
+  def insert_slug(overrides \\ []) do
+    overrides = ensure_intake_conversation(overrides)
+
+    Custyard.Slug
+    |> struct(build_slug(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
   Insert an audit event into the database.
   """
   def insert_audit_event(overrides \\ []) do

@@ -83,6 +83,17 @@ defmodule CustyardWeb.Router do
     end
   end
 
+  # Slug-claim confirmation — scanner-safe dead views. GET peeks (zero
+  # state change, so mail-scanner prefetch never consumes the single-use
+  # token); the explicit POST confirms. Same no-referrer + :intake layout
+  # discipline as /i and /r: the token in the path is a bearer credential.
+  scope "/c", CustyardWeb do
+    pipe_through [:browser, :public_intake]
+
+    get "/:token", ClaimConfirmationController, :show
+    post "/:token/confirm", ClaimConfirmationController, :confirm
+  end
+
   scope "/api", CustyardWeb do
     pipe_through :api
 
@@ -129,6 +140,7 @@ defmodule CustyardWeb.Router do
       on_mount: [{CustyardWeb.Live.OperatorAuth, :require_super_admin}] do
       live "/settings", SettingsLive, :index
       live "/intake-sources", IntakeSourcesLive, :index
+      live "/slugs", SlugsLive, :index
     end
   end
 

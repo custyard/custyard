@@ -20,8 +20,11 @@ defmodule CustyardWeb.Live.ResumeAuth do
 
     * `:conversation` — preloaded with prospect and public messages
     * `:branding` — instance branding for the `:intake` layout
-    * `:resume_token_hash` — key for the `:resume_reply` rate bucket; the
-      plaintext token is deliberately not kept in socket state
+    * `:resume_token_hash` — key for the `:resume_reply` rate bucket; this
+      hook deliberately does not assign the plaintext token (auth and rate
+      keys are hash-based; `ResumeLive` separately keeps the plaintext from
+      its mount params solely so the claim-confirmation email can carry the
+      resume URL)
     * `:client_ip` — key for the IP-scoped mutation buckets (connect info is
       only readable during mount, so it is captured here)
   """
