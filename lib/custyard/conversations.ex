@@ -13,7 +13,10 @@ defmodule Custyard.Conversations do
 
   Options:
     - :filter - state filter ("all", "new", "active", "waiting", "dormant", "snoozed")
-    - :organization_id - scope to a specific organization (nil for all - super_admin only)
+    - :organization_id - scope to a specific organization (nil for all - super_admin only).
+      Org-scoped results also include conversations without an organization
+      (unlinked prospects) — they are visible to all operator roles, matching
+      `Custyard.Authorization.can_access_conversation?/2`.
   """
   def list_for_attention_queue(opts \\ []) do
     filter = Keyword.get(opts, :filter, "all")
@@ -56,8 +59,10 @@ defmodule Custyard.Conversations do
 
   defp apply_organization_filter(query, nil), do: query
 
+  # Org-scoped operators also see conversations without an organization
+  # (unlinked prospects); see list_for_attention_queue/1.
   defp apply_organization_filter(query, org_id) when is_integer(org_id) do
-    from c in query, where: c.organization_id == ^org_id
+    from c in query, where: c.organization_id == ^org_id or is_nil(c.organization_id)
   end
 
   defp apply_state_filter(query, "all"), do: query
@@ -320,6 +325,24 @@ defmodule Custyard.Conversations do
   end
 
   @doc """
+  Broadcast a PubSub message on the org-scoped conversations topic
+  (`"conversations:org:{id}"`).
+
+  Skips the broadcast entirely when `organization_id` is nil so the malformed
+  topic `"conversations:org:"` is never published — subscribers are always
+  keyed by a real organization id.
+  """
+  def broadcast_to_org(nil, _message), do: :ok
+
+  def broadcast_to_org(organization_id, message) do
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations:org:#{organization_id}",
+      message
+    )
+  end
+
+  @doc """
   Create a message for a conversation.
   Also touches the conversation's updated_at for accurate last-activity tracking.
   """
@@ -479,11 +502,7 @@ defmodule Custyard.Conversations do
       {:conversation_updated, conversation.id}
     )
 
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "conversations:org:#{conversation.organization_id}",
-      {:conversation_updated, conversation.id}
-    )
+    broadcast_to_org(conversation.organization_id, {:conversation_updated, conversation.id})
 
     :ok
   end

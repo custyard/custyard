@@ -166,7 +166,11 @@ defmodule CustyardWeb.OperatorComponents do
   end
 
   @doc """
-  Renders a source badge (lettermint/zendesk/intercom/slack/email).
+  Renders a source badge with a human label for the conversation/route source.
+
+  Known sources get a curated label and color; any other atom falls back to a
+  humanized label with neutral styling, so new source values render sensibly
+  without requiring a change here.
 
   ## Examples
 
@@ -182,19 +186,36 @@ defmodule CustyardWeb.OperatorComponents do
         :intercom -> "text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950"
         :slack -> "text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950"
         :email -> "text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950"
+        :portal -> "text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-950"
+        :disambiguation -> "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950"
         _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
       end
 
-    assigns = assign(assigns, :colors, colors)
+    assigns =
+      assigns
+      |> assign(:colors, colors)
+      |> assign(:label, source_label(assigns.source))
 
     ~H"""
     <span
       class={"text-xs px-1.5 py-0.5 rounded #{@colors}"}
       data-testid={"source-badge-#{@source}"}
     >
-      {to_string(@source)}
+      {@label}
     </span>
     """
+  end
+
+  defp source_label(:email), do: "Email"
+  defp source_label(:lettermint), do: "Lettermint"
+  defp source_label(:zendesk), do: "Zendesk"
+  defp source_label(:intercom), do: "Intercom"
+  defp source_label(:slack), do: "Slack"
+  defp source_label(:portal), do: "Portal"
+  defp source_label(:disambiguation), do: "Needs routing"
+
+  defp source_label(other) do
+    other |> to_string() |> String.replace("_", " ") |> String.capitalize()
   end
 
   @doc """

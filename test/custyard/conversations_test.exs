@@ -6,7 +6,7 @@ defmodule Custyard.ConversationsTest do
 
   import Custyard.Factory
 
-  describe "list_neglected/0" do
+  describe "list_neglected" do
     test "returns conversations excluding resolved" do
       org = insert_organization()
       active = insert_conversation(organization_id: org.id, state: :active)
@@ -42,6 +42,22 @@ defmodule Custyard.ConversationsTest do
 
       assert result.organization.id == org.id
       assert result.contact.id == contact.id
+    end
+
+    test "org scoping includes nil-org conversations and excludes other orgs" do
+      org = insert_organization()
+      other_org = insert_organization()
+
+      own = insert_conversation(organization_id: org.id)
+      other = insert_conversation(organization_id: other_org.id)
+      unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
+
+      results = Conversations.list_neglected(organization_id: org.id)
+      ids = Enum.map(results, & &1.id)
+
+      assert own.id in ids
+      assert unlinked.id in ids
+      refute other.id in ids
     end
   end
 
@@ -95,6 +111,34 @@ defmodule Custyard.ConversationsTest do
       [result] = Conversations.list_for_attention_queue()
 
       assert result.message_count == 2
+    end
+
+    test "org scoping includes nil-org conversations and excludes other orgs" do
+      org = insert_organization()
+      other_org = insert_organization()
+
+      own = insert_conversation(organization_id: org.id)
+      other = insert_conversation(organization_id: other_org.id)
+      unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
+
+      results = Conversations.list_for_attention_queue(organization_id: org.id)
+      ids = Enum.map(results, & &1.conversation.id)
+
+      assert own.id in ids
+      assert unlinked.id in ids
+      refute other.id in ids
+    end
+
+    test "unscoped (super_admin) queue includes nil-org conversations" do
+      org = insert_organization()
+      own = insert_conversation(organization_id: org.id)
+      unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
+
+      results = Conversations.list_for_attention_queue()
+      ids = Enum.map(results, & &1.conversation.id)
+
+      assert own.id in ids
+      assert unlinked.id in ids
     end
   end
 
@@ -870,6 +914,61 @@ defmodule Custyard.ConversationsTest do
       assert reloaded_conv.state == :active
       assert reloaded_conv.last_operator_action_at != nil
       assert message.conversation_id == conv.id
+    end
+
+    test "reply on a nil-org conversation broadcasts on the global topic" do
+      conversation =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          subject: "Unlinked reply thread"
+        )
+
+      conv_id = conversation.id
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+
+      {:ok, message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
+
+      assert message.source == :operator
+      assert_received {:message_added, ^conv_id}
+      assert_received {:conversation_updated, ^conv_id}
+    end
+
+    test "reply on a nil-org conversation never broadcasts to the malformed bare org topic" do
+      conversation =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          subject: "Unlinked reply thread"
+        )
+
+      # Subscribing only to the malformed topic a nil org would interpolate
+      # into isolates this assertion from the legitimate "conversations" topic.
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:")
+
+      {:ok, _message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
+
+      refute_received {:conversation_updated, _id}
+    end
+  end
+
+  describe "broadcast_to_org/2" do
+    test "publishes to the org-scoped topic for a real organization id" do
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:123")
+
+      assert :ok = Conversations.broadcast_to_org(123, {:conversation_updated, 7})
+
+      assert_received {:conversation_updated, 7}
+    end
+
+    test "skips the broadcast entirely when organization_id is nil" do
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:")
+
+      assert :ok = Conversations.broadcast_to_org(nil, {:conversation_updated, 7})
+
+      refute_received {:conversation_updated, 7}
     end
   end
 end

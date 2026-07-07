@@ -169,6 +169,38 @@ defmodule CustyardWeb.OperatorComponentsTest do
     end
   end
 
+  describe "source_badge/1" do
+    test "renders email source with human label" do
+      html = render_component(&OperatorComponents.source_badge/1, source: :email)
+
+      assert html =~ "Email"
+      assert html =~ ~s(data-testid="source-badge-email")
+    end
+
+    test "renders portal source with human label" do
+      html = render_component(&OperatorComponents.source_badge/1, source: :portal)
+
+      assert html =~ "Portal"
+      assert html =~ ~s(data-testid="source-badge-portal")
+    end
+
+    test "renders disambiguation source as Needs routing" do
+      html = render_component(&OperatorComponents.source_badge/1, source: :disambiguation)
+
+      assert html =~ "Needs routing"
+      assert html =~ ~s(data-testid="source-badge-disambiguation")
+    end
+
+    test "renders unknown source atoms with a humanized label and neutral styling" do
+      # New source values (e.g. :public_intake) must render without changes here
+      html = render_component(&OperatorComponents.source_badge/1, source: :public_intake)
+
+      assert html =~ "Public intake"
+      assert html =~ ~s(data-testid="source-badge-public_intake")
+      assert html =~ "text-gray-600"
+    end
+  end
+
   describe "score_breakdown/1" do
     test "renders breakdown with all positive factors" do
       breakdown = %{

@@ -426,4 +426,113 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "New incoming message"
     end
   end
+
+  describe "nil-organization conversations" do
+    defp insert_scoped_operator(org_id, role \\ "agent") do
+      {:ok, operator} =
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{
+          email: "#{role}-#{System.unique_integer([:positive])}@example.com",
+          password: "password123",
+          role: role,
+          organization_id: org_id
+        })
+        |> Repo.insert()
+
+      operator
+    end
+
+    defp conn_for_operator(operator) do
+      Phoenix.ConnTest.build_conn()
+      |> Phoenix.ConnTest.init_test_session(%{})
+      |> Plug.Conn.put_session(:operator_id, operator.id)
+    end
+
+    test "renders a nil-org conversation without crashing", %{conn: conn} do
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          subject: "Anonymous request"
+        )
+
+      insert_message(conversation_id: conv.id, body: "Hello from an unlinked prospect")
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "Anonymous request"
+      assert html =~ "Hello from an unlinked prospect"
+      assert html =~ "Unlinked prospect"
+      # No org link, no tier badge without an organization
+      refute html =~ "operator-sidebar-org-link"
+      refute html =~ "operator-tier-badge"
+    end
+
+    test "header shows the source badge", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, source: :portal)
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ ~s(data-testid="source-badge-portal")
+      assert html =~ "Portal"
+    end
+
+    test "org-scoped operator can open a nil-org conversation" do
+      org = insert_organization()
+      operator = insert_scoped_operator(org.id)
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          subject: "Unlinked but visible"
+        )
+
+      conn = conn_for_operator(operator)
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "Unlinked but visible"
+      assert html =~ "Unlinked prospect"
+    end
+
+    test "org-scoped operator still cannot open another org's conversation" do
+      org = insert_organization()
+      other_org = insert_organization()
+      operator = insert_scoped_operator(org.id)
+
+      conv = insert_conversation(organization_id: other_org.id, subject: "Foreign conversation")
+
+      conn = conn_for_operator(operator)
+
+      assert {:error, {:redirect, %{to: "/operator", flash: flash}}} =
+               live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert flash["error"] =~ "do not have access"
+    end
+
+    test "super_admin can open a nil-org conversation", %{conn: conn} do
+      # Default setup operator is super_admin
+      conv = insert_conversation(organization_id: nil, source: :disambiguation)
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ conv.subject
+    end
+
+    test "reply on a nil-org conversation records the message without crashing", %{conn: conn} do
+      conv = insert_conversation(organization_id: nil, source: :disambiguation)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Reply to unlinked prospect")
+      |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      assert message.body == "Reply to unlinked prospect"
+      assert message.source == :operator
+    end
+  end
 end

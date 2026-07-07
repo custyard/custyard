@@ -72,8 +72,16 @@ defmodule Custyard.Authorization do
 
   @doc """
   super_admin can access any conversation; others must be in the same org.
+
+  Conversations without an organization (unlinked prospects) are accessible
+  to all operator roles: organization scoping is workload scoping, not
+  tenancy, and unlinked intake must never be invisible to every operator.
+  This mirrors the queue visibility rule in
+  `Custyard.Conversations.list_for_attention_queue/1`.
   """
   def can_access_conversation?(%OperatorAccount{role: "super_admin"}, _conversation), do: true
+
+  def can_access_conversation?(%OperatorAccount{}, %{organization_id: nil}), do: true
 
   def can_access_conversation?(%OperatorAccount{organization_id: org_id}, conversation),
     do: conversation.organization_id == org_id
