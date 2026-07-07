@@ -212,7 +212,7 @@ defmodule CustyardWeb.Plugs.LoginRateLimitTest do
 
       conn =
         conn(:get, "/")
-        |> put_req_header("x-forwarded-for", "#{client_ip}, 10.0.0.1, 10.0.0.2")
+        |> put_req_header("x-forwarded-for", "10.0.0.1, 10.0.0.2, #{client_ip}")
 
       result = LoginRateLimit.call(conn, opts)
 
@@ -221,26 +221,52 @@ defmodule CustyardWeb.Plugs.LoginRateLimitTest do
       assert result.status == 429
     end
 
-    test "uses leftmost IP from X-Forwarded-For" do
+    test "uses the rightmost (proxy-appended) IP from X-Forwarded-For" do
       opts = LoginRateLimit.init(max_attempts: 3, window_ms: 60_000)
-      client_ip = "192.0.2.50"
-      proxy_ip = "10.0.0.1"
+      spoofed_ip = "192.0.2.50"
+      real_ip = "198.51.100.77"
 
-      # Insert attempts only for the proxy IP (rightmost)
+      # Insert attempts only for the client-supplied leftmost entry
       now = System.monotonic_time(:millisecond)
 
-      :ets.insert(@table, {proxy_ip, now})
-      :ets.insert(@table, {proxy_ip, now - 1000})
-      :ets.insert(@table, {proxy_ip, now - 2000})
+      :ets.insert(@table, {spoofed_ip, now})
+      :ets.insert(@table, {spoofed_ip, now - 1000})
+      :ets.insert(@table, {spoofed_ip, now - 2000})
 
       conn =
         conn(:get, "/")
-        |> put_req_header("x-forwarded-for", "#{client_ip}, #{proxy_ip}")
+        |> put_req_header("x-forwarded-for", "#{spoofed_ip}, #{real_ip}")
 
       result = LoginRateLimit.call(conn, opts)
 
-      # Should NOT be blocked because client_ip (leftmost) has no attempts
+      # Should NOT be blocked: the key is the rightmost entry (appended
+      # by the trusted proxy), not the spoofable leftmost one
       refute result.halted
+    end
+
+    test "garbage header values key as the peer address, not a fresh bucket" do
+      opts = LoginRateLimit.init(max_attempts: 3, window_ms: 60_000)
+      peer_ip = "127.0.0.1"
+
+      # Exhaust the peer's budget
+      now = System.monotonic_time(:millisecond)
+
+      :ets.insert(@table, {peer_ip, now})
+      :ets.insert(@table, {peer_ip, now - 1000})
+      :ets.insert(@table, {peer_ip, now - 2000})
+
+      # Pre-extraction behavior keyed the raw header string, so every
+      # unique garbage value minted a fresh login-attempt budget. Now
+      # non-IP values fall through to the peer address.
+      conn =
+        conn(:get, "/")
+        |> put_req_header("fly-client-ip", "garbage")
+        |> put_req_header("x-forwarded-for", "also;;garbage")
+
+      result = LoginRateLimit.call(conn, opts)
+
+      assert result.halted
+      assert result.status == 429
     end
 
     test "prefers Fly-Client-IP over X-Forwarded-For" do
@@ -317,7 +343,7 @@ defmodule CustyardWeb.Plugs.LoginRateLimitTest do
 
       conn =
         conn(:get, "/")
-        |> put_req_header("x-forwarded-for", "  #{client_ip}  , 10.0.0.1")
+        |> put_req_header("x-forwarded-for", "10.0.0.1,   #{client_ip}  ")
 
       result = LoginRateLimit.call(conn, opts)
 

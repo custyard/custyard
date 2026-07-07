@@ -30,9 +30,22 @@ defmodule CustyardWeb.Endpoint do
 
   # LiveView socket - session options are resolved at runtime
   # check_origin: :conn is set at endpoint config level in runtime.exs
+  # :peer_data and :x_headers feed CustyardWeb.ClientIP for LiveView rate limiting
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: {__MODULE__, :session_options_for_socket, []}]],
-    longpoll: [connect_info: [session: {__MODULE__, :session_options_for_socket, []}]]
+    websocket: [
+      connect_info: [
+        :peer_data,
+        :x_headers,
+        session: {__MODULE__, :session_options_for_socket, []}
+      ]
+    ],
+    longpoll: [
+      connect_info: [
+        :peer_data,
+        :x_headers,
+        session: {__MODULE__, :session_options_for_socket, []}
+      ]
+    ]
 
   plug Plug.Static,
     at: "/",

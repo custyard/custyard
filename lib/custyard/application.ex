@@ -30,6 +30,8 @@ defmodule Custyard.Application do
         {DNSCluster, query: Application.get_env(:custyard, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Custyard.PubSub},
         {Finch, name: Custyard.Finch},
+        # Sliding-window rate limiter (owns its ETS table, sweeps stale entries)
+        {Custyard.RateLimit, []},
         # Task supervisor for async webhook purposes (enrichment, notification, audit)
         {Task.Supervisor, name: Custyard.TaskSupervisor, max_children: 100},
         CustyardWeb.Endpoint
