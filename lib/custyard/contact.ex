@@ -13,14 +13,6 @@ defmodule Custyard.Contact do
     timestamps(type: :utc_datetime)
   end
 
-  # Basic email validation: local-part@domain.tld
-  # More restrictive than RFC 5322 but catches common issues:
-  # - Exactly one @ sign
-  # - No whitespace or control characters
-  # - Reasonable length limits (local <= 64, domain <= 255, total <= 320)
-  # - At least one dot in domain
-  @email_regex ~r/^[a-zA-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/
-
   @doc """
   Changeset for creating a new contact.
   """
@@ -61,28 +53,10 @@ defmodule Custyard.Contact do
     end
   end
 
+  # Email validation rules are shared with other email-bearing schemas
+  # (e.g. Prospect) via Custyard.EmailAddress; behavior is identical to the
+  # rules that historically lived here.
   defp validate_email(changeset) do
-    case get_change(changeset, :email) do
-      nil ->
-        changeset
-
-      email ->
-        cond do
-          # Check for control characters or null bytes
-          String.match?(email, ~r/[\x00-\x1F\x7F]/) ->
-            add_error(changeset, :email, "must not contain control characters")
-
-          # Validate format with regex
-          not Regex.match?(@email_regex, email) ->
-            add_error(changeset, :email, "must be a valid email address")
-
-          # Validate local part length (before @)
-          String.split(email, "@") |> hd() |> String.length() > 64 ->
-            add_error(changeset, :email, "local part must be at most 64 characters")
-
-          true ->
-            changeset
-        end
-    end
+    Custyard.EmailAddress.validate_email(changeset, :email)
   end
 end

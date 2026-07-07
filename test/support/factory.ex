@@ -4,6 +4,8 @@ defmodule Custyard.Factory do
   Returns maps with defaults that can be merged with overrides.
   """
 
+  alias Custyard.Auth.Token
+
   @doc """
   Build organization attributes.
 
@@ -208,22 +210,43 @@ defmodule Custyard.Factory do
     |> Custyard.Repo.insert!()
   end
 
+  # Sources whose conversations may exist without an organization; the factory
+  # skips auto-creating one for these unless organization_id is given.
+  @org_exempt_sources [:disambiguation, :public_intake]
+
   @doc """
   Insert a conversation into the database.
-  Requires organization_id or will create one.
+  Requires organization_id or will create one — except for org-exempt sources
+  (:disambiguation, :public_intake), which stay organization-less unless an
+  organization_id override is provided.
   """
   def insert_conversation(overrides \\ []) do
-    overrides = ensure_organization(overrides)
+    overrides =
+      if Keyword.get(overrides, :source) in @org_exempt_sources do
+        overrides
+      else
+        ensure_organization(overrides)
+      end
+
     attrs = build_conversation(overrides)
 
     # Extract cached_score (not in changeset cast list for security)
     {cached_score, attrs} = Map.pop(attrs, :cached_score, 0)
+    # intake_source_key is creation-only (not in the operator changeset cast
+    # list); apply it as a raw change like cached_score
+    {intake_source_key, attrs} = Map.pop(attrs, :intake_source_key)
 
     %Custyard.Conversation{}
     |> Custyard.Conversation.changeset(attrs)
     |> Ecto.Changeset.change(cached_score: cached_score)
+    |> maybe_change_intake_source_key(intake_source_key)
     |> Custyard.Repo.insert!()
   end
+
+  defp maybe_change_intake_source_key(changeset, nil), do: changeset
+
+  defp maybe_change_intake_source_key(changeset, key),
+    do: Ecto.Changeset.change(changeset, intake_source_key: key)
 
   @doc """
   Insert a message into the database.
@@ -344,6 +367,80 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Build prospect attributes.
+
+  ## Examples
+
+      build_prospect()
+      build_prospect(email: "prospect@example.com", notify_on_reply: true)
+  """
+  def build_prospect(overrides \\ []) do
+    defaults = %{
+      resume_token_hash: Token.generate() |> elem(1),
+      email: nil,
+      notify_on_reply: false,
+      email_captured_at: nil,
+      revoked_at: nil,
+      conversation_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Insert a prospect into the database.
+  Requires conversation_id or will create an org-less :public_intake conversation.
+  """
+  def insert_prospect(overrides \\ []) do
+    overrides = ensure_intake_conversation(overrides)
+    attrs = build_prospect(overrides)
+
+    # create_changeset casts only conversation_id and resume_token_hash;
+    # the remaining fields (normally set via Intake.capture_email/3 or the
+    # revoke path) are applied as raw changes.
+    {create_attrs, extra} = Map.split(attrs, [:conversation_id, :resume_token_hash])
+    extra = extra |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
+
+    %Custyard.Prospect{}
+    |> Custyard.Prospect.create_changeset(create_attrs)
+    |> Ecto.Changeset.change(extra)
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
+  Build intake source attributes.
+
+  ## Examples
+
+      build_intake_source()
+      build_intake_source(key: "landing-page", mode: :passive)
+  """
+  def build_intake_source(overrides \\ []) do
+    id = unique_id()
+
+    defaults = %{
+      key: "source-#{id}",
+      name: "Intake Source #{id}",
+      mode: :active,
+      headline: nil,
+      intro_copy: nil,
+      questions: [],
+      enabled: true
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Insert an intake source into the database.
+  """
+  def insert_intake_source(overrides \\ []) do
+    %Custyard.IntakeSource{}
+    |> Custyard.IntakeSource.changeset(build_intake_source(overrides))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
   Insert an audit event into the database.
   """
   def insert_audit_event(overrides \\ []) do
@@ -398,6 +495,15 @@ defmodule Custyard.Factory do
       overrides
     else
       conv = insert_conversation()
+      Keyword.put(overrides, :conversation_id, conv.id)
+    end
+  end
+
+  defp ensure_intake_conversation(overrides) do
+    if Keyword.has_key?(overrides, :conversation_id) do
+      overrides
+    else
+      conv = insert_conversation(source: :public_intake)
       Keyword.put(overrides, :conversation_id, conv.id)
     end
   end

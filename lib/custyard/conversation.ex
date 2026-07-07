@@ -4,7 +4,21 @@ defmodule Custyard.Conversation do
 
   @states [:new, :active, :waiting, :dormant, :resolved]
   @urgencies [:normal, :elevated, :urgent]
-  @sources [:email, :lettermint, :zendesk, :intercom, :slack, :portal, :disambiguation]
+  @sources [
+    :email,
+    :lettermint,
+    :zendesk,
+    :intercom,
+    :slack,
+    :portal,
+    :disambiguation,
+    :public_intake
+  ]
+
+  # Sources whose conversations may exist without an organization:
+  # - :disambiguation — limbo conversations awaiting manual routing
+  # - :public_intake — anonymous prospect conversations (linked later, if ever)
+  @org_exempt_sources [:disambiguation, :public_intake]
 
   @neglect_levels [:ok, :warning, :critical]
 
@@ -26,6 +40,12 @@ defmodule Custyard.Conversation do
     field :urgency, Ecto.Enum, values: @urgencies, default: :normal
     field :source, Ecto.Enum, values: @sources, default: :email
     field :cached_score, :integer, default: 0
+
+    # CTA provenance: which public intake source (by key string, not FK)
+    # created this conversation. Creation-only — deliberately absent from the
+    # changeset/2 cast list; set via intake_changeset/2 at creation.
+    field :intake_source_key, :string
+
     field :last_operator_action_at, :utc_datetime
     field :last_customer_action_at, :utc_datetime
     field :snoozed_until, :utc_datetime
@@ -37,6 +57,7 @@ defmodule Custyard.Conversation do
     belongs_to :organization, Custyard.Organization
     belongs_to :contact, Custyard.Contact
     belongs_to :project, Custyard.Project
+    has_one :prospect, Custyard.Prospect
     has_many :messages, Custyard.Message
     has_many :tasks, Custyard.Task
 
@@ -71,6 +92,20 @@ defmodule Custyard.Conversation do
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:contact_id)
     |> foreign_key_constraint(:project_id)
+  end
+
+  @doc """
+  Changeset for creating a public-intake conversation.
+
+  Extends `changeset/2` with `:intake_source_key`, which is creation-only
+  provenance: it is deliberately absent from the `changeset/2` cast list so
+  operator-facing update paths can never set or change it.
+  """
+  def intake_changeset(conversation, attrs) do
+    conversation
+    |> changeset(attrs)
+    |> cast(attrs, [:intake_source_key])
+    |> validate_format(:intake_source_key, Custyard.IntakeSource.key_format())
   end
 
   @doc """
@@ -157,11 +192,11 @@ defmodule Custyard.Conversation do
     |> cast(attrs, [:cached_score, :last_neglect_notification])
   end
 
-  # Disambiguation conversations can have nil organization_id
+  # Disambiguation and public-intake conversations can have nil organization_id
   defp validate_required_organization(changeset) do
     source = get_field(changeset, :source)
 
-    if source == :disambiguation do
+    if source in @org_exempt_sources do
       changeset
     else
       validate_required(changeset, [:organization_id])

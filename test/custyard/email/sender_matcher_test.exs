@@ -76,4 +76,106 @@ defmodule Custyard.Email.SenderMatcherTest do
       assert matched_contact.id == contact.id
     end
   end
+
+  describe "resolve/1" do
+    import ExUnit.CaptureLog
+
+    alias Custyard.{Contact, Organization, Repo}
+
+    test "resolves an exact contact match" do
+      org = insert_organization(domain: "acme.example.com")
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+
+      assert {:contact, resolved} = SenderMatcher.resolve("alice@acme.example.com")
+      assert resolved.id == contact.id
+    end
+
+    test "matches case-insensitively with surrounding whitespace" do
+      org = insert_organization(domain: "acme.example.com")
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+
+      assert {:contact, resolved} = SenderMatcher.resolve("  ALICE@Acme.Example.COM ")
+      assert resolved.id == contact.id
+    end
+
+    test "multi-org ambiguity resolves to the oldest contact and logs a warning" do
+      org_a = insert_organization(domain: "a.example.com")
+      org_b = insert_organization(domain: "b.example.com")
+
+      older = insert_contact(organization_id: org_a.id, email: "shared@example.com")
+      _newer = insert_contact(organization_id: org_b.id, email: "shared@example.com")
+
+      # Make the tie-break deterministic: age the first contact
+      hour_ago =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(c in Contact, where: c.id == ^older.id),
+        set: [inserted_at: hour_ago]
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:contact, resolved} = SenderMatcher.resolve("shared@example.com")
+          assert resolved.id == older.id
+        end)
+
+      assert log =~ "Multi-org sender ambiguity"
+    end
+
+    test "falls back to organization-by-domain" do
+      org = insert_organization(domain: "widgets.example.com")
+
+      assert {:organization, resolved} = SenderMatcher.resolve("newcomer@widgets.example.com")
+      assert resolved.id == org.id
+    end
+
+    test "never resolves to the _unmatched_ sentinel organization" do
+      insert_organization(domain: "_unmatched_", name: "Unmatched Senders")
+
+      assert SenderMatcher.resolve("someone@_unmatched_") == :none
+    end
+
+    test "never resolves a contact inside the sentinel organization" do
+      sentinel = insert_organization(domain: "_unmatched_", name: "Unmatched Senders")
+      insert_contact(organization_id: sentinel.id, email: "drifter@nowhere.example.net")
+
+      assert SenderMatcher.resolve("drifter@nowhere.example.net") == :none
+    end
+
+    test "a sentinel-org contact falls through to organization-by-domain" do
+      sentinel = insert_organization(domain: "_unmatched_", name: "Unmatched Senders")
+      insert_contact(organization_id: sentinel.id, email: "early-bird@widgets.example.com")
+      org = insert_organization(domain: "widgets.example.com")
+
+      assert {:organization, resolved} = SenderMatcher.resolve("early-bird@widgets.example.com")
+      assert resolved.id == org.id
+    end
+
+    test "resolves contacts in organizations without a domain" do
+      org = insert_organization(domain: nil)
+      contact = insert_contact(organization_id: org.id, email: "solo@freemail.example.net")
+
+      assert {:contact, resolved} = SenderMatcher.resolve("solo@freemail.example.net")
+      assert resolved.id == contact.id
+    end
+
+    test "returns :none for unknown senders" do
+      assert SenderMatcher.resolve("stranger@nowhere.example.net") == :none
+    end
+
+    test "returns :none for addresses without a domain" do
+      assert SenderMatcher.resolve("not-an-email") == :none
+    end
+
+    test "never creates rows" do
+      org_count = Repo.aggregate(Organization, :count)
+      contact_count = Repo.aggregate(Contact, :count)
+
+      assert SenderMatcher.resolve("stranger@nowhere.example.net") == :none
+
+      assert Repo.aggregate(Organization, :count) == org_count
+      assert Repo.aggregate(Contact, :count) == contact_count
+    end
+  end
 end
