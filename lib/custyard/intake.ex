@@ -214,21 +214,25 @@ defmodule Custyard.Intake do
         {:error, :not_found}
 
       %Prospect{} = prospect ->
-        conversation =
-          Conversation
-          |> Repo.get!(prospect.conversation_id)
-          |> Repo.preload([
-            :organization,
-            :contact,
-            :prospect,
-            messages:
-              from(m in Message,
-                where: m.is_internal_note == false,
-                order_by: [asc: m.inserted_at, asc: m.id]
-              )
-          ])
+        case Repo.get(Conversation, prospect.conversation_id) do
+          nil ->
+            {:error, :not_found}
 
-        {:ok, conversation}
+          conversation ->
+            conversation =
+              Repo.preload(conversation, [
+                :organization,
+                :contact,
+                :prospect,
+                messages:
+                  from(m in Message,
+                    where: m.is_internal_note == false,
+                    order_by: [asc: m.inserted_at, asc: m.id]
+                  )
+              ])
+
+            {:ok, conversation}
+        end
     end
   end
 
@@ -238,11 +242,15 @@ defmodule Custyard.Intake do
   Rotate a conversation's resume token, invalidating the previous one.
 
   Returns `{:ok, %{prospect: p, resume_token: token}}` — the only other place
-  a plaintext resume token is returned. Rotation does not clear revocation.
+  a plaintext resume token is returned. Revoked prospects are rejected with
+  the same `{:error, :no_prospect}` as missing ones.
   """
   def rotate_resume_token(%Conversation{} = conversation) do
     case get_prospect(conversation) do
       nil ->
+        {:error, :no_prospect}
+
+      %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
         {:error, :no_prospect}
 
       %Prospect{} = prospect ->

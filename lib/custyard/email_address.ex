@@ -57,4 +57,6 @@ defmodule Custyard.EmailAddress do
   def normalize(email) when is_binary(email) do
     email |> String.trim() |> String.downcase()
   end
+
+  def normalize(email), do: email
 end
