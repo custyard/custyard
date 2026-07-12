@@ -1,8 +1,10 @@
 # Software Design Document: Relationship-Driven Service Platform (aka Customer onboarding platform)
 
 **Working title:** TBD (referred to as "the platform" throughout)
-**Version:** 0.1 — MVP specification
-**Date:** 2026-03-20
+**Version:** 0.4 — MVP specification
+**Date:** 2026-07-05
+
+**Revision note (v0.4):** §5.2 (outbound) and §7 (activation flow, definition of done) are reconciled with routed-webhook-first intake and platform-native outbound, as specified in the [Prospect Conversation Loop](spec-conversation-loop.md). Supporting edits in §3.3 and §4.1 keep this document internally consistent. The deeper architecture and data-model reconciliation — inbound-route entities, multi-webhook fan-out, per-project routes and the disambiguation flow — remains recorded in [design-decisions-email-routing.md](design-decisions-email-routing.md) and is not folded into §3–§4 here.
 
 ---
 
@@ -233,7 +235,7 @@ The platform integrates with the operator's existing mail infrastructure rather 
 
 **Email Ingestion Pipeline**
 
-Receives email via LMTP delivery or IMAP polling (operator's choice based on existing mail infrastructure). Parses RFC 5322 messages, extracts headers for threading, matches senders to known contacts, and creates or appends to conversations. Runs as a background process to avoid blocking on mail parsing.
+Receives email via routed inbound webhooks (per-organization callback URLs from the transactional email service, carrying routing context in the channel), LMTP delivery, or IMAP polling (operator's choice based on existing mail infrastructure). Parses RFC 5322 messages, extracts headers for threading, matches senders to known contacts, and creates or appends to conversations. Runs as a background process to avoid blocking on mail parsing.
 
 **Attention Scoring Engine**
 
@@ -327,7 +329,7 @@ A single communication within a Conversation.
 - Records source (email, portal, internal note)
 - Preserves email headers for threading and debugging
 - Internal notes are visible only to operators, not in the portal
-- For outbound messages sent via Lettermint: tracks delivery status (pending, sent, delivered, bounced, suppressed) and external message ID for webhook correlation
+- For outbound messages sent via the transactional email service: tracks delivery status (pending, sent, delivered, bounced, suppressed, failed) and external message ID for webhook correlation. The `failed` status records a reply that was never dispatched (e.g. an unverified reply-from address), surfaced to the operator so delivery failure is never silent
 
 **Attachment**
 
@@ -522,31 +524,32 @@ The operator can configure Sieve rules on their MTA to inject custom headers bef
 
 ### 5.2 Outbound Communication
 
-**MVP Behavior**
+Outbound email is platform-native and in the MVP. The operator composes replies in the platform, and the platform sends them; the operator's personal mail client is not part of the loop. The full requirements, acceptance criteria, and resolved decisions live in the [Prospect Conversation Loop](spec-conversation-loop.md); this section states the behavior the SDD depends on.
 
-The operator responds via their own email client, replying to the original message or composing from the monitored address. The platform captures the operator's response when it arrives as an inbound message, either because:
-- The operator CCs or BCCs the monitored address, or
-- Sieve rules route the operator's outbound replies back to the platform based on recipient domain matching
+**Composing and Sending**
 
-This means the platform's Conversation view shows both sides of the conversation, but the platform itself does not send email in the MVP.
+When the operator composes a response in the conversation view:
+- The platform sends it as email to the conversation's contact.
+- Threading headers maintain continuity in the customer's mail client: In-Reply-To names the most recent customer message; References lists the thread's ancestors.
+- Sending is asynchronous — composing does not block the operator interface.
+- Sending transitions the conversation through validated state-machine transitions, not direct attribute writes.
 
-**Post-MVP Behavior (v1.1)**
+**Sender Identity and Verification**
 
-The platform sends outbound email directly. When the operator composes a response in the platform UI:
-- Email is sent as a reply to the original contact
-- Threading headers (In-Reply-To, References) maintain continuity in the customer's mail client
-- Both plain text and HTML parts are included
-- A footer links to the portal conversation (if the contact has portal access)
+- Each organization has a configured reply-from address; an outbound reply uses its conversation's organization reply-from address as the From identity.
+- A reply-from address is valid only if it corresponds to a verified sending domain registered with the email service. Setting or changing it is validated at configuration time, and an unverified address is rejected then.
+- An outbound reply whose reply-from address is unverified is not dispatched. The message is recorded with delivery status `failed` and surfaced to the operator. Delivery failure is never silent — the platform fails closed at both the earliest (configuration) and last (send) opportunity.
 
-Outbound sending uses SMTP (direct or relayed through the operator's existing MTA) or a transactional email service like Lettermint.
+**Delivery Status Tracking**
 
-**Delivery Status Tracking (Lettermint)**
+The platform receives webhook callbacks for email lifecycle events and records them against the originating Message, giving operators visibility into whether their replies reached the customer.
+- A dedicated status webhook endpoint — separate from the inbound-message pipeline — receives delivery events and updates the corresponding message, correlated by external message identifier. Status events are authenticated with the same signature scheme as inbound webhooks.
+- Delivery status values: pending, sent, delivered, bounced, suppressed, failed. Statuses are rank-ordered so out-of-order webhook delivery does not regress a message's status (see the conversation-loop spec for the ranking rule).
+- Each outbound message in the thread shows a delivery indicator; bounce and suppression states are visually distinct. A bounce or suppression sets the contact's email-validity status and raises operator attention; it informs rather than gates future sends.
 
-When using Lettermint for outbound email, the platform receives webhook callbacks for email lifecycle events: sent, delivered, bounced, returned, suppressed. These events are stored against the originating Message record, giving operators visibility into whether their replies actually reached the customer. Bounce events can trigger visual indicators in the conversation view and optionally affect the contact's email validity status.
+**Transport**
 
-**MVP Gap**
-
-Until v1.1, the portal shows operator responses only after they're captured via the CC/BCC/Sieve ingestion path. There's a delay between the operator hitting send in their mail client and the response appearing in the portal. This is acceptable for initial activation but creates visible latency for portal-active customers.
+Outbound sending goes through the transactional email service (Lettermint) that also provides routed inbound intake and delivery-status callbacks. The integration remains replaceable; sending via SMTP relayed through the operator's existing MTA is a supported alternative, as LMTP and IMAP remain for intake.
 
 ### 5.3 Portal Operations
 
@@ -750,14 +753,15 @@ Task list with completion status. Tasks marked `portal_visible = true` are shown
 
 ### 7.1 What's in the MVP
 
-1. **Organizations and Contacts**: CRUD, domain-based matching, tier assignment.
-2. **Email ingestion**: LMTP or IMAP, sender matching, threading, conversation creation.
-3. **Conversations**: Full lifecycle (New → Active → Waiting → Dormant → Resolved), message threading, operator responses (sent as email).
-4. **Attention queue**: Composite scoring, real-time updates, snooze, neglect indicators.
-5. **Neglect thresholds**: Configurable per tier, notification on breach.
-6. **Client portal**: Authentication (Rodauth), conversation viewing and filing, reply threading.
-7. **Tasks**: Create from conversations, basic state management, portal visibility toggle.
-8. **Organization view**: Activity timeline, open conversations, contacts.
+1. **Organizations and Contacts**: CRUD, domain-based matching, tier assignment, per-organization reply-from address.
+2. **Email intake**: Routed inbound webhooks (per-organization callback URLs), with LMTP or IMAP as supported alternatives; sender matching, threading, conversation creation.
+3. **Conversations**: Full lifecycle (New → Active → Waiting → Dormant → Resolved), message threading, and platform-native operator replies composed in the platform and sent as threaded email.
+4. **Outbound and delivery tracking**: Platform-sent replies with In-Reply-To/References threading, verified reply-from (fail-closed on unverified), and per-message delivery status ingested from the email service's status webhook.
+5. **Attention queue**: Composite scoring, real-time updates, snooze, neglect indicators.
+6. **Neglect thresholds**: Configurable per tier, notification on breach.
+7. **Client portal**: Authentication, conversation viewing and filing, reply threading.
+8. **Tasks**: Create from conversations, basic state management, portal visibility toggle.
+9. **Organization view**: Activity timeline, open conversations, contacts.
 
 ### 7.2 What's NOT in the MVP
 
@@ -765,7 +769,8 @@ Task list with completion status. Tasks marked `portal_visible = true` are shown
 - White-label portal branding (v2 — functional portal first, branding second).
 - SSO for portal customers via rodauth-omniauth (v2 — email/password first).
 - Internal project tracking / secondary workflow (v2).
-- Outbound email (v1.1 — the MVP ingests and displays; operator responds via their own email client initially, with the platform recording the response when it arrives as an inbound message to the monitored address via CC/BCC).
+- Per-project routes and the disambiguation DM flow (designed in the design-decisions document; the MVP loop uses per-organization routes only).
+- Attachment handling on outbound replies.
 - Reporting and analytics beyond the neglect report.
 - Mobile-optimized portal (responsive layout handles basic cases; dedicated mobile optimization is post-MVP).
 
@@ -778,13 +783,20 @@ Step 1: Deploy and configure
 ├── Platform deployed on operator's infrastructure (single server, Docker or systemd)
 ├── PostgreSQL and Redis running
 ├── Operator creates their account (first-run setup wizard)
-├── Configure monitored email address (LMTP endpoint or IMAP credentials)
-└── Verify email ingestion with a test message
+├── Connect the transactional email service account (Lettermint)
+├── Register the two webhook endpoints: routed inbound-message intake
+│   and the separate delivery-status endpoint (both signature-verified)
+├── (Alternative intake) Configure LMTP endpoint or IMAP credentials
+│   against operator-controlled mail infrastructure
+└── Verify intake with a test message on the configured path
 
 Step 2: Seed relationship data
 ├── Create first Organization (name, domain, tier)
+├── Provision its per-organization inbound route (unique callback URL)
+├── Configure the Organization's reply-from address; verify it resolves
+│   to a verified sending domain (unverified is rejected here)
 ├── Create Contacts for that Organization (email addresses)
-└── Verify: send email from known contact address, confirm it creates
+└── Verify: send email to the Organization's route, confirm it creates
     a Conversation linked to the correct Organization and Contact
 
 Step 3: Validate the attention queue
@@ -802,7 +814,18 @@ Step 4: Test conversation lifecycle
 ├── Send another email from the customer (verify Resolved → Active)
 └── Verify: all transitions appear in the Organization activity timeline
 
-Step 5: Enable the client portal
+Step 5: Test platform-native reply and delivery tracking
+├── Compose a reply in the conversation view; send it
+├── Verify: it arrives in the customer's mailbox threaded under the
+│   original message in a standard mail client (In-Reply-To/References)
+├── Verify: the message's delivery status advances (pending → sent →
+│   delivered) as status-webhook events arrive, shown in the thread
+├── Verify: a customer reply returns to the Organization's inbound route
+│   and appends to the same Conversation
+└── Negative test: set an unverified reply-from and send; verify the
+    message is recorded `failed`, surfaced to the operator, not silently dropped
+
+Step 6: Enable the client portal
 ├── Create a portal account for a Contact at the test Organization
 ├── Log in as that Contact
 ├── Verify: only that Organization's Conversations are visible
@@ -810,15 +833,14 @@ Step 5: Enable the client portal
 ├── Verify: request appears in the operator's attention queue
 ├── Reply from the portal
 ├── Verify: reply appears in the operator's Conversation view
-└── Verify: operator response (sent via own email client, CC'd to
-    monitored address) is ingested and appears in the portal thread
+└── Verify: the operator's platform-sent reply appears in the portal thread
 
-Step 6: Go live with one real customer
+Step 7: Go live with one real customer
 ├── Create Organization + Contacts for a real customer
-├── Configure Sieve rules to forward that customer's emails
+├── Provision the Organization's inbound route and verify its reply-from
 ├── Invite the customer contact to the portal
 └── Monitor: first real request flows through capture → attention queue
-    → operator action → customer visibility in portal
+    → operator reply (sent and delivery-tracked) → customer visibility in portal
 ```
 
 ### 7.4 Definition of Done for MVP
@@ -830,14 +852,15 @@ The MVP is done when:
 3. Neglect thresholds fire and are visible in the attention queue for at least two distinct Organization tiers.
 4. A customer contact can log into the portal, see their Conversations and current states, file a new request, and reply to an existing Conversation.
 5. Portal-filed requests appear in the operator's attention queue indistinguishably from email-filed requests (the source is noted but the scoring and display are identical).
-6. The full cycle works: customer emails → platform captures → operator sees it in attention queue → operator responds → customer sees response in portal.
-7. All of the above works on a single self-hosted server (no external service dependencies beyond the operator's existing MTA and DNS).
+6. The full cycle works: customer contacts the Organization's route → platform captures → operator sees it in attention queue → operator replies from the platform → the reply arrives as a correctly threaded email → the customer sees the response in the portal.
+7. Every outbound reply records a delivery status that advances from status-webhook events and is visible in the thread; an unverified reply-from address produces a `failed` message surfaced to the operator, with no silently dropped mail.
+8. All of the above works on a single self-hosted server. The transactional email service (routed intake, outbound sending, delivery-status webhooks) is the one required external dependency for the platform-native loop, and it is replaceable; operator-controlled LMTP/IMAP intake and SMTP-relayed outbound through the operator's own MTA remain supported alternatives, preserving data sovereignty.
 
 ---
 
 ## Appendix A: Open Questions
 
-1. **Outbound email timing**: The MVP defers operator-initiated outbound email (the operator responds from their own email client and CCs the platform). This means the platform's Conversation view has the customer's messages but not the operator's responses unless the CC mechanism is working. Is this acceptable friction for the MVP, or is outbound email load-bearing for the activation flow?
+1. **Outbound email timing** — *Resolved (v0.4).* Outbound email is load-bearing for the activation flow and is in the MVP: the operator replies from the platform and the platform sends the email, with delivery tracked. The prior CC/BCC-capture approach is a rejected alternative (portal-visible latency). See §5.2 and the [Prospect Conversation Loop](spec-conversation-loop.md).
 
 2. **Multi-operator support**: The MVP assumes a single operator. When does multi-operator become necessary? The data model supports it (operator_accounts table, assignment fields could be added to conversations), but the attention queue scoring changes significantly with multiple operators (whose idle time? who is assigned?).
 
