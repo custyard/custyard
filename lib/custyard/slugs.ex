@@ -18,7 +18,7 @@ defmodule Custyard.Slugs do
 
   Promotion to `provisioned` (`promote/2`) is the only path allowed to write
   `organization_id`; it is called exclusively from
-  `Custyard.Organizations.convert_prospect/2`, inside the conversion
+  `Custyard.Organizations.convert_prospect/3`, inside the conversion
   transaction.
   """
 
@@ -250,7 +250,7 @@ defmodule Custyard.Slugs do
 
   @doc """
   Promote a conversation's confirmed claim to `provisioned`, linking it to
-  `organization`. Called only from `Custyard.Organizations.convert_prospect/2`,
+  `organization`. Called only from `Custyard.Organizations.convert_prospect/3`,
   inside its conversion transaction.
 
   Race-safe conditional UPDATE: `WHERE conversation_id = ? AND status =

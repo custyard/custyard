@@ -640,10 +640,13 @@ defmodule Custyard.Intake do
   defp capture_and_link(conversation, prospect, attrs) do
     case prospect |> Prospect.capture_email_changeset(attrs) |> Repo.update() do
       {:ok, prospect} ->
-        case link_conversation(conversation, SenderMatcher.resolve(prospect.email)) do
-          {:ok, conversation} -> conversation
-          {:error, changeset} -> Repo.rollback(changeset)
-        end
+        # Linking is now a conditional UPDATE that always reports success
+        # (a lost DB-side race returns the conversation untouched), so there
+        # is no changeset error to roll back here.
+        {:ok, conversation} =
+          link_conversation(conversation, SenderMatcher.resolve(prospect.email))
+
+        conversation
 
       {:error, changeset} ->
         Repo.rollback(changeset)
@@ -658,24 +661,48 @@ defmodule Custyard.Intake do
     {:ok, conversation}
   end
 
-  # Contact match: both FKs set in ONE changeset — nothing else validates
-  # that the contact/organization pair is consistent.
-  defp link_conversation(conversation, {:contact, contact}) do
-    conversation
-    |> Conversation.changeset(%{
+  # Contact match: both FKs set in ONE write — nothing else validates that
+  # the contact/organization pair is consistent. Conditional on
+  # `organization_id IS NULL` at the DB, not just the in-memory struct: a
+  # socket mounted before an operator ran Organizations.convert_prospect/3
+  # still carries organization_id: nil, so a plain update-by-PK could clobber
+  # the just-converted link and orphan the new org. The DB guard means a
+  # concurrent link wins (0 rows) and this write is a no-op.
+  defp link_conversation(%Conversation{id: id} = conversation, {:contact, contact}) do
+    conditional_link(conversation, id,
       contact_id: contact.id,
       organization_id: contact.organization_id
-    })
-    |> Repo.update()
+    )
   end
 
-  defp link_conversation(conversation, {:organization, organization}) do
-    conversation
-    |> Conversation.changeset(%{organization_id: organization.id})
-    |> Repo.update()
+  defp link_conversation(%Conversation{id: id} = conversation, {:organization, organization}) do
+    conditional_link(conversation, id, organization_id: organization.id)
   end
 
   defp link_conversation(conversation, :none), do: {:ok, conversation}
+
+  # Race-safe conditional link: `WHERE id = ? AND organization_id IS NULL`.
+  # On count == 1 the fields are patched onto the in-memory struct so the
+  # post-commit side effects (org-scoped broadcast) see the new linkage
+  # without a re-read; capture_email/3 reloads for the value it returns. On
+  # count == 0 a concurrent link already won, so the stale struct is returned
+  # untouched and its link is left intact.
+  defp conditional_link(conversation, id, fields) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    set = Keyword.put(fields, :updated_at, now)
+
+    {count, _} =
+      Repo.update_all(
+        from(c in Conversation, where: c.id == ^id and is_nil(c.organization_id)),
+        set: set
+      )
+
+    if count == 1 do
+      {:ok, struct(conversation, set)}
+    else
+      {:ok, conversation}
+    end
+  end
 
   defp perform_capture_side_effects(conversation) do
     Scoring.calculate_and_cache(conversation.id)

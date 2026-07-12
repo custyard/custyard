@@ -212,10 +212,16 @@ defmodule Custyard.Settings do
   """
   def update_intake_config(config) when is_map(config) do
     settings = get()
-    stringified = stringify_keys(config)
+
+    # Merge over the stored map: intake_config holds independent keys driving
+    # different subsystems (unlinked_tier_score, slug_claim_ttl_hours), so a
+    # partial update must preserve the others rather than reset them to
+    # defaults on the next get_intake_config/0. (Unlike update_branding/1,
+    # which replaces the whole map so a key can be cleared.)
+    merged = Map.merge(settings.intake_config || %{}, stringify_keys(config))
 
     settings
-    |> cast(%{intake_config: stringified}, [:intake_config])
+    |> cast(%{intake_config: merged}, [:intake_config])
     |> validate_intake_config()
     |> Repo.update()
   end

@@ -484,6 +484,38 @@ defmodule Custyard.IntakeTest do
       assert prospect.email == "alice@acme.example.com"
     end
 
+    test "a stale nil-org struct cannot clobber a link written after mount", %{
+      conversation: conversation
+    } do
+      # Organization A: the conversation gets linked to this in the DB after
+      # the in-memory struct was loaded (e.g. an operator ran
+      # convert_prospect/3 against a socket still holding organization_id: nil).
+      org_a = insert_organization(domain: "already.example.com")
+
+      # Organization B: what capture-time email resolution would resolve to.
+      org_b = insert_organization(domain: "acme.example.com")
+      insert_contact(organization_id: org_b.id, email: "alice@acme.example.com")
+
+      # DB row now points at A while our `conversation` struct is stale (nil org).
+      Repo.get!(Conversation, conversation.id)
+      |> Ecto.Changeset.change(organization_id: org_a.id)
+      |> Repo.update!()
+
+      assert conversation.organization_id == nil
+
+      assert {:ok, _updated} = Intake.capture_email(conversation, "alice@acme.example.com")
+
+      # The stale write lost the DB-side race (WHERE organization_id IS NULL):
+      # the row still links to A and B never clobbered it.
+      reloaded = Repo.get!(Conversation, conversation.id)
+      assert reloaded.organization_id == org_a.id
+      assert reloaded.contact_id == nil
+
+      # The email is still captured even though the link was skipped.
+      prospect = Repo.get_by!(Prospect, conversation_id: conversation.id)
+      assert prospect.email == "alice@acme.example.com"
+    end
+
     test "downcases and trims before resolving and storing", %{conversation: conversation} do
       org = insert_organization(domain: "acme.example.com")
       contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")

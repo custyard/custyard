@@ -4,7 +4,7 @@ defmodule Custyard.Scoring do
 
   Score = (idle_weight * idle_score) + (state_weight * state_score) +
           (tier_weight * tier_score) + (urgency_weight * urgency_score) +
-          (velocity_weight * velocity_score) + neglect_bonus
+          (velocity_weight * velocity_score) + (neglect_weight * neglect_bonus)
 
   Conversations without an organization (unlinked prospects) score with all
   components: the tier component comes from the configurable
@@ -322,7 +322,7 @@ defmodule Custyard.Scoring do
       @default_weights
   end
 
-  @default_unlinked_tier_score 10
+  @default_unlinked_tier_score @tier_scores.standard
 
   defp get_unlinked_tier_score do
     Settings.get_intake_config().unlinked_tier_score
