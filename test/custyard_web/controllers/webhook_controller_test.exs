@@ -5,6 +5,7 @@ defmodule CustyardWeb.WebhookControllerTest do
   alias Custyard.Repo
 
   import Custyard.Factory
+  import Custyard.Fixtures.EmailPayloads
 
   describe "routed/2 (token-based routing)" do
     setup do
@@ -118,6 +119,89 @@ defmodule CustyardWeb.WebhookControllerTest do
       # Verify the conversation was assigned to the project
       conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
       assert conversation.project_id == project.id
+    end
+  end
+
+  describe "threading" do
+    setup do
+      Application.put_env(:custyard, :env, :test)
+
+      on_exit(fn ->
+        Application.delete_env(:custyard, :env)
+      end)
+
+      org = insert_organization()
+      _contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+
+      {:ok, route} =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{
+          organization_id: org.id,
+          source: :lettermint
+        })
+        |> Repo.insert()
+
+      {:ok, org: org, route: route}
+    end
+
+    test "reply with In-Reply-To threads into existing conversation", %{
+      conn: conn,
+      route: route
+    } do
+      original_id = unique_message_id()
+
+      first_response =
+        conn
+        |> post(
+          ~p"/api/webhook/route/#{route.callback_token}",
+          standard_payload(%{"headers" => %{"message-id" => original_id}})
+        )
+        |> json_response(200)
+
+      conversation_id = first_response["conversation_id"]
+
+      reply_response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", reply_payload(original_id))
+        |> json_response(200)
+
+      assert reply_response["status"] == "ok"
+      assert reply_response["conversation_id"] == conversation_id
+    end
+
+    test "unrelated In-Reply-To starts a new conversation", %{conn: conn, route: route} do
+      first_response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", standard_payload())
+        |> json_response(200)
+
+      reply_response =
+        conn
+        |> post(
+          ~p"/api/webhook/route/#{route.callback_token}",
+          reply_payload("<nonexistent@elsewhere.example.com>")
+        )
+        |> json_response(200)
+
+      assert reply_response["conversation_id"] != first_response["conversation_id"]
+    end
+
+    test "html-only payload creates a conversation with stripped body", %{
+      conn: conn,
+      route: route
+    } do
+      response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", html_only_payload())
+        |> json_response(200)
+
+      assert response["status"] == "ok"
+
+      message =
+        Repo.get_by!(Custyard.Message, conversation_id: response["conversation_id"])
+
+      assert message.body =~ "HTML only body"
+      refute message.body =~ "<p>"
     end
   end
 

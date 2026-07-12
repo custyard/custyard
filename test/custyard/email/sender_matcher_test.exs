@@ -28,6 +28,44 @@ defmodule Custyard.Email.SenderMatcherTest do
       assert org.domain == "_unmatched_"
       assert contact.email == "unknown@random.test"
     end
+
+    test "matches email case-insensitively" do
+      org = insert_organization(domain: "acme.example.com")
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+
+      assert {:ok, matched_org, matched_contact} = SenderMatcher.match("ALICE@Acme.Example.COM")
+      assert matched_org.id == org.id
+      assert matched_contact.id == contact.id
+    end
+
+    test "extracts display name when creating contact from Name <email> format" do
+      insert_organization(domain: "acme.example.com")
+
+      assert {:ok, _org, contact} =
+               SenderMatcher.match("Alice Smith <new-alice@acme.example.com>")
+
+      assert contact.email == "new-alice@acme.example.com"
+      assert contact.name == "Alice Smith"
+    end
+
+    test "handles quoted display names" do
+      org = insert_organization(domain: "acme.example.com")
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+
+      assert {:ok, matched_org, matched_contact} =
+               SenderMatcher.match(~s("Smith, Alice" <alice@acme.example.com>))
+
+      assert matched_org.id == org.id
+      assert matched_contact.id == contact.id
+    end
+
+    test "address without a domain returns a changeset error" do
+      # No domain -> unmatched-org fallback, but contact creation fails
+      # email format validation. No contact row is created.
+      assert {:error, %Ecto.Changeset{} = changeset} = SenderMatcher.match("not-an-email")
+      assert {"must be a valid email address", _} = changeset.errors[:email]
+      refute Custyard.Repo.get_by(Custyard.Contact, email: "not-an-email")
+    end
   end
 
   describe "match_within_org/2" do
@@ -121,6 +159,16 @@ defmodule Custyard.Email.SenderMatcherTest do
         end)
 
       assert log =~ "Multi-org sender ambiguity"
+    end
+
+    test "resolves from Name <email> format" do
+      org = insert_organization(domain: "acme.example.com")
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
+
+      assert {:contact, resolved} =
+               SenderMatcher.resolve("Alice Smith <alice@acme.example.com>")
+
+      assert resolved.id == contact.id
     end
 
     test "falls back to organization-by-domain" do
