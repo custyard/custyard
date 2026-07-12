@@ -88,7 +88,8 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
 
     test "reply message has delivery_status pending", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      contact = insert_contact(organization_id: org.id, email: "pending@customer.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
 
       {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
 
@@ -270,6 +271,90 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       html = render(view)
       refute html =~ "delivery-status-pending"
       assert html =~ "delivery-status-failed"
+    end
+  end
+
+  describe "consent-withheld replies (public intake)" do
+    test "delivery indicator shows withheld", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+
+      insert_prospect(
+        conversation_id: conv.id,
+        email: "prospect@example.com",
+        notify_on_reply: false
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :operator,
+        sender_email: nil,
+        body: "Recorded but not emailed",
+        delivery_status: :withheld
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "delivery-status-withheld"
+      assert html =~ "Not emailed"
+    end
+
+    test "reply without prospect consent shows the advisory and records withheld", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+
+      insert_prospect(
+        conversation_id: conv.id,
+        email: "prospect@example.com",
+        notify_on_reply: false
+      )
+
+      {:ok, view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      assert html =~ "operator-reply-consent-advisory"
+
+      html =
+        view
+        |> form("form[phx-submit=send_reply]", body: "Reply without consent")
+        |> render_submit()
+
+      [message] = Conversations.list_public_messages(conv.id)
+      assert message.delivery_status == :withheld
+      assert html =~ "delivery-status-withheld"
+      refute html =~ "delivery-status-pending"
+    end
+
+    test "advisory is absent when the prospect has opted in", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+
+      insert_prospect(
+        conversation_id: conv.id,
+        email: "prospect@example.com",
+        notify_on_reply: true
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute html =~ "operator-reply-consent-advisory"
+    end
+
+    test "advisory is absent when no email was captured", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+
+      # Prospect row without a captured email: there is no opt-in to speak
+      # of, so the opt-in advisory would misstate the cause — the "no reply
+      # channel" state is conveyed by the reply-channel badge instead.
+      insert_prospect(conversation_id: conv.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute html =~ "operator-reply-consent-advisory"
+    end
+
+    test "advisory is absent on non-intake conversations", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute html =~ "operator-reply-consent-advisory"
     end
   end
 

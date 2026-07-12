@@ -14,6 +14,7 @@ defmodule Custyard.Email.Outbound do
 
       case Custyard.Email.Outbound.deliver(message) do
         {:ok, message} -> # delivery_status is now :sent
+        {:error, :no_consent, message} -> # delivery_status is now :withheld
         {:error, reason, message} -> # delivery_status is now :failed
       end
   """
@@ -21,21 +22,32 @@ defmodule Custyard.Email.Outbound do
   require Logger
 
   alias Custyard.Email.{Headers, ThreadHeaders}
-  alias Custyard.{Message, Repo}
+  alias Custyard.{Conversations, Message, Repo, Settings}
   import Swoosh.Email
 
   @doc """
   Deliver an outbound email for a message.
 
-  The message must be preloaded with `conversation.contact` and
-  `conversation.organization` (or at minimum have a `sender_email`
-  and conversation with a contact email).
+  The message's conversation, contact, organization, and prospect are
+  force-preloaded, so the consent re-check always reads current DB state even
+  when a caller passes a message with stale associations already loaded.
+  Recipient resolution falls back contact.email -> prospect.email -> no
+  recipient; the prospect channel additionally requires the prospect's
+  reply-notification opt-in (consent gate, secondary layer —
+  `Conversations.send_reply/3` is the primary). A prospect-channel recipient
+  without opt-in marks the message `:withheld` and returns
+  `{:error, :no_consent, updated_message}`, so no caller can bypass policy.
 
   Returns `{:ok, updated_message}` on success or
   `{:error, reason, updated_message}` on failure.
   """
   def deliver(%Message{} = message) do
-    message = Repo.preload(message, conversation: [:contact, :organization])
+    # force: true — the consent re-check must read committed consent state;
+    # without it a caller passing a preloaded conversation would silently
+    # turn this defense-in-depth layer into a stale-read no-op.
+    message =
+      Repo.preload(message, [conversation: [:contact, :organization, :prospect]], force: true)
+
     conversation = message.conversation
 
     with {:ok, recipient} <- resolve_recipient(conversation),
@@ -49,6 +61,15 @@ defmodule Custyard.Email.Outbound do
 
       {:ok, updated}
     else
+      # Consent withheld is an expected state, not a delivery failure — the
+      # reply stays visible to the prospect via the resume link.
+      {:error, :no_consent} ->
+        Logger.info(
+          "Outbound email withheld for message #{message.id}: prospect has not opted in"
+        )
+
+        {:error, :no_consent, message |> mark_status(:withheld) |> broadcast_delivery_update()}
+
       {:error, reason} ->
         Logger.error(
           "Outbound email delivery failed for message #{message.id}: #{inspect(reason)}"
@@ -75,15 +96,20 @@ defmodule Custyard.Email.Outbound do
 
   # --- Private ---
 
+  # Recipient fallback: contact.email -> prospect.email -> no recipient.
+  # The contact channel delivers unconditionally (established-customer path).
+  # reply_channel/1 already excludes revoked prospects and empty emails, so
+  # the prospect channel only needs the consent check here.
   defp resolve_recipient(conversation) do
-    case conversation.contact do
-      %{email: email} when is_binary(email) and email != "" ->
-        {:ok, email}
-
-      _ ->
-        {:error, :no_recipient_email}
+    case Conversations.reply_channel(conversation) do
+      {:contact, email} -> {:ok, email}
+      {:prospect, email} -> prospect_recipient(conversation.prospect, email)
+      :none -> {:error, :no_recipient_email}
     end
   end
+
+  defp prospect_recipient(%{notify_on_reply: true}, email), do: {:ok, email}
+  defp prospect_recipient(_prospect, _email), do: {:error, :no_consent}
 
   defp resolve_from_address(message, conversation) do
     # Priority: message sender_email > app config fallback
@@ -127,6 +153,12 @@ defmodule Custyard.Email.Outbound do
     |> Map.get("References", in_reply_to)
   end
 
+  # Public-intake mail always carries the instance branding display name,
+  # keyed on the conversation's source — linking the conversation to an
+  # organization later must not change the From identity (source-keyed rule
+  # in the public intake spec).
+  defp from_name(%{source: :public_intake}), do: header_safe_name(branding_name())
+
   defp from_name(conversation) do
     name =
       case conversation.organization do
@@ -134,7 +166,18 @@ defmodule Custyard.Email.Outbound do
         _ -> "Custyard"
       end
 
-    name |> sanitize_header_text() |> quote_display_name()
+    header_safe_name(name)
+  end
+
+  defp header_safe_name(name), do: name |> sanitize_header_text() |> quote_display_name()
+
+  # Instance branding display name for public-intake mail; "Custyard" when no
+  # branding name is configured.
+  defp branding_name do
+    case Settings.get_branding() do
+      %{name: name} when is_binary(name) and name != "" -> name
+      _ -> "Custyard"
+    end
   end
 
   # Delegates to the shared Custyard.Email.Headers (extracted from this

@@ -174,6 +174,8 @@ defmodule Custyard.Conversations do
     |> Repo.preload([
       :organization,
       :contact,
+      # Feeds reply_channel/1 and reply_deliverable?/1 without extra queries
+      :prospect,
       :tasks,
       messages: from(m in Message, order_by: m.inserted_at)
     ])
@@ -369,6 +371,66 @@ defmodule Custyard.Conversations do
   defp prospect_email(_prospect), do: nil
 
   @doc """
+  Classify how an operator reply on this conversation would be delivered.
+
+  Returns one of:
+
+    * `:contact` — the linked contact has an email; delivers unconditionally
+      (established-customer path)
+    * `:prospect_opted_in` — a prospect email was captured with the
+      reply-notification opt-in; delivers
+    * `:prospect_no_consent` — a prospect email was captured but the prospect
+      has not opted into email replies; the consent-advisory state
+    * `:none` — no recipient at all (no email captured, or resume access
+      revoked)
+
+  The operator UI keys the consent advisory on `:prospect_no_consent`
+  specifically — the `:none` states are conveyed by the reply-channel badge,
+  not the opt-in wording.
+
+  Callers must pass a `conversation` with fresh `:contact`/`:prospect`
+  associations. If they are already `Ecto.assoc_loaded?`, this function reuses
+  them as-is rather than re-reading from the database — a stale preload (e.g.
+  a prospect's `notify_on_reply` flipped after it was loaded) silently
+  produces a stale consent decision.
+  """
+  def reply_delivery(%Conversation{} = conversation) do
+    conversation = preload_reply_channel_assocs(conversation)
+
+    case reply_channel(conversation) do
+      {:contact, _email} ->
+        :contact
+
+      {:prospect, _email} ->
+        if conversation.prospect.notify_on_reply,
+          do: :prospect_opted_in,
+          else: :prospect_no_consent
+
+      :none ->
+        :none
+    end
+  end
+
+  @doc """
+  Whether an operator reply on this conversation will be emailed.
+
+  Contact recipients deliver unconditionally — the established-customer path,
+  including when a captured prospect email matched an existing contact and the
+  conversation is linked. The prospect channel requires the prospect's
+  reply-notification opt-in; `reply_channel/1` already treats revoked
+  prospects as having no channel. `:none` means there is no recipient at all.
+
+  `send_reply/3` uses this as the primary consent gate for public-intake
+  conversations: a non-deliverable public-intake reply is persisted with
+  `delivery_status: :withheld` and never handed to delivery.
+  `Custyard.Email.Outbound.deliver/1` independently re-checks (defense in
+  depth), so no caller can bypass the policy.
+  """
+  def reply_deliverable?(%Conversation{} = conversation) do
+    reply_delivery(conversation) in [:contact, :prospect_opted_in]
+  end
+
+  @doc """
   Broadcast a PubSub message on the org-scoped conversations topic
   (`"conversations:org:{id}"`).
 
@@ -431,9 +493,23 @@ defmodule Custyard.Conversations do
   The entire operation runs inside a transaction so the message and conversation
   update succeed or fail atomically.
 
+  Consent gate (primary layer, public-intake only): the recipient class is
+  computed before the insert via `reply_deliverable?/1`, reading committed
+  consent state (associations are force-preloaded, so a stale prospect on the
+  caller's struct cannot mask a consent flip). When a public-intake
+  conversation's reply channel is the prospect email without the prospect's
+  reply-notification opt-in, or there is no recipient at all, the reply is
+  persisted with `delivery_status: :withheld` and delivery is skipped
+  entirely — it reaches the prospect only via the resume link. Non-intake
+  replies always go to delivery, so a missing recipient surfaces as the
+  visible `:pending` -> `:failed` path rather than a silent withhold.
+  Contact recipients deliver unconditionally.
+
   ## Options
 
-    * `:operator_email` - email of the operator sending the reply (optional)
+    * `:operator_email` - email of the operator sending the reply (optional;
+      never used for public-intake conversations, which always send from the
+      platform address)
 
   ## Returns
 
@@ -446,10 +522,22 @@ defmodule Custyard.Conversations do
 
   """
   def send_reply(conversation, body, opts \\ []) do
-    conversation = Repo.preload(conversation, [:contact, :organization])
+    # force: true — callers (ConversationLive) pass conversations whose
+    # prospect was preloaded at page load; a plain preload skips loaded
+    # associations, and the primary consent gate must see committed consent
+    # state, not the socket's snapshot.
+    conversation =
+      Repo.preload(conversation, [:contact, :organization, :prospect], force: true)
+
+    deliverable? = reply_deliverable?(conversation)
+
+    # :withheld is reserved for the public-intake consent gate. A non-intake
+    # reply with no recipient still goes to delivery so it lands on the
+    # visible :pending -> :failed path instead of a false calm.
+    attempt_delivery? = deliverable? or conversation.source != :public_intake
 
     Repo.transaction(fn ->
-      with {:ok, message} <- insert_reply_message(conversation, body, opts),
+      with {:ok, message} <- insert_reply_message(conversation, body, attempt_delivery?, opts),
            {:ok, _conv} <- update_conversation_after_reply(conversation) do
         # Side effects outside the transaction boundary aren't critical —
         # a failed broadcast doesn't warrant rolling back the message.
@@ -466,7 +554,8 @@ defmodule Custyard.Conversations do
         # Deliver the email asynchronously so we don't block the caller.
         # The message is already persisted with delivery_status: :pending;
         # Email.Outbound.deliver/1 will update it to :sent or :failed.
-        deliver_async(message)
+        # A :withheld reply is never handed to delivery.
+        if attempt_delivery?, do: deliver_async(message)
 
         {:ok, message}
 
@@ -493,7 +582,7 @@ defmodule Custyard.Conversations do
   end
 
   # Build and insert the operator reply message with email metadata.
-  defp insert_reply_message(conversation, body, opts) do
+  defp insert_reply_message(conversation, body, attempt_delivery?, opts) do
     last_customer_msg = find_last_customer_message(conversation.id)
 
     attrs = %{
@@ -502,7 +591,10 @@ defmodule Custyard.Conversations do
       body: body,
       is_internal_note: false,
       conversation_id: conversation.id,
-      delivery_status: :pending,
+      # Consent gate, primary layer: a public-intake reply with no consenting
+      # recipient -> :withheld (see send_reply/3); delivery is skipped by the
+      # caller. Non-intake replies always start :pending.
+      delivery_status: if(attempt_delivery?, do: :pending, else: :withheld),
       message_id: generate_outbound_message_id(conversation),
       in_reply_to: last_customer_msg && last_customer_msg.message_id,
       sender_email: resolve_sender_email(conversation, opts)
@@ -567,6 +659,16 @@ defmodule Custyard.Conversations do
   end
 
   # Determine the from address for outbound email.
+  #
+  # Public-intake conversations always send from the platform address: with a
+  # nil sender_email, Outbound's :email_from_address fallback applies. Keyed
+  # on the conversation's source, not org presence — no inbound route exists
+  # for these conversations, and the operator_email fallback would leak the
+  # replying operator's personal address to prospects. The rule holds even
+  # after the conversation links to an organization (source-keyed rule in the
+  # public intake spec).
+  defp resolve_sender_email(%Conversation{source: :public_intake}, _opts), do: nil
+
   # Priority: inbound route from_address > operator_email option > fallback
   defp resolve_sender_email(conversation, opts) do
     route_address = lookup_route_from_address(conversation)
@@ -586,6 +688,9 @@ defmodule Custyard.Conversations do
       :intercom -> :intercom
       :slack -> :slack
       :portal -> :portal
+      # Public-intake replies go out over native email — explicit so the
+      # mapping never rides on the catch-all below
+      :public_intake -> :email
       # For disambiguation or unknown sources, default to :email
       _ -> :email
     end
@@ -747,22 +852,40 @@ defmodule Custyard.Conversations do
     count
   end
 
+  # Resolved :public_intake conversations are retained longer than the
+  # standard bound to honor the months-later resume path (spec: NFR Retention).
+  @public_intake_retention_days 365
+
   @doc """
-  Delete resolved conversations older than the given number of days.
-  Also deletes associated messages (via FK cascade) and cleans up orphaned contacts.
-  Returns the number of conversations deleted.
+  Delete resolved conversations older than the retention bound.
+  Also deletes associated messages and the prospect row (via FK cascade) and
+  cleans up orphaned contacts. Returns the number of conversations deleted.
+
+  Retention splits by source: `days_old` (90 via `run_cleanup/1`) applies to
+  every source except `:public_intake`, which is retained for 365 days after
+  resolution so a prospect returning months later still finds the thread.
+  Once purged, the prospect row cascades away with the conversation, so the
+  resume token no longer resolves and the resume URL renders the uniform
+  unavailable page.
 
   Options:
     - :dry_run - if true, returns count without deleting (default: false)
+    - :public_intake_days - retention for resolved `:public_intake`
+      conversations (default: 365)
   """
   def cleanup_resolved_conversations(days_old, opts \\ []) do
     dry_run = Keyword.get(opts, :dry_run, false)
-    cutoff = DateTime.utc_now() |> DateTime.add(-days_old * 24 * 60 * 60, :second)
+    intake_days = Keyword.get(opts, :public_intake_days, @public_intake_retention_days)
+    now = DateTime.utc_now()
+    cutoff = DateTime.add(now, -days_old * 24 * 60 * 60, :second)
+    intake_cutoff = DateTime.add(now, -intake_days * 24 * 60 * 60, :second)
 
     query =
       from(c in Conversation,
         where: c.state == :resolved,
-        where: c.updated_at < ^cutoff
+        where:
+          ((is_nil(c.source) or c.source != ^:public_intake) and c.updated_at < ^cutoff) or
+            (c.source == ^:public_intake and c.updated_at < ^intake_cutoff)
       )
 
     if dry_run do
@@ -805,14 +928,24 @@ defmodule Custyard.Conversations do
   Returns a map with counts for each cleanup type.
 
   Options:
-    - :resolved_days - delete resolved conversations older than this (default: 90)
+    - :resolved_days - delete resolved conversations older than this
+      (default: 90); resolved `:public_intake` conversations use the longer
+      `:public_intake_days` bound instead
+    - :public_intake_days - retention for resolved `:public_intake`
+      conversations (default: 365)
     - :dry_run - if true, returns counts without deleting (default: false)
   """
   def run_cleanup(opts \\ []) do
     resolved_days = Keyword.get(opts, :resolved_days, 90)
+    intake_days = Keyword.get(opts, :public_intake_days, @public_intake_retention_days)
     dry_run = Keyword.get(opts, :dry_run, false)
 
-    resolved_count = cleanup_resolved_conversations(resolved_days, dry_run: dry_run)
+    resolved_count =
+      cleanup_resolved_conversations(resolved_days,
+        dry_run: dry_run,
+        public_intake_days: intake_days
+      )
+
     contacts_count = cleanup_orphaned_contacts(dry_run: dry_run)
     tasks_count = if dry_run, do: count_orphaned_tasks(), else: delete_orphaned_tasks()
 

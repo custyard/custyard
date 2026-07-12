@@ -89,6 +89,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       socket
       |> assign(:page_title, truncate_subject(conversation.subject))
       |> assign(:conversation, conversation)
+      |> assign_reply_delivery(conversation)
       |> assign(:breakdown, breakdown)
       |> assign(:neglect_status, neglect_status)
       |> assign(:other_conversations, other_conversations)
@@ -113,18 +114,31 @@ defmodule CustyardWeb.Operator.ConversationLive do
     operator = socket.assigns.current_operator
 
     case Conversations.send_reply(conversation, body, operator_email: operator.email) do
-      {:ok, _message} ->
+      {:ok, message} ->
         socket = socket |> assign(:reply_text, "") |> reload_conversation()
 
         socket =
-          if deliverable_recipient?(conversation) do
-            socket
-          else
-            put_flash(
-              socket,
-              :error,
-              "Reply saved, but the contact has no email address so it cannot be delivered"
-            )
+          cond do
+            # Ground truth for this message: :withheld is only ever set by the
+            # public-intake consent gate at send time, so this can't be fooled
+            # by a consent flip that happens before the reload below runs.
+            message.delivery_status == :withheld ->
+              socket
+
+            socket.assigns.reply_will_email? ->
+              socket
+
+            # The reply-box advisory already explains the withheld delivery
+            # for public-intake conversations; no flash needed.
+            socket.assigns.conversation.source == :public_intake ->
+              socket
+
+            true ->
+              put_flash(
+                socket,
+                :error,
+                "Reply saved, but the contact has no email address so it cannot be delivered"
+              )
           end
 
         {:noreply, socket}
@@ -390,15 +404,6 @@ defmodule CustyardWeb.Operator.ConversationLive do
     task
   end
 
-  # A reply is recorded in the thread even without a contact email, but the
-  # async delivery will fail — warn the operator up front.
-  defp deliverable_recipient?(conversation) do
-    case conversation.contact do
-      %{email: email} when is_binary(email) and email != "" -> true
-      _ -> false
-    end
-  end
-
   defp load_conversation(id) do
     Conversations.get_with_messages(id)
   rescue
@@ -420,10 +425,23 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
         socket
         |> assign(:conversation, conversation)
+        |> assign_reply_delivery(conversation)
         |> assign(:breakdown, breakdown)
         |> assign(:neglect_status, neglect_status)
         |> assign(:other_conversations, other_conversations)
     end
+  end
+
+  # The consent advisory keys on :prospect_no_consent specifically — a
+  # public-intake conversation with no captured email (or revoked resume
+  # access) has no opt-in to speak of, and that state is conveyed by the
+  # reply-channel badge instead.
+  defp assign_reply_delivery(socket, conversation) do
+    reply_delivery = Conversations.reply_delivery(conversation)
+
+    socket
+    |> assign(:reply_delivery, reply_delivery)
+    |> assign(:reply_will_email?, reply_delivery in [:contact, :prospect_opted_in])
   end
 
   # Unlinked (nil-org) conversations have no sibling org conversations to list.
@@ -543,6 +561,20 @@ defmodule CustyardWeb.Operator.ConversationLive do
         </div>
 
         <div class="border-t border-gray-200 dark:border-zinc-700 p-3 space-y-2 bg-white dark:bg-zinc-800">
+          <%!-- Consent advisory: shown only when a prospect email was
+          captured without the reply-notification opt-in. The reply still
+          saves and stays visible via the resume link, so sending is never
+          blocked — the operator just knows up front that no email goes
+          out. No-email and revoked states are covered by the reply-channel
+          badge, not this opt-in wording. --%>
+          <p
+            :if={@reply_delivery == :prospect_no_consent}
+            class="text-xs text-amber-600 dark:text-amber-400"
+            data-testid="operator-reply-consent-advisory"
+          >
+            This prospect has not opted into email replies — replies are not
+            emailed, but stay visible via their resume link.
+          </p>
           <form phx-submit="send_reply" class="flex gap-2" data-testid="operator-reply-form">
             <textarea
               name="body"
@@ -932,7 +964,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     """
   end
 
-  attr :status, :atom, required: true, values: [:pending, :sent, :failed, :bounced]
+  attr :status, :atom, required: true, values: [:pending, :sent, :failed, :bounced, :withheld]
 
   defp delivery_indicator(%{status: :pending} = assigns) do
     ~H"""
@@ -1016,6 +1048,29 @@ defmodule CustyardWeb.Operator.ConversationLive do
         <path
           fill-rule="evenodd"
           d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
+    """
+  end
+
+  defp delivery_indicator(%{status: :withheld} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-gray-400 dark:text-zinc-500"
+      title="Not emailed — visible via resume link"
+      data-testid="delivery-status-withheld"
+    >
+      <svg
+        class="h-3.5 w-3.5"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M10 18a8 8 0 100-16 8 8 0 000 16zM6.75 9.25a.75.75 0 000 1.5h6.5a.75.75 0 000-1.5h-6.5z"
           clip-rule="evenodd"
         />
       </svg>
