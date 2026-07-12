@@ -1,7 +1,7 @@
 defmodule Custyard.OrganizationsTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.Organizations
+  alias Custyard.{AuditEvent, Contact, Conversation, Organizations, Prospect, Repo, Slugs}
 
   import Custyard.Factory
 
@@ -223,6 +223,186 @@ defmodule Custyard.OrganizationsTest do
 
       assert is_binary(result)
       assert result == "localhost"
+    end
+  end
+
+  describe "convert_prospect/3" do
+    setup do
+      %{operator: insert_operator_account(role: "super_admin")}
+    end
+
+    test "links the conversation to a new organization, keeping :public_intake provenance", %{
+      operator: operator
+    } do
+      conversation = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conversation.id)
+
+      assert {:ok, converted} =
+               Organizations.convert_prospect(conversation, %{name: "Acme Corp"}, operator)
+
+      assert converted.source == :public_intake
+      assert %{name: "Acme Corp"} = converted.organization
+    end
+
+    test "creates a contact from the prospect's captured email", %{operator: operator} do
+      conversation = insert_conversation(source: :public_intake)
+
+      insert_prospect(
+        conversation_id: conversation.id,
+        email: "buyer@acme.com",
+        email_captured_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      )
+
+      assert {:ok, converted} =
+               Organizations.convert_prospect(conversation, %{name: "Acme Corp"}, operator)
+
+      assert converted.contact_id
+      contact = Repo.get_by!(Contact, organization_id: converted.organization_id)
+      assert contact.email == "buyer@acme.com"
+    end
+
+    test "no captured email means no contact is created", %{operator: operator} do
+      conversation = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conversation.id)
+
+      assert {:ok, converted} =
+               Organizations.convert_prospect(conversation, %{name: "Acme Corp"}, operator)
+
+      assert is_nil(converted.contact_id)
+      assert Repo.aggregate(Contact, :count) == 0
+    end
+
+    test "promotes the conversation's confirmed slug claim to provisioned", %{operator: operator} do
+      conversation = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conversation.id)
+      {:ok, _slug, token} = Slugs.claim("acme-hq", "buyer@example.com", conversation)
+      {:ok, _confirmed} = Slugs.confirm(token)
+
+      assert {:ok, converted} =
+               Organizations.convert_prospect(conversation, %{name: "Acme Corp"}, operator)
+
+      slug = Repo.get_by!(Custyard.Slug, conversation_id: conversation.id)
+      assert slug.status == :provisioned
+      assert slug.organization_id == converted.organization_id
+    end
+
+    test "an unconfirmed claim is not promoted, but conversion still succeeds", %{
+      operator: operator
+    } do
+      conversation = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conversation.id)
+      {:ok, _slug, _token} = Slugs.claim("still-pending", "buyer@example.com", conversation)
+
+      assert {:ok, _converted} =
+               Organizations.convert_prospect(conversation, %{name: "Acme"}, operator)
+
+      slug = Repo.get_by!(Custyard.Slug, conversation_id: conversation.id)
+      assert slug.status == :claimed
+    end
+
+    test "does not revoke or rotate resume access", %{operator: operator} do
+      conversation = insert_conversation(source: :public_intake)
+      prospect = insert_prospect(conversation_id: conversation.id)
+
+      assert {:ok, _converted} =
+               Organizations.convert_prospect(conversation, %{name: "Acme"}, operator)
+
+      reloaded = Repo.get!(Prospect, prospect.id)
+      assert reloaded.resume_token_hash == prospect.resume_token_hash
+      assert is_nil(reloaded.revoked_at)
+    end
+
+    test "records a :prospect_converted audit event attributed to the operator", %{
+      operator: operator
+    } do
+      conversation = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conversation.id)
+
+      assert {:ok, converted} =
+               Organizations.convert_prospect(conversation, %{name: "Acme"}, operator)
+
+      event =
+        Repo.get_by!(AuditEvent,
+          conversation_id: converted.id,
+          event_type: :prospect_converted
+        )
+
+      assert event.organization_id == converted.organization_id
+      assert event.payload["operator_id"] == operator.id
+      assert event.payload["operator_email"] == operator.email
+    end
+
+    test "refuses a conversation already linked to an organization", %{operator: operator} do
+      org = insert_organization()
+      conversation = insert_conversation(organization_id: org.id, source: :public_intake)
+
+      assert {:error, :not_convertible} =
+               Organizations.convert_prospect(conversation, %{name: "Someone Else"}, operator)
+    end
+
+    test "refuses a non-public-intake conversation", %{operator: operator} do
+      conversation = insert_conversation(organization_id: nil, source: :disambiguation)
+
+      assert {:error, :not_convertible} =
+               Organizations.convert_prospect(conversation, %{name: "Someone Else"}, operator)
+    end
+
+    test "a genuine step-2 failure compensates the organization, conversation stays unlinked", %{
+      operator: operator
+    } do
+      conversation = insert_conversation(source: :public_intake)
+
+      # Bypasses Prospect's changeset validation (mirrors the factory's raw-struct
+      # discipline) to force a real Contact changeset error inside the transaction.
+      insert_prospect(
+        conversation_id: conversation.id,
+        email: "not-an-email",
+        email_captured_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      )
+
+      assert {:error, %Ecto.Changeset{}} =
+               Organizations.convert_prospect(conversation, %{name: "Bad Email Co"}, operator)
+
+      assert Organizations.list_organizations() == []
+      refute Repo.get!(Conversation, conversation.id).organization_id
+    end
+
+    test "a concurrent conversion attempt loses the race and compensates its organization", %{
+      operator: operator
+    } do
+      conversation = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conversation.id)
+
+      assert {:ok, _first} =
+               Organizations.convert_prospect(conversation, %{name: "First Corp"}, operator)
+
+      # Simulates a second operator whose in-memory conversation struct was
+      # loaded before the first conversion committed (organization_id still nil).
+      assert {:error, :already_converted} =
+               Organizations.convert_prospect(conversation, %{name: "Second Corp"}, operator)
+
+      assert [remaining] = Organizations.list_organizations()
+      assert remaining.name == "First Corp"
+    end
+
+    test "a Lettermint provisioning failure leaves no organization and the conversation unlinked",
+         %{operator: operator} do
+      conversation = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conversation.id)
+
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+      on_exit(fn -> Application.put_env(:custyard, :lettermint, original_config) end)
+
+      assert {:error, %Ecto.Changeset{}} =
+               Organizations.convert_prospect(
+                 conversation,
+                 %{name: "Doomed Corp", lettermint_project_id: "lm_doomed"},
+                 operator
+               )
+
+      assert Organizations.list_organizations() == []
+      refute Repo.get!(Conversation, conversation.id).organization_id
     end
   end
 end

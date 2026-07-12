@@ -29,4 +29,15 @@ defmodule CustyardWeb.FormHelpers do
       String.replace(acc, "%{#{key}}", to_string(value))
     end)
   end
+
+  @doc """
+  Converts an empty string to `nil`; passes any other value through
+  unchanged.
+
+  Used to normalize optional text-input form fields (e.g. domain) before
+  casting into a changeset, where a blank submission should mean "not
+  provided" rather than the literal empty string.
+  """
+  def empty_to_nil(""), do: nil
+  def empty_to_nil(value), do: value
 end

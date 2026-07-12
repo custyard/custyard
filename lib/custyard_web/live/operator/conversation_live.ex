@@ -13,8 +13,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
   use CustyardWeb, :live_view
 
   import CustyardWeb.OperatorComponents
+  import CustyardWeb.FormHelpers
 
-  alias Custyard.{Authorization, Conversation, Conversations, Message, Scoring}
+  alias Custyard.{
+    Authorization,
+    Conversation,
+    Conversations,
+    Message,
+    Organizations,
+    Scoring,
+    Slugs
+  }
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -104,6 +113,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:edit_task_due_at, "")
       |> assign(:edit_task_portal_visible, true)
       |> assign(:show_sidebar, false)
+      |> assign(:show_convert_form, false)
+      |> assign(:convert_form_data, %{name: "", domain: ""})
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
   end
@@ -211,6 +222,47 @@ defmodule CustyardWeb.Operator.ConversationLive do
   def handle_event("set_state", %{"state" => _state}, socket) do
     # Invalid state value - silently ignore (could also flash an error)
     {:noreply, socket}
+  end
+
+  def handle_event("show_convert_form", _params, socket) do
+    if Authorization.can_create_organization?(socket.assigns.current_operator) do
+      {:noreply,
+       socket
+       |> assign(:show_convert_form, true)
+       |> assign(:convert_form_data, prefill_convert_form(socket.assigns.conversation))}
+    else
+      {:noreply, put_flash(socket, :error, "Only super admins can convert prospects")}
+    end
+  end
+
+  def handle_event("hide_convert_form", _params, socket) do
+    {:noreply, assign(socket, :show_convert_form, false)}
+  end
+
+  def handle_event("validate_convert_form", params, socket) do
+    form_data = %{
+      name: Map.get(params, "name", ""),
+      domain: Map.get(params, "domain", "")
+    }
+
+    {:noreply, assign(socket, :convert_form_data, form_data)}
+  end
+
+  def handle_event("convert_prospect", params, socket) do
+    operator = socket.assigns.current_operator
+
+    if Authorization.can_create_organization?(operator) do
+      attrs = %{
+        name: Map.get(params, "name", ""),
+        domain: empty_to_nil(Map.get(params, "domain", ""))
+      }
+
+      socket.assigns.conversation
+      |> Organizations.convert_prospect(attrs, operator)
+      |> handle_convert_result(socket)
+    else
+      {:noreply, put_flash(socket, :error, "Only super admins can convert prospects")}
+    end
   end
 
   def handle_event("toggle_task_form", _params, socket) do
@@ -384,6 +436,53 @@ defmodule CustyardWeb.Operator.ConversationLive do
   defp broadcast_conversation_update(id, organization_id) do
     Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
     Conversations.broadcast_to_org(organization_id, {:conversation_updated, id})
+  end
+
+  defp handle_convert_result({:ok, _conversation}, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_convert_form, false)
+     |> put_flash(:info, "Converted to a new organization")
+     |> reload_conversation()}
+  end
+
+  defp handle_convert_result({:error, :already_converted}, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_convert_form, false)
+     |> put_flash(:error, "This conversation was already converted")
+     |> reload_conversation()}
+  end
+
+  defp handle_convert_result({:error, :not_convertible}, socket) do
+    {:noreply, put_flash(socket, :error, "This conversation cannot be converted")}
+  end
+
+  defp handle_convert_result({:error, %Ecto.Changeset{} = changeset}, socket) do
+    {:noreply,
+     put_flash(socket, :error, "Failed to convert: #{format_changeset_errors(changeset)}")}
+  end
+
+  # Prefill only — never auto-set: freemail domains would match-link every
+  # same-domain prospect if the operator submitted the form unedited, so
+  # both fields stay plain editable text inputs.
+  defp prefill_convert_form(conversation) do
+    slug = Slugs.get_claim_for_conversation(conversation.id)
+    prospect = conversation.prospect
+
+    %{
+      name: (slug && slug.slug) || "",
+      domain: email_domain(prospect && prospect.email)
+    }
+  end
+
+  defp email_domain(nil), do: ""
+
+  defp email_domain(email) do
+    case String.split(email, "@") do
+      [_local, domain] -> domain
+      _ -> ""
+    end
   end
 
   defp get_scoped_task!(socket, task_id) when is_binary(task_id) do
@@ -691,6 +790,64 @@ defmodule CustyardWeb.Operator.ConversationLive do
               >
                 Unlinked prospect
               </div>
+              <button
+                :if={
+                  @conversation.source == :public_intake and
+                    Authorization.can_create_organization?(@current_operator) and
+                    not @show_convert_form
+                }
+                phx-click="show_convert_form"
+                class="mt-2 text-xs text-indigo-600 hover:underline"
+                data-testid="operator-convert-prospect-btn"
+              >
+                Convert to organization
+              </button>
+              <form
+                :if={@show_convert_form}
+                phx-submit="convert_prospect"
+                phx-change="validate_convert_form"
+                class="mt-2 p-2 bg-gray-50 dark:bg-zinc-900 rounded border border-gray-200 dark:border-zinc-700 space-y-2"
+                data-testid="operator-convert-form"
+              >
+                <input
+                  type="text"
+                  name="name"
+                  value={@convert_form_data.name}
+                  placeholder="Organization name"
+                  aria-label="Organization name"
+                  required
+                  autofocus
+                  class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 dark:bg-zinc-700 dark:text-zinc-100"
+                  data-testid="operator-convert-name-input"
+                />
+                <input
+                  type="text"
+                  name="domain"
+                  value={@convert_form_data.domain}
+                  placeholder="Domain (optional)"
+                  aria-label="Domain"
+                  class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 dark:bg-zinc-700 dark:text-zinc-100"
+                  data-testid="operator-convert-domain-input"
+                />
+                <div class="flex gap-2">
+                  <button
+                    type="submit"
+                    phx-disable-with="Converting..."
+                    class="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                    data-testid="operator-convert-submit"
+                  >
+                    Convert
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="hide_convert_form"
+                    class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
+                    data-testid="operator-convert-cancel"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
             <% end %>
           </div>
 

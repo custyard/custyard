@@ -283,6 +283,48 @@ defmodule Custyard.SlugsTest do
     end
   end
 
+  describe "promote/2" do
+    test "promotes a confirmed claim to provisioned, linking the organization" do
+      conversation = intake_conversation()
+      {:ok, _slug, token} = Slugs.claim("promote-me", "buyer@example.com", conversation)
+      {:ok, _confirmed} = Slugs.confirm(token)
+      org = insert_organization()
+
+      assert {:ok, :provisioned} = Slugs.promote(conversation, org)
+      promoted = Repo.get_by!(Slug, conversation_id: conversation.id)
+      assert promoted.status == :provisioned
+      assert promoted.organization_id == org.id
+    end
+
+    test "an unconfirmed (merely claimed) row is not promoted" do
+      conversation = intake_conversation()
+      {:ok, _slug, _token} = Slugs.claim("still-pending", "buyer@example.com", conversation)
+      org = insert_organization()
+
+      assert {:error, :not_found} = Slugs.promote(conversation, org)
+      assert Repo.get_by!(Slug, conversation_id: conversation.id).status == :claimed
+    end
+
+    test "a conversation with no claim at all is not a failure" do
+      conversation = intake_conversation()
+      org = insert_organization()
+
+      assert {:error, :not_found} = Slugs.promote(conversation, org)
+    end
+
+    test "an already-provisioned row is not re-promoted" do
+      conversation = intake_conversation()
+      {:ok, _slug, token} = Slugs.claim("once-only", "buyer@example.com", conversation)
+      {:ok, _confirmed} = Slugs.confirm(token)
+      org = insert_organization()
+      other_org = insert_organization()
+
+      assert {:ok, _} = Slugs.promote(conversation, org)
+      assert {:error, :not_found} = Slugs.promote(conversation, other_org)
+      assert Repo.get_by!(Slug, conversation_id: conversation.id).organization_id == org.id
+    end
+  end
+
   describe "available?/1" do
     test "no row means available" do
       assert Slugs.available?("never-claimed")
