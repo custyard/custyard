@@ -6,8 +6,8 @@ defmodule CustyardWeb.IntakeController do
   operator-configured intake source; unknown and disabled keys render the
   standard 404. POST validates the message body *before* touching the
   context, creates the conversation through
-  `Custyard.Intake.create_intake_conversation/3`, sets the signed resume
-  cookie, and redirects to the resume URL. Malformed or oversized input
+  `Custyard.Intake.create_intake_conversation/3`, sets the signed conversation
+  cookie, and redirects to the conversation URL. Malformed or oversized input
   re-renders the form with a structured error — never a 500.
 
   Deliberately a controller, not a LiveView: these surfaces take anonymous
@@ -21,7 +21,7 @@ defmodule CustyardWeb.IntakeController do
 
   alias Custyard.Email.Normalizer
   alias Custyard.{Intake, IntakeSource, Settings}
-  alias CustyardWeb.Plugs.ResumeCookie
+  alias CustyardWeb.Plugs.ConversationCookie
 
   plug :put_layout, html: {CustyardWeb.Layouts, :intake}
   plug CustyardWeb.Plugs.PublicRateLimit, [bucket: :intake_get] when action == :show
@@ -52,12 +52,12 @@ defmodule CustyardWeb.IntakeController do
     source = conn.assigns.intake_source
 
     case Intake.create_intake_conversation(source.key, body) do
-      {:ok, %{conversation: conversation, resume_token: token}} ->
+      {:ok, %{conversation: conversation, access_token: token}} ->
         maybe_capture_email(conversation, submission.email, submission.notify)
 
         conn
-        |> ResumeCookie.put_resume_cookie(token)
-        |> redirect(to: ~p"/r/#{token}")
+        |> ConversationCookie.put_conversation_cookie(token)
+        |> redirect(to: ~p"/c/#{token}")
 
       # The source was disabled or deleted between load_source and the
       # context's own lookup — same treatment as an unknown key.
@@ -71,7 +71,7 @@ defmodule CustyardWeb.IntakeController do
 
   # The optional passive-form email is captured after creation. A capture
   # failure (invalid address, concurrent capture) must never fail the
-  # submission itself — the conversation and resume redirect stand either way.
+  # submission itself — the conversation and conversation redirect stand either way.
   defp maybe_capture_email(conversation, email, notify) do
     if String.trim(email) != "" do
       _result = Intake.capture_email(conversation, email, notify: notify)
@@ -120,7 +120,7 @@ defmodule CustyardWeb.IntakeController do
     template = if source.mode == :passive, do: :passive, else: :active
 
     conn
-    |> assign_resume_banner()
+    |> assign_conversation_banner()
     |> assign_active_path(source)
     |> render(template, source: source, form: form)
   end
@@ -147,20 +147,20 @@ defmodule CustyardWeb.IntakeController do
     )
   end
 
-  # "Resume your conversation" banner: shown when the signed resume cookie
+  # "Resume your conversation" banner: shown when the signed conversation cookie
   # verifies against a live (non-revoked, non-purged) prospect. Only a link —
   # conversation content never renders on the intake page, so the check is
-  # the lightweight resume_token_valid?/1, never the preloaded thread.
-  defp assign_resume_banner(conn) do
-    conn = fetch_cookies(conn, signed: [ResumeCookie.cookie_name()])
-    token = conn.cookies[ResumeCookie.cookie_name()]
+  # the lightweight access_token_valid?/1, never the preloaded thread.
+  defp assign_conversation_banner(conn) do
+    conn = fetch_cookies(conn, signed: [ConversationCookie.cookie_name()])
+    token = conn.cookies[ConversationCookie.cookie_name()]
 
-    resume_path =
-      if is_binary(token) and Intake.resume_token_valid?(token) do
-        ~p"/r/#{token}"
+    conversation_path =
+      if is_binary(token) and Intake.access_token_valid?(token) do
+        ~p"/c/#{token}"
       end
 
-    assign(conn, :resume_path, resume_path)
+    assign(conn, :conversation_path, conversation_path)
   end
 
   # Passive pages link to the active flow; the pairing policy (first enabled

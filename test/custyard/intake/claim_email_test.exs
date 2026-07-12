@@ -9,8 +9,8 @@ defmodule Custyard.Intake.ClaimEmailTest do
   alias Custyard.Intake.ClaimEmail
   alias Custyard.{RateLimit, Settings, Slug, Slugs}
 
-  @confirm_url "http://localhost/c/test-confirmation-token"
-  @resume_url "http://localhost/r/test-resume-token"
+  @confirm_url "http://localhost/claim/test-confirmation-token"
+  @conversation_url "http://localhost/c/test-access-token"
 
   setup do
     RateLimit.reset()
@@ -37,7 +37,10 @@ defmodule Custyard.Intake.ClaimEmailTest do
   end
 
   defp send!(slug) do
-    ClaimEmail.send_confirmation(slug, confirm_url: @confirm_url, resume_url: @resume_url)
+    ClaimEmail.send_confirmation(slug,
+      confirm_url: @confirm_url,
+      conversation_url: @conversation_url
+    )
   end
 
   describe "composition" do
@@ -60,10 +63,10 @@ defmodule Custyard.Intake.ClaimEmailTest do
         # Text and HTML bodies both carry the slug and the two platform URLs.
         assert email.text_body =~ "acme-corp"
         assert email.text_body =~ @confirm_url
-        assert email.text_body =~ @resume_url
+        assert email.text_body =~ @conversation_url
         assert email.html_body =~ "acme-corp"
         assert email.html_body =~ @confirm_url
-        assert email.html_body =~ @resume_url
+        assert email.html_body =~ @conversation_url
       end)
     end
 

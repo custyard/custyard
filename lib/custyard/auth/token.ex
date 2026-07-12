@@ -2,7 +2,7 @@ defmodule Custyard.Auth.Token do
   @moduledoc """
   Shared primitive for high-entropy bearer tokens stored hashed at rest.
 
-  Used for months-lived bearer credentials (prospect resume tokens, slug-claim
+  Used for months-lived bearer credentials (prospect access tokens, slug-claim
   confirmation tokens). Unlike the codebase's short-lived login token and
   permanent org credentials, these tokens are hashed before persistence so a
   database read never yields a live credential.

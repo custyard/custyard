@@ -9,7 +9,7 @@ defmodule Custyard.Intake.ClaimEmail do
   shared `Custyard.Email.Headers` discipline.
 
   The body contains ONLY the claimed slug and platform links (the `/c`
-  confirmation URL and the `/r` resume URL) — NEVER prospect-supplied
+  confirmation URL and the `/c` conversation URL) — NEVER prospect-supplied
   content: this mail must be useless as a spam relay.
 
   Sends are bounded by the `:claim_email_send` rate bucket keyed by the
@@ -31,7 +31,7 @@ defmodule Custyard.Intake.ClaimEmail do
   Send the confirmation email for a freshly claimed (or token-rotated)
   slug.
 
-  Requires `:confirm_url` and `:resume_url` in `opts` — the caller owns
+  Requires `:confirm_url` and `:conversation_url` in `opts` — the caller owns
   URL construction (LoginEmail precedent). Returns `{:ok, metadata}` /
   `{:error, reason}` when delivering synchronously, `{:ok, :queued}` when
   the async flag hands delivery to the task supervisor,
@@ -41,7 +41,7 @@ defmodule Custyard.Intake.ClaimEmail do
   """
   def send_confirmation(%Slug{} = slug, opts) do
     confirm_url = Keyword.fetch!(opts, :confirm_url)
-    resume_url = Keyword.fetch!(opts, :resume_url)
+    conversation_url = Keyword.fetch!(opts, :conversation_url)
 
     case RateLimit.check_rate(:claim_email_send, slug.email) do
       {:deny, _retry_after_ms} ->
@@ -49,7 +49,7 @@ defmodule Custyard.Intake.ClaimEmail do
 
       {:allow, _count} ->
         slug
-        |> compose(confirm_url, resume_url)
+        |> compose(confirm_url, conversation_url)
         |> deliver(slug)
     end
   end
@@ -57,13 +57,13 @@ defmodule Custyard.Intake.ClaimEmail do
   @doc """
   Compose the confirmation email without delivering (testable seam).
   """
-  def compose(%Slug{} = slug, confirm_url, resume_url) do
+  def compose(%Slug{} = slug, confirm_url, conversation_url) do
     new()
     |> to(slug.email)
     |> from({from_display_name(), from_address()})
     |> subject("Confirm your claim: #{slug.slug}")
-    |> text_body(confirmation_text(slug.slug, confirm_url, resume_url))
-    |> html_body(confirmation_html(slug.slug, confirm_url, resume_url))
+    |> text_body(confirmation_text(slug.slug, confirm_url, conversation_url))
+    |> html_body(confirmation_html(slug.slug, confirm_url, conversation_url))
   end
 
   defp deliver(email, slug) do
@@ -106,7 +106,7 @@ defmodule Custyard.Intake.ClaimEmail do
     Application.get_env(:custyard, :email_from_address, "noreply@custyard.local")
   end
 
-  defp confirmation_text(slug, confirm_url, resume_url) do
+  defp confirmation_text(slug, confirm_url, conversation_url) do
     """
     You claimed the name: #{slug}
 
@@ -114,15 +114,15 @@ defmodule Custyard.Intake.ClaimEmail do
 
     #{confirm_url}
 
-    You can return to your conversation any time with your resume link:
+    You can return to your conversation any time with your conversation link:
 
-    #{resume_url}
+    #{conversation_url}
 
     If you didn't claim this name, you can safely ignore this email.
     """
   end
 
-  defp confirmation_html(slug, confirm_url, resume_url) do
+  defp confirmation_html(slug, confirm_url, conversation_url) do
     """
     <html>
     <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -139,9 +139,9 @@ defmodule Custyard.Intake.ClaimEmail do
         <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{confirm_url}</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
         <p style="color: #6b7280; font-size: 14px;">
-          Return to your conversation any time with your resume link:
+          Return to your conversation any time with your conversation link:
         </p>
-        <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{resume_url}</p>
+        <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{conversation_url}</p>
         <p style="color: #9ca3af; font-size: 12px; margin-bottom: 0;">
           If you didn't claim this name, you can safely ignore this email.
         </p>

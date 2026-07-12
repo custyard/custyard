@@ -300,7 +300,7 @@ defmodule Custyard.OrganizationsTest do
       assert slug.status == :claimed
     end
 
-    test "does not revoke or rotate resume access", %{operator: operator} do
+    test "does not revoke or rotate conversation access", %{operator: operator} do
       conversation = insert_conversation(source: :public_intake)
       prospect = insert_prospect(conversation_id: conversation.id)
 
@@ -308,7 +308,7 @@ defmodule Custyard.OrganizationsTest do
                Organizations.convert_prospect(conversation, %{name: "Acme"}, operator)
 
       reloaded = Repo.get!(Prospect, prospect.id)
-      assert reloaded.resume_token_hash == prospect.resume_token_hash
+      assert reloaded.access_token_hash == prospect.access_token_hash
       assert is_nil(reloaded.revoked_at)
     end
 

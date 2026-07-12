@@ -39,7 +39,7 @@ defmodule Custyard.RateLimit do
   `Settings` — see docs/design/design-decisions-public-intake.md), read
   from `config :custyard, :rate_limit_buckets` at call time via
   `bucket_config!/1`. Keys are caller-defined terms: client IPs for the
-  controller buckets, token hashes for `:resume_reply`, downcased emails
+  controller buckets, token hashes for `:conversation_reply`, downcased emails
   for `:claim_email_send`.
 
   ## Single-Node Scope
@@ -109,8 +109,8 @@ defmodule Custyard.RateLimit do
   configured for `bucket` WITHOUT recording an event.
 
   Lets an early surface honor a budget that another surface owns and
-  counts — e.g. `CustyardWeb.Plugs.ResumeCookie` refuses the cookie
-  refresh once `ResumeAuth`'s `:resume_mount` budget is exhausted, without
+  counts — e.g. `CustyardWeb.Plugs.ConversationCookie` refuses the cookie
+  refresh once `ProspectAuth`'s `:conversation_mount` budget is exhausted, without
   double-billing the HTTP mount that follows in the same request.
 
   Reads the ETS table directly (no GenServer round trip): nothing is

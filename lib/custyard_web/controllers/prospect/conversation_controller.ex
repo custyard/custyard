@@ -1,8 +1,8 @@
-defmodule CustyardWeb.ResumeController do
+defmodule CustyardWeb.Prospect.ConversationController do
   @moduledoc """
   The uniform "conversation unavailable" page.
 
-  Invalid, revoked, purged, and malformed resume tokens all land here — one
+  Invalid, revoked, purged, and malformed access tokens all land here — one
   identical rendering for every failure class, so token handling exposes no
   validity oracle. A dead view: unauthenticated failures never cost a
   LiveView socket.

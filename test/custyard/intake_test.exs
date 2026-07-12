@@ -12,7 +12,7 @@ defmodule Custyard.IntakeTest do
     end
 
     test "creates conversation, prospect, and first message atomically", %{source: source} do
-      assert {:ok, %{conversation: conversation, prospect: prospect, resume_token: token}} =
+      assert {:ok, %{conversation: conversation, prospect: prospect, access_token: token}} =
                Intake.create_intake_conversation("landing-page", "Hello, I need help with X")
 
       assert conversation.source == :public_intake
@@ -37,14 +37,14 @@ defmodule Custyard.IntakeTest do
     end
 
     test "stores only the token hash at rest, never the plaintext" do
-      assert {:ok, %{prospect: prospect, resume_token: token}} =
+      assert {:ok, %{prospect: prospect, access_token: token}} =
                Intake.create_intake_conversation("landing-page", "Hello")
 
       stored = Repo.get!(Prospect, prospect.id)
-      assert stored.resume_token_hash == Token.hash(token)
-      refute stored.resume_token_hash == token
+      assert stored.access_token_hash == Token.hash(token)
+      refute stored.access_token_hash == token
       # The plaintext never appears in the prospects table
-      assert Repo.get_by(Prospect, resume_token_hash: token) == nil
+      assert Repo.get_by(Prospect, access_token_hash: token) == nil
     end
 
     test "caches a score greater than zero" do
@@ -117,21 +117,21 @@ defmodule Custyard.IntakeTest do
     end
   end
 
-  describe "get_conversation_by_resume_token/1" do
+  describe "get_conversation_by_access_token/1" do
     setup do
       insert_intake_source(key: "cta")
 
-      {:ok, %{conversation: conversation, resume_token: token}} =
+      {:ok, %{conversation: conversation, access_token: token}} =
         Intake.create_intake_conversation("cta", "Hello from a prospect")
 
       %{conversation: conversation, token: token}
     end
 
-    test "round-trips a valid token with resume-view preloads", %{
+    test "round-trips a valid token with conversation-view preloads", %{
       conversation: conversation,
       token: token
     } do
-      assert {:ok, loaded} = Intake.get_conversation_by_resume_token(token)
+      assert {:ok, loaded} = Intake.get_conversation_by_access_token(token)
       assert loaded.id == conversation.id
       assert Ecto.assoc_loaded?(loaded.prospect)
       assert Ecto.assoc_loaded?(loaded.organization)
@@ -141,13 +141,13 @@ defmodule Custyard.IntakeTest do
     end
 
     test "rejects unknown tokens" do
-      assert {:error, :not_found} = Intake.get_conversation_by_resume_token("bogus")
-      assert {:error, :not_found} = Intake.get_conversation_by_resume_token(nil)
+      assert {:error, :not_found} = Intake.get_conversation_by_access_token("bogus")
+      assert {:error, :not_found} = Intake.get_conversation_by_access_token(nil)
     end
 
     test "rejects revoked tokens", %{conversation: conversation, token: token} do
-      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
-      assert {:error, :not_found} = Intake.get_conversation_by_resume_token(token)
+      assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
+      assert {:error, :not_found} = Intake.get_conversation_by_access_token(token)
     end
 
     test "excludes internal notes from the preloaded messages", %{
@@ -161,81 +161,81 @@ defmodule Custyard.IntakeTest do
         body: "secret operator note"
       )
 
-      assert {:ok, loaded} = Intake.get_conversation_by_resume_token(token)
+      assert {:ok, loaded} = Intake.get_conversation_by_access_token(token)
       refute Enum.any?(loaded.messages, & &1.is_internal_note)
     end
   end
 
-  describe "rotate_resume_token/1" do
+  describe "rotate_access_token/1" do
     setup do
       insert_intake_source(key: "cta")
       {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
-      %{conversation: result.conversation, token: result.resume_token}
+      %{conversation: result.conversation, token: result.access_token}
     end
 
     test "invalidates the old token and returns a new plaintext once", %{
       conversation: conversation,
       token: old_token
     } do
-      assert {:ok, %{prospect: prospect, resume_token: new_token}} =
-               Intake.rotate_resume_token(conversation)
+      assert {:ok, %{prospect: prospect, access_token: new_token}} =
+               Intake.rotate_access_token(conversation)
 
       refute new_token == old_token
-      assert prospect.resume_token_hash == Token.hash(new_token)
+      assert prospect.access_token_hash == Token.hash(new_token)
 
-      assert {:error, :not_found} = Intake.get_conversation_by_resume_token(old_token)
-      assert {:ok, loaded} = Intake.get_conversation_by_resume_token(new_token)
+      assert {:error, :not_found} = Intake.get_conversation_by_access_token(old_token)
+      assert {:ok, loaded} = Intake.get_conversation_by_access_token(new_token)
       assert loaded.id == conversation.id
     end
 
     test "returns an error for conversations without a prospect" do
       conversation = insert_conversation()
-      assert {:error, :no_prospect} = Intake.rotate_resume_token(conversation)
+      assert {:error, :no_prospect} = Intake.rotate_access_token(conversation)
     end
 
-    test "rejects rotation after resume access is revoked", %{conversation: conversation} do
-      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
-      assert {:error, :no_prospect} = Intake.rotate_resume_token(conversation)
+    test "rejects rotation after conversation access is revoked", %{conversation: conversation} do
+      assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
+      assert {:error, :no_prospect} = Intake.rotate_access_token(conversation)
     end
 
-    test "broadcasts resume_access_changed on the conversation topic", %{
+    test "broadcasts conversation_access_changed on the conversation topic", %{
       conversation: conversation
     } do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conversation.id}")
 
-      assert {:ok, _result} = Intake.rotate_resume_token(conversation)
+      assert {:ok, _result} = Intake.rotate_access_token(conversation)
 
       conversation_id = conversation.id
-      assert_receive {:resume_access_changed, ^conversation_id}
+      assert_receive {:conversation_access_changed, ^conversation_id}
     end
   end
 
-  describe "resume_token_valid?/1" do
+  describe "access_token_valid?/1" do
     setup do
       insert_intake_source(key: "cta")
       {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
-      %{conversation: result.conversation, token: result.resume_token}
+      %{conversation: result.conversation, token: result.access_token}
     end
 
     test "true for a live token", %{token: token} do
-      assert Intake.resume_token_valid?(token)
+      assert Intake.access_token_valid?(token)
     end
 
     test "false for unknown and non-binary tokens" do
-      refute Intake.resume_token_valid?("bogus")
-      refute Intake.resume_token_valid?(nil)
+      refute Intake.access_token_valid?("bogus")
+      refute Intake.access_token_valid?(nil)
     end
 
     test "false once revoked", %{conversation: conversation, token: token} do
-      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
-      refute Intake.resume_token_valid?(token)
+      assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
+      refute Intake.access_token_valid?(token)
     end
 
     test "false for the old token after rotation", %{conversation: conversation, token: token} do
-      assert {:ok, %{resume_token: new_token}} = Intake.rotate_resume_token(conversation)
+      assert {:ok, %{access_token: new_token}} = Intake.rotate_access_token(conversation)
 
-      refute Intake.resume_token_valid?(token)
-      assert Intake.resume_token_valid?(new_token)
+      refute Intake.access_token_valid?(token)
+      assert Intake.access_token_valid?(new_token)
     end
   end
 
@@ -243,9 +243,9 @@ defmodule Custyard.IntakeTest do
     setup do
       insert_intake_source(key: "cta")
       {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
-      old_hash = Token.hash(result.resume_token)
+      old_hash = Token.hash(result.access_token)
 
-      {:ok, %{resume_token: new_token}} = Intake.rotate_resume_token(result.conversation)
+      {:ok, %{access_token: new_token}} = Intake.rotate_access_token(result.conversation)
 
       %{
         conversation: result.conversation,
@@ -309,8 +309,8 @@ defmodule Custyard.IntakeTest do
       %{conversation: result.conversation}
     end
 
-    test "refuses the write once resume access is revoked", %{conversation: conversation} do
-      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
+    test "refuses the write once conversation access is revoked", %{conversation: conversation} do
+      assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
 
       assert {:error, :no_prospect} = Intake.add_prospect_reply(conversation, "Still here?")
       assert Repo.aggregate(Message, :count) == 1
@@ -355,8 +355,8 @@ defmodule Custyard.IntakeTest do
       assert {:error, :no_prospect} = Intake.set_notification(conversation, true)
     end
 
-    test "rejects the toggle after resume access is revoked", %{conversation: conversation} do
-      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
+    test "rejects the toggle after conversation access is revoked", %{conversation: conversation} do
+      assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
 
       assert {:error, :no_prospect} = Intake.set_notification(conversation, true)
 
@@ -447,8 +447,8 @@ defmodule Custyard.IntakeTest do
       assert prospect.email == "first@example.com"
     end
 
-    test "rejects capture after resume access is revoked", %{conversation: conversation} do
-      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
+    test "rejects capture after conversation access is revoked", %{conversation: conversation} do
+      assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
 
       # Same error as a missing prospect: revoked and absent are
       # indistinguishable to the caller.
@@ -480,6 +480,38 @@ defmodule Custyard.IntakeTest do
       assert updated.organization_id == linked_org.id
       assert updated.contact_id == nil
 
+      prospect = Repo.get_by!(Prospect, conversation_id: conversation.id)
+      assert prospect.email == "alice@acme.example.com"
+    end
+
+    test "a stale nil-org struct cannot clobber a link written after mount", %{
+      conversation: conversation
+    } do
+      # Organization A: the conversation gets linked to this in the DB after
+      # the in-memory struct was loaded (e.g. an operator ran
+      # convert_prospect/3 against a socket still holding organization_id: nil).
+      org_a = insert_organization(domain: "already.example.com")
+
+      # Organization B: what capture-time email resolution would resolve to.
+      org_b = insert_organization(domain: "acme.example.com")
+      insert_contact(organization_id: org_b.id, email: "alice@acme.example.com")
+
+      # DB row now points at A while our `conversation` struct is stale (nil org).
+      Repo.get!(Conversation, conversation.id)
+      |> Ecto.Changeset.change(organization_id: org_a.id)
+      |> Repo.update!()
+
+      assert conversation.organization_id == nil
+
+      assert {:ok, _updated} = Intake.capture_email(conversation, "alice@acme.example.com")
+
+      # The stale write lost the DB-side race (WHERE organization_id IS NULL):
+      # the row still links to A and B never clobbered it.
+      reloaded = Repo.get!(Conversation, conversation.id)
+      assert reloaded.organization_id == org_a.id
+      assert reloaded.contact_id == nil
+
+      # The email is still captured even though the link was skipped.
       prospect = Repo.get_by!(Prospect, conversation_id: conversation.id)
       assert prospect.email == "alice@acme.example.com"
     end

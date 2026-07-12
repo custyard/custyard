@@ -310,8 +310,11 @@ defmodule Custyard.Organizations do
   sees it.
 
   Step 2, one transaction: the prospect is read inside the transaction (not
-  before it) so a concurrent email capture can't race the read; race-safe
-  conditional promotion of the conversation's confirmed slug claim
+  before it), narrowing — though not eliminating, under READ COMMITTED — the
+  window in which a concurrently committed email capture is missed (the
+  conditional link below, `WHERE ... organization_id IS NULL`, is what makes
+  this safe, not the read placement); race-safe conditional promotion of the
+  conversation's confirmed slug claim
   (`Slugs.promote/2` — `{:error, :not_found}` is not a failure, a prospect
   can convert without ever having claimed a slug), a contact created from
   the prospect's captured email when present, then a conditional link
@@ -324,8 +327,8 @@ defmodule Custyard.Organizations do
   until this transaction commits, so the delete is cascade-safe.
 
   Post-commit: rescore, `"conversations"` + org-scoped broadcasts, a
-  `:prospect_converted` audit event. Resume access is untouched — conversion
-  neither revokes nor rotates the prospect's resume token.
+  `:prospect_converted` audit event. Conversation access is untouched — conversion
+  neither revokes nor rotates the prospect's access token.
 
   Returns `{:ok, conversation}`, `{:error, :not_convertible}` (already
   linked, or not a public-intake conversation), `{:error, :already_converted}`

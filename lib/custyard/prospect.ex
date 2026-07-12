@@ -2,13 +2,13 @@ defmodule Custyard.Prospect do
   @moduledoc """
   Anonymous prospect identity attached 1:1 to a public-intake conversation.
 
-  Created at intake time, the prospect row holds the hashed resume token
+  Created at intake time, the prospect row holds the hashed access token
   (the plaintext is shown to the submitter exactly once and never persisted),
   the captured email (write-once through the public flow), and the
   reply-notification consent flag (default off).
 
   The prospect persists unchanged through linking and conversion — it is the
-  resume credential holder and notification preference, not the identity. The
+  access credential holder and notification preference, not the identity. The
   "no reply channel" flag is derived from this record by
   `Custyard.Conversations.reply_channel/1`, never stored.
   """
@@ -19,7 +19,7 @@ defmodule Custyard.Prospect do
   alias Custyard.EmailAddress
 
   schema "prospects" do
-    field :resume_token_hash, :string
+    field :access_token_hash, :string
     field :email, :string
     field :notify_on_reply, :boolean, default: false
     field :email_captured_at, :utc_datetime
@@ -38,10 +38,10 @@ defmodule Custyard.Prospect do
   """
   def create_changeset(prospect, attrs) do
     prospect
-    |> cast(attrs, [:conversation_id, :resume_token_hash])
-    |> validate_required([:conversation_id, :resume_token_hash])
+    |> cast(attrs, [:conversation_id, :access_token_hash])
+    |> validate_required([:conversation_id, :access_token_hash])
     |> unique_constraint(:conversation_id)
-    |> unique_constraint(:resume_token_hash)
+    |> unique_constraint(:access_token_hash)
     |> foreign_key_constraint(:conversation_id)
   end
 
@@ -68,18 +68,18 @@ defmodule Custyard.Prospect do
   end
 
   @doc """
-  Changeset for rotating the resume token: stores the new hash, invalidating
+  Changeset for rotating the access token: stores the new hash, invalidating
   the previous token.
   """
   def rotate_token_changeset(prospect, new_hash) do
     prospect
-    |> cast(%{resume_token_hash: new_hash}, [:resume_token_hash])
-    |> validate_required([:resume_token_hash])
-    |> unique_constraint(:resume_token_hash)
+    |> cast(%{access_token_hash: new_hash}, [:access_token_hash])
+    |> validate_required([:access_token_hash])
+    |> unique_constraint(:access_token_hash)
   end
 
   @doc """
-  Changeset for revoking resume access.
+  Changeset for revoking conversation access.
   """
   def revoke_changeset(prospect, revoked_at) do
     cast(prospect, %{revoked_at: revoked_at}, [:revoked_at])

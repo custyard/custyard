@@ -182,8 +182,8 @@ defmodule Custyard.RateLimitTest do
     test "returns the configured intake buckets" do
       assert RateLimit.bucket_config!(:intake_get) == {60, 60_000}
       assert RateLimit.bucket_config!(:intake_post) == {5, 3_600_000}
-      assert RateLimit.bucket_config!(:resume_mount) == {30, 600_000}
-      assert RateLimit.bucket_config!(:resume_reply) == {20, 3_600_000}
+      assert RateLimit.bucket_config!(:conversation_mount) == {30, 600_000}
+      assert RateLimit.bucket_config!(:conversation_reply) == {20, 3_600_000}
       assert RateLimit.bucket_config!(:email_capture) == {5, 3_600_000}
       assert RateLimit.bucket_config!(:claim_submit) == {3, 3_600_000}
       assert RateLimit.bucket_config!(:claim_confirm) == {10, 60_000}

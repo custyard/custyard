@@ -333,7 +333,7 @@ defmodule Custyard.Conversations do
 
   Returns `{:contact, email}` when the linked contact has an email (always
   preferred), `{:prospect, email}` when a prospect captured an email and
-  resume access has not been revoked, and `:none` otherwise.
+  conversation access has not been revoked, and `:none` otherwise.
 
   The "no reply channel" state is derived, never stored — capturing an email
   clears it with zero clearing code. Contact and prospect are preloaded only
@@ -363,7 +363,7 @@ defmodule Custyard.Conversations do
 
   defp contact_email(_contact), do: nil
 
-  # Prospect email counts only while resume access is not revoked
+  # Prospect email counts only while conversation access is not revoked
   defp prospect_email(%Custyard.Prospect{email: email, revoked_at: nil})
        when is_binary(email) and email != "",
        do: email
@@ -381,7 +381,7 @@ defmodule Custyard.Conversations do
       reply-notification opt-in; delivers
     * `:prospect_no_consent` — a prospect email was captured but the prospect
       has not opted into email replies; the consent-advisory state
-    * `:none` — no recipient at all (no email captured, or resume access
+    * `:none` — no recipient at all (no email captured, or conversation access
       revoked)
 
   The operator UI keys the consent advisory on `:prospect_no_consent`
@@ -500,7 +500,7 @@ defmodule Custyard.Conversations do
   conversation's reply channel is the prospect email without the prospect's
   reply-notification opt-in, or there is no recipient at all, the reply is
   persisted with `delivery_status: :withheld` and delivery is skipped
-  entirely — it reaches the prospect only via the resume link. Non-intake
+  entirely — it reaches the prospect only via the conversation link. Non-intake
   replies always go to delivery, so a missing recipient surfaces as the
   visible `:pending` -> `:failed` path rather than a silent withhold.
   Contact recipients deliver unconditionally.
@@ -853,7 +853,7 @@ defmodule Custyard.Conversations do
   end
 
   # Resolved :public_intake conversations are retained longer than the
-  # standard bound to honor the months-later resume path (spec: NFR Retention).
+  # standard bound to honor the months-later conversation path (spec: NFR Retention).
   @public_intake_retention_days 365
 
   @doc """
@@ -865,7 +865,7 @@ defmodule Custyard.Conversations do
   every source except `:public_intake`, which is retained for 365 days after
   resolution so a prospect returning months later still finds the thread.
   Once purged, the prospect row cascades away with the conversation, so the
-  resume token no longer resolves and the resume URL renders the uniform
+  access token no longer resolves and the conversation URL renders the uniform
   unavailable page.
 
   Options:

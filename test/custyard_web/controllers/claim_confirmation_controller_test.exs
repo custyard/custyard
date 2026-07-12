@@ -26,8 +26,8 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     base = [
       intake_get: @generous,
       intake_post: @generous,
-      resume_mount: @generous,
-      resume_reply: @generous,
+      conversation_mount: @generous,
+      conversation_reply: @generous,
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
@@ -55,16 +55,16 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     :ok
   end
 
-  describe "GET /c/:token (peek)" do
+  describe "GET /claim/:token (peek)" do
     test "renders the slug and a confirm form with ZERO state change", %{conn: conn} do
       %{slug: slug, token: token} = claim!()
 
-      conn = get(conn, ~p"/c/#{token}")
+      conn = get(conn, ~p"/claim/#{token}")
       html = html_response(conn, 200)
 
       assert html =~ "claim-confirm-page"
       assert html =~ "acme-corp"
-      assert html =~ ~s(action="/c/#{token}/confirm")
+      assert html =~ ~s(action="/claim/#{token}/confirm")
       assert html =~ "claim-confirm-submit"
 
       # Zero state change: still claimed, hash untouched.
@@ -77,13 +77,13 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       %{slug: slug, token: token} = claim!()
 
       for _scan <- 1..5 do
-        assert build_conn() |> get(~p"/c/#{token}") |> html_response(200) =~ "acme-corp"
+        assert build_conn() |> get(~p"/claim/#{token}") |> html_response(200) =~ "acme-corp"
       end
 
       assert Repo.get!(Slug, slug.id).status == :claimed
 
       # The prospect's explicit POST still confirms after all the scans.
-      conn = post(conn, ~p"/c/#{token}/confirm")
+      conn = post(conn, ~p"/claim/#{token}/confirm")
       assert html_response(conn, 200) =~ "claim-confirmed-page"
       assert Repo.get!(Slug, slug.id).status == :confirmed
     end
@@ -91,22 +91,24 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     test "sends Referrer-Policy: no-referrer (the token is a bearer credential)", %{conn: conn} do
       %{token: token} = claim!()
 
-      conn = get(conn, ~p"/c/#{token}")
+      conn = get(conn, ~p"/claim/#{token}")
       assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
     end
   end
 
-  describe "POST /c/:token/confirm" do
-    test "consumes the token and renders the success page without the resume URL", %{conn: conn} do
+  describe "POST /claim/:token/confirm" do
+    test "consumes the token and renders the success page without the conversation URL", %{
+      conn: conn
+    } do
       %{slug: slug, token: token} = claim!()
 
-      conn = post(conn, ~p"/c/#{token}/confirm")
+      conn = post(conn, ~p"/claim/#{token}/confirm")
       html = html_response(conn, 200)
 
       assert html =~ "claim-confirmed-page"
       assert html =~ "acme-corp"
-      # The success page must not mint or reveal the resume URL.
-      refute html =~ "/r/"
+      # The success page must not mint or reveal the conversation URL.
+      refute html =~ "/c/"
 
       reloaded = Repo.get!(Slug, slug.id)
       assert reloaded.status == :confirmed
@@ -128,7 +130,7 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     test "invalid, expired, used, and purged tokens all render one identical page" do
       # Used token
       %{token: used_token} = claim!()
-      post(build_conn(), ~p"/c/#{used_token}/confirm")
+      post(build_conn(), ~p"/claim/#{used_token}/confirm")
 
       # Expired token
       conversation = insert_conversation(source: :public_intake)
@@ -149,12 +151,15 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
 
       get_pages =
         for token <- tokens do
-          build_conn() |> get(~p"/c/#{token}") |> html_response(200) |> normalized_page()
+          build_conn() |> get(~p"/claim/#{token}") |> html_response(200) |> normalized_page()
         end
 
       post_pages =
         for token <- tokens do
-          build_conn() |> post(~p"/c/#{token}/confirm") |> html_response(200) |> normalized_page()
+          build_conn()
+          |> post(~p"/claim/#{token}/confirm")
+          |> html_response(200)
+          |> normalized_page()
         end
 
       assert Enum.uniq(get_pages ++ post_pages) |> length() == 1
@@ -167,10 +172,10 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       put_buckets(claim_confirm: [limit: 2, window_ms: 60_000])
       %{token: token} = claim!()
 
-      assert conn |> get(~p"/c/#{token}") |> html_response(200)
-      assert build_conn() |> get(~p"/c/#{token}") |> html_response(200)
+      assert conn |> get(~p"/claim/#{token}") |> html_response(200)
+      assert build_conn() |> get(~p"/claim/#{token}") |> html_response(200)
 
-      denied = build_conn() |> post(~p"/c/#{token}/confirm")
+      denied = build_conn() |> post(~p"/claim/#{token}/confirm")
       assert denied.status == 429
       assert [retry_after] = get_resp_header(denied, "retry-after")
       assert String.to_integer(retry_after) >= 1

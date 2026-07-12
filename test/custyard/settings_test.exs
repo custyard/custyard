@@ -361,6 +361,22 @@ defmodule Custyard.SettingsTest do
       assert [error] = errors_on(changeset).intake_config
       assert error =~ "bogus"
     end
+
+    test "merges over the stored config so a partial update preserves untouched keys" do
+      assert {:ok, _} =
+               Settings.update_intake_config(%{
+                 unlinked_tier_score: 25,
+                 slug_claim_ttl_hours: 48
+               })
+
+      # Partial update touching only one key must not reset the other.
+      assert {:ok, _} = Settings.update_intake_config(%{unlinked_tier_score: 30})
+
+      config = Settings.get_intake_config()
+      assert config.unlinked_tier_score == 30
+      # The untouched key keeps its previously-set value, not the default 72.
+      assert config.slug_claim_ttl_hours == 48
+    end
   end
 
   describe "get_branding/0" do

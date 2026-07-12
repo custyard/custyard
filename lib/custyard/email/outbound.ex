@@ -62,7 +62,7 @@ defmodule Custyard.Email.Outbound do
       {:ok, updated}
     else
       # Consent withheld is an expected state, not a delivery failure — the
-      # reply stays visible to the prospect via the resume link.
+      # reply stays visible to the prospect via the conversation link.
       {:error, :no_consent} ->
         Logger.info(
           "Outbound email withheld for message #{message.id}: prospect has not opted in"
