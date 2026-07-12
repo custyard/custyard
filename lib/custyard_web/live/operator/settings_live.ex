@@ -299,50 +299,63 @@ defmodule CustyardWeb.Operator.SettingsLive do
   defp save_branding(branding_params, socket) do
     old_logo_url = socket.assigns.branding.logo_url
     uploaded_logo_url = consume_uploaded_logo(socket)
-    remove_logo? = Map.get(branding_params, "remove_logo") == "true"
-
-    logo_url =
-      cond do
-        uploaded_logo_url -> uploaded_logo_url
-        remove_logo? -> nil
-        true -> old_logo_url
-      end
+    logo_url = resolve_logo_url(branding_params, uploaded_logo_url, old_logo_url)
 
     branding =
       branding_params
       |> Map.take(["name", "primary_color"])
       |> Map.put("logo_url", logo_url)
-      |> Enum.reject(fn {_key, value} ->
-        not is_binary(value) or String.trim(value) == ""
-      end)
+      |> Enum.reject(&blank_branding_entry?/1)
       |> Map.new()
 
     case Settings.update_branding(branding) do
       {:ok, _settings} ->
-        # Delete the replaced (or explicitly removed) file only after the new
-        # branding persisted successfully.
-        if old_logo_url && old_logo_url != logo_url do
-          Uploads.delete_logo(old_logo_url)
-        end
-
-        {:noreply,
-         socket
-         |> assign(:branding, Settings.get_branding())
-         |> assign(:editing_branding, false)
-         |> put_flash(:info, "Branding updated successfully")}
+        handle_branding_saved(socket, old_logo_url, logo_url)
 
       {:error, changeset} ->
-        # The consumed upload was never persisted; remove it so failed saves
-        # (e.g. a bad color) don't leave orphaned files behind.
-        if uploaded_logo_url, do: Uploads.delete_logo(uploaded_logo_url)
-
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "Failed to update branding: #{format_changeset_errors(changeset)}"
-         )}
+        handle_branding_error(socket, uploaded_logo_url, changeset)
     end
+  end
+
+  defp resolve_logo_url(branding_params, uploaded_logo_url, old_logo_url) do
+    remove_logo? = Map.get(branding_params, "remove_logo") == "true"
+
+    cond do
+      uploaded_logo_url -> uploaded_logo_url
+      remove_logo? -> nil
+      true -> old_logo_url
+    end
+  end
+
+  defp blank_branding_entry?({_key, value}) do
+    not is_binary(value) or String.trim(value) == ""
+  end
+
+  defp handle_branding_saved(socket, old_logo_url, logo_url) do
+    # Delete the replaced (or explicitly removed) file only after the new
+    # branding persisted successfully.
+    if old_logo_url && old_logo_url != logo_url do
+      Uploads.delete_logo(old_logo_url)
+    end
+
+    {:noreply,
+     socket
+     |> assign(:branding, Settings.get_branding())
+     |> assign(:editing_branding, false)
+     |> put_flash(:info, "Branding updated successfully")}
+  end
+
+  defp handle_branding_error(socket, uploaded_logo_url, changeset) do
+    # The consumed upload was never persisted; remove it so failed saves
+    # (e.g. a bad color) don't leave orphaned files behind.
+    if uploaded_logo_url, do: Uploads.delete_logo(uploaded_logo_url)
+
+    {:noreply,
+     put_flash(
+       socket,
+       :error,
+       "Failed to update branding: #{format_changeset_errors(changeset)}"
+     )}
   end
 
   defp consume_uploaded_logo(socket) do
