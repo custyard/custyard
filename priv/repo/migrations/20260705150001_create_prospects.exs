@@ -4,8 +4,8 @@ defmodule Custyard.Repo.Migrations.CreateProspects do
   def change do
     create table(:prospects) do
       add :conversation_id, references(:conversations, on_delete: :delete_all), null: false
-      # SHA-256 hash of the resume token — plaintext tokens are never persisted
-      add :resume_token_hash, :string, null: false
+      # SHA-256 hash of the access token — plaintext tokens are never persisted
+      add :access_token_hash, :string, null: false
       # Captured prospect email (write-once through the public flow)
       add :email, :string
       # Reply-notification consent; default off (consent is opt-in)
@@ -18,7 +18,7 @@ defmodule Custyard.Repo.Migrations.CreateProspects do
 
     # One prospect per conversation (1:1)
     create unique_index(:prospects, [:conversation_id])
-    # Indexed lookup by hashed resume token
-    create unique_index(:prospects, [:resume_token_hash])
+    # Indexed lookup by hashed access token
+    create unique_index(:prospects, [:access_token_hash])
   end
 end

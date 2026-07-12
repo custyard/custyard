@@ -32,8 +32,8 @@ defmodule CustyardWeb.IntakeControllerTest do
     base = [
       intake_get: @generous,
       intake_post: @generous,
-      resume_mount: @generous,
-      resume_reply: @generous,
+      conversation_mount: @generous,
+      conversation_reply: @generous,
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
@@ -154,7 +154,7 @@ defmodule CustyardWeb.IntakeControllerTest do
   end
 
   describe "POST /i/:source_key" do
-    test "anonymous submit creates the conversation and redirects to the resume URL", %{
+    test "anonymous submit creates the conversation and redirects to the conversation URL", %{
       conn: conn
     } do
       source = insert_intake_source(mode: :active)
@@ -164,7 +164,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           "submission" => %{"body" => "Hello, I want to join the waitlist"}
         })
 
-      assert "/r/" <> token = redirected_to(conn)
+      assert "/c/" <> token = redirected_to(conn)
       assert byte_size(token) > 40
 
       conversation = Repo.one!(Conversation)
@@ -213,14 +213,14 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert html =~ ~s(data-testid="no-reply-channel-badge")
     end
 
-    test "sets the signed resume cookie with the canonical attributes", %{conn: conn} do
+    test "sets the signed conversation cookie with the canonical attributes", %{conn: conn} do
       source = insert_intake_source(mode: :active)
 
       conn =
         post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Cookie please"}})
 
-      assert "/r/" <> token = redirected_to(conn)
-      assert %{} = cookie = conn.resp_cookies["_custyard_resume"]
+      assert "/c/" <> token = redirected_to(conn)
+      assert %{} = cookie = conn.resp_cookies["_custyard_conversation"]
       assert cookie.http_only
       assert cookie.same_site == "Lax"
       assert cookie.max_age == 31_536_000
@@ -232,17 +232,17 @@ defmodule CustyardWeb.IntakeControllerTest do
       refute cookie[:secure]
     end
 
-    test "the resume redirect target renders the thread on a fresh session", %{conn: conn} do
+    test "the conversation redirect target renders the thread on a fresh session", %{conn: conn} do
       source = insert_intake_source(mode: :active)
 
       conn =
         post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "See you there"}})
 
-      resume_path = redirected_to(conn)
+      conversation_path = redirected_to(conn)
 
       # Cookie-less fresh browser: the URL alone is the credential.
       fresh = Phoenix.ConnTest.build_conn()
-      html = fresh |> get(resume_path) |> html_response(200)
+      html = fresh |> get(conversation_path) |> html_response(200)
 
       assert html =~ ~s(data-testid="resume-conversation")
       assert html =~ "See you there"
@@ -301,7 +301,7 @@ defmodule CustyardWeb.IntakeControllerTest do
       conn =
         post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Passive but serious"}})
 
-      assert "/r/" <> _token = redirected_to(conn)
+      assert "/c/" <> _token = redirected_to(conn)
 
       conversation = Repo.one!(Conversation)
       assert conversation.source == :public_intake
@@ -322,7 +322,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           }
         })
 
-      assert "/r/" <> _token = redirected_to(conn)
+      assert "/c/" <> _token = redirected_to(conn)
 
       prospect = Repo.one!(Prospect)
       assert prospect.email == "prospect@example.com"
@@ -338,7 +338,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           "submission" => %{"body" => "Bad email attached", "email" => "not-an-email"}
         })
 
-      assert "/r/" <> _token = redirected_to(conn)
+      assert "/c/" <> _token = redirected_to(conn)
 
       conversation = Repo.one!(Conversation)
       assert conversation.subject == "Bad email attached"
@@ -356,7 +356,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           Phoenix.ConnTest.build_conn()
           |> post(~p"/i/#{source.key}", %{"submission" => %{"body" => "Burst #{n}"}})
 
-        assert "/r/" <> _token = redirected_to(conn)
+        assert "/c/" <> _token = redirected_to(conn)
       end
 
       assert Repo.aggregate(Conversation, :count) == 2
@@ -372,7 +372,7 @@ defmodule CustyardWeb.IntakeControllerTest do
     end
   end
 
-  describe "resume banner on intake pages" do
+  describe "conversation banner on intake pages" do
     test "a verifying cookie renders the banner link and no conversation content", %{conn: conn} do
       source = insert_intake_source(mode: :active)
 
@@ -381,14 +381,14 @@ defmodule CustyardWeb.IntakeControllerTest do
           "submission" => %{"body" => "Banner secret content"}
         })
 
-      assert "/r/" <> token = redirected_to(conn)
+      assert "/c/" <> token = redirected_to(conn)
 
       # Same conn: Phoenix.ConnTest recycles response cookies automatically.
       conn = get(conn, ~p"/i/#{source.key}")
       html = html_response(conn, 200)
 
       assert html =~ ~s(data-testid="intake-resume-banner")
-      assert html =~ ~p"/r/#{token}"
+      assert html =~ ~p"/c/#{token}"
       refute html =~ "Banner secret content"
     end
 
@@ -397,7 +397,7 @@ defmodule CustyardWeb.IntakeControllerTest do
 
       conn =
         conn
-        |> put_req_cookie("_custyard_resume", "garbage-value")
+        |> put_req_cookie("_custyard_conversation", "garbage-value")
         |> get(~p"/i/#{source.key}")
 
       refute html_response(conn, 200) =~ ~s(data-testid="intake-resume-banner")
@@ -410,7 +410,7 @@ defmodule CustyardWeb.IntakeControllerTest do
         post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Revoke me soon"}})
 
       conversation = Repo.one!(Conversation)
-      {:ok, _prospect} = Custyard.Intake.revoke_resume_access(conversation)
+      {:ok, _prospect} = Custyard.Intake.revoke_conversation_access(conversation)
 
       conn = get(conn, ~p"/i/#{source.key}")
 
@@ -418,17 +418,17 @@ defmodule CustyardWeb.IntakeControllerTest do
     end
   end
 
-  describe "GET /r/:token over HTTP" do
-    test "refreshes the resume cookie on a valid token", %{conn: _} do
+  describe "GET /c/:token over HTTP" do
+    test "refreshes the conversation cookie on a valid token", %{conn: _} do
       source = insert_intake_source(mode: :active)
 
-      {:ok, %{resume_token: token}} =
+      {:ok, %{access_token: token}} =
         Custyard.Intake.create_intake_conversation(source.key, "Refresh my cookie")
 
-      conn = Phoenix.ConnTest.build_conn() |> get(~p"/r/#{token}")
+      conn = Phoenix.ConnTest.build_conn() |> get(~p"/c/#{token}")
 
       assert html_response(conn, 200) =~ ~s(data-testid="resume-conversation")
-      assert %{} = cookie = conn.resp_cookies["_custyard_resume"]
+      assert %{} = cookie = conn.resp_cookies["_custyard_conversation"]
       assert cookie.http_only
       assert cookie.same_site == "Lax"
       assert cookie.max_age == 31_536_000
@@ -436,40 +436,40 @@ defmodule CustyardWeb.IntakeControllerTest do
     end
 
     test "an invalid token redirects to the uniform page and sets no cookie", %{conn: conn} do
-      conn = get(conn, ~p"/r/definitely-not-a-token")
+      conn = get(conn, ~p"/c/definitely-not-a-token")
 
-      assert redirected_to(conn) == "/r/unavailable"
-      refute Map.has_key?(conn.resp_cookies, "_custyard_resume")
+      assert redirected_to(conn) == "/c/unavailable"
+      refute Map.has_key?(conn.resp_cookies, "_custyard_conversation")
     end
 
     test "a rate-limited client gets no cookie refresh even for a valid token", %{conn: _} do
-      put_buckets(resume_mount: [limit: 1, window_ms: 60_000])
+      put_buckets(conversation_mount: [limit: 1, window_ms: 60_000])
       source = insert_intake_source(mode: :active)
 
-      {:ok, %{resume_token: token}} =
+      {:ok, %{access_token: token}} =
         Custyard.Intake.create_intake_conversation(source.key, "Probe target")
 
       # First GET: the cookie plug's non-counting peek allows, the mount
       # check consumes the whole budget.
-      first = Phoenix.ConnTest.build_conn() |> get(~p"/r/#{token}")
+      first = Phoenix.ConnTest.build_conn() |> get(~p"/c/#{token}")
       assert html_response(first, 200)
-      assert Map.has_key?(first.resp_cookies, "_custyard_resume")
+      assert Map.has_key?(first.resp_cookies, "_custyard_conversation")
 
       # Over the limit, valid and invalid tokens are indistinguishable:
       # the peek denies BEFORE any token lookup, so the 302 carries no
       # Set-Cookie — presence of the refresh is not a validity oracle and
-      # the lookup itself stays inside the :resume_mount budget.
-      denied_valid = Phoenix.ConnTest.build_conn() |> get(~p"/r/#{token}")
-      assert redirected_to(denied_valid) == "/r/unavailable"
-      refute Map.has_key?(denied_valid.resp_cookies, "_custyard_resume")
+      # the lookup itself stays inside the :conversation_mount budget.
+      denied_valid = Phoenix.ConnTest.build_conn() |> get(~p"/c/#{token}")
+      assert redirected_to(denied_valid) == "/c/unavailable"
+      refute Map.has_key?(denied_valid.resp_cookies, "_custyard_conversation")
 
-      denied_invalid = Phoenix.ConnTest.build_conn() |> get(~p"/r/definitely-not-a-token")
-      assert redirected_to(denied_invalid) == "/r/unavailable"
-      refute Map.has_key?(denied_invalid.resp_cookies, "_custyard_resume")
+      denied_invalid = Phoenix.ConnTest.build_conn() |> get(~p"/c/definitely-not-a-token")
+      assert redirected_to(denied_invalid) == "/c/unavailable"
+      refute Map.has_key?(denied_invalid.resp_cookies, "_custyard_conversation")
     end
 
     test "the unavailable page renders with the no-referrer policy", %{conn: conn} do
-      conn = get(conn, "/r/unavailable")
+      conn = get(conn, "/c/unavailable")
 
       assert html_response(conn, 200) =~ "Conversation unavailable"
       assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
@@ -478,14 +478,14 @@ defmodule CustyardWeb.IntakeControllerTest do
   end
 
   describe "custom domains (CustomDomain plug unchanged)" do
-    test "intake and resume paths on a customer domain rewrite into the portal and 404" do
+    test "intake and conversation paths on a customer domain rewrite into the portal and 404" do
       insert_organization(custom_domain: "support.acme-custyard-test.com")
       source = insert_intake_source(mode: :active)
 
-      {:ok, %{resume_token: token}} =
+      {:ok, %{access_token: token}} =
         Custyard.Intake.create_intake_conversation(source.key, "Not on this host")
 
-      for path <- ["/i/#{source.key}", "/r/#{token}"] do
+      for path <- ["/i/#{source.key}", "/c/#{token}"] do
         conn =
           Phoenix.ConnTest.build_conn()
           |> Map.put(:host, "support.acme-custyard-test.com")
@@ -496,7 +496,7 @@ defmodule CustyardWeb.IntakeControllerTest do
         # application host only, and no cookie is issued.
         assert conn.status == 404
         assert String.starts_with?(conn.request_path, "/p/")
-        refute Map.has_key?(conn.resp_cookies, "_custyard_resume")
+        refute Map.has_key?(conn.resp_cookies, "_custyard_conversation")
       end
     end
   end

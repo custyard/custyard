@@ -376,7 +376,7 @@ defmodule Custyard.Factory do
   """
   def build_prospect(overrides \\ []) do
     defaults = %{
-      resume_token_hash: Token.generate() |> elem(1),
+      access_token_hash: Token.generate() |> elem(1),
       email: nil,
       notify_on_reply: false,
       email_captured_at: nil,
@@ -395,10 +395,10 @@ defmodule Custyard.Factory do
     overrides = ensure_intake_conversation(overrides)
     attrs = build_prospect(overrides)
 
-    # create_changeset casts only conversation_id and resume_token_hash;
+    # create_changeset casts only conversation_id and access_token_hash;
     # the remaining fields (normally set via Intake.capture_email/3 or the
     # revoke path) are applied as raw changes.
-    {create_attrs, extra} = Map.split(attrs, [:conversation_id, :resume_token_hash])
+    {create_attrs, extra} = Map.split(attrs, [:conversation_id, :access_token_hash])
     extra = extra |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
 
     %Custyard.Prospect{}

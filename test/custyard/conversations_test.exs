@@ -1278,18 +1278,18 @@ defmodule Custyard.ConversationsTest do
       assert Repo.get(Custyard.Conversation, intake_old.id)
     end
 
-    test "purging cascades to the prospect so the resume token stops resolving" do
+    test "purging cascades to the prospect so the access token stops resolving" do
       {token, hash} = Token.generate()
       conversation = insert_conversation(source: :public_intake, state: :resolved)
-      prospect = insert_prospect(conversation_id: conversation.id, resume_token_hash: hash)
+      prospect = insert_prospect(conversation_id: conversation.id, access_token_hash: hash)
       backdate_updated_at(conversation, 366)
 
-      assert {:ok, _conversation} = Intake.get_conversation_by_resume_token(token)
+      assert {:ok, _conversation} = Intake.get_conversation_by_access_token(token)
 
       assert Conversations.cleanup_resolved_conversations(90) == 1
 
       assert Repo.get(Prospect, prospect.id) == nil
-      assert Intake.get_conversation_by_resume_token(token) == {:error, :not_found}
+      assert Intake.get_conversation_by_access_token(token) == {:error, :not_found}
     end
 
     # dry_run: the non-dry path of run_cleanup/1 also invokes

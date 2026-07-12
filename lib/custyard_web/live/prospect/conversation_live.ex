@@ -1,8 +1,8 @@
-defmodule CustyardWeb.ResumeLive do
+defmodule CustyardWeb.Prospect.ConversationLive do
   @moduledoc """
-  The prospect-facing conversation view behind the resume token.
+  The prospect-facing conversation view behind the access token.
 
-  `CustyardWeb.Live.ResumeAuth` authenticates the URL token on every mount
+  `CustyardWeb.Live.ProspectAuth` authenticates the URL token on every mount
   and assigns the conversation; this module only renders and forwards
   mutations to `Custyard.Intake`. Enumeration neutrality is binding here:
   the page never renders organization or contact linkage — not the org name,
@@ -10,7 +10,7 @@ defmodule CustyardWeb.ResumeLive do
   whether a captured email matched a contact, an org domain, or nothing.
 
   Every mutating event checks its rate bucket directly (plug limits never
-  see websocket events): replies use `:resume_reply` keyed by the token hash
+  see websocket events): replies use `:conversation_reply` keyed by the token hash
   (the abuse handle is the credential, not the network path), while email
   capture and the notification toggle share the IP-keyed `:email_capture`
   bucket — both are low-frequency prospect-preference writes from the same
@@ -20,7 +20,7 @@ defmodule CustyardWeb.ResumeLive do
   Token rotation is enforced against mounted sockets, not just fresh
   mounts: every mutation passes the mount-time `:token_hash` to the
   context, which refuses it once the stored hash rotates, and the
-  `{:resume_access_changed, id}` broadcast from rotation/revocation makes
+  `{:conversation_access_changed, id}` broadcast from rotation/revocation makes
   the view re-authenticate — so an open tab on a rotated-away token stops
   receiving operator replies instead of streaming them until disconnect.
   """
@@ -31,12 +31,12 @@ defmodule CustyardWeb.ResumeLive do
   alias Custyard.Intake.ClaimEmail
   alias Custyard.{Conversations, Intake, RateLimit, Slug, Slugs}
 
-  @unavailable_path "/r/unavailable"
+  @unavailable_path "/c/unavailable"
 
   @impl true
   def mount(params, _session, socket) do
-    # :conversation, :branding, :resume_token_hash, :client_ip come from
-    # the ResumeAuth on_mount hook.
+    # :conversation, :branding, :access_token_hash, :client_ip come from
+    # the ProspectAuth on_mount hook.
     conversation = socket.assigns.conversation
 
     if connected?(socket) do
@@ -50,12 +50,12 @@ defmodule CustyardWeb.ResumeLive do
      |> assign(:messages, conversation.messages)
      |> assign(:reply_form, empty_reply_form())
      |> assign(:email_form, empty_email_form())
-     # The plaintext resume token, kept ONLY so the claim-confirmation
-     # email can carry the /r resume URL the prospect already holds — the
+     # The plaintext access token, kept ONLY so the claim-confirmation
+     # email can carry the /r conversation URL the prospect already holds — the
      # email is the durable copy of the credential, and only the hash is
      # stored, so the URL cannot be reconstructed anywhere else. Never
-     # rendered; never used for auth (that stays hash-based in ResumeAuth).
-     |> assign(:resume_token, params["token"])
+     # rendered; never used for auth (that stays hash-based in ProspectAuth).
+     |> assign(:access_token, params["token"])
      |> assign(:slug_claim, Slugs.get_claim_for_conversation(conversation.id))
      |> assign(:claim_form, empty_claim_form(conversation.prospect))
      |> assign(:claim_notify, false)}
@@ -67,7 +67,7 @@ defmodule CustyardWeb.ResumeLive do
   def handle_event("submit_reply", params, socket) do
     # Rate check first: every reply attempt counts, valid or not — the
     # anonymous surface must bound the flood, not just the successes.
-    case RateLimit.check_rate(:resume_reply, socket.assigns.resume_token_hash) do
+    case RateLimit.check_rate(:conversation_reply, socket.assigns.access_token_hash) do
       {:deny, _retry_after_ms} ->
         {:noreply,
          put_flash(socket, :error, "You are replying too quickly. Please wait and try again.")}
@@ -129,7 +129,7 @@ defmodule CustyardWeb.ResumeLive do
     case validate_body(body) do
       :ok ->
         case Intake.add_prospect_reply(socket.assigns.conversation, body,
-               token_hash: socket.assigns.resume_token_hash
+               token_hash: socket.assigns.access_token_hash
              ) do
           {:ok, %{conversation: updated}} ->
             conversation = %{
@@ -172,7 +172,7 @@ defmodule CustyardWeb.ResumeLive do
 
     case Intake.capture_email(conversation, email,
            notify: notify,
-           token_hash: socket.assigns.resume_token_hash
+           token_hash: socket.assigns.access_token_hash
          ) do
       # Enumeration-neutral by construction: capture_email returns {:ok, _}
       # regardless of whether the email matched a contact, an org domain, or
@@ -235,12 +235,12 @@ defmodule CustyardWeb.ResumeLive do
   defp maybe_capture_email(socket, email, notify) do
     case Intake.capture_email(socket.assigns.conversation, email,
            notify: notify,
-           token_hash: socket.assigns.resume_token_hash
+           token_hash: socket.assigns.access_token_hash
          ) do
       {:error, :already_captured} when notify ->
         _result =
           Intake.set_notification(socket.assigns.conversation, true,
-            token_hash: socket.assigns.resume_token_hash
+            token_hash: socket.assigns.access_token_hash
           )
 
         :ok
@@ -259,8 +259,8 @@ defmodule CustyardWeb.ResumeLive do
     base = CustyardWeb.Endpoint.url()
 
     ClaimEmail.send_confirmation(slug,
-      confirm_url: base <> ~p"/c/#{confirmation_token}",
-      resume_url: base <> ~p"/r/#{socket.assigns.resume_token}"
+      confirm_url: base <> ~p"/claim/#{confirmation_token}",
+      conversation_url: base <> ~p"/c/#{socket.assigns.access_token}"
     )
   end
 
@@ -344,7 +344,7 @@ defmodule CustyardWeb.ResumeLive do
 
   defp toggle_notifications(socket, notify?) do
     case Intake.set_notification(socket.assigns.conversation, notify?,
-           token_hash: socket.assigns.resume_token_hash
+           token_hash: socket.assigns.access_token_hash
          ) do
       {:ok, prospect} ->
         {:noreply, assign(socket, :prospect, prospect)}
@@ -371,11 +371,11 @@ defmodule CustyardWeb.ResumeLive do
   # read side — without it a tab opened before rotation keeps receiving
   # operator replies over PubSub until it happens to disconnect.
   @impl true
-  def handle_info({:resume_access_changed, _id}, socket) do
+  def handle_info({:conversation_access_changed, _id}, socket) do
     prospect = Intake.get_prospect(socket.assigns.conversation)
 
     if prospect && is_nil(prospect.revoked_at) &&
-         prospect.resume_token_hash == socket.assigns.resume_token_hash do
+         prospect.access_token_hash == socket.assigns.access_token_hash do
       {:noreply, assign(socket, :prospect, prospect)}
     else
       {:noreply, redirect(socket, to: @unavailable_path)}

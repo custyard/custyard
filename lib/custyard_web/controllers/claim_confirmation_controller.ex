@@ -2,15 +2,15 @@ defmodule CustyardWeb.ClaimConfirmationController do
   @moduledoc """
   Scanner-safe slug-claim confirmation — the `/c` dead views.
 
-  GET `/c/:token` PEEKS: it renders the claimed slug and a Confirm button
+  GET `/claim/:token` PEEKS: it renders the claimed slug and a Confirm button
   with ZERO state change, so mail-scanner prefetch can never consume the
-  single-use token. POST `/c/:token/confirm` consumes it via
+  single-use token. POST `/claim/:token/confirm` consumes it via
   `Custyard.Slugs.confirm/1` (race-safe conditional update).
 
   Invalid, expired, already-used, and purged tokens ALL render one
   identical generic page (the PR-6 uniform-unavailable pattern) — token
   handling exposes no validity oracle. The success page deliberately does
-  not mint or reveal the resume URL: the email the prospect already holds
+  not mint or reveal the conversation URL: the email the prospect already holds
   is the only carrier of that credential.
   """
 
@@ -47,7 +47,7 @@ defmodule CustyardWeb.ClaimConfirmationController do
   end
 
   # One identical rendering for every failure class — same template, same
-  # status, same assigns — mirroring the resume surface's unavailable page.
+  # status, same assigns — mirroring the conversation surface's unavailable page.
   defp render_unavailable(conn) do
     conn
     |> assign(:page_title, "Confirmation unavailable")

@@ -1,11 +1,11 @@
 defmodule Custyard.Intake do
   @moduledoc """
   Public intake domain: intake-source configuration, anonymous conversation
-  creation, resume-token access, and prospect email capture.
+  creation, access-token access, and prospect email capture.
 
   Public-intake conversations carry source `:public_intake`, no organization,
   and no contact. Each has exactly one `Custyard.Prospect` holding the hashed
-  resume token; the plaintext token is returned exactly once at creation (and
+  access token; the plaintext token is returned exactly once at creation (and
   again only on rotation) and is never persisted.
   """
 
@@ -115,15 +115,15 @@ defmodule Custyard.Intake do
 
   - the conversation (source `:public_intake`, no organization, no contact,
     subject derived from the first non-empty line of the body)
-  - the prospect with a fresh resume token (hash stored, plaintext returned)
+  - the prospect with a fresh access token (hash stored, plaintext returned)
   - the first message (source `:prospect`, origin `:public_intake`)
 
   Post-commit it caches the attention score and broadcasts
   `{:conversation_created, id}` on the `"conversations"` topic only — the
   org-scoped topic is skipped because the organization is nil.
 
-  Returns `{:ok, %{conversation: c, prospect: p, resume_token: token}}` — the
-  only place the plaintext resume token is returned — or
+  Returns `{:ok, %{conversation: c, prospect: p, access_token: token}}` — the
+  only place the plaintext access token is returned — or
   `{:error, :unknown_source}` / `{:error, changeset}`.
   """
   def create_intake_conversation(source_key, message_body, _opts \\ []) do
@@ -137,7 +137,7 @@ defmodule Custyard.Intake do
   end
 
   defp do_create_intake_conversation(source, message_body) do
-    {resume_token, token_hash} = Token.generate()
+    {access_token, token_hash} = Token.generate()
     body = Normalizer.truncate(message_body, Normalizer.max_body_length())
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -155,7 +155,7 @@ defmodule Custyard.Intake do
     |> Multi.insert(:prospect, fn %{conversation: conversation} ->
       Prospect.create_changeset(%Prospect{}, %{
         conversation_id: conversation.id,
-        resume_token_hash: token_hash
+        access_token_hash: token_hash
       })
     end)
     |> Multi.insert(:message, fn %{conversation: conversation} ->
@@ -193,7 +193,7 @@ defmodule Custyard.Intake do
          %{
            conversation: Repo.reload!(conversation),
            prospect: prospect,
-           resume_token: resume_token
+           access_token: access_token
          }}
 
       {:error, _step, changeset, _changes} ->
@@ -220,22 +220,22 @@ defmodule Custyard.Intake do
     end
   end
 
-  ## Resume access ------------------------------------------------------------
+  ## Conversation access ------------------------------------------------------------
 
   @doc """
-  Fetch the conversation a resume token grants access to.
+  Fetch the conversation a access token grants access to.
 
   Hashes the presented token for an indexed lookup; revoked and unknown tokens
   are indistinguishable (`{:error, :not_found}`). Preloads the associations the
-  resume view renders (organization, contact, prospect, public messages).
+  conversation view renders (organization, contact, prospect, public messages).
   """
-  def get_conversation_by_resume_token(token) when is_binary(token) do
+  def get_conversation_by_access_token(token) when is_binary(token) do
     hash = Token.hash(token)
 
     prospect =
       Repo.one(
         from p in Prospect,
-          where: p.resume_token_hash == ^hash and is_nil(p.revoked_at)
+          where: p.access_token_hash == ^hash and is_nil(p.revoked_at)
       )
 
     case prospect do
@@ -265,30 +265,30 @@ defmodule Custyard.Intake do
     end
   end
 
-  def get_conversation_by_resume_token(_token), do: {:error, :not_found}
+  def get_conversation_by_access_token(_token), do: {:error, :not_found}
 
   @doc """
-  Whether a resume token currently resolves: same predicate as
-  `get_conversation_by_resume_token/1` (hash match, not revoked) without
+  Whether a access token currently resolves: same predicate as
+  `get_conversation_by_access_token/1` (hash match, not revoked) without
   loading the conversation or its preloads.
 
   For surfaces that only need validity — the cookie refresh in
-  `CustyardWeb.Plugs.ResumeCookie` and the intake-page resume banner —
+  `CustyardWeb.Plugs.ConversationCookie` and the intake-page conversation banner —
   not the thread.
   """
-  def resume_token_valid?(token) when is_binary(token) do
+  def access_token_valid?(token) when is_binary(token) do
     hash = Token.hash(token)
 
     Repo.exists?(
       from p in Prospect,
-        where: p.resume_token_hash == ^hash and is_nil(p.revoked_at)
+        where: p.access_token_hash == ^hash and is_nil(p.revoked_at)
     )
   end
 
-  def resume_token_valid?(_token), do: false
+  def access_token_valid?(_token), do: false
 
   @doc """
-  Add a prospect reply to a public-intake conversation via the resume surface.
+  Add a prospect reply to a public-intake conversation via the conversation surface.
 
   Mirrors the established inbound semantics (the webhook pipeline's
   reactivation and the portal reply path): the message carries source
@@ -305,7 +305,7 @@ defmodule Custyard.Intake do
 
   ## Options
 
-    * `:token_hash` - the hash of the resume token the caller authenticated
+    * `:token_hash` - the hash of the access token the caller authenticated
       with. When present, the write is refused (`{:error, :no_prospect}`)
       unless it still matches the prospect's stored hash — token rotation
       must strip write access from handles minted under the previous token.
@@ -352,12 +352,12 @@ defmodule Custyard.Intake do
     end
   end
 
-  # Enforces the `:token_hash` option shared by the resume-surface writes:
+  # Enforces the `:token_hash` option shared by the conversation-surface writes:
   # when the caller presents the credential hash it authenticated with, the
   # prospect's stored hash must still match, otherwise the token rotated
   # underneath a still-mounted socket and the handle has lost access.
   # Callers without the option skip the check.
-  defp token_hash_current?(%Prospect{resume_token_hash: current}, opts) do
+  defp token_hash_current?(%Prospect{access_token_hash: current}, opts) do
     case Keyword.fetch(opts, :token_hash) do
       {:ok, presented} -> presented == current
       :error -> true
@@ -435,17 +435,17 @@ defmodule Custyard.Intake do
   end
 
   @doc """
-  Rotate a conversation's resume token, invalidating the previous one.
+  Rotate a conversation's access token, invalidating the previous one.
 
-  Returns `{:ok, %{prospect: p, resume_token: token}}` — the only other place
-  a plaintext resume token is returned. Revoked prospects are rejected with
+  Returns `{:ok, %{prospect: p, access_token: token}}` — the only other place
+  a plaintext access token is returned. Revoked prospects are rejected with
   the same `{:error, :no_prospect}` as missing ones.
 
-  Post-commit it broadcasts `{:resume_access_changed, id}` on the
-  `"conversation:{id}"` topic so resume views mounted under the old token
+  Post-commit it broadcasts `{:conversation_access_changed, id}` on the
+  `"conversation:{id}"` topic so conversation views mounted under the old token
   re-authenticate and shut down instead of streaming past the rotation.
   """
-  def rotate_resume_token(%Conversation{} = conversation) do
+  def rotate_access_token(%Conversation{} = conversation) do
     case get_prospect(conversation) do
       nil ->
         {:error, :no_prospect}
@@ -454,24 +454,24 @@ defmodule Custyard.Intake do
         {:error, :no_prospect}
 
       %Prospect{} = prospect ->
-        {resume_token, token_hash} = Token.generate()
+        {access_token, token_hash} = Token.generate()
 
         with {:ok, prospect} <-
                prospect |> Prospect.rotate_token_changeset(token_hash) |> Repo.update() do
-          broadcast_resume_access_changed(conversation.id)
-          {:ok, %{prospect: prospect, resume_token: resume_token}}
+          broadcast_conversation_access_changed(conversation.id)
+          {:ok, %{prospect: prospect, access_token: access_token}}
         end
     end
   end
 
   @doc """
-  Revoke resume access for a conversation. Operator-initiated; the resume
+  Revoke conversation access for a conversation. Operator-initiated; the access
   token stops resolving once `revoked_at` is set.
 
-  Broadcasts the same `{:resume_access_changed, id}` as rotation so mounted
-  resume views re-authenticate and shut down.
+  Broadcasts the same `{:conversation_access_changed, id}` as rotation so mounted
+  conversation views re-authenticate and shut down.
   """
-  def revoke_resume_access(%Conversation{} = conversation) do
+  def revoke_conversation_access(%Conversation{} = conversation) do
     case get_prospect(conversation) do
       nil ->
         {:error, :no_prospect}
@@ -480,21 +480,21 @@ defmodule Custyard.Intake do
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
         with {:ok, prospect} <- prospect |> Prospect.revoke_changeset(now) |> Repo.update() do
-          broadcast_resume_access_changed(conversation.id)
+          broadcast_conversation_access_changed(conversation.id)
           {:ok, prospect}
         end
     end
   end
 
-  # Resume views subscribe to "conversation:{id}"; this tells them the
+  # Conversation views subscribe to "conversation:{id}"; this tells them the
   # credential state changed (rotation or revocation) so the read side —
   # an already-mounted socket receiving operator replies over PubSub —
   # gets closed off, not just the writes.
-  defp broadcast_resume_access_changed(conversation_id) do
+  defp broadcast_conversation_access_changed(conversation_id) do
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
       "conversation:#{conversation_id}",
-      {:resume_access_changed, conversation_id}
+      {:conversation_access_changed, conversation_id}
     )
 
     :ok
@@ -732,7 +732,7 @@ defmodule Custyard.Intake do
   @doc """
   Fetch the prospect row for a conversation. Returns `nil` when none exists.
 
-  Public so the resume surface can re-read prospect state (captured email,
+  Public so the conversation surface can re-read prospect state (captured email,
   notification preference) after a mutation without reaching for `Repo`.
   """
   def get_prospect(%Conversation{id: conversation_id}) do

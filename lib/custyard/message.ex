@@ -3,7 +3,7 @@ defmodule Custyard.Message do
   import Ecto.Changeset
 
   # Message types: how the message was sent
-  # :prospect — anonymous public-intake submission or resume-link reply
+  # :prospect — anonymous public-intake submission or conversation-link reply
   @sources [:email, :portal, :operator, :prospect]
 
   # Origins: which adapter/integration the message came from (for audit/reporting)

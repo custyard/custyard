@@ -7,12 +7,12 @@ defmodule Custyard.ProspectTest do
   import Custyard.Factory
 
   describe "create_changeset/2" do
-    test "requires conversation_id and resume_token_hash" do
+    test "requires conversation_id and access_token_hash" do
       changeset = Prospect.create_changeset(%Prospect{}, %{})
 
       refute changeset.valid?
       assert "can't be blank" in errors_on(changeset).conversation_id
-      assert "can't be blank" in errors_on(changeset).resume_token_hash
+      assert "can't be blank" in errors_on(changeset).access_token_hash
     end
 
     test "enforces one prospect per conversation" do
@@ -22,14 +22,14 @@ defmodule Custyard.ProspectTest do
                %Prospect{}
                |> Prospect.create_changeset(%{
                  conversation_id: prospect.conversation_id,
-                 resume_token_hash: Token.generate() |> elem(1)
+                 access_token_hash: Token.generate() |> elem(1)
                })
                |> Repo.insert()
 
       assert "has already been taken" in errors_on(changeset).conversation_id
     end
 
-    test "enforces unique resume_token_hash" do
+    test "enforces unique access_token_hash" do
       prospect = insert_prospect()
       conversation = insert_conversation(source: :public_intake)
 
@@ -37,18 +37,18 @@ defmodule Custyard.ProspectTest do
                %Prospect{}
                |> Prospect.create_changeset(%{
                  conversation_id: conversation.id,
-                 resume_token_hash: prospect.resume_token_hash
+                 access_token_hash: prospect.access_token_hash
                })
                |> Repo.insert()
 
-      assert "has already been taken" in errors_on(changeset).resume_token_hash
+      assert "has already been taken" in errors_on(changeset).access_token_hash
     end
 
     test "does not cast email or notification fields" do
       changeset =
         Prospect.create_changeset(%Prospect{}, %{
           conversation_id: 1,
-          resume_token_hash: "hash",
+          access_token_hash: "hash",
           email: "sneaky@example.com",
           notify_on_reply: true,
           revoked_at: DateTime.utc_now()
@@ -74,7 +74,7 @@ defmodule Custyard.ProspectTest do
           email_captured_at: now,
           notify_on_reply: true,
           # Must be ignored: not in the cast list
-          resume_token_hash: "attacker-controlled",
+          access_token_hash: "attacker-controlled",
           revoked_at: now,
           conversation_id: 999_999
         })
@@ -83,7 +83,7 @@ defmodule Custyard.ProspectTest do
       assert Ecto.Changeset.get_change(changeset, :email) == "person@example.com"
       assert Ecto.Changeset.get_change(changeset, :email_captured_at) == now
       assert Ecto.Changeset.get_change(changeset, :notify_on_reply) == true
-      assert Ecto.Changeset.get_change(changeset, :resume_token_hash) == nil
+      assert Ecto.Changeset.get_change(changeset, :access_token_hash) == nil
       assert Ecto.Changeset.get_change(changeset, :revoked_at) == nil
       assert Ecto.Changeset.get_change(changeset, :conversation_id) == nil
     end
@@ -149,8 +149,8 @@ defmodule Custyard.ProspectTest do
       {_token, new_hash} = Token.generate()
 
       {:ok, rotated} = prospect |> Prospect.rotate_token_changeset(new_hash) |> Repo.update()
-      assert rotated.resume_token_hash == new_hash
-      refute rotated.resume_token_hash == prospect.resume_token_hash
+      assert rotated.access_token_hash == new_hash
+      refute rotated.access_token_hash == prospect.access_token_hash
     end
   end
 end

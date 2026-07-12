@@ -36,17 +36,17 @@ defmodule CustyardWeb.Router do
     plug CustyardWeb.Plugs.PortalAuth
   end
 
-  # Public intake surfaces (/i, /r — and /c when the slug claim lands):
+  # Public prospect surfaces (/i intake, /c conversation, /claim slug-claim):
   # anonymous, hammerable, and carrying bearer tokens in the path. The
-  # resume URL must never leak via the Referer header, and the pages render
+  # conversation URL must never leak via the Referer header, and the pages render
   # the sparse operator-branded :intake layout instead of the app chrome.
   pipeline :public_intake do
     plug CustyardWeb.Plugs.NoReferrer
     plug :put_root_layout, html: {CustyardWeb.Layouts, :intake_root}
   end
 
-  pipeline :resume_cookie do
-    plug CustyardWeb.Plugs.ResumeCookie
+  pipeline :conversation_cookie do
+    plug CustyardWeb.Plugs.ConversationCookie
   end
 
   scope "/", CustyardWeb do
@@ -66,28 +66,28 @@ defmodule CustyardWeb.Router do
     post "/:source_key", IntakeController, :create
   end
 
-  # Resume access — the token in the URL is the credential; every mount
+  # Conversation access — the token in the URL is the credential; every mount
   # re-authenticates it (nothing lives in the session). The uniform
   # "conversation unavailable" page is a dead view so invalid tokens never
   # cost a LiveView socket; it must be declared before the catch-all live
   # route ("unavailable" is not a valid token shape, but order still matters).
-  scope "/r", CustyardWeb do
-    pipe_through [:browser, :public_intake, :resume_cookie]
+  scope "/c", CustyardWeb do
+    pipe_through [:browser, :public_intake, :conversation_cookie]
 
-    get "/unavailable", ResumeController, :unavailable
+    get "/unavailable", Prospect.ConversationController, :unavailable
 
-    live_session :intake_resume,
-      on_mount: [{CustyardWeb.Live.ResumeAuth, :default}],
+    live_session :prospect_conversation,
+      on_mount: [{CustyardWeb.Live.ProspectAuth, :default}],
       layout: {CustyardWeb.Layouts, :intake} do
-      live "/:token", ResumeLive, :show
+      live "/:token", Prospect.ConversationLive, :show
     end
   end
 
   # Slug-claim confirmation — scanner-safe dead views. GET peeks (zero
   # state change, so mail-scanner prefetch never consumes the single-use
   # token); the explicit POST confirms. Same no-referrer + :intake layout
-  # discipline as /i and /r: the token in the path is a bearer credential.
-  scope "/c", CustyardWeb do
+  # discipline as /i and /c: the token in the path is a bearer credential.
+  scope "/claim", CustyardWeb do
     pipe_through [:browser, :public_intake]
 
     get "/:token", ClaimConfirmationController, :show

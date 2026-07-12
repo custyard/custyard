@@ -327,8 +327,8 @@ defmodule Custyard.Organizations do
   until this transaction commits, so the delete is cascade-safe.
 
   Post-commit: rescore, `"conversations"` + org-scoped broadcasts, a
-  `:prospect_converted` audit event. Resume access is untouched — conversion
-  neither revokes nor rotates the prospect's resume token.
+  `:prospect_converted` audit event. Conversation access is untouched — conversion
+  neither revokes nor rotates the prospect's access token.
 
   Returns `{:ok, conversation}`, `{:error, :not_convertible}` (already
   linked, or not a public-intake conversation), `{:error, :already_converted}`
