@@ -110,14 +110,20 @@ defmodule CustyardWeb.Router do
   # This allows organizations to use their own domain (e.g., support.acme.com)
   # and have requests routed to the portal routes transparently.
 
-  # LiveDashboard routes (requires phoenix_live_dashboard dependency)
-  # if Application.compile_env(:custyard, :dev_routes) do
-  #   import Phoenix.LiveDashboard.Router
-  #
-  #   scope "/dev" do
-  #     pipe_through :browser
-  #
-  #     live_dashboard "/dashboard", metrics: CustyardWeb.Telemetry
-  #   end
-  # end
+  # Development-only routes. dev_routes is set to true only in config/dev.exs,
+  # so nothing here mounts in prod.
+  if Application.compile_env(:custyard, :dev_routes) do
+    # In dev, outbound mail is captured by the Swoosh Local (in-memory) adapter.
+    # This UI renders that mailbox so you can open magic-link login emails at
+    # http://localhost:4000/dev/mailbox. Deliberately NOT piped through :browser:
+    # the strict CSP (script-src 'self') would block the preview's inline <script>.
+    forward "/dev/mailbox", Plug.Swoosh.MailboxPreview
+
+    # LiveDashboard (requires the phoenix_live_dashboard dependency, not yet added):
+    # import Phoenix.LiveDashboard.Router
+    # scope "/dev" do
+    #   pipe_through :browser
+    #   live_dashboard "/dashboard", metrics: CustyardWeb.Telemetry
+    # end
+  end
 end
