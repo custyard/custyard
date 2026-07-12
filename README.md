@@ -38,6 +38,41 @@ mix compile && mix fly.secrets
 
 http://localhost:4000
 
+## Admin login (fresh instance)
+
+Custyard uses **email-only auth**: operators log in with a magic link, no password.
+Roles are `super_admin` (all orgs), `admin` (one org), and `agent` (support); the
+default for a new account is `super_admin`.
+
+### Local dev
+
+A `super_admin` account is created for you automatically. On every boot,
+`Custyard.Application` inserts `admin@custyard.local` if it doesn't already exist —
+so a fresh checkout after `mix setup` already has an admin. To log in:
+
+1. Open http://localhost:4000/operator/login and enter `admin@custyard.local`.
+2. The magic link is captured by the Swoosh local (in-memory) mailer. Open the
+   dev mailbox at http://localhost:4000/dev/mailbox and click the login link.
+   (Link expires in 15 minutes; request a new one if it lapses.)
+
+To use a different email instead of the default:
+
+```bash
+mix dev.create_operator --email you@example.com
+```
+
+### Production (Docker / Fly)
+
+The container entrypoint runs `Custyard.Release.setup_operator()`, which creates
+`admin@custyard.local` (`super_admin`) on first boot if no operator exists. Log in
+the same way via `/operator/login` — but delivery needs a real mailer, so set
+`MAIL_ADAPTER` (`mailgun` | `sendgrid` | `smtp` | `postmark`) and its credentials
+(see `.env.sample`). To create an operator with a specific email:
+
+```bash
+bin/custyard eval 'Custyard.Release.setup_operator("ops@example.com")'
+```
+
 ## Phoenix.new / Remote VM Setup
 
 ### GitHub Auth (Device Flow)
