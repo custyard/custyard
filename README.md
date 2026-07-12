@@ -107,4 +107,4 @@ git clone https://github.com/owner/private-repo.git
 
 - [Development Guide](docs/development.md)
 - [LMTP Troubleshooting](docs/lmtp-troubleshooting.md)
-- [Email Test Strategy](docs/qa/email-test-strategy.md)
+- [Email Test Strategy](docs/backlog/0323-email-test-strategy.md)
