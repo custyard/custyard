@@ -1,3 +1,5 @@
+# docs/backlog/0323-email-test-strategy.md
+---
 # Email Infrastructure Test Strategy
 
 **Context:** GitHub Issue #10 - Email Infrastructure with Lettermint integration

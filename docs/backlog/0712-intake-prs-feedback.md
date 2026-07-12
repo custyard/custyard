@@ -1,3 +1,5 @@
+# docs/backlog/0712-intake-prs-feedback.md
+---
 # Intake Stack — PR Review Feedback (verbatim)
 
 Consolidated review feedback for the public-intake PR stack, merged to `main` (tip 703189b).
@@ -1505,4 +1507,3 @@ Test coverage is thorough:
 ### Verdict
 
 The implementation is solid with good defensive programming patterns. The main issues are the PubSub subscription gap (which causes stale UI after conversion) and the non-exhaustive case clause (latent crash path). Both are fixable with minimal changes.
-

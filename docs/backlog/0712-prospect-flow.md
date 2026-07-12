@@ -1,10 +1,19 @@
+# docs/backlog/0712-prospect-flow.md
+---
 # Prospect-Flow Backlog — 2026-07-12
 
 Findings from prod prospect-flow testing on custyard.fly.dev (intake `eu-otshosted`).
 9 issues found + 2 still-open items from earlier turns = 11 total.
 
-**Already fixed** (branch `fix/prospect-flow-ui`, commit `1f7bea1`, pushed): per-source
-intake URLs + copy button, reply-gating, textarea-clear-after-send. Not in this backlog.
+**Status: all 11 items RESOLVED** on `fix/prospect-flow-ui` (2026-07-12, multi-agent
+implementation pass; full suite 1803 tests green). Item details kept below for reference.
+Notable decisions: error flashes auto-dismiss at 10s (info stays 5s); source links render
+even for disabled sources (provenance, not availability); message delete is soft-only
+(tombstone keeps thread position); claim shape-validation runs before rate-limit but
+existence checks stay behind it (no enumeration oracle).
+
+**Previously fixed** (commit `1f7bea1`): per-source intake URLs + copy button,
+reply-gating, textarea-clear-after-send. Not in this backlog.
 
 ---
 
