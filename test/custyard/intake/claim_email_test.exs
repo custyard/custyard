@@ -37,7 +37,10 @@ defmodule Custyard.Intake.ClaimEmailTest do
   end
 
   defp send!(slug) do
-    ClaimEmail.send_confirmation(slug, confirm_url: @confirm_url, conversation_url: @conversation_url)
+    ClaimEmail.send_confirmation(slug,
+      confirm_url: @confirm_url,
+      conversation_url: @conversation_url
+    )
   end
 
   describe "composition" do

@@ -97,7 +97,9 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
   end
 
   describe "POST /claim/:token/confirm" do
-    test "consumes the token and renders the success page without the conversation URL", %{conn: conn} do
+    test "consumes the token and renders the success page without the conversation URL", %{
+      conn: conn
+    } do
       %{slug: slug, token: token} = claim!()
 
       conn = post(conn, ~p"/claim/#{token}/confirm")
@@ -154,7 +156,10 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
 
       post_pages =
         for token <- tokens do
-          build_conn() |> post(~p"/claim/#{token}/confirm") |> html_response(200) |> normalized_page()
+          build_conn()
+          |> post(~p"/claim/#{token}/confirm")
+          |> html_response(200)
+          |> normalized_page()
         end
 
       assert Enum.uniq(get_pages ++ post_pages) |> length() == 1
