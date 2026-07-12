@@ -49,6 +49,11 @@ defmodule Custyard.EmailAddressTest do
     test "trims and downcases" do
       assert EmailAddress.normalize("  MiXeD@Example.COM ") == "mixed@example.com"
     end
+
+    test "passes non-binary input through unchanged" do
+      assert EmailAddress.normalize(nil) == nil
+      assert EmailAddress.normalize(123) == 123
+    end
   end
 
   describe "regex/0" do

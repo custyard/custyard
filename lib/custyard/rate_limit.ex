@@ -165,10 +165,13 @@ defmodule Custyard.RateLimit do
   (`System.monotonic_time(:millisecond)` by default). Returns the number
   of entries deleted. Called periodically by the owning GenServer;
   public so tests can drive it deterministically.
+
+  Serialized through the owning GenServer, like `check_rate/5`, since the
+  table is `:protected` and only the owner process may write to it.
   """
   @spec sweep(integer()) :: non_neg_integer()
   def sweep(now \\ System.monotonic_time(:millisecond)) do
-    :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+    GenServer.call(__MODULE__, {:sweep, now})
   end
 
   @doc """
@@ -176,8 +179,7 @@ defmodule Custyard.RateLimit do
   """
   @spec reset() :: :ok
   def reset do
-    :ets.delete_all_objects(@table)
-    :ok
+    GenServer.call(__MODULE__, :reset)
   end
 
   ## GenServer callbacks
@@ -187,7 +189,7 @@ defmodule Custyard.RateLimit do
     table =
       :ets.new(@table, [
         :duplicate_bag,
-        :public,
+        :protected,
         :named_table,
         read_concurrency: true,
         write_concurrency: true
@@ -222,8 +224,21 @@ defmodule Custyard.RateLimit do
   end
 
   @impl true
+  def handle_call({:sweep, now}, _from, state) do
+    {:reply, do_sweep(now), state}
+  end
+
+  @impl true
+  def handle_call(:reset, _from, state) do
+    :ets.delete_all_objects(@table)
+    {:reply, :ok, state}
+  end
+
+  @impl true
   def handle_info(:sweep, state) do
-    sweep()
+    # Called from within the owning process, so this bypasses
+    # GenServer.call — routing through it here would deadlock.
+    do_sweep(System.monotonic_time(:millisecond))
     schedule_sweep(state.sweep_interval_ms)
     {:noreply, state}
   end
@@ -232,6 +247,10 @@ defmodule Custyard.RateLimit do
 
   defp schedule_sweep(interval) do
     Process.send_after(self(), :sweep, interval)
+  end
+
+  defp do_sweep(now) do
+    :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:"=<", :"$1", now}], [true]}])
   end
 
   defp timestamps_in_window(entry_key, window_start) do

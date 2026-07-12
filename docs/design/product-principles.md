@@ -1,6 +1,6 @@
 # Product Principles: Relationship-Driven Service Platform
 
-**Version:** 0.2 — Aligned with SDD v0.2
+**Version:** 0.3 — Aligned with SDD v0.3
 **Date:** 2026-03-24
 
 ---

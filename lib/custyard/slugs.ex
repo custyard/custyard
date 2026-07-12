@@ -157,16 +157,16 @@ defmodule Custyard.Slugs do
     hash = Token.hash(token)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    case Repo.one(from s in Slug, where: s.confirmation_token_hash == ^hash, select: s.id) do
+    case Repo.one(from s in Slug, where: s.confirmation_token_hash == ^hash) do
       nil ->
         {:error, :invalid}
 
-      id ->
+      slug ->
         {count, _} =
           Repo.update_all(
             from(s in Slug,
               where:
-                s.id == ^id and s.confirmation_token_hash == ^hash and
+                s.id == ^slug.id and s.confirmation_token_hash == ^hash and
                   s.status == :claimed and s.expires_at > ^now
             ),
             set: [
@@ -178,7 +178,22 @@ defmodule Custyard.Slugs do
             ]
           )
 
-        if count == 1, do: {:ok, Repo.get!(Slug, id)}, else: {:error, :invalid}
+        # Patch the already-fetched struct in memory instead of re-reading:
+        # a re-fetch could race with an operator release/1 in the window
+        # after the update_all succeeds, raising instead of erroring.
+        if count == 1 do
+          {:ok,
+           %{
+             slug
+             | status: :confirmed,
+               confirmed_at: now,
+               confirmation_token_hash: nil,
+               expires_at: nil,
+               updated_at: now
+           }}
+        else
+          {:error, :invalid}
+        end
     end
   end
 
@@ -193,7 +208,7 @@ defmodule Custyard.Slugs do
   `{:ok, slug, token}` with the plaintext exactly once, or
   `{:error, :invalid}`.
   """
-  def rotate_confirmation_token(%Slug{id: id}) do
+  def rotate_confirmation_token(%Slug{id: id} = slug) do
     {token, hash} = Token.generate()
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -203,7 +218,15 @@ defmodule Custyard.Slugs do
         set: [confirmation_token_hash: hash, updated_at: now]
       )
 
-    if count == 1, do: {:ok, Repo.get!(Slug, id), token}, else: {:error, :invalid}
+    # Patch the caller's own struct instead of re-reading: the caller
+    # already holds the row, and a re-fetch could race with an operator
+    # release/1 in the window after the update_all succeeds, raising
+    # instead of erroring.
+    if count == 1 do
+      {:ok, %{slug | confirmation_token_hash: hash, updated_at: now}, token}
+    else
+      {:error, :invalid}
+    end
   end
 
   @doc """
