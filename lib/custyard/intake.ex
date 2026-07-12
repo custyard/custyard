@@ -60,6 +60,20 @@ defmodule Custyard.Intake do
   def get_enabled_source(_key), do: nil
 
   @doc """
+  The intake source passive pages pair with: the first enabled active-mode
+  source, ordered by key — the deterministic choice until explicit pairing
+  exists in the schema. Returns `nil` when no enabled active source exists.
+  """
+  def first_enabled_active_source do
+    Repo.one(
+      from s in IntakeSource,
+        where: s.enabled == true and s.mode == :active,
+        order_by: [asc: s.key],
+        limit: 1
+    )
+  end
+
+  @doc """
   Create an intake source.
   """
   def create_source(attrs) do
@@ -252,11 +266,170 @@ defmodule Custyard.Intake do
   def get_conversation_by_resume_token(_token), do: {:error, :not_found}
 
   @doc """
+  Whether a resume token currently resolves: same predicate as
+  `get_conversation_by_resume_token/1` (hash match, not revoked) without
+  loading the conversation or its preloads.
+
+  For surfaces that only need validity — the cookie refresh in
+  `CustyardWeb.Plugs.ResumeCookie` and the intake-page resume banner —
+  not the thread.
+  """
+  def resume_token_valid?(token) when is_binary(token) do
+    hash = Token.hash(token)
+
+    Repo.exists?(
+      from p in Prospect,
+        where: p.resume_token_hash == ^hash and is_nil(p.revoked_at)
+    )
+  end
+
+  def resume_token_valid?(_token), do: false
+
+  @doc """
+  Add a prospect reply to a public-intake conversation via the resume surface.
+
+  Mirrors the established inbound semantics (the webhook pipeline's
+  reactivation and the portal reply path): the message carries source
+  `:prospect` and origin `:public_intake` with `sender_email` and
+  `delivery_status` deliberately nil; a reply on a waiting/dormant/resolved
+  conversation reactivates it to `:active`; `last_customer_action_at` is
+  always touched. Post-commit: rescore plus guarded broadcasts (the
+  org-scoped topic fires only when the conversation is linked).
+
+  The prospect is re-read and re-checked inside the same transaction as the
+  write, so a revocation or rotation racing the caller's handle still blocks
+  it: revoked and missing prospects are both `{:error, :no_prospect}`,
+  indistinguishable by design.
+
+  ## Options
+
+    * `:token_hash` - the hash of the resume token the caller authenticated
+      with. When present, the write is refused (`{:error, :no_prospect}`)
+      unless it still matches the prospect's stored hash — token rotation
+      must strip write access from handles minted under the previous token.
+      Callers that did not authenticate by token (the intake POST that just
+      created it) omit the option.
+  """
+  def add_prospect_reply(%Conversation{id: conversation_id}, body, opts \\ [])
+      when is_binary(body) do
+    case Repo.get(Conversation, conversation_id) do
+      nil -> {:error, :no_prospect}
+      conversation -> do_add_prospect_reply(conversation, body, opts)
+    end
+  end
+
+  defp do_add_prospect_reply(conversation, body, opts) do
+    body = Normalizer.truncate(body, Normalizer.max_body_length())
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    message_changeset =
+      Message.changeset(%Message{}, %{
+        conversation_id: conversation.id,
+        source: :prospect,
+        origin: :public_intake,
+        body: body,
+        is_internal_note: false
+      })
+
+    Multi.new()
+    |> Multi.run(:prospect, fn _repo, _changes -> authorized_prospect(conversation.id, opts) end)
+    |> Multi.insert(:message, message_changeset)
+    |> Multi.update(:conversation, reactivate_changeset(conversation, now))
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{conversation: conversation, message: message}} ->
+        perform_reply_side_effects(conversation)
+        {:ok, %{conversation: conversation, message: message}}
+
+      {:error, :prospect, reason, _changes} ->
+        {:error, reason}
+
+      {:error, _step, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  # Enforces the `:token_hash` option shared by the resume-surface writes:
+  # when the caller presents the credential hash it authenticated with, the
+  # prospect's stored hash must still match, otherwise the token rotated
+  # underneath a still-mounted socket and the handle has lost access.
+  # Callers without the option skip the check.
+  defp token_hash_current?(%Prospect{resume_token_hash: current}, opts) do
+    case Keyword.fetch(opts, :token_hash) do
+      {:ok, presented} -> presented == current
+      :error -> true
+    end
+  end
+
+  # Loads the prospect eligible to act under the presented token, inside the
+  # caller's transaction — mirrors capturable_prospect/2 so a concurrent
+  # rotation or revocation between the check and the write can't let a
+  # stale/revoked token slip through.
+  defp authorized_prospect(conversation_id, opts) do
+    case Repo.get_by(Prospect, conversation_id: conversation_id) do
+      nil ->
+        {:error, :no_prospect}
+
+      %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
+        {:error, :no_prospect}
+
+      %Prospect{} = prospect ->
+        if token_hash_current?(prospect, opts) do
+          {:ok, prospect}
+        else
+          {:error, :no_prospect}
+        end
+    end
+  end
+
+  # A customer action on a waiting/dormant/resolved conversation reactivates
+  # it — mirrors the webhook pipeline's maybe_reactivate and the portal reply
+  # path (which also updates last_customer_action_at in the same write).
+  defp reactivate_changeset(conversation, now) do
+    attrs =
+      if conversation.state in [:waiting, :dormant, :resolved] do
+        %{state: :active, last_customer_action_at: now}
+      else
+        %{last_customer_action_at: now}
+      end
+
+    Conversation.changeset(conversation, attrs)
+  end
+
+  defp perform_reply_side_effects(conversation) do
+    Scoring.calculate_and_cache(conversation.id)
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversations",
+      {:conversation_updated, conversation.id}
+    )
+
+    # No-op while organization_id is nil (broadcast_to_org/2 guard).
+    Conversations.broadcast_to_org(
+      conversation.organization_id,
+      {:conversation_updated, conversation.id}
+    )
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversation:#{conversation.id}",
+      {:message_added, conversation.id}
+    )
+
+    :ok
+  end
+
+  @doc """
   Rotate a conversation's resume token, invalidating the previous one.
 
   Returns `{:ok, %{prospect: p, resume_token: token}}` — the only other place
   a plaintext resume token is returned. Revoked prospects are rejected with
   the same `{:error, :no_prospect}` as missing ones.
+
+  Post-commit it broadcasts `{:resume_access_changed, id}` on the
+  `"conversation:{id}"` topic so resume views mounted under the old token
+  re-authenticate and shut down instead of streaming past the rotation.
   """
   def rotate_resume_token(%Conversation{} = conversation) do
     case get_prospect(conversation) do
@@ -271,6 +444,7 @@ defmodule Custyard.Intake do
 
         with {:ok, prospect} <-
                prospect |> Prospect.rotate_token_changeset(token_hash) |> Repo.update() do
+          broadcast_resume_access_changed(conversation.id)
           {:ok, %{prospect: prospect, resume_token: resume_token}}
         end
     end
@@ -279,6 +453,9 @@ defmodule Custyard.Intake do
   @doc """
   Revoke resume access for a conversation. Operator-initiated; the resume
   token stops resolving once `revoked_at` is set.
+
+  Broadcasts the same `{:resume_access_changed, id}` as rotation so mounted
+  resume views re-authenticate and shut down.
   """
   def revoke_resume_access(%Conversation{} = conversation) do
     case get_prospect(conversation) do
@@ -288,31 +465,51 @@ defmodule Custyard.Intake do
       %Prospect{} = prospect ->
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-        prospect
-        |> Prospect.revoke_changeset(now)
-        |> Repo.update()
+        with {:ok, prospect} <- prospect |> Prospect.revoke_changeset(now) |> Repo.update() do
+          broadcast_resume_access_changed(conversation.id)
+          {:ok, prospect}
+        end
     end
+  end
+
+  # Resume views subscribe to "conversation:{id}"; this tells them the
+  # credential state changed (rotation or revocation) so the read side —
+  # an already-mounted socket receiving operator replies over PubSub —
+  # gets closed off, not just the writes.
+  defp broadcast_resume_access_changed(conversation_id) do
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "conversation:#{conversation_id}",
+      {:resume_access_changed, conversation_id}
+    )
+
+    :ok
   end
 
   @doc """
   Set the prospect's reply-notification preference.
 
   Revoked prospects are rejected with the same `{:error, :no_prospect}` as
-  missing ones — revocation removes write access entirely.
+  missing ones — revocation removes write access entirely. Accepts the same
+  `:token_hash` option as `add_prospect_reply/3`: a stale hash (rotated
+  token) is refused as `{:error, :no_prospect}`. The check and the update run
+  inside the same transaction, so a revocation or rotation racing the
+  caller's handle still blocks the write.
   """
-  def set_notification(%Conversation{} = conversation, notify?) when is_boolean(notify?) do
-    case get_prospect(conversation) do
-      nil ->
-        {:error, :no_prospect}
+  def set_notification(%Conversation{id: conversation_id}, notify?, opts \\ [])
+      when is_boolean(notify?) do
+    Repo.transaction(fn ->
+      case authorized_prospect(conversation_id, opts) do
+        {:ok, prospect} ->
+          case prospect |> Prospect.notification_changeset(notify?) |> Repo.update() do
+            {:ok, prospect} -> prospect
+            {:error, changeset} -> Repo.rollback(changeset)
+          end
 
-      %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
-        {:error, :no_prospect}
-
-      %Prospect{} = prospect ->
-        prospect
-        |> Prospect.notification_changeset(notify?)
-        |> Repo.update()
-    end
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
   end
 
   ## Email capture and linking ------------------------------------------------
@@ -341,31 +538,26 @@ defmodule Custyard.Intake do
 
     * `:notify` - reply-notification consent captured alongside the email
       (default `false`)
+    * `:token_hash` - same semantics as `add_prospect_reply/3`: a stale hash
+      (rotated token) is refused as `{:error, :no_prospect}`, checked before
+      the write-once guard so a rotated-out handle cannot learn whether an
+      email was captured
   """
   def capture_email(%Conversation{} = conversation, email, opts \\ []) do
     notify? = Keyword.get(opts, :notify, false)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     Repo.transaction(fn ->
-      case Repo.get_by(Prospect, conversation_id: conversation.id) do
-        nil ->
-          Repo.rollback(:no_prospect)
-
-        # Revoked prospects lose write access even through a still-live
-        # handle (e.g. a LiveView mounted before revocation). Reuses
-        # :no_prospect so revoked and missing stay indistinguishable.
-        %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
-          Repo.rollback(:no_prospect)
-
-        %Prospect{email: existing} when not is_nil(existing) ->
-          Repo.rollback(:already_captured)
-
-        %Prospect{} = prospect ->
+      case capturable_prospect(conversation.id, opts) do
+        {:ok, prospect} ->
           capture_and_link(conversation, prospect, %{
             email: email,
             email_captured_at: now,
             notify_on_reply: notify?
           })
+
+        {:error, reason} ->
+          Repo.rollback(reason)
       end
     end)
     |> case do
@@ -375,6 +567,30 @@ defmodule Custyard.Intake do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # Loads the prospect eligible for email capture, inside the transaction.
+  # Revoked prospects (write access removed even through a still-live handle,
+  # e.g. a LiveView mounted before revocation) and stale token hashes (token
+  # rotated underneath a mounted socket) both reuse :no_prospect so all three
+  # failure classes stay indistinguishable; the stale-hash check runs BEFORE
+  # the write-once guard so a rotated-out handle cannot learn whether an
+  # email was captured.
+  defp capturable_prospect(conversation_id, opts) do
+    case Repo.get_by(Prospect, conversation_id: conversation_id) do
+      nil ->
+        {:error, :no_prospect}
+
+      %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
+        {:error, :no_prospect}
+
+      %Prospect{} = prospect ->
+        cond do
+          not token_hash_current?(prospect, opts) -> {:error, :no_prospect}
+          not is_nil(prospect.email) -> {:error, :already_captured}
+          true -> {:ok, prospect}
+        end
     end
   end
 
@@ -443,7 +659,13 @@ defmodule Custyard.Intake do
     :ok
   end
 
-  defp get_prospect(%Conversation{id: conversation_id}) do
+  @doc """
+  Fetch the prospect row for a conversation. Returns `nil` when none exists.
+
+  Public so the resume surface can re-read prospect state (captured email,
+  notification preference) after a mutation without reaching for `Repo`.
+  """
+  def get_prospect(%Conversation{id: conversation_id}) do
     Repo.get_by(Prospect, conversation_id: conversation_id)
   end
 end

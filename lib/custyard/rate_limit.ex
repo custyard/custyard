@@ -105,6 +105,42 @@ defmodule Custyard.RateLimit do
   end
 
   @doc """
+  Non-counting check: reports whether `key` is currently within the limit
+  configured for `bucket` WITHOUT recording an event.
+
+  Lets an early surface honor a budget that another surface owns and
+  counts — e.g. `CustyardWeb.Plugs.ResumeCookie` refuses the cookie
+  refresh once `ResumeAuth`'s `:resume_mount` budget is exhausted, without
+  double-billing the HTTP mount that follows in the same request.
+
+  Reads the ETS table directly (no GenServer round trip): nothing is
+  written, so the count-then-insert atomicity that serializes
+  `check_rate` does not apply.
+
+  Returns `{:allow, count}` (in-window events so far, may be `0`) or
+  `{:deny, retry_after_ms}`.
+  """
+  @spec peek(atom(), term(), integer()) ::
+          {:allow, non_neg_integer()} | {:deny, pos_integer()}
+  def peek(bucket, key, now \\ System.monotonic_time(:millisecond)) do
+    {limit, window_ms} = bucket_config!(bucket)
+
+    if limit <= 0 do
+      {:deny, window_ms}
+    else
+      window_start = now - window_ms
+      timestamps = timestamps_in_window({bucket, key}, window_start)
+      count = length(timestamps)
+
+      if count >= limit do
+        {:deny, retry_after(timestamps, limit, window_ms, now)}
+      else
+        {:allow, count}
+      end
+    end
+  end
+
+  @doc """
   Resolves `{limit, window_ms}` for a configured bucket.
 
   Raises `ArgumentError` when the bucket is not configured.

@@ -1,0 +1,48 @@
+<div data-testid="intake-passive">
+  <.resume_banner :if={@resume_path} resume_path={@resume_path} />
+
+  <h1
+    class="text-2xl font-semibold text-zinc-900 dark:text-zinc-100"
+    data-testid="intake-headline"
+  >
+    {@source.headline || @source.name}
+  </h1>
+  <p
+    :if={@source.intro_copy}
+    class="mt-3 text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap"
+    data-testid="intake-intro"
+  >
+    {@source.intro_copy}
+  </p>
+
+  <div :if={@source.questions != []} class="mt-8 space-y-6" data-testid="intake-questions">
+    <div :for={qa <- @source.questions} data-testid="intake-question">
+      <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+        {qa["question"]}
+      </h2>
+      <p class="mt-1 text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">
+        {qa["answer"]}
+      </p>
+    </div>
+  </div>
+
+  <div class="mt-8">
+    <.message_form
+      form={@form}
+      action={~p"/i/#{@source.key}"}
+      show_email={true}
+      branding={@branding}
+    />
+  </div>
+
+  <p :if={@active_path} class="mt-6 text-sm text-zinc-600 dark:text-zinc-400">
+    Ready for more?
+    <.link
+      href={@active_path}
+      class="font-medium text-indigo-700 dark:text-indigo-300 underline"
+      data-testid="intake-active-link"
+    >
+      Get in touch directly
+    </.link>
+  </p>
+</div>

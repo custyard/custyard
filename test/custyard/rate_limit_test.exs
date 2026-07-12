@@ -132,6 +132,52 @@ defmodule Custyard.RateLimitTest do
     end
   end
 
+  describe "peek/3" do
+    setup do
+      original = Application.get_env(:custyard, :rate_limit_buckets)
+
+      Application.put_env(:custyard, :rate_limit_buckets,
+        peek_bucket: [limit: 2, window_ms: 60_000],
+        closed_bucket: [limit: 0, window_ms: 1000]
+      )
+
+      on_exit(fn -> Application.put_env(:custyard, :rate_limit_buckets, original) end)
+      :ok
+    end
+
+    test "reports the in-window count without recording an event" do
+      # Any number of peeks consumes nothing.
+      assert {:allow, 0} = RateLimit.peek(:peek_bucket, "ip-1")
+      assert {:allow, 0} = RateLimit.peek(:peek_bucket, "ip-1")
+
+      assert {:allow, 1} = RateLimit.check_rate(:peek_bucket, "ip-1")
+      assert {:allow, 1} = RateLimit.peek(:peek_bucket, "ip-1")
+      assert {:allow, 2} = RateLimit.check_rate(:peek_bucket, "ip-1")
+    end
+
+    test "denies once the counting surface has exhausted the budget" do
+      assert {:allow, 1} = RateLimit.check_rate(:peek_bucket, "ip-1")
+      assert {:allow, 2} = RateLimit.check_rate(:peek_bucket, "ip-1")
+
+      assert {:deny, retry_after_ms} = RateLimit.peek(:peek_bucket, "ip-1")
+      assert retry_after_ms > 0
+      assert retry_after_ms <= 60_000
+
+      # Peeking while denied never extends the window either.
+      assert {:deny, _} = RateLimit.peek(:peek_bucket, "ip-1")
+    end
+
+    test "a non-positive limit always denies" do
+      assert {:deny, 1000} = RateLimit.peek(:closed_bucket, "ip-1")
+    end
+
+    test "raises for an unconfigured bucket" do
+      assert_raise ArgumentError, ~r/unknown rate-limit bucket :nope/, fn ->
+        RateLimit.peek(:nope, "ip-1")
+      end
+    end
+  end
+
   describe "bucket_config!/1" do
     test "returns the configured intake buckets" do
       assert RateLimit.bucket_config!(:intake_get) == {60, 60_000}

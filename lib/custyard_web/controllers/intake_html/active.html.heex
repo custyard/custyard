@@ -1,0 +1,26 @@
+<div data-testid="intake-active">
+  <.resume_banner :if={@resume_path} resume_path={@resume_path} />
+
+  <h1
+    class="text-2xl font-semibold text-zinc-900 dark:text-zinc-100"
+    data-testid="intake-headline"
+  >
+    {@source.headline || @source.name}
+  </h1>
+  <p
+    :if={@source.intro_copy}
+    class="mt-3 text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap"
+    data-testid="intake-intro"
+  >
+    {@source.intro_copy}
+  </p>
+
+  <div class="mt-6">
+    <.message_form
+      form={@form}
+      action={~p"/i/#{@source.key}"}
+      show_email={false}
+      branding={@branding}
+    />
+  </div>
+</div>

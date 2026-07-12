@@ -1,0 +1,41 @@
+<%!-- Shared intake message form. Assigns: @form, @action, @show_email,
+     @branding. The message is the only required field; the optional email
+     (passive mode) feeds Intake.capture_email/3 after creation. --%>
+<.form
+  for={@form}
+  action={@action}
+  method="post"
+  class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
+  data-testid="intake-form"
+>
+  <.input
+    field={@form[:body]}
+    type="textarea"
+    label="Your message"
+    rows="5"
+    placeholder="How can we help?"
+  />
+  <%= if @show_email do %>
+    <div class="mt-4">
+      <.input
+        field={@form[:email]}
+        type="email"
+        label="Email (optional) — so we can reply"
+        autocomplete="email"
+      />
+    </div>
+    <div class="mt-3">
+      <.input field={@form[:notify]} type="checkbox" label="Email me when we reply" />
+    </div>
+  <% end %>
+  <div class="flex justify-end mt-4">
+    <button
+      type="submit"
+      class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
+      style={"background-color: #{@branding.primary_color || "#4f46e5"}"}
+      data-testid="intake-form-submit"
+    >
+      Send message
+    </button>
+  </div>
+</.form>
