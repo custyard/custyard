@@ -67,10 +67,13 @@ Hooks.CtrlEnterSubmit = {
   }
 }
 
-// Auto-dismiss flash messages after a timeout
-// Used for info/success flashes that don't need user acknowledgment
+// Auto-dismiss flash messages after a timeout (configurable via
+// data-dismiss-timeout, in milliseconds). Elements that are hidden at mount
+// (e.g. the client/server connection-error flashes toggled by
+// phx-disconnected/phx-connected) are left alone.
 Hooks.AutoDismiss = {
   mounted() {
+    if (this.el.hasAttribute("hidden")) return
     const timeout = parseInt(this.el.dataset.dismissTimeout || "5000")
     this.timer = setTimeout(() => {
       // Fade out then hide

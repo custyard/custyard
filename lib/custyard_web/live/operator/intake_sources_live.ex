@@ -418,6 +418,30 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
           data-testid="operator-intake-source-intro-copy-input"
         />
 
+        <div>
+          <.input
+            field={@form[:link_title]}
+            type="text"
+            label="Link title"
+            placeholder="Acme"
+            data-testid="operator-intake-source-link-title-input"
+          />
+          <div class="mt-2">
+            <.input
+              field={@form[:link_url]}
+              type="url"
+              label="Link URL"
+              placeholder="https://example.com"
+              data-testid="operator-intake-source-link-url-input"
+            />
+          </div>
+          <p class="text-xs text-gray-500 dark:text-zinc-400 mt-1">
+            Optional link back to your product, shown to prospects on this source's
+            pages and their conversation threads. Appears only when both title and
+            URL (http/https) are set.
+          </p>
+        </div>
+
         <fieldset class="border-t border-gray-200 dark:border-zinc-700 pt-4">
           <legend class="sr-only">Questions and answers</legend>
           <div class="flex items-center justify-between mb-2">

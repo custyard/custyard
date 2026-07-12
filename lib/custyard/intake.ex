@@ -60,6 +60,22 @@ defmodule Custyard.Intake do
   def get_enabled_source(_key), do: nil
 
   @doc """
+  Get an intake source by key, regardless of enabled state. Returns `nil`
+  for unknown keys and non-binary input.
+
+  Provenance lookup for prospect surfaces: `conversations.intake_source_key`
+  stores the key string (not a foreign key), so a conversation's source may
+  be disabled or deleted after creation — the branded link on an existing
+  thread survives a disable (the source still exists) and disappears on
+  delete. Public intake entry must keep using `get_enabled_source/1`.
+  """
+  def get_source_by_key(key) when is_binary(key) do
+    Repo.get_by(IntakeSource, key: key)
+  end
+
+  def get_source_by_key(_key), do: nil
+
+  @doc """
   The intake source passive pages pair with: the first enabled active-mode
   source, ordered by key — the deterministic choice until explicit pairing
   exists in the schema. Returns `nil` when no enabled active source exists.
@@ -303,6 +319,12 @@ defmodule Custyard.Intake do
   it: revoked and missing prospects are both `{:error, :no_prospect}`,
   indistinguishable by design.
 
+  A reply whose trimmed body is identical to the prospect's most recent
+  message in the conversation is refused with `{:error, :duplicate_message}`
+  — prod testing produced runs of identical messages from double-submits.
+  Only the single latest prospect-authored message is compared, so resending
+  earlier content stays legitimate.
+
   ## Options
 
     * `:token_hash` - the hash of the access token the caller authenticated
@@ -336,6 +358,13 @@ defmodule Custyard.Intake do
 
     Multi.new()
     |> Multi.run(:prospect, fn _repo, _changes -> authorized_prospect(conversation.id, opts) end)
+    |> Multi.run(:duplicate, fn _repo, _changes ->
+      if duplicate_of_last_prospect_message?(conversation.id, body) do
+        {:error, :duplicate_message}
+      else
+        {:ok, :unique}
+      end
+    end)
     |> Multi.insert(:message, message_changeset)
     |> Multi.update(:conversation, reactivate_changeset(conversation, now))
     |> Repo.transaction()
@@ -347,9 +376,30 @@ defmodule Custyard.Intake do
       {:error, :prospect, reason, _changes} ->
         {:error, reason}
 
+      {:error, :duplicate, reason, _changes} ->
+        {:error, reason}
+
       {:error, _step, changeset, _changes} ->
         {:error, changeset}
     end
+  end
+
+  # Double-submit guard: whether `body` (trimmed) matches the prospect's most
+  # recent message in the conversation. Deliberately compares only the single
+  # latest prospect-authored message — operator messages never participate,
+  # and content older than the latest prospect message may be resent. Runs
+  # inside the reply transaction so it serializes with the insert.
+  defp duplicate_of_last_prospect_message?(conversation_id, body) do
+    last_body =
+      Repo.one(
+        from m in Message,
+          where: m.conversation_id == ^conversation_id and m.source == :prospect,
+          order_by: [desc: m.inserted_at, desc: m.id],
+          limit: 1,
+          select: m.body
+      )
+
+    is_binary(last_body) and String.trim(last_body) == String.trim(body)
   end
 
   # Enforces the `:token_hash` option shared by the conversation-surface writes:

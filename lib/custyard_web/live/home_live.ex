@@ -1,10 +1,27 @@
 defmodule CustyardWeb.HomeLive do
   use CustyardWeb, :live_view
 
+  alias Custyard.{OperatorAccount, Repo}
+
   @impl true
-  def mount(_params, _session, socket) do
-    {:ok, socket}
+  def mount(_params, session, socket) do
+    # An authenticated operator landing on "/" goes straight to the
+    # dashboard (attention queue). Same session discipline as
+    # CustyardWeb.Live.OperatorAuth: the id must resolve to a live
+    # operator row — a stale session keeps the public landing page
+    # instead of bouncing through /operator's login redirect.
+    if operator_session?(session) do
+      {:ok, redirect(socket, to: ~p"/operator")}
+    else
+      {:ok, socket}
+    end
   end
+
+  defp operator_session?(%{"operator_id" => operator_id}) when not is_nil(operator_id) do
+    Repo.get(OperatorAccount, operator_id) != nil
+  end
+
+  defp operator_session?(_session), do: false
 
   @impl true
   def render(assigns) do

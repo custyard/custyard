@@ -153,6 +153,44 @@ defmodule CustyardWeb.IntakeControllerTest do
     end
   end
 
+  describe "branded source link on intake pages" do
+    test "renders the anchor on active and passive pages when both fields are set", %{
+      conn: conn
+    } do
+      for mode <- [:active, :passive] do
+        source =
+          insert_intake_source(
+            mode: mode,
+            link_title: "Acme Product",
+            link_url: "https://acme.example/product"
+          )
+
+        html = conn |> get(~p"/i/#{source.key}") |> html_response(200)
+
+        assert html =~ ~s(data-testid="intake-source-link")
+        assert html =~ ~s(href="https://acme.example/product")
+        assert html =~ ~s(target="_blank")
+        assert html =~ ~s(rel="noopener noreferrer")
+        assert html =~ "Acme Product"
+      end
+    end
+
+    test "renders no link when either field is missing", %{conn: conn} do
+      for overrides <- [
+            [],
+            [link_title: "Acme Product"],
+            [link_url: "https://acme.example/product"]
+          ] do
+        source = insert_intake_source(Keyword.merge([mode: :active], overrides))
+
+        html = conn |> get(~p"/i/#{source.key}") |> html_response(200)
+
+        refute html =~ ~s(data-testid="intake-source-link"),
+               "expected no link for #{inspect(overrides)}"
+      end
+    end
+  end
+
   describe "POST /i/:source_key" do
     test "anonymous submit creates the conversation and redirects to the conversation URL", %{
       conn: conn

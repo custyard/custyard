@@ -317,6 +317,59 @@ defmodule Custyard.IntakeTest do
     end
   end
 
+  describe "add_prospect_reply/3 duplicate suppression" do
+    setup do
+      insert_intake_source(key: "cta")
+      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      %{conversation: result.conversation}
+    end
+
+    test "refuses a reply identical to the prospect's most recent message", %{
+      conversation: conversation
+    } do
+      assert {:ok, _result} = Intake.add_prospect_reply(conversation, "Any update?")
+
+      assert {:error, :duplicate_message} = Intake.add_prospect_reply(conversation, "Any update?")
+      assert Repo.aggregate(Message, :count) == 2
+    end
+
+    test "the comparison trims both sides", %{conversation: conversation} do
+      # The intake body itself is the prospect's most recent message.
+      assert {:error, :duplicate_message} = Intake.add_prospect_reply(conversation, "  Hello \n")
+      assert Repo.aggregate(Message, :count) == 1
+    end
+
+    test "only the single most recent prospect message is compared", %{
+      conversation: conversation
+    } do
+      assert {:ok, _result} = Intake.add_prospect_reply(conversation, "First")
+      assert {:ok, _result} = Intake.add_prospect_reply(conversation, "Second")
+
+      # "First" is older than the latest prospect message — resending it is fine.
+      assert {:ok, _result} = Intake.add_prospect_reply(conversation, "First")
+    end
+
+    test "an intervening operator message neither resets nor triggers the check", %{
+      conversation: conversation
+    } do
+      assert {:ok, _result} = Intake.add_prospect_reply(conversation, "Any update?")
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :operator,
+        body: "Operator body, never compared"
+      )
+
+      # The latest PROSPECT message is still "Any update?" even though the
+      # operator spoke since — the duplicate stays refused.
+      assert {:error, :duplicate_message} = Intake.add_prospect_reply(conversation, "Any update?")
+
+      # And an operator body is never a duplicate trigger.
+      assert {:ok, _result} =
+               Intake.add_prospect_reply(conversation, "Operator body, never compared")
+    end
+  end
+
   describe "first_enabled_active_source/0" do
     test "returns the first enabled active-mode source ordered by key" do
       insert_intake_source(key: "zz-active", mode: :active)

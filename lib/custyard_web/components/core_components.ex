@@ -160,8 +160,8 @@ defmodule CustyardWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
-      phx-hook={@kind == :info && "AutoDismiss"}
-      data-dismiss-timeout="5000"
+      phx-hook="AutoDismiss"
+      data-dismiss-timeout={if @kind == :error, do: "10000", else: "5000"}
       data-flash-kind={@kind}
       role="alert"
       data-testid={"flash-#{@kind}"}
@@ -179,7 +179,7 @@ defmodule CustyardWeb.CoreComponents do
         <.icon :if={@kind == :error} name="hero-exclamation-circle-mini" class="h-4 w-4" />
         {@title}
       </p>
-      <p class="mt-2 pl-[22px] text-sm leading-5">{msg}</p>
+      <p class={["text-sm leading-5", @title && "mt-2 pl-[22px]"]}>{msg}</p>
       <button
         type="button"
         class="group absolute top-1 right-1 p-2"
@@ -398,7 +398,7 @@ defmodule CustyardWeb.CoreComponents do
       <select
         id={@id}
         name={@name}
-        class="mt-2 block w-full rounded-md border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 shadow-sm focus:border-zinc-400 focus:ring-0 sm:text-sm"
+        class="mt-2 block w-full rounded-md border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-sm focus:border-zinc-400 focus:ring-0 sm:text-sm"
         multiple={@multiple}
         data-testid={"input-select-#{@name}"}
         {@rest}
@@ -671,8 +671,8 @@ defmodule CustyardWeb.CoreComponents do
   You can customize the size and colors of the icons by setting
   width, height, and background color classes.
 
-  Icons are extracted from the `heroicons` directory and bundled within
-  your compiled app.css by the plugin in your `assets/tailwind.config.js`.
+  Icons are extracted from `deps/heroicons/optimized` and bundled within
+  your compiled app.css by the plugin in `assets/vendor/heroicons.js`.
 
   ## Examples
 

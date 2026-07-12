@@ -1,0 +1,17 @@
+<%!-- Per-source branding link back to the operator's product. Rendered only
+     when the source has BOTH link_title and link_url set (IntakeSource.link?/1);
+     link_url is changeset-locked to http/https. Assigns: @source. --%>
+<p
+  :if={IntakeSource.link?(@source)}
+  class="mt-8 text-center text-sm text-zinc-500 dark:text-zinc-400"
+  data-testid="intake-source-link"
+>
+  <a
+    href={@source.link_url}
+    target="_blank"
+    rel="noopener noreferrer"
+    class="font-medium text-indigo-700 dark:text-indigo-300 underline"
+  >
+    {@source.link_title}
+  </a>
+</p>

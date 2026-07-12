@@ -1,5 +1,6 @@
 @import "tailwindcss" source("../..");
 @plugin "@tailwindcss/forms";
+@plugin "../vendor/heroicons";
 
 /* Phoenix LiveView state variants */
 @custom-variant phx-no-feedback (.phx-no-feedback&, .phx-no-feedback &);
