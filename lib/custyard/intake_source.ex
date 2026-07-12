@@ -44,17 +44,40 @@ defmodule Custyard.IntakeSource do
 
   def modes, do: @modes
 
+  @doc "Maximum number of Q&A entries per source (UI cap mirrors validation)."
+  def max_questions, do: @max_questions
+
+  @update_fields [:name, :mode, :headline, :intro_copy, :questions, :enabled]
+
   @doc false
   def changeset(intake_source, attrs) do
     intake_source
-    |> cast(attrs, [:key, :name, :mode, :headline, :intro_copy, :questions, :enabled])
+    |> cast(attrs, [:key | @update_fields])
     |> validate_required([:key, :name])
     |> validate_format(:key, @key_format)
+    |> unique_constraint(:key)
+    |> validate_content()
+  end
+
+  @doc """
+  Changeset for updating an existing source. Does not cast `:key`: the key is
+  a public URL segment and conversation provenance
+  (`conversations.intake_source_key`), immutable after creation regardless of
+  caller.
+  """
+  def update_changeset(intake_source, attrs) do
+    intake_source
+    |> cast(attrs, @update_fields)
+    |> validate_required([:name])
+    |> validate_content()
+  end
+
+  defp validate_content(changeset) do
+    changeset
     |> validate_length(:name, max: 200)
     |> validate_length(:headline, max: 200)
     |> validate_length(:intro_copy, max: 2000)
     |> validate_questions()
-    |> unique_constraint(:key)
   end
 
   # Q&A list validation: at most 20 entries; each entry must be a map with

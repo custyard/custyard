@@ -39,6 +39,15 @@ defmodule Custyard.Intake do
   end
 
   @doc """
+  Get an intake source by id, regardless of enabled state. Returns `nil`
+  when not found. Operator UI lookup - the public surface must use
+  `get_enabled_source/1`.
+  """
+  def get_source(id) do
+    Repo.get(IntakeSource, id)
+  end
+
+  @doc """
   Get an enabled intake source by key.
 
   Returns `nil` for unknown or disabled keys. Request input is validated by
@@ -61,10 +70,14 @@ defmodule Custyard.Intake do
 
   @doc """
   Update an intake source.
+
+  The key is immutable after creation (public URL segment and conversation
+  provenance): `IntakeSource.update_changeset/2` never casts `:key`, so key
+  values in `attrs` are ignored regardless of caller.
   """
   def update_source(%IntakeSource{} = source, attrs) do
     source
-    |> IntakeSource.changeset(attrs)
+    |> IntakeSource.update_changeset(attrs)
     |> Repo.update()
   end
 

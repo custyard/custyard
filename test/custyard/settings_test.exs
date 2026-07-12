@@ -18,6 +18,13 @@ defmodule Custyard.SettingsTest do
 
       assert settings1.id == settings2.id
     end
+
+    test "create_defaults leaves branding empty with nil-defaulted reads" do
+      settings = Settings.get()
+
+      assert settings.branding == %{}
+      assert Settings.get_branding() == %{name: nil, logo_url: nil, primary_color: nil}
+    end
   end
 
   describe "get_weights/0" do
@@ -356,6 +363,111 @@ defmodule Custyard.SettingsTest do
     end
   end
 
+  describe "get_branding/0" do
+    test "returns all-nil defaults when nothing is stored" do
+      assert Settings.get_branding() == %{name: nil, logo_url: nil, primary_color: nil}
+    end
+
+    test "drops unknown keys and malformed values stored in the column" do
+      Settings.get()
+
+      Repo.update_all(Settings,
+        set: [
+          branding: %{
+            "name" => "Acme Support",
+            "primary_color" => "not-a-color",
+            "surprise" => "x"
+          }
+        ]
+      )
+
+      branding = Settings.get_branding()
+
+      assert branding.name == "Acme Support"
+      assert branding.primary_color == nil
+      refute Map.has_key?(branding, :surprise)
+    end
+  end
+
+  describe "update_branding/1" do
+    test "round-trips valid values" do
+      assert {:ok, _} =
+               Settings.update_branding(%{
+                 name: "Acme Support",
+                 logo_url: "/uploads/logos/acme.png",
+                 primary_color: "#1a2b3c"
+               })
+
+      branding = Settings.get_branding()
+
+      assert branding.name == "Acme Support"
+      assert branding.logo_url == "/uploads/logos/acme.png"
+      assert branding.primary_color == "#1a2b3c"
+    end
+
+    test "omitted keys clear back to defaults (whole-map replace)" do
+      assert {:ok, _} = Settings.update_branding(%{name: "Acme", primary_color: "#112233"})
+      assert {:ok, _} = Settings.update_branding(%{name: "Acme"})
+
+      branding = Settings.get_branding()
+
+      assert branding.name == "Acme"
+      assert branding.primary_color == nil
+    end
+
+    test "rejects unknown keys" do
+      assert {:error, changeset} = Settings.update_branding(%{bogus: "x"})
+
+      assert [error] = errors_on(changeset).branding
+      assert error =~ "bogus"
+    end
+
+    test "rejects logo paths outside /uploads/ and traversal attempts" do
+      bad_paths = [
+        "/uploads/../secrets",
+        "http://evil",
+        "//host/x",
+        "/uploads/%2E%2e/x",
+        "/uploads/a%00.png",
+        "/uploads/a\0.png"
+      ]
+
+      for bad <- bad_paths do
+        assert {:error, changeset} = Settings.update_branding(%{logo_url: bad}),
+               "expected #{inspect(bad)} to be rejected"
+
+        assert [error] = errors_on(changeset).branding
+        assert error =~ "logo_url"
+      end
+
+      assert Settings.get_branding().logo_url == nil
+    end
+
+    test "enforces the hex color format" do
+      for bad <- ["1a2b3c", "#1a2b3", "#1a2b3cff", "red", "#12345g", "#1a2b3c\n"] do
+        assert {:error, _} = Settings.update_branding(%{primary_color: bad}),
+               "expected #{inspect(bad)} to be rejected"
+      end
+
+      assert {:ok, _} = Settings.update_branding(%{primary_color: "#ABCdef"})
+      assert Settings.get_branding().primary_color == "#ABCdef"
+    end
+
+    test "enforces the name length bound" do
+      assert {:error, _} = Settings.update_branding(%{name: String.duplicate("a", 101)})
+      assert {:error, _} = Settings.update_branding(%{name: 42})
+      assert {:ok, _} = Settings.update_branding(%{name: String.duplicate("a", 100)})
+    end
+
+    test "rejects blank names (consumers fall back to \"Custyard\" only on nil)" do
+      assert {:error, _} = Settings.update_branding(%{name: ""})
+      assert {:error, _} = Settings.update_branding(%{name: "   "})
+      assert {:error, _} = Settings.update_branding(%{name: "\n\t"})
+
+      assert Settings.get_branding().name == nil
+    end
+  end
+
   describe "changeset/2" do
     test "validates weights structure" do
       settings = Settings.get()
@@ -392,6 +504,19 @@ defmodule Custyard.SettingsTest do
       refute changeset.valid?
       assert [error] = errors_on(changeset).intake_config
       assert error =~ "unlinked_tier_score"
+    end
+
+    test "validates branding structure" do
+      settings = Settings.get()
+
+      changeset =
+        Settings.changeset(settings, %{
+          branding: %{"primary_color" => "blue"}
+        })
+
+      refute changeset.valid?
+      assert [error] = errors_on(changeset).branding
+      assert error =~ "primary_color"
     end
   end
 end

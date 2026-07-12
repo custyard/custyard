@@ -438,6 +438,19 @@ defmodule Custyard.IntakeTest do
       assert updated.mode == :passive
     end
 
+    test "update_source/2 never changes the key (immutable public URL segment)" do
+      source = insert_intake_source(key: "original")
+
+      assert {:ok, updated} = Intake.update_source(source, %{key: "other", name: "Renamed"})
+      assert updated.key == "original"
+      assert updated.name == "Renamed"
+
+      # String keys (the LiveView param shape) are ignored the same way.
+      assert {:ok, updated} = Intake.update_source(source, %{"key" => "other"})
+      assert updated.key == "original"
+      assert Repo.reload!(source).key == "original"
+    end
+
     test "delete_source/1 removes the source but leaves conversation provenance" do
       source = insert_intake_source(key: "ephemeral")
 

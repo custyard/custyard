@@ -87,6 +87,7 @@ defmodule CustyardWeb.Router do
     live_session :operator_super_admin,
       on_mount: [{CustyardWeb.Live.OperatorAuth, :require_super_admin}] do
       live "/settings", SettingsLive, :index
+      live "/intake-sources", IntakeSourcesLive, :index
     end
   end
 
