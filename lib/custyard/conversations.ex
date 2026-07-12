@@ -387,6 +387,12 @@ defmodule Custyard.Conversations do
   The operator UI keys the consent advisory on `:prospect_no_consent`
   specifically — the `:none` states are conveyed by the reply-channel badge,
   not the opt-in wording.
+
+  Callers must pass a `conversation` with fresh `:contact`/`:prospect`
+  associations. If they are already `Ecto.assoc_loaded?`, this function reuses
+  them as-is rather than re-reading from the database — a stale preload (e.g.
+  a prospect's `notify_on_reply` flipped after it was loaded) silently
+  produces a stale consent decision.
   """
   def reply_delivery(%Conversation{} = conversation) do
     conversation = preload_reply_channel_assocs(conversation)
@@ -878,7 +884,7 @@ defmodule Custyard.Conversations do
       from(c in Conversation,
         where: c.state == :resolved,
         where:
-          (c.source != ^:public_intake and c.updated_at < ^cutoff) or
+          ((is_nil(c.source) or c.source != ^:public_intake) and c.updated_at < ^cutoff) or
             (c.source == ^:public_intake and c.updated_at < ^intake_cutoff)
       )
 

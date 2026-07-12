@@ -9,7 +9,7 @@ defmodule Custyard.ConversationsTest do
   import Custyard.Factory
   import Swoosh.TestAssertions
 
-  describe "list_neglected/1" do
+  describe "list_neglected" do
     test "returns conversations excluding resolved" do
       org = insert_organization()
       active = insert_conversation(organization_id: org.id, state: :active)
@@ -919,7 +919,7 @@ defmodule Custyard.ConversationsTest do
       assert message.conversation_id == conv.id
     end
 
-    test "reply on a nil-org conversation broadcasts global topics but never the bare org topic" do
+    test "reply on a nil-org conversation broadcasts on the global topic" do
       conversation =
         insert_conversation(
           organization_id: nil,
@@ -931,18 +931,29 @@ defmodule Custyard.ConversationsTest do
 
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
-      # The malformed topic that a nil org would interpolate into
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:")
 
       {:ok, message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
 
       assert message.source == :operator
-
       assert_received {:message_added, ^conv_id}
       assert_received {:conversation_updated, ^conv_id}
-      # Exactly one :conversation_updated (from "conversations") — nothing
-      # arrived on the "conversations:org:" topic.
-      refute_received {:conversation_updated, ^conv_id}
+    end
+
+    test "reply on a nil-org conversation never broadcasts to the malformed bare org topic" do
+      conversation =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          subject: "Unlinked reply thread"
+        )
+
+      # Subscribing only to the malformed topic a nil org would interpolate
+      # into isolates this assertion from the legitimate "conversations" topic.
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:")
+
+      {:ok, _message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
+
+      refute_received {:conversation_updated, _id}
     end
   end
 
@@ -1231,6 +1242,22 @@ defmodule Custyard.ConversationsTest do
     test "purges resolved public-intake conversations after 365 days" do
       conversation = insert_conversation(source: :public_intake, state: :resolved)
       backdate_updated_at(conversation, 366)
+
+      assert Conversations.cleanup_resolved_conversations(90) == 1
+      assert Repo.get(Custyard.Conversation, conversation.id) == nil
+    end
+
+    test "purges resolved conversations with a NULL source column at the standard bound" do
+      # The DB column has no NOT NULL constraint (only the Ecto schema
+      # default), so a legacy row or a bypass-the-schema insert can leave
+      # source NULL. Force it directly, bypassing the changeset default.
+      conversation = insert_conversation(state: :resolved)
+      backdate_updated_at(conversation, 91)
+
+      Repo.update_all(
+        from(c in Custyard.Conversation, where: c.id == ^conversation.id),
+        set: [source: nil]
+      )
 
       assert Conversations.cleanup_resolved_conversations(90) == 1
       assert Repo.get(Custyard.Conversation, conversation.id) == nil

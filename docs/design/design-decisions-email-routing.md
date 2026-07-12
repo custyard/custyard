@@ -1,7 +1,8 @@
 # Design Decisions: Data Model + Lettermint Integration
 
+**Version:** 0.3
 **Date:** 2026-03-24
-**Context:** Supplements SDD v0.2Th. Captures decisions made during design review of Tasks 80, 77, 106 in light of Lettermint's per-project routes and multiple webhooks per route.
+**Context:** Supplements SDD v0.3. Captures decisions made during design review of Tasks 80, 77, 106 in light of Lettermint's per-project routes and multiple webhooks per route.
 
 ---
 

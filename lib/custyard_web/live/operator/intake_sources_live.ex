@@ -47,20 +47,26 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
 
   @impl true
   def handle_event("edit", %{"id" => id}, socket) do
-    case Intake.get_source(id) do
-      nil ->
-        {:noreply,
-         socket
-         |> put_flash(:error, "Intake source not found")
-         |> load_sources()}
+    case parse_id_or_flash(id, socket) do
+      {:ok, int_id} ->
+        case Intake.get_source(int_id) do
+          nil ->
+            {:noreply,
+             socket
+             |> put_flash(:error, "Intake source not found")
+             |> load_sources()}
 
-      source ->
-        {:noreply,
-         socket
-         |> assign(:show_form, true)
-         |> assign(:editing_source, source)
-         |> assign(:form_params, %{})
-         |> rebuild_form(source.questions)}
+          source ->
+            {:noreply,
+             socket
+             |> assign(:show_form, true)
+             |> assign(:editing_source, source)
+             |> assign(:form_params, %{})
+             |> rebuild_form(source.questions)}
+        end
+
+      {:error, socket} ->
+        {:noreply, socket}
     end
   end
 
@@ -109,7 +115,10 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   @impl true
   def handle_event("toggle_enabled", %{"id" => id}, socket) do
     if Authorization.can_modify_settings?(socket.assigns.current_operator) do
-      toggle_enabled(socket, id)
+      case parse_id_or_flash(id, socket) do
+        {:ok, int_id} -> toggle_enabled(socket, int_id)
+        {:error, socket} -> {:noreply, socket}
+      end
     else
       {:noreply, put_flash(socket, :error, @permission_error)}
     end
@@ -118,9 +127,25 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   @impl true
   def handle_event("delete", %{"id" => id}, socket) do
     if Authorization.can_modify_settings?(socket.assigns.current_operator) do
-      delete_source(socket, id)
+      case parse_id_or_flash(id, socket) do
+        {:ok, int_id} -> delete_source(socket, int_id)
+        {:error, socket} -> {:noreply, socket}
+      end
     else
       {:noreply, put_flash(socket, :error, @permission_error)}
+    end
+  end
+
+  defp parse_id_or_flash(id, socket) do
+    case Integer.parse(id) do
+      {int_id, ""} ->
+        {:ok, int_id}
+
+      _ ->
+        {:error,
+         socket
+         |> put_flash(:error, "Intake source not found")
+         |> load_sources()}
     end
   end
 
@@ -223,17 +248,22 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   # given question rows. The key is stripped on edit so it can never be
   # revalidated or changed through this form.
   defp rebuild_form(socket, questions) do
-    base = socket.assigns.editing_source || %IntakeSource{}
+    editing_source = socket.assigns.editing_source
+    base = editing_source || %IntakeSource{}
 
     attrs =
       socket.assigns.form_params
       |> Map.put("questions", questions)
-      |> maybe_strip_key(socket.assigns.editing_source)
+      |> maybe_strip_key(editing_source)
 
-    changeset =
-      base
-      |> IntakeSource.changeset(attrs)
-      |> Map.put(:action, :validate)
+    base_changeset =
+      if editing_source do
+        IntakeSource.update_changeset(base, attrs)
+      else
+        IntakeSource.changeset(base, attrs)
+      end
+
+    changeset = Map.put(base_changeset, :action, :validate)
 
     socket
     |> assign(:questions, questions)

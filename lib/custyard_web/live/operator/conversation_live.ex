@@ -77,18 +77,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           {:ok, %Conversation{}} ->
             # Transition succeeded - this operator was first
             Scoring.calculate_and_cache(conversation.id)
-
-            # Broadcast the state change
-            Phoenix.PubSub.broadcast(
-              Custyard.PubSub,
-              "conversations",
-              {:conversation_updated, conversation.id}
-            )
-
-            Conversations.broadcast_to_org(
-              conversation.organization_id,
-              {:conversation_updated, conversation.id}
-            )
+            broadcast_conversation_update(conversation.id, conversation.organization_id)
 
             # Reload with all associations (messages, etc.)
             load_conversation(id)
@@ -136,17 +125,23 @@ defmodule CustyardWeb.Operator.ConversationLive do
     operator = socket.assigns.current_operator
 
     case Conversations.send_reply(conversation, body, operator_email: operator.email) do
-      {:ok, _message} ->
+      {:ok, message} ->
         socket = socket |> assign(:reply_text, "") |> reload_conversation()
 
         socket =
           cond do
+            # Ground truth for this message: :withheld is only ever set by the
+            # public-intake consent gate at send time, so this can't be fooled
+            # by a consent flip that happens before the reload below runs.
+            message.delivery_status == :withheld ->
+              socket
+
             socket.assigns.reply_will_email? ->
               socket
 
             # The reply-box advisory already explains the withheld delivery
             # for public-intake conversations; no flash needed.
-            conversation.source == :public_intake ->
+            socket.assigns.conversation.source == :public_intake ->
               socket
 
             true ->
@@ -212,17 +207,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
            }) do
         {:ok, _} ->
           Scoring.calculate_and_cache(conversation.id)
-
-          Phoenix.PubSub.broadcast(
-            Custyard.PubSub,
-            "conversations",
-            {:conversation_updated, conversation.id}
-          )
-
-          Conversations.broadcast_to_org(
-            conversation.organization_id,
-            {:conversation_updated, conversation.id}
-          )
+          broadcast_conversation_update(conversation.id, conversation.organization_id)
 
           {:noreply, reload_conversation(socket)}
 
@@ -434,6 +419,23 @@ defmodule CustyardWeb.Operator.ConversationLive do
     else
       {:noreply, socket}
     end
+  end
+
+  # Nil-org conversations subscribe to the global "conversations" topic (see
+  # mount_conversation/3), which also carries :conversation_created for every
+  # new inbound email — never relevant to an already-open conversation.
+  def handle_info({:conversation_created, _id}, socket) do
+    {:noreply, socket}
+  end
+
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
+  defp broadcast_conversation_update(id, organization_id) do
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+    Conversations.broadcast_to_org(organization_id, {:conversation_updated, id})
   end
 
   defp handle_convert_result({:ok, _conversation}, socket) do

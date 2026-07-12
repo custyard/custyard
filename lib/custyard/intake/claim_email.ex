@@ -34,9 +34,10 @@ defmodule Custyard.Intake.ClaimEmail do
   Requires `:confirm_url` and `:resume_url` in `opts` — the caller owns
   URL construction (LoginEmail precedent). Returns `{:ok, metadata}` /
   `{:error, reason}` when delivering synchronously, `{:ok, :queued}` when
-  the async flag hands delivery to the task supervisor, or
-  `{:error, :rate_limited}` when the per-email daily send bound is
-  exhausted (nothing is sent or queued).
+  the async flag hands delivery to the task supervisor,
+  `{:error, :queue_failed}` when the task supervisor refuses the job (down
+  or at `max_children`), or `{:error, :rate_limited}` when the per-email
+  daily send bound is exhausted (nothing is sent or queued).
   """
   def send_confirmation(%Slug{} = slug, opts) do
     confirm_url = Keyword.fetch!(opts, :confirm_url)
@@ -67,8 +68,10 @@ defmodule Custyard.Intake.ClaimEmail do
 
   defp deliver(email, slug) do
     if Application.get_env(:custyard, :deliver_replies_async?, true) do
-      Task.Supervisor.start_child(Custyard.TaskSupervisor, fn -> do_deliver(email, slug) end)
-      {:ok, :queued}
+      case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn -> do_deliver(email, slug) end) do
+        {:ok, _pid} -> {:ok, :queued}
+        {:error, _reason} -> {:error, :queue_failed}
+      end
     else
       do_deliver(email, slug)
     end
