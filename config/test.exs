@@ -24,6 +24,10 @@ config :logger, level: :warning
 # Disable scoring scheduler in tests to avoid sandbox conflicts
 config :custyard, start_scheduler: false
 
+# Disable public-intake background sweeps (slug claim expiry) in tests;
+# the sweep functions take an injectable clock and are tested directly.
+config :custyard, start_intake_sweeps: false
+
 # Skip async email delivery of operator replies; the supervised task would
 # outlive the SQL sandbox owner. Tests exercise Email.Outbound.deliver/1 directly.
 config :custyard, deliver_replies_async?: false

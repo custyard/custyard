@@ -37,6 +37,7 @@ defmodule Custyard.Application do
         CustyardWeb.Endpoint
       ]
       |> maybe_add_scheduler()
+      |> maybe_add_intake_sweeps()
       |> maybe_add_lmtp_server()
       |> maybe_add_imap_poller()
 
@@ -126,6 +127,17 @@ defmodule Custyard.Application do
   defp maybe_add_scheduler(children) do
     if Application.get_env(:custyard, :start_scheduler, true) do
       children ++ [Custyard.Scoring.Scheduler]
+    else
+      children
+    end
+  end
+
+  # Public-intake background sweeps (expired slug claims). Flagged off in
+  # config/test.exs — tests drive the sweep functions directly with an
+  # injected clock.
+  defp maybe_add_intake_sweeps(children) do
+    if Application.get_env(:custyard, :start_intake_sweeps, true) do
+      children ++ [Custyard.Slugs.ClaimExpiry]
     else
       children
     end

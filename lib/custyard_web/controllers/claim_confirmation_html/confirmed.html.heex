@@ -1,0 +1,19 @@
+<%!-- Success page. Deliberately does NOT mint or reveal the resume URL —
+     the confirmation email the visitor followed is the only carrier of
+     that credential. --%>
+<div class="py-16 text-center" data-testid="claim-confirmed-page">
+  <h1 class="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+    Claim confirmed
+  </h1>
+  <p class="mt-4 text-zinc-600 dark:text-zinc-400">
+    The name
+    <span
+      class="font-mono font-semibold text-zinc-900 dark:text-zinc-100"
+      data-testid="claim-confirmed-slug"
+    >
+      {@slug.slug}
+    </span>
+    is confirmed. You can close this page — use the conversation link from your email to return
+    at any time.
+  </p>
+</div>

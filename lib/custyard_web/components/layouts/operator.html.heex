@@ -99,6 +99,17 @@ inactive_class =
             Intake Sources
           </.link>
           <.link
+            navigate={~p"/operator/slugs"}
+            class={
+              if nav_active?.("/operator/slugs", [CustyardWeb.Operator.SlugsLive]),
+                do: active_class,
+                else: inactive_class
+            }
+            data-testid="operator-nav-slugs"
+          >
+            Slugs
+          </.link>
+          <.link
             navigate={~p"/operator/settings"}
             class={
               if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
@@ -200,6 +211,16 @@ inactive_class =
         }
       >
         Intake Sources
+      </.link>
+      <.link
+        navigate={~p"/operator/slugs"}
+        class={
+          if nav_active?.("/operator/slugs", [CustyardWeb.Operator.SlugsLive]),
+            do: active_class,
+            else: inactive_class
+        }
+      >
+        Slugs
       </.link>
       <.link
         navigate={~p"/operator/settings"}

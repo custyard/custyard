@@ -7,7 +7,12 @@ defmodule Custyard.AuditEventTest do
 
   describe "event_types/0" do
     test "returns list of valid event types" do
-      assert AuditEvent.event_types() == [:webhook_received, :webhook_processed, :webhook_error]
+      assert AuditEvent.event_types() == [
+               :webhook_received,
+               :webhook_processed,
+               :webhook_error,
+               :slug_released
+             ]
     end
   end
 

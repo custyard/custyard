@@ -2,14 +2,14 @@ defmodule CustyardWeb.Plugs.NoReferrer do
   @moduledoc """
   Sends `Referrer-Policy: no-referrer` on public intake surfaces.
 
-  The resume URL (and, from PR 7 on, the slug-claim confirmation URL) is a
-  bearer credential carried in the path: it must never leak to third parties
-  through the `Referer` header when a prospect follows an outbound link.
+  The resume URL and the slug-claim confirmation URL are bearer credentials
+  carried in the path: they must never leak to third parties through the
+  `Referer` header when a prospect follows an outbound link.
 
   Mounted after `:browser`, so this deliberately overrides the weaker
   `strict-origin-when-cross-origin` default from
-  `put_secure_browser_headers/2`. Applied to the `/i` and `/r` scopes; the
-  `/c` confirmation scope reuses it when it arrives.
+  `put_secure_browser_headers/2`. Applied to the `/i`, `/r`, and `/c`
+  scopes.
   """
 
   @behaviour Plug

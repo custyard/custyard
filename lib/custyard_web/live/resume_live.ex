@@ -28,12 +28,13 @@ defmodule CustyardWeb.ResumeLive do
   use CustyardWeb, :live_view
 
   alias Custyard.Email.Normalizer
-  alias Custyard.{Conversations, Intake, RateLimit}
+  alias Custyard.Intake.ClaimEmail
+  alias Custyard.{Conversations, Intake, RateLimit, Slug, Slugs}
 
   @unavailable_path "/r/unavailable"
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     # :conversation, :branding, :resume_token_hash, :client_ip come from
     # the ResumeAuth on_mount hook.
     conversation = socket.assigns.conversation
@@ -48,7 +49,16 @@ defmodule CustyardWeb.ResumeLive do
      |> assign(:prospect, conversation.prospect)
      |> assign(:messages, conversation.messages)
      |> assign(:reply_form, empty_reply_form())
-     |> assign(:email_form, empty_email_form())}
+     |> assign(:email_form, empty_email_form())
+     # The plaintext resume token, kept ONLY so the claim-confirmation
+     # email can carry the /r resume URL the prospect already holds — the
+     # email is the durable copy of the credential, and only the hash is
+     # stored, so the URL cannot be reconstructed anywhere else. Never
+     # rendered; never used for auth (that stays hash-based in ResumeAuth).
+     |> assign(:resume_token, params["token"])
+     |> assign(:slug_claim, Slugs.get_claim_for_conversation(conversation.id))
+     |> assign(:claim_form, empty_claim_form(conversation.prospect))
+     |> assign(:claim_notify, false)}
   end
 
   ## Events --------------------------------------------------------------------
@@ -87,6 +97,31 @@ defmodule CustyardWeb.ResumeLive do
 
       {:allow, _count} ->
         toggle_notifications(socket, params["notify"] == "true")
+    end
+  end
+
+  @impl true
+  def handle_event("claim_slug", params, socket) do
+    # IP-keyed :claim_submit bucket on every claim attempt — the anonymous
+    # surface bounds the flood, valid or not.
+    case RateLimit.check_rate(:claim_submit, socket.assigns.client_ip || "unknown") do
+      {:deny, _retry_after_ms} ->
+        {:noreply,
+         put_flash(socket, :error, "Too many claim attempts. Please wait and try again.")}
+
+      {:allow, _count} ->
+        claim_slug(socket, claim_params(params))
+    end
+  end
+
+  @impl true
+  def handle_event("resend_confirmation", _params, socket) do
+    case socket.assigns.slug_claim do
+      %Slug{status: :claimed} = claim ->
+        resend_confirmation(socket, claim)
+
+      _other ->
+        {:noreply, socket}
     end
   end
 
@@ -160,6 +195,153 @@ defmodule CustyardWeb.ResumeLive do
     end
   end
 
+  # Order is deliberate and tested: (1) the claim commits in its own
+  # transaction; (2) email capture is best-effort AFTER it — a capture
+  # failure (write-once :already_captured, revocation) must never lose the
+  # committed claim; (3) the confirmation email goes out last. A claim
+  # failure re-renders the form without touching the prospect, so nothing
+  # is captured against a slug the prospect doesn't hold.
+  defp claim_slug(socket, %{slug: slug_text, email: email, notify: notify}) do
+    conversation = socket.assigns.conversation
+
+    case Slugs.claim(slug_text, email, conversation) do
+      {:ok, slug, confirmation_token} ->
+        maybe_capture_email(socket, slug.email, notify)
+        send_result = send_confirmation_email(socket, slug, confirmation_token)
+
+        {:noreply,
+         socket
+         |> assign(:slug_claim, Slugs.get_claim_for_conversation(conversation.id))
+         |> assign(:prospect, Intake.get_prospect(conversation))
+         |> assign(:claim_form, empty_claim_form(nil))
+         |> assign(:claim_notify, false)
+         |> put_claim_flash(send_result)}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply,
+         socket
+         |> assign(:claim_form, to_form(changeset, as: :claim))
+         |> assign(:claim_notify, notify)}
+    end
+  end
+
+  # Enumeration neutrality of capture is preserved: every outcome renders
+  # identically (the claim already succeeded, and nothing here branches
+  # into the markup). :already_captured — the write-once email — leaves the
+  # earlier prospect email standing while the claim stays anchored to the
+  # address it was submitted with; a checked notify box is still an explicit
+  # opt-in, so it falls through to set_notification instead of being
+  # silently dropped. An unchecked box never turns an earlier opt-in off.
+  defp maybe_capture_email(socket, email, notify) do
+    case Intake.capture_email(socket.assigns.conversation, email,
+           notify: notify,
+           token_hash: socket.assigns.resume_token_hash
+         ) do
+      {:error, :already_captured} when notify ->
+        _result =
+          Intake.set_notification(socket.assigns.conversation, true,
+            token_hash: socket.assigns.resume_token_hash
+          )
+
+        :ok
+
+      _other ->
+        :ok
+    end
+  end
+
+  # Returns ClaimEmail.send_confirmation/2's result so callers can surface
+  # the synchronously-knowable :claim_email_send denial. Send failures
+  # leave the claim intact and re-sendable — the row and its token hash
+  # committed before this call; async mailer failures surface as
+  # {:ok, :queued} and stay fire-and-forget.
+  defp send_confirmation_email(socket, slug, confirmation_token) do
+    base = CustyardWeb.Endpoint.url()
+
+    ClaimEmail.send_confirmation(slug,
+      confirm_url: base <> ~p"/c/#{confirmation_token}",
+      resume_url: base <> ~p"/r/#{socket.assigns.resume_token}"
+    )
+  end
+
+  # The claim itself committed either way — only the flash differs. A
+  # rate-limited (or synchronously failed) send means no email exists, so
+  # the flash must not tell the prospect to check for one; the panel's
+  # resend button is the recovery path.
+  defp put_claim_flash(socket, {:ok, _delivered_or_queued}) do
+    put_flash(socket, :info, "Name claimed. Check your email to confirm the claim.")
+  end
+
+  defp put_claim_flash(socket, {:error, :rate_limited}) do
+    put_flash(
+      socket,
+      :error,
+      "Name claimed, but the confirmation email limit is reached for today. " <>
+        "Use \"Resend confirmation email\" later."
+    )
+  end
+
+  defp put_claim_flash(socket, {:error, _reason}) do
+    put_flash(
+      socket,
+      :error,
+      "Name claimed, but we could not send the confirmation email right now. " <>
+        "Use \"Resend confirmation email\" to try again."
+    )
+  end
+
+  # Resend mints a fresh token (only the hash is stored, so the old URL
+  # cannot be re-sent). The bucket is peeked BEFORE rotation so a denied
+  # resend never kills the link the earlier email carries; the counting
+  # check inside ClaimEmail.send_confirmation/2 stays the single owner of
+  # the budget.
+  defp resend_confirmation(socket, claim) do
+    case RateLimit.peek(:claim_email_send, claim.email) do
+      {:deny, _retry_after_ms} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Confirmation email limit reached for today. Please try again later."
+         )}
+
+      {:allow, _count} ->
+        case Slugs.rotate_confirmation_token(claim) do
+          {:ok, slug, confirmation_token} ->
+            send_result = send_confirmation_email(socket, slug, confirmation_token)
+
+            {:noreply,
+             socket
+             |> assign(:slug_claim, slug)
+             |> put_resend_flash(send_result)}
+
+          # Confirmed or expired underneath us — refresh the panel.
+          {:error, :invalid} ->
+            {:noreply,
+             assign(
+               socket,
+               :slug_claim,
+               Slugs.get_claim_for_conversation(socket.assigns.conversation.id)
+             )}
+        end
+    end
+  end
+
+  # Same "honest flash vs false success" discipline as put_claim_flash/2:
+  # the token already rotated either way, so only the flash differs on
+  # whether an email actually went out (or was queued).
+  defp put_resend_flash(socket, {:ok, _delivered_or_queued}) do
+    put_flash(socket, :info, "Confirmation email sent.")
+  end
+
+  defp put_resend_flash(socket, {:error, _reason}) do
+    put_flash(
+      socket,
+      :error,
+      "Could not send the confirmation email right now. Please try again."
+    )
+  end
+
   defp toggle_notifications(socket, notify?) do
     case Intake.set_notification(socket.assigns.conversation, notify?,
            token_hash: socket.assigns.resume_token_hash
@@ -215,6 +397,12 @@ defmodule CustyardWeb.ResumeLive do
 
   defp capture_params(_params), do: %{email: nil, notify: false}
 
+  defp claim_params(%{"claim" => %{} = claim}) do
+    %{slug: claim["slug"], email: claim["email"], notify: claim["notify"] == "true"}
+  end
+
+  defp claim_params(_params), do: %{slug: nil, email: nil, notify: false}
+
   # Same shape discipline as the intake POST: non-binary and oversized input
   # gets a structured error, never a crash.
   defp validate_body(body) when is_binary(body) do
@@ -234,6 +422,14 @@ defmodule CustyardWeb.ResumeLive do
 
   defp empty_reply_form, do: to_form(%{"body" => ""}, as: :reply)
   defp empty_email_form, do: to_form(%{"email" => "", "notify" => "false"}, as: :capture)
+
+  # Prefill the claim's anchor email from the captured prospect email when
+  # one exists — the claim requires an email either way, and prefilling
+  # nudges the two toward consistency.
+  defp empty_claim_form(prospect) do
+    email = if prospect && prospect.email, do: prospect.email, else: ""
+    to_form(%{"slug" => "", "email" => email}, as: :claim)
+  end
 
   ## Render --------------------------------------------------------------------
 
@@ -351,6 +547,97 @@ defmodule CustyardWeb.ResumeLive do
           </.form>
         </div>
       <% end %>
+
+      <div
+        class="mt-6 bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
+        data-testid="resume-claim-panel"
+      >
+        <%= cond do %>
+          <% is_nil(@slug_claim) -> %>
+            <h2 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-2">
+              Claim your name
+            </h2>
+            <p class="text-sm text-zinc-700 dark:text-zinc-300 mb-3">
+              Reserve a name for your organization. We'll send a confirmation link to the
+              email you give us — that's where we confirm the claim.
+            </p>
+            <.form for={@claim_form} phx-submit="claim_slug" data-testid="resume-claim-form">
+              <.input
+                field={@claim_form[:slug]}
+                type="text"
+                label="Name"
+                autocomplete="off"
+                placeholder="acme"
+              />
+              <div class="mt-3">
+                <.input
+                  field={@claim_form[:email]}
+                  type="email"
+                  label="Where do we confirm the claim?"
+                  autocomplete="email"
+                />
+              </div>
+              <label class="mt-3 flex items-center gap-3 text-sm text-zinc-700 dark:text-zinc-300">
+                <input type="hidden" name="claim[notify]" value="false" />
+                <input
+                  type="checkbox"
+                  name="claim[notify]"
+                  value="true"
+                  checked={@claim_notify}
+                  class="rounded border-zinc-300 dark:border-zinc-600 text-zinc-900 focus:ring-0"
+                  data-testid="resume-claim-notify"
+                /> Email me when the team replies
+              </label>
+              <div class="flex justify-end mt-3">
+                <button
+                  type="submit"
+                  phx-disable-with="Claiming..."
+                  class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
+                  style={"background-color: #{@branding.primary_color || "#4f46e5"}"}
+                  data-testid="resume-claim-submit"
+                >
+                  Claim name
+                </button>
+              </div>
+            </.form>
+          <% @slug_claim.status == :claimed -> %>
+            <div data-testid="resume-claim-status-provisional">
+              <p class="text-sm text-zinc-700 dark:text-zinc-300">
+                The name
+                <span
+                  class="font-mono font-semibold text-zinc-900 dark:text-zinc-100"
+                  data-testid="resume-claim-slug"
+                >
+                  {@slug_claim.slug}
+                </span>
+                is reserved provisionally. Confirm it from the email we sent — <span data-testid="resume-claim-expiry">{expiry_label(@slug_claim.expires_at)}</span>.
+              </p>
+              <div class="flex justify-end mt-3">
+                <button
+                  type="button"
+                  phx-click="resend_confirmation"
+                  class="text-sm font-medium text-zinc-700 dark:text-zinc-300 px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-700"
+                  data-testid="resume-claim-resend"
+                >
+                  Resend confirmation email
+                </button>
+              </div>
+            </div>
+          <% true -> %>
+            <div data-testid="resume-claim-status-confirmed">
+              <p class="text-sm text-zinc-700 dark:text-zinc-300">
+                The name
+                <span
+                  class="font-mono font-semibold text-zinc-900 dark:text-zinc-100"
+                  data-testid="resume-claim-slug"
+                >
+                  {@slug_claim.slug}
+                </span>
+                is confirmed.
+              </p>
+            </div>
+        <% end %>
+      </div>
     </div>
     """
   end
@@ -376,6 +663,17 @@ defmodule CustyardWeb.ResumeLive do
   defp body_text_style(_msg), do: "text-gray-900 dark:text-zinc-100"
 
   defp format_time(datetime), do: Calendar.strftime(datetime, "%b %d, %H:%M")
+
+  # Countdown label for a provisional claim's expiry.
+  defp expiry_label(expires_at) do
+    case DateTime.diff(expires_at, DateTime.utc_now(), :hour) do
+      hours when hours >= 1 -> "expires in about #{hours} #{pluralize_hour(hours)}"
+      _less_than_one -> "expires in less than an hour"
+    end
+  end
+
+  defp pluralize_hour(1), do: "hour"
+  defp pluralize_hour(_hours), do: "hours"
 
   defp state_color(:new), do: "bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300"
 

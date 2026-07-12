@@ -1,6 +1,7 @@
 defmodule Custyard.AuditEvent do
   @moduledoc """
-  Schema for persisting webhook audit events.
+  Schema for persisting audit events (webhook processing and operator
+  actions such as slug release).
 
   Provides an append-only audit log for compliance and debugging.
   Records are queryable by conversation, organization, or message_id.
@@ -9,7 +10,7 @@ defmodule Custyard.AuditEvent do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @event_types [:webhook_received, :webhook_processed, :webhook_error]
+  @event_types [:webhook_received, :webhook_processed, :webhook_error, :slug_released]
 
   schema "audit_events" do
     field :event_type, Ecto.Enum, values: @event_types
