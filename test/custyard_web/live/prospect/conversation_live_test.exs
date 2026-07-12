@@ -49,6 +49,19 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     Repo.one(from m in Message, where: m.conversation_id == ^conversation_id, select: count())
   end
 
+  # The reply box collapses behind "Add comment" whenever the prospect's own
+  # message is the most recent; open it (when present) before submitting so
+  # these tests exercise the submit path regardless of thread state.
+  defp submit_reply(view, body) do
+    if has_element?(view, ~s([data-testid="resume-add-comment-btn"])) do
+      view |> element(~s([data-testid="resume-add-comment-btn"])) |> render_click()
+    end
+
+    view
+    |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => body}})
+    |> render_submit()
+  end
+
   describe "mount and thread rendering" do
     test "a fresh session shows the thread including operator replies" do
       %{conversation: conversation, access_token: token} = create_intake!()
@@ -69,6 +82,26 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       assert html =~ "Support Team"
       # Sender identity never renders — not even the operator address.
       refute html =~ "operator-private@example.com"
+    end
+
+    test "the reply box is gated by who spoke last" do
+      %{conversation: conversation, resume_token: token} = create_intake!()
+
+      # Prospect's own message is the most recent → collapsed behind a button.
+      {:ok, view, html} = live(build_conn(), ~p"/r/#{token}")
+      assert html =~ ~s(data-testid="resume-add-comment")
+      refute html =~ ~s(data-testid="resume-reply-form")
+
+      # Clicking "Add comment" reveals the form in place.
+      html = view |> element(~s([data-testid="resume-add-comment-btn"])) |> render_click()
+      assert html =~ ~s(data-testid="resume-reply-form")
+
+      # When the team spoke last, the form shows automatically as "Reply".
+      insert_message(conversation_id: conversation.id, source: :operator, body: "On it!")
+
+      {:ok, _view, html} = live(build_conn(), ~p"/r/#{token}")
+      assert html =~ ~s(data-testid="resume-reply-form")
+      refute html =~ ~s(data-testid="resume-add-comment")
     end
 
     test "internal notes are never rendered" do
@@ -146,10 +179,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
 
-      html =
-        view
-        |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => "I am back!"}})
-        |> render_submit()
+      html = submit_reply(view, "I am back!")
 
       assert html =~ "I am back!"
 
@@ -174,17 +204,13 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
 
-      view
-      |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => "   "}})
-      |> render_submit()
+      submit_reply(view, "   ")
 
       assert message_count(conversation.id) == 1
 
       oversized = String.duplicate("a", 100_001)
 
-      view
-      |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => oversized}})
-      |> render_submit()
+      submit_reply(view, oversized)
 
       assert message_count(conversation.id) == 1
     end
@@ -196,17 +222,12 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
 
       for n <- 1..2 do
-        view
-        |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => "Reply #{n}"}})
-        |> render_submit()
+        submit_reply(view, "Reply #{n}")
       end
 
       assert message_count(conversation.id) == 3
 
-      html =
-        view
-        |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => "Reply 3"}})
-        |> render_submit()
+      html = submit_reply(view, "Reply 3")
 
       assert html =~ "replying too quickly"
       assert message_count(conversation.id) == 3

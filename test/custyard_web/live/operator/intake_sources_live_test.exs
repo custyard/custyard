@@ -44,6 +44,24 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
 
       assert html =~ "operator-intake-sources-empty"
     end
+
+    test "each card exposes the public URL and a copy-paste embed snippet", %{conn: conn} do
+      source =
+        insert_intake_source(key: "landing-page", name: "Landing Page", headline: "Need help?")
+
+      {:ok, _view, html} = live(conn, ~p"/operator/intake-sources")
+
+      assert html =~ "operator-intake-source-url-#{source.id}"
+      # The absolute /i/:key intake URL is surfaced for copy/paste.
+      assert html =~ "/i/landing-page"
+      # The embed snippet is a ready anchor whose text prefers the headline
+      # (HEEx escapes the angle brackets when rendering the literal markup).
+      assert html =~ "operator-intake-source-snippet-#{source.id}"
+      assert html =~ "&lt;a href="
+      assert html =~ "Need help?&lt;/a&gt;"
+      # Copy affordances are wired to the existing clipboard hook.
+      assert html =~ ~s(phx-hook="CopyToClipboard")
+    end
   end
 
   describe "create" do

@@ -610,9 +610,83 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
           </button>
         </div>
       </div>
+
+      <div
+        class="mt-3 pt-3 border-t border-gray-100 dark:border-zinc-700 space-y-3"
+        data-testid={"operator-intake-source-integration-#{@source.id}"}
+      >
+        <div>
+          <span class="block text-xs font-semibold text-gray-700 dark:text-zinc-300 mb-1">
+            Public link
+          </span>
+          <div class="flex items-center gap-2">
+            <code
+              class="min-w-0 flex-1 truncate text-xs font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-900 px-2 py-1 rounded"
+              data-testid={"operator-intake-source-url-#{@source.id}"}
+            >
+              {intake_url(@source)}
+            </code>
+            <button
+              type="button"
+              id={"copy-url-#{@source.id}"}
+              phx-hook="CopyToClipboard"
+              data-clipboard-text={intake_url(@source)}
+              class="shrink-0 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 px-2 py-1 rounded border border-indigo-200 dark:border-indigo-800"
+              data-testid={"operator-intake-source-copy-url-#{@source.id}"}
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <span class="block text-xs font-semibold text-gray-700 dark:text-zinc-300 mb-1">
+            Embed snippet
+          </span>
+          <div class="flex items-center gap-2">
+            <code
+              class="min-w-0 flex-1 truncate text-xs font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-900 px-2 py-1 rounded"
+              data-testid={"operator-intake-source-snippet-#{@source.id}"}
+            >
+              {intake_snippet(@source)}
+            </code>
+            <button
+              type="button"
+              id={"copy-snippet-#{@source.id}"}
+              phx-hook="CopyToClipboard"
+              data-clipboard-text={intake_snippet(@source)}
+              class="shrink-0 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 px-2 py-1 rounded border border-indigo-200 dark:border-indigo-800"
+              data-testid={"operator-intake-source-copy-snippet-#{@source.id}"}
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+
+        <p class="text-xs text-gray-400 dark:text-zinc-500">
+          Paste the link anywhere, or drop the snippet into your site's HTML — prospects
+          who follow it land on this intake page.
+          <span :if={not @source.enabled} class="text-amber-600 dark:text-amber-400">
+            This source is disabled: the link returns "not found" until you enable it.
+          </span>
+        </p>
+      </div>
     </div>
     """
   end
+
+  # The absolute public intake URL (application host, /i/:key scope).
+  defp intake_url(source), do: url(~p"/i/#{source.key}")
+
+  # A ready-to-paste anchor tag. Link text prefers the headline, falling
+  # back to the source name; both are operator-authored.
+  defp intake_snippet(source) do
+    text = if present?(source.headline), do: source.headline, else: source.name
+    ~s(<a href="#{intake_url(source)}">#{text}</a>)
+  end
+
+  defp present?(nil), do: false
+  defp present?(value), do: String.trim(value) != ""
 
   defp mode_colors(:active),
     do: "text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950"

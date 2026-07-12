@@ -58,10 +58,20 @@ defmodule CustyardWeb.Prospect.ConversationLive do
      |> assign(:access_token, params["token"])
      |> assign(:slug_claim, Slugs.get_claim_for_conversation(conversation.id))
      |> assign(:claim_form, empty_claim_form(conversation.prospect))
-     |> assign(:claim_notify, false)}
+     |> assign(:claim_notify, false)
+     # The reply box stays collapsed behind an "Add comment" button while the
+     # prospect's own message is the most recent — it auto-opens (see
+     # render) once the team replies, so consecutive self-replies are a
+     # deliberate second action rather than the default.
+     |> assign(:reply_open, false)}
   end
 
   ## Events --------------------------------------------------------------------
+
+  @impl true
+  def handle_event("show_reply", _params, socket) do
+    {:noreply, assign(socket, :reply_open, true)}
+  end
 
   @impl true
   def handle_event("submit_reply", params, socket) do
@@ -143,6 +153,9 @@ defmodule CustyardWeb.Prospect.ConversationLive do
              |> assign(:conversation, conversation)
              |> assign(:messages, Conversations.list_public_messages(conversation.id))
              |> assign(:reply_form, empty_reply_form())
+             # Collapse again: the prospect's new message is now the most
+             # recent, so the box returns to the "Add comment" affordance.
+             |> assign(:reply_open, false)
              |> put_flash(:info, "Reply sent.")}
 
           # Revoked, purged, or rotated-away mid-session: same uniform page
@@ -471,31 +484,48 @@ defmodule CustyardWeb.Prospect.ConversationLive do
         </div>
       </div>
 
-      <.form
-        for={@reply_form}
-        phx-submit="submit_reply"
-        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
-        data-testid="resume-reply-form"
-      >
-        <.input
-          field={@reply_form[:body]}
-          type="textarea"
-          label="Reply"
-          rows="4"
-          placeholder="Write a reply..."
-        />
-        <div class="flex justify-end mt-3">
+      <%= if reply_form_open?(@messages, @reply_open) do %>
+        <.form
+          for={@reply_form}
+          phx-submit="submit_reply"
+          class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
+          data-testid="resume-reply-form"
+        >
+          <.input
+            field={@reply_form[:body]}
+            type="textarea"
+            label={reply_heading(@messages)}
+            rows="4"
+            placeholder="Write a message..."
+            phx-hook="ResetOnSubmit"
+          />
+          <div class="flex justify-end mt-3">
+            <button
+              type="submit"
+              phx-disable-with="Sending..."
+              class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
+              style={"background-color: #{@branding.primary_color || "#4f46e5"}"}
+              data-testid="resume-reply-submit"
+            >
+              {reply_heading(@messages)}
+            </button>
+          </div>
+        </.form>
+      <% else %>
+        <div
+          class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 flex justify-center"
+          data-testid="resume-add-comment"
+        >
           <button
-            type="submit"
-            phx-disable-with="Sending..."
-            class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
-            style={"background-color: #{@branding.primary_color || "#4f46e5"}"}
-            data-testid="resume-reply-submit"
+            type="button"
+            phx-click="show_reply"
+            class="text-sm font-medium text-zinc-700 dark:text-zinc-300 px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-700"
+            data-testid="resume-add-comment-btn"
           >
-            Send reply
+            Add comment
           </button>
         </div>
-      </.form>
+      <% end %>
 
       <%= if @prospect.email do %>
         <div
@@ -643,6 +673,20 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   end
 
   ## Presentation helpers -------------------------------------------------------
+
+  # The reply box shows outright when the team spoke last (the prospect is
+  # expected to answer) or when they explicitly opened it via "Add comment";
+  # otherwise it stays collapsed so a self-reply is a deliberate choice.
+  defp reply_form_open?(messages, reply_open),
+    do: reply_open or not last_from_prospect?(messages)
+
+  # "Reply" when responding to the team; "Add comment" when the prospect is
+  # adding to their own most-recent message.
+  defp reply_heading(messages),
+    do: if(last_from_prospect?(messages), do: "Add comment", else: "Reply")
+
+  defp last_from_prospect?([]), do: false
+  defp last_from_prospect?(messages), do: match?(%{source: :prospect}, List.last(messages))
 
   # Sender labels never include an email address or a name — org/contact
   # linkage must be invisible on this page.
