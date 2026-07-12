@@ -193,6 +193,11 @@ defmodule Custyard.IntakeTest do
       assert {:error, :no_prospect} = Intake.rotate_resume_token(conversation)
     end
 
+    test "rejects rotation after resume access is revoked", %{conversation: conversation} do
+      assert {:ok, _prospect} = Intake.revoke_resume_access(conversation)
+      assert {:error, :no_prospect} = Intake.rotate_resume_token(conversation)
+    end
+
     test "broadcasts resume_access_changed on the conversation topic", %{
       conversation: conversation
     } do

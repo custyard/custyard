@@ -6,7 +6,7 @@ defmodule Custyard.ConversationsTest do
 
   import Custyard.Factory
 
-  describe "list_neglected/1" do
+  describe "list_neglected" do
     test "returns conversations excluding resolved" do
       org = insert_organization()
       active = insert_conversation(organization_id: org.id, state: :active)
@@ -916,7 +916,7 @@ defmodule Custyard.ConversationsTest do
       assert message.conversation_id == conv.id
     end
 
-    test "reply on a nil-org conversation broadcasts global topics but never the bare org topic" do
+    test "reply on a nil-org conversation broadcasts on the global topic" do
       conversation =
         insert_conversation(
           organization_id: nil,
@@ -928,18 +928,29 @@ defmodule Custyard.ConversationsTest do
 
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
-      # The malformed topic that a nil org would interpolate into
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:")
 
       {:ok, message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
 
       assert message.source == :operator
-
       assert_received {:message_added, ^conv_id}
       assert_received {:conversation_updated, ^conv_id}
-      # Exactly one :conversation_updated (from "conversations") — nothing
-      # arrived on the "conversations:org:" topic.
-      refute_received {:conversation_updated, ^conv_id}
+    end
+
+    test "reply on a nil-org conversation never broadcasts to the malformed bare org topic" do
+      conversation =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          subject: "Unlinked reply thread"
+        )
+
+      # Subscribing only to the malformed topic a nil org would interpolate
+      # into isolates this assertion from the legitimate "conversations" topic.
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:")
+
+      {:ok, _message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
+
+      refute_received {:conversation_updated, _id}
     end
   end
 

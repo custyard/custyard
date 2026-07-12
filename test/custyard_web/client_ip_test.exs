@@ -9,7 +9,17 @@ defmodule CustyardWeb.ClientIPTest do
 
   describe "from_conn/1 with trust_proxy_headers disabled (default)" do
     setup do
+      original = Application.get_env(:custyard, :trust_proxy_headers)
       Application.delete_env(:custyard, :trust_proxy_headers)
+
+      on_exit(fn ->
+        if original do
+          Application.put_env(:custyard, :trust_proxy_headers, original)
+        else
+          Application.delete_env(:custyard, :trust_proxy_headers)
+        end
+      end)
+
       :ok
     end
 
@@ -36,10 +46,15 @@ defmodule CustyardWeb.ClientIPTest do
 
   describe "from_conn/1 with trust_proxy_headers enabled" do
     setup do
+      original = Application.get_env(:custyard, :trust_proxy_headers)
       Application.put_env(:custyard, :trust_proxy_headers, true)
 
       on_exit(fn ->
-        Application.delete_env(:custyard, :trust_proxy_headers)
+        if original do
+          Application.put_env(:custyard, :trust_proxy_headers, original)
+        else
+          Application.delete_env(:custyard, :trust_proxy_headers)
+        end
       end)
 
       :ok
