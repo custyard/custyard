@@ -268,6 +268,11 @@ if config_env() == :prod do
         pool_size: pool_size,
         journal_mode: :wal,
         busy_timeout: 5000
+
+      # DANGER: production on a local SQLite file means the DB lives on the
+      # ephemeral rootfs and is destroyed on every deploy/restart/migration.
+      # Flag it so the app renders a persistent warning banner (see #71).
+      config :custyard, :ephemeral_db_warning?, true
   end
 
   # Persistent upload directory (survives deployments, unlike priv/static)
