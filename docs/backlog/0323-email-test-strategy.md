@@ -4,7 +4,7 @@
 
 **Context:** GitHub Issue #10 - Email Infrastructure with Lettermint integration
 **Date:** 2026-03-23
-**Status:** Research and Design
+**Status:** Phase 1 complete (2026-07-12, `fix/prospect-flow-ui`); Phases 2–4 open
 
 ## Executive Summary
 
@@ -574,12 +574,12 @@ Email Infrastructure (Suite)
 
 ## 9. Implementation Roadmap
 
-### Phase 1: Foundation (Week 1)
-- [ ] Create `test/support/fixtures/email_payloads.ex`
-- [ ] Add `WebhookControllerTest` with basic happy path
-- [ ] Add unit tests for `SenderMatcher`
-- [ ] Add unit tests for `ThreadMatcher`
-- [ ] Add unit tests for `SieveHeaderMapper`
+### Phase 1: Foundation (Week 1) — DONE 2026-07-12
+- [x] Create `test/support/fixtures/email_payloads.ex`
+- [x] Add `WebhookControllerTest` with basic happy path (already existed; threading coverage added)
+- [x] Add unit tests for `SenderMatcher` (existed from intake stack; gaps filled)
+- [x] Add unit tests for `ThreadMatcher` (existed; gaps filled)
+- [x] Add unit tests for `SieveHeaderMapper` (coverage was already complete — no changes needed)
 
 ### Phase 2: Edge Cases (Week 2)
 - [ ] Add property-based tests with StreamData
