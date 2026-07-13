@@ -43,3 +43,8 @@ config :phoenix_live_view,
 
 # Use test adapter for Swoosh to capture emails in tests
 config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Test
+
+# Never send real events to the live Sentry instance from the test suite,
+# even if SENTRY_DSN leaks into the environment (CI, a developer's shell).
+# Sentry.Test.setup_sentry/1 overrides this per-test with a local Bypass DSN.
+config :sentry, dsn: nil

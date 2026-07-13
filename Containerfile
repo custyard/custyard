@@ -32,6 +32,10 @@ RUN mix compile
 # Copy migrations and seeds (after compile - changes here won't invalidate compile cache)
 COPY priv/repo priv/repo
 
+# Package source code so Sentry stacktraces include source context
+# (enable_source_code_context). Must run before the release is assembled.
+RUN mix sentry.package_source_code
+
 # Build release
 RUN mix release
 

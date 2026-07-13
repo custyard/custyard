@@ -64,6 +64,12 @@ defmodule Custyard.MixProject do
       {:plover, "~> 0.6"},
       {:domainatrex, "~> 3.2"},
 
+      # Error tracking / diagnostics (self-hosted Sentry at catch.onetimesecret.com).
+      # hackney backs the default Sentry.HackneyClient with its own isolated
+      # connection pool, so error reporting never contends with the app's Finch.
+      {:sentry, "~> 13.0"},
+      {:hackney, "~> 1.20"},
+
       # QA tools
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
