@@ -1,4 +1,8 @@
 defmodule CustyardWeb.Endpoint do
+  # Sentry.PlugCapture wraps the whole plug stack to report exceptions raised
+  # anywhere in it. It must come before `use Phoenix.Endpoint`. When no DSN is
+  # configured (dev/test) it is a no-op.
+  use Sentry.PlugCapture
   use Phoenix.Endpoint, otp_app: :custyard
 
   # Session options - salts are configured at runtime for production security.
@@ -109,6 +113,16 @@ defmodule CustyardWeb.Endpoint do
   # Trust Fly.io proxy headers - rewrites conn.scheme/host/port from x-forwarded-*
   # Required for check_origin validation (Origin scheme must match conn.scheme)
   plug Plug.RewriteOn, [:x_forwarded_host, :x_forwarded_port, :x_forwarded_proto]
+
+  # Attach request context (method, scrubbed URL, headers) to Sentry events.
+  # Placed after RewriteOn so the URL reflects the real external scheme/host.
+  # url_scrubber redacts bearer tokens in the path (Custyard's tokens live in
+  # the path, which the default scrubber does not cover); body_scrubber sends no
+  # params (public-intake bodies carry prospect PII). Default header/cookie
+  # scrubbers still strip authorization/cookie. No-op without a configured DSN.
+  plug Sentry.PlugContext,
+    url_scrubber: {Custyard.Sentry, :scrub_conn_url},
+    body_scrubber: {Custyard.Sentry, :scrub_conn_body}
 
   # Custom domain support - rewrites paths for white-label portal domains
   plug CustyardWeb.Plugs.CustomDomain

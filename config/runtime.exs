@@ -82,6 +82,35 @@ if config_env() == :prod do
   end
 end
 
+# Error tracking (self-hosted Sentry). Prod-only on purpose: reading SENTRY_DSN
+# in every environment would let a stray env var in CI or a dev shell ship real
+# events to the production instance, and would override the dsn: nil guard that
+# config/test.exs sets at compile time. With no SENTRY_DSN the SDK stays
+# disabled (nil DSN => no events). Base options live in config/config.exs.
+if config_env() == :prod do
+  sentry_dsn =
+    case System.get_env("SENTRY_DSN") do
+      nil -> nil
+      "" -> nil
+      dsn -> dsn
+    end
+
+  if sentry_dsn do
+    config :sentry,
+      dsn: sentry_dsn,
+      # Distinguish deployments (e.g. "custyard-eu-prod"); defaults to "production".
+      environment_name: System.get_env("SENTRY_ENVIRONMENT") || "production"
+
+    # Optional release identifier for grouping errors by deploy. Only set when
+    # provided so the SDK's own fallback is used otherwise.
+    case System.get_env("SENTRY_RELEASE") do
+      nil -> :ok
+      "" -> :ok
+      release -> config :sentry, release: release
+    end
+  end
+end
+
 # LMTP server configuration (all environments)
 lmtp_enabled = System.get_env("LMTP_ENABLED") == "true"
 

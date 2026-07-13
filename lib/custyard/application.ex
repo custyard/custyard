@@ -23,6 +23,12 @@ defmodule Custyard.Application do
     # Check for dangerous SQLite + ephemeral storage configuration
     warn_if_ephemeral_sqlite()
 
+    # Report crashed-process and LiveView exceptions to Sentry. These never pass
+    # through Sentry.PlugCapture (they run off the request path), so the logger
+    # handler is what captures them. Only added when a DSN is configured, so
+    # dev/test are unaffected.
+    maybe_add_sentry_logger_handler()
+
     children =
       [
         CustyardWeb.Telemetry,
@@ -51,6 +57,20 @@ defmodule Custyard.Application do
     end
 
     result
+  end
+
+  # Attach Sentry.LoggerHandler when (and only when) a DSN is configured.
+  # Idempotent guard against double-add on config reloads/restarts.
+  defp maybe_add_sentry_logger_handler do
+    if Application.get_env(:sentry, :dsn) do
+      :logger.add_handler(:custyard_sentry_handler, Sentry.LoggerHandler, %{
+        config: %{metadata: [:file, :line]}
+      })
+    end
+  rescue
+    # add_handler raises {:already_exist, _} on a second attempt; a duplicate
+    # handler is harmless and must never block application startup.
+    _ -> :ok
   end
 
   # Detect dangerous configuration: local SQLite with ephemeral /data path on Fly.io

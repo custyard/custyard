@@ -62,6 +62,23 @@ config :logger, :console,
 
 config :phoenix, :json_library, Jason
 
+# Error tracking (self-hosted Sentry at catch.onetimesecret.com).
+#
+# The DSN is deliberately NOT set here — it is read from SENTRY_DSN at runtime
+# (config/runtime.exs). With no DSN, the SDK records nothing, so dev and test
+# never emit events. config/test.exs pins dsn: nil defensively.
+#
+# before_send is the fail-closed scrubbing choke point for every event; see
+# Custyard.Sentry. Performance tracing is intentionally left off (no
+# traces_sample_rate) for the first cut: it is errors-only, and trace spans
+# capture DB query params (more PII surface) and pull in OpenTelemetry deps.
+# Enable deliberately later if wanted.
+config :sentry,
+  environment_name: config_env(),
+  enable_source_code_context: true,
+  root_source_code_paths: [File.cwd!()],
+  before_send: {Custyard.Sentry, :before_send}
+
 # Rate-limit buckets for the public intake surfaces (Custyard.RateLimit).
 # Deliberately app config, not operator Settings — see
 # docs/design/design-decisions-public-intake.md. Keys per bucket:
