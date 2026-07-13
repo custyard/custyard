@@ -3,7 +3,7 @@ defmodule Custyard.Conversations do
   Context for conversation queries and operations.
   """
 
-  alias Custyard.{Conversation, Message, Repo}
+  alias Custyard.{Conversation, Message, OperatorAccount, Repo}
   import Ecto.Query
 
   @doc """
@@ -481,6 +481,41 @@ defmodule Custyard.Conversations do
     # Touch conversation updated_at so it reflects latest activity
     touch_conversation_updated_at(attrs[:conversation_id] || attrs["conversation_id"])
     message
+  end
+
+  @doc """
+  Soft-delete a message (GitHub-style tombstone).
+
+  Stamps `deleted_at` and the deleting operator; the original body stays in
+  the database and rendering surfaces replace it with a tombstone. There is
+  deliberately no hard-delete path.
+
+  Idempotent: an already-deleted message is returned unchanged so the
+  original deletion attribution is never overwritten.
+
+  Broadcasts `{:message_updated, conversation_id}` on the conversation topic
+  (`"conversation:{id}"`) — the same message-level pattern
+  `Custyard.Email.Outbound` uses for delivery updates — so open operator,
+  prospect, and portal views swap in the tombstone without a remount.
+  """
+  def soft_delete_message(%Message{deleted_at: %DateTime{}} = message, _operator) do
+    {:ok, message}
+  end
+
+  def soft_delete_message(%Message{} = message, %OperatorAccount{} = operator) do
+    case message |> Message.soft_delete_changeset(operator) |> Repo.update() do
+      {:ok, deleted} ->
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversation:#{deleted.conversation_id}",
+          {:message_updated, deleted.conversation_id}
+        )
+
+        {:ok, deleted}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   @doc """

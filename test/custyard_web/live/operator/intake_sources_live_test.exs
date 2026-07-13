@@ -44,6 +44,24 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
 
       assert html =~ "operator-intake-sources-empty"
     end
+
+    test "each card exposes the public URL and a copy-paste embed snippet", %{conn: conn} do
+      source =
+        insert_intake_source(key: "landing-page", name: "Landing Page", headline: "Need help?")
+
+      {:ok, _view, html} = live(conn, ~p"/operator/intake-sources")
+
+      assert html =~ "operator-intake-source-url-#{source.id}"
+      # The absolute /i/:key intake URL is surfaced for copy/paste.
+      assert html =~ "/i/landing-page"
+      # The embed snippet is a ready anchor whose text prefers the headline
+      # (HEEx escapes the angle brackets when rendering the literal markup).
+      assert html =~ "operator-intake-source-snippet-#{source.id}"
+      assert html =~ "&lt;a href="
+      assert html =~ "Need help?&lt;/a&gt;"
+      # Copy affordances are wired to the existing clipboard hook.
+      assert html =~ ~s(phx-hook="CopyToClipboard")
+    end
   end
 
   describe "create" do
@@ -162,6 +180,85 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
       reloaded = Repo.get!(IntakeSource, source.id)
       assert reloaded.key == "original-key"
       assert reloaded.name == "Renamed"
+    end
+  end
+
+  describe "link fields" do
+    test "create persists link_title and link_url through the form", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+
+      view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
+
+      html = render(view)
+      assert html =~ ~s(name="intake_source[link_title]")
+      assert html =~ ~s(name="intake_source[link_url]")
+
+      view
+      |> form("[data-testid=operator-intake-source-form]", %{
+        "intake_source" => %{
+          "key" => "with-link",
+          "name" => "With Link",
+          "mode" => "active",
+          "link_title" => "Acme",
+          "link_url" => "https://acme.example/product"
+        }
+      })
+      |> render_submit()
+
+      assert render(view) =~ "Intake source created successfully"
+
+      source = Repo.get_by!(IntakeSource, key: "with-link")
+      assert source.link_title == "Acme"
+      assert source.link_url == "https://acme.example/product"
+    end
+
+    test "edit round-trips the link fields", %{conn: conn} do
+      source = insert_intake_source(link_title: "Before", link_url: "https://before.example")
+
+      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+
+      view |> element("[data-testid=operator-intake-source-edit-#{source.id}]") |> render_click()
+
+      # The form is prefilled from the persisted source.
+      html = render(view)
+      assert html =~ "Before"
+      assert html =~ "https://before.example"
+
+      view
+      |> form("[data-testid=operator-intake-source-form]", %{
+        "intake_source" => %{
+          "name" => source.name,
+          "link_title" => "After",
+          "link_url" => "https://after.example"
+        }
+      })
+      |> render_submit()
+
+      assert render(view) =~ "Intake source updated successfully"
+
+      reloaded = Repo.get!(IntakeSource, source.id)
+      assert reloaded.link_title == "After"
+      assert reloaded.link_url == "https://after.example"
+    end
+
+    test "a non-http(s) link_url is rejected with a changeset error", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+
+      view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
+
+      view
+      |> form("[data-testid=operator-intake-source-form]", %{
+        "intake_source" => %{
+          "key" => "bad-link",
+          "name" => "Bad Link",
+          "link_title" => "Click me",
+          "link_url" => "javascript:alert(1)"
+        }
+      })
+      |> render_submit()
+
+      assert render(view) =~ "must be an http or https URL"
+      refute Repo.get_by(IntakeSource, key: "bad-link")
     end
   end
 

@@ -274,6 +274,74 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
     end
   end
 
+  describe "delete message" do
+    test "operator soft-deletes a message and the tombstone replaces the body", %{
+      conn: conn,
+      operator: operator
+    } do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, body: "Sensitive customer detail")
+
+      {:ok, view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      assert html =~ "Sensitive customer detail"
+
+      html =
+        view
+        |> element(~s([data-testid="operator-message-delete-#{message.id}"]))
+        |> render_click()
+
+      assert html =~ "operator-message-tombstone"
+      assert html =~ "This message was deleted"
+      refute html =~ "Sensitive customer detail"
+
+      # Soft delete only: the row keeps its body, stamped with the deleter.
+      reloaded = Repo.get!(Custyard.Message, message.id)
+      assert reloaded.body == "Sensitive customer detail"
+      assert %DateTime{} = reloaded.deleted_at
+      assert reloaded.deleted_by_operator_id == operator.id
+    end
+
+    test "delete affordance requires confirmation and disappears once deleted", %{
+      conn: conn,
+      operator: operator
+    } do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, body: "Doomed message")
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view
+             |> element(~s([data-testid="operator-message-delete-#{message.id}"]))
+             |> render() =~ "data-confirm"
+
+      {:ok, _} = Conversations.soft_delete_message(message, operator)
+
+      # The message_updated broadcast refreshes the open view: tombstone in,
+      # delete affordance gone.
+      html = render(view)
+      assert html =~ "This message was deleted"
+      refute html =~ "Doomed message"
+      refute has_element?(view, ~s([data-testid="operator-message-delete-#{message.id}"]))
+    end
+
+    test "deleting an unknown message id flashes an error and deletes nothing", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      other_conv = insert_conversation(organization_id: org.id)
+      foreign = insert_message(conversation_id: other_conv.id, body: "Other thread")
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      # An id from another conversation is out of scope for this view.
+      html = render_click(view, "delete_message", %{"id" => to_string(foreign.id)})
+
+      assert html =~ "Message not found"
+      assert Repo.get!(Custyard.Message, foreign.id).deleted_at == nil
+    end
+  end
+
   describe "consent-withheld replies (public intake)" do
     test "delivery indicator shows withheld", %{conn: conn} do
       conv = insert_conversation(source: :public_intake)
@@ -358,6 +426,45 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
     end
   end
 
+  describe "prospect message via label" do
+    test "shows the masked prospect email when one was captured", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+
+      # sender_email is nil on real prospect messages (see Intake) — the via
+      # label is the only place the captured email should surface.
+      insert_message(conversation_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "via prospect pro***@example.com"
+      refute html =~ "prospect@example.com"
+    end
+
+    test "masks all but the first char when the local part is 3 chars or fewer", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id, email: "abc@example.com")
+      insert_message(conversation_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "via prospect a***@example.com"
+      refute html =~ "abc@example.com"
+    end
+
+    test "keeps plain via prospect when no email was captured", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id)
+      insert_message(conversation_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "via prospect"
+      refute html =~ "via prospect ***"
+      refute html =~ "***@"
+    end
+  end
+
   describe "handle_event add_note" do
     test "creates an internal note", %{conn: conn} do
       org = insert_organization()
@@ -403,6 +510,51 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
 
       updated = Conversations.get_conversation!(conv.id)
       assert updated.state == :resolved
+    end
+
+    test "waiting button toggles: clicking on a waiting conversation reverts to active", %{
+      conn: conn
+    } do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, state: :waiting)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      # The button reflects the current state and offers the reverse transition
+      assert has_element?(
+               view,
+               "[data-testid=operator-state-waiting][phx-value-state=active][aria-pressed=true]"
+             )
+
+      view
+      |> element("[data-testid=operator-state-waiting]")
+      |> render_click()
+
+      updated = Conversations.get_conversation!(conv.id)
+      assert updated.state == :active
+    end
+
+    test "waiting button reflects the toggled state after clicking", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(
+               view,
+               "[data-testid=operator-state-waiting][phx-value-state=waiting][aria-pressed=false]"
+             )
+
+      view
+      |> element("[data-testid=operator-state-waiting]")
+      |> render_click()
+
+      assert has_element?(
+               view,
+               "[data-testid=operator-state-waiting][phx-value-state=active][aria-pressed=true]"
+             )
+
+      assert render(view) =~ "click to resume"
     end
   end
 

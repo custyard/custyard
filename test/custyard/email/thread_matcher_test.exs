@@ -134,6 +134,41 @@ defmodule Custyard.Email.ThreadMatcherTest do
       assert found2.id == conv2.id
     end
 
+    test "empty-string References returns :not_found" do
+      org = insert_organization()
+
+      parsed = %{in_reply_to: nil, references: ""}
+
+      assert :not_found = ThreadMatcher.find_thread(parsed, org.id)
+    end
+
+    test "malformed message ids do not crash and return :not_found" do
+      org = insert_organization()
+
+      for bad_id <- ["<<not@valid>>", "no-brackets-no-at", "<>", "   ", "<@>"] do
+        parsed = %{in_reply_to: bad_id, references: bad_id}
+
+        assert :not_found = ThreadMatcher.find_thread(parsed, org.id),
+               "expected :not_found for #{inspect(bad_id)}"
+      end
+    end
+
+    test "References chain with irregular whitespace still matches" do
+      org = insert_organization()
+      conversation = insert_conversation(organization_id: org.id)
+
+      message =
+        insert_message(conversation_id: conversation.id, message_id: "spaced@example.com")
+
+      parsed = %{
+        in_reply_to: nil,
+        references: "first@example.com  \t #{message.message_id} \n last@example.com"
+      }
+
+      assert {:ok, found} = ThreadMatcher.find_thread(parsed, org.id)
+      assert found.id == conversation.id
+    end
+
     test "multiple References matched returns one conversation" do
       org = insert_organization()
       conversation = insert_conversation(organization_id: org.id)

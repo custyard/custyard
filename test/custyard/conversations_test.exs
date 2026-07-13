@@ -386,6 +386,53 @@ defmodule Custyard.ConversationsTest do
     end
   end
 
+  describe "soft_delete_message/2" do
+    test "stamps deleted_at and the deleting operator, keeping the original body" do
+      conv = insert_conversation()
+      message = insert_message(conversation_id: conv.id, body: "Sensitive content")
+      operator = insert_operator_account()
+
+      assert {:ok, deleted} = Conversations.soft_delete_message(message, operator)
+
+      assert %DateTime{} = deleted.deleted_at
+      assert deleted.deleted_by_operator_id == operator.id
+
+      # Soft delete only: the row and its original body stay in the database.
+      reloaded = Repo.get!(Custyard.Message, message.id)
+      assert reloaded.body == "Sensitive content"
+      assert %DateTime{} = reloaded.deleted_at
+    end
+
+    test "broadcasts message_updated on the conversation topic" do
+      conv = insert_conversation()
+      message = insert_message(conversation_id: conv.id)
+      operator = insert_operator_account()
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv.id}")
+
+      assert {:ok, _deleted} = Conversations.soft_delete_message(message, operator)
+
+      conv_id = conv.id
+      assert_received {:message_updated, ^conv_id}
+    end
+
+    test "is idempotent and preserves the original deletion attribution" do
+      conv = insert_conversation()
+      message = insert_message(conversation_id: conv.id)
+      first_operator = insert_operator_account()
+      second_operator = insert_operator_account()
+
+      {:ok, deleted} = Conversations.soft_delete_message(message, first_operator)
+      assert {:ok, unchanged} = Conversations.soft_delete_message(deleted, second_operator)
+
+      assert unchanged.deleted_at == deleted.deleted_at
+      assert unchanged.deleted_by_operator_id == first_operator.id
+
+      reloaded = Repo.get!(Custyard.Message, message.id)
+      assert reloaded.deleted_by_operator_id == first_operator.id
+    end
+  end
+
   describe "update_state/2" do
     test "updates conversation state" do
       conv = insert_conversation(state: :new)

@@ -183,5 +183,39 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       # The denied POST consumed nothing.
       assert Custyard.Slugs.peek(token) |> elem(0) == :ok
     end
+
+    test "shape-invalid tokens render unavailable without consuming the bucket" do
+      put_buckets(claim_confirm: [limit: 1, window_ms: 60_000])
+      %{token: token} = claim!()
+
+      # Scanner garbage — wrong length, wrong charset — fails the shape
+      # check before the rate limit and spends nothing.
+      for garbage <- ["not-a-real-token", String.duplicate("a", 44), "shell$injection!"] do
+        assert build_conn() |> get(~p"/claim/#{garbage}") |> html_response(200) =~
+                 "claim-unavailable"
+
+        assert build_conn() |> post(~p"/claim/#{garbage}/confirm") |> html_response(200) =~
+                 "claim-unavailable"
+      end
+
+      # The whole budget survived the garbage: the real token still confirms.
+      assert build_conn() |> post(~p"/claim/#{token}/confirm") |> html_response(200) =~
+               "claim-confirmed-page"
+    end
+
+    test "well-formed but nonexistent tokens still consume the bucket (no existence oracle)" do
+      put_buckets(claim_confirm: [limit: 1, window_ms: 60_000])
+
+      # Shape-valid: exactly what Custyard.Auth.Token mints, just unknown.
+      # It must spend budget — rate-limit accounting may reveal token
+      # SHAPE, never whether a token EXISTS.
+      phantom = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+
+      assert build_conn() |> get(~p"/claim/#{phantom}") |> html_response(200) =~
+               "claim-unavailable"
+
+      denied = build_conn() |> get(~p"/claim/#{phantom}")
+      assert denied.status == 429
+    end
   end
 end

@@ -49,6 +49,19 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     Repo.one(from m in Message, where: m.conversation_id == ^conversation_id, select: count())
   end
 
+  # The reply box collapses behind "Add comment" whenever the prospect's own
+  # message is the most recent; open it (when present) before submitting so
+  # these tests exercise the submit path regardless of thread state.
+  defp submit_reply(view, body) do
+    if has_element?(view, ~s([data-testid="resume-add-comment-btn"])) do
+      view |> element(~s([data-testid="resume-add-comment-btn"])) |> render_click()
+    end
+
+    view
+    |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => body}})
+    |> render_submit()
+  end
+
   describe "mount and thread rendering" do
     test "a fresh session shows the thread including operator replies" do
       %{conversation: conversation, access_token: token} = create_intake!()
@@ -69,6 +82,26 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       assert html =~ "Support Team"
       # Sender identity never renders — not even the operator address.
       refute html =~ "operator-private@example.com"
+    end
+
+    test "the reply box is gated by who spoke last" do
+      %{conversation: conversation, access_token: token} = create_intake!()
+
+      # Prospect's own message is the most recent → collapsed behind a button.
+      {:ok, view, html} = live(build_conn(), ~p"/c/#{token}")
+      assert html =~ ~s(data-testid="resume-add-comment")
+      refute html =~ ~s(data-testid="resume-reply-form")
+
+      # Clicking "Add comment" reveals the form in place.
+      html = view |> element(~s([data-testid="resume-add-comment-btn"])) |> render_click()
+      assert html =~ ~s(data-testid="resume-reply-form")
+
+      # When the team spoke last, the form shows automatically as "Reply".
+      insert_message(conversation_id: conversation.id, source: :operator, body: "On it!")
+
+      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      assert html =~ ~s(data-testid="resume-reply-form")
+      refute html =~ ~s(data-testid="resume-add-comment")
     end
 
     test "internal notes are never rendered" do
@@ -139,6 +172,117 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
   end
 
+  describe "deleted messages (operator soft delete)" do
+    test "a deleted message renders the tombstone, never the original body" do
+      %{conversation: conversation, access_token: token} = create_intake!()
+
+      message =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :operator,
+          body: "Operator reply sent by mistake"
+        )
+
+      operator = insert_operator_account()
+      {:ok, _deleted} = Conversations.soft_delete_message(message, operator)
+
+      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+
+      assert html =~ ~s(data-testid="resume-message-tombstone")
+      assert html =~ "This message was deleted"
+      refute html =~ "Operator reply sent by mistake"
+    end
+
+    test "an already-open view swaps to the tombstone when the delete broadcasts" do
+      %{conversation: conversation, access_token: token} = create_intake!()
+
+      # A follow-up with a body distinct from the intake message: the intake
+      # body seeds the conversation subject, which stays visible after the
+      # delete — only the message body must vanish.
+      message =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :prospect,
+          body: "Accidentally pasted a password here"
+        )
+
+      {:ok, view, html} = live(build_conn(), ~p"/c/#{token}")
+      assert html =~ "Accidentally pasted a password here"
+
+      operator = insert_operator_account()
+      {:ok, _deleted} = Conversations.soft_delete_message(message, operator)
+
+      # The message_updated broadcast reloads the thread in place.
+      html = render(view)
+      assert html =~ "This message was deleted"
+      refute html =~ "Accidentally pasted a password here"
+    end
+  end
+
+  describe "branded source link" do
+    test "renders the source's link when both title and url are set" do
+      source =
+        insert_intake_source(
+          mode: :active,
+          link_title: "Acme Product",
+          link_url: "https://acme.example/product"
+        )
+
+      {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, "Hello")
+
+      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+
+      assert html =~ ~s(data-testid="resume-source-link")
+      assert html =~ ~s(href="https://acme.example/product")
+      assert html =~ ~s(target="_blank")
+      assert html =~ ~s(rel="noopener noreferrer")
+      assert html =~ "Acme Product"
+    end
+
+    test "renders no link when the source has no link configured" do
+      %{access_token: token} = create_intake!()
+
+      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+
+      refute html =~ ~s(data-testid="resume-source-link")
+    end
+
+    test "a deleted source renders the thread fine without a link" do
+      source =
+        insert_intake_source(
+          mode: :active,
+          link_title: "Acme Product",
+          link_url: "https://acme.example/product"
+        )
+
+      {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, "Hello")
+      {:ok, _deleted} = Intake.delete_source(source)
+
+      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+
+      assert html =~ ~s(data-testid="resume-conversation")
+      assert html =~ "Hello"
+      refute html =~ ~s(data-testid="resume-source-link")
+    end
+
+    test "a disabled source still links (provenance, not intake availability)" do
+      source =
+        insert_intake_source(
+          mode: :active,
+          link_title: "Acme Product",
+          link_url: "https://acme.example/product"
+        )
+
+      {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, "Hello")
+      {:ok, _source} = Intake.update_source(source, %{enabled: false})
+
+      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+
+      assert html =~ ~s(data-testid="resume-source-link")
+      assert html =~ "Acme Product"
+    end
+  end
+
   describe "prospect replies" do
     test "a reply reactivates a resolved conversation and mirrors inbound semantics" do
       %{conversation: conversation, access_token: token} = create_intake!()
@@ -146,10 +290,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
 
-      html =
-        view
-        |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => "I am back!"}})
-        |> render_submit()
+      html = submit_reply(view, "I am back!")
 
       assert html =~ "I am back!"
 
@@ -174,19 +315,37 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
 
-      view
-      |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => "   "}})
-      |> render_submit()
+      submit_reply(view, "   ")
 
       assert message_count(conversation.id) == 1
 
       oversized = String.duplicate("a", 100_001)
 
-      view
-      |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => oversized}})
-      |> render_submit()
+      submit_reply(view, oversized)
 
       assert message_count(conversation.id) == 1
+    end
+
+    test "resending the latest message verbatim is refused with a friendly notice" do
+      %{conversation: conversation, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+
+      submit_reply(view, "Any update?")
+      assert message_count(conversation.id) == 2
+
+      html = submit_reply(view, "Any update?")
+
+      assert html =~ "Looks like you already sent that message."
+      assert message_count(conversation.id) == 2
+
+      # Whitespace doesn't dodge the check.
+      submit_reply(view, "  Any update? \n")
+      assert message_count(conversation.id) == 2
+
+      # Different content still goes through.
+      submit_reply(view, "Any update at all?")
+      assert message_count(conversation.id) == 3
     end
 
     test "replies over websocket are rate limited by token hash with no message row" do
@@ -196,17 +355,12 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
 
       for n <- 1..2 do
-        view
-        |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => "Reply #{n}"}})
-        |> render_submit()
+        submit_reply(view, "Reply #{n}")
       end
 
       assert message_count(conversation.id) == 3
 
-      html =
-        view
-        |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => "Reply 3"}})
-        |> render_submit()
+      html = submit_reply(view, "Reply 3")
 
       assert html =~ "replying too quickly"
       assert message_count(conversation.id) == 3
@@ -616,18 +770,40 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
                after_first.confirmation_token_hash
     end
 
-    test "the claim event is bounded by the IP-keyed :claim_submit bucket" do
+    test "shape-invalid claims render errors without consuming the :claim_submit budget" do
       put_buckets(claim_submit: [limit: 1, window_ms: 60_000])
       %{conversation: conversation, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
 
-      # First attempt (invalid slug) burns the budget — every attempt
-      # counts on the anonymous surface.
-      submit_claim(view, "x", "buyer@example.com")
+      # Malformed submissions fail the DB-free shape check and spend
+      # nothing — a typo must not burn the small hourly allowance.
+      html = submit_claim(view, "x", "buyer@example.com")
+      assert html =~ "must be 3-63 characters"
 
-      html = submit_claim(view, "valid-name", "buyer@example.com")
+      html = submit_claim(view, "valid-name", "not-an-email")
+      assert html =~ "must be a valid email address"
 
+      # The whole budget is still available: the shape-valid claim commits.
+      submit_claim(view, "valid-name", "buyer@example.com")
+      assert Slugs.get_claim_for_conversation(conversation.id).slug == "valid-name"
+    end
+
+    test "shape-valid claims are bounded by the IP-keyed :claim_submit bucket" do
+      put_buckets(claim_submit: [limit: 1, window_ms: 60_000])
+
+      # A taken slug is an EXISTENCE outcome, not a shape failure — probing
+      # it must consume budget so enumeration stays bounded.
+      holder = create_intake!("Earlier claim")
+      {:ok, _slug, _token} = Slugs.claim("contested", "first@example.com", holder.conversation)
+
+      %{conversation: conversation, access_token: token} = create_intake!()
+      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+
+      html = submit_claim(view, "contested", "second@example.com")
+      assert html =~ "is already claimed"
+
+      html = submit_claim(view, "fresh-name", "second@example.com")
       assert html =~ "Too many claim attempts"
       assert is_nil(Slugs.get_claim_for_conversation(conversation.id))
     end

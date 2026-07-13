@@ -195,6 +195,88 @@ defmodule Custyard.IntakeSourceTest do
     end
   end
 
+  describe "link fields" do
+    test "accepts an http/https link_url with a title on create and update" do
+      attrs = build_intake_source(link_title: "Acme", link_url: "https://acme.example/product")
+
+      changeset = IntakeSource.changeset(%IntakeSource{}, attrs)
+      assert changeset.valid?
+
+      source = insert_intake_source()
+
+      update =
+        IntakeSource.update_changeset(source, %{
+          name: source.name,
+          link_title: "Acme",
+          link_url: "http://acme.example"
+        })
+
+      assert update.valid?
+    end
+
+    test "rejects non-http(s) and malformed link_url values on both changesets" do
+      source = insert_intake_source()
+
+      for url <- [
+            "javascript:alert(1)",
+            "data:text/html,hi",
+            "ftp://acme.example",
+            "acme.example",
+            "/relative/path",
+            "https://",
+            "not a url"
+          ] do
+        changeset =
+          IntakeSource.changeset(%IntakeSource{}, build_intake_source(link_url: url))
+
+        refute changeset.valid?, "expected link_url #{inspect(url)} to be invalid on create"
+        assert "must be an http or https URL" in errors_on(changeset).link_url
+
+        update = IntakeSource.update_changeset(source, %{name: source.name, link_url: url})
+        refute update.valid?, "expected link_url #{inspect(url)} to be invalid on update"
+        assert "must be an http or https URL" in errors_on(update).link_url
+      end
+    end
+
+    test "caps link_title at 80 chars" do
+      changeset =
+        IntakeSource.changeset(
+          %IntakeSource{},
+          build_intake_source(link_title: String.duplicate("t", 81))
+        )
+
+      refute changeset.valid?
+      assert "should be at most 80 character(s)" in errors_on(changeset).link_title
+    end
+
+    test "link fields round-trip through the database" do
+      source =
+        insert_intake_source(link_title: "Acme", link_url: "https://acme.example")
+
+      reloaded = Repo.reload!(source)
+      assert reloaded.link_title == "Acme"
+      assert reloaded.link_url == "https://acme.example"
+    end
+  end
+
+  describe "link?/1" do
+    test "true only when both title and url are present and non-blank" do
+      assert IntakeSource.link?(%IntakeSource{
+               link_title: "Acme",
+               link_url: "https://acme.example"
+             })
+
+      refute IntakeSource.link?(%IntakeSource{link_title: "Acme", link_url: nil})
+      refute IntakeSource.link?(%IntakeSource{link_title: nil, link_url: "https://a.example"})
+      refute IntakeSource.link?(%IntakeSource{link_title: "  ", link_url: "https://a.example"})
+      refute IntakeSource.link?(%IntakeSource{link_title: nil, link_url: nil})
+    end
+
+    test "nil source (deleted) is false" do
+      refute IntakeSource.link?(nil)
+    end
+  end
+
   describe "key_format/0" do
     test "matches the conversations.intake_source_key format" do
       assert Regex.match?(IntakeSource.key_format(), "landing-page")

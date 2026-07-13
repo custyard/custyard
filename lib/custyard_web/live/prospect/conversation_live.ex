@@ -29,7 +29,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
 
   alias Custyard.Email.Normalizer
   alias Custyard.Intake.ClaimEmail
-  alias Custyard.{Conversations, Intake, RateLimit, Slug, Slugs}
+  alias Custyard.{Conversations, Intake, IntakeSource, RateLimit, Slug, Slugs}
 
   @unavailable_path "/c/unavailable"
 
@@ -46,6 +46,13 @@ defmodule CustyardWeb.Prospect.ConversationLive do
     {:ok,
      socket
      |> assign(:page_title, "Your conversation")
+     # Per-source branding link: provenance-keyed (intake_source_key stores
+     # the key string, not an FK), so the source may be disabled or deleted
+     # after creation — a deleted source yields nil and renders no link
+     # (IntakeSource.link?/1 handles nil). Operator-configured branding is
+     # identical for every prospect of the source, so enumeration neutrality
+     # is unaffected.
+     |> assign(:intake_source, Intake.get_source_by_key(conversation.intake_source_key))
      |> assign(:prospect, conversation.prospect)
      |> assign(:messages, conversation.messages)
      |> assign(:reply_form, empty_reply_form())
@@ -58,10 +65,20 @@ defmodule CustyardWeb.Prospect.ConversationLive do
      |> assign(:access_token, params["token"])
      |> assign(:slug_claim, Slugs.get_claim_for_conversation(conversation.id))
      |> assign(:claim_form, empty_claim_form(conversation.prospect))
-     |> assign(:claim_notify, false)}
+     |> assign(:claim_notify, false)
+     # The reply box stays collapsed behind an "Add comment" button while the
+     # prospect's own message is the most recent — it auto-opens (see
+     # render) once the team replies, so consecutive self-replies are a
+     # deliberate second action rather than the default.
+     |> assign(:reply_open, false)}
   end
 
   ## Events --------------------------------------------------------------------
+
+  @impl true
+  def handle_event("show_reply", _params, socket) do
+    {:noreply, assign(socket, :reply_open, true)}
+  end
 
   @impl true
   def handle_event("submit_reply", params, socket) do
@@ -102,15 +119,30 @@ defmodule CustyardWeb.Prospect.ConversationLive do
 
   @impl true
   def handle_event("claim_slug", params, socket) do
-    # IP-keyed :claim_submit bucket on every claim attempt — the anonymous
-    # surface bounds the flood, valid or not.
-    case RateLimit.check_rate(:claim_submit, socket.assigns.client_ip || "unknown") do
-      {:deny, _retry_after_ms} ->
-        {:noreply,
-         put_flash(socket, :error, "Too many claim attempts. Please wait and try again.")}
+    claim = claim_params(params)
 
-      {:allow, _count} ->
-        claim_slug(socket, claim_params(params))
+    # DB-free shape validation FIRST: a malformed slug or email renders its
+    # changeset errors without consuming an IP-keyed :claim_submit token, so
+    # a typo can't burn the small hourly allowance. Only shape-valid
+    # attempts — the ones that can reach the database and probe existence
+    # (slug taken, per-email cap) — spend budget, which keeps enumeration
+    # probing bounded exactly as before.
+    case claim_shape_changeset(socket, claim) do
+      %Ecto.Changeset{valid?: true} ->
+        case RateLimit.check_rate(:claim_submit, socket.assigns.client_ip || "unknown") do
+          {:deny, _retry_after_ms} ->
+            {:noreply,
+             put_flash(socket, :error, "Too many claim attempts. Please wait and try again.")}
+
+          {:allow, _count} ->
+            claim_slug(socket, claim)
+        end
+
+      %Ecto.Changeset{} = invalid ->
+        {:noreply,
+         socket
+         |> assign(:claim_form, to_form(%{invalid | action: :insert}, as: :claim))
+         |> assign(:claim_notify, claim.notify)}
     end
   end
 
@@ -143,7 +175,16 @@ defmodule CustyardWeb.Prospect.ConversationLive do
              |> assign(:conversation, conversation)
              |> assign(:messages, Conversations.list_public_messages(conversation.id))
              |> assign(:reply_form, empty_reply_form())
+             # Collapse again: the prospect's new message is now the most
+             # recent, so the box returns to the "Add comment" affordance.
+             |> assign(:reply_open, false)
              |> put_flash(:info, "Reply sent.")}
+
+          # Double-submit of the prospect's latest message: nothing was
+          # written, the earlier copy already renders — a friendly notice,
+          # not an error.
+          {:error, :duplicate_message} ->
+            {:noreply, put_flash(socket, :info, "Looks like you already sent that message.")}
 
           # Revoked, purged, or rotated-away mid-session: same uniform page
           # as any other failure class.
@@ -365,6 +406,14 @@ defmodule CustyardWeb.Prospect.ConversationLive do
      assign(socket, :messages, Conversations.list_public_messages(socket.assigns.conversation.id))}
   end
 
+  # Message-level change (operator soft delete, delivery status): refresh the
+  # thread so tombstones replace deleted bodies in already-open tabs.
+  @impl true
+  def handle_info({:message_updated, _id}, socket) do
+    {:noreply,
+     assign(socket, :messages, Conversations.list_public_messages(socket.assigns.conversation.id))}
+  end
+
   # Rotation or revocation happened while this socket was mounted:
   # re-authenticate the mount-time hash against the stored one and shut the
   # view down unless it still holds the live credential. This closes the
@@ -402,6 +451,21 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   end
 
   defp claim_params(_params), do: %{slug: nil, email: nil, notify: false}
+
+  # Shape validation through the REAL claim changeset so format rules never
+  # fork: the fields Slugs.claim/3 generates itself (expiry, token hash) get
+  # placeholders, leaving only the prospect-supplied slug/email able to
+  # fail. Purely local — unique_constraint/3 checks nothing until an insert,
+  # so this touches no database and carries no existence signal.
+  defp claim_shape_changeset(socket, %{slug: slug, email: email}) do
+    Slug.claim_changeset(%Slug{}, %{
+      slug: slug,
+      email: email,
+      conversation_id: socket.assigns.conversation.id,
+      expires_at: DateTime.utc_now() |> DateTime.truncate(:second),
+      confirmation_token_hash: "shape-check-placeholder"
+    })
+  end
 
   # Same shape discipline as the intake POST: non-binary and oversized input
   # gets a structured error, never a crash.
@@ -462,7 +526,17 @@ defmodule CustyardWeb.Prospect.ConversationLive do
             <span data-testid="resume-message-sender">{sender_label(msg)}</span>
             <span data-testid="resume-message-time">{format_time(msg.inserted_at)}</span>
           </div>
+          <%!-- Soft-deleted messages render ONLY the tombstone — the original
+          body must never reach this page again once an operator deletes it. --%>
           <div
+            :if={msg.deleted_at}
+            class="italic text-zinc-500 dark:text-zinc-400"
+            data-testid="resume-message-tombstone"
+          >
+            This message was deleted
+          </div>
+          <div
+            :if={is_nil(msg.deleted_at)}
             class={"whitespace-pre-wrap break-words #{body_text_style(msg)}"}
             data-testid="resume-message-body"
           >
@@ -471,31 +545,48 @@ defmodule CustyardWeb.Prospect.ConversationLive do
         </div>
       </div>
 
-      <.form
-        for={@reply_form}
-        phx-submit="submit_reply"
-        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
-        data-testid="resume-reply-form"
-      >
-        <.input
-          field={@reply_form[:body]}
-          type="textarea"
-          label="Reply"
-          rows="4"
-          placeholder="Write a reply..."
-        />
-        <div class="flex justify-end mt-3">
+      <%= if reply_form_open?(@messages, @reply_open) do %>
+        <.form
+          for={@reply_form}
+          phx-submit="submit_reply"
+          class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
+          data-testid="resume-reply-form"
+        >
+          <.input
+            field={@reply_form[:body]}
+            type="textarea"
+            label={reply_heading(@messages)}
+            rows="4"
+            placeholder="Write a message..."
+            phx-hook="ResetOnSubmit"
+          />
+          <div class="flex justify-end mt-3">
+            <button
+              type="submit"
+              phx-disable-with="Sending..."
+              class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
+              style={"background-color: #{@branding.primary_color || "#4f46e5"}"}
+              data-testid="resume-reply-submit"
+            >
+              {reply_heading(@messages)}
+            </button>
+          </div>
+        </.form>
+      <% else %>
+        <div
+          class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 flex justify-center"
+          data-testid="resume-add-comment"
+        >
           <button
-            type="submit"
-            phx-disable-with="Sending..."
-            class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
-            style={"background-color: #{@branding.primary_color || "#4f46e5"}"}
-            data-testid="resume-reply-submit"
+            type="button"
+            phx-click="show_reply"
+            class="text-sm font-medium text-zinc-700 dark:text-zinc-300 px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-700"
+            data-testid="resume-add-comment-btn"
           >
-            Send reply
+            Add comment
           </button>
         </div>
-      </.form>
+      <% end %>
 
       <%= if @prospect.email do %>
         <div
@@ -510,7 +601,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
                 name="notify"
                 value="true"
                 checked={@prospect.notify_on_reply}
-                class="rounded border-zinc-300 dark:border-zinc-600 text-zinc-900 focus:ring-0"
+                class="rounded border-zinc-300 dark:border-zinc-600 text-indigo-600 dark:text-indigo-500 accent-indigo-600 dark:accent-indigo-500 focus:ring-0"
                 data-testid="resume-notify-checkbox"
               /> Email me when the team replies
             </label>
@@ -584,7 +675,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
                   name="claim[notify]"
                   value="true"
                   checked={@claim_notify}
-                  class="rounded border-zinc-300 dark:border-zinc-600 text-zinc-900 focus:ring-0"
+                  class="rounded border-zinc-300 dark:border-zinc-600 text-indigo-600 dark:text-indigo-500 accent-indigo-600 dark:accent-indigo-500 focus:ring-0"
                   data-testid="resume-claim-notify"
                 /> Email me when the team replies
               </label>
@@ -638,11 +729,40 @@ defmodule CustyardWeb.Prospect.ConversationLive do
             </div>
         <% end %>
       </div>
+
+      <p
+        :if={IntakeSource.link?(@intake_source)}
+        class="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400"
+        data-testid="resume-source-link"
+      >
+        <a
+          href={@intake_source.link_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="font-medium text-indigo-700 dark:text-indigo-300 underline"
+        >
+          {@intake_source.link_title}
+        </a>
+      </p>
     </div>
     """
   end
 
   ## Presentation helpers -------------------------------------------------------
+
+  # The reply box shows outright when the team spoke last (the prospect is
+  # expected to answer) or when they explicitly opened it via "Add comment";
+  # otherwise it stays collapsed so a self-reply is a deliberate choice.
+  defp reply_form_open?(messages, reply_open),
+    do: reply_open or not last_from_prospect?(messages)
+
+  # "Reply" when responding to the team; "Add comment" when the prospect is
+  # adding to their own most-recent message.
+  defp reply_heading(messages),
+    do: if(last_from_prospect?(messages), do: "Add comment", else: "Reply")
+
+  defp last_from_prospect?([]), do: false
+  defp last_from_prospect?(messages), do: match?(%{source: :prospect}, List.last(messages))
 
   # Sender labels never include an email address or a name — org/contact
   # linkage must be invisible on this page.

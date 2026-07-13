@@ -26,6 +26,8 @@ defmodule Custyard.IntakeSource do
   @max_questions 20
   @max_question_length 200
   @max_answer_length 2000
+  @max_link_title_length 80
+  @max_link_url_length 2000
 
   schema "intake_sources" do
     field :key, :string
@@ -34,6 +36,8 @@ defmodule Custyard.IntakeSource do
     field :headline, :string
     field :intro_copy, :string
     field :questions, {:array, :map}, default: []
+    field :link_title, :string
+    field :link_url, :string
     field :enabled, :boolean, default: true
 
     timestamps(type: :utc_datetime)
@@ -47,7 +51,29 @@ defmodule Custyard.IntakeSource do
   @doc "Maximum number of Q&A entries per source (UI cap mirrors validation)."
   def max_questions, do: @max_questions
 
-  @update_fields [:name, :mode, :headline, :intro_copy, :questions, :enabled]
+  @doc """
+  Whether the source carries a renderable branded link — both `link_title`
+  and `link_url` present and non-blank. Prospect surfaces render the anchor
+  only when this is true; `nil` (deleted source) is always false.
+  """
+  def link?(%__MODULE__{link_title: title, link_url: url}) do
+    present?(title) and present?(url)
+  end
+
+  def link?(nil), do: false
+
+  defp present?(value), do: is_binary(value) and String.trim(value) != ""
+
+  @update_fields [
+    :name,
+    :mode,
+    :headline,
+    :intro_copy,
+    :questions,
+    :link_title,
+    :link_url,
+    :enabled
+  ]
 
   @doc false
   def changeset(intake_source, attrs) do
@@ -77,7 +103,26 @@ defmodule Custyard.IntakeSource do
     |> validate_length(:name, max: 200)
     |> validate_length(:headline, max: 200)
     |> validate_length(:intro_copy, max: 2000)
+    |> validate_length(:link_title, max: @max_link_title_length)
+    |> validate_length(:link_url, max: @max_link_url_length)
+    |> validate_link_url()
     |> validate_questions()
+  end
+
+  # Only absolute http/https URLs with a host: the value renders verbatim as
+  # an anchor href on public prospect pages, so javascript:/data:/relative
+  # values are rejected at the changeset boundary.
+  defp validate_link_url(changeset) do
+    validate_change(changeset, :link_url, fn :link_url, url ->
+      case URI.new(url) do
+        {:ok, %URI{scheme: scheme, host: host}}
+        when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+          []
+
+        _other ->
+          [link_url: "must be an http or https URL"]
+      end
+    end)
   end
 
   # Q&A list validation: at most 20 entries; each entry must be a map with

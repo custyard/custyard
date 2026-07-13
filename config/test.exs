@@ -3,7 +3,8 @@ import Config
 config :custyard, env: :test
 
 config :custyard, Custyard.Repo,
-  database: Path.expand("../priv/repo/custyard_test.db", __DIR__),
+  database:
+    Path.expand("../priv/repo/custyard_test#{System.get_env("MIX_TEST_PARTITION")}.db", __DIR__),
   pool_size: 5,
   pool: Ecto.Adapters.SQL.Sandbox,
   journal_mode: :wal,

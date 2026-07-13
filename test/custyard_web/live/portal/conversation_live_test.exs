@@ -128,6 +128,38 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
       assert html =~ "customer@example.com"
     end
+
+    test "soft-deleted messages render the tombstone, never the original body", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, body: "Deleted operator slip")
+      operator = insert_operator_account()
+
+      {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, operator)
+
+      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+
+      assert html =~ ~s(data-testid="portal-message-tombstone")
+      assert html =~ "This message was deleted"
+      refute html =~ "Deleted operator slip"
+    end
+
+    test "an already-open view swaps to the tombstone when the delete broadcasts", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, body: "Regretted message")
+      operator = insert_operator_account()
+
+      {:ok, view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      assert html =~ "Regretted message"
+
+      {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, operator)
+
+      # The message_updated broadcast reloads the thread in place.
+      html = render(view)
+      assert html =~ "This message was deleted"
+      refute html =~ "Regretted message"
+    end
   end
 
   describe "reply submission" do

@@ -41,6 +41,12 @@ defmodule Custyard.Message do
     # Delivery status tracks outbound message lifecycle (nil for inbound messages)
     field :delivery_status, Ecto.Enum, values: @delivery_statuses
 
+    # Soft delete (GitHub-style tombstone): the body stays in the database and
+    # rendering surfaces show "This message was deleted" instead. There is no
+    # hard-delete path. Set only via soft_delete_changeset/2.
+    field :deleted_at, :utc_datetime
+    belongs_to :deleted_by_operator, Custyard.OperatorAccount
+
     belongs_to :conversation, Custyard.Conversation
 
     timestamps(type: :utc_datetime)
@@ -74,6 +80,27 @@ defmodule Custyard.Message do
     # error messages sometimes report just _index due to how Exqlite parses errors)
     |> unique_constraint(:message_id, name: :messages_message_id_unique_index)
     |> unique_constraint(:message_id, name: :messages_message_id_index)
+  end
+
+  @doc """
+  Whether the message has been soft-deleted (tombstoned).
+  """
+  def deleted?(%__MODULE__{deleted_at: deleted_at}), do: not is_nil(deleted_at)
+
+  @doc """
+  Changeset for soft-deleting a message (GitHub-style tombstone).
+
+  Stamps `deleted_at` and the deleting operator. The body column is left
+  untouched — the original content stays in the database and only rendering
+  changes. Deliberately not part of `changeset/2` so external attrs can never
+  set or clear the deletion fields.
+  """
+  def soft_delete_changeset(message, %Custyard.OperatorAccount{} = operator) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    message
+    |> change(deleted_at: now, deleted_by_operator_id: operator.id)
+    |> foreign_key_constraint(:deleted_by_operator_id)
   end
 
   @doc """

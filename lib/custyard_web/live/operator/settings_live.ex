@@ -4,6 +4,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
   import CustyardWeb.FormHelpers, only: [format_changeset_errors: 1]
 
   alias Custyard.{Authorization, Settings}
+  alias CustyardWeb.Uploads
 
   # Fixed display order for weight keys (maps don't guarantee iteration order)
   @weight_display_order ~w(idle state tier urgency velocity neglect)a
@@ -14,6 +15,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
     weights = settings.score_weights
     thresholds = settings.neglect_thresholds
+    branding = Settings.get_branding()
 
     socket =
       socket
@@ -21,13 +23,19 @@ defmodule CustyardWeb.Operator.SettingsLive do
       |> assign(:weights, weights)
       |> assign(:thresholds, thresholds)
       |> assign(:intake_config, Settings.get_intake_config())
-      |> assign(:branding, Settings.get_branding())
+      |> assign(:branding, branding)
       |> assign(:editing_weights, false)
       |> assign(:editing_thresholds, false)
       |> assign(:editing_intake, false)
       |> assign(:editing_branding, false)
       |> assign(:weight_form, to_form(weights, as: "weights"))
       |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
+      |> assign(:branding_form, branding_form_from(branding))
+      |> allow_upload(:logo,
+        accept: ~w(.png .jpg .jpeg .svg .webp),
+        max_entries: 1,
+        max_file_size: 2_000_000
+      )
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
   end
@@ -91,12 +99,54 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   @impl true
   def handle_event("edit_branding", _params, socket) do
-    {:noreply, assign(socket, :editing_branding, true)}
+    {:noreply,
+     socket
+     |> assign(:editing_branding, true)
+     |> assign(:branding_form, branding_form_from(socket.assigns.branding))}
   end
 
   @impl true
   def handle_event("cancel_branding", _params, socket) do
+    socket =
+      Enum.reduce(socket.assigns.uploads.logo.entries, socket, fn entry, acc ->
+        cancel_upload(acc, :logo, entry.ref)
+      end)
+
     {:noreply, assign(socket, :editing_branding, false)}
+  end
+
+  # Tracks in-progress branding form state so re-renders triggered by upload
+  # progress (or the color picker) don't reset what the operator has typed.
+  @impl true
+  def handle_event("validate_branding", params, socket) do
+    branding_params = Map.get(params, "branding", %{})
+    form = socket.assigns.branding_form
+
+    form =
+      form
+      |> Map.put("name", Map.get(branding_params, "name", form["name"]))
+      |> Map.put(
+        "primary_color",
+        Map.get(branding_params, "primary_color", form["primary_color"])
+      )
+      |> Map.put("remove_logo", Map.get(branding_params, "remove_logo", "false") == "true")
+
+    # The native color picker feeds the visible hex input, not vice versa.
+    form =
+      case params["_target"] do
+        ["branding", "primary_color_picker"] ->
+          Map.put(form, "primary_color", Map.get(branding_params, "primary_color_picker", ""))
+
+        _ ->
+          form
+      end
+
+    {:noreply, assign(socket, :branding_form, form)}
+  end
+
+  @impl true
+  def handle_event("cancel_logo_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :logo, ref)}
   end
 
   @impl true
@@ -243,32 +293,91 @@ defmodule CustyardWeb.Operator.SettingsLive do
   # update_branding replaces the whole map, so an omitted key reads back as
   # its default (nil). Settings.valid_branding_entry?/2 independently rejects
   # blank names, so direct context callers cannot store them either.
+  #
+  # The logo never comes from a form param - it is either a freshly consumed
+  # upload, the previously stored path, or nil when "remove_logo" is checked.
   defp save_branding(branding_params, socket) do
+    old_logo_url = socket.assigns.branding.logo_url
+    uploaded_logo_url = consume_uploaded_logo(socket)
+    logo_url = resolve_logo_url(branding_params, uploaded_logo_url, old_logo_url)
+
     branding =
       branding_params
-      |> Map.take(["name", "logo_url", "primary_color"])
-      |> Enum.reject(fn {_key, value} ->
-        not is_binary(value) or String.trim(value) == ""
-      end)
+      |> Map.take(["name", "primary_color"])
+      |> Map.put("logo_url", logo_url)
+      |> Enum.reject(&blank_branding_entry?/1)
       |> Map.new()
 
     case Settings.update_branding(branding) do
       {:ok, _settings} ->
-        {:noreply,
-         socket
-         |> assign(:branding, Settings.get_branding())
-         |> assign(:editing_branding, false)
-         |> put_flash(:info, "Branding updated successfully")}
+        handle_branding_saved(socket, old_logo_url, logo_url)
 
       {:error, changeset} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "Failed to update branding: #{format_changeset_errors(changeset)}"
-         )}
+        handle_branding_error(socket, uploaded_logo_url, changeset)
     end
   end
+
+  defp resolve_logo_url(branding_params, uploaded_logo_url, old_logo_url) do
+    remove_logo? = Map.get(branding_params, "remove_logo") == "true"
+
+    cond do
+      uploaded_logo_url -> uploaded_logo_url
+      remove_logo? -> nil
+      true -> old_logo_url
+    end
+  end
+
+  defp blank_branding_entry?({_key, value}) do
+    not is_binary(value) or String.trim(value) == ""
+  end
+
+  defp handle_branding_saved(socket, old_logo_url, logo_url) do
+    # Delete the replaced (or explicitly removed) file only after the new
+    # branding persisted successfully.
+    if old_logo_url && old_logo_url != logo_url do
+      Uploads.delete_logo(old_logo_url)
+    end
+
+    {:noreply,
+     socket
+     |> assign(:branding, Settings.get_branding())
+     |> assign(:editing_branding, false)
+     |> put_flash(:info, "Branding updated successfully")}
+  end
+
+  defp handle_branding_error(socket, uploaded_logo_url, changeset) do
+    # The consumed upload was never persisted; remove it so failed saves
+    # (e.g. a bad color) don't leave orphaned files behind.
+    if uploaded_logo_url, do: Uploads.delete_logo(uploaded_logo_url)
+
+    {:noreply,
+     put_flash(
+       socket,
+       :error,
+       "Failed to update branding: #{format_changeset_errors(changeset)}"
+     )}
+  end
+
+  defp consume_uploaded_logo(socket) do
+    socket
+    |> consume_uploaded_entries(:logo, fn %{path: path}, entry ->
+      {:ok, Uploads.save_logo(path, entry.client_name)}
+    end)
+    |> List.first()
+  end
+
+  defp branding_form_from(branding) do
+    %{
+      "name" => branding.name || "",
+      "primary_color" => branding.primary_color || "",
+      "remove_logo" => false
+    }
+  end
+
+  defp upload_error_to_string(:too_large), do: "File is too large (max 2MB)"
+  defp upload_error_to_string(:not_accepted), do: "Invalid file type"
+  defp upload_error_to_string(:too_many_files), do: "Only one file allowed"
+  defp upload_error_to_string(_), do: "Upload error"
 
   defp parse_float(str) when is_binary(str) do
     case Float.parse(str) do
@@ -617,9 +726,9 @@ defmodule CustyardWeb.Operator.SettingsLive do
         </div>
         <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
           Instance branding for the public intake pages and prospect-facing email.
-          The name falls back to "Custyard" when unset. The logo must be an
-          /uploads/ path; the color a hex value like #1a2b3c. Leave a field blank
-          to clear it.
+          The name falls back to "Custyard" when unset. Upload a logo image
+          (PNG, JPG, SVG, or WebP, max 2MB) and pick a primary color. Leave the
+          name or color blank to clear it.
         </p>
 
         <div :if={not @editing_branding} class="space-y-3">
@@ -636,9 +745,18 @@ defmodule CustyardWeb.Operator.SettingsLive do
             class="flex items-center justify-between"
             data-testid="operator-settings-branding-logo-url"
           >
-            <span class="text-sm text-gray-700 dark:text-zinc-300">Logo URL</span>
-            <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded break-all">
-              {@branding.logo_url || "not set"}
+            <span class="text-sm text-gray-700 dark:text-zinc-300">Logo</span>
+            <span class="flex items-center gap-2">
+              <img
+                :if={@branding.logo_url}
+                src={@branding.logo_url}
+                alt="Instance logo"
+                class="w-8 h-8 rounded object-cover border border-gray-200 dark:border-zinc-700"
+                data-testid="operator-settings-branding-logo-thumb"
+              />
+              <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded break-all">
+                {@branding.logo_url || "not set"}
+              </span>
             </span>
           </div>
           <div
@@ -662,6 +780,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
         <form
           :if={@editing_branding}
           phx-submit="save_branding"
+          phx-change="validate_branding"
           class="space-y-3"
           data-testid="operator-settings-branding-form"
         >
@@ -674,37 +793,107 @@ defmodule CustyardWeb.Operator.SettingsLive do
               maxlength="100"
               name="branding[name]"
               id="branding_name"
-              value={@branding.name}
+              value={@branding_form["name"]}
               placeholder="Custyard (default)"
+              phx-debounce="300"
               class="w-64 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
-          <div class="flex items-center justify-between gap-4">
-            <label class="text-sm text-gray-700 dark:text-zinc-300" for="branding_logo_url">
-              Logo URL
+          <div>
+            <label
+              class="block text-sm text-gray-700 dark:text-zinc-300 mb-1"
+              for={@uploads.logo.ref}
+            >
+              Logo
             </label>
-            <input
-              type="text"
-              name="branding[logo_url]"
-              id="branding_logo_url"
-              value={@branding.logo_url}
-              placeholder="/uploads/logos/logo.png"
-              class="w-64 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
-            />
+            <div class="flex items-start gap-4">
+              <div :if={@branding.logo_url} class="shrink-0">
+                <img
+                  src={@branding.logo_url}
+                  alt="Current logo"
+                  class="w-16 h-16 rounded object-cover border border-gray-200 dark:border-zinc-700"
+                  data-testid="operator-settings-branding-current-logo"
+                />
+                <label class="flex items-center gap-1 mt-1 text-xs text-gray-500 dark:text-zinc-400">
+                  <input type="hidden" name="branding[remove_logo]" value="false" />
+                  <input
+                    type="checkbox"
+                    name="branding[remove_logo]"
+                    value="true"
+                    checked={@branding_form["remove_logo"]}
+                    class="rounded border-gray-300 dark:border-zinc-600"
+                    data-testid="operator-settings-branding-remove-logo"
+                  /> Remove logo
+                </label>
+              </div>
+              <div class="flex-1">
+                <.live_file_input upload={@uploads.logo} class="text-sm" />
+                <p class="text-xs text-gray-500 dark:text-zinc-400 mt-1">
+                  PNG, JPG, SVG, or WebP. Max 2MB.
+                </p>
+                <div :for={entry <- @uploads.logo.entries} class="mt-2">
+                  <div class="flex items-center gap-2">
+                    <div class="text-sm text-gray-600 dark:text-zinc-400">{entry.client_name}</div>
+                    <progress value={entry.progress} max="100" class="w-20 h-2" />
+                    <button
+                      type="button"
+                      phx-click="cancel_logo_upload"
+                      phx-value-ref={entry.ref}
+                      class="text-red-500 text-xs hover:text-red-700"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <div
+                    :for={err <- upload_errors(@uploads.logo, entry)}
+                    class="text-red-500 text-xs mt-1"
+                  >
+                    {upload_error_to_string(err)}
+                  </div>
+                </div>
+                <div :for={err <- upload_errors(@uploads.logo)} class="text-red-500 text-xs mt-1">
+                  {upload_error_to_string(err)}
+                </div>
+              </div>
+            </div>
           </div>
           <div class="flex items-center justify-between gap-4">
             <label class="text-sm text-gray-700 dark:text-zinc-300" for="branding_primary_color">
               Primary color
             </label>
-            <input
-              type="text"
-              name="branding[primary_color]"
-              id="branding_primary_color"
-              value={@branding.primary_color}
-              placeholder="#1a2b3c"
-              pattern="^#[0-9a-fA-F]{6}$"
-              class="w-64 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
-            />
+            <div class="flex items-center gap-2">
+              <input
+                type="color"
+                name="branding[primary_color_picker]"
+                id="branding_primary_color_picker"
+                aria-label="Primary color picker"
+                value={
+                  if(@branding_form["primary_color"] != "",
+                    do: @branding_form["primary_color"],
+                    else: "#808080"
+                  )
+                }
+                class={[
+                  "w-9 h-9 rounded border cursor-pointer",
+                  if(@branding_form["primary_color"] == "",
+                    do: "border-dashed border-gray-400 dark:border-zinc-500 opacity-50",
+                    else: "border-gray-300 dark:border-zinc-600"
+                  )
+                ]}
+                data-testid="operator-settings-branding-color-picker"
+              />
+              <input
+                type="text"
+                name="branding[primary_color]"
+                id="branding_primary_color"
+                value={@branding_form["primary_color"]}
+                placeholder="#1a2b3c"
+                pattern="^#[0-9a-fA-F]{6}$"
+                phx-debounce="300"
+                class="w-28 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
+                data-testid="operator-settings-branding-color-input"
+              />
+            </div>
           </div>
           <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-zinc-700">
             <button

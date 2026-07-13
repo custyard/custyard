@@ -129,6 +129,13 @@ defmodule CustyardWeb.Portal.ConversationLive do
     {:noreply, socket |> load_messages() |> load_tasks()}
   end
 
+  # Message-level change (operator soft delete, delivery status): refresh the
+  # thread so tombstones replace deleted bodies in already-open tabs.
+  @impl true
+  def handle_info({:message_updated, _}, socket) do
+    {:noreply, load_messages(socket)}
+  end
+
   @impl true
   def handle_info({:conversation_updated, _}, socket) do
     # Reload conversation to get updated state, urgency, etc.
@@ -201,7 +208,17 @@ defmodule CustyardWeb.Portal.ConversationLive do
             <span data-testid="portal-message-sender">{sender_label(msg)}</span>
             <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
           </div>
+          <%!-- Soft-deleted messages render ONLY the tombstone — the original
+          body must never reach this page again once an operator deletes it. --%>
           <div
+            :if={msg.deleted_at}
+            class="italic text-gray-500 dark:text-zinc-400"
+            data-testid="portal-message-tombstone"
+          >
+            This message was deleted
+          </div>
+          <div
+            :if={is_nil(msg.deleted_at)}
             class={"whitespace-pre-wrap break-words #{body_text_style(msg)}"}
             data-testid="portal-message-body"
           >

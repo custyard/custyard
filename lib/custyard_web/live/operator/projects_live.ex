@@ -251,7 +251,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
           phx-change="filter_org"
           name="org"
           value={@filter_org || ""}
-          class="border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm"
+          class="border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
           data-testid="operator-projects-org-filter"
         >
           <option value="">All organizations</option>

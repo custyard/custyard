@@ -186,6 +186,25 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   def handle_event("add_note", _params, socket), do: {:noreply, socket}
 
+  # Soft delete: the message row (and its body) stays in the database; every
+  # rendering surface shows a tombstone instead. Scoped to the loaded
+  # conversation's messages so an id from another conversation is a no-op.
+  def handle_event("delete_message", %{"id" => id}, socket) do
+    case find_conversation_message(socket.assigns.conversation, id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Message not found")}
+
+      message ->
+        case Conversations.soft_delete_message(message, socket.assigns.current_operator) do
+          {:ok, _message} ->
+            {:noreply, reload_conversation(socket)}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Failed to delete message")}
+        end
+    end
+  end
+
   def handle_event("update_reply", %{"body" => body}, socket) do
     {:noreply, assign(socket, :reply_text, body)}
   end
@@ -485,6 +504,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
+  # Find a message by id within the already-loaded conversation thread.
+  # Inherently conversation-scoped: an id belonging to another conversation
+  # simply isn't in the list.
+  defp find_conversation_message(conversation, id) when is_binary(id) do
+    case Integer.parse(id) do
+      {int_id, ""} -> Enum.find(conversation.messages, &(&1.id == int_id))
+      _ -> nil
+    end
+  end
+
   defp get_scoped_task!(socket, task_id) when is_binary(task_id) do
     case Integer.parse(task_id) do
       {int_id, ""} -> get_scoped_task!(socket, int_id)
@@ -655,7 +684,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
             No messages yet
           </div>
           <%= for message <- @conversation.messages do %>
-            <.message_bubble message={message} />
+            <.message_bubble
+              message={message}
+              prospect_email={@conversation.prospect && @conversation.prospect.email}
+            />
           <% end %>
         </div>
 
@@ -887,13 +919,26 @@ defmodule CustyardWeb.Operator.ConversationLive do
                   Reopen
                 </button>
               <% else %>
+                <%!-- Toggle: clicking while already :waiting reverts to :active
+                (a valid state-machine transition), so a mis-click is undoable
+                in place. aria-pressed + solid styling mark the active state. --%>
                 <button
                   phx-click="set_state"
-                  phx-value-state="waiting"
-                  class="w-full text-left text-sm px-3 py-1.5 rounded bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border border-yellow-200"
+                  phx-value-state={if @conversation.state == :waiting, do: "active", else: "waiting"}
+                  aria-pressed={to_string(@conversation.state == :waiting)}
+                  class={[
+                    "w-full text-left text-sm px-3 py-1.5 rounded border",
+                    if(@conversation.state == :waiting,
+                      do:
+                        "bg-yellow-200 hover:bg-yellow-100 text-yellow-900 border-yellow-400 font-medium",
+                      else: "bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border-yellow-200"
+                    )
+                  ]}
                   data-testid="operator-state-waiting"
                 >
-                  Waiting on customer
+                  {if @conversation.state == :waiting,
+                    do: "Waiting on customer — click to resume",
+                    else: "Waiting on customer"}
                 </button>
                 <button
                   phx-click="set_state"
@@ -1049,10 +1094,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   attr :message, Message, required: true
+  attr :prospect_email, :string, default: nil
 
   defp message_bubble(assigns) do
     is_operator = assigns.message.source == :operator
     is_internal = assigns.message.is_internal_note
+    is_deleted = Message.deleted?(assigns.message)
 
     bg_class =
       cond do
@@ -1070,6 +1117,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       assigns
       |> assign(:is_operator, is_operator)
       |> assign(:is_internal, is_internal)
+      |> assign(:is_deleted, is_deleted)
       |> assign(:bg_class, bg_class)
 
     ~H"""
@@ -1097,7 +1145,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
             </span>
           <% end %>
           <span class="text-xs text-gray-400 dark:text-zinc-500">
-            {unless @is_internal, do: "via #{@message.source}"}
+            {unless @is_internal, do: via_label(@message.source, @prospect_email)}
           </span>
           <span
             class="text-xs text-gray-400 dark:text-zinc-500 ml-auto"
@@ -1106,11 +1154,31 @@ defmodule CustyardWeb.Operator.ConversationLive do
             {format_time(@message.inserted_at)}
           </span>
           <.delivery_indicator
-            :if={@is_operator and not @is_internal and @message.delivery_status}
+            :if={@is_operator and not @is_internal and not @is_deleted and @message.delivery_status}
             status={@message.delivery_status}
           />
+          <button
+            :if={not @is_deleted}
+            phx-click="delete_message"
+            phx-value-id={@message.id}
+            data-confirm="Delete this message? A tombstone stays visible in the thread and the customer can no longer read it."
+            class="text-gray-300 dark:text-zinc-600 hover:text-red-600 dark:hover:text-red-400"
+            title="Delete message"
+            aria-label="Delete message"
+            data-testid={"operator-message-delete-#{@message.id}"}
+          >
+            <.icon name="hero-trash" class="h-3 w-3" />
+          </button>
         </div>
         <div
+          :if={@is_deleted}
+          class="text-sm italic text-gray-400 dark:text-zinc-500"
+          data-testid="operator-message-tombstone"
+        >
+          This message was deleted
+        </div>
+        <div
+          :if={not @is_deleted}
           class="text-sm text-gray-800 dark:text-zinc-200 whitespace-pre-wrap break-words"
           data-testid="operator-message-body"
         >
@@ -1246,6 +1314,29 @@ defmodule CustyardWeb.Operator.ConversationLive do
       message.sender_email -> message.sender_email
       true -> "Customer"
     end
+  end
+
+  # Prospect messages surface the captured email (masked) so the operator can
+  # see who they are talking to without exposing the full address on screen.
+  # Falls back to the plain source label when no email was captured.
+  defp via_label(:prospect, email) when is_binary(email) and email != "" do
+    "via prospect #{mask_email(email)}"
+  end
+
+  defp via_label(source, _prospect_email), do: "via #{source}"
+
+  # Keep up to the first 3 chars of the local part (just the first char when
+  # the local part is 3 chars or fewer), then "***@domain".
+  defp mask_email(email) do
+    case String.split(email, "@", parts: 2) do
+      [local, domain] -> "#{masked_local(local)}@#{domain}"
+      [local] -> masked_local(local)
+    end
+  end
+
+  defp masked_local(local) do
+    keep = if String.length(local) > 3, do: 3, else: 1
+    String.slice(local, 0, keep) <> "***"
   end
 
   defp format_time(datetime) do
