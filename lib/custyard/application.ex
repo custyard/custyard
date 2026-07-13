@@ -60,17 +60,24 @@ defmodule Custyard.Application do
   end
 
   # Attach Sentry.LoggerHandler when (and only when) a DSN is configured.
-  # Idempotent guard against double-add on config reloads/restarts.
+  # :logger.add_handler/3 signals failure by return value, not by raising, so we
+  # match on it: an already-registered handler (config reload/restart) is
+  # expected and fine; any other error is logged rather than silently dropped.
   defp maybe_add_sentry_logger_handler do
     if Application.get_env(:sentry, :dsn) do
-      :logger.add_handler(:custyard_sentry_handler, Sentry.LoggerHandler, %{
-        config: %{metadata: [:file, :line]}
-      })
+      case :logger.add_handler(:custyard_sentry_handler, Sentry.LoggerHandler, %{
+             config: %{metadata: [:file, :line]}
+           }) do
+        :ok ->
+          :ok
+
+        {:error, {:already_exist, _}} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Could not attach Sentry logger handler: #{inspect(reason)}")
+      end
     end
-  rescue
-    # add_handler raises {:already_exist, _} on a second attempt; a duplicate
-    # handler is harmless and must never block application startup.
-    _ -> :ok
   end
 
   # Detect dangerous configuration: local SQLite with ephemeral /data path on Fly.io

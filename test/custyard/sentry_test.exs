@@ -86,6 +86,10 @@ defmodule Custyard.SentryTest do
       assert Scrub.scrub_query("as=contact_42") == "as=#{@redacted}"
     end
 
+    test "preserves a valueless (flag-style) param as just the key" do
+      assert Scrub.scrub_query("debug&token=x&page=2") == "debug&token=#{@redacted}&page=2"
+    end
+
     test "nil and empty pass through" do
       assert Scrub.scrub_query(nil) == nil
       assert Scrub.scrub_query("") == ""
@@ -214,11 +218,31 @@ defmodule Custyard.SentryTest do
     end
 
     test "redacts a whole extra value stored under a sensitive key" do
-      event = event(extra: %{token: "rawsecret", note: "fine"})
+      event = event(extra: %{token: "rawsecret", access_token: "raw2", note: "fine"})
       scrubbed = Scrub.before_send(event)
 
       assert scrubbed.extra.token == @redacted
+      assert scrubbed.extra.access_token == @redacted
       assert scrubbed.extra.note == "fine"
+    end
+
+    test "deep-scrubs sensitive values nested inside extra (maps, lists, tuples)" do
+      event =
+        event(
+          extra: %{
+            context: %{"org_token" => "nestedsecret", "ok" => "keep"},
+            items: [%{token: "listsecret"}],
+            pair: {:access_token, "tuplesecret"}
+          }
+        )
+
+      scrubbed = Scrub.before_send(event)
+
+      assert scrubbed.extra.context["org_token"] == @redacted
+      assert scrubbed.extra.context["ok"] == "keep"
+      assert [%{token: @redacted}] = scrubbed.extra.items
+      # A tuple is inspected + string-scrubbed; the raw secret must be gone.
+      refute inspect(scrubbed.extra.pair) =~ "tuplesecret"
     end
 
     test "drops unmatched-route 404 noise" do

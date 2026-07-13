@@ -96,8 +96,12 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
 
   defp wait_for(agent, attempts) do
     case Agent.get(agent, & &1) do
-      [ev | _] -> inspect(ev.msg, limit: :infinity, printable_limit: :infinity)
-      [] -> Process.sleep(20) || wait_for(agent, attempts - 1)
+      [ev | _] ->
+        inspect(ev.msg, limit: :infinity, printable_limit: :infinity)
+
+      [] ->
+        Process.sleep(20)
+        wait_for(agent, attempts - 1)
     end
   end
 

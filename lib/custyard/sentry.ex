@@ -31,11 +31,12 @@ defmodule Custyard.Sentry do
   @redacted "[REDACTED]"
   @scrub_failed "[SCRUBBING_FAILED]"
 
-  # Query-parameter names (compared case-insensitively) whose *values* must
-  # never reach Sentry. Covers the path-token names when they also appear as
-  # query params, plus generic secret-bearing names and the dev-only
-  # `?as=<contact_id>` impersonation param.
-  @sensitive_query_params ~w(token key secret passphrase password callback_token org_token as)
+  # Exact key/param names (compared case-insensitively) whose *values* must
+  # never reach Sentry. Used for query-parameter names AND for structured map
+  # keys in :extra. Covers the path-token names when they appear as params/keys,
+  # generic secret-bearing names, and the dev-only `?as=<contact_id>`
+  # impersonation param.
+  @sensitive_keys ~w(access_token org_token callback_token token key credential secret passphrase password email as)
 
   # Path patterns. Each redacts the single credential segment that follows a
   # known prefix, leaving the prefix (and any trailing segments) intact for
@@ -66,7 +67,11 @@ defmodule Custyard.Sentry do
   # an already-inspected socket string, so the outer inspect renders the value
   # as `access_token: \"...\"` (backslash-quote), not a bare `"..."`. The value
   # class excludes both quote and backslash so it stops at the closing delimiter.
-  @sensitive_value_keys ~w(access_token org_token callback_token token passphrase secret password email)
+  # Subset used for the free-form-text regex below: distinctive names only (no
+  # bare `key`/`as`, which would over-match legitimate `key: "..."` fields
+  # everywhere in inspected structs). Exact structured-key matching uses the
+  # broader @sensitive_keys above.
+  @sensitive_value_keys ~w(access_token org_token callback_token token credential passphrase secret password email)
   @key_alternation Enum.join(@sensitive_value_keys, "|")
   @atom_kv_pattern ~r/((?:#{@key_alternation}):\s*)\\*"[^"\\]*\\*"/
   @string_kv_pattern ~r/(\\*"(?:#{@key_alternation})\\*"\s*=>\s*)\\*"[^"\\]*\\*"/
@@ -182,18 +187,22 @@ defmodule Custyard.Sentry do
     |> Enum.map_join("&", fn {key, value} ->
       encoded_key = URI.encode_www_form(key)
 
-      if sensitive_param?(key) do
-        "#{encoded_key}=#{@redacted}"
-      else
-        "#{encoded_key}=#{URI.encode_www_form(value)}"
+      cond do
+        sensitive_key?(key) -> "#{encoded_key}=#{@redacted}"
+        # Flag-style params (`?debug`) decode to "" (and defensively guard nil);
+        # emit just the key rather than an empty `key=`.
+        value in [nil, ""] -> encoded_key
+        true -> "#{encoded_key}=#{URI.encode_www_form(value)}"
       end
     end)
   end
 
   # -- internals -------------------------------------------------------------
 
-  # Only unmatched-route 404s are dropped, and only via this one explicit
-  # clause — `before_send` is a security hook, not a general event filter.
+  # Single place for event filtering (noise drops). Deliberately narrow: only
+  # unmatched-route 404s. `before_send` is a security hook, not a general event
+  # filter — add any future noise filters here, as explicit clauses, not by
+  # broadening before_send.
   defp drop?(%Sentry.Event{original_exception: %Phoenix.Router.NoRouteError{}}), do: true
   defp drop?(_event), do: false
 
@@ -233,42 +242,63 @@ defmodule Custyard.Sentry do
   defp scrub_message(event), do: event
 
   # :extra carries `crash_reason` (an inspected exit reason that, for a crashed
-  # LiveView, embeds the socket state and its raw access token). Redact any
-  # value under a sensitive key outright, and scrub sensitive keyed values out
-  # of string values (crash_reason) in place, keeping the rest for debugging.
+  # LiveView, embeds the socket state and its raw access token), and may hold
+  # arbitrary nested terms that Sentry serializes/inspects *after* before_send.
+  # deep_scrub walks the whole structure so a token or keyed secret buried in a
+  # nested map/list/tuple/struct cannot slip past.
   defp scrub_extra(%Sentry.Event{extra: extra} = event) when is_map(extra) do
-    scrubbed =
-      Map.new(extra, fn {key, value} ->
-        cond do
-          sensitive_param?(key) -> {key, @redacted}
-          is_binary(value) -> {key, scrub_text(value)}
-          true -> {key, value}
-        end
-      end)
-
-    %{event | extra: scrubbed}
+    %{event | extra: deep_scrub_map(extra)}
   end
 
   defp scrub_extra(event), do: event
+
+  # Recursively scrub an arbitrary term: redact values under a sensitive key,
+  # scrub sensitive keyed values / URL tokens out of strings, and recurse into
+  # containers (maps, lists, tuples, keyword pairs). Plain scalars (numbers,
+  # atoms, nil) are safe as-is; any other non-container term (struct, ref, pid,
+  # fun) is inspected and string-scrubbed so its representation can't leak — an
+  # inspected struct renders `key: "value"`, which scrub_text redacts.
+  defp deep_scrub(value) when is_binary(value), do: scrub_text(value)
+  defp deep_scrub(value) when is_map(value) and not is_struct(value), do: deep_scrub_map(value)
+  defp deep_scrub(value) when is_list(value), do: Enum.map(value, &deep_scrub/1)
+
+  # A `{key, value}` pair (keyword-list element / 2-tuple) is treated like a map
+  # entry so a sensitive key redacts its value even outside a map.
+  defp deep_scrub({key, value}) when is_atom(key) or is_binary(key) do
+    if sensitive_key?(key), do: {key, @redacted}, else: {key, deep_scrub(value)}
+  end
+
+  defp deep_scrub(value) when is_tuple(value) do
+    value |> Tuple.to_list() |> Enum.map(&deep_scrub/1) |> List.to_tuple()
+  end
+
+  defp deep_scrub(value) when is_number(value) or is_atom(value), do: value
+  defp deep_scrub(value), do: value |> inspect() |> scrub_text()
+
+  defp deep_scrub_map(map) do
+    Map.new(map, fn {key, value} ->
+      if sensitive_key?(key), do: {key, @redacted}, else: {key, deep_scrub(value)}
+    end)
+  end
 
   # query_string may be a raw string, a map, or a keyword-ish list.
   defp scrub_query_field(nil), do: nil
   defp scrub_query_field(query) when is_binary(query), do: scrub_query(query)
 
   defp scrub_query_field(query) when is_map(query) do
-    Map.new(query, fn {k, v} -> {k, if(sensitive_param?(k), do: @redacted, else: v)} end)
+    Map.new(query, fn {k, v} -> {k, if(sensitive_key?(k), do: @redacted, else: v)} end)
   end
 
   defp scrub_query_field(query) when is_list(query) do
-    Enum.map(query, fn {k, v} -> {k, if(sensitive_param?(k), do: @redacted, else: v)} end)
+    Enum.map(query, fn {k, v} -> {k, if(sensitive_key?(k), do: @redacted, else: v)} end)
   end
 
   defp scrub_query_field(other), do: other
 
-  defp sensitive_param?(key) when is_binary(key),
-    do: String.downcase(key) in @sensitive_query_params
+  defp sensitive_key?(key) when is_binary(key),
+    do: String.downcase(key) in @sensitive_keys
 
-  defp sensitive_param?(key), do: sensitive_param?(to_string(key))
+  defp sensitive_key?(key), do: sensitive_key?(to_string(key))
 
   # Last-resort redaction when scrubbing itself raised: never keep any
   # potentially-sensitive field, but still report the event so the underlying
