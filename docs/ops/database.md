@@ -28,5 +28,9 @@ fly secrets set DATABASE_URL="libsql://…" TURSO_AUTH_TOKEN="…"   # triggers 
 
 # migrate and recreate the operator account (use rpc, not eval, against the running app)
 fly ssh console -C "/app/bin/custyard rpc 'Custyard.Release.migrate()'"
-fly ssh console -C "/app/bin/custyard rpc 'Custyard.Release.setup_operator(\"you@yourdomain.com\")'"
+fly ssh console -C "/app/bin/custyard rpc 'Custyard.Release.setup_operator(\"lettermint@solutious.com\")'"
 ```
+
+turso db destroy cydb1-onetime
+turso db create cydb1-onetime
+turso db show --url cydb1-onetime

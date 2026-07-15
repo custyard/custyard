@@ -68,7 +68,7 @@ defmodule Custyard.MixProject do
       # hackney backs the default Sentry.HackneyClient with its own isolated
       # connection pool, so error reporting never contends with the app's Finch.
       {:sentry, "~> 13.0"},
-      {:hackney, "~> 1.20"},
+      {:hackney, "~> 4.5"},
 
       # QA tools
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

@@ -27,6 +27,19 @@ Procfile*
 .DS_Store
 *.swp
 
+# Agent tooling & session state (not needed inside container)
+.claude/
+.serena/
+.remember/
+
+# Design/reference material
+resources/
+wireframes/
+
+# Crash dumps
+erl_crash.dump
+*.dump
+
 # Local environment
 .env*
 *.local
