@@ -546,6 +546,153 @@ defmodule CustyardWeb.IntakeControllerTest do
     end
   end
 
+  describe "intake observability" do
+    test "an accepted submission emits a submission event", %{conn: conn} do
+      source = insert_intake_source(mode: :active)
+
+      events =
+        capture_events([:custyard, :intake, :submission], fn ->
+          post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Counted"}})
+        end)
+
+      assert [{%{count: 1}, metadata}] = events
+      assert metadata.mode == :active
+      assert metadata.email_captured == false
+      assert metadata.receipt == :skipped
+    end
+
+    test "a submission that captures an email and sends a receipt says so", %{conn: conn} do
+      enable_email!()
+      source = insert_intake_source(mode: :active)
+
+      events =
+        capture_events([:custyard, :intake, :submission], fn ->
+          post(conn, ~p"/i/#{source.key}", %{
+            "submission" => %{
+              "body" => "Counted with email",
+              "email" => "prospect@example.com",
+              "notify" => "true"
+            }
+          })
+        end)
+
+      assert [{%{count: 1}, metadata}] = events
+      assert metadata.email_captured == true
+      assert metadata.receipt == :sent
+    end
+
+    test "an unknown key emits unknown_source tagged :unknown_key", %{conn: conn} do
+      events =
+        capture_events([:custyard, :intake, :unknown_source], fn ->
+          get(conn, ~p"/i/no-such-key")
+        end)
+
+      assert [{%{count: 1}, %{reason: :unknown_key}}] = events
+    end
+
+    # The alarming variant: the source survived load_source and was disabled
+    # before the context's own lookup, so a real submission was lost. The plug
+    # pipeline cannot be interleaved from a test, so create/2 is invoked
+    # directly with :intake_source already assigned — which is exactly the
+    # state the race leaves the conn in.
+    test "a source disabled mid-submission is tagged :disabled_mid_submission" do
+      source = insert_intake_source(mode: :active)
+
+      conn =
+        build_conn()
+        |> Plug.Conn.put_private(:phoenix_endpoint, CustyardWeb.Endpoint)
+        |> Map.put(:path_params, %{"source_key" => source.key})
+        |> Plug.Conn.assign(:intake_source, source)
+
+      {:ok, _disabled} = Custyard.Intake.update_source(source, %{enabled: false})
+
+      events =
+        capture_events([:custyard, :intake, :unknown_source], fn ->
+          assert CustyardWeb.IntakeController.create(conn, %{
+                   "submission" => %{"body" => "Lost to a race"}
+                 }).status == 404
+        end)
+
+      assert [{%{count: 1}, %{reason: :disabled_mid_submission}}] = events
+      assert Repo.aggregate(Conversation, :count) == 0
+    end
+
+    # The third create_conversation/1 branch: the insert was refused, the
+    # prospect saw a generic failure and left. Forced by writing a key past
+    # IntakeSource.key_format/0 straight to the row — the lookups still find it,
+    # but Conversation.intake_changeset/2 rejects it, which is the same
+    # {:error, %Ecto.Changeset{}} shape any refused insert produces.
+    test "a submission the database refuses is counted, not swallowed", %{conn: conn} do
+      source = insert_intake_source(mode: :active)
+
+      {1, _} =
+        Repo.update_all(
+          from(s in Custyard.IntakeSource, where: s.id == ^source.id),
+          set: [key: "Not A Valid Key"]
+        )
+
+      events =
+        capture_events([:custyard, :intake, :submission_rejected], fn ->
+          rejected =
+            post(conn, ~p"/i/#{"Not A Valid Key"}", %{
+              "submission" => %{"body" => "Refused by the database"}
+            })
+
+          assert rejected.status == 422
+        end)
+
+      assert [{%{count: 1}, %{mode: :active}}] = events
+      assert Repo.aggregate(Conversation, :count) == 0
+    end
+
+    test "a rate-limited request emits from the plug, not the controller", %{conn: conn} do
+      put_buckets(intake_get: [limit: 1, window_ms: 60_000])
+      source = insert_intake_source(mode: :active)
+
+      get(conn, ~p"/i/#{source.key}")
+
+      events =
+        capture_events([:custyard, :public_rate_limit, :exceeded], fn ->
+          denied = get(build_conn(), ~p"/i/#{source.key}")
+          assert denied.status == 429
+        end)
+
+      assert [{%{count: 1}, %{bucket: :intake_get}}] = events
+    end
+  end
+
+  # Collects every emission of `event` during `fun`, as {measurements, metadata}.
+  defp capture_events(event, fun) do
+    parent = self()
+    handler_id = {__MODULE__, event, System.unique_integer()}
+
+    :telemetry.attach(
+      handler_id,
+      event,
+      fn ^event, measurements, metadata, _config ->
+        send(parent, {handler_id, measurements, metadata})
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+
+    drain_events(handler_id, [])
+  end
+
+  defp drain_events(handler_id, acc) do
+    receive do
+      {^handler_id, measurements, metadata} ->
+        drain_events(handler_id, [{measurements, metadata} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
   describe "conversation banner on intake pages" do
     test "a verifying cookie renders the banner link and no conversation content", %{conn: conn} do
       source = insert_intake_source(mode: :active)
