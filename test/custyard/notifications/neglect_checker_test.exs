@@ -205,6 +205,67 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert found.organization.name == "Test Org"
       assert found.contact.name == "John Doe"
     end
+
+    test "includes unlinked public-intake conversations past the standard cutoff" do
+      thresholds = Settings.get_neglect_thresholds()
+      {warning_hours, _critical_hours} = thresholds.standard
+
+      old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :public_intake,
+          state: :new,
+          last_operator_action_at: old_action_time
+        )
+
+      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      found = Enum.find(candidates, &(&1.id == conv.id))
+
+      assert found != nil
+      # The left join must still preload, yielding an explicit nil rather
+      # than an unloaded association (which would raise downstream).
+      assert found.organization == nil
+    end
+
+    test "excludes unlinked conversations still within the standard threshold" do
+      thresholds = Settings.get_neglect_thresholds()
+      {warning_hours, _critical_hours} = thresholds.standard
+
+      recent_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours - 1), :hour)
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :public_intake,
+          state: :new,
+          last_operator_action_at: recent_action_time
+        )
+
+      candidates = NeglectChecker.list_notification_candidates(thresholds)
+
+      refute Enum.any?(candidates, &(&1.id == conv.id))
+    end
+
+    test "excludes resolved unlinked conversations" do
+      thresholds = Settings.get_neglect_thresholds()
+      {warning_hours, _critical_hours} = thresholds.standard
+
+      old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :public_intake,
+          state: :resolved,
+          last_operator_action_at: old_action_time
+        )
+
+      candidates = NeglectChecker.list_notification_candidates(thresholds)
+
+      refute Enum.any?(candidates, &(&1.id == conv.id))
+    end
   end
 
   describe "check_and_notify/0" do
@@ -273,11 +334,9 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert first_count >= second_count
     end
 
-    test "neither crashes nor notifies for nil-org conversations with neglect status" do
-      # Nil-org conversations (disambiguation source) now accrue neglect status
-      # via Scoring.neglect_status/2, but list_notification_candidates inner-joins
-      # organizations, so they are excluded from the sweep. This pins the current
-      # boundary; a later PR will deliberately widen it.
+    test "notifies for nil-org conversations that reached neglect status" do
+      # Nil-org conversations accrue neglect status on the standard-tier
+      # thresholds (Scoring.neglect_tier/1) and now reach the sweep too.
       thresholds = Settings.get_neglect_thresholds()
       {warning_hours, _critical_hours} = thresholds.standard
 
@@ -295,13 +354,14 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       preloaded = Repo.preload(conv, [:organization])
       assert Custyard.Scoring.neglect_status(preloaded, thresholds) == :warning
 
-      # But the sweep excludes it and dispatches nothing
-      refute Enum.any?(
+      # And the sweep now picks it up and dispatches without crashing on the
+      # nil organization
+      assert Enum.any?(
                NeglectChecker.list_notification_candidates(thresholds),
                &(&1.id == conv.id)
              )
 
-      assert {:ok, 0} = NeglectChecker.check_and_notify()
+      assert {:ok, 1} = NeglectChecker.check_and_notify()
     end
 
     test "sends new notification when severity escalates" do

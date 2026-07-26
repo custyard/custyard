@@ -21,6 +21,11 @@ defmodule Custyard.Notifications.NeglectChecker do
   alias Custyard.{Conversation, Repo, Settings}
   alias Custyard.Notifications.Email, as: NotificationEmail
 
+  # Organization tiers carrying their own neglect thresholds. Unlinked
+  # conversations have no tier and are handled separately, on the standard
+  # cutoff, matching `Scoring.neglect_tier/1`.
+  @neglect_tiers [:enterprise, :standard, :basic]
+
   @doc """
   Check all active conversations for neglect threshold breaches and dispatch notifications.
 
@@ -46,41 +51,65 @@ defmodule Custyard.Notifications.NeglectChecker do
   for their organization's tier. This is optimized to avoid loading all
   active conversations on every check.
 
+  Unlinked conversations (nil organization — public intake and
+  disambiguation) have no tier to join against, so they are matched by a
+  dedicated `is_nil(organization_id)` branch on the standard-tier cutoff.
+  That mirrors `Scoring.neglect_tier/1`, which already scores them as
+  standard. The join is a LEFT join purely so those rows survive it — on
+  its own it changes nothing, because every tier comparison is NULL for
+  them and `NULL OR NULL OR NULL` is not TRUE.
+
   Excludes:
   - Resolved conversations (no longer need attention)
   - Currently snoozed conversations
-  - Conversations with nil organization (disambiguation conversations)
   """
   def list_notification_candidates(thresholds \\ nil) do
     now = DateTime.utc_now()
 
     # Use provided thresholds or load from Settings
     thresholds = thresholds || Settings.get_neglect_thresholds()
-    {enterprise_warning, _} = thresholds.enterprise
-    {standard_warning, _} = thresholds.standard
-    {basic_warning, _} = thresholds.basic
-
-    enterprise_cutoff = hours_ago(enterprise_warning)
-    standard_cutoff = hours_ago(standard_warning)
-    basic_cutoff = hours_ago(basic_warning)
 
     from(c in Conversation,
-      join: o in assoc(c, :organization),
+      left_join: o in assoc(c, :organization),
       left_join: ct in assoc(c, :contact),
       where: c.state != :resolved,
       where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
       # Only load conversations that have exceeded their tier's warning threshold
       # This is the key optimization - we filter in the DB instead of loading all
-      where:
-        (o.tier == :enterprise and
-           coalesce(c.last_operator_action_at, c.inserted_at) <= ^enterprise_cutoff) or
-          (o.tier == :standard and
-             coalesce(c.last_operator_action_at, c.inserted_at) <= ^standard_cutoff) or
-          (o.tier == :basic and
-             coalesce(c.last_operator_action_at, c.inserted_at) <= ^basic_cutoff),
+      where: ^past_warning_cutoff(thresholds),
       preload: [organization: o, contact: ct]
     )
     |> Repo.all()
+  end
+
+  # One OR branch per tier, plus the unlinked branch. Composed rather than
+  # written out so the boolean stays readable and the tier list has a single
+  # source of truth.
+  defp past_warning_cutoff(thresholds) do
+    unlinked_cutoff = warning_cutoff(thresholds, :standard)
+
+    unlinked =
+      dynamic(
+        [c],
+        is_nil(c.organization_id) and
+          coalesce(c.last_operator_action_at, c.inserted_at) <= ^unlinked_cutoff
+      )
+
+    Enum.reduce(@neglect_tiers, unlinked, fn tier, acc ->
+      cutoff = warning_cutoff(thresholds, tier)
+
+      dynamic(
+        [c, o],
+        ^acc or
+          (o.tier == ^tier and
+             coalesce(c.last_operator_action_at, c.inserted_at) <= ^cutoff)
+      )
+    end)
+  end
+
+  defp warning_cutoff(thresholds, tier) do
+    {warning, _critical} = Map.fetch!(thresholds, tier)
+    hours_ago(warning)
   end
 
   defp hours_ago(hours) do
@@ -130,11 +159,16 @@ defmodule Custyard.Notifications.NeglectChecker do
   defp dispatch_notification(conversation, level) do
     Logger.info(
       "Neglect notification: conversation #{conversation.id} (#{conversation.subject}) " <>
-        "reached #{level} for org #{conversation.organization.name}"
+        "reached #{level} for org #{org_label(conversation.organization)}"
     )
 
     # Delegate to email module when configured
     # This will be a no-op if email is not configured
     NotificationEmail.deliver_neglect_alert(conversation, level)
   end
+
+  # Unlinked conversations now reach this path; the log line must not
+  # dereference a nil organization.
+  defp org_label(nil), do: "(unlinked)"
+  defp org_label(organization), do: organization.name
 end
