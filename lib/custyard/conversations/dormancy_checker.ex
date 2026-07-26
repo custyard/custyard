@@ -3,8 +3,15 @@ defmodule Custyard.Conversations.DormancyChecker do
   Transitions stale waiting conversations to dormant state.
 
   A conversation becomes dormant when it has been in :waiting state with no
-  customer action beyond the tier-based dormancy threshold. This prevents
-  abandoned conversations from cluttering the attention queue.
+  customer action beyond the tier-based dormancy threshold. This is the
+  automatic `waiting -> dormant` transition described in `docs/design/sdd.md`
+  §74/§80 — an inactivity signal, not a suppression one. Dormant conversations
+  stay in the attention queue (`Conversations.list_for_attention_queue/1`
+  excludes only `:resolved` and snoozed rows) and score *higher* than waiting
+  ones (`Scoring` weights dormant 25 against waiting 0), so the transition
+  raises queue position rather than lowering it. `sdd.md` §477 describes a
+  queue filtered to actionable states that the implementation does not have;
+  that divergence is tracked separately.
 
   Dormancy thresholds use the neglect critical thresholds from Settings:
   - Enterprise: default 8 hours
@@ -16,6 +23,11 @@ defmodule Custyard.Conversations.DormancyChecker do
 
   import Ecto.Query
   alias Custyard.{Conversation, Conversations, Repo, Settings}
+
+  # Organization tiers carrying their own dormancy threshold. Unlinked
+  # conversations have no tier and are handled separately, on the standard
+  # cutoff, matching `Scoring.neglect_tier/1` and `NeglectChecker`.
+  @dormancy_tiers [:enterprise, :standard, :basic]
 
   @doc """
   Find and transition all stale waiting conversations to dormant.
@@ -33,32 +45,57 @@ defmodule Custyard.Conversations.DormancyChecker do
 
   Uses the critical threshold from Settings.get_neglect_thresholds/0 as the
   dormancy cutoff for each tier.
+
+  Unlinked conversations (nil organization — public intake and disambiguation)
+  have no tier to join against, so they are matched by a dedicated
+  `is_nil(organization_id)` branch on the standard-tier cutoff. That mirrors
+  `Scoring.neglect_tier/1` and `NeglectChecker.list_notification_candidates/1`.
+  The join is a LEFT join purely so those rows survive it — on its own it
+  changes nothing, because every tier comparison is NULL for them and
+  `NULL OR NULL OR NULL` is not TRUE.
   """
   def stale_conversations do
-    # Get thresholds from Settings (database-configurable)
-    # Use the critical threshold as the dormancy cutoff
+    # Thresholds are database-configurable; the critical threshold doubles as
+    # the dormancy cutoff.
     thresholds = Settings.get_neglect_thresholds()
-    {_, enterprise_critical} = thresholds.enterprise
-    {_, standard_critical} = thresholds.standard
-    {_, basic_critical} = thresholds.basic
-
-    enterprise_cutoff = hours_ago(enterprise_critical)
-    standard_cutoff = hours_ago(standard_critical)
-    basic_cutoff = hours_ago(basic_critical)
 
     from(c in Conversation,
-      join: o in assoc(c, :organization),
+      left_join: o in assoc(c, :organization),
       where: c.state == :waiting,
-      where:
-        (o.tier == :enterprise and
-           coalesce(c.last_customer_action_at, c.inserted_at) <= ^enterprise_cutoff) or
-          (o.tier == :standard and
-             coalesce(c.last_customer_action_at, c.inserted_at) <= ^standard_cutoff) or
-          (o.tier == :basic and
-             coalesce(c.last_customer_action_at, c.inserted_at) <= ^basic_cutoff),
+      where: ^past_dormancy_cutoff(thresholds),
       select: c
     )
     |> Repo.all()
+  end
+
+  # One OR branch per tier, plus the unlinked branch. Composed rather than
+  # written out so the boolean stays readable and the tier list has a single
+  # source of truth.
+  defp past_dormancy_cutoff(thresholds) do
+    unlinked_cutoff = dormancy_cutoff(thresholds, :standard)
+
+    unlinked =
+      dynamic(
+        [c],
+        is_nil(c.organization_id) and
+          coalesce(c.last_customer_action_at, c.inserted_at) <= ^unlinked_cutoff
+      )
+
+    Enum.reduce(@dormancy_tiers, unlinked, fn tier, acc ->
+      cutoff = dormancy_cutoff(thresholds, tier)
+
+      dynamic(
+        [c, o],
+        ^acc or
+          (o.tier == ^tier and
+             coalesce(c.last_customer_action_at, c.inserted_at) <= ^cutoff)
+      )
+    end)
+  end
+
+  defp dormancy_cutoff(thresholds, tier) do
+    {_warning, critical} = Map.fetch!(thresholds, tier)
+    hours_ago(critical)
   end
 
   defp hours_ago(hours) do
