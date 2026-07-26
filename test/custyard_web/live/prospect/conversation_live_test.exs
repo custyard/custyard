@@ -33,7 +33,9 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
-      claim_email_send: @generous
+      claim_email_send: @generous,
+      intake_arrival_email: @generous,
+      intake_receipt_email: @generous
     ]
 
     Application.put_env(:custyard, :rate_limit_buckets, Keyword.merge(base, overrides))

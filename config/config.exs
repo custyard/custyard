@@ -83,7 +83,8 @@ config :sentry,
 # Deliberately app config, not operator Settings — see
 # docs/design/design-decisions-public-intake.md. Keys per bucket:
 # client IP unless noted (conversation_reply: token hash; claim_email_send:
-# downcased email; intake_arrival_email: intake source key).
+# downcased email; intake_arrival_email: intake source key;
+# intake_receipt_email: downcased captured email).
 config :custyard, :rate_limit_buckets,
   intake_get: [limit: 60, window_ms: 60_000],
   intake_post: [limit: 5, window_ms: 3_600_000],
@@ -93,7 +94,8 @@ config :custyard, :rate_limit_buckets,
   claim_submit: [limit: 3, window_ms: 3_600_000],
   claim_confirm: [limit: 10, window_ms: 60_000],
   claim_email_send: [limit: 5, window_ms: 86_400_000],
-  intake_arrival_email: [limit: 60, window_ms: 3_600_000]
+  intake_arrival_email: [limit: 60, window_ms: 3_600_000],
+  intake_receipt_email: [limit: 5, window_ms: 86_400_000]
 
 # Swoosh mailer configuration
 config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Local

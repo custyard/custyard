@@ -20,6 +20,7 @@ defmodule CustyardWeb.IntakeController do
   import Phoenix.Component, only: [to_form: 2]
 
   alias Custyard.Email.Normalizer
+  alias Custyard.Intake.ReceiptEmail
   alias Custyard.{Intake, IntakeSource, Settings}
   alias CustyardWeb.Plugs.ConversationCookie
 
@@ -53,7 +54,9 @@ defmodule CustyardWeb.IntakeController do
 
     case Intake.create_intake_conversation(source.key, body) do
       {:ok, %{conversation: conversation, access_token: token}} ->
-        maybe_capture_email(conversation, submission.email, submission.notify)
+        conversation
+        |> maybe_capture_email(submission.email, submission.notify)
+        |> maybe_send_receipt(conversation, source, token)
 
         conn
         |> ConversationCookie.put_conversation_cookie(token)
@@ -69,16 +72,39 @@ defmodule CustyardWeb.IntakeController do
     end
   end
 
-  # The optional passive-form email is captured after creation. A capture
-  # failure (invalid address, concurrent capture) must never fail the
-  # submission itself — the conversation and conversation redirect stand either way.
+  # The optional email is captured after creation. A capture failure
+  # (invalid address, concurrent capture) must never fail the submission
+  # itself — the conversation and conversation redirect stand either way.
   defp maybe_capture_email(conversation, email, notify) do
     if String.trim(email) != "" do
-      _result = Intake.capture_email(conversation, email, notify: notify)
+      Intake.capture_email(conversation, email, notify: notify)
+    else
+      {:error, :no_email}
     end
-
-    :ok
   end
+
+  # Only a successful capture earns a receipt, and it is addressed to the
+  # stored (normalized, downcased) value rather than the raw submission.
+  # This is the only moment the plaintext access token exists — it is
+  # hashed at rest — so the resume URL cannot be reconstructed later.
+  # Result ignored: everything above is committed, and ReceiptEmail owns
+  # its own gating, rate limiting, and failure logging.
+  defp maybe_send_receipt({:ok, _captured}, conversation, source, token) do
+    case Intake.get_prospect(conversation) do
+      %{email: email} when is_binary(email) ->
+        _result =
+          ReceiptEmail.send_receipt(email, source,
+            conversation_url: CustyardWeb.Endpoint.url() <> ~p"/c/#{token}"
+          )
+
+        :ok
+
+      _no_email ->
+        :ok
+    end
+  end
+
+  defp maybe_send_receipt(_capture_failed, _conversation, _source, _token), do: :ok
 
   # Shape-validate the message body BEFORE any context call: non-binary and
   # oversized params get a structured 4xx with the form re-rendered, never

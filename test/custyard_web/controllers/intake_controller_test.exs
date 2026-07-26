@@ -37,10 +37,53 @@ defmodule CustyardWeb.IntakeControllerTest do
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
-      claim_email_send: @generous
+      claim_email_send: @generous,
+      intake_arrival_email: @generous,
+      intake_receipt_email: @generous
     ]
 
     Application.put_env(:custyard, :rate_limit_buckets, Keyword.merge(base, overrides))
+  end
+
+  # Both intake emails — the operator arrival notification and the prospect
+  # receipt — are gated by :email_enabled, which is off by default in test.
+  defp enable_email! do
+    original_enabled = Application.get_env(:custyard, :email_enabled)
+    original_operator = Application.get_env(:custyard, :operator_email)
+
+    Application.put_env(:custyard, :email_enabled, true)
+    Application.put_env(:custyard, :operator_email, "ops@example.com")
+
+    on_exit(fn ->
+      restore_env(:email_enabled, original_enabled)
+      restore_env(:operator_email, original_operator)
+    end)
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:custyard, key)
+  defp restore_env(key, value), do: Application.put_env(:custyard, key, value)
+
+  # Swoosh's test adapter messages the test process per delivery. Draining
+  # the mailbox directly (rather than assert_email_sent/1, which inspects
+  # only the first message) lets a test reason about *which* addresses were
+  # written to when a single request sends more than one email.
+  defp sent_emails(acc \\ []) do
+    receive do
+      {:email, email} -> sent_emails([email | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  defp recipients do
+    sent_emails()
+    |> Enum.flat_map(fn email -> Enum.map(email.to, fn {_name, address} -> address end) end)
+  end
+
+  defp email_to(address) do
+    Enum.find(sent_emails(), fn email ->
+      Enum.any?(email.to, fn {_name, to} -> to == address end)
+    end)
   end
 
   defp row_counts do
@@ -52,7 +95,7 @@ defmodule CustyardWeb.IntakeControllerTest do
   end
 
   describe "GET /i/:source_key (active)" do
-    test "renders the message form without an email field", %{conn: conn} do
+    test "renders the message form with the optional email field", %{conn: conn} do
       source = insert_intake_source(mode: :active, headline: "Join the waitlist")
 
       conn = get(conn, ~p"/i/#{source.key}")
@@ -61,7 +104,11 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert html =~ ~s(data-testid="intake-active")
       assert html =~ "Join the waitlist"
       assert html =~ ~s(name="submission[body]")
-      refute html =~ ~s(name="submission[email]")
+      # Without this the default mode collects no contact information at
+      # all, and a prospect who loses the conversation cookie is
+      # unreachable forever.
+      assert html =~ ~s(name="submission[email]")
+      assert html =~ ~s(name="submission[notify]")
     end
 
     test "renders operator instance branding with Custyard fallback", %{conn: conn} do
@@ -366,6 +413,95 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert prospect.email == "prospect@example.com"
       assert prospect.notify_on_reply
       assert prospect.email_captured_at
+    end
+
+    test "active optional email flows into capture too", %{conn: conn} do
+      source = insert_intake_source(mode: :active)
+
+      conn =
+        post(conn, ~p"/i/#{source.key}", %{
+          "submission" => %{
+            "body" => "How much for 50 seats?",
+            "email" => "Buyer@Example.com",
+            "notify" => "true"
+          }
+        })
+
+      assert "/c/" <> _token = redirected_to(conn)
+
+      prospect = Repo.one!(Prospect)
+      assert prospect.email == "buyer@example.com"
+      assert prospect.notify_on_reply
+    end
+
+    test "a captured email receives the resume URL", %{conn: conn} do
+      enable_email!()
+      source = insert_intake_source(mode: :active, name: "Pricing CTA")
+
+      conn =
+        post(conn, ~p"/i/#{source.key}", %{
+          "submission" => %{"body" => "Pricing please", "email" => "buyer@example.com"}
+        })
+
+      "/c/" <> token = redirected_to(conn)
+      resume_url = CustyardWeb.Endpoint.url() <> "/c/#{token}"
+
+      receipt = email_to("buyer@example.com")
+
+      assert receipt
+      assert receipt.text_body =~ resume_url
+      assert receipt.html_body =~ resume_url
+      # The receipt must carry no submitted content.
+      refute receipt.text_body =~ "Pricing please"
+    end
+
+    # notify_on_reply is consent for operator replies. The receipt is the
+    # delivery mechanism for the prospect's own access link.
+    test "the resume URL is sent even when reply notifications are declined", %{conn: conn} do
+      enable_email!()
+      source = insert_intake_source(mode: :active)
+
+      conn =
+        post(conn, ~p"/i/#{source.key}", %{
+          "submission" => %{
+            "body" => "No mail please",
+            "email" => "quiet@example.com",
+            "notify" => "false"
+          }
+        })
+
+      assert "/c/" <> _token = redirected_to(conn)
+      refute Repo.one!(Prospect).notify_on_reply
+
+      assert email_to("quiet@example.com")
+    end
+
+    test "no email submitted means no receipt", %{conn: conn} do
+      enable_email!()
+      source = insert_intake_source(mode: :active)
+
+      conn =
+        post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Anonymous question"}})
+
+      assert "/c/" <> _token = redirected_to(conn)
+
+      # The operator still gets the arrival notification; nobody else does.
+      assert recipients() == ["ops@example.com"]
+    end
+
+    test "a rejected email means no receipt and no lost submission", %{conn: conn} do
+      enable_email!()
+      source = insert_intake_source(mode: :active)
+
+      conn =
+        post(conn, ~p"/i/#{source.key}", %{
+          "submission" => %{"body" => "Bad address", "email" => "not-an-email"}
+        })
+
+      assert "/c/" <> _token = redirected_to(conn)
+      assert Repo.one!(Prospect).email == nil
+
+      assert recipients() == ["ops@example.com"]
     end
 
     test "a capture failure does not lose the submission", %{conn: conn} do
