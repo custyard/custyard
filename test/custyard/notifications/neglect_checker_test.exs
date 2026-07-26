@@ -2,6 +2,7 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
   use Custyard.DataCase, async: true
 
   import Custyard.Factory
+  import Swoosh.TestAssertions
 
   alias Custyard.Notifications.NeglectChecker
   alias Custyard.Settings
@@ -362,6 +363,34 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
              )
 
       assert {:ok, 1} = NeglectChecker.check_and_notify()
+    end
+
+    # The tests above run with :email_enabled false, which routes through
+    # Notifications.Email's log stub. Production runs with
+    # EMAIL_NOTIFICATIONS_ENABLED=true, so the path that actually ships is
+    # the delivery one — and it is the one that dereferences the now
+    # sometimes-nil organization.
+    test "delivers a real alert for an unlinked conversation when email is on" do
+      thresholds = Settings.get_neglect_thresholds()
+      {warning_hours, _critical_hours} = thresholds.standard
+
+      Application.put_env(:custyard, :email_enabled, true)
+      on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
+
+      insert_conversation(
+        organization_id: nil,
+        source: :public_intake,
+        subject: "Unlinked and neglected",
+        state: :new,
+        last_operator_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+      )
+
+      assert {:ok, 1} = NeglectChecker.check_and_notify()
+
+      assert_email_sent(fn email ->
+        assert email.subject =~ "Unlinked and neglected"
+        assert email.html_body =~ "Unlinked prospect"
+      end)
     end
 
     test "sends new notification when severity escalates" do
