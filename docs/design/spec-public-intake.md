@@ -126,7 +126,7 @@ The existing rule "portal-sourced conversations are never anonymous" is unchange
 - Portal account provisioning during intake; portal authentication follows the existing portal spec.
 - CAPTCHA or proof-of-work challenges (revisit if abuse is observed; rate limiting is the first line).
 - Custom fields, attachments, or urgency selection on the intake form.
-- Notification emails to the prospect beyond the claim confirmation and consented operator replies.
+- Notification emails to the prospect beyond the submission receipt, the claim confirmation, and consented operator replies. The receipt is transactional, not a notification: it carries the resume URL, which exists in plaintext only at submit time, and is therefore sent whenever an email is captured regardless of `notify_on_reply` — that flag is consent for operator replies. Without it a prospect who loses the conversation cookie is unreachable permanently.
 - Embedding the intake form in the operator's site (iframe/JS widget); intake is a hosted page.
 - Provider-side delivery status (bounce handling) — arrives with the Lettermint status webhook (issue #25).
 
