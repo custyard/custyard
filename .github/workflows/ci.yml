@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # No base-branch filter: `branches:` matches the PR's base, so scoping it to
+  # main leaves stacked PRs (base feat/*, fix/*) with no checks at all.
   pull_request:
-    branches: [main]
 
 env:
   MIX_ENV: test
