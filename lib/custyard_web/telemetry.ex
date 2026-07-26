@@ -10,9 +10,12 @@ defmodule CustyardWeb.Telemetry do
   > aggregates or displays them.
   >
   > Modules that need an operator to actually see something log alongside the
-  > emit. Attaching a reporter is tracked separately; it predates the intake
-  > work and affects the LMTP, webhook, scoring and sender-matching metrics
-  > equally.
+  > emit. Attaching a reporter is tracked in #11; it predates the intake work
+  > and affects the LMTP, webhook, scoring and sender-matching metrics equally.
+  >
+  > Note also that `periodic_measurements/0` emits
+  > `[:custyard, :conversations, :active]`, which no metric below declares — so
+  > that measurement is orphaned twice over. Also #11.
   """
 
   use Supervisor
@@ -184,9 +187,9 @@ defmodule CustyardWeb.Telemetry do
 
       # Public Intake Metrics (events emitted by IntakeController and
       # Plugs.PublicRateLimit). NOTE: nothing consumes this list yet — see the
-      # moduledoc. These declarations exist so a reporter picks them up the day
-      # one is attached; until then the Logger lines at each emit site are the
-      # only readable signal.
+      # moduledoc and #11. These declarations exist so a reporter picks them up
+      # the day one is attached; until then the Logger lines at each emit site
+      # are the only readable signal.
       counter("custyard.intake.submission.count",
         tags: [:mode, :email_captured, :receipt],
         description: "Accepted public intake submissions"
