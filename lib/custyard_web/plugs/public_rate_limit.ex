@@ -23,6 +23,8 @@ defmodule CustyardWeb.Plugs.PublicRateLimit do
 
   @behaviour Plug
 
+  require Logger
+
   import Plug.Conn
 
   alias Custyard.RateLimit
@@ -41,12 +43,27 @@ defmodule CustyardWeb.Plugs.PublicRateLimit do
 
     case RateLimit.check_rate(bucket, key) do
       {:allow, _count} -> conn
-      {:deny, retry_after_ms} -> deny(conn, retry_after_ms)
+      {:deny, retry_after_ms} -> deny(conn, bucket, retry_after_ms)
     end
   end
 
   # Renders the standard error page the same way PortalAuth renders its 404.
-  defp deny(conn, retry_after_ms) do
+  #
+  # Instrumented here rather than downstream because this halts: nothing in the
+  # controller ever runs for a denied request, so a counter placed there would
+  # report zero while the limiter turned every visitor away. Deliberately not
+  # sent to Sentry — a public surface under a scanner would generate one event
+  # per rejected request. The log line and the counter are what distinguish
+  # "the limiter is rejecting everyone" from "nobody is submitting".
+  defp deny(conn, bucket, retry_after_ms) do
+    Logger.warning("public rate limit exceeded", bucket: bucket)
+
+    :telemetry.execute(
+      [:custyard, :public_rate_limit, :exceeded],
+      %{count: 1},
+      %{bucket: bucket}
+    )
+
     retry_after_s = max(div(retry_after_ms + 999, 1000), 1)
 
     conn

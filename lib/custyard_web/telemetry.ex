@@ -1,4 +1,20 @@
 defmodule CustyardWeb.Telemetry do
+  @moduledoc """
+  Telemetry supervisor and metric declarations.
+
+  > **`metrics/0` currently has no consumer.** The supervision tree below
+  > starts `:telemetry_poller` only — there is no `Telemetry.Metrics` reporter
+  > child, and the LiveDashboard route in `router.ex` is commented out with
+  > `phoenix_live_dashboard` not in `mix.exs`. Every metric declared here is
+  > therefore inert: the underlying `:telemetry` events do fire, but nothing
+  > aggregates or displays them.
+  >
+  > Modules that need an operator to actually see something log alongside the
+  > emit. Attaching a reporter is tracked separately; it predates the intake
+  > work and affects the LMTP, webhook, scoring and sender-matching metrics
+  > equally.
+  """
+
   use Supervisor
   import Telemetry.Metrics
 
@@ -164,6 +180,25 @@ defmodule CustyardWeb.Telemetry do
       counter("custyard.message.created.count",
         tags: [:source],
         description: "Total messages created by source"
+      ),
+
+      # Public Intake Metrics (events emitted by IntakeController and
+      # Plugs.PublicRateLimit). NOTE: nothing consumes this list yet — see the
+      # moduledoc. These declarations exist so a reporter picks them up the day
+      # one is attached; until then the Logger lines at each emit site are the
+      # only readable signal.
+      counter("custyard.intake.submission.count",
+        tags: [:mode, :email_captured, :receipt],
+        description: "Accepted public intake submissions"
+      ),
+      counter("custyard.intake.unknown_source.count",
+        tags: [:reason],
+        description:
+          "Intake requests for a key with no enabled source. :unknown_key is a bad or stale URL; :disabled_mid_submission means a source went away between page load and POST, losing a real submission"
+      ),
+      counter("custyard.public_rate_limit.exceeded.count",
+        tags: [:bucket],
+        description: "Requests rejected by the public per-IP rate limiter"
       )
     ]
   end

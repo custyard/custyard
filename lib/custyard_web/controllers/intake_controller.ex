@@ -17,6 +17,8 @@ defmodule CustyardWeb.IntakeController do
 
   use CustyardWeb, :controller
 
+  require Logger
+
   import Phoenix.Component, only: [to_form: 2]
 
   alias Custyard.Email.Normalizer
@@ -54,18 +56,20 @@ defmodule CustyardWeb.IntakeController do
 
     case Intake.create_intake_conversation(source.key, body) do
       {:ok, %{conversation: conversation, access_token: token}} ->
-        conversation
-        |> maybe_capture_email(submission.email, submission.notify)
-        |> maybe_send_receipt(conversation, source, token)
+        capture_result = maybe_capture_email(conversation, submission.email, submission.notify)
+        receipt_result = maybe_send_receipt(capture_result, conversation, source, token)
+
+        emit_submission(source, capture_result, receipt_result)
 
         conn
         |> ConversationCookie.put_conversation_cookie(token)
         |> redirect(to: ~p"/c/#{token}")
 
       # The source was disabled or deleted between load_source and the
-      # context's own lookup — same treatment as an unknown key.
+      # context's own lookup — same treatment as an unknown key, but a
+      # strictly more alarming signal: this one ate a real submission.
       {:error, :unknown_source} ->
-        render_not_found(conn)
+        render_not_found(conn, :disabled_mid_submission)
 
       {:error, %Ecto.Changeset{}} ->
         render_submission_error(conn, submission, "could not be submitted")
@@ -97,14 +101,14 @@ defmodule CustyardWeb.IntakeController do
             conversation_url: CustyardWeb.Endpoint.url() <> ~p"/c/#{token}"
           )
 
-        :ok
+        :sent
 
       _no_email ->
-        :ok
+        :skipped
     end
   end
 
-  defp maybe_send_receipt(_capture_failed, _conversation, _source, _token), do: :ok
+  defp maybe_send_receipt(_capture_failed, _conversation, _source, _token), do: :skipped
 
   # Shape-validate the message body BEFORE any context call: non-binary and
   # oversized params get a structured 4xx with the form re-rendered, never
@@ -209,16 +213,66 @@ defmodule CustyardWeb.IntakeController do
   # request input is never converted to an atom (Intake.get_enabled_source/1).
   defp load_source(conn, _opts) do
     case Intake.get_enabled_source(conn.path_params["source_key"]) do
-      nil -> render_not_found(conn)
+      nil -> render_not_found(conn, :unknown_key)
       %IntakeSource{} = source -> assign(conn, :intake_source, source)
     end
   end
 
-  defp render_not_found(conn) do
+  defp render_not_found(conn, reason) do
+    source_key = conn.path_params["source_key"]
+
+    Logger.warning("intake: no enabled source for key",
+      source_key: inspect(source_key),
+      reason: reason
+    )
+
+    :telemetry.execute(
+      [:custyard, :intake, :unknown_source],
+      %{count: 1},
+      %{reason: reason}
+    )
+
+    # First manual capture in the tree. The global before_send
+    # ({Custyard.Sentry, :before_send}) still applies — it drops only
+    # Phoenix.Router.NoRouteError, and /i/ is not a scrubbed path prefix, so
+    # the key survives for diagnosis. Intake source keys are public URL
+    # components, not credentials.
+    #
+    # Fingerprinted by reason alone, deliberately: a scanner spraying keys
+    # must collapse into one issue whose event stream carries the keys, not
+    # thousands of separate issues.
+    Sentry.capture_message("intake: no enabled source for key",
+      level: if(reason == :disabled_mid_submission, do: :error, else: :warning),
+      fingerprint: ["intake-unknown-source", to_string(reason)],
+      extra: %{source_key: source_key, reason: reason}
+    )
+
     conn
     |> put_status(:not_found)
     |> put_view(CustyardWeb.ErrorHTML)
     |> render("404.html")
     |> halt()
+  end
+
+  ## Instrumentation -----------------------------------------------------------
+
+  # The one event that answers "did submissions stop, or is it just quiet?".
+  # Logged as well as emitted: metrics/0 has no reporter attached, so `fly logs`
+  # is the only consumer that exists today.
+  defp emit_submission(source, capture_result, receipt_result) do
+    email_captured = match?({:ok, _}, capture_result)
+
+    Logger.info("intake: submission accepted",
+      source_key: source.key,
+      mode: source.mode,
+      email_captured: email_captured,
+      receipt: receipt_result
+    )
+
+    :telemetry.execute(
+      [:custyard, :intake, :submission],
+      %{count: 1},
+      %{mode: source.mode, email_captured: email_captured, receipt: receipt_result}
+    )
   end
 end

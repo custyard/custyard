@@ -39,10 +39,12 @@ config :logger, :console,
   metadata: [
     :request_id,
     :actual_size,
+    :bucket,
     :client_hostname,
     :command,
     :current_count,
     :declared_size,
+    :email_captured,
     :error_type,
     :extension,
     :hostname,
@@ -51,13 +53,16 @@ config :logger, :console,
     :max_size,
     :message_count,
     :messages_processed,
+    :mode,
     :peer,
     :reason,
+    :receipt,
     :received_count,
     :recipient,
     :recipient_count,
     :sender,
-    :size_bytes
+    :size_bytes,
+    :source_key
   ]
 
 config :phoenix, :json_library, Jason
