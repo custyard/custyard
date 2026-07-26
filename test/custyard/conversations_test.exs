@@ -1339,9 +1339,6 @@ defmodule Custyard.ConversationsTest do
       assert Intake.get_conversation_by_access_token(token) == {:error, :not_found}
     end
 
-    # dry_run: the non-dry path of run_cleanup/1 also invokes
-    # cleanup_orphaned_contacts/1, whose DELETE-with-JOIN is unsupported on
-    # SQLite (pre-existing, unrelated to the retention split).
     test "run_cleanup applies the public-intake retention split" do
       intake_old = insert_conversation(source: :public_intake, state: :resolved)
       intake_young = insert_conversation(source: :public_intake, state: :resolved)
@@ -1350,6 +1347,36 @@ defmodule Custyard.ConversationsTest do
 
       %{resolved_conversations: count} = Conversations.run_cleanup(dry_run: true)
       assert count == 1
+    end
+
+    # The non-dry path was never exercised: cleanup_orphaned_contacts/1
+    # expressed its anti-join as a DELETE-with-JOIN, which SQLite rejects,
+    # so run_cleanup/1 raised on any real invocation. It is scheduled now
+    # (Conversations.RetentionSweep), so this pins the whole path.
+    test "run_cleanup deletes for real, not only under dry_run" do
+      intake_old = insert_conversation(source: :public_intake, state: :resolved)
+      intake_young = insert_conversation(source: :public_intake, state: :resolved)
+      backdate_updated_at(intake_old, 366)
+      backdate_updated_at(intake_young, 120)
+
+      counts = Conversations.run_cleanup()
+
+      assert counts.resolved_conversations == 1
+      refute Repo.get(Custyard.Conversation, intake_old.id)
+      assert Repo.get(Custyard.Conversation, intake_young.id)
+    end
+
+    test "run_cleanup removes contacts left with no conversations" do
+      org = insert_organization()
+      orphan = insert_contact(organization_id: org.id)
+      kept = insert_contact(organization_id: org.id)
+      _live = insert_conversation(organization_id: org.id, contact_id: kept.id, state: :active)
+
+      counts = Conversations.run_cleanup()
+
+      assert counts.orphaned_contacts >= 1
+      refute Repo.get(Custyard.Contact, orphan.id)
+      assert Repo.get(Custyard.Contact, kept.id)
     end
   end
 

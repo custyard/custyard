@@ -28,8 +28,63 @@ end
 
 # Configure Swoosh mailer for production
 if config_env() == :prod do
-  # Mail configuration (optional - falls back to Local adapter if not set)
-  mail_adapter = System.get_env("MAIL_ADAPTER")
+  # MAIL_ADAPTER is required in prod, and "local" must be chosen explicitly.
+  #
+  # The old behaviour — unset or misspelled silently keeps Swoosh's
+  # in-memory Local adapter — is the worst kind of failure this app has.
+  # Operator login is magic-link-only, so a discarded mail queue is not
+  # degraded service, it is total lockout: nobody can sign in, and every
+  # claim confirmation, arrival notification, and prospect receipt is
+  # accepted and thrown away with no error anywhere. Refusing to boot
+  # surfaces it at deploy time, while Fly still has the previous machine.
+  #
+  # This is deliberately stricter than the Lettermint route-provisioning
+  # warning below, which degrades to a MockClient that provisions nothing
+  # but breaks nothing.
+  known_mail_adapters = ~w(mailgun sendgrid smtp postmark lettermint local)
+
+  mail_adapter =
+    case System.get_env("MAIL_ADAPTER") do
+      nil -> nil
+      "" -> nil
+      value -> value
+    end
+
+  cond do
+    is_nil(mail_adapter) ->
+      raise """
+      MAIL_ADAPTER is not set.
+
+      Set it to one of: #{Enum.join(known_mail_adapters, ", ")}
+
+      Operator login is magic-link-only, so an instance without working
+      mail cannot be signed into at all. Use MAIL_ADAPTER=local to run
+      without outbound mail on purpose — it discards every message.
+      """
+
+    mail_adapter not in known_mail_adapters ->
+      raise """
+      MAIL_ADAPTER is set to #{inspect(mail_adapter)}, which is not recognized.
+
+      Set it to one of: #{Enum.join(known_mail_adapters, ", ")}
+
+      An unrecognized value used to fall through to the in-memory Local
+      adapter, which accepts and discards every message — including the
+      magic links operators sign in with.
+      """
+
+    true ->
+      :ok
+  end
+
+  if mail_adapter == "local" do
+    IO.warn("""
+    MAIL_ADAPTER=local: outbound mail is discarded.
+
+    Magic-link logins, prospect receipts, and operator notifications will
+    not be delivered. This is only appropriate for a smoke-test instance.
+    """)
+  end
 
   if mail_adapter do
     case mail_adapter do
@@ -67,8 +122,9 @@ if config_env() == :prod do
           api_token: System.get_env("LETTERMINT_API_KEY"),
           base_url: System.get_env("LETTERMINT_API_URL")
 
-      _ ->
-        # Unknown adapter, keep Local
+      "local" ->
+        # Explicitly opted into the in-memory adapter; warned about above.
+        # Unrecognized values never reach here — they raise.
         :ok
     end
 

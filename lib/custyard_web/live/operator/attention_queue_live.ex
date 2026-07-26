@@ -156,11 +156,19 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     org_id = socket.assigns[:scoped_organization_id]
     now = DateTime.utc_now()
 
+    # Read operator settings once for the whole render. Without this each
+    # row re-reads them (four uncached Repo.one calls) and re-counts its own
+    # 24h messages, which is a remote round trip each in production.
+    settings = Scoring.preload_settings()
+
     conversations =
       Conversations.list_for_attention_queue(filter: filter, organization_id: org_id)
       |> Enum.map(fn %{conversation: conv, message_count: message_count} ->
-        neglect_status = Scoring.neglect_status(conv)
-        breakdown = Scoring.breakdown(conv)
+        neglect_status = Scoring.neglect_status(conv, settings.thresholds)
+
+        breakdown =
+          Scoring.breakdown(conv, settings: settings, message_count: message_count)
+
         hours_idle = hours_since(conv.last_operator_action_at || conv.inserted_at)
         is_snoozed = conv.snoozed_until && DateTime.compare(conv.snoozed_until, now) == :gt
 
