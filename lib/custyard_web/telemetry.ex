@@ -191,6 +191,11 @@ defmodule CustyardWeb.Telemetry do
         tags: [:mode, :email_captured, :receipt],
         description: "Accepted public intake submissions"
       ),
+      counter("custyard.intake.submission_rejected.count",
+        tags: [:mode],
+        description:
+          "Submissions the database refused. A server-side loss: the prospect saw a generic failure and left"
+      ),
       counter("custyard.intake.unknown_source.count",
         tags: [:reason],
         description:

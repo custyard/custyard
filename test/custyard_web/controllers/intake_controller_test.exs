@@ -617,6 +617,34 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert Repo.aggregate(Conversation, :count) == 0
     end
 
+    # The third create_conversation/1 branch: the insert was refused, the
+    # prospect saw a generic failure and left. Forced by writing a key past
+    # IntakeSource.key_format/0 straight to the row — the lookups still find it,
+    # but Conversation.intake_changeset/2 rejects it, which is the same
+    # {:error, %Ecto.Changeset{}} shape any refused insert produces.
+    test "a submission the database refuses is counted, not swallowed", %{conn: conn} do
+      source = insert_intake_source(mode: :active)
+
+      {1, _} =
+        Repo.update_all(
+          from(s in Custyard.IntakeSource, where: s.id == ^source.id),
+          set: [key: "Not A Valid Key"]
+        )
+
+      events =
+        capture_events([:custyard, :intake, :submission_rejected], fn ->
+          rejected =
+            post(conn, ~p"/i/#{"Not A Valid Key"}", %{
+              "submission" => %{"body" => "Refused by the database"}
+            })
+
+          assert rejected.status == 422
+        end)
+
+      assert [{%{count: 1}, %{mode: :active}}] = events
+      assert Repo.aggregate(Conversation, :count) == 0
+    end
+
     test "a rate-limited request emits from the plug, not the controller", %{conn: conn} do
       put_buckets(intake_get: [limit: 1, window_ms: 60_000])
       source = insert_intake_source(mode: :active)

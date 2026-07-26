@@ -71,7 +71,13 @@ defmodule CustyardWeb.IntakeController do
       {:error, :unknown_source} ->
         render_not_found(conn, :disabled_mid_submission)
 
-      {:error, %Ecto.Changeset{}} ->
+      # Server-side loss: the Multi inserting conversation + prospect + message
+      # did not commit. The prospect sees a generic failure and leaves. Strictly
+      # more likely than the disabled-source race above, and the failure mode
+      # that would take the submission counter to zero while looking like a
+      # quiet week — so it reports rather than dying silently.
+      {:error, %Ecto.Changeset{} = changeset} ->
+        emit_submission_rejected(source, changeset)
         render_submission_error(conn, submission, "could not be submitted")
     end
   end
@@ -273,6 +279,33 @@ defmodule CustyardWeb.IntakeController do
       [:custyard, :intake, :submission],
       %{count: 1},
       %{mode: source.mode, email_captured: email_captured, receipt: receipt_result}
+    )
+  end
+
+  # A submission the server refused. Only the changeset's error *shape* is
+  # reported — never the values, which are untrusted prospect input and the
+  # message body itself.
+  defp emit_submission_rejected(source, changeset) do
+    errors =
+      changeset
+      |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
+      |> inspect()
+
+    Logger.error("intake: submission rejected by the database",
+      source_key: source.key,
+      reason: errors
+    )
+
+    :telemetry.execute(
+      [:custyard, :intake, :submission_rejected],
+      %{count: 1},
+      %{mode: source.mode}
+    )
+
+    Sentry.capture_message("intake: submission rejected by the database",
+      level: :error,
+      fingerprint: ["intake-submission-rejected"],
+      extra: %{source_key: source.key, errors: errors}
     )
   end
 end
