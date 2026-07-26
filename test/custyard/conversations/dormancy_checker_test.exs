@@ -136,6 +136,73 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
 
       assert conv.id in ids
     end
+
+    test "includes unlinked prospects past the standard-tier cutoff" do
+      # Unlinked conversations have no tier; they use the standard cutoff of
+      # 48 hours, matching Scoring.neglect_tier/1 and NeglectChecker.
+      past_threshold =
+        DateTime.utc_now()
+        |> DateTime.add(-49, :hour)
+        |> DateTime.truncate(:second)
+
+      stale_conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :public_intake,
+          state: :waiting,
+          last_customer_action_at: past_threshold
+        )
+
+      results = DormancyChecker.stale_conversations()
+      ids = Enum.map(results, & &1.id)
+
+      assert stale_conv.id in ids
+    end
+
+    test "excludes unlinked prospects within the standard-tier cutoff" do
+      within_threshold =
+        DateTime.utc_now()
+        |> DateTime.add(-24, :hour)
+        |> DateTime.truncate(:second)
+
+      _fresh_conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :public_intake,
+          state: :waiting,
+          last_customer_action_at: within_threshold
+        )
+
+      results = DormancyChecker.stale_conversations()
+
+      assert results == []
+    end
+
+    test "falls back to inserted_at for unlinked prospects with no customer action" do
+      past_threshold =
+        DateTime.utc_now()
+        |> DateTime.add(-50, :hour)
+        |> DateTime.truncate(:second)
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :public_intake,
+          state: :waiting,
+          last_customer_action_at: nil
+        )
+
+      {1, _} =
+        Repo.update_all(
+          from(c in Custyard.Conversation, where: c.id == ^conv.id),
+          set: [inserted_at: past_threshold]
+        )
+
+      results = DormancyChecker.stale_conversations()
+      ids = Enum.map(results, & &1.id)
+
+      assert conv.id in ids
+    end
   end
 
   describe "transition_stale_conversations/0" do
@@ -208,6 +275,33 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
 
       unchanged = Repo.get!(Custyard.Conversation, conv.id)
       assert unchanged.state == :waiting
+    end
+
+    test "transitions unlinked prospects and broadcasts without an org topic" do
+      past_threshold =
+        DateTime.utc_now()
+        |> DateTime.add(-49, :hour)
+        |> DateTime.truncate(:second)
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :public_intake,
+          state: :waiting,
+          last_customer_action_at: past_threshold
+        )
+
+      conv_id = conv.id
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+
+      count = DormancyChecker.transition_stale_conversations()
+
+      assert count == 1
+      assert_receive {:conversation_updated, ^conv_id}, 1000
+
+      updated = Repo.get!(Custyard.Conversation, conv.id)
+      assert updated.state == :dormant
     end
 
     test "broadcasts conversation_updated event for each transition" do

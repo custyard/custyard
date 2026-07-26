@@ -150,7 +150,7 @@ Important Files Changed
 | lib/custyard_web/live/operator/conversation_live.ex | Adds nil-org rendering, global topic fallback subscription, and broadcast_to_org migration — but the global topic subscription introduces a crash risk from unhandled {:conversation_created, id} messages |
 | lib/custyard/authorization.ex | Adds nil-org conversation access for all OperatorAccount roles; clause ordering is correct (super_admin first, nil-org second, org-match last, catch-all deny at bottom); documented and tested |
 | lib/custyard/conversations.ex | Adds broadcast_to_org/2 with nil guard, updates apply_organization_filter to OR-include nil-org rows for org-scoped queries; logic is sound and the new nil-org skip in broadcast is a strict improvement over interpolating a bare topic |
-| lib/custyard/conversations/dormancy_checker.ex | Migrates to broadcast_to_org; the inner join on organization in stale_conversations/0 already excludes nil-org conversations so the nil guard in broadcast_to_org is unreachable here but harmlessly defensive |
+| lib/custyard/conversations/dormancy_checker.ex | Migrates to broadcast_to_org; the inner join on organization in stale_conversations/0 already excludes nil-org conversations so the nil guard in broadcast_to_org is unreachable here but harmlessly defensive. **Superseded 2026-07-25**: the inner join was a bug, not a design choice — see the correction under Minor Observations below. The nil guard is now reachable. |
 | lib/custyard_web/components/operator_components.ex | Adds human labels for source atoms and a humanized fallback; String.capitalize gives "Public intake" for :public_intake as expected; unknown sources render neutrally without requiring a code change |
 | lib/custyard_web/live/operator/attention_queue_live.ex | Migrates raw broadcasts to broadcast_to_org, adds source_badge to queue card, and guards org-name/tier display for nil-org conversations; has a catch-all handle_info that conversation_live.ex is missing |
 
@@ -189,7 +189,9 @@ Comments Outside Diff (1)
 
 ### Minor Observations
 
-1. **DormancyChecker excludes nil-org conversations by design** (`lib/custyard/conversations/dormancy_checker.ex:49-61`): The `join: o in assoc(c, :organization)` (inner join) inherently excludes nil-org conversations from dormancy transitions. This appears intentional since unlinked conversations have no tier-based thresholds, but it's worth noting in case future behavior changes are needed.
+1. ~~**DormancyChecker excludes nil-org conversations by design**~~ (`lib/custyard/conversations/dormancy_checker.ex:49-61`): The `join: o in assoc(c, :organization)` (inner join) inherently excludes nil-org conversations from dormancy transitions. This appears intentional since unlinked conversations have no tier-based thresholds, but it's worth noting in case future behavior changes are needed.
+
+   **Correction (2026-07-25).** Not by design. `sdd.md` §74/§80 define the automatic `waiting -> dormant` transition as inactivity-based with no carve-out for unlinked rows, and `Scoring.neglect_tier/1` already resolves a nil organization to the standard tier — so "no tier-based threshold" was never true. `NeglectChecker` was corrected to a LEFT join plus an `is_nil(organization_id)` standard-cutoff branch, and `DormancyChecker` now matches. Unlinked prospects go dormant on the standard cutoff.
 
 2. **Source badge fallback** (`lib/custyard_web/components/operator_components.ex:217-219`): The `String.capitalize/1` fallback produces "Public intake" from `:public_intake` which is good. Just confirming this matches expectations for the upcoming PR #3.
 
