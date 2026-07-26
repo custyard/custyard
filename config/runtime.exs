@@ -17,6 +17,18 @@ parse_int = fn env_var, default ->
   end
 end
 
+# Treat a blank env var as unset.
+#
+# `""` is truthy in Elixir, so `if System.get_env("X")` passes for a secret
+# that exists with an empty value. `.env.secrets.sample` ships credential keys
+# empty by design and `mix fly.secrets --apply` syncs whatever is in the file,
+# so blank-but-present is a realistic state, not a hypothetical one.
+blank_to_nil = fn
+  nil -> nil
+  "" -> nil
+  value -> value
+end
+
 # Helper to add webhook secret from env var if set
 maybe_put_env_secret = fn map, key, env_var ->
   case System.get_env(env_var) do
@@ -119,8 +131,8 @@ if config_env() == :prod do
         # Swoosh.Adapters.Lettermint available since swoosh 1.17+
         config :custyard, Custyard.Mailer,
           adapter: Swoosh.Adapters.Lettermint,
-          api_token: System.get_env("LETTERMINT_API_KEY"),
-          base_url: System.get_env("LETTERMINT_API_URL")
+          api_token: blank_to_nil.(System.get_env("LETTERMINT_API_KEY")),
+          base_url: blank_to_nil.(System.get_env("LETTERMINT_API_URL"))
 
       "local" ->
         # Explicitly opted into the in-memory adapter; warned about above.
@@ -222,9 +234,14 @@ if imap_enabled do
     ssl: System.get_env("IMAP_SSL") != "false"
 end
 
-# Lettermint API configuration (route management)
-lettermint_api_url = System.get_env("LETTERMINT_API_URL")
-lettermint_api_key = System.get_env("LETTERMINT_API_KEY")
+# Lettermint API configuration (route management).
+#
+# Blank is treated as unset: a key that synced with an empty value would
+# otherwise wire up the real HttpClient with no credential, so every
+# provisioning call fails at the API instead of falling back to the MockClient,
+# which at least announces itself at boot.
+lettermint_api_url = blank_to_nil.(System.get_env("LETTERMINT_API_URL"))
+lettermint_api_key = blank_to_nil.(System.get_env("LETTERMINT_API_KEY"))
 
 if lettermint_api_url && lettermint_api_key do
   config :custyard, :lettermint,
