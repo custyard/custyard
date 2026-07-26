@@ -15,18 +15,31 @@ Deploy Custyard to [Fly.io](https://fly.io) with SQLite persistent storage.
 # From the repo root — create app + volume on Fly.io
 fly launch --no-deploy
 
-# Create a persistent volume for SQLite (pick the same region as your app)
+# Create a persistent volume for SQLite (pick the same region as your app).
+# Skip this if you are using Turso — the shipped fly.toml has [mounts]
+# commented out for exactly that case. If you keep local SQLite, you must
+# also uncomment [mounts] or the database lives on the ephemeral rootfs.
 fly volumes create custyard_data --region <your-region> --size 1
 
-# Set required secret (deployment fails without this)
+# Set required secrets (deployment fails without these)
 fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
-
-# Optional: set operator password (auto-generated if not set)
-fly secrets set OPERATOR_PASSWORD="<GENERATE_A_STRONG_PASSWORD>"
+fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_API_KEY="..."
 
 # Deploy
 fly deploy
+
+# Create a routable operator — bootstrap only seeds the non-routable
+# admin@custyard.local, and login is magic-link-only, so without this
+# nobody can sign in.
+fly ssh console -C "/app/bin/custyard eval 'Custyard.Release.setup_operator(\"you@yourdomain\")'"
 ```
+
+> **Mail is required, not optional.** Operator login is magic-link-only: the
+> app emails a single-use token and there is no password path. `config/runtime.exs`
+> refuses to boot if `MAIL_ADAPTER` is unset or unrecognized, which surfaces the
+> problem at deploy time while Fly still has the previous machine running. Use
+> `MAIL_ADAPTER=local` only for a smoke-test instance — it discards every message,
+> including your own login links.
 
 > `fly launch --no-deploy` reads the existing `fly.toml`. Accept the defaults or change the app name/region when prompted. See [fly launch docs](https://fly.io/docs/launch/create/).
 
@@ -41,7 +54,7 @@ The included `fly.toml` is pre-configured with:
 | `primary_region` | `iad` | Change to your preferred [region](https://fly.io/docs/reference/regions/) |
 | `auto_stop_machines` | `stop` | Saves cost; machines restart on traffic |
 | `min_machines_running` | `1` | Keeps one machine warm for WebSocket (LiveView) |
-| `mounts` | `/data` | SQLite database lives here |
+| `mounts` | *commented out* | The volume mount is disabled because this deployment uses Turso. **If you are not on Turso, uncomment it** — with `auto_stop_machines = "stop"` and no mount, the SQLite file lives on the ephemeral rootfs and every deploy or idle-stop destroys the database, including prospect resume tokens, which are the only credential a prospect has |
 
 Edit `PHX_HOST` in `fly.toml` `[env]` to match your domain (or `<app-name>.fly.dev`).
 
@@ -53,16 +66,10 @@ Manage secrets with [`fly secrets`](https://fly.io/docs/apps/secrets/):
 # Required (deployment will fail without SECRET_KEY_BASE)
 fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
 
-# Optional (derived from SECRET_KEY_BASE if not set)
-fly secrets set LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32)
-
-# Optional (auto-generated on each start if not set)
-fly secrets set OPERATOR_PASSWORD="..."
-
-# Inbound webhooks/email — set to enable /api/webhook/inbound (omit to disable)
-fly secrets set WEBHOOK_TOKEN="..."
-
-# Optional — outbound email (pick one adapter)
+# Required — outbound email (pick one adapter; the app refuses to boot
+# without MAIL_ADAPTER, because operator login is magic-link-only)
+fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_API_KEY="..." LETTERMINT_API_URL="..."
+# or
 fly secrets set MAIL_ADAPTER=postmark POSTMARK_API_KEY="..."
 # or
 fly secrets set MAIL_ADAPTER=sendgrid SENDGRID_API_KEY="..."
@@ -70,10 +77,33 @@ fly secrets set MAIL_ADAPTER=sendgrid SENDGRID_API_KEY="..."
 fly secrets set MAIL_ADAPTER=mailgun MAILGUN_API_KEY="..." MAILGUN_DOMAIN="..."
 # or
 fly secrets set MAIL_ADAPTER=smtp SMTP_HOST="..." SMTP_USERNAME="..." SMTP_PASSWORD="..."
+# or, smoke-test instances only — discards all mail including login links
+fly secrets set MAIL_ADAPTER=local
+
+# Required whenever DATABASE_URL is a libsql:// (Turso) URL — see Turso below
+fly secrets set TURSO_AUTH_TOKEN="..."
+
+# Optional (derived from SECRET_KEY_BASE if not set)
+fly secrets set LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32)
+
+# Optional — inbound webhook signature verification, one secret per source.
+# Omit a source to leave its signature check unconfigured.
+fly secrets set WEBHOOK_SECRET_LETTERMINT="..."
+fly secrets set WEBHOOK_SECRET_ZENDESK="..."
+fly secrets set WEBHOOK_SECRET_INTERCOM="..."
+fly secrets set WEBHOOK_SECRET_SLACK="..."
+
+# Optional — error tracking (prod only; unset means the Sentry SDK stays off)
+fly secrets set SENTRY_DSN="https://<public_key>@catch.onetimesecret.com/11"
 
 # List current secrets
 fly secrets list
 ```
+
+These are synced from `.env.secrets` by `mix fly.secrets --apply`. That task
+skips any line beginning with `#`, so a key that is present-but-commented in
+`.env.secrets` is never set on Fly — check `fly secrets list` rather than
+assuming the file is the source of truth.
 
 ### Environment variables
 
@@ -85,6 +115,7 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 | `PHX_HOST` | `custyard.fly.dev` | Public hostname |
 | `DATABASE_URL` | — | Connection URL for Postgres or Turso (takes precedence over `DATABASE_PATH`) |
 | `DATABASE_PATH` | `/data/custyard.db` | SQLite DB path (must be on the mounted volume) |
+| `MAIL_ADAPTER` | — | **Required.** One of `lettermint`, `postmark`, `sendgrid`, `mailgun`, `smtp`, `local`. Set as a secret alongside its credential; the app raises on boot if unset or unrecognized |
 | `POOL_SIZE` | `10` | Ecto connection pool size |
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
 | `IMAP_ENABLED` | `false` | IMAP polling (disabled — ports blocked on Fly.io) |
