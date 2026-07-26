@@ -942,12 +942,19 @@ defmodule Custyard.Conversations do
   def cleanup_orphaned_contacts(opts \\ []) do
     dry_run = Keyword.get(opts, :dry_run, false)
 
-    # Find contacts with no conversations
+    # Find contacts with no conversations. Expressed as NOT EXISTS rather
+    # than an anti-join because SQLite rejects JOINs in DELETE statements,
+    # and this query is used for both the count and the delete.
     query =
       from(ct in Custyard.Contact,
-        left_join: c in Conversation,
-        on: c.contact_id == ct.id,
-        where: is_nil(c.id)
+        as: :contact,
+        where:
+          not exists(
+            from(c in Conversation,
+              where: c.contact_id == parent_as(:contact).id,
+              select: 1
+            )
+          )
       )
 
     if dry_run do

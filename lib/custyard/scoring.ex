@@ -106,12 +106,16 @@ defmodule Custyard.Scoring do
       |> Repo.all()
       |> Map.new()
 
+    # Operator settings are identical for every conversation in the batch;
+    # read them once rather than four times per row (see preload_settings/0).
+    settings = preload_settings()
+
     # Calculate and update each - use non-raising update to handle race conditions
     updated_count =
       conversations
       |> Enum.map(fn conv ->
         msg_count = Map.get(message_counts, conv.id, 0)
-        score = calculate_with_message_count(conv, msg_count)
+        score = calculate_with_message_count(conv, msg_count, settings)
 
         case conv
              |> Ecto.Changeset.change(cached_score: score)
@@ -135,9 +139,9 @@ defmodule Custyard.Scoring do
   end
 
   # Internal: Calculate score with pre-fetched message count (batch path)
-  defp calculate_with_message_count(conversation, message_count) do
+  defp calculate_with_message_count(conversation, message_count, settings) do
     conversation
-    |> components(message_count)
+    |> components(message_count, settings)
     |> components_total()
   end
 
@@ -149,17 +153,49 @@ defmodule Custyard.Scoring do
   @doc """
   Calculate score without caching (for display/debugging).
   """
-  def calculate(conversation) do
+  def calculate(conversation, settings \\ nil) do
     conversation
-    |> components(nil)
+    |> components(nil, settings || preload_settings())
     |> components_total()
   end
 
   @doc """
-  Get score breakdown for transparency UI.
+  Read every operator setting the per-conversation scoring functions need,
+  in one pass.
+
+  `Settings.get/0` is an uncached `Repo.one`, and scoring a single
+  conversation reaches for settings four times (weights, the unlinked-tier
+  score, and neglect thresholds twice — once directly and once through the
+  neglect bonus). On SQLite that is cheap; in production the repo is Turso
+  over the network, so each one is a remote round trip and a queue render
+  or recalculator sweep turns into hundreds of sequential ones.
+
+  Pass the result to `breakdown/2` and `neglect_status/2` when scoring more
+  than one conversation. Reads are per-call, so hold a bundle only for the
+  duration of one render or sweep.
   """
-  def breakdown(conversation) do
-    components = components(conversation, nil)
+  def preload_settings do
+    %{
+      weights: get_weights(),
+      thresholds: get_neglect_thresholds(),
+      unlinked_tier_score: get_unlinked_tier_score()
+    }
+  end
+
+  @doc """
+  Get score breakdown for transparency UI.
+
+  Options:
+
+  - `:settings` — a `preload_settings/0` bundle, to avoid re-reading
+    operator settings per conversation.
+  - `:message_count` — the conversation's 24h message count when the caller
+    already has it, which skips a per-conversation `COUNT` query.
+  """
+  def breakdown(conversation, opts \\ []) do
+    settings = Keyword.get(opts, :settings) || preload_settings()
+    message_count = Keyword.get(opts, :message_count)
+    components = components(conversation, message_count, settings)
 
     %{
       idle: round(components.idle),
@@ -175,9 +211,9 @@ defmodule Custyard.Scoring do
   # Single source of truth for the six weighted score components.
   # `message_count` overrides the 24h message-count query for the batch path;
   # pass nil to compute velocity from the database.
-  defp components(conversation, message_count) do
+  defp components(conversation, message_count, settings) do
     conversation = ensure_preloaded(conversation, :organization)
-    weights = get_weights()
+    weights = settings.weights
 
     velocity =
       case message_count do
@@ -188,10 +224,10 @@ defmodule Custyard.Scoring do
     %{
       idle: idle_score(conversation) * weights.idle,
       state: state_score(conversation) * weights.state,
-      tier: tier_score(conversation) * weights.tier,
+      tier: tier_score(conversation, settings) * weights.tier,
       urgency: urgency_score(conversation) * weights.urgency,
       velocity: velocity * weights.velocity,
-      neglect: neglect_bonus(conversation) * weights.neglect
+      neglect: neglect_bonus(conversation, settings) * weights.neglect
     }
   end
 
@@ -244,11 +280,11 @@ defmodule Custyard.Scoring do
 
   # Conversations without an organization (unlinked prospects) get the
   # configurable tier-equivalent score from intake_config.
-  defp tier_score(%{organization: nil}) do
-    get_unlinked_tier_score()
+  defp tier_score(%{organization: nil}, settings) do
+    settings.unlinked_tier_score
   end
 
-  defp tier_score(conversation) do
+  defp tier_score(conversation, _settings) do
     tier = conversation.organization.tier
     Map.get(@tier_scores, tier, 10)
   end
@@ -263,8 +299,8 @@ defmodule Custyard.Scoring do
     min(10, :math.log(count + 1) * 3)
   end
 
-  defp neglect_bonus(conversation) do
-    case neglect_status(conversation) do
+  defp neglect_bonus(conversation, settings) do
+    case neglect_status(conversation, settings.thresholds) do
       :critical -> 15
       :warning -> 7
       :ok -> 0

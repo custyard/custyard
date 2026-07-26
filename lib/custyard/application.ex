@@ -159,12 +159,12 @@ defmodule Custyard.Application do
     end
   end
 
-  # Public-intake background sweeps (expired slug claims). Flagged off in
-  # config/test.exs — tests drive the sweep functions directly with an
-  # injected clock.
+  # Public-intake background sweeps (expired slug claims, retention bounds).
+  # Flagged off in config/test.exs — tests drive the sweep functions
+  # directly with an injected clock or explicit options.
   defp maybe_add_intake_sweeps(children) do
     if Application.get_env(:custyard, :start_intake_sweeps, true) do
-      children ++ [Custyard.Slugs.ClaimExpiry]
+      children ++ [Custyard.Slugs.ClaimExpiry, Custyard.Conversations.RetentionSweep]
     else
       children
     end

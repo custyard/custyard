@@ -849,4 +849,87 @@ defmodule Custyard.ScoringTest do
       assert Scoring.breakdown(critical).neglect_bonus == 15
     end
   end
+
+  describe "preload_settings/0" do
+    test "carries every setting the per-conversation scoring functions need" do
+      settings = Scoring.preload_settings()
+
+      assert %{weights: weights, thresholds: thresholds, unlinked_tier_score: score} = settings
+      assert is_map(weights)
+      assert {_warning, _critical} = thresholds.standard
+      assert is_number(score)
+    end
+
+    test "a pre-loaded bundle produces the same breakdown as reading per call" do
+      org = insert_organization(tier: :enterprise)
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          urgency: :urgent,
+          state: :new,
+          last_operator_action_at: DateTime.add(DateTime.utc_now(), -30, :hour)
+        )
+
+      assert Scoring.breakdown(conversation) ==
+               Scoring.breakdown(conversation, settings: Scoring.preload_settings())
+    end
+
+    # The whole point of the bundle: in production the repo is Turso over
+    # the network, so a per-row settings read is a per-row round trip.
+    test "scoring a conversation with a bundle and a known count issues no queries" do
+      org = insert_organization(tier: :standard)
+      conversation = insert_conversation(organization_id: org.id) |> Repo.preload(:organization)
+      settings = Scoring.preload_settings()
+
+      queries =
+        count_queries(fn ->
+          Scoring.breakdown(conversation, settings: settings, message_count: 3)
+          Scoring.neglect_status(conversation, settings.thresholds)
+        end)
+
+      assert queries == 0
+    end
+
+    test "without a bundle the same scoring hits the database repeatedly" do
+      org = insert_organization(tier: :standard)
+      conversation = insert_conversation(organization_id: org.id) |> Repo.preload(:organization)
+
+      queries =
+        count_queries(fn ->
+          Scoring.breakdown(conversation)
+          Scoring.neglect_status(conversation)
+        end)
+
+      assert queries > 0
+    end
+  end
+
+  defp count_queries(fun) do
+    parent = self()
+    handler_id = {__MODULE__, System.unique_integer()}
+
+    :telemetry.attach(
+      handler_id,
+      [:custyard, :repo, :query],
+      fn _event, _measurements, _metadata, _config -> send(parent, {handler_id, :query}) end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+
+    drain_queries(handler_id, 0)
+  end
+
+  defp drain_queries(handler_id, count) do
+    receive do
+      {^handler_id, :query} -> drain_queries(handler_id, count + 1)
+    after
+      0 -> count
+    end
+  end
 end
