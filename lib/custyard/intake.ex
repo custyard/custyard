@@ -25,6 +25,7 @@ defmodule Custyard.Intake do
 
   alias Custyard.Auth.Token
   alias Custyard.Email.{Normalizer, SenderMatcher}
+  alias Custyard.Intake.ArrivalEmail
 
   # Slack-adapter subject derivation precedent: 80-char cap, 77 + "..."
   @subject_max_length 80
@@ -204,6 +205,12 @@ defmodule Custyard.Intake do
           conversation.organization_id,
           {:conversation_created, conversation.id}
         )
+
+        # Out-of-band arrival signal: the broadcasts above reach only
+        # LiveViews that are already open. Result deliberately ignored —
+        # everything above is committed, and ArrivalEmail owns its own
+        # gating, rate limiting, and failure logging.
+        _ = ArrivalEmail.send_arrival(conversation, source, body)
 
         {:ok,
          %{
