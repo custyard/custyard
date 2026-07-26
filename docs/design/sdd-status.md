@@ -2,6 +2,12 @@
 
 Planning & Implementation State
 
+> **Partially historical.** Sections below marked with a dated correction were
+> verified against the code on 2026-07-25; the rest of this document has not
+> been re-verified since it was written and its test counts and status tables
+> may lag the implementation. `docs/design/spec-public-intake.md` and its
+> design-decisions companion are current and authoritative for the intake path.
+
 ## Key Files
 
 Planning Artifacts:
@@ -34,7 +40,7 @@ Security:
 
 - lib/custyard_web/plugs/require_operator.ex - Operator session validation
 - lib/custyard_web/plugs/portal_auth.ex - Org token/custom domain validation
-- lib/custyard_web/plugs/webhook_auth.ex - Bearer token for webhook endpoint
+- lib/custyard/webhooks/signature.ex - Per-source HMAC signature verification for inbound webhooks (`WEBHOOK_SECRET_LETTERMINT`, `_ZENDESK`, `_INTERCOM`, `_SLACK`), with per-adapter digests under lib/custyard/webhooks/adapters/
 - lib/custyard_web/plugs/login_rate_limit.ex - ETS-based rate limiting (5/60s per IP)
 - lib/custyard_web/plugs/custom_domain.ex - Custom domain → org resolution with path rewriting
 
@@ -62,7 +68,7 @@ Security:
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ------- |
 | Email Ingestion Pipeline     | LMTP server, IMAP poller, HTTP webhook. Three ingestion paths converge on Processor for unified handling  | Done    |
 | Attention Scoring Engine     | Scoring module with idle/state/tier/urgency/velocity/neglect components. Scheduler runs every 5 min.      | Done    |
-| Authentication (Operator)    | Email/password + Argon2, session-based, rate-limited login, timing-attack safe                            | Done    |
+| Authentication (Operator)    | **Corrected 2026-07-25:** magic-link only — `POST /login` emails a 15-minute single-use token, `GET /login/verify/:token` establishes the session. Rate-limited, timing-attack safe. `password_hash` (Argon2) survives on the schema and is still written by `mix dev.reset_operator_password`, but no route consumes it; there is no password login path. | Done    |
 | Authentication (Portal)      | Token-based URL + custom domain. No Rodauth/SSO yet — SDD specifies Rodauth email/password + optional SSO | Partial |
 | Background Processing        | Scoring scheduler, dormancy checker, neglect checker all running as GenServers                            | Done    |
 | Operator/Customer Isolation  | Separate route scopes, plugs, LiveView on_mount hooks. No shared auth.                                    | Done    |
@@ -85,7 +91,7 @@ Security:
 | Project Template  | is_template flag on Project. Template instantiation with date calculation.                     | Done    |
 | Activity Log      | Not implemented — SDD specifies append-only log for organization timeline and audit.           | Not Yet |
 | Neglect Threshold | Stored in Settings schema (JSON column), per-tier warning/critical hours.                      | Done    |
-| Operator Account  | email, password_hash (Argon2).                                                                 | Done    |
+| Operator Account  | email, role, organization_id, login_token + login_token_expires_at (magic link). password_hash (Argon2) present but unused by any login route — see the Authentication (Operator) row. | Done    |
 | Portal Account    | Not implemented as separate entity — portal access uses org token, not per-contact accounts.   | Not Yet |
 | Settings          | Single-row schema with score_weights, neglect_thresholds, sieve_header_mappings.               | Done    |
 
@@ -214,9 +220,9 @@ Recent QA work (qa/batch1-security-and-validation-fixes):
 
 Security measures in place:
 
-- Argon2 password hashing with constant-time comparison
+- Magic-link operator login: single-use token, 15-minute TTL, constant-time comparison (`Plug.Crypto.secure_compare`), cleared on use
 - Login rate limiting (5 attempts / 60s per IP)
-- Webhook bearer token authentication (secure_compare)
+- Per-source HMAC webhook signature verification (secure_compare) — replaced the single bearer token this document originally described
 - Session renewal on login
 - CSRF protection on all browser routes
 - HTML email bodies stripped to plain text
