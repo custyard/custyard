@@ -85,6 +85,31 @@ defmodule CustyardWeb.Live.PortalAuthTest do
   end
 
   describe "on_mount/4 - custom domain handling" do
+    test "keeps navigation and submission on the custom domain", %{conn: conn} do
+      org = insert_organization(custom_domain: "portal.acme.test")
+      conn = %{conn | host: org.custom_domain}
+
+      {:ok, _view, html} = live(conn, "/")
+      assert html =~ ~s(href="/new")
+      assert html =~ ~s(href="/projects")
+      refute html =~ ~s(href="//)
+      refute html =~ "/p/#{org.token}"
+
+      {:ok, view, form_html} = live(conn, "/new")
+      assert form_html =~ ~s(href="/")
+
+      {:error, {:live_redirect, %{to: redirect_path}}} =
+        view
+        |> form("form", %{
+          "subject" => "Custom domain request",
+          "body" => "Please check this request",
+          "urgency" => "normal"
+        })
+        |> render_submit()
+
+      assert redirect_path =~ ~r{^/request/\d+$}
+    end
+
     test "sets is_custom_domain assign from session flag", %{conn: conn} do
       org = insert_organization(name: "Custom Domain Org")
 

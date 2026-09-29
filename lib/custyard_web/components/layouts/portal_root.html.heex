@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en" class="[scrollbar-gutter:stable]">
+  <head>
+    <% org = @current_org %>
+    <% description = "Customer portal for #{org.name}" %>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content={org.primary_color || "#4f46e5"} />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="application-name" content={org.name} />
+    <meta name="apple-mobile-web-app-title" content={org.name} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={org.name} />
+    <meta property="og:title" content={assigns[:page_title] || org.name} />
+    <meta property="og:description" content={description} />
+    <meta :if={org.logo_url} property="og:image" content={org.logo_url} />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={assigns[:page_title] || org.name} />
+    <meta name="twitter:description" content={description} />
+    <meta :if={org.logo_url} name="twitter:image" content={org.logo_url} />
+    <.live_title suffix={" · " <> org.name}>
+      {assigns[:page_title] || org.name}
+    </.live_title>
+    <link rel="icon" href={org.logo_url || ~p"/images/portal-icon.svg"} />
+    <link :if={org.logo_url} rel="apple-touch-icon" href={org.logo_url} />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
+    </script>
+  </head>
+  <body class="bg-white dark:bg-zinc-900 antialiased" data-testid="portal-root-body">
+    {@inner_content}
+  </body>
+</html>

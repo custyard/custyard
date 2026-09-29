@@ -34,6 +34,7 @@ defmodule CustyardWeb.Router do
 
   pipeline :portal_auth do
     plug CustyardWeb.Plugs.PortalAuth
+    plug :put_root_layout, html: {CustyardWeb.Layouts, :portal_root}
   end
 
   # Public prospect surfaces (/i intake, /c conversation, /claim slug-claim):

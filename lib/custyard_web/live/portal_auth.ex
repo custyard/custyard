@@ -47,13 +47,14 @@ defmodule CustyardWeb.Live.PortalAuth do
   end
 
   # Generate portal navigation paths based on domain type.
-  # Custom domains get root-relative paths (/) to preserve white-label branding.
+  # Custom domains get an empty prefix, so appending /new yields /new rather
+  # than the protocol-relative URL //new.
   # Standard access gets token-prefixed paths (/p/:token).
   defp assign_portal_paths(socket, org, is_custom_domain) do
     if is_custom_domain do
-      # Custom domain: use root-relative paths to avoid exposing org token
+      # Custom domain: preserve the host without exposing the org token.
       socket
-      |> assign(:portal_path, "/")
+      |> assign(:portal_path, "")
       |> assign(:portal_home_path, "/")
     else
       # Standard access: use token-prefixed paths
