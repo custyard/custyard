@@ -36,7 +36,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
           # Create message with idempotent insert to handle race conditions.
           # If a concurrent request already created a message with this message_id,
           # we need to use that message's conversation instead.
-          case create_message_with_dedup(conversation, normalized, is_new) do
+          case create_message_with_dedup(conversation, normalized, is_new, route_context) do
             {:ok, final_conversation, final_is_new} ->
               {final_conversation, final_is_new}
 
@@ -79,12 +79,12 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   end
 
   defp find_or_create_conversation(normalized, org, contact, route_context) do
+    dedup_scope = delivery_scope(org.id, normalized, route_context)
     # First check for duplicate message_id to prevent race condition:
     # If this exact message was already processed (perhaps concurrently),
     # return its existing conversation instead of creating a duplicate.
-    with :not_found <- find_by_message_id(normalized.message_id, org.id),
-         # Thread matching is scoped to organization to prevent cross-org leakage
-         :not_found <- ThreadMatcher.find_thread(normalized, org.id) do
+    with :not_found <- find_by_message_id(normalized.message_id, org.id, dedup_scope),
+         :not_found <- find_thread(normalized, org.id, dedup_scope) do
       case create_conversation(normalized, org, contact, route_context) do
         {:ok, conversation} -> {:ok, conversation, true}
         error -> error
@@ -97,9 +97,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   end
 
   # Find conversation by existing message_id (for race condition prevention)
-  defp find_by_message_id(nil, _org_id), do: :not_found
+  defp find_by_message_id(nil, _org_id, _dedup_scope), do: :not_found
 
-  defp find_by_message_id(message_id, org_id) do
+  defp find_by_message_id(message_id, org_id, dedup_scope) do
     import Ecto.Query
 
     query =
@@ -107,6 +107,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
         join: c in Conversation,
         on: c.id == m.conversation_id,
         where: m.message_id == ^message_id,
+        # NULL covers messages created before the scoped index migration and
+        # direct imports that do not use insert_idempotent/1.
+        where: m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope),
         where: c.organization_id == ^org_id,
         select: c,
         limit: 1
@@ -115,6 +118,38 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       nil -> :not_found
       conversation -> {:ok, conversation}
     end
+  end
+
+  defp find_thread(%{source: :zendesk, in_reply_to: marker}, org_id, dedup_scope)
+       when is_binary(marker) do
+    import Ecto.Query
+
+    query =
+      from m in Message,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where: c.organization_id == ^org_id,
+        where: c.source == :zendesk,
+        where: m.in_reply_to == ^marker,
+        where: m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope),
+        select: c,
+        limit: 1
+
+    case Repo.one(query) do
+      nil -> :not_found
+      conversation -> {:ok, conversation}
+    end
+  end
+
+  defp find_thread(%{source: source} = normalized, org_id, dedup_scope)
+       when source in [:intercom, :slack],
+       do: ThreadMatcher.find_thread(normalized, org_id, dedup_scope)
+
+  defp find_thread(normalized, org_id, _dedup_scope),
+    do: ThreadMatcher.find_thread(normalized, org_id)
+
+  defp delivery_scope(org_id, normalized, route_context) do
+    Message.dedup_scope(org_id, normalized[:source], route_context[:route_id])
   end
 
   defp create_conversation(normalized, org, contact, route_context) do
@@ -147,10 +182,34 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
 
   # Create message and handle race condition where duplicate message_id means
   # a concurrent request already processed this email
-  defp create_message_with_dedup(conversation, normalized, is_new) do
+  defp create_message_with_dedup(conversation, normalized, is_new, route_context) do
     origin = normalized[:source]
     source = message_source(origin)
+    dedup_scope = delivery_scope(conversation.organization_id, normalized, route_context)
 
+    # A previously imported message may have no dedup_scope. Its conversation
+    # was found above; do not insert a second copy under the new scoped index.
+    if already_delivered?(normalized.message_id, conversation.id, dedup_scope) do
+      {:ok, conversation, false}
+    else
+      insert_message(conversation, normalized, is_new, source, origin, dedup_scope)
+    end
+  end
+
+  defp already_delivered?(nil, _conversation_id, _dedup_scope), do: false
+
+  defp already_delivered?(message_id, conversation_id, dedup_scope) do
+    import Ecto.Query
+
+    Repo.exists?(
+      from m in Message,
+        where: m.conversation_id == ^conversation_id,
+        where: m.message_id == ^message_id,
+        where: m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope)
+    )
+  end
+
+  defp insert_message(conversation, normalized, is_new, source, origin, dedup_scope) do
     attrs = %{
       conversation_id: conversation.id,
       source: source,
@@ -161,6 +220,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       in_reply_to: normalized.in_reply_to,
       is_internal_note: false
     }
+
+    attrs = Map.put(attrs, :dedup_scope, dedup_scope)
 
     case Message.insert_idempotent(attrs) do
       {:ok, message} ->

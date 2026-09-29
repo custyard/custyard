@@ -100,6 +100,88 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert length(messages) == 1
     end
 
+    test "the same provider message ID is retained separately for two organizations" do
+      first_org = insert_organization(domain: "first.example.com")
+      second_org = insert_organization(domain: "second.example.com")
+
+      normalized = %{
+        from: "sender@example.com",
+        subject: "Shared delivery",
+        body: "Same message delivered to two customers",
+        message_id: "shared-delivery@example.com",
+        in_reply_to: nil,
+        references: nil,
+        headers: %{},
+        source: :lettermint
+      }
+
+      assert {:ok, first} = SenderMatching.process(normalized, %{organization_id: first_org.id})
+      assert {:ok, second} = SenderMatching.process(normalized, %{organization_id: second_org.id})
+      assert first.id != second.id
+      assert second.organization_id == second_org.id
+
+      messages =
+        Message |> Ecto.Query.where(message_id: "shared-delivery@example.com") |> Repo.all()
+
+      assert length(messages) == 2
+
+      assert MapSet.new(Enum.map(messages, & &1.conversation_id)) ==
+               MapSet.new([first.id, second.id])
+    end
+
+    test "Zendesk comments thread by ticket and deduplicate by comment within a route" do
+      alias Custyard.Webhooks.Adapters.Zendesk
+
+      org = insert_organization(domain: "zendesk.example.com")
+      route_context = %{organization_id: org.id, route_id: 42}
+
+      ticket = %{
+        "id" => 987,
+        "subject" => "Help",
+        "requester" => %{"email" => "alice@example.com"}
+      }
+
+      {:ok, first_event} =
+        Zendesk.normalize(%{
+          "ticket" => Map.put(ticket, "comment", %{"id" => 10, "body" => "First"})
+        })
+
+      {:ok, second_event} =
+        Zendesk.normalize(%{
+          "ticket" => Map.put(ticket, "comment", %{"id" => 11, "body" => "Second"})
+        })
+
+      assert {:ok, first} = SenderMatching.process(first_event, route_context)
+      assert {:ok, second} = SenderMatching.process(second_event, route_context)
+      assert first.id == second.id
+      assert {:ok, retry} = SenderMatching.process(second_event, route_context)
+      assert retry.id == first.id
+
+      messages = Message |> Ecto.Query.where(conversation_id: ^first.id) |> Repo.all()
+      assert Enum.sort(Enum.map(messages, & &1.body)) == ["First", "Second"]
+    end
+
+    test "identical Zendesk ticket and comment IDs on separate routes stay separate" do
+      alias Custyard.Webhooks.Adapters.Zendesk
+
+      org = insert_organization(domain: "zendesk-routes.example.com")
+
+      ticket = %{
+        "id" => 100,
+        "subject" => "Same remote ID",
+        "requester" => %{"email" => "alice@example.com"},
+        "comment" => %{"id" => 1, "body" => "Route-specific"}
+      }
+
+      {:ok, event} = Zendesk.normalize(%{"ticket" => ticket})
+      assert {:ok, first} = SenderMatching.process(event, %{organization_id: org.id, route_id: 1})
+
+      assert {:ok, second} =
+               SenderMatching.process(event, %{organization_id: org.id, route_id: 2})
+
+      assert first.id != second.id
+    end
+
     test "detects urgent subject keywords" do
       org = insert_organization(domain: "acme.example.com")
 

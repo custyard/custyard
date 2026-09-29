@@ -73,21 +73,24 @@ defmodule Custyard.Webhooks.Adapters.Zendesk do
     ticket = params["ticket"] || params
     from = extract_sender(ticket, params)
     subject = ticket["subject"] || ticket["title"] || "(no subject)"
-    body = extract_body(ticket)
+    comment = ticket["comment"] || ticket["latest_comment"] || params["comment"]
+    body = extract_body(ticket, comment)
 
-    {:ok,
-     %{
-       from: from,
-       to: nil,
-       subject: truncate(subject, @max_subject_length),
-       body: truncate(body, @max_body_length),
-       message_id: build_message_id(ticket),
-       in_reply_to: nil,
-       references: nil,
-       headers: %{},
-       source: :zendesk,
-       metadata: build_metadata(ticket)
-     }}
+    with {:ok, message_id} <- build_message_id(ticket, params, comment) do
+      {:ok,
+       %{
+         from: from,
+         to: nil,
+         subject: truncate(subject, @max_subject_length),
+         body: truncate(body, @max_body_length),
+         message_id: message_id,
+         in_reply_to: ticket_thread_id(ticket),
+         references: nil,
+         headers: %{},
+         source: :zendesk,
+         metadata: build_metadata(ticket)
+       }}
+    end
   end
 
   defp extract_sender(ticket, params) do
@@ -106,17 +109,35 @@ defmodule Custyard.Webhooks.Adapters.Zendesk do
     }
   end
 
-  defp extract_body(ticket) do
-    comment = ticket["comment"] || ticket["latest_comment"] || %{}
-    comment["body"] || ticket["description"] || ""
-  end
+  defp extract_body(ticket, comment) when is_map(comment),
+    do: comment["body"] || ticket["description"] || ""
 
-  defp build_message_id(ticket) do
-    case ticket["id"] do
-      nil -> nil
-      id -> "zendesk-#{id}@zendesk.webhook"
+  defp extract_body(_ticket, comment) when is_binary(comment), do: comment
+  defp extract_body(ticket, _comment), do: ticket["description"] || ""
+
+  defp ticket_thread_id(%{"id" => id}) when not is_nil(id),
+    do: "zendesk-ticket-#{id}@zendesk.webhook"
+
+  defp ticket_thread_id(_), do: nil
+
+  defp build_message_id(%{"id" => ticket_id}, params, comment) when not is_nil(ticket_id) do
+    comment_id = (is_map(comment) && comment["id"]) || params["comment_id"] || params["event_id"]
+
+    case comment_id do
+      nil ->
+        if is_nil(comment) do
+          # Ticket-only event, with no comment to discard on a later update.
+          {:ok, "zendesk-#{ticket_id}@zendesk.webhook"}
+        else
+          {:error, "Zendesk comment ID is required for idempotent delivery"}
+        end
+
+      comment_id ->
+        {:ok, "zendesk-ticket-#{ticket_id}-comment-#{comment_id}@zendesk.webhook"}
     end
   end
+
+  defp build_message_id(_, _, _), do: {:ok, nil}
 
   defp truncate(nil, _max_length), do: ""
   defp truncate(text, max_length) when byte_size(text) <= max_length, do: text

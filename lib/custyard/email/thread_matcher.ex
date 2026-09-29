@@ -25,16 +25,16 @@ defmodule Custyard.Email.ThreadMatcher do
     - `{:ok, conversation}` if a matching thread is found
     - `:not_found` if no matching thread exists
   """
-  def find_thread(parsed, organization_id) do
+  def find_thread(parsed, organization_id, dedup_scope \\ nil) do
     # Try In-Reply-To first, then fall back to References header
-    with :not_found <- find_by_message_id(parsed.in_reply_to, organization_id) do
-      find_by_references(parsed.references, organization_id)
+    with :not_found <- find_by_message_id(parsed.in_reply_to, organization_id, dedup_scope) do
+      find_by_references(parsed.references, organization_id, dedup_scope)
     end
   end
 
-  defp find_by_message_id(nil, _organization_id), do: :not_found
+  defp find_by_message_id(nil, _organization_id, _dedup_scope), do: :not_found
 
-  defp find_by_message_id(message_id, organization_id) do
+  defp find_by_message_id(message_id, organization_id, dedup_scope) do
     query =
       from m in Message,
         join: c in Conversation,
@@ -44,15 +44,15 @@ defmodule Custyard.Email.ThreadMatcher do
         select: c,
         limit: 1
 
-    case Repo.one(query) do
+    case Repo.one(maybe_scope(query, dedup_scope)) do
       nil -> :not_found
       conversation -> {:ok, conversation}
     end
   end
 
-  defp find_by_references(nil, _organization_id), do: :not_found
+  defp find_by_references(nil, _organization_id, _dedup_scope), do: :not_found
 
-  defp find_by_references(references, organization_id) do
+  defp find_by_references(references, organization_id, dedup_scope) do
     # References header can contain multiple message IDs
     message_ids = String.split(references, ~r/\s+/)
 
@@ -65,9 +65,15 @@ defmodule Custyard.Email.ThreadMatcher do
         select: c,
         limit: 1
 
-    case Repo.one(query) do
+    case Repo.one(maybe_scope(query, dedup_scope)) do
       nil -> :not_found
       conversation -> {:ok, conversation}
     end
+  end
+
+  defp maybe_scope(query, nil), do: query
+
+  defp maybe_scope(query, dedup_scope) do
+    where(query, [m, _c], m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope))
   end
 end

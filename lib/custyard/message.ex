@@ -2,6 +2,8 @@ defmodule Custyard.Message do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias Custyard.{Conversation, Repo}
+
   # Message types: how the message was sent
   # :prospect — anonymous public-intake submission or conversation-link reply
   @sources [:email, :portal, :operator, :prospect]
@@ -36,6 +38,8 @@ defmodule Custyard.Message do
     field :body, :string
     field :is_internal_note, :boolean, default: false
     field :message_id, :string
+    # Uniqueness namespace for inbound deliveries (organization, source, route).
+    field :dedup_scope, :string
     field :in_reply_to, :string
     field :lettermint_message_id, :string
     # Delivery status tracks outbound message lifecycle (nil for inbound messages)
@@ -66,6 +70,7 @@ defmodule Custyard.Message do
       :body,
       :is_internal_note,
       :message_id,
+      :dedup_scope,
       :in_reply_to,
       :lettermint_message_id,
       :delivery_status,
@@ -75,11 +80,9 @@ defmodule Custyard.Message do
     |> validate_length(:body, max: 100_000)
     # Note: :source and :origin use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:conversation_id)
-    # Unique constraint on message_id for webhook idempotency
-    # Handle both possible index names (migration creates _unique_index, but SQLite
-    # error messages sometimes report just _index due to how Exqlite parses errors)
-    |> unique_constraint(:message_id, name: :messages_message_id_unique_index)
-    |> unique_constraint(:message_id, name: :messages_message_id_index)
+    |> unique_constraint([:dedup_scope, :message_id],
+      name: :messages_dedup_scope_message_id_index
+    )
   end
 
   @doc """
@@ -121,31 +124,72 @@ defmodule Custyard.Message do
   @doc """
   Insert a message, handling duplicate message_id gracefully.
 
-  For webhook idempotency: if a message with the same message_id already exists,
-  returns the existing message instead of creating a duplicate.
+  For webhook idempotency: a matching message ID in the same delivery namespace
+  returns the existing message. The namespace includes the organization, provider,
+  and inbound route when available.
 
   Returns `{:ok, message}` on success or duplicate, `{:error, changeset}` on validation failure.
   """
   def insert_idempotent(attrs) do
-    alias Custyard.Repo
-
+    attrs = ensure_dedup_scope(attrs)
     changeset = changeset(%__MODULE__{}, attrs)
 
     case Repo.insert(changeset) do
-      {:ok, message} ->
-        {:ok, message}
-
-      {:error, %Ecto.Changeset{errors: errors} = cs} ->
-        # Check if it's a duplicate message_id error
-        if Keyword.has_key?(errors, :message_id) and attrs[:message_id] do
-          # Return the existing message
-          case Repo.get_by(__MODULE__, message_id: attrs[:message_id]) do
-            nil -> {:error, cs}
-            existing -> {:ok, existing}
-          end
-        else
-          {:error, cs}
-        end
+      {:ok, message} -> {:ok, message}
+      {:error, %Ecto.Changeset{} = cs} -> recover_duplicate(attrs, cs)
     end
   end
+
+  defp recover_duplicate(attrs, %Ecto.Changeset{errors: errors} = cs) do
+    if duplicate_constraint?(errors) && attrs[:message_id] && attrs[:dedup_scope] do
+      existing =
+        Repo.get_by(__MODULE__,
+          dedup_scope: attrs[:dedup_scope],
+          message_id: attrs[:message_id]
+        )
+
+      if existing && same_organization?(attrs[:conversation_id], existing.conversation_id),
+        do: {:ok, existing},
+        else: {:error, cs}
+    else
+      {:error, cs}
+    end
+  end
+
+  defp duplicate_constraint?(errors),
+    do: Keyword.has_key?(errors, :message_id) or Keyword.has_key?(errors, :dedup_scope)
+
+  defp same_organization?(requested_id, existing_id) do
+    case {Repo.get(Conversation, requested_id), Repo.get(Conversation, existing_id)} do
+      {%Conversation{organization_id: org_id}, %Conversation{organization_id: org_id}} -> true
+      _ -> false
+    end
+  end
+
+  @doc "Build the namespace for a provider delivery within an organization."
+  def dedup_scope(organization_id, origin, route_id \\ nil) do
+    "org:#{organization_id}:source:#{origin || :email}:route:#{route_id || 0}"
+  end
+
+  defp ensure_dedup_scope(%{message_id: message_id} = attrs) when not is_nil(message_id) do
+    case attrs[:dedup_scope] do
+      nil ->
+        case attrs[:conversation_id] && Repo.get(Conversation, attrs[:conversation_id]) do
+          nil ->
+            attrs
+
+          conversation ->
+            Map.put(
+              attrs,
+              :dedup_scope,
+              dedup_scope(conversation.organization_id, attrs[:origin] || attrs[:source])
+            )
+        end
+
+      _ ->
+        attrs
+    end
+  end
+
+  defp ensure_dedup_scope(attrs), do: attrs
 end

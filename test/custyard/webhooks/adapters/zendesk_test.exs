@@ -94,6 +94,7 @@ defmodule Custyard.Webhooks.Adapters.ZendeskTest do
       assert normalized.source == :zendesk
       assert normalized.metadata.external_id == "12345"
       assert normalized.metadata.external_priority == "high"
+      assert normalized.in_reply_to == "zendesk-ticket-12345@zendesk.webhook"
     end
 
     test "handles payload without requester" do
@@ -107,6 +108,32 @@ defmodule Custyard.Webhooks.Adapters.ZendeskTest do
 
       assert {:ok, normalized} = Zendesk.normalize(params)
       assert normalized.from == "bob@example.com"
+    end
+
+    test "distinct comments have distinct message IDs on the same ticket" do
+      ticket = %{"id" => 123, "subject" => "Help", "requester" => %{"email" => "a@example.com"}}
+
+      {:ok, first} =
+        Zendesk.normalize(%{
+          "ticket" => Map.put(ticket, "comment", %{"id" => 1, "body" => "First"})
+        })
+
+      {:ok, second} =
+        Zendesk.normalize(%{
+          "ticket" => Map.put(ticket, "comment", %{"id" => 2, "body" => "Second"})
+        })
+
+      assert first.message_id != second.message_id
+      assert first.in_reply_to == second.in_reply_to
+      assert first.body == "First"
+      assert second.body == "Second"
+    end
+
+    test "rejects a comment with no stable ID instead of losing later comments" do
+      params = %{"ticket" => %{"id" => 123, "comment" => %{"body" => "No ID"}}}
+
+      assert {:error, "Zendesk comment ID is required for idempotent delivery"} =
+               Zendesk.normalize(params)
     end
   end
 end
