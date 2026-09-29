@@ -299,12 +299,57 @@ defmodule CustyardWeb.WebhookControllerTest do
       }
 
       raw_body = Jason.encode!(params)
-      signature = :crypto.mac(:hmac, :sha256, secret, raw_body) |> Base.encode16(case: :lower)
+      timestamp = to_string(System.system_time(:second))
+
+      digest =
+        :crypto.mac(:hmac, :sha256, secret, timestamp <> "." <> raw_body)
+        |> Base.encode16(case: :lower)
+
+      signature = "t=#{timestamp},v1=#{digest}"
 
       response =
         conn
         |> put_private(:raw_body, raw_body)
         |> put_req_header("x-lettermint-signature", signature)
+        |> put_req_header("content-type", "application/json")
+        |> post(~p"/api/webhook/route/#{route.callback_token}", params)
+        |> json_response(200)
+
+      assert response["status"] == "ok"
+    end
+
+    test "verifies Zendesk's timestamp header with the route's signing secret", %{conn: conn} do
+      org = insert_organization()
+
+      {:ok, route} =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{organization_id: org.id, source: :zendesk})
+        |> Repo.insert()
+
+      secret = "zendesk-route-secret"
+
+      Application.put_env(:custyard, :webhook_secrets, %{
+        zendesk: %{route.callback_token => secret}
+      })
+
+      params = %{
+        "ticket" => %{
+          "id" => 941,
+          "subject" => "Signed Zendesk event",
+          "comment" => %{"id" => 11, "body" => "Customer comment"},
+          "requester" => %{"email" => "alice@example.com"}
+        }
+      }
+
+      raw_body = Jason.encode!(params)
+      timestamp = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+      signature = :crypto.mac(:hmac, :sha256, secret, timestamp <> raw_body) |> Base.encode64()
+
+      response =
+        conn
+        |> put_private(:raw_body, raw_body)
+        |> put_req_header("x-zendesk-webhook-signature", signature)
+        |> put_req_header("x-zendesk-webhook-signature-timestamp", timestamp)
         |> put_req_header("content-type", "application/json")
         |> post(~p"/api/webhook/route/#{route.callback_token}", params)
         |> json_response(200)

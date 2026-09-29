@@ -2,9 +2,8 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
   @moduledoc """
   Webhook adapter for Lettermint email service.
 
-  Lettermint provides per-project inbound/outbound routes with HMAC-SHA256
-  signature verification. Includes optional timestamp-based replay protection
-  when the X-Lettermint-Timestamp header is present.
+  Lettermint signs `timestamp.raw_body` with HMAC-SHA256 and sends the timestamp
+  and hex digest together in `X-Lettermint-Signature: t=...,v1=...`.
   """
   @behaviour Custyard.Webhooks.Adapter
 
@@ -17,48 +16,46 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
   @impl true
   def verify_signature(_payload, _signature, nil), do: {:error, "no secret configured"}
 
-  def verify_signature(payload, signature, secret) when is_binary(signature) do
-    body = if is_binary(payload), do: payload, else: Jason.encode!(payload)
-    expected = :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)
+  def verify_signature(payload, signature, secret) when is_binary(payload),
+    do: verify_request(payload, nil, signature, secret)
 
-    # Strip "sha256=" prefix if present
-    signature = String.replace_prefix(signature, "sha256=", "")
-
-    if Plug.Crypto.secure_compare(expected, String.downcase(signature)) do
-      :ok
-    else
-      {:error, "invalid signature"}
-    end
-  end
-
-  def verify_signature(_payload, nil, _secret), do: {:error, "missing signature header"}
+  def verify_signature(_payload, _signature, _secret),
+    do: {:error, "missing signature header"}
 
   @doc """
-  Verify request with replay protection.
-
-  If a timestamp is provided, validates it's within the allowed skew window
-  to prevent replay attacks. Falls back to signature-only verification if
-  no timestamp is provided (for backward compatibility).
+  Verify the signed timestamp and exact raw body with replay protection.
   """
   @impl true
   def verify_request(_raw_body, _timestamp, _signature, nil), do: {:error, "no secret configured"}
 
-  def verify_request(raw_body, timestamp, signature, secret) do
-    # First verify the signature
-    case verify_signature(raw_body, signature, secret) do
-      :ok ->
-        # Then validate timestamp if provided
-        validate_timestamp(timestamp)
+  def verify_request(raw_body, _timestamp, signature, secret) when is_binary(raw_body) do
+    with {:ok, timestamp, provided} <- parse_signature(signature),
+         :ok <- validate_timestamp(timestamp) do
+      expected =
+        :crypto.mac(:hmac, :sha256, secret, timestamp <> "." <> raw_body)
+        |> Base.encode16(case: :lower)
 
-      error ->
-        error
+      if Plug.Crypto.secure_compare(expected, String.downcase(provided)),
+        do: :ok,
+        else: {:error, "invalid signature"}
     end
   end
 
-  defp validate_timestamp(nil) do
-    # No timestamp provided - accept for backward compatibility
-    # Replay protection relies on message_id deduplication in this case
-    :ok
+  defp parse_signature(nil), do: {:error, "missing signature header"}
+
+  defp parse_signature(signature) when is_binary(signature) do
+    parts =
+      signature
+      |> String.split(",")
+      |> Enum.map(&String.split(&1, "=", parts: 2))
+
+    with [timestamp] <- for(["t", value] <- parts, do: value),
+         [digest] <- for(["v1", value] <- parts, do: value),
+         true <- byte_size(digest) == 64 and String.match?(digest, ~r/\A[0-9a-fA-F]{64}\z/) do
+      {:ok, timestamp, digest}
+    else
+      _ -> {:error, "invalid signature format"}
+    end
   end
 
   defp validate_timestamp(timestamp_str) when is_binary(timestamp_str) do

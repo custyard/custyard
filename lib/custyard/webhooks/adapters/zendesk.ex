@@ -5,13 +5,8 @@ defmodule Custyard.Webhooks.Adapters.Zendesk do
   Zendesk sends webhook payloads when tickets are created or updated.
   Uses HMAC-SHA256 signature verification via the `X-Zendesk-Webhook-Signature` header.
 
-  ## Replay Protection
-
-  Zendesk webhooks do not include timestamps by default. Replay protection relies on:
-  1. Message ID deduplication (tickets have unique IDs)
-  2. Optional timestamp validation if `X-Zendesk-Webhook-Timestamp` header is provided
-
-  If your Zendesk setup supports custom headers, configure it to send timestamps.
+  Zendesk signs `timestamp <> raw_body` and sends the timestamp in
+  `X-Zendesk-Webhook-Signature-Timestamp`.
   """
   @behaviour Custyard.Webhooks.Adapter
 
@@ -24,55 +19,48 @@ defmodule Custyard.Webhooks.Adapters.Zendesk do
   @impl true
   def verify_signature(_payload, _signature, nil), do: {:error, "no secret configured"}
 
-  def verify_signature(payload, signature, secret) when is_binary(signature) do
-    body = if is_binary(payload), do: payload, else: Jason.encode!(payload)
-    expected = :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode64()
-
-    if Plug.Crypto.secure_compare(expected, signature) do
-      :ok
-    else
-      {:error, "invalid signature"}
-    end
-  end
-
-  def verify_signature(_payload, nil, _secret), do: {:error, "missing signature header"}
+  def verify_signature(_payload, _signature, _secret),
+    do: {:error, "Zendesk requires verify_request/4 with a timestamp"}
 
   @doc """
-  Verify request with optional replay protection.
-
-  If a timestamp is provided (via custom header), validates it's within the
-  allowed skew window. Falls back to signature-only verification if no
-  timestamp is provided (standard Zendesk behavior).
+  Verify Zendesk's timestamp-prefixed body signature and reject stale requests.
   """
   @impl true
   def verify_request(_raw_body, _timestamp, _signature, nil), do: {:error, "no secret configured"}
 
   def verify_request(raw_body, timestamp, signature, secret) do
-    case verify_signature(raw_body, signature, secret) do
-      :ok -> validate_timestamp(timestamp)
+    with :ok <- validate_timestamp(timestamp),
+         true <- is_binary(signature) do
+      expected = :crypto.mac(:hmac, :sha256, secret, timestamp <> raw_body) |> Base.encode64()
+
+      if Plug.Crypto.secure_compare(expected, signature),
+        do: :ok,
+        else: {:error, "invalid signature"}
+    else
+      false -> {:error, "missing signature header"}
       error -> error
     end
   end
 
-  defp validate_timestamp(nil) do
-    # No timestamp provided - accept but rely on message_id deduplication
-    :ok
-  end
+  defp validate_timestamp(nil), do: {:error, "missing timestamp"}
 
   defp validate_timestamp(timestamp_str) when is_binary(timestamp_str) do
-    case Integer.parse(timestamp_str) do
-      {timestamp, ""} ->
-        now = System.system_time(:second)
-
-        if abs(now - timestamp) <= @max_timestamp_skew do
-          :ok
-        else
-          {:error, "stale timestamp - request may be a replay attack"}
-        end
+    case DateTime.from_iso8601(timestamp_str) do
+      {:ok, timestamp, _offset} ->
+        validate_timestamp_seconds(DateTime.to_unix(timestamp))
 
       _ ->
-        {:error, "invalid timestamp format"}
+        case Integer.parse(timestamp_str) do
+          {timestamp, ""} -> validate_timestamp_seconds(timestamp)
+          _ -> {:error, "invalid timestamp format"}
+        end
     end
+  end
+
+  defp validate_timestamp_seconds(timestamp) do
+    if abs(System.system_time(:second) - timestamp) <= @max_timestamp_skew,
+      do: :ok,
+      else: {:error, "stale timestamp - request may be a replay attack"}
   end
 
   # Conversation.changeset validates subject max 500 chars
