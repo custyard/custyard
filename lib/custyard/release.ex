@@ -10,6 +10,7 @@ defmodule Custyard.Release do
 
   def migrate do
     load_app()
+    Custyard.Storage.validate_fly_storage!()
 
     for repo <- repos() do
       {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
@@ -18,6 +19,7 @@ defmodule Custyard.Release do
 
   def rollback(repo, version) do
     load_app()
+    Custyard.Storage.validate_fly_storage!()
     {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
   end
 
