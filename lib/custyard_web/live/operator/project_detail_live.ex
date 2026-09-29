@@ -83,7 +83,9 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
       portal_visible: params["portal_visible"] == "true"
     }
 
-    case project_mutation(socket, fn project -> Projects.create_task(project, attrs) end) do
+    case project_mutation(socket, fn project, _operator ->
+           Projects.create_task(project, attrs, broadcast?: false)
+         end) do
       {:ok, _task} ->
         {:noreply,
          socket
@@ -102,10 +104,13 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   def handle_event("cycle_task_state", %{"id" => task_id}, socket) do
-    case project_mutation(socket, fn project ->
+    case project_mutation(socket, fn project, _operator ->
            case get_project_task(project.id, task_id) do
-             nil -> {:error, :not_found}
-             task -> Projects.update_task_state(task, next_task_state(task.state))
+             nil ->
+               {:error, :not_found}
+
+             task ->
+               Projects.update_task_state(task, next_task_state(task.state), broadcast?: false)
            end
          end) do
       {:ok, _} -> {:noreply, refresh_project(socket)}
@@ -116,10 +121,10 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   def handle_event("delete_task", %{"id" => task_id}, socket) do
-    case project_mutation(socket, fn project ->
+    case project_mutation(socket, fn project, _operator ->
            case get_project_task(project.id, task_id) do
              nil -> {:error, :not_found}
-             task -> Projects.delete_task(task)
+             task -> Projects.delete_task(task, broadcast?: false)
            end
          end) do
       {:ok, _} -> {:noreply, refresh_project(socket)}
@@ -139,7 +144,12 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   defp project_mutation(socket, fun) do
-    Projects.with_operator_access(socket.assigns.project.id, socket.assigns.current_operator, fun)
+    Projects.with_operator_access(
+      socket.assigns.project.id,
+      socket.assigns.current_operator,
+      fun,
+      broadcast_project?: true
+    )
   end
 
   defp refresh_project(socket) do

@@ -139,11 +139,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   defp save_project(nil, attrs, operator) do
-    if Authorization.can_manage_project?(operator, attrs.organization_id) do
-      Projects.create_project(attrs)
-    else
-      {:error, :unauthorized}
-    end
+    Projects.create_project_for_operator(attrs, operator)
   end
 
   defp save_project(project, attrs, operator) do
