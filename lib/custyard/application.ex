@@ -43,6 +43,7 @@ defmodule Custyard.Application do
         CustyardWeb.Endpoint
       ]
       |> maybe_add_scheduler()
+      |> maybe_add_outbound_queue()
       |> maybe_add_intake_sweeps()
       |> maybe_add_lmtp_server()
       |> maybe_add_imap_poller()
@@ -83,6 +84,14 @@ defmodule Custyard.Application do
   defp maybe_add_scheduler(children) do
     if Application.get_env(:custyard, :start_scheduler, true) do
       children ++ [Custyard.Scoring.Scheduler]
+    else
+      children
+    end
+  end
+
+  defp maybe_add_outbound_queue(children) do
+    if Application.get_env(:custyard, :start_outbound_queue, true) do
+      children ++ [Custyard.Email.OutboundQueue]
     else
       children
     end

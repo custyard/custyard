@@ -4,6 +4,7 @@ defmodule Custyard.Conversations do
   """
 
   alias Custyard.{Conversation, Message, OperatorAccount, Repo}
+  alias Custyard.Email.OutboundQueue
   import Ecto.Query
 
   @doc """
@@ -468,6 +469,48 @@ defmodule Custyard.Conversations do
     end)
   end
 
+  @doc "Run an operator mutation while the conversation's current scope is locked."
+  def with_operator_access(id, %OperatorAccount{} = operator, fun) when is_function(fun, 1) do
+    Repo.transaction(fn ->
+      case lock_conversation_for_operator(id, operator) do
+        nil ->
+          Repo.rollback(:unauthorized)
+
+        conversation ->
+          case fun.(conversation) do
+            {:ok, value} -> value
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+  end
+
+  defp lock_conversation_for_operator(id, operator) do
+    query =
+      from(c in Conversation, where: c.id == ^id)
+      |> scope_conversation_to_operator(operator)
+
+    # This UPDATE obtains the database write lock before checking and acting on
+    # the row. A concurrent organization link must finish first or wait until
+    # the mutation commits, on both SQLite and PostgreSQL.
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    case Repo.update_all(query, set: [updated_at: now]) do
+      {1, _} -> Repo.get!(Conversation, id)
+      {0, _} -> nil
+    end
+  end
+
+  defp scope_conversation_to_operator(query, %OperatorAccount{role: "super_admin"}),
+    do: query
+
+  defp scope_conversation_to_operator(query, %OperatorAccount{organization_id: org_id})
+       when is_integer(org_id),
+       do: from(c in query, where: c.organization_id == ^org_id or is_nil(c.organization_id))
+
+  defp scope_conversation_to_operator(query, %OperatorAccount{}),
+    do: from(c in query, where: is_nil(c.organization_id))
+
   @doc """
   Create a message for a conversation, raising on failure.
   Also touches the conversation's updated_at for accurate last-activity tracking.
@@ -545,6 +588,8 @@ defmodule Custyard.Conversations do
     * `:operator_email` - email of the operator sending the reply (optional;
       never used for public-intake conversations, which always send from the
       platform address)
+    * `:operator` - operator account whose current organization scope must be
+      locked and authorized before the reply is inserted
 
   ## Returns
 
@@ -557,63 +602,46 @@ defmodule Custyard.Conversations do
 
   """
   def send_reply(conversation, body, opts \\ []) do
-    # force: true — callers (ConversationLive) pass conversations whose
-    # prospect was preloaded at page load; a plain preload skips loaded
-    # associations, and the primary consent gate must see committed consent
-    # state, not the socket's snapshot.
-    conversation =
-      Repo.preload(conversation, [:contact, :organization, :prospect], force: true)
-
-    deliverable? = reply_deliverable?(conversation)
-
-    # :withheld is reserved for the public-intake consent gate. A non-intake
-    # reply with no recipient still goes to delivery so it lands on the
-    # visible :pending -> :failed path instead of a false calm.
-    attempt_delivery? = deliverable? or conversation.source != :public_intake
-
     Repo.transaction(fn ->
+      conversation =
+        case Keyword.get(opts, :operator) do
+          %OperatorAccount{} = operator ->
+            case lock_conversation_for_operator(conversation.id, operator) do
+              nil -> Repo.rollback(:unauthorized)
+              current -> current
+            end
+
+          nil ->
+            Repo.get!(Conversation, conversation.id)
+        end
+        |> Repo.preload([:contact, :organization, :prospect])
+
+      # Recipient and consent decisions use the row and associations read after
+      # acquiring the scope lock, never the LiveView's earlier snapshot.
+      deliverable? = reply_deliverable?(conversation)
+      attempt_delivery? = deliverable? or conversation.source != :public_intake
+
       with {:ok, message} <- insert_reply_message(conversation, body, attempt_delivery?, opts),
            {:ok, _conv} <- update_conversation_after_reply(conversation) do
-        # Side effects outside the transaction boundary aren't critical —
-        # a failed broadcast doesn't warrant rolling back the message.
-        message
+        {message, conversation, attempt_delivery?}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
     |> case do
-      {:ok, message} ->
+      {:ok, {message, conversation, attempt_delivery?}} ->
         # Post-transaction side effects: scoring + broadcasts
         perform_reply_side_effects(conversation)
 
-        # Deliver the email asynchronously so we don't block the caller.
-        # The message is already persisted with delivery_status: :pending;
-        # Email.Outbound.deliver/1 will update it to :sent or :failed.
-        # A :withheld reply is never handed to delivery.
-        if attempt_delivery?, do: deliver_async(message)
+        # The persisted pending message is the delivery job. Wake the supervised
+        # scanner after commit; it also recovers pending replies at startup.
+        if attempt_delivery?, do: OutboundQueue.wake()
 
         {:ok, message}
 
       {:error, _reason} = error ->
         error
     end
-  end
-
-  # Fire-and-forget delivery via a supervised task.
-  # Failures are logged by Email.Outbound and reflected in delivery_status.
-  # Disabled in config/test.exs to avoid sandbox ownership issues with async
-  # tasks; tests exercise Email.Outbound.deliver/1 directly.
-  defp deliver_async(%Message{} = message) do
-    alias Custyard.Email.Outbound
-
-    if Application.get_env(:custyard, :deliver_replies_async?, true) do
-      Task.Supervisor.start_child(
-        Custyard.TaskSupervisor,
-        fn -> Outbound.deliver(message) end
-      )
-    end
-
-    :ok
   end
 
   # Build and insert the operator reply message with email metadata.

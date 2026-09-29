@@ -29,8 +29,12 @@ config :custyard, start_scheduler: false
 # the sweep functions take an injectable clock and are tested directly.
 config :custyard, start_intake_sweeps: false
 
-# Skip async email delivery of operator replies; the supervised task would
-# outlive the SQL sandbox owner. Tests exercise Email.Outbound.deliver/1 directly.
+# Drive the durable outbound scan explicitly in tests; a background scan would
+# outlive the SQL sandbox owner.
+config :custyard, start_outbound_queue: false
+
+# Public-intake notification mail still uses supervised tasks. Keep those
+# synchronous in tests so their database reads stay with the sandbox owner.
 config :custyard, deliver_replies_async?: false
 
 # Allow ?as=<contact_id> param for testing contact impersonation

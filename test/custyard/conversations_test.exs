@@ -4,10 +4,36 @@ defmodule Custyard.ConversationsTest do
 
   alias Custyard.Auth.Token
   alias Custyard.Email.Outbound
-  alias Custyard.{Conversations, Intake, Prospect}
+  alias Custyard.{Conversations, Intake, Message, OperatorAccount, Prospect, Repo}
 
   import Custyard.Factory
   import Swoosh.TestAssertions
+
+  test "operator reply and other writes reject a stale conversation after foreign linkage" do
+    own = insert_organization()
+    foreign = insert_organization()
+    operator = %OperatorAccount{role: "admin", organization_id: own.id}
+    stale = insert_conversation(organization_id: nil, source: :public_intake, state: :active)
+
+    stale
+    |> Ecto.Changeset.change(organization_id: foreign.id)
+    |> Repo.update!()
+
+    assert {:error, :unauthorized} =
+             Conversations.send_reply(stale, "Unauthorized reply", operator: operator)
+
+    assert {:error, :unauthorized} =
+             Conversations.with_operator_access(stale.id, operator, fn current ->
+               Conversations.create_message(%{
+                 source: :operator,
+                 body: "Unauthorized note",
+                 is_internal_note: true,
+                 conversation_id: current.id
+               })
+             end)
+
+    assert Repo.aggregate(Message, :count) == 0
+  end
 
   describe "list_neglected" do
     test "returns conversations excluding resolved" do
