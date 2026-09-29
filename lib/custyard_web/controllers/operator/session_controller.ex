@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Operator.SessionController do
   use CustyardWeb, :controller
 
-  alias Custyard.{OperatorAccount, Repo}
+  alias Custyard.{OperatorAccount, RateLimit, Repo}
   alias Custyard.Auth.LoginEmail
 
   require Logger
@@ -9,14 +9,41 @@ defmodule CustyardWeb.Operator.SessionController do
   # Base64url character class for validating token format
   @token_pattern ~r/^[A-Za-z0-9_-]+$/
 
-  plug CustyardWeb.Plugs.LoginRateLimit,
-       [max_attempts: 5, window_ms: 60_000] when action == :create
+  plug CustyardWeb.Plugs.PublicRateLimit,
+       [bucket: :operator_login_ip] when action == :create
 
   def new(conn, _params) do
     render(conn, :new, error: nil, email: nil, info: nil, layout: {CustyardWeb.Layouts, :root})
   end
 
   def create(conn, %{"email" => email}) when is_binary(email) and email != "" do
+    email = email |> String.trim() |> String.downcase()
+
+    case RateLimit.check_rate(:operator_login_email, email) do
+      {:deny, retry_after_ms} ->
+        retry_after_s = max(div(retry_after_ms + 999, 1000), 1)
+
+        conn
+        |> put_resp_header("retry-after", Integer.to_string(retry_after_s))
+        |> put_status(429)
+        |> put_view(CustyardWeb.ErrorHTML)
+        |> render("429.html")
+
+      {:allow, _count} ->
+        deliver_login_link(conn, email)
+    end
+  end
+
+  def create(conn, _params) do
+    render(conn, :new,
+      error: "Email is required.",
+      email: nil,
+      info: nil,
+      layout: {CustyardWeb.Layouts, :root}
+    )
+  end
+
+  defp deliver_login_link(conn, email) do
     case Repo.get_by(OperatorAccount, email: email) do
       nil ->
         # Don't reveal whether the email exists — always show success page
@@ -35,20 +62,10 @@ defmodule CustyardWeb.Operator.SessionController do
         LoginEmail.deliver_login_link(updated_operator, login_url)
     end
 
-    # Use Post/Redirect/Get so the rate limiter sees a successful redirect
-    # (it counts non-3xx responses as failed attempts).
+    # Keep the response identical whether the account exists or not.
     conn
     |> put_session(:login_sent_email, email)
     |> redirect(to: ~p"/operator/login/sent")
-  end
-
-  def create(conn, _params) do
-    render(conn, :new,
-      error: "Email is required.",
-      email: nil,
-      info: nil,
-      layout: {CustyardWeb.Layouts, :root}
-    )
   end
 
   def sent(conn, _params) do

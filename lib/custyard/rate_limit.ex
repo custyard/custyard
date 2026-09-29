@@ -11,16 +11,13 @@ defmodule Custyard.RateLimit do
   double-digit limits per window) — and it matters because some buckets
   bound real resources, e.g. `:claim_email_send` caps outbound email
   volume. This deliberately departs from the lock-free
-  `LoginRateLimit` precedent, where briefly over-admitting a few failed
-  logins is harmless.
+  the former login limiter, where racing requests could briefly over-admit.
 
   ## Counting Strategy
 
   Every checked event counts toward the limit — successes and failures
-  alike. This is deliberately unlike `CustyardWeb.Plugs.LoginRateLimit`,
-  which counts only failed logins: the public intake surfaces are
-  anonymous and hammerable, so a flood of "successful" requests is
-  exactly what the limiter must bound. Denied requests do not insert an
+  alike. Public intake and magic-link issuance are anonymous and hammerable,
+  so a flood of "successful" requests must be bounded. Denied requests do not insert an
   event, so being rate limited never extends the deny window.
 
   ## Bounded Memory
