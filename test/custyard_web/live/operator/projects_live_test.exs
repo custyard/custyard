@@ -22,6 +22,63 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
   end
 
   # Helper to create projects
+  defp scoped_admin_conn(conn, org) do
+    operator =
+      %OperatorAccount{}
+      |> OperatorAccount.changeset(%{
+        email: "project-admin-#{System.unique_integer([:positive])}@example.com",
+        role: "admin",
+        organization_id: org.id
+      })
+      |> Repo.insert!()
+
+    Plug.Conn.put_session(conn, :operator_id, operator.id)
+  end
+
+  test "scoped admin cannot filter, edit, or take over a foreign project", %{conn: conn} do
+    own = insert_organization(name: "Own organization")
+    foreign = insert_organization(name: "Foreign organization")
+
+    project =
+      create_project(%{title: "Foreign confidential project", organization_id: foreign.id})
+
+    conn = scoped_admin_conn(conn, own)
+
+    {:ok, _view, html} = live(conn, ~p"/operator/projects?org=#{foreign.id}")
+    refute html =~ project.title
+    refute html =~ foreign.name
+
+    {:ok, view, _html} = live(conn, ~p"/operator/projects")
+    refute render_click(view, "edit_project", %{"id" => to_string(project.id)}) =~ project.title
+
+    render_change(view, "validate_form", %{
+      "title" => "Taken over",
+      "organization_id" => to_string(own.id)
+    })
+
+    render_submit(view, "save_project", %{})
+    assert Repo.get!(Project, project.id).organization_id == foreign.id
+    assert Repo.get!(Project, project.id).title == project.title
+  end
+
+  test "scoped admin cannot reassign an owned project to a foreign organization", %{conn: conn} do
+    own = insert_organization()
+    foreign = insert_organization()
+    project = create_project(%{title: "Owned project", organization_id: own.id})
+    conn = scoped_admin_conn(conn, own)
+    {:ok, view, _html} = live(conn, ~p"/operator/projects")
+
+    render_click(view, "edit_project", %{"id" => to_string(project.id)})
+
+    render_change(view, "validate_form", %{
+      "title" => "Moved project",
+      "organization_id" => to_string(foreign.id)
+    })
+
+    render_submit(view, "save_project", %{})
+    assert Repo.get!(Project, project.id).organization_id == own.id
+  end
+
   defp create_project(attrs) do
     %Project{}
     |> Project.changeset(attrs)

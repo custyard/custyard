@@ -60,6 +60,8 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           {:conversation_created, conv.id}
         )
 
+        Custyard.Conversations.broadcast_to_org(org.id, {:conversation_created, conv.id})
+
         {:noreply, push_navigate(socket, to: "#{portal_path}/request/#{conv.id}")}
 
       {:error, _step, changeset, _changes} ->
@@ -93,6 +95,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
       </h1>
 
       <form
+        id="portal-new-request-form"
         phx-submit="submit"
         phx-change="validate"
         class="space-y-4"

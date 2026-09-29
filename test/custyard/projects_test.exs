@@ -1,9 +1,56 @@
 defmodule Custyard.ProjectsTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.{Project, Projects, Repo, Task}
+  alias Custyard.{OperatorAccount, Project, Projects, Repo, Task}
 
   import Custyard.Factory
+
+  test "scoped project writes reject a stale foreign project" do
+    own = insert_organization()
+    foreign = insert_organization()
+    operator = %OperatorAccount{role: "admin", organization_id: own.id}
+    stale = create_project(%{title: "Foreign project", organization_id: foreign.id})
+
+    assert {:error, :unauthorized} =
+             Projects.update_project_for_operator(
+               stale,
+               %{title: "Taken over", organization_id: own.id},
+               operator
+             )
+
+    assert {:error, :unauthorized} = Projects.delete_project_for_operator(stale, operator)
+
+    assert {:error, :unauthorized} =
+             Projects.with_operator_access(stale.id, operator, fn project ->
+               Projects.create_task(project, %{title: "Foreign task"})
+             end)
+
+    assert Repo.get!(Project, stale.id).title == "Foreign project"
+    assert Repo.aggregate(Task, :count) == 0
+  end
+
+  test "scoped project update checks the destination organization" do
+    own = insert_organization()
+    foreign = insert_organization()
+    operator = %OperatorAccount{role: "admin", organization_id: own.id}
+    project = create_project(%{title: "Own project", organization_id: own.id})
+
+    assert {:error, :unauthorized} =
+             Projects.update_project_for_operator(
+               project,
+               %{title: "Moved", organization_id: foreign.id},
+               operator
+             )
+
+    assert {:error, :unauthorized} =
+             Projects.update_project_for_operator(
+               project,
+               %{"title" => "Moved", "organization_id" => foreign.id},
+               operator
+             )
+
+    assert Repo.get!(Project, project.id).organization_id == own.id
+  end
 
   # Helper to create a project directly
   defp create_project(attrs) do

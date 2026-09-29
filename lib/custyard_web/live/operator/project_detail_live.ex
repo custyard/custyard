@@ -5,7 +5,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
-    case fetch_project(id, socket.assigns.scoped_organization_id) do
+    case Projects.get_project_for_operator(id, socket.assigns.current_operator) do
       nil ->
         {:ok,
          socket
@@ -21,6 +21,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
          socket
          |> assign(:project, project)
          |> assign(:page_title, project.title)
+         |> attach_hook(:authorize_project_events, :handle_event, &authorize_project_event/3)
          |> assign(:show_task_form, false)
          |> assign(:new_task_title, "")
          |> assign(:new_task_due_at, "")
@@ -28,27 +29,32 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
     end
   end
 
-  # Load the project only when the operator's org scope allows it; org-scoped
-  # operators (admin/agent) must not see or modify other organizations'
-  # projects. Non-integer ids fall through to the not-found redirect instead
-  # of raising Ecto.Query.CastError.
-  defp fetch_project(id, scoped_org_id) do
-    with {int_id, ""} <- Integer.parse(id),
-         %{} = project <- Projects.get_project(int_id),
-         true <- can_access_project?(project, scoped_org_id) do
-      project
-    else
-      _ -> nil
+  defp authorize_project_event(_event, _params, socket) do
+    case current_project(socket) do
+      nil -> {:halt, project_access_revoked(socket)}
+      project -> {:cont, assign(socket, :project, project)}
     end
   end
 
-  defp can_access_project?(_project, nil), do: true
-  defp can_access_project?(project, scoped_org_id), do: project.organization_id == scoped_org_id
+  defp current_project(socket) do
+    Projects.get_project_for_operator(
+      socket.assigns.project.id,
+      socket.assigns.current_operator
+    )
+  end
+
+  defp project_access_revoked(socket) do
+    socket
+    |> put_flash(:error, "You no longer have access to this project")
+    |> push_navigate(to: ~p"/operator/projects")
+  end
 
   @impl true
   def handle_info({:project_updated, _id}, socket) do
-    project = Projects.get_project!(socket.assigns.project.id)
-    {:noreply, assign(socket, :project, project)}
+    case current_project(socket) do
+      nil -> {:noreply, project_access_revoked(socket)}
+      project -> {:noreply, assign(socket, :project, project)}
+    end
   end
 
   def handle_info(_msg, socket) do
@@ -69,8 +75,6 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   def handle_event("add_task", params, socket) do
-    project = socket.assigns.project
-
     due_at = parse_datetime(params["due_at"])
 
     attrs = %{
@@ -79,17 +83,18 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
       portal_visible: params["portal_visible"] == "true"
     }
 
-    case Projects.create_task(project, attrs) do
+    case project_mutation(socket, fn project -> Projects.create_task(project, attrs) end) do
       {:ok, _task} ->
-        project = Projects.get_project!(project.id)
-
         {:noreply,
          socket
-         |> assign(:project, project)
          |> assign(:show_task_form, false)
          |> assign(:new_task_title, "")
          |> assign(:new_task_due_at, "")
-         |> assign(:new_task_portal_visible, true)}
+         |> assign(:new_task_portal_visible, true)
+         |> refresh_project()}
+
+      {:error, :unauthorized} ->
+        {:noreply, project_access_revoked(socket)}
 
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, "Failed to create task")}
@@ -97,47 +102,50 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   def handle_event("cycle_task_state", %{"id" => task_id}, socket) do
-    task = get_project_task(socket, task_id)
-
-    if task do
-      next_state = next_task_state(task.state)
-
-      case Projects.update_task_state(task, next_state) do
-        {:ok, _} ->
-          project = Projects.get_project!(socket.assigns.project.id)
-          {:noreply, assign(socket, :project, project)}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "Failed to update task")}
-      end
-    else
-      {:noreply, socket}
+    case project_mutation(socket, fn project ->
+           case get_project_task(project.id, task_id) do
+             nil -> {:error, :not_found}
+             task -> Projects.update_task_state(task, next_task_state(task.state))
+           end
+         end) do
+      {:ok, _} -> {:noreply, refresh_project(socket)}
+      {:error, :not_found} -> {:noreply, socket}
+      {:error, :unauthorized} -> {:noreply, project_access_revoked(socket)}
+      {:error, _} -> {:noreply, put_flash(socket, :error, "Failed to update task")}
     end
   end
 
   def handle_event("delete_task", %{"id" => task_id}, socket) do
-    task = get_project_task(socket, task_id)
-
-    if task do
-      case Projects.delete_task(task) do
-        {:ok, _} ->
-          project = Projects.get_project!(socket.assigns.project.id)
-          {:noreply, assign(socket, :project, project)}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "Failed to delete task")}
-      end
-    else
-      {:noreply, socket}
+    case project_mutation(socket, fn project ->
+           case get_project_task(project.id, task_id) do
+             nil -> {:error, :not_found}
+             task -> Projects.delete_task(task)
+           end
+         end) do
+      {:ok, _} -> {:noreply, refresh_project(socket)}
+      {:error, :not_found} -> {:noreply, socket}
+      {:error, :unauthorized} -> {:noreply, project_access_revoked(socket)}
+      {:error, _} -> {:noreply, put_flash(socket, :error, "Failed to delete task")}
     end
   end
 
   # phx-value-id is client-controlled; only accept tasks that belong to the
   # mounted project so crafted events can't mutate foreign tasks.
-  defp get_project_task(socket, task_id) do
+  defp get_project_task(project_id, task_id) do
     case Integer.parse(to_string(task_id)) do
-      {int_id, ""} -> Projects.get_project_task(socket.assigns.project.id, int_id)
+      {int_id, ""} -> Projects.get_project_task(project_id, int_id)
       _ -> nil
+    end
+  end
+
+  defp project_mutation(socket, fun) do
+    Projects.with_operator_access(socket.assigns.project.id, socket.assigns.current_operator, fun)
+  end
+
+  defp refresh_project(socket) do
+    case current_project(socket) do
+      nil -> project_access_revoked(socket)
+      project -> assign(socket, :project, project)
     end
   end
 

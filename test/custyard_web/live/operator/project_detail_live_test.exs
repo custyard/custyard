@@ -32,6 +32,56 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
     |> Repo.insert!()
   end
 
+  defp scoped_admin_conn(conn, org) do
+    operator =
+      %OperatorAccount{}
+      |> OperatorAccount.changeset(%{
+        email: "detail-admin-#{System.unique_integer([:positive])}@example.com",
+        role: "admin",
+        organization_id: org.id
+      })
+      |> Repo.insert!()
+
+    Plug.Conn.put_session(conn, :operator_id, operator.id)
+  end
+
+  test "open project detail rejects task mutations after reassignment", %{conn: conn} do
+    own = insert_organization()
+    foreign = insert_organization()
+    project = create_project(%{title: "Moved project", organization_id: own.id})
+    conn = scoped_admin_conn(conn, own)
+    {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+
+    project
+    |> Ecto.Changeset.change(organization_id: foreign.id)
+    |> Repo.update!()
+
+    render_click(view, "add_task", %{"title" => "Unauthorized task"})
+
+    assert_redirect(view, "/operator/projects")
+    assert Repo.aggregate(Task, :count) == 0
+  end
+
+  test "project detail redirects when a project moves out of scope", %{conn: conn} do
+    own = insert_organization()
+    foreign = insert_organization()
+    project = create_project(%{title: "Moved project", organization_id: own.id})
+    conn = scoped_admin_conn(conn, own)
+    {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+
+    {:ok, _updated} = Custyard.Projects.update_project(project, %{organization_id: foreign.id})
+
+    assert_redirect(view, "/operator/projects")
+  end
+
+  test "invalid project ID redirects without crashing", %{conn: conn} do
+    org = insert_organization()
+    conn = scoped_admin_conn(conn, org)
+
+    assert {:error, {:live_redirect, %{to: "/operator/projects"}}} =
+             live(conn, "/operator/projects/not-a-project-id")
+  end
+
   describe "mount/3" do
     test "renders project detail page", %{conn: conn} do
       org = insert_organization(name: "Acme Corp")
