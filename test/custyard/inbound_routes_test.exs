@@ -82,6 +82,47 @@ defmodule Custyard.InboundRoutesTest do
       assert String.starts_with?(route.lettermint_route_id, "lm_route_")
     end
 
+    test "webhook-only sources create local routes without provisioning Lettermint" do
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn -> Application.put_env(:custyard, :lettermint, original_config) end)
+
+      for source <- [:zendesk, :intercom, :slack, :email] do
+        org = Factory.insert_organization()
+
+        {:ok, route} =
+          InboundRoutes.create_route(%{
+            organization_id: org.id,
+            route_type: :general,
+            source: source
+          })
+
+        assert route.source == source
+        assert route.lettermint_route_id == nil
+        assert InboundRoutes.callback_url(route) =~ "source=#{source}"
+      end
+    end
+
+    test "a Zendesk route can be deleted without a Lettermint API call" do
+      org = Factory.insert_organization()
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn -> Application.put_env(:custyard, :lettermint, original_config) end)
+
+      assert {:ok, route} =
+               InboundRoutes.create_route(%{
+                 organization_id: org.id,
+                 route_type: :general,
+                 source: "zendesk"
+               })
+
+      assert route.lettermint_route_id == nil
+      assert {:ok, _deleted} = InboundRoutes.delete_route(route)
+      assert InboundRoutes.get_route(route.id) == nil
+    end
+
     test "create_route accepts custom callback_token" do
       org = Factory.insert_organization()
       # Token must be at least 32 chars for security
@@ -437,6 +478,61 @@ defmodule Custyard.InboundRoutesTest do
       org = Factory.insert_organization()
 
       assert InboundRoutes.get_general_route(org.id) == nil
+    end
+
+    test "Lettermint and Zendesk general routes have deterministic source selection" do
+      org = Factory.insert_organization()
+
+      {:ok, lettermint} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :lettermint
+        })
+
+      {:ok, zendesk} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :zendesk
+        })
+
+      assert InboundRoutes.get_general_route(org.id).id == lettermint.id
+      assert InboundRoutes.get_general_route(org.id, source: :email).id == lettermint.id
+      assert InboundRoutes.get_general_route(org.id, source: :zendesk).id == zendesk.id
+
+      assert {:ok, email_route} =
+               InboundRoutes.find_or_create_general_route(org.id, source: :email)
+
+      assert email_route.id == lettermint.id
+
+      assert {:ok, zendesk_route} =
+               InboundRoutes.find_or_create_general_route(org.id, source: :zendesk)
+
+      assert zendesk_route.id == zendesk.id
+      assert length(InboundRoutes.list_for_organization(org.id)) == 2
+    end
+
+    test "email intake creates a local route when only a Zendesk general route exists" do
+      org = Factory.insert_organization()
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+
+      on_exit(fn -> Application.put_env(:custyard, :lettermint, original_config) end)
+
+      {:ok, zendesk} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :zendesk
+        })
+
+      assert InboundRoutes.get_general_route(org.id).id == zendesk.id
+      assert {:ok, email} = InboundRoutes.find_or_create_general_route(org.id, source: :email)
+      assert email.source == :email
+      assert email.id != zendesk.id
+      assert email.lettermint_route_id == nil
+      assert InboundRoutes.get_general_route(org.id).id == email.id
     end
 
     test "get_project_route returns project route" do

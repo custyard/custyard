@@ -16,6 +16,7 @@ defmodule Custyard.InboundRoutes do
 
   require Logger
 
+  alias Ecto.Changeset
   alias Custyard.{InboundRoute, InboundRouteWebhook, Repo}
   alias Custyard.Lettermint.Client
   import Ecto.Query
@@ -73,8 +74,9 @@ defmodule Custyard.InboundRoutes do
   @doc """
   Create a new inbound route.
 
-  Calls the Lettermint API to create the remote route, then stores
-  the local record with the returned `lettermint_route_id`.
+  Lettermint routes are provisioned remotely before their local record is
+  stored. Other sources are webhook-only and are stored locally without
+  creating a Lettermint mailbox.
 
   ## Examples
 
@@ -94,27 +96,32 @@ defmodule Custyard.InboundRoutes do
     changeset = InboundRoute.changeset(%InboundRoute{}, attrs)
 
     if changeset.valid? do
-      org_id = attrs[:organization_id] || attrs["organization_id"]
-      org = Repo.get!(Custyard.Organization, org_id)
-      route_type = attrs[:route_type] || attrs["route_type"]
-
-      lettermint_client = Client.client()
-
-      case lettermint_client.create_route(%{
-             lettermint_project_id: org.lettermint_project_id,
-             name: "#{org.name} #{route_type}",
-             route_type: "inbound"
-           }) do
-        {:ok, remote} ->
-          changeset
-          |> Ecto.Changeset.put_change(:lettermint_route_id, remote["id"])
-          |> Repo.insert()
-
-        {:error, _reason} = error ->
-          error
+      case Changeset.get_field(changeset, :source) do
+        :lettermint -> create_lettermint_route(changeset)
+        _ -> changeset |> Changeset.put_change(:lettermint_route_id, nil) |> Repo.insert()
       end
     else
       {:error, changeset}
+    end
+  end
+
+  defp create_lettermint_route(changeset) do
+    org_id = Changeset.get_field(changeset, :organization_id)
+    route_type = Changeset.get_field(changeset, :route_type)
+    org = Repo.get!(Custyard.Organization, org_id)
+
+    case Client.client().create_route(%{
+           lettermint_project_id: org.lettermint_project_id,
+           name: "#{org.name} #{route_type}",
+           route_type: "inbound"
+         }) do
+      {:ok, remote} ->
+        changeset
+        |> Changeset.put_change(:lettermint_route_id, remote["id"])
+        |> Repo.insert()
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -304,14 +311,15 @@ defmodule Custyard.InboundRoutes do
 
   ## Options
 
-    * `:source` - The source to set on a newly created route (default: `:lettermint`).
-      Has no effect when a route already exists.
+    * `:source` - The source to use or create (default: `:lettermint`).
+      `:email` reuses an existing Lettermint route, then an email route.
+      Other sources use only a route of their own source.
   """
   def find_or_create_general_route(organization_id, opts \\ [])
       when is_integer(organization_id) do
     source = Keyword.get(opts, :source, :lettermint)
 
-    case get_general_route(organization_id) do
+    case get_general_route(organization_id, source: source) do
       nil ->
         with {:ok, route} <-
                create_route(%{
@@ -351,16 +359,41 @@ defmodule Custyard.InboundRoutes do
   end
 
   @doc """
-  Get the general (catch-all) route for an organization.
-  Returns nil if not found.
+  Get a general route for an organization. Without a source, prefers Lettermint,
+  then email, then another source; ties use the oldest route ID. With a source,
+  selects only that source except `:email`, which prefers an existing Lettermint
+  route. Returns nil if no suitable route exists.
   """
-  def get_general_route(organization_id) when is_integer(organization_id) do
-    from(r in InboundRoute,
-      where: r.organization_id == ^organization_id and r.route_type == :general,
-      preload: [:webhooks]
-    )
+  def get_general_route(organization_id, opts \\ []) when is_integer(organization_id) do
+    source = Keyword.get(opts, :source)
+
+    query =
+      from(r in InboundRoute,
+        where: r.organization_id == ^organization_id and r.route_type == :general,
+        order_by: [
+          asc:
+            fragment(
+              "CASE ? WHEN 'lettermint' THEN 0 WHEN 'email' THEN 1 ELSE 2 END",
+              r.source
+            ),
+          asc: r.id
+        ],
+        limit: 1,
+        preload: [:webhooks]
+      )
+
+    query
+    |> maybe_filter_general_source(source)
     |> Repo.one()
   end
+
+  defp maybe_filter_general_source(query, nil), do: query
+
+  defp maybe_filter_general_source(query, :email),
+    do: where(query, [r], r.source in [:lettermint, :email])
+
+  defp maybe_filter_general_source(query, source),
+    do: where(query, [r], r.source == ^source)
 
   @doc """
   Get the project-specific route for a project.
