@@ -64,6 +64,15 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
   # --- Test setup ---
 
+  test "scoped admin cannot open another organization's detail", %{conn: conn} do
+    own = insert_organization(name: "Own organization")
+    foreign = insert_organization(name: "Foreign organization")
+    operator = create_admin(own)
+
+    assert {:error, {:redirect, %{to: "/operator/organizations"}}} =
+             live(authenticate_conn(conn, operator), ~p"/operator/organizations/#{foreign.id}")
+  end
+
   describe "Routes tab rendering" do
     setup %{conn: conn} do
       org = insert_organization(name: "Routes Test Org")

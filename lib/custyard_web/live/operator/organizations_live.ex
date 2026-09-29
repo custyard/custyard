@@ -59,7 +59,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
   end
 
   def handle_event("edit_org", %{"id" => id}, socket) do
-    case Organizations.get_organization(id) do
+    case Organizations.get_organization_for_operator(id, socket.assigns.current_operator) do
       nil ->
         {:noreply,
          socket
@@ -247,7 +247,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
   end
 
   defp load_organizations(socket) do
-    orgs = Organizations.list_organizations_with_counts()
+    orgs = Organizations.list_organizations_with_counts(socket.assigns.current_operator)
     assign(socket, :organizations, orgs)
   end
 

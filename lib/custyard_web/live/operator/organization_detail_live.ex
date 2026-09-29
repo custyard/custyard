@@ -13,7 +13,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
-    case Organizations.get_organization(id) do
+    case Organizations.get_organization_for_operator(id, socket.assigns.current_operator) do
       nil ->
         {:ok,
          socket
