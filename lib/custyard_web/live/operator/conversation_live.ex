@@ -89,7 +89,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   defp activate_if_new(%Conversation{state: :new} = conversation, operator) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    case Conversations.with_operator_access(conversation.id, operator, fn current ->
+    case Conversations.with_operator_access(conversation.id, operator, fn current, _operator ->
            if current.state == :new do
              Conversations.transition_state(current, :new, :active, last_operator_action_at: now)
            else
@@ -197,7 +197,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   def handle_event("add_note", %{"body" => body}, socket) when byte_size(body) > 0 do
     conversation = socket.assigns.conversation
 
-    case conversation_mutation(socket, fn current ->
+    case conversation_mutation(socket, fn current, _operator ->
            Conversations.create_message(%{
              source: :operator,
              body: body,
@@ -233,8 +233,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
         {:noreply, put_flash(socket, :error, "Message not found")}
 
       message ->
-        case conversation_mutation(socket, fn _current ->
-               Conversations.soft_delete_message(message, socket.assigns.current_operator)
+        case conversation_mutation(socket, fn _current, current_operator ->
+               Conversations.soft_delete_message(message, current_operator)
              end) do
           {:ok, _message} ->
             {:noreply, reload_conversation(socket)}
@@ -263,11 +263,15 @@ defmodule CustyardWeb.Operator.ConversationLive do
       new_state = String.to_existing_atom(state)
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      case conversation_mutation(socket, fn current ->
-             Conversations.update_conversation(current, %{
-               state: new_state,
-               last_operator_action_at: now
-             })
+      case conversation_mutation(socket, fn current, current_operator ->
+             if Authorization.can_set_conversation_state?(current_operator) do
+               Conversations.update_conversation(current, %{
+                 state: new_state,
+                 last_operator_action_at: now
+               })
+             else
+               {:error, :unauthorized}
+             end
            end) do
         {:ok, _} ->
           Scoring.calculate_and_cache(conversation.id)
@@ -357,7 +361,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       due_at = parse_due_at(params["due_at"])
       portal_visible = params["portal_visible"] == "true"
 
-      case conversation_mutation(socket, fn current ->
+      case conversation_mutation(socket, fn current, _operator ->
              Conversations.create_task(%{
                title: title,
                due_at: due_at,
@@ -396,7 +400,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         :done -> :open
       end
 
-    case conversation_mutation(socket, fn _current ->
+    case conversation_mutation(socket, fn _current, _operator ->
            Conversations.update_task_state(task, new_state)
          end) do
       {:ok, _} ->
@@ -444,7 +448,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       due_at = parse_due_at(params["due_at"])
       portal_visible = params["portal_visible"] == "true"
 
-      case conversation_mutation(socket, fn _current ->
+      case conversation_mutation(socket, fn _current, _operator ->
              Conversations.update_task(task, %{
                title: title,
                due_at: due_at,
@@ -471,7 +475,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
   def handle_event("delete_task", %{"id" => id}, socket) do
     task = get_scoped_task!(socket, id)
 
-    case conversation_mutation(socket, fn _current -> Conversations.delete_task(task) end) do
+    case conversation_mutation(socket, fn _current, _operator ->
+           Conversations.delete_task(task)
+         end) do
       {:ok, _} ->
         {:noreply,
          socket

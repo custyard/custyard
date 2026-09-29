@@ -54,10 +54,50 @@ defmodule CustyardWeb.Live.OperatorAuth do
             {:cont,
              socket
              |> assign(:operator_id, operator_id)
-             |> assign(:current_operator, operator)
-             |> assign(:scoped_organization_id, OperatorAccount.scoped_organization_id(operator))
-             |> assign(:current_role, operator.role)
-             |> assign(:is_super_admin, operator.role == "super_admin")}
+             |> assign_operator(operator)
+             |> attach_refresh_hooks()}
+        end
+    end
+  end
+
+  defp assign_operator(socket, operator) do
+    socket
+    |> assign(:current_operator, operator)
+    |> assign(:scoped_organization_id, OperatorAccount.scoped_organization_id(operator))
+    |> assign(:current_role, operator.role)
+    |> assign(:is_super_admin, operator.role == "super_admin")
+  end
+
+  defp attach_refresh_hooks(socket) do
+    socket
+    |> attach_hook(:refresh_operator_event, :handle_event, fn _event, _params, socket ->
+      refresh_operator(socket)
+    end)
+    |> attach_hook(:refresh_operator_info, :handle_info, fn _message, socket ->
+      refresh_operator(socket)
+    end)
+    |> attach_hook(:refresh_operator_params, :handle_params, fn _params, _uri, socket ->
+      refresh_operator(socket)
+    end)
+    |> attach_hook(:refresh_operator_async, :handle_async, fn _name, _result, socket ->
+      refresh_operator(socket)
+    end)
+  end
+
+  defp refresh_operator(socket) do
+    case Repo.get(OperatorAccount, socket.assigns.operator_id) do
+      nil ->
+        {:halt, redirect(socket, to: "/operator/login")}
+
+      operator ->
+        previous = socket.assigns.current_operator
+
+        if operator.role == previous.role and operator.organization_id == previous.organization_id do
+          {:cont, assign_operator(socket, operator)}
+        else
+          # Remount under the new role and organization before any existing
+          # view can render or act on resources loaded under the old scope.
+          {:halt, redirect(socket, to: "/operator")}
         end
     end
   end

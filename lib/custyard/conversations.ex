@@ -3,7 +3,7 @@ defmodule Custyard.Conversations do
   Context for conversation queries and operations.
   """
 
-  alias Custyard.{Conversation, Message, OperatorAccount, Repo}
+  alias Custyard.{Conversation, Message, OperatorAccess, OperatorAccount, Repo}
   alias Custyard.Email.OutboundQueue
   import Ecto.Query
 
@@ -470,17 +470,17 @@ defmodule Custyard.Conversations do
   end
 
   @doc "Run an operator mutation while the conversation's current scope is locked."
-  def with_operator_access(id, %OperatorAccount{} = operator, fun) when is_function(fun, 1) do
+  def with_operator_access(id, %OperatorAccount{} = operator, fun) when is_function(fun, 2) do
     Repo.transaction(fn ->
-      case lock_conversation_for_operator(id, operator) do
-        nil ->
-          Repo.rollback(:unauthorized)
-
-        conversation ->
-          case fun.(conversation) do
-            {:ok, value} -> value
-            {:error, reason} -> Repo.rollback(reason)
-          end
+      with %OperatorAccount{} = current_operator <- OperatorAccess.lock_current(operator),
+           %Conversation{} = conversation <-
+             lock_conversation_for_operator(id, current_operator) do
+        case fun.(conversation, current_operator) do
+          {:ok, value} -> value
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      else
+        _ -> Repo.rollback(:unauthorized)
       end
     end)
   end
@@ -602,19 +602,14 @@ defmodule Custyard.Conversations do
 
   """
   def send_reply(conversation, body, opts \\ []) do
-    Repo.transaction(fn ->
-      conversation =
-        case Keyword.get(opts, :operator) do
-          %OperatorAccount{} = operator ->
-            case lock_conversation_for_operator(conversation.id, operator) do
-              nil -> Repo.rollback(:unauthorized)
-              current -> current
-            end
+    conversation
+    |> reply_transaction(body, opts)
+    |> handle_reply_transaction()
+  end
 
-          nil ->
-            Repo.get!(Conversation, conversation.id)
-        end
-        |> Repo.preload([:contact, :organization, :prospect])
+  defp reply_transaction(conversation, body, opts) do
+    Repo.transaction(fn ->
+      {conversation, opts} = load_reply_conversation(conversation.id, opts)
 
       # Recipient and consent decisions use the row and associations read after
       # acquiring the scope lock, never the LiveView's earlier snapshot.
@@ -628,20 +623,37 @@ defmodule Custyard.Conversations do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-    |> case do
-      {:ok, {message, conversation, attempt_delivery?}} ->
-        # Post-transaction side effects: scoring + broadcasts
-        perform_reply_side_effects(conversation)
+  end
 
-        # The persisted pending message is the delivery job. Wake the supervised
-        # scanner after commit; it also recovers pending replies at startup.
-        if attempt_delivery?, do: OutboundQueue.wake()
+  defp load_reply_conversation(id, opts) do
+    case Keyword.get(opts, :operator) do
+      %OperatorAccount{} = operator ->
+        current_operator = OperatorAccess.lock_current(operator)
 
-        {:ok, message}
+        case current_operator && lock_conversation_for_operator(id, current_operator) do
+          nil ->
+            Repo.rollback(:unauthorized)
 
-      {:error, _reason} = error ->
-        error
+          current ->
+            {Repo.preload(current, [:contact, :organization, :prospect]),
+             Keyword.put(opts, :operator_email, current_operator.email)}
+        end
+
+      nil ->
+        {Repo.get!(Conversation, id) |> Repo.preload([:contact, :organization, :prospect]), opts}
     end
+  end
+
+  defp handle_reply_transaction({:ok, {message, conversation, attempt_delivery?}}) do
+    # The pending message becomes a delivery job only after the transaction
+    # commits, and the scanner recovers it if the process stops before waking.
+    perform_reply_side_effects(conversation)
+    if attempt_delivery?, do: OutboundQueue.wake()
+    {:ok, message}
+  end
+
+  defp handle_reply_transaction({:error, _reason} = error) do
+    error
   end
 
   # Build and insert the operator reply message with email metadata.

@@ -12,7 +12,16 @@ defmodule Custyard.ConversationsTest do
   test "operator reply and other writes reject a stale conversation after foreign linkage" do
     own = insert_organization()
     foreign = insert_organization()
-    operator = %OperatorAccount{role: "admin", organization_id: own.id}
+
+    operator =
+      %OperatorAccount{}
+      |> OperatorAccount.changeset(%{
+        email: "conversation-scope@example.com",
+        role: "admin",
+        organization_id: own.id
+      })
+      |> Repo.insert!()
+
     stale = insert_conversation(organization_id: nil, source: :public_intake, state: :active)
 
     stale
@@ -23,13 +32,44 @@ defmodule Custyard.ConversationsTest do
              Conversations.send_reply(stale, "Unauthorized reply", operator: operator)
 
     assert {:error, :unauthorized} =
-             Conversations.with_operator_access(stale.id, operator, fn current ->
+             Conversations.with_operator_access(stale.id, operator, fn current, _operator ->
                Conversations.create_message(%{
                  source: :operator,
                  body: "Unauthorized note",
                  is_internal_note: true,
                  conversation_id: current.id
                })
+             end)
+
+    assert Repo.aggregate(Message, :count) == 0
+  end
+
+  test "scoped conversation writes use the operator's current organization" do
+    own = insert_organization()
+    foreign = insert_organization()
+
+    operator =
+      %OperatorAccount{}
+      |> OperatorAccount.changeset(%{
+        email: "current-conversation-scope@example.com",
+        role: "admin",
+        organization_id: own.id
+      })
+      |> Repo.insert!()
+
+    conversation = insert_conversation(organization_id: own.id, state: :active)
+
+    operator
+    |> OperatorAccount.role_changeset(%{organization_id: foreign.id})
+    |> Repo.update!()
+
+    assert {:error, :unauthorized} =
+             Conversations.send_reply(conversation, "Stale assignment", operator: operator)
+
+    assert {:error, :unauthorized} =
+             Conversations.with_operator_access(conversation.id, operator, fn _current,
+                                                                              _operator ->
+               {:ok, :unexpected}
              end)
 
     assert Repo.aggregate(Message, :count) == 0

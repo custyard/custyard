@@ -4,7 +4,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
-  alias Custyard.{OperatorAccount, Repo, Scoring}
+  alias Custyard.{Conversation, OperatorAccount, Repo, Scoring}
 
   # Helpers for creating operators and authenticated connections
 
@@ -280,6 +280,101 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       conn = login(conn, agent)
 
       {:ok, _view, _html} = live(conn, ~p"/operator")
+    end
+  end
+
+  describe "connected socket scope refresh" do
+    test "reassignment removes access before the next organization event", %{conn: conn} do
+      own = insert_organization(name: "Original organization")
+      next_org = insert_organization(name: "Next organization")
+
+      operator =
+        create_operator(%{
+          email: "reassigned-admin@example.com",
+          role: "admin",
+          organization_id: own.id
+        })
+
+      {:ok, view, html} = live(login(conn, operator), ~p"/operator/organizations")
+      assert html =~ own.name
+
+      operator
+      |> OperatorAccount.role_changeset(%{organization_id: next_org.id})
+      |> Repo.update!()
+
+      render_click(view, "show_form", %{})
+      assert_redirect(view, "/operator")
+    end
+
+    test "demotion removes admin page access before the next event", %{conn: conn} do
+      org = insert_organization()
+
+      operator =
+        create_operator(%{
+          email: "demoted-admin@example.com",
+          role: "admin",
+          organization_id: org.id
+        })
+
+      {:ok, view, _html} = live(login(conn, operator), ~p"/operator/organizations")
+
+      operator
+      |> OperatorAccount.role_changeset(%{role: "agent"})
+      |> Repo.update!()
+
+      render_click(view, "show_form", %{})
+      assert_redirect(view, "/operator")
+    end
+
+    test "reassignment removes access before a project broadcast reload", %{conn: conn} do
+      own = insert_organization()
+      next_org = insert_organization()
+      project = insert_project(organization_id: own.id)
+
+      operator =
+        create_operator(%{
+          email: "reassigned-project-agent@example.com",
+          role: "agent",
+          organization_id: own.id
+        })
+
+      {:ok, view, _html} = live(login(conn, operator), ~p"/operator/projects/#{project.id}")
+
+      operator
+      |> OperatorAccount.role_changeset(%{organization_id: next_org.id})
+      |> Repo.update!()
+
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
+        "project:#{project.id}",
+        {:project_updated, project.id}
+      )
+
+      assert_redirect(view, "/operator")
+    end
+
+    test "demotion blocks a state change from an open conversation", %{conn: conn} do
+      org = insert_organization()
+      conversation = insert_conversation(organization_id: org.id, state: :active)
+
+      operator =
+        create_operator(%{
+          email: "demoted-conversation-admin@example.com",
+          role: "admin",
+          organization_id: org.id
+        })
+
+      {:ok, view, _html} =
+        live(login(conn, operator), ~p"/operator/conversation/#{conversation.id}")
+
+      operator
+      |> OperatorAccount.role_changeset(%{role: "agent"})
+      |> Repo.update!()
+
+      render_click(view, "set_state", %{"state" => "waiting"})
+
+      assert_redirect(view, "/operator")
+      assert Repo.get!(Conversation, conversation.id).state == :active
     end
   end
 end
