@@ -13,10 +13,6 @@ defmodule CustyardWeb.Telemetry do
   > emit. Attaching a reporter is tracked in custyard/custyard#11; it predates
   > the intake work and affects the LMTP, webhook, scoring and sender-matching
   > metrics equally.
-  >
-  > Note also that `periodic_measurements/0` emits
-  > `[:custyard, :conversations, :active]`, which no metric below declares — so
-  > that measurement is orphaned twice over. Also custyard/custyard#11.
   """
 
   use Supervisor
@@ -127,6 +123,15 @@ defmodule CustyardWeb.Telemetry do
       summary("vm.total_run_queue_lengths.cpu"),
       summary("vm.total_run_queue_lengths.io"),
 
+      # Queue depth, sampled by periodic_measurements/0 every 10s.
+      last_value("custyard.conversations.active.count",
+        description: "Open conversations — every state but :resolved"
+      ),
+      last_value("custyard.conversations.by_state.count",
+        tags: [:state],
+        description: "Open conversations per state, the queue-depth breakdown"
+      ),
+
       # LMTP Server Metrics (events emitted by LMTPServer)
       counter("custyard.lmtp.connection.open.count",
         description: "Total LMTP connections opened"
@@ -189,9 +194,8 @@ defmodule CustyardWeb.Telemetry do
       # Public Intake Metrics (events emitted by IntakeController and
       # Plugs.PublicRateLimit). NOTE: nothing consumes this list yet — see the
       # moduledoc and custyard/custyard#11. These declarations exist so a
-      # reporter picks them up
-      # the day one is attached; until then the Logger lines at each emit site
-      # are the only readable signal.
+      # reporter picks them up the day one is attached; until then the Logger
+      # lines at each emit site are the only readable signal.
       counter("custyard.intake.submission.count",
         tags: [:mode, :email_captured, :receipt],
         description: "Accepted public intake submissions"
@@ -238,11 +242,23 @@ defmodule CustyardWeb.Telemetry do
 
       total = Enum.sum(Map.values(counts))
 
-      :telemetry.execute(
-        [:custyard, :conversations, :active],
-        %{count: total},
-        %{by_state: counts}
-      )
+      :telemetry.execute([:custyard, :conversations, :active], %{count: total}, %{})
+
+      # The breakdown goes out as one event per state with `state` as a tag,
+      # rather than riding along as a map in the metadata: a map-valued tag is
+      # not something a reporter can group by.
+      #
+      # Zero-filled from Conversation.states/0 because `group_by` returns no row
+      # for a state with no conversations. Emitting only the states present would
+      # leave a `last_value` gauge reporting the stale count from the last sample
+      # where that state was non-empty — a drained queue would read as full.
+      for state <- Custyard.Conversation.states(), state != :resolved do
+        :telemetry.execute(
+          [:custyard, :conversations, :by_state],
+          %{count: Map.get(counts, state, 0)},
+          %{state: state}
+        )
+      end
     rescue
       # Don't crash periodic measurement if repo is unavailable
       _ -> :ok
