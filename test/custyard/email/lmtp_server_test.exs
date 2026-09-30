@@ -9,6 +9,10 @@ defmodule Custyard.Email.LMTPServerTest do
   """
   use Custyard.DataCase, async: false
 
+  # Binds a real TCP listener on @test_port. Sandboxes that restrict socket
+  # binding fail the whole module, so `mix test --exclude lmtp` skips it.
+  @moduletag :lmtp
+
   alias Custyard.Email.LMTPServer
 
   import Custyard.Factory
