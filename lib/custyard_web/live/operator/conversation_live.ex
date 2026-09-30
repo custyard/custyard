@@ -809,7 +809,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
             This prospect has not opted into email replies — replies are not
             emailed, but stay visible via their conversation link.
           </p>
-          <form phx-submit="send_reply" class="flex gap-2" data-testid="operator-reply-form">
+          <form
+            id="operator-reply-form"
+            phx-submit="send_reply"
+            class="flex gap-2"
+            data-testid="operator-reply-form"
+          >
             <textarea
               name="body"
               rows="2"
@@ -831,7 +836,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
             </button>
           </form>
 
-          <form phx-submit="add_note" class="flex gap-2" data-testid="operator-note-form">
+          <form
+            id="operator-note-form"
+            phx-submit="add_note"
+            class="flex gap-2"
+            data-testid="operator-note-form"
+          >
             <input
               type="text"
               name="body"
@@ -939,6 +949,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
               </button>
               <form
                 :if={@show_convert_form}
+                id="operator-convert-form"
                 phx-submit="convert_prospect"
                 phx-change="validate_convert_form"
                 class="mt-2 p-2 bg-gray-50 dark:bg-zinc-900 rounded border border-gray-200 dark:border-zinc-700 space-y-2"
@@ -1085,6 +1096,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
             <%= if @show_task_form do %>
               <form
+                id="operator-conversation-task-form"
                 phx-submit="add_task"
                 phx-change="update_new_task"
                 class="mt-3 space-y-2 p-2 bg-gray-50 dark:bg-zinc-800 rounded border border-gray-200 dark:border-zinc-700"
@@ -1531,6 +1543,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   defp task_edit_form(assigns) do
     ~H"""
     <form
+      id={"operator-task-edit-form-#{@task.id}"}
       phx-submit="save_task"
       phx-change="update_edit_task"
       class="p-2 bg-indigo-50 dark:bg-indigo-900/30 rounded border border-indigo-200 dark:border-indigo-700 space-y-2"

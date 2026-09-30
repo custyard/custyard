@@ -779,6 +779,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
         <form
           :if={@editing_branding}
+          id="operator-settings-branding-form"
           phx-submit="save_branding"
           phx-change="validate_branding"
           class="space-y-3"

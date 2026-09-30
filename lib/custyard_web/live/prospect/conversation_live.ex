@@ -593,7 +593,11 @@ defmodule CustyardWeb.Prospect.ConversationLive do
           class="mt-6 bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
           data-testid="resume-notify-toggle"
         >
-          <form phx-change="toggle_notifications" data-testid="resume-notify-form">
+          <form
+            id="resume-notify-form"
+            phx-change="toggle_notifications"
+            data-testid="resume-notify-form"
+          >
             <label class="flex items-center gap-3 text-sm text-zinc-700 dark:text-zinc-300">
               <input type="hidden" name="notify" value="false" />
               <input
