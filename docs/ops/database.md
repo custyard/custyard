@@ -1,36 +1,31 @@
-# docs/ops/database.md
----
+# Database operations
 
-## ⚠️ Start fresh: delete and recreate your database
+Production uses SQLite at `/data/custyard.db` by default. On Fly.io, `fly.toml`
+mounts the `custyard_data` volume at `/data`; startup checks the mount before
+the Repo or migrations run. Uploaded files also live under `/data/uploads`.
 
-Migration `20260705150001_create_prospects.exs` was renamed in-place (`resume_token_hash` → `access_token_hash`) after existing databases had already run it, so `schema_migrations` marks it complete with the old schema. Stale DBs fail with `no such column: access_token_hash` (262 test failures). Reset to start fresh:
-
-### Local SQLite (dev + test)
-
-```sh
-# test DB (including MIX_TEST_PARTITION variants) — recreated automatically on next `mix test`
-rm -f priv/repo/custyard_test*.db*
-
-# dev DB — recreate + migrate + seed
-rm -f priv/repo/custyard_dev.db*
-mix ecto.setup        # or: mix ecto.reset (drops + recreates in one step)
-```
-
-### Turso (production, `libsql://` DATABASE_URL)
+Create the volume in the app's primary region before the first deploy:
 
 ```sh
-turso db destroy <db-name> --yes
-turso db create <db-name>
-turso db show <db-name> --url          # new libsql:// URL
-turso db tokens create <db-name>       # new auth token
-
-fly secrets set DATABASE_URL="libsql://…" TURSO_AUTH_TOKEN="…"   # triggers restart
-
-# migrate and recreate the operator account (use rpc, not eval, against the running app)
-fly ssh console -C "/app/bin/custyard rpc 'Custyard.Release.migrate()'"
-fly ssh console -C "/app/bin/custyard rpc 'Custyard.Release.setup_operator(\"lettermint@solutious.com\")'"
+fly volumes create custyard_data --region <your-region> --size 1
+fly volumes list
 ```
 
-turso db destroy cydb1-onetime
-turso db create cydb1-onetime
-turso db show --url cydb1-onetime
+Keep one app machine per SQLite database. Before a schema repair or migration,
+take a volume snapshot and verify which machine owns the volume. See
+[Fly.io deployment](../flyio-deployment.md#volumes-and-backups).
+
+`DATABASE_URL=libsql://...` is unsupported. The locked SQLite driver does not
+connect to Turso; it interprets the URL as a local filename. Runtime
+configuration rejects it so a deployment cannot silently create an ephemeral
+database. PostgreSQL requires a release built with `Ecto.Adapters.Postgres` and
+a PostgreSQL `DATABASE_URL`.
+
+## Legacy schema mismatch
+
+An earlier version renamed `resume_token_hash` to `access_token_hash` inside
+an already applied migration. An existing database with the old column can
+fail with `no such column: access_token_hash`. Preserve and back up any
+production data before applying a forward schema repair. Recreating a local
+development or test database is appropriate only when its contents are
+disposable.

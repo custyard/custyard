@@ -7,7 +7,13 @@ defmodule Custyard.Webhooks.SignatureTest do
     test "delegates to lettermint adapter" do
       payload = "test-payload"
       secret = "test-secret"
-      sig = :crypto.mac(:hmac, :sha256, secret, payload) |> Base.encode16(case: :lower)
+      timestamp = to_string(System.system_time(:second))
+
+      digest =
+        :crypto.mac(:hmac, :sha256, secret, timestamp <> "." <> payload)
+        |> Base.encode16(case: :lower)
+
+      sig = "t=#{timestamp},v1=#{digest}"
 
       assert :ok = Signature.verify(:lettermint, payload, sig, secret)
     end

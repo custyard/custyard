@@ -22,6 +22,27 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
   end
 
   describe "mount/3" do
+    test "scoped admin sees only their organization's portal credential", %{conn: conn} do
+      own = insert_organization(name: "Own organization")
+      foreign = insert_organization(name: "Foreign organization")
+
+      operator =
+        %OperatorAccount{}
+        |> OperatorAccount.changeset(%{
+          email: "scoped-org-admin@example.com",
+          role: "admin",
+          organization_id: own.id
+        })
+        |> Repo.insert!()
+
+      conn = Plug.Conn.put_session(conn, :operator_id, operator.id)
+      {:ok, _view, html} = live(conn, ~p"/operator/organizations")
+
+      assert html =~ "/p/#{own.token}"
+      refute html =~ foreign.name
+      refute html =~ foreign.token
+    end
+
     test "renders organizations list", %{conn: conn} do
       insert_organization(name: "Acme Corp", tier: :enterprise)
       insert_organization(name: "Beta LLC", tier: :standard)

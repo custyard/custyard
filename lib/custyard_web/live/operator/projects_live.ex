@@ -7,7 +7,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    organizations = Organizations.list_organizations()
+    organizations = Organizations.list_organizations_for_operator(socket.assigns.current_operator)
 
     socket =
       socket
@@ -45,7 +45,10 @@ defmodule CustyardWeb.Operator.ProjectsLive do
      socket
      |> assign(:show_form, true)
      |> assign(:editing_project, nil)
-     |> assign(:form_data, default_form_data())}
+     |> assign(:form_data, %{
+       default_form_data()
+       | organization_id: to_string(socket.assigns.scoped_organization_id || "")
+     })}
   end
 
   def handle_event("hide_form", _params, socket) do
@@ -56,12 +59,17 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   def handle_event("edit_project", %{"id" => id}, socket) do
-    case Projects.get_project(id) do
+    operator = socket.assigns.current_operator
+
+    case Projects.get_project_for_operator(id, operator) do
       nil ->
         {:noreply,
          socket
          |> put_flash(:error, "Project not found")
          |> load_projects()}
+
+      _project when operator.role not in ["admin", "super_admin"] ->
+        {:noreply, put_flash(socket, :error, "You do not have permission to edit this project")}
 
       project ->
         {:noreply,
@@ -96,23 +104,12 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   def handle_event("save_project", _params, socket) do
     operator = socket.assigns.current_operator
     attrs = build_project_attrs(socket.assigns.form_data)
-    org_id = attrs[:organization_id]
-
-    if Authorization.can_manage_project?(operator, org_id) do
-      result =
-        case socket.assigns.editing_project do
-          nil -> Projects.create_project(attrs)
-          project -> Projects.update_project(project, attrs)
-        end
-
-      handle_save_result(result, socket)
-    else
-      {:noreply, put_flash(socket, :error, "You do not have permission to manage this project")}
-    end
+    result = save_project(socket.assigns.editing_project, attrs, operator)
+    handle_save_result(result, socket)
   end
 
   def handle_event("delete_project", %{"id" => id}, socket) do
-    case Projects.get_project(id) do
+    case Projects.get_project_for_operator(id, socket.assigns.current_operator) do
       nil ->
         {:noreply,
          socket
@@ -124,7 +121,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
              socket.assigns.current_operator,
              project.organization_id
            ) do
-          case Projects.delete_project(project) do
+          case Projects.delete_project_for_operator(project, socket.assigns.current_operator) do
             {:ok, _} ->
               {:noreply,
                socket
@@ -141,6 +138,17 @@ defmodule CustyardWeb.Operator.ProjectsLive do
     end
   end
 
+  defp save_project(nil, attrs, operator) do
+    Projects.create_project_for_operator(attrs, operator)
+  end
+
+  defp save_project(project, attrs, operator) do
+    case Projects.get_project_for_operator(project.id, operator) do
+      nil -> {:error, :unauthorized}
+      current -> Projects.update_project_for_operator(current, attrs, operator)
+    end
+  end
+
   defp handle_save_result({:ok, _project}, socket) do
     action = if socket.assigns.editing_project, do: "updated", else: "created"
 
@@ -150,6 +158,10 @@ defmodule CustyardWeb.Operator.ProjectsLive do
      |> assign(:show_form, false)
      |> assign(:editing_project, nil)
      |> load_projects()}
+  end
+
+  defp handle_save_result({:error, :unauthorized}, socket) do
+    {:noreply, put_flash(socket, :error, "You do not have permission to manage this project")}
   end
 
   defp handle_save_result({:error, changeset}, socket) do
@@ -181,22 +193,10 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   defp load_projects(socket) do
-    scoped_org_id = socket.assigns[:scoped_organization_id]
+    filter_org_id = parse_org_id(socket.assigns.filter_org)
 
     projects =
-      case socket.assigns.filter_org do
-        nil ->
-          Projects.list_for_operator(organization_id: scoped_org_id)
-
-        "" ->
-          Projects.list_for_operator(organization_id: scoped_org_id)
-
-        org_id ->
-          case Integer.parse(org_id) do
-            {id, ""} -> Projects.list_for_organization(id)
-            _ -> Projects.list_for_operator(organization_id: scoped_org_id)
-          end
-      end
+      Projects.list_for_operator(socket.assigns.current_operator, organization_id: filter_org_id)
 
     assign(socket, :projects, projects)
   end

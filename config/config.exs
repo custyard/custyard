@@ -91,6 +91,8 @@ config :sentry,
 # downcased email; intake_arrival_email: intake source key;
 # intake_receipt_email: downcased captured email).
 config :custyard, :rate_limit_buckets,
+  operator_login_ip: [limit: 5, window_ms: 60_000],
+  operator_login_email: [limit: 5, window_ms: 3_600_000],
   intake_get: [limit: 60, window_ms: 60_000],
   intake_post: [limit: 5, window_ms: 3_600_000],
   conversation_mount: [limit: 30, window_ms: 600_000],

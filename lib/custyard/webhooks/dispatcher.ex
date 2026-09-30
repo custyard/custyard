@@ -54,7 +54,8 @@ defmodule Custyard.Webhooks.Dispatcher do
     route_context = %{
       organization_id: route.organization_id,
       project_id: route.project_id,
-      route_type: route.route_type
+      route_type: route.route_type,
+      route_id: route.id
     }
 
     # Step 1: Sender matching (synchronous, blocking)

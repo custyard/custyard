@@ -97,6 +97,17 @@ defmodule Custyard.Organizations do
     Repo.get(Organization, id)
   end
 
+  @doc "Get an organization only when it is in an operator's scope."
+  def get_organization_for_operator(id, %OperatorAccount{} = operator) do
+    case get_organization(id) do
+      %Organization{} = org ->
+        if OperatorAccount.can_access_organization?(operator, org.id), do: org
+
+      nil ->
+        nil
+    end
+  end
+
   @doc """
   Get an organization by ID, raising if not found.
   """
@@ -141,6 +152,14 @@ defmodule Custyard.Organizations do
     |> Repo.all()
   end
 
+  @doc "List organizations visible to an operator."
+  def list_organizations_for_operator(%OperatorAccount{} = operator) do
+    Organization
+    |> scope_to_operator(operator)
+    |> order_by([o], asc: o.name)
+    |> Repo.all()
+  end
+
   @doc """
   List all organizations with conversation counts.
   """
@@ -153,6 +172,25 @@ defmodule Custyard.Organizations do
     )
     |> Repo.all()
   end
+
+  @doc "List visible organizations with their conversation counts."
+  def list_organizations_with_counts(%OperatorAccount{} = operator) do
+    Organization
+    |> scope_to_operator(operator)
+    |> join(:left, [o], c in assoc(o, :conversations))
+    |> group_by([o], o.id)
+    |> select([o, c], %{org: o, conversation_count: count(c.id)})
+    |> order_by([o], asc: o.name)
+    |> Repo.all()
+  end
+
+  defp scope_to_operator(query, %OperatorAccount{role: "super_admin"}), do: query
+
+  defp scope_to_operator(query, %OperatorAccount{organization_id: org_id})
+       when is_integer(org_id),
+       do: where(query, [o], o.id == ^org_id)
+
+  defp scope_to_operator(query, %OperatorAccount{}), do: where(query, [o], false)
 
   @doc """
   Create a new organization.

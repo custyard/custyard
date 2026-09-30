@@ -3,7 +3,7 @@ defmodule Custyard.Projects do
   Context for project queries and operations.
   """
 
-  alias Custyard.{Project, Repo, Task}
+  alias Custyard.{Authorization, OperatorAccess, OperatorAccount, Project, Repo, Task}
   import Ecto.Query
 
   @doc """
@@ -31,6 +31,36 @@ defmodule Custyard.Projects do
     query |> Repo.all() |> Enum.map(&with_progress/1)
   end
 
+  @doc "List projects within an operator's scope, intersected with an optional org filter."
+  def list_for_operator(%OperatorAccount{} = operator, opts) do
+    requested_org_id = Keyword.get(opts, :organization_id)
+
+    query =
+      from(p in Project,
+        where: p.is_template == false,
+        order_by: [desc: p.inserted_at],
+        preload: [:tasks, :organization]
+      )
+      |> scope_to_operator(operator)
+
+    query =
+      if is_integer(requested_org_id) do
+        from(p in query, where: p.organization_id == ^requested_org_id)
+      else
+        query
+      end
+
+    query |> Repo.all() |> Enum.map(&with_progress/1)
+  end
+
+  defp scope_to_operator(query, %OperatorAccount{role: "super_admin"}), do: query
+
+  defp scope_to_operator(query, %OperatorAccount{organization_id: org_id})
+       when is_integer(org_id),
+       do: from(p in query, where: p.organization_id == ^org_id)
+
+  defp scope_to_operator(query, %OperatorAccount{}), do: from(p in query, where: false)
+
   @doc """
   List projects for a specific organization (operator view).
   """
@@ -49,11 +79,13 @@ defmodule Custyard.Projects do
   List portal-visible projects for an organization.
   """
   def list_portal_visible(org_id) do
+    visible_tasks = from(t in Task, where: t.portal_visible == true)
+
     from(p in Project,
       where: p.organization_id == ^org_id,
       where: p.portal_visible == true,
       order_by: [desc: p.inserted_at],
-      preload: [:tasks]
+      preload: [tasks: ^visible_tasks]
     )
     |> Repo.all()
     |> Enum.map(&with_progress/1)
@@ -100,6 +132,25 @@ defmodule Custyard.Projects do
     end
   end
 
+  @doc "Get a project only when it is within an operator's organization scope."
+  def get_project_for_operator(id, %OperatorAccount{} = operator) when is_binary(id) do
+    case Integer.parse(id) do
+      {int_id, ""} -> get_project_for_operator(int_id, operator)
+      _ -> nil
+    end
+  end
+
+  def get_project_for_operator(id, %OperatorAccount{} = operator) when is_integer(id) do
+    query = from(p in Project, where: p.id == ^id) |> scope_to_operator(operator)
+
+    case Repo.one(query) do
+      nil -> nil
+      project -> project |> Repo.preload(:tasks) |> with_progress()
+    end
+  end
+
+  def get_project_for_operator(_id, %OperatorAccount{}), do: nil
+
   @doc """
   Get a project by ID (operator access).
   Raises if not found.
@@ -114,25 +165,160 @@ defmodule Custyard.Projects do
   Create a project.
   """
   def create_project(attrs) do
-    %Project{}
-    |> Project.changeset(attrs)
-    |> Repo.insert()
+    case %Project{} |> Project.changeset(attrs) |> Repo.insert() do
+      {:ok, project} = result ->
+        broadcast_org_project(project.organization_id, {:project_created, project.id})
+        result
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Create a project with the operator's current role and assignment locked."
+  def create_project_for_operator(attrs, %OperatorAccount{} = operator) do
+    result =
+      Repo.transaction(fn ->
+        current_operator = OperatorAccess.lock_current(operator)
+        changeset = Project.changeset(%Project{}, attrs)
+        destination_id = Ecto.Changeset.get_field(changeset, :organization_id)
+
+        if current_operator && Authorization.can_manage_project?(current_operator, destination_id) do
+          case Repo.insert(changeset) do
+            {:ok, project} -> project
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        else
+          Repo.rollback(:unauthorized)
+        end
+      end)
+
+    case result do
+      {:ok, project} ->
+        broadcast_org_project(project.organization_id, {:project_created, project.id})
+        result
+
+      error ->
+        error
+    end
   end
 
   @doc """
   Update a project.
   """
   def update_project(project, attrs) do
-    project
-    |> Project.changeset(attrs)
-    |> Repo.update()
+    case project |> Project.changeset(attrs) |> Repo.update() do
+      {:ok, updated} = result ->
+        broadcast_project_update(updated.id)
+
+        if project.organization_id != updated.organization_id do
+          broadcast_org_project(project.organization_id, {:project_updated, updated.id})
+        end
+
+        result
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Update an operator-managed project while holding its scoped database row lock."
+  def update_project_for_operator(%Project{} = project, attrs, %OperatorAccount{} = operator) do
+    case with_operator_access(project.id, operator, fn current, current_operator ->
+           changeset = Project.changeset(current, attrs)
+           destination_id = Ecto.Changeset.get_field(changeset, :organization_id)
+
+           if Authorization.can_manage_project?(current_operator, current.organization_id) and
+                Authorization.can_manage_project?(current_operator, destination_id) do
+             case Repo.update(changeset) do
+               {:ok, updated} -> {:ok, {updated, current.organization_id}}
+               error -> error
+             end
+           else
+             {:error, :unauthorized}
+           end
+         end) do
+      {:ok, {updated, old_org_id}} ->
+        broadcast_project_update(updated.id)
+
+        if old_org_id != updated.organization_id do
+          broadcast_org_project(old_org_id, {:project_updated, updated.id})
+        end
+
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   @doc """
   Delete a project.
   """
   def delete_project(project) do
-    Repo.delete(project)
+    case Repo.delete(project) do
+      {:ok, deleted} = result ->
+        broadcast_org_project(deleted.organization_id, {:project_deleted, deleted.id})
+        result
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Delete an operator-managed project only while its scoped row is locked."
+  def delete_project_for_operator(%Project{} = project, %OperatorAccount{} = operator) do
+    case with_operator_access(project.id, operator, fn current, current_operator ->
+           if Authorization.can_manage_project?(current_operator, current.organization_id) do
+             Repo.delete(current)
+           else
+             {:error, :unauthorized}
+           end
+         end) do
+      {:ok, deleted} = result ->
+        broadcast_org_project(deleted.organization_id, {:project_deleted, deleted.id})
+        result
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Run a project mutation while its current operator scope is locked."
+  def with_operator_access(id, %OperatorAccount{} = operator, fun, opts \\ [])
+      when is_function(fun, 2) do
+    result =
+      Repo.transaction(fn ->
+        with %OperatorAccount{} = current_operator <- OperatorAccess.lock_current(operator),
+             %Project{} = project <- lock_project_for_operator(id, current_operator) do
+          case fun.(project, current_operator) do
+            {:ok, value} -> value
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        else
+          _ -> Repo.rollback(:unauthorized)
+        end
+      end)
+
+    if match?({:ok, _}, result) and Keyword.get(opts, :broadcast_project?, false) do
+      broadcast_project_update(id)
+    end
+
+    result
+  end
+
+  defp lock_project_for_operator(id, operator) do
+    query = from(p in Project, where: p.id == ^id) |> scope_to_operator(operator)
+
+    # A no-op UPDATE obtains the row's write lock. SQLite takes its write lock
+    # here, while PostgreSQL locks this row; reassignment cannot slip between
+    # authorization and the following mutation.
+    case Repo.update_all(query,
+           set: [updated_at: DateTime.utc_now() |> DateTime.truncate(:second)]
+         ) do
+      {1, _} -> Repo.get!(Project, id) |> Repo.preload(:tasks)
+      {0, _} -> nil
+    end
   end
 
   @doc """
@@ -179,14 +365,24 @@ defmodule Custyard.Projects do
       organization_id: org_id
     }
 
-    Repo.transaction(fn ->
-      with {:ok, project} <- create_project(project_attrs),
-           {:ok, _tasks} <- create_tasks_from_template(project, template, start_date) do
-        Repo.preload(project, :tasks) |> with_progress()
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    result =
+      Repo.transaction(fn ->
+        with {:ok, project} <- %Project{} |> Project.changeset(project_attrs) |> Repo.insert(),
+             {:ok, _tasks} <- create_tasks_from_template(project, template, start_date) do
+          Repo.preload(project, :tasks) |> with_progress()
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, project} ->
+        broadcast_org_project(project.organization_id, {:project_created, project.id})
+        result
+
+      error ->
+        error
+    end
   end
 
   def create_from_template(%Project{is_template: false}, _org_id, _start_date) do
@@ -283,7 +479,7 @@ defmodule Custyard.Projects do
   Create a task for a project.
   Broadcasts an update to project subscribers.
   """
-  def create_task(project, attrs) do
+  def create_task(project, attrs, opts \\ []) do
     attrs = Map.put(attrs, :project_id, project.id)
 
     result =
@@ -293,7 +489,7 @@ defmodule Custyard.Projects do
 
     case result do
       {:ok, task} ->
-        broadcast_project_update(project.id)
+        if Keyword.get(opts, :broadcast?, true), do: broadcast_project_update(project.id)
         {:ok, task}
 
       error ->
@@ -305,7 +501,7 @@ defmodule Custyard.Projects do
   Update a task's state.
   Broadcasts an update to project subscribers.
   """
-  def update_task_state(%Task{} = task, new_state) do
+  def update_task_state(%Task{} = task, new_state, opts \\ []) do
     result =
       task
       |> Task.state_changeset(new_state)
@@ -313,7 +509,9 @@ defmodule Custyard.Projects do
 
     case result do
       {:ok, task} ->
-        if task.project_id, do: broadcast_project_update(task.project_id)
+        if task.project_id && Keyword.get(opts, :broadcast?, true),
+          do: broadcast_project_update(task.project_id)
+
         {:ok, task}
 
       error ->
@@ -325,12 +523,14 @@ defmodule Custyard.Projects do
   Delete a task.
   Broadcasts an update to project subscribers.
   """
-  def delete_task(%Task{} = task) do
+  def delete_task(%Task{} = task, opts \\ []) do
     project_id = task.project_id
 
     case Repo.delete(task) do
       {:ok, _} = result ->
-        if project_id, do: broadcast_project_update(project_id)
+        if project_id && Keyword.get(opts, :broadcast?, true),
+          do: broadcast_project_update(project_id)
+
         result
 
       error ->
@@ -359,5 +559,19 @@ defmodule Custyard.Projects do
       "project:#{project_id}",
       {:project_updated, project_id}
     )
+
+    case Repo.get(Project, project_id) do
+      %Project{organization_id: org_id} ->
+        broadcast_org_project(org_id, {:project_updated, project_id})
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp broadcast_org_project(nil, _event), do: :ok
+
+  defp broadcast_org_project(org_id, event) do
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "projects:org:#{org_id}", event)
   end
 end

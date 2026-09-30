@@ -749,6 +749,42 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert flash["error"] =~ "do not have access"
     end
 
+    test "open unlinked prospect loses access when linked to another organization" do
+      own = insert_organization()
+      foreign = insert_organization()
+      contact = insert_contact(organization_id: foreign.id, email: "known@foreign.example")
+      operator = insert_scoped_operator(own.id, "admin")
+      conv = insert_conversation(organization_id: nil, source: :public_intake, state: :active)
+      insert_prospect(conversation_id: conv.id)
+      conn = conn_for_operator(operator)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      assert {:ok, _linked} = Custyard.Intake.capture_email(conv, contact.email)
+
+      assert_redirect(view, "/operator")
+      refute Enum.any?(Conversations.list_public_messages(conv.id), &(&1.source == :operator))
+    end
+
+    test "stale unlinked socket cannot reply when linkage has no broadcast" do
+      own = insert_organization()
+      foreign = insert_organization()
+      operator = insert_scoped_operator(own.id, "admin")
+      conv = insert_conversation(organization_id: nil, source: :public_intake, state: :active)
+      conn = conn_for_operator(operator)
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      conv
+      |> Ecto.Changeset.change(organization_id: foreign.id)
+      |> Repo.update!()
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Unauthorized reply")
+      |> render_submit()
+
+      assert_redirect(view, "/operator")
+      refute Enum.any?(Conversations.list_public_messages(conv.id), &(&1.source == :operator))
+    end
+
     test "super_admin can open a nil-org conversation", %{conn: conn} do
       # Default setup operator is super_admin
       conv = insert_conversation(organization_id: nil, source: :disambiguation)

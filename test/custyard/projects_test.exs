@@ -1,11 +1,153 @@
 defmodule Custyard.ProjectsTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.{Project, Projects, Repo, Task}
+  alias Custyard.{OperatorAccount, Project, Projects, Repo, Task}
 
   import Custyard.Factory
 
+  test "scoped project writes reject a stale foreign project" do
+    own = insert_organization()
+    foreign = insert_organization()
+    operator = insert_admin(own)
+    stale = create_project(%{title: "Foreign project", organization_id: foreign.id})
+
+    assert {:error, :unauthorized} =
+             Projects.update_project_for_operator(
+               stale,
+               %{title: "Taken over", organization_id: own.id},
+               operator
+             )
+
+    assert {:error, :unauthorized} = Projects.delete_project_for_operator(stale, operator)
+
+    assert {:error, :unauthorized} =
+             Projects.with_operator_access(stale.id, operator, fn project, _operator ->
+               Projects.create_task(project, %{title: "Foreign task"})
+             end)
+
+    assert Repo.get!(Project, stale.id).title == "Foreign project"
+    assert Repo.aggregate(Task, :count) == 0
+  end
+
+  test "scoped project update checks the destination organization" do
+    own = insert_organization()
+    foreign = insert_organization()
+    operator = insert_admin(own)
+    project = create_project(%{title: "Own project", organization_id: own.id})
+
+    assert {:error, :unauthorized} =
+             Projects.update_project_for_operator(
+               project,
+               %{title: "Moved", organization_id: foreign.id},
+               operator
+             )
+
+    assert {:error, :unauthorized} =
+             Projects.update_project_for_operator(
+               project,
+               %{"title" => "Moved", "organization_id" => foreign.id},
+               operator
+             )
+
+    assert Repo.get!(Project, project.id).organization_id == own.id
+  end
+
+  test "scoped project mutation uses the operator's current assignment and role" do
+    own = insert_organization()
+    foreign = insert_organization()
+    operator = insert_admin(own)
+    project = create_project(%{title: "Own project", organization_id: own.id})
+
+    operator
+    |> OperatorAccount.role_changeset(%{organization_id: foreign.id})
+    |> Repo.update!()
+
+    assert {:error, :unauthorized} =
+             Projects.update_project_for_operator(project, %{title: "Stale edit"}, operator)
+
+    assert {:error, :unauthorized} =
+             Projects.create_project_for_operator(
+               %{title: "Stale creation", organization_id: own.id},
+               operator
+             )
+
+    assert Repo.get!(Project, project.id).title == "Own project"
+
+    reassigned = Repo.get!(OperatorAccount, operator.id)
+
+    reassigned
+    |> OperatorAccount.role_changeset(%{role: "agent"})
+    |> Repo.update!()
+
+    foreign_project = create_project(%{title: "Foreign project", organization_id: foreign.id})
+
+    assert {:error, :unauthorized} =
+             Projects.update_project_for_operator(
+               foreign_project,
+               %{title: "Stale admin edit"},
+               reassigned
+             )
+  end
+
+  test "scoped task mutation broadcasts after its transaction commits" do
+    own = insert_organization()
+    operator = insert_admin(own)
+    project = create_project(%{title: "Task project", organization_id: own.id})
+    Phoenix.PubSub.subscribe(Custyard.PubSub, "project:#{project.id}")
+
+    assert {:ok, _task} =
+             Projects.with_operator_access(
+               project.id,
+               operator,
+               fn current, _operator ->
+                 result = Projects.create_task(current, %{title: "New task"}, broadcast?: false)
+                 refute_received {:project_updated, _}
+                 result
+               end,
+               broadcast_project?: true
+             )
+
+    assert_receive {:project_updated, id}
+    assert id == project.id
+    assert Repo.aggregate(Task, :count) == 1
+  end
+
+  test "rolled-back scoped task mutation emits no project update" do
+    own = insert_organization()
+    operator = insert_admin(own)
+    project = create_project(%{title: "Rollback project", organization_id: own.id})
+    Phoenix.PubSub.subscribe(Custyard.PubSub, "project:#{project.id}")
+
+    assert {:error, :forced_rollback} =
+             Projects.with_operator_access(
+               project.id,
+               operator,
+               fn current, _operator ->
+                 assert {:ok, _task} =
+                          Projects.create_task(current, %{title: "Uncommitted task"},
+                            broadcast?: false
+                          )
+
+                 {:error, :forced_rollback}
+               end,
+               broadcast_project?: true
+             )
+
+    refute_received {:project_updated, _}
+    assert Repo.aggregate(Task, :count) == 0
+  end
+
   # Helper to create a project directly
+  defp insert_admin(org) do
+    %OperatorAccount{}
+    |> OperatorAccount.changeset(%{
+      email: "project-scope-#{System.unique_integer([:positive])}@example.com",
+      role: "admin",
+      organization_id: org.id
+    })
+    |> Repo.insert!()
+  end
+
   defp create_project(attrs) do
     %Project{}
     |> Project.changeset(attrs)
@@ -367,6 +509,18 @@ defmodule Custyard.ProjectsTest do
       assert project.is_template == false
       assert project.portal_visible == true
       assert project.project_type == :customer
+    end
+
+    test "publishes a complete copied project after template transaction", %{
+      org: org,
+      template: template
+    } do
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "projects:org:#{org.id}")
+
+      assert {:ok, project} = Projects.create_from_template(template, org.id, ~D[2024-03-01])
+      assert_receive {:project_created, id}
+      assert id == project.id
+      assert length(Projects.get_project!(id).tasks) == 2
     end
 
     test "calculates target date based on template duration", %{org: org, template: template} do

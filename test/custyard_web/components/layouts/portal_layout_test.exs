@@ -90,6 +90,38 @@ defmodule CustyardWeb.Layouts.PortalLayoutTest do
     # with proper PortalAuth middleware).
   end
 
+  describe "browser branding" do
+    test "uses organization metadata and icon on the portal", %{conn: conn} do
+      org =
+        insert_organization(
+          name: "Acme Service",
+          custom_domain: "support.acme.test",
+          logo_url: "/uploads/acme-logo.png",
+          primary_color: "#123456"
+        )
+
+      conn = %{conn | host: org.custom_domain}
+      {:ok, _view, html} = live(conn, "/")
+
+      assert html =~ ~s(content="Acme Service")
+      assert html =~ ~s(content="Customer portal for Acme Service")
+      assert html =~ ~s(content="#123456")
+      assert html =~ ~s(rel="icon" href="/uploads/acme-logo.png")
+      refute html =~ "site.webmanifest"
+      refute html =~ "og-image.png"
+      refute html =~ "ephemeral-db-banner"
+      refute html =~ "Custyard —"
+    end
+
+    test "uses a neutral portal icon without a customer logo", %{conn: conn} do
+      org = insert_organization(logo_url: nil)
+      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}")
+
+      assert html =~ ~s(rel="icon" href="/images/portal-icon.svg")
+      refute html =~ "site.webmanifest"
+    end
+  end
+
   describe "data-testid attributes" do
     test "portal layout has expected data-testid attributes", %{conn: conn} do
       org = insert_organization(logo_url: "/uploads/test.png", primary_color: "#123456")

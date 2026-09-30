@@ -45,10 +45,9 @@ size = "shared-cpu-1x"
 # scoring recalculator batch processing, and LiveView connections
 memory = "1gb"
 
-# Not needed when using Turso
-# [mounts]
-# source = "custyard_data"
-# destination = "/data"
+[mounts]
+source = "custyard_data"
+destination = "/data"
 
 [checks]
 [checks.health]

@@ -27,6 +27,10 @@ defmodule CustyardWeb.Portal.ProjectsListLive do
     {:noreply, load_projects(socket)}
   end
 
+  def handle_info({:project_deleted, _id}, socket) do
+    {:noreply, load_projects(socket)}
+  end
+
   # Catch-all for unexpected PubSub messages to prevent LiveView crashes
   def handle_info(_msg, socket) do
     {:noreply, socket}

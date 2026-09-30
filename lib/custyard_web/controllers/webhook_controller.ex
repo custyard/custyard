@@ -17,7 +17,7 @@ defmodule CustyardWeb.WebhookController do
 
   # Timestamp headers for replay protection (when supported by the source)
   @timestamp_headers %{
-    lettermint: "x-lettermint-timestamp",
+    zendesk: "x-zendesk-webhook-signature-timestamp",
     slack: "x-slack-request-timestamp"
   }
 
@@ -51,6 +51,11 @@ defmodule CustyardWeb.WebhookController do
         slack: "secret_from_slack"
       }
 
+  Where a source has multiple provider webhooks, use a map keyed by the inbound
+  route's callback token for independent signing secrets, for example:
+
+      zendesk: %{callback_token => "that_webhooks_signing_secret"}
+
   ## Dev/Test Behavior
 
   In dev/test environments without configured secrets, signature verification
@@ -67,7 +72,7 @@ defmodule CustyardWeb.WebhookController do
     with {:ok, route} <- find_route(callback_token),
          # Use source from route, not from request body (security fix)
          {:ok, adapter} <- resolve_adapter(route.source),
-         :ok <- verify_webhook(adapter, conn, params),
+         :ok <- verify_webhook(adapter, conn, route),
          {:ok, normalized} <- adapter.normalize(params) do
       dispatch_normalized(conn, route, normalized)
     else
@@ -145,10 +150,10 @@ defmodule CustyardWeb.WebhookController do
     end
   end
 
-  defp verify_webhook(adapter, conn, _params) do
+  defp verify_webhook(adapter, conn, route) do
     source = adapter.source_name()
 
-    case get_webhook_secret(source) do
+    case get_webhook_secret(source, route) do
       nil -> verify_without_secret(source)
       secret -> verify_with_secret(conn, source, secret)
     end
@@ -233,8 +238,13 @@ defmodule CustyardWeb.WebhookController do
     end
   end
 
-  defp get_webhook_secret(source) do
-    Application.get_env(:custyard, :webhook_secrets, %{})
-    |> Map.get(source)
+  defp get_webhook_secret(source, route) do
+    case Application.get_env(:custyard, :webhook_secrets, %{}) |> Map.get(source) do
+      # Per-webhook secrets are keyed by the callback token, so two provider
+      # accounts of the same type can rotate their credentials independently.
+      secrets when is_map(secrets) -> Map.get(secrets, route.callback_token)
+      secret when is_binary(secret) -> secret
+      _ -> nil
+    end
   end
 end

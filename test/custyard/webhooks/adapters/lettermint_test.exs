@@ -10,25 +10,31 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
   end
 
   describe "verify_signature/3" do
-    test "returns :ok for valid HMAC-SHA256 signature" do
+    test "returns :ok for a current signed timestamp and raw body" do
+      payload = ~s({"from":"alice@example.com"})
+      secret = "test-secret-key"
+      timestamp = to_string(System.system_time(:second))
+
+      digest =
+        :crypto.mac(:hmac, :sha256, secret, timestamp <> "." <> payload)
+        |> Base.encode16(case: :lower)
+
+      signature = "t=#{timestamp},v1=#{digest}"
+
+      assert :ok = Lettermint.verify_signature(payload, signature, secret)
+    end
+
+    test "rejects the former body-only signature" do
       payload = ~s({"from":"alice@example.com"})
       secret = "test-secret-key"
       signature = :crypto.mac(:hmac, :sha256, secret, payload) |> Base.encode16(case: :lower)
 
-      assert :ok = Lettermint.verify_signature(payload, signature, secret)
-    end
-
-    test "returns :ok with sha256= prefix" do
-      payload = ~s({"from":"alice@example.com"})
-      secret = "test-secret-key"
-      hmac = :crypto.mac(:hmac, :sha256, secret, payload) |> Base.encode16(case: :lower)
-      signature = "sha256=#{hmac}"
-
-      assert :ok = Lettermint.verify_signature(payload, signature, secret)
+      assert {:error, "invalid signature format"} =
+               Lettermint.verify_signature(payload, signature, secret)
     end
 
     test "returns error for invalid signature" do
-      assert {:error, "invalid signature"} =
+      assert {:error, "invalid signature format"} =
                Lettermint.verify_signature("payload", "bad-sig", "secret")
     end
 
@@ -39,6 +45,18 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
 
     test "returns error for no secret configured" do
       assert {:error, "no secret configured"} = Lettermint.verify_signature("payload", "sig", nil)
+    end
+
+    test "rejects stale signed timestamps" do
+      payload = ~s({"from":"alice@example.com"})
+      timestamp = to_string(System.system_time(:second) - 601)
+
+      digest =
+        :crypto.mac(:hmac, :sha256, "secret", timestamp <> "." <> payload)
+        |> Base.encode16(case: :lower)
+
+      assert {:error, "stale timestamp" <> _} =
+               Lettermint.verify_signature(payload, "t=#{timestamp},v1=#{digest}", "secret")
     end
   end
 

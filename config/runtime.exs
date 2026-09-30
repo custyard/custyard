@@ -354,35 +354,44 @@ if config_env() == :prod do
     end
 
   pool_size = parse_int.("POOL_SIZE", 10)
+  repo_adapter = Application.get_env(:custyard, :repo_adapter, Ecto.Adapters.SQLite3)
 
   cond do
     is_binary(database_url) and String.starts_with?(database_url, "libsql://") ->
-      # Turso/libSQL: pass URL as :database with auth token
-      config :custyard, Custyard.Repo,
-        database: database_url,
-        token: System.get_env("TURSO_AUTH_TOKEN"),
-        pool_size: pool_size
+      raise """
+      DATABASE_URL uses libsql://, but the compiled Ecto.Adapters.SQLite3 adapter
+      cannot connect to Turso. Remove DATABASE_URL and use SQLite on a mounted
+      persistent volume, or build with a supported remote database adapter.
+      """
 
-    is_binary(database_url) ->
-      # Postgres-style URL
+    is_binary(database_url) and repo_adapter == Ecto.Adapters.Postgres and
+        (String.starts_with?(database_url, "postgres://") or
+           String.starts_with?(database_url, "postgresql://")) ->
       config :custyard, Custyard.Repo,
         url: database_url,
         pool_size: pool_size
 
-    true ->
-      # Default: local SQLite file
-      # WAL mode is essential for concurrent read/write performance
-      # busy_timeout handles write contention (Scoring.Recalculator runs bulk updates)
+    is_binary(database_url) ->
+      raise "DATABASE_URL is not supported by the compiled #{inspect(repo_adapter)} adapter"
+
+    repo_adapter == Ecto.Adapters.Postgres ->
+      raise "DATABASE_URL is required when the app is compiled with Ecto.Adapters.Postgres"
+
+    repo_adapter == Ecto.Adapters.SQLite3 ->
+      database_path = System.get_env("DATABASE_PATH") || "/data/custyard.db"
+
+      if Path.type(database_path) != :absolute do
+        raise "DATABASE_PATH must be an absolute filesystem path"
+      end
+
       config :custyard, Custyard.Repo,
-        database: System.get_env("DATABASE_PATH") || "/data/custyard.db",
+        database: database_path,
         pool_size: pool_size,
         journal_mode: :wal,
         busy_timeout: 5000
 
-      # DANGER: production on a local SQLite file means the DB lives on the
-      # ephemeral rootfs and is destroyed on every deploy/restart/migration.
-      # Flag it so the app renders a persistent warning banner (see #71).
-      config :custyard, :ephemeral_db_warning?, true
+    true ->
+      raise "No production database configuration for #{inspect(repo_adapter)}"
   end
 
   # Persistent upload directory (survives deployments, unlike priv/static)

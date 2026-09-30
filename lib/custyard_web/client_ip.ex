@@ -2,8 +2,8 @@ defmodule CustyardWeb.ClientIP do
   @moduledoc """
   Client IP extraction with a single trust boundary for proxy headers.
 
-  Extracted from `CustyardWeb.Plugs.LoginRateLimit` so every rate-limit
-  surface (plugs and LiveViews) shares one discipline:
+  Shared by every rate-limit surface (plugs and LiveViews) so they use
+  the same trust discipline:
 
   Proxy headers are only honored when `config :custyard,
   :trust_proxy_headers` is `true` (default `false`; enabled for the Fly

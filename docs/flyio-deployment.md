@@ -15,10 +15,8 @@ Deploy Custyard to [Fly.io](https://fly.io) with SQLite persistent storage.
 # From the repo root — create app + volume on Fly.io
 fly launch --no-deploy
 
-# Create a persistent volume for SQLite (pick the same region as your app).
-# Skip this if you are using Turso — the shipped fly.toml has [mounts]
-# commented out for exactly that case. If you keep local SQLite, you must
-# also uncomment [mounts] or the database lives on the ephemeral rootfs.
+# Create a persistent volume before deploying. The shipped fly.toml mounts it
+# at /data for both SQLite and uploaded files.
 fly volumes create custyard_data --region <your-region> --size 1
 
 # Set required secrets (deployment fails without these)
@@ -51,10 +49,10 @@ The included `fly.toml` is pre-configured with:
 
 | Setting | Value | Notes |
 |---------|-------|-------|
-| `primary_region` | `iad` | Change to your preferred [region](https://fly.io/docs/reference/regions/) |
+| `primary_region` | `ams` | Change to your preferred [region](https://fly.io/docs/reference/regions/) |
 | `auto_stop_machines` | `stop` | Saves cost; machines restart on traffic |
 | `min_machines_running` | `1` | Keeps one machine warm for WebSocket (LiveView) |
-| `mounts` | *commented out* | The volume mount is disabled because this deployment uses Turso. **If you are not on Turso, uncomment it** — with `auto_stop_machines = "stop"` and no mount, the SQLite file lives on the ephemeral rootfs and every deploy or idle-stop destroys the database, including prospect resume tokens, which are the only credential a prospect has |
+| `mounts` | `custyard_data` at `/data` | Required for SQLite and uploads. The app refuses to start on Fly if `/data` is not mounted. |
 
 Edit `PHX_HOST` in `fly.toml` `[env]` to match your domain (or `<app-name>.fly.dev`).
 
@@ -79,9 +77,6 @@ fly secrets set MAIL_ADAPTER=mailgun MAILGUN_API_KEY="..." MAILGUN_DOMAIN="..."
 fly secrets set MAIL_ADAPTER=smtp SMTP_HOST="..." SMTP_USERNAME="..." SMTP_PASSWORD="..."
 # or, smoke-test instances only — discards all mail including login links
 fly secrets set MAIL_ADAPTER=local
-
-# Required whenever DATABASE_URL is a libsql:// (Turso) URL — see Turso below
-fly secrets set TURSO_AUTH_TOKEN="..."
 
 # Optional (derived from SECRET_KEY_BASE if not set)
 fly secrets set LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32)
@@ -113,7 +108,7 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 |----------|---------|-------------|
 | `PORT` | `4000` | HTTP listen port |
 | `PHX_HOST` | `custyard.fly.dev` | Public hostname |
-| `DATABASE_URL` | — | Connection URL for Postgres or Turso (takes precedence over `DATABASE_PATH`) |
+| `DATABASE_URL` | — | PostgreSQL URL only when the release was compiled with `Ecto.Adapters.Postgres`. `libsql://` is rejected. |
 | `DATABASE_PATH` | `/data/custyard.db` | SQLite DB path (must be on the mounted volume) |
 | `MAIL_ADAPTER` | — | **Required.** One of `lettermint`, `postmark`, `sendgrid`, `mailgun`, `smtp`, `local`. Set as a secret alongside its credential; the app raises on boot if unset or unrecognized |
 | `POOL_SIZE` | `10` | Ecto connection pool size |
@@ -177,7 +172,7 @@ Then create a CNAME record pointing your domain to `<app-name>.fly.dev`. Update 
 
 ## Volumes and backups
 
-SQLite data is stored on a [Fly volume](https://fly.io/docs/volumes/) mounted at `/data`. Volumes are region-specific and tied to a single machine.
+SQLite data and uploads are stored on a [Fly volume](https://fly.io/docs/volumes/) mounted at `/data`. Volumes are region-specific and tied to a single machine. Before migrations run, the app checks the Linux mount table and refuses to start if Fly has not mounted `/data`.
 
 ```bash
 # List volumes
@@ -209,28 +204,13 @@ fly postgres attach custyard-db  # sets DATABASE_URL automatically
 fly deploy
 ```
 
-Remove the `[mounts]` section from `fly.toml` if you no longer need SQLite volumes. See [Fly Postgres docs](https://fly.io/docs/postgres/).
+Keep the `[mounts]` section if uploads still use `/data/uploads`. See [Fly Postgres docs](https://fly.io/docs/postgres/).
 
 ### Turso (libSQL)
 
-[Turso](https://turso.tech) is distributed SQLite. The runtime config detects `libsql://` URLs and passes them as `:database` with a separate auth token:
+This release does not support Turso. `Ecto.Adapters.SQLite3` and its locked Exqlite driver treat a `libsql://` URL as a local filename, so runtime configuration now rejects that URL at startup. Moving to Turso requires a compatible Ecto adapter and a migration plan for the existing SQLite data.
 
-```bash
-fly secrets set \
-  DATABASE_URL="libsql://your-db.turso.io" \
-  TURSO_AUTH_TOKEN="your-auth-token"
-```
-
-To get your database URL and token, install the [Turso CLI](https://docs.turso.tech/cli/installation):
-
-```bash
-brew install tursodatabase/tap/turso
-turso auth login
-turso db show <your-db-name>        # shows URL
-turso db tokens create <your-db-name>  # generates auth token
-```
-
-No compile-time adapter change needed — keep `repo_adapter: Ecto.Adapters.SQLite3`. Requires `exqlite` with libSQL support. See [Turso Elixir SDK docs](https://docs.turso.tech/sdk/elixir).
+If an existing Fly app was configured with `DATABASE_URL=libsql://...`, inspect and back up its current machine **before** removing that secret or deploying this change. The previous driver may have stored data in a local `libsql:/...` path inside the container. That data is not automatically copied to `/data`, and replacing the machine can remove it. Restore any recoverable data onto the mounted volume, then confirm `/data/custyard.db` contains the expected records before switching traffic.
 
 ### Neon / Supabase
 
@@ -254,7 +234,7 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 | "ERROR: SECRET_KEY_BASE is not set" | Run `fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)` |
 | App won't start | Check `fly logs`; verify `SECRET_KEY_BASE` is set via `fly secrets list` |
 | Health check fails | Ensure port 4000 matches `internal_port` in `fly.toml` |
-| Database errors | Confirm volume is mounted: `fly ssh console -C "ls -la /data"` |
+| Database errors | Confirm the volume is attached with `fly volumes list` and mounted with `fly ssh console -C "mountpoint /data"` |
 | LiveView disconnects | Verify `PHX_HOST` matches your actual domain; Fly proxy handles WebSocket upgrade automatically |
 | Migration failures | SSH in and run manually: `fly ssh console -C "bin/custyard eval 'Custyard.Release.migrate()'"` |
 
