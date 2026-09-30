@@ -357,6 +357,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
       </h2>
 
       <.form
+        id="operator-intake-source-form"
         for={@form}
         phx-change="validate"
         phx-submit="save"

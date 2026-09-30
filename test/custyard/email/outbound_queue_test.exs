@@ -9,6 +9,9 @@ defmodule Custyard.Email.OutboundQueueTest do
   alias Custyard.PubSub
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Background delivery must report email to the test owner, not the GenServer mailbox.
+  setup :set_swoosh_global
+
   test "recovers a pending reply and delivers it once" do
     org = insert_organization()
     contact = insert_contact(organization_id: org.id)
@@ -67,5 +70,8 @@ defmodule Custyard.Email.OutboundQueueTest do
     assert_receive {:message_updated, id}, 2_000
     assert id == conversation.id
     assert Repo.get!(Message, message.id).delivery_status == :sent
+    assert_email_sent(to: contact.email)
+    assert Process.alive?(worker)
+    assert OutboundQueue.drain_pending() == 0
   end
 end

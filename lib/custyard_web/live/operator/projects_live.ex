@@ -321,6 +321,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
       </h2>
 
       <form
+        id="operator-project-form"
         phx-change="validate_form"
         phx-submit="save_project"
         class="space-y-4"

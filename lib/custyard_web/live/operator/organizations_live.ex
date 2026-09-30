@@ -334,6 +334,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
       </h2>
 
       <form
+        id="operator-org-form"
         phx-submit="save_org"
         phx-change="validate_form"
         class="space-y-4"
