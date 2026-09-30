@@ -8,7 +8,15 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   require Logger
 
-  alias Custyard.{Conversations, Organizations, Projects, InboundRoutes, Authorization}
+  alias Custyard.{
+    Conversations,
+    Organizations,
+    Projects,
+    InboundRoutes,
+    Authorization,
+    Acknowledgments
+  }
+
   alias Custyard.{InboundRoute, InboundRouteWebhook}
 
   @impl true
@@ -34,11 +42,12 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   end
 
   @impl true
-  def handle_params(%{"tab" => tab}, _uri, socket)
-      when tab in ~w(conversations contacts projects routes) do
+  def handle_params(%{"tab" => tab} = params, _uri, socket)
+      when tab in ~w(conversations contacts projects routes acknowledgments) do
     socket =
       socket
       |> assign(:tab, tab)
+      |> assign(:acknowledgment_page, acknowledgment_page(params))
       |> load_tab_data(socket.assigns.organization, tab)
 
     {:noreply, socket}
@@ -76,6 +85,35 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     |> assign(:general_route_count, general_route_count)
     |> assign(:show_create_route_form, false)
     |> assign(:confirm_delete_route_id, nil)
+  end
+
+  @acknowledgment_page_size 20
+
+  defp load_tab_data(socket, org, "acknowledgments") do
+    page = Map.get(socket.assigns, :acknowledgment_page, 1)
+
+    records =
+      Acknowledgments.list_for_organization(org.id,
+        limit: @acknowledgment_page_size + 1,
+        offset: (page - 1) * @acknowledgment_page_size
+      )
+
+    socket
+    |> assign(:acknowledgments, Enum.take(records, @acknowledgment_page_size))
+    |> assign(:acknowledgment_has_next, length(records) > @acknowledgment_page_size)
+  end
+
+  defp acknowledgment_page(params) do
+    case Map.get(params, "page", "1") do
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {page, ""} when page > 0 and page <= 1_000_000 -> page
+          _ -> 1
+        end
+
+      _ ->
+        1
+    end
   end
 
   # --- Route Event Handlers ---
@@ -349,6 +387,13 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           >
             Routes
           </.tab_link>
+          <.tab_link
+            tab="acknowledgments"
+            current={@tab}
+            patch={~p"/operator/organizations/#{@organization.id}?tab=acknowledgments"}
+          >
+            Acknowledgments
+          </.tab_link>
         </div>
       </div>
 
@@ -361,6 +406,13 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             <.contacts_tab contacts={@contacts} />
           <% "projects" -> %>
             <.projects_tab projects={@projects} />
+          <% "acknowledgments" -> %>
+            <.acknowledgments_tab
+              records={@acknowledgments}
+              organization={@organization}
+              page={@acknowledgment_page}
+              has_next={@acknowledgment_has_next}
+            />
           <% "routes" -> %>
             <.routes_tab
               routes={@routes}
@@ -398,6 +450,93 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     >
       {render_slot(@inner_block)}
     </.link>
+    """
+  end
+
+  attr :records, :list, required: true
+  attr :organization, :any, required: true
+  attr :page, :integer, required: true
+  attr :has_next, :boolean, required: true
+
+  defp acknowledgments_tab(assigns) do
+    ~H"""
+    <div class="space-y-4" data-testid="org-acknowledgments-list">
+      <p :if={@records == []} class="py-12 text-center text-sm text-gray-600 dark:text-zinc-400">
+        No acknowledgments on this page.
+      </p>
+      <article
+        :for={record <- @records}
+        class="rounded-lg border border-gray-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800"
+        data-testid={"org-acknowledgment-#{record.id}"}
+      >
+        <h2 class="font-medium text-gray-900 dark:text-zinc-100">
+          {record.statement_key} · {record.statement_version}
+        </h2>
+        <dl class="mt-3 grid gap-2 text-sm text-gray-600 dark:text-zinc-400 sm:grid-cols-2">
+          <div>
+            <dt class="font-medium">Source</dt><dd class="break-all">{record.source}</dd>
+          </div>
+          <div>
+            <dt class="font-medium">Source organization</dt><dd class="break-all">
+              {record.source_organization_id}
+            </dd>
+          </div>
+          <div>
+            <dt class="font-medium">Submission ID</dt><dd class="break-all">
+              {record.submission_id}
+            </dd>
+          </div>
+          <div>
+            <dt class="font-medium">Actor</dt><dd class="break-all">{record.actor_id}</dd>
+          </div>
+          <div>
+            <dt class="font-medium">Actor role</dt><dd>{record.actor_role}</dd>
+          </div>
+          <div>
+            <dt class="font-medium">Actor type</dt><dd>{record.actor_type}</dd>
+          </div>
+          <div>
+            <dt class="font-medium">Acknowledged at (UTC)</dt><dd>
+              {record.acknowledged_at}
+            </dd>
+          </div>
+          <div>
+            <dt class="font-medium">Received at (UTC)</dt><dd>
+              {DateTime.to_iso8601(record.received_at)}
+            </dd>
+          </div>
+          <div class="sm:col-span-2">
+            <dt class="font-medium">Statement SHA-256</dt><dd class="break-all">
+              {record.statement_hash}
+            </dd>
+          </div>
+        </dl>
+        <h3 class="mt-4 text-sm font-medium text-gray-900 dark:text-zinc-100">
+          Exact historical wording
+        </h3>
+        <pre
+          class="mt-2 whitespace-pre-wrap break-words font-sans text-sm text-gray-900 dark:text-zinc-100"
+          data-testid="acknowledgment-statement"
+        >{record.statement_text}</pre>
+      </article>
+      <nav aria-label="Acknowledgment pages" class="flex items-center gap-4 text-sm">
+        <.link
+          :if={@page > 1}
+          patch={
+            ~p"/operator/organizations/#{@organization.id}?tab=acknowledgments&page=#{@page - 1}"
+          }
+          data-testid="acknowledgments-previous"
+        >Previous</.link>
+        <span>Page {@page}</span>
+        <.link
+          :if={@has_next}
+          patch={
+            ~p"/operator/organizations/#{@organization.id}?tab=acknowledgments&page=#{@page + 1}"
+          }
+          data-testid="acknowledgments-next"
+        >Next</.link>
+      </nav>
+    </div>
     """
   end
 
