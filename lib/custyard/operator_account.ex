@@ -126,6 +126,14 @@ defmodule Custyard.OperatorAccount do
   end
 
   @doc """
+  Whether the operator holds a login token that has not expired yet.
+  """
+  def login_token_valid?(%__MODULE__{login_token: token} = operator) when is_binary(token),
+    do: verify_login_token(operator, token)
+
+  def login_token_valid?(_operator), do: false
+
+  @doc """
   Clears the login token after successful use.
   """
   def clear_login_token_changeset(operator_account) do

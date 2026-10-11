@@ -562,4 +562,34 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
                live(conn, ~p"/operator/organizations/#{org.id}")
     end
   end
+
+  describe "stale route rows" do
+    test "acting on a route that no longer exists shows a notice instead of crashing",
+         %{conn: conn} do
+      org = insert_organization()
+
+      {:ok, _general} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      operator = create_super_admin()
+
+      {:ok, view, _html} =
+        live(authenticate_conn(conn, operator), ~p"/operator/organizations/#{org.id}")
+
+      view |> element("a", "Routes") |> render_click()
+
+      html = render_click(view, "delete_route", %{"id" => "999999"})
+      assert html =~ "no longer exists"
+
+      html =
+        render_click(view, "toggle_webhook", %{
+          "route-id" => "999999",
+          "purpose" => "audit",
+          "enabled" => "true"
+        })
+
+      assert html =~ "no longer exists"
+      assert Process.alive?(view.pid)
+    end
+  end
 end

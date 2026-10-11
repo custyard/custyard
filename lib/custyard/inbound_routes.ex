@@ -93,7 +93,10 @@ defmodule Custyard.InboundRoutes do
   """
   def create_route(attrs) when is_map(attrs) do
     # Validate changeset first to avoid orphaning remote routes on validation failure
-    changeset = InboundRoute.changeset(%InboundRoute{}, attrs)
+    changeset =
+      %InboundRoute{}
+      |> InboundRoute.changeset(attrs)
+      |> validate_project_organization()
 
     if changeset.valid? do
       case Changeset.get_field(changeset, :source) do
@@ -102,6 +105,26 @@ defmodule Custyard.InboundRoutes do
       end
     else
       {:error, changeset}
+    end
+  end
+
+  # A route stamps its project on every conversation it receives, so the
+  # project must belong to the route's own organization; the changeset alone
+  # only checks that the project row exists, which let an admin link another
+  # organization's project to their route.
+  defp validate_project_organization(changeset) do
+    project_id = Changeset.get_field(changeset, :project_id)
+    organization_id = Changeset.get_field(changeset, :organization_id)
+
+    case project_id && Repo.get(Custyard.Project, project_id) do
+      nil ->
+        changeset
+
+      %Custyard.Project{organization_id: ^organization_id} ->
+        changeset
+
+      _other_organization ->
+        Changeset.add_error(changeset, :project_id, "must belong to the same organization")
     end
   end
 

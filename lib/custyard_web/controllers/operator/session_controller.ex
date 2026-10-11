@@ -50,10 +50,7 @@ defmodule CustyardWeb.Operator.SessionController do
         Logger.debug("Login attempt for non-existent email: #{email}")
 
       operator ->
-        updated_operator =
-          operator
-          |> OperatorAccount.login_token_changeset()
-          |> Repo.update!()
+        updated_operator = ensure_login_token(operator)
 
         login_url =
           CustyardWeb.Endpoint.url() <>
@@ -68,6 +65,21 @@ defmodule CustyardWeb.Operator.SessionController do
     |> redirect(to: ~p"/operator/login/sent")
   end
 
+  # Re-send the outstanding link while it is still valid instead of minting a
+  # new token on every request. The per-email bucket admits a handful of
+  # requests an hour from anyone, so rotating on each of them let a stranger
+  # who knew an operator's address invalidate the link that operator was
+  # about to click.
+  defp ensure_login_token(operator) do
+    if OperatorAccount.login_token_valid?(operator) do
+      operator
+    else
+      operator
+      |> OperatorAccount.login_token_changeset()
+      |> Repo.update!()
+    end
+  end
+
   def sent(conn, _params) do
     email = get_session(conn, :login_sent_email)
 
@@ -76,36 +88,64 @@ defmodule CustyardWeb.Operator.SessionController do
     |> render(:sent, email: email || "", layout: {CustyardWeb.Layouts, :root})
   end
 
+  # GET peeks: the link in the email renders a page with a "Log in" button
+  # and changes nothing, so a mail scanner or link prefetcher that follows
+  # the URL neither consumes the single-use token (leaving the operator with
+  # "expired") nor walks away with an operator session. Only the explicit
+  # POST below consumes the token. Same pattern as ClaimConfirmationController.
   def verify(conn, %{"token" => token}) do
-    if String.match?(token, @token_pattern) do
-      case Repo.get_by(OperatorAccount, login_token: token) do
-        nil ->
-          render_invalid_token(conn)
+    case lookup_login_token(token) do
+      {:ok, _operator} ->
+        render(conn, :verify, token: token, layout: {CustyardWeb.Layouts, :root})
 
-        operator ->
-          if OperatorAccount.verify_login_token(operator, token) do
-            # Clear the token so it can't be reused
-            operator
-            |> OperatorAccount.clear_login_token_changeset()
-            |> Repo.update!()
+      {:error, :expired} ->
+        render_expired_token(conn)
 
-            conn
-            |> configure_session(renew: true)
-            |> put_session(:operator_id, operator.id)
-            |> put_flash(:info, "Welcome back")
-            |> redirect(to: ~p"/operator")
-          else
-            render(conn, :new,
-              error: "This login link has expired. Please request a new one.",
-              email: nil,
-              info: nil,
-              layout: {CustyardWeb.Layouts, :root}
-            )
-          end
-      end
-    else
-      render_invalid_token(conn)
+      {:error, :invalid} ->
+        render_invalid_token(conn)
     end
+  end
+
+  def consume(conn, %{"token" => token}) do
+    case lookup_login_token(token) do
+      {:ok, operator} ->
+        # Clear the token so it can't be reused
+        operator
+        |> OperatorAccount.clear_login_token_changeset()
+        |> Repo.update!()
+
+        conn
+        |> configure_session(renew: true)
+        |> put_session(:operator_id, operator.id)
+        |> put_flash(:info, "Welcome back")
+        |> redirect(to: ~p"/operator")
+
+      {:error, :expired} ->
+        render_expired_token(conn)
+
+      {:error, :invalid} ->
+        render_invalid_token(conn)
+    end
+  end
+
+  defp lookup_login_token(token) do
+    with true <- String.match?(token, @token_pattern),
+         %OperatorAccount{} = operator <- Repo.get_by(OperatorAccount, login_token: token) do
+      if OperatorAccount.verify_login_token(operator, token),
+        do: {:ok, operator},
+        else: {:error, :expired}
+    else
+      _ -> {:error, :invalid}
+    end
+  end
+
+  defp render_expired_token(conn) do
+    render(conn, :new,
+      error: "This login link has expired. Please request a new one.",
+      email: nil,
+      info: nil,
+      layout: {CustyardWeb.Layouts, :root}
+    )
   end
 
   def delete(conn, _params) do

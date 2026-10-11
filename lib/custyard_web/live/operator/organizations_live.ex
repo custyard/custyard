@@ -129,13 +129,29 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
       end
 
     if authorized? do
-      attrs = build_org_attrs(socket)
+      old_logo_url = get_old_logo_url(socket)
+      new_logo_url = consume_uploaded_logo(socket)
+      attrs = build_org_attrs(socket, new_logo_url)
 
       result =
         case socket.assigns.editing_org do
           nil -> Organizations.create_organization(attrs)
           org -> Organizations.update_organization(org, attrs)
         end
+
+      # Files follow the database: the replaced logo goes only once the new
+      # one is persisted (deleting it first left logo_url pointing at nothing
+      # when validation failed), and a rejected save discards the new file.
+      case result do
+        {:ok, _org} when is_binary(new_logo_url) and is_binary(old_logo_url) ->
+          delete_old_logo(old_logo_url)
+
+        {:error, _changeset} when is_binary(new_logo_url) ->
+          delete_old_logo(new_logo_url)
+
+        _ ->
+          :ok
+      end
 
       handle_save_result(socket, result)
     else
@@ -145,15 +161,8 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   @valid_tiers ~w(enterprise standard basic)
 
-  defp build_org_attrs(socket) do
+  defp build_org_attrs(socket, logo_url) do
     form_data = socket.assigns.form_data
-    old_logo_url = get_old_logo_url(socket)
-    logo_url = consume_uploaded_logo(socket)
-
-    # Clean up old logo file when uploading a new one
-    if logo_url && old_logo_url do
-      delete_old_logo(old_logo_url)
-    end
 
     %{
       name: form_data.name,

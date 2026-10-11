@@ -112,6 +112,7 @@ defmodule CustyardWeb.Router do
     post "/login", SessionController, :create
     get "/login/sent", SessionController, :sent
     get "/login/verify/:token", SessionController, :verify
+    post "/login/verify/:token", SessionController, :consume
     delete "/logout", SessionController, :delete
   end
 

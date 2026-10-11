@@ -13,7 +13,9 @@ defmodule CustyardWeb.Operator.SettingsLive do
   def mount(_params, _session, socket) do
     settings = Settings.get()
 
-    weights = settings.score_weights
+    # Settings.get_weights/0 returns atom keys; the raw score_weights column
+    # holds the JSON map with string keys, which sorted_weights/1 cannot see.
+    weights = Settings.get_weights()
     thresholds = settings.neglect_thresholds
     branding = Settings.get_branding()
 
@@ -57,6 +59,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
     else
       {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
     end
+  end
+
+  def handle_event("save_weights", _params, socket) do
+    {:noreply, put_flash(socket, :error, "No weights were submitted")}
   end
 
   @impl true
@@ -176,11 +182,15 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
       case Settings.update_weights(weights) do
         {:ok, _settings} ->
+          # Re-read through get_weights/0: the form submits string keys and
+          # the display helpers expect atom keys.
+          saved = Settings.get_weights()
+
           {:noreply,
            socket
-           |> assign(:weights, weights)
+           |> assign(:weights, saved)
            |> assign(:editing_weights, false)
-           |> assign(:weight_form, to_form(weights, as: "weights"))
+           |> assign(:weight_form, to_form(saved, as: "weights"))
            |> put_flash(:info, "Weights updated successfully")}
 
         {:error, _changeset} ->
