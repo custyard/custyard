@@ -123,11 +123,15 @@ defmodule Custyard.Notifications.NeglectChecker do
     thresholds = thresholds || Settings.get_neglect_thresholds()
     past_cutoff = past_warning_cutoff(thresholds)
 
+    # For an unlinked conversation every tier branch of the cutoff is NULL,
+    # so the disjunction is NULL rather than false whenever its own branch
+    # is false, and NOT NULL would never select it. coalesce makes "not past
+    # the cutoff" mean exactly that.
     ids =
       from(c in Conversation,
         left_join: o in assoc(c, :organization),
         where: not is_nil(c.last_neglect_notification),
-        where: not (^past_cutoff),
+        where: ^dynamic(not coalesce(^past_cutoff, false)),
         select: c.id
       )
       |> Repo.all()

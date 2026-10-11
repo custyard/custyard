@@ -112,6 +112,11 @@ defmodule Custyard.Email.OutboundQueue do
     {:noreply, %{state | timer_ref: timer_ref}}
   end
 
+  # Mailer adapters may report to the delivering process, which is this one
+  # (Swoosh's test adapter sends it every email). A stray message must not
+  # take the delivery worker down.
+  def handle_info(_message, state), do: {:noreply, state}
+
   defp scan_pending do
     drain_pending()
   rescue

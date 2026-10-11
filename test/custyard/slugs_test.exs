@@ -459,10 +459,12 @@ defmodule Custyard.SlugsTest do
 
       promoted = intake_conversation()
       {:ok, promoted_slug, _token} = Slugs.claim("promoted-co", "d@example.com", promoted)
+      org = insert_organization()
 
+      # A provisioned row carries its organization (CHECK constraint).
       Custyard.Repo.update_all(
         from(s in Slug, where: s.id == ^promoted_slug.id),
-        set: [status: :provisioned, conversation_id: nil]
+        set: [status: :provisioned, organization_id: org.id, conversation_id: nil]
       )
 
       assert Slugs.delete_expired_claims() == 0

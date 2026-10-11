@@ -458,6 +458,30 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
                :critical
     end
 
+    # Unlinked rows make every tier branch of the cutoff NULL; one that is
+    # within the standard cutoff but past a shorter tier's must still reset.
+    test "clears the notification level on a recovered unlinked conversation" do
+      thresholds = Settings.get_neglect_thresholds()
+      {enterprise_warning, _} = thresholds.enterprise
+      {standard_warning, _} = thresholds.standard
+      assert enterprise_warning + 1 < standard_warning
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          state: :active,
+          last_operator_action_at:
+            DateTime.utc_now()
+            |> DateTime.add(-(enterprise_warning + 1), :hour)
+            |> DateTime.truncate(:second),
+          last_neglect_notification: :warning
+        )
+
+      assert NeglectChecker.reset_recovered_notifications() == 1
+      assert Repo.get!(Custyard.Conversation, conv.id).last_neglect_notification == nil
+    end
+
     test "a conversation neglected again after recovery is alerted again" do
       thresholds = Settings.get_neglect_thresholds()
       {warning_hours, _critical_hours} = thresholds.standard
