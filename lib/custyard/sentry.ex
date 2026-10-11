@@ -144,6 +144,18 @@ defmodule Custyard.Sentry do
   on a bare path or on free-form text containing such a path. `nil` passes
   through.
   """
+  @doc """
+  Whether `path` carries one of Custyard's path-borne bearer credentials
+  (the same prefixes `scrub_path/1` redacts). `CustyardWeb.Endpoint` uses it
+  to keep those requests out of the request log.
+  """
+  @spec token_path?(String.t() | nil) :: boolean()
+  def token_path?(path) when is_binary(path) do
+    Enum.any?(@path_patterns, &Regex.match?(&1, path))
+  end
+
+  def token_path?(_path), do: false
+
   @spec scrub_path(String.t() | nil) :: String.t() | nil
   def scrub_path(nil), do: nil
 

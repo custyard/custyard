@@ -68,7 +68,21 @@ defmodule CustyardWeb.Endpoint do
   end
 
   plug Plug.RequestId
-  plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
+
+  plug Plug.Telemetry,
+    event_prefix: [:phoenix, :endpoint],
+    log: {__MODULE__, :request_log_level, []}
+
+  @doc false
+  # Custyard's bearer credentials travel in the path: conversation resume
+  # tokens (/c/:token, multi-use and months-lived), slug-claim tokens,
+  # operator magic links, webhook callback tokens and the portal organization
+  # token. Phoenix.Logger writes the request line ("GET /c/<token>") at :info,
+  # so every visit put a live credential into the log stream. Those requests
+  # are not logged; Custyard.Sentry scrubs the same paths in error reports.
+  def request_log_level(%Plug.Conn{request_path: path}) do
+    if Custyard.Sentry.token_path?(path), do: false, else: :info
+  end
 
   # Debug plug for origin header diagnosis. Uncomment to trace check_origin issues.
   # See: docs/lessons-learned/06-phoenix-check-origin-fly.md, PR #34

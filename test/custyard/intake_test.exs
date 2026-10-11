@@ -682,4 +682,21 @@ defmodule Custyard.IntakeTest do
       assert Repo.reload!(conversation).intake_source_key == "ephemeral"
     end
   end
+
+  describe "revoke_conversation_access/1 and slug claims" do
+    test "revoking access releases the conversation's pending claim" do
+      source = insert_intake_source(mode: :active)
+      {:ok, %{conversation: conversation}} = Intake.create_intake_conversation(source.key, "Hi")
+
+      {:ok, _slug, confirmation_token} =
+        Custyard.Slugs.claim("revoked-co", "x@example.com", conversation)
+
+      assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
+
+      assert is_nil(Custyard.Slugs.get_claim_for_conversation(conversation.id))
+      # The link already in the abuser's inbox no longer confirms anything
+      assert {:error, :invalid} = Custyard.Slugs.confirm(confirmation_token)
+      assert Custyard.Slugs.available?("revoked-co")
+    end
+  end
 end

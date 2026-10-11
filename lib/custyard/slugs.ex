@@ -340,6 +340,36 @@ defmodule Custyard.Slugs do
     {count, _} =
       Repo.delete_all(from s in Slug, where: s.status == :claimed and s.expires_at <= ^now)
 
+    count + delete_orphaned_claims()
+  end
+
+  # The retention purge deletes resolved public-intake conversations and
+  # nilifies slugs.conversation_id. A claimed or confirmed row left behind
+  # has no prospect who can act on it and no conversation promote/2 could
+  # ever match, yet it kept the name blocked forever. Provisioned rows
+  # belong to an organization and are untouched.
+  defp delete_orphaned_claims do
+    {count, _} =
+      Repo.delete_all(
+        from s in Slug,
+          where: s.status in [:claimed, :confirmed] and is_nil(s.conversation_id)
+      )
+
+    count
+  end
+
+  @doc """
+  Delete the live (claimed or confirmed, not provisioned) claim held by a
+  conversation, if any. Used when the conversation's access is revoked.
+  Returns the number of rows deleted (0 or 1).
+  """
+  def release_claim_for_conversation(conversation_id) do
+    {count, _} =
+      Repo.delete_all(
+        from s in Slug,
+          where: s.conversation_id == ^conversation_id and s.status in [:claimed, :confirmed]
+      )
+
     count
   end
 end

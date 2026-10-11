@@ -63,6 +63,7 @@ defmodule CustyardWeb.IntakeController do
 
         conn
         |> ConversationCookie.put_conversation_cookie(token)
+        |> maybe_flash_rejected_email(capture_result)
         |> redirect(to: ~p"/c/#{token}")
 
       # The source was disabled or deleted between load_source and the
@@ -92,6 +93,20 @@ defmodule CustyardWeb.IntakeController do
       {:error, :no_email}
     end
   end
+
+  # The submission stands either way, but a rejected address was the
+  # prospect's only way to hear back (and to get the resume URL); say so on
+  # the conversation page, where the email prompt lets them fix it.
+  defp maybe_flash_rejected_email(conn, {:error, %Ecto.Changeset{}}) do
+    put_flash(
+      conn,
+      :error,
+      "Your message was sent, but that email address doesn't look valid. " <>
+        "Add your email below to receive replies."
+    )
+  end
+
+  defp maybe_flash_rejected_email(conn, _capture_result), do: conn
 
   # Only a successful capture earns a receipt, and it is addressed to the
   # stored (normalized, downcased) value rather than the raw submission.
