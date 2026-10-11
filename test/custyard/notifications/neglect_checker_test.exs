@@ -438,17 +438,17 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
         insert_conversation(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: DateTime.utc_now() |> DateTime.truncate(:second),
-          last_neglect_notification: :critical
+          last_operator_action_at: DateTime.utc_now() |> DateTime.truncate(:second)
         )
+        |> with_notification_level(:critical)
 
       still_neglected =
         insert_conversation(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour),
-          last_neglect_notification: :critical
+          last_operator_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
         )
+        |> with_notification_level(:critical)
 
       assert {:ok, _count} = NeglectChecker.check_and_notify()
 
@@ -474,9 +474,9 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
           last_operator_action_at:
             DateTime.utc_now()
             |> DateTime.add(-(enterprise_warning + 1), :hour)
-            |> DateTime.truncate(:second),
-          last_neglect_notification: :warning
+            |> DateTime.truncate(:second)
         )
+        |> with_notification_level(:warning)
 
       assert NeglectChecker.reset_recovered_notifications() == 1
       assert Repo.get!(Custyard.Conversation, conv.id).last_neglect_notification == nil
@@ -491,9 +491,9 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
         insert_conversation(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: DateTime.utc_now() |> DateTime.truncate(:second),
-          last_neglect_notification: :critical
+          last_operator_action_at: DateTime.utc_now() |> DateTime.truncate(:second)
         )
+        |> with_notification_level(:critical)
 
       assert NeglectChecker.reset_recovered_notifications() == 1
 
@@ -506,5 +506,13 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
 
       assert {:ok, 1} = NeglectChecker.check_and_notify()
     end
+  end
+
+  # last_neglect_notification is system-managed: the factory's public
+  # changeset drops it, so set it the way NeglectChecker does.
+  defp with_notification_level(conversation, level) do
+    conversation
+    |> Custyard.Conversation.internal_changeset(%{last_neglect_notification: level})
+    |> Repo.update!()
   end
 end
