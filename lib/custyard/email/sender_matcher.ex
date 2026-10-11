@@ -14,11 +14,21 @@ defmodule Custyard.Email.SenderMatcher do
   """
 
   require Logger
-  alias Custyard.{Contact, Organization, Repo}
+  alias Custyard.{Contact, EmailAddress, Organization, Repo}
   import Ecto.Query
 
   def match(from_address) do
-    email = extract_email(from_address)
+    case extract_email(from_address) do
+      # No storable address (missing From, bare display name, chat user id):
+      # file the message under the catchall with no contact rather than
+      # rejecting it. Operator and portal views already render contactless
+      # conversations, and the raw sender stays on the message row.
+      nil -> with {:ok, org} <- get_or_create_unmatched_org(), do: {:ok, org, nil}
+      email -> match_email(email, from_address)
+    end
+  end
+
+  defp match_email(email, from_address) do
     domain = extract_domain(email)
 
     case find_contacts_by_email(email) do
@@ -65,7 +75,13 @@ defmodule Custyard.Email.SenderMatcher do
   Returns `{:contact, contact}` | `{:organization, organization}` | `:none`.
   """
   def resolve(from_address) do
-    email = extract_email(from_address)
+    case extract_email(from_address) do
+      nil -> :none
+      email -> resolve_email(email)
+    end
+  end
+
+  defp resolve_email(email) do
     domain = extract_domain(email)
 
     case find_linkable_contacts_by_email(email) do
@@ -107,27 +123,48 @@ defmodule Custyard.Email.SenderMatcher do
   to find or create the contact within that org scope.
   """
   def match_within_org(from_address, org_id) do
-    email = extract_email(from_address)
     org = Repo.get!(Organization, org_id)
 
-    case find_contact_in_org(email, org_id) do
-      {:ok, contact} ->
-        {:ok, org, contact}
+    case extract_email(from_address) do
+      nil ->
+        {:ok, org, nil}
 
-      :not_found ->
-        with {:ok, contact} <- create_contact(org, email, from_address) do
-          {:ok, org, contact}
+      email ->
+        case find_contact_in_org(email, org_id) do
+          {:ok, contact} ->
+            {:ok, org, contact}
+
+          :not_found ->
+            with {:ok, contact} <- create_contact(org, email, from_address) do
+              {:ok, org, contact}
+            end
         end
     end
   end
 
-  defp extract_email(from) do
-    # Handle "Name <email>" format
-    case Regex.run(~r/<([^>]+)>/, from) do
-      [_, email] -> String.downcase(email)
-      nil -> String.downcase(String.trim(from))
-    end
+  @doc """
+  Extract the downcased address from a sender string.
+
+  Handles the `Name <email>` form. Returns `nil` when `from` carries nothing
+  that can be stored as a contact: `nil` or non-string input, a blank string,
+  a bare display name (`Name <>`), or a chat identifier such as a Slack user
+  id. Validity is the `Custyard.EmailAddress` rule `Contact.changeset/2`
+  enforces, so an unstorable sender is detected before any insert.
+  """
+  @spec extract_email(term()) :: String.t() | nil
+  def extract_email(from) when is_binary(from) do
+    candidate =
+      case Regex.run(~r/<([^>]+)>/, from) do
+        [_, email] -> email
+        nil -> from
+      end
+
+    candidate = candidate |> String.trim() |> String.downcase()
+
+    if Regex.match?(EmailAddress.regex(), candidate), do: candidate, else: nil
   end
+
+  def extract_email(_from), do: nil
 
   defp extract_domain(email) do
     case String.split(email, "@") do
@@ -203,6 +240,25 @@ defmodule Custyard.Email.SenderMatcher do
       name: name
     })
     |> Repo.insert()
+    |> case do
+      {:ok, contact} ->
+        {:ok, contact}
+
+      # Two deliveries from a first-time sender (one email to two mailboxes
+      # of the same organization, or a provider retry racing the original)
+      # both miss the lookup and both insert; the loser hits the
+      # (email, organization_id) unique index. Adopt the winner's row
+      # instead of failing the delivery.
+      {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+        if Keyword.has_key?(errors, :email) do
+          case find_contact_in_org(email, org.id) do
+            {:ok, contact} -> {:ok, contact}
+            :not_found -> {:error, changeset}
+          end
+        else
+          {:error, changeset}
+        end
+    end
   end
 
   defp extract_name(from) do

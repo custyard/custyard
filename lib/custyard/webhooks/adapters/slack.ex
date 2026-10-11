@@ -31,6 +31,10 @@ defmodule Custyard.Webhooks.Adapters.Slack do
   signature and the timestamp for replay protection.
   """
   @impl true
+  def verify_request(_raw_body, _timestamp_str, signature, _secret)
+      when not is_binary(signature),
+      do: {:error, "missing signature header"}
+
   def verify_request(raw_body, timestamp_str, signature, secret) do
     with {:ok, timestamp} <- parse_timestamp(timestamp_str),
          :ok <- validate_timestamp(timestamp) do

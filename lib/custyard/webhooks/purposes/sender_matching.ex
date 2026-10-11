@@ -11,7 +11,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   """
 
   alias Custyard.{Conversation, Conversations, Message, Repo, Scoring}
-  alias Custyard.Email.{SenderMatcher, SieveHeaderMapper, ThreadMatcher}
+  alias Custyard.Email.{Normalizer, SenderMatcher, SieveHeaderMapper, ThreadMatcher}
 
   require Logger
 
@@ -120,8 +120,14 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     end
   end
 
-  defp find_thread(%{source: :zendesk, in_reply_to: marker}, org_id, dedup_scope)
-       when is_binary(marker) do
+  # Ticket and chat providers reference the thread they belong to (ticket id,
+  # Intercom conversation id, Slack thread_ts) rather than the previous
+  # message, so match on either side of that marker: the root event carries
+  # it as message_id, every reply carries it as in_reply_to. Matching
+  # in_reply_to is what keeps replies together when the root was never
+  # stored (subscription added mid-thread, root event rejected or lost).
+  defp find_thread(%{source: source, in_reply_to: marker}, org_id, dedup_scope)
+       when source in [:zendesk, :intercom, :slack] and is_binary(marker) do
     import Ecto.Query
 
     query =
@@ -129,9 +135,10 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
         join: c in Conversation,
         on: c.id == m.conversation_id,
         where: c.organization_id == ^org_id,
-        where: c.source == :zendesk,
-        where: m.in_reply_to == ^marker,
+        where: c.source == ^source,
+        where: m.message_id == ^marker or m.in_reply_to == ^marker,
         where: m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope),
+        order_by: [asc: c.id],
         select: c,
         limit: 1
 
@@ -158,7 +165,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     base_attrs = %{
       organization_id: org.id,
       contact_id: contact && contact.id,
-      subject: normalized.subject,
+      subject: Normalizer.presence(normalized.subject) || "(no subject)",
       state: :new,
       urgency: detect_urgency(normalized.subject, normalized.body),
       source: normalized[:source] || :email,
@@ -215,7 +222,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       source: source,
       origin: origin,
       sender_email: normalized.from,
-      body: normalized.body,
+      # Message.changeset requires a body; an attachment-only email or a
+      # text-less chat event must still be recorded rather than rejected.
+      body: Normalizer.presence(normalized.body) || "(empty message)",
       message_id: normalized.message_id,
       in_reply_to: normalized.in_reply_to,
       is_internal_note: false

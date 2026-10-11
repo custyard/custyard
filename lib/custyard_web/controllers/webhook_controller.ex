@@ -72,14 +72,9 @@ defmodule CustyardWeb.WebhookController do
     with {:ok, route} <- find_route(callback_token),
          # Use source from route, not from request body (security fix)
          {:ok, adapter} <- resolve_adapter(route.source),
-         :ok <- verify_webhook(adapter, conn, route),
-         {:ok, normalized} <- adapter.normalize(params) do
-      dispatch_normalized(conn, route, normalized)
+         :ok <- verify_webhook(adapter, conn, route) do
+      handle_payload(conn, route, adapter, params)
     else
-      # Slack URL verification bypass
-      {:bypass, %{type: "url_verification", challenge: challenge}} ->
-        json(conn, %{challenge: challenge})
-
       {:error, reason} ->
         # Return generic error to prevent information leakage.
         # Log specific error server-side for debugging.
@@ -91,6 +86,37 @@ defmodule CustyardWeb.WebhookController do
 
         conn |> put_status(401) |> json(%{status: "error", reason: "unauthorized"})
     end
+  end
+
+  # Runs only once the request is authenticated. A payload the adapter cannot
+  # normalize is a provider or template problem, not an auth failure, so it is
+  # reported as 422 (and logged as such) rather than folded into the 401 path;
+  # a payload shape the adapter never anticipated is contained to the same 422
+  # instead of escaping as a 500.
+  defp handle_payload(conn, route, adapter, params) do
+    case normalize(adapter, params) do
+      {:ok, normalized} ->
+        dispatch_normalized(conn, route, normalized)
+
+      # Slack URL verification handshake
+      {:bypass, %{type: "url_verification", challenge: challenge}} ->
+        json(conn, %{challenge: challenge})
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.warning(
+          "Webhook payload rejected on route #{route.id} (#{route.source}): #{inspect(reason)}"
+        )
+
+        conn |> put_status(422) |> json(%{status: "error", reason: "invalid payload"})
+    end
+  end
+
+  defp normalize(adapter, params) do
+    adapter.normalize(params)
+  rescue
+    error -> {:error, Exception.message(error)}
   end
 
   defp dispatch_normalized(conn, route, normalized) do

@@ -458,4 +458,100 @@ defmodule CustyardWeb.WebhookControllerTest do
       assert response["status"] == "ok"
     end
   end
+
+  describe "payload handling after authentication" do
+    setup do
+      Application.put_env(:custyard, :env, :test)
+      on_exit(fn -> Application.delete_env(:custyard, :env) end)
+      :ok
+    end
+
+    defp authenticated_route(source) do
+      org = insert_organization()
+
+      {:ok, route} =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{organization_id: org.id, source: source})
+        |> Repo.insert()
+
+      route
+    end
+
+    test "a payload the adapter rejects returns 422, not 401", %{conn: conn} do
+      route = authenticated_route(:zendesk)
+
+      # A Zendesk body template that sends the comment as a string without an id
+      params = %{
+        "ticket" => %{
+          "id" => 1,
+          "subject" => "Help",
+          "requester" => %{"email" => "alice@example.com"},
+          "comment" => "No comment id"
+        }
+      }
+
+      response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", params)
+        |> json_response(422)
+
+      assert response["reason"] == "invalid payload"
+    end
+
+    test "a payload with an unexpected shape returns 422 instead of 500", %{conn: conn} do
+      route = authenticated_route(:zendesk)
+
+      params = %{"ticket" => %{"id" => %{"nested" => 1}, "subject" => "Help"}}
+
+      response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", params)
+        |> json_response(422)
+
+      assert response["reason"] == "invalid payload"
+    end
+
+    test "a payload without a sender is accepted as a contactless conversation", %{conn: conn} do
+      route = authenticated_route(:lettermint)
+
+      params = %{
+        "subject" => "No sender",
+        "text" => "hello",
+        "headers" => %{
+          "message-id" => "<nosender-#{System.unique_integer([:positive])}@test.com>"
+        }
+      }
+
+      response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", params)
+        |> json_response(200)
+
+      conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
+      assert conversation.contact_id == nil
+    end
+
+    test "non-string fields are tolerated", %{conn: conn} do
+      route = authenticated_route(:lettermint)
+
+      params = %{
+        "from" => "alice@example.com",
+        "subject" => ["not", "a", "string"],
+        "text" => "",
+        "html" => "<p>Only HTML</p>",
+        "headers" => []
+      }
+
+      response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", params)
+        |> json_response(200)
+
+      conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
+      assert conversation.subject == "(no subject)"
+
+      [message] = Repo.all(Ecto.Query.where(Custyard.Message, conversation_id: ^conversation.id))
+      assert message.body == "Only HTML"
+    end
+  end
 end
