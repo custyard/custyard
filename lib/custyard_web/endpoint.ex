@@ -124,9 +124,14 @@ defmodule CustyardWeb.Endpoint do
     Plug.Session.call(conn, Plug.Session.init(session_options()))
   end
 
-  # Trust Fly.io proxy headers - rewrites conn.scheme/host/port from x-forwarded-*
-  # Required for check_origin validation (Origin scheme must match conn.scheme)
-  plug Plug.RewriteOn, [:x_forwarded_host, :x_forwarded_port, :x_forwarded_proto]
+  # Trust Fly.io proxy headers - rewrites conn.scheme/port from x-forwarded-*
+  # Required for check_origin validation (Origin scheme must match conn.scheme).
+  # X-Forwarded-Host is deliberately NOT trusted: the proxy preserves the
+  # Host header, and CustyardWeb.Plugs.CustomDomain resolves conn.host to an
+  # organization's white-label portal, so honoring a client-supplied
+  # X-Forwarded-Host let anyone reach any organization's portal without its
+  # token by naming its (public) custom domain in that header.
+  plug Plug.RewriteOn, [:x_forwarded_port, :x_forwarded_proto]
 
   # Attach request context (method, scrubbed URL, headers) to Sentry events.
   # Placed after RewriteOn so the URL reflects the real external scheme/host.

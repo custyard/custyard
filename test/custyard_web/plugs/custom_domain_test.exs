@@ -37,7 +37,7 @@ defmodule CustyardWeb.Plugs.CustomDomainTest do
       refute Map.has_key?(result.assigns, :organization)
     end
 
-    test "rewrites root path for known custom domain" do
+    test "redirects the root path of a custom domain to the request list" do
       org =
         insert_organization(
           custom_domain: "support.acme.com",
@@ -48,11 +48,40 @@ defmodule CustyardWeb.Plugs.CustomDomainTest do
 
       result = CustomDomain.call(conn, [])
 
-      assert result.request_path == "/p/acme-test-token-secure-32-chars-x/"
+      # "/" is the app host's home page; the browser must land on a URL the
+      # LiveView client can resolve on connect.
+      assert result.halted
+      assert result.status == 302
+      assert Plug.Conn.get_resp_header(result, "location") == ["/requests"]
+      assert result.assigns.organization.id == org.id
+    end
+
+    test "rewrites /requests to the portal list for a known custom domain" do
+      org =
+        insert_organization(
+          custom_domain: "support.acme.com",
+          token: "acme-test-token-secure-32-chars-x"
+        )
+
+      conn = conn(:get, "/requests") |> Map.put(:host, "support.acme.com")
+
+      result = CustomDomain.call(conn, [])
+
+      assert result.request_path == "/p/acme-test-token-secure-32-chars-x"
       assert result.path_info == ["p", "acme-test-token-secure-32-chars-x"]
       assert result.assigns.organization.id == org.id
       assert result.assigns.custom_domain_request == true
       assert result.private[:custyard_custom_domain] == true
+    end
+
+    test "resolves the custom domain regardless of case" do
+      org = insert_organization(custom_domain: "support.acme.com")
+
+      conn = conn(:get, "/new") |> Map.put(:host, "Support.ACME.com")
+      result = CustomDomain.call(conn, [])
+
+      assert result.assigns.organization.id == org.id
+      assert result.request_path == "/p/#{org.token}/new"
     end
 
     test "rewrites subpath for known custom domain" do

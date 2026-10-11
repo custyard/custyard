@@ -27,9 +27,12 @@ defmodule CustyardWeb.Live.PortalAuth do
             {:halt, Phoenix.LiveView.redirect(socket, to: "/")}
 
           org ->
-            # Validate URL token matches session org (unless on custom domain)
-            # This prevents confusion when session org differs from URL org
-            if is_custom_domain or is_nil(url_token) or org.token == url_token do
+            # Validate URL token matches session org. On a custom domain the
+            # LiveView connects on the un-prefixed URL and carries no token,
+            # so the check simply does not apply there; a session flag alone
+            # must never waive it, or a socket could join /p/<anything>/...
+            # on the strength of a cookie.
+            if is_nil(url_token) or org.token == url_token do
               {:cont,
                socket
                |> assign(:current_org, org)
@@ -52,10 +55,11 @@ defmodule CustyardWeb.Live.PortalAuth do
   # Standard access gets token-prefixed paths (/p/:token).
   defp assign_portal_paths(socket, org, is_custom_domain) do
     if is_custom_domain do
-      # Custom domain: preserve the host without exposing the org token.
+      # Custom domain: preserve the host without exposing the org token. The
+      # list is /requests rather than / (the app host's home page owns /).
       socket
       |> assign(:portal_path, "")
-      |> assign(:portal_home_path, "/")
+      |> assign(:portal_home_path, "/requests")
     else
       # Standard access: use token-prefixed paths
       token_path = "/p/#{org.token}"

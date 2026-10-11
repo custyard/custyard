@@ -57,6 +57,7 @@ defmodule Custyard.Organization do
     |> unique_constraint(:domain, name: :organizations_domain_unique_index)
     |> unique_constraint(:custom_domain)
     |> validate_domain()
+    |> update_change(:custom_domain, &normalize_custom_domain/1)
     |> validate_custom_domain()
     |> validate_logo_url()
   end
@@ -88,6 +89,14 @@ defmodule Custyard.Organization do
         end
     end
   end
+
+  # Hostnames are case-insensitive and browsers send them lowercase, while the
+  # custom-domain lookup is an exact match; a domain saved as entered
+  # ("Support.Acme.com") validated and verified but never resolved.
+  defp normalize_custom_domain(domain) when is_binary(domain),
+    do: domain |> String.trim() |> String.downcase()
+
+  defp normalize_custom_domain(domain), do: domain
 
   defp validate_custom_domain(changeset) do
     case get_change(changeset, :custom_domain) do
