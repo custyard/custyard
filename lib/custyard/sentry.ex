@@ -140,11 +140,6 @@ defmodule Custyard.Sentry do
   end
 
   @doc """
-  Redacts the credential segment after each known sensitive path prefix. Works
-  on a bare path or on free-form text containing such a path. `nil` passes
-  through.
-  """
-  @doc """
   Whether `path` carries one of Custyard's path-borne bearer credentials
   (the same prefixes `scrub_path/1` redacts). `CustyardWeb.Endpoint` uses it
   to keep those requests out of the request log.
@@ -156,6 +151,11 @@ defmodule Custyard.Sentry do
 
   def token_path?(_path), do: false
 
+  @doc """
+  Redacts the credential segment after each known sensitive path prefix. Works
+  on a bare path or on free-form text containing such a path. `nil` passes
+  through.
+  """
   @spec scrub_path(String.t() | nil) :: String.t() | nil
   def scrub_path(nil), do: nil
 

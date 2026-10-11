@@ -388,6 +388,9 @@ defmodule Custyard.Organizations do
     end
   end
 
+  def convert_prospect(%Conversation{}, _org_attrs, %OperatorAccount{}),
+    do: {:error, :not_convertible}
+
   # The organization (and its provisioned inbound route) is already committed
   # when step 2 runs; an exception there must not leave it behind as an orphan
   # that blocks a retry on the domain unique index.
@@ -398,9 +401,6 @@ defmodule Custyard.Organizations do
       delete_organization(organization)
       reraise error, __STACKTRACE__
   end
-
-  def convert_prospect(%Conversation{}, _org_attrs, %OperatorAccount{}),
-    do: {:error, :not_convertible}
 
   defp do_convert(conversation, organization) do
     Repo.transaction(fn ->
