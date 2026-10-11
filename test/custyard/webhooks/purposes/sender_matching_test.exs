@@ -408,4 +408,29 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert conversation.contact_id == nil
     end
   end
+
+  describe "customer replies to waiting conversations" do
+    test "an inbound email reactivates a conversation waiting on the customer" do
+      org = insert_organization(domain: "acme.example.com")
+      waiting = insert_conversation(organization_id: org.id, state: :waiting, subject: "Pending")
+      existing = insert_message(conversation_id: waiting.id, message_id: "waiting-1@example.com")
+
+      normalized = %{
+        from: "alice@acme.example.com",
+        subject: "Re: Pending",
+        body: "Here is the information you asked for",
+        message_id: "waiting-reply-1@example.com",
+        in_reply_to: existing.message_id,
+        references: nil,
+        headers: %{},
+        source: :email
+      }
+
+      assert {:ok, conversation} =
+               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+
+      assert conversation.id == waiting.id
+      assert conversation.state == :active
+    end
+  end
 end

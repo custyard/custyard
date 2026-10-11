@@ -280,8 +280,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     :email
   end
 
+  # A customer message unblocks a conversation that was waiting on the
+  # customer, exactly as the portal and public-intake reply paths already do;
+  # leaving it :waiting kept the reply out of the attention queue.
   defp maybe_reactivate(conversation) do
-    if conversation.state in [:dormant, :resolved] do
+    if conversation.state in [:waiting, :dormant, :resolved] do
       conversation
       |> Conversation.state_changeset(:active)
       |> Repo.update!()

@@ -380,12 +380,23 @@ defmodule Custyard.Organizations do
     case create_organization(org_attrs) do
       {:ok, organization} ->
         conversation
-        |> do_convert(organization)
+        |> do_convert_or_compensate(organization)
         |> handle_convert_result(organization, operator)
 
       {:error, changeset} ->
         {:error, changeset}
     end
+  end
+
+  # The organization (and its provisioned inbound route) is already committed
+  # when step 2 runs; an exception there must not leave it behind as an orphan
+  # that blocks a retry on the domain unique index.
+  defp do_convert_or_compensate(conversation, organization) do
+    do_convert(conversation, organization)
+  rescue
+    error ->
+      delete_organization(organization)
+      reraise error, __STACKTRACE__
   end
 
   def convert_prospect(%Conversation{}, _org_attrs, %OperatorAccount{}),

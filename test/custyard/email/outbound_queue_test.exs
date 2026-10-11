@@ -68,4 +68,36 @@ defmodule Custyard.Email.OutboundQueueTest do
     assert id == conversation.id
     assert Repo.get!(Message, message.id).delivery_status == :sent
   end
+
+  describe "replies interrupted mid-delivery" do
+    import Ecto.Query
+
+    setup do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id)
+      conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      {:ok, message} = Conversations.send_reply(conversation, "Interrupted reply")
+      {:ok, message: message, contact: contact}
+    end
+
+    test "a stale :sending row is failed, never re-sent", %{message: message} do
+      long_ago = DateTime.utc_now() |> DateTime.add(-1200, :second) |> DateTime.truncate(:second)
+
+      from(m in Message, where: m.id == ^message.id)
+      |> Repo.update_all(set: [delivery_status: :sending, updated_at: long_ago])
+
+      assert OutboundQueue.drain_pending() == 0
+      assert Repo.get!(Message, message.id).delivery_status == :failed
+      assert_no_email_sent()
+    end
+
+    test "a :sending row inside the grace period is left to its attempt", %{message: message} do
+      from(m in Message, where: m.id == ^message.id)
+      |> Repo.update_all(set: [delivery_status: :sending])
+
+      assert OutboundQueue.drain_pending() == 0
+      assert Repo.get!(Message, message.id).delivery_status == :sending
+      assert_no_email_sent()
+    end
+  end
 end

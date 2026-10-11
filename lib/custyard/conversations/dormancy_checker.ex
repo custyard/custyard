@@ -77,8 +77,7 @@ defmodule Custyard.Conversations.DormancyChecker do
     unlinked =
       dynamic(
         [c],
-        is_nil(c.organization_id) and
-          coalesce(c.last_customer_action_at, c.inserted_at) <= ^unlinked_cutoff
+        is_nil(c.organization_id) and ^quiet_since(unlinked_cutoff)
       )
 
     Enum.reduce(@dormancy_tiers, unlinked, fn tier, acc ->
@@ -86,11 +85,22 @@ defmodule Custyard.Conversations.DormancyChecker do
 
       dynamic(
         [c, o],
-        ^acc or
-          (o.tier == ^tier and
-             coalesce(c.last_customer_action_at, c.inserted_at) <= ^cutoff)
+        ^acc or (o.tier == ^tier and ^quiet_since(cutoff))
       )
     end)
+  end
+
+  # Dormant means no activity from either side for the whole period
+  # (sdd.md, US-3). Measuring only the customer side turned a conversation
+  # dormant minutes after the operator replied and marked it waiting, before
+  # the customer had any chance to answer. An operator who never acted does
+  # not hold the conversation back.
+  defp quiet_since(cutoff) do
+    dynamic(
+      [c],
+      coalesce(c.last_customer_action_at, c.inserted_at) <= ^cutoff and
+        (is_nil(c.last_operator_action_at) or c.last_operator_action_at <= ^cutoff)
+    )
   end
 
   defp dormancy_cutoff(thresholds, tier) do
@@ -102,26 +112,31 @@ defmodule Custyard.Conversations.DormancyChecker do
     DateTime.add(DateTime.utc_now(), -hours, :hour)
   end
 
-  defp transition_to_dormant(conversation) do
-    case conversation
-         |> Conversation.state_changeset(:dormant)
-         |> Repo.update() do
-      {:ok, updated} ->
-        Phoenix.PubSub.broadcast(
-          Custyard.PubSub,
-          "conversations",
-          {:conversation_updated, updated.id}
-        )
+  # Guarded by the state the row was selected in: a customer reply that
+  # reactivated the conversation between the SELECT above and this UPDATE
+  # must win, not be overwritten with :dormant from a stale struct.
+  defp transition_to_dormant(%Conversation{id: id} = conversation) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-        Conversations.broadcast_to_org(
-          updated.organization_id,
-          {:conversation_updated, updated.id}
-        )
+    {count, _} =
+      from(c in Conversation, where: c.id == ^id and c.state == :waiting)
+      |> Repo.update_all(set: [state: :dormant, updated_at: now])
 
-        true
+    if count == 1 do
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
+        "conversations",
+        {:conversation_updated, id}
+      )
 
-      {:error, _changeset} ->
-        false
+      Conversations.broadcast_to_org(
+        conversation.organization_id,
+        {:conversation_updated, id}
+      )
+
+      true
+    else
+      false
     end
   end
 end

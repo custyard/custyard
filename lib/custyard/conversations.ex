@@ -966,9 +966,39 @@ defmodule Custyard.Conversations do
     if dry_run do
       Repo.aggregate(query, :count)
     else
-      {count, _} = Repo.delete_all(query)
-      count
+      delete_conversations_with_audit_trail(query)
     end
+  end
+
+  # audit_events.conversation_id is a plain FK (ON DELETE NO ACTION), so a
+  # single DELETE over every expired conversation fails as a whole as soon as
+  # one of them has an audit event (every conversion, slug release and
+  # audited webhook delivery writes one), and the sweep then retries the same
+  # failing statement forever. Detach the audit rows first, in the same
+  # transaction, so the trail survives the purge and the purge survives the
+  # trail. Ids go in bounded chunks to stay under SQLite's parameter limit.
+  @cleanup_chunk_size 500
+
+  defp delete_conversations_with_audit_trail(query) do
+    ids = Repo.all(from(c in query, select: c.id))
+
+    {:ok, count} =
+      Repo.transaction(fn ->
+        ids
+        |> Enum.chunk_every(@cleanup_chunk_size)
+        |> Enum.reduce(0, fn chunk, acc ->
+          from(a in Custyard.AuditEvent, where: a.conversation_id in ^chunk)
+          |> Repo.update_all(set: [conversation_id: nil])
+
+          {deleted, _} =
+            from(c in Conversation, where: c.id in ^chunk and c.state == :resolved)
+            |> Repo.delete_all()
+
+          acc + deleted
+        end)
+      end)
+
+    count
   end
 
   @doc """

@@ -1344,6 +1344,20 @@ defmodule Custyard.ConversationsTest do
       assert Repo.get(Custyard.Conversation, young.id)
     end
 
+    test "purges a resolved conversation that has audit events and keeps its trail" do
+      org = insert_organization()
+      old = insert_conversation(organization_id: org.id, state: :resolved)
+      backdate_updated_at(old, 91)
+      event = insert_audit_event(conversation_id: old.id, organization_id: org.id)
+
+      assert Conversations.cleanup_resolved_conversations(90) == 1
+      assert Repo.get(Custyard.Conversation, old.id) == nil
+
+      kept = Repo.get!(Custyard.AuditEvent, event.id)
+      assert kept.conversation_id == nil
+      assert kept.organization_id == org.id
+    end
+
     test "keeps resolved public-intake conversations well past the 90-day bound" do
       conversation = insert_conversation(source: :public_intake, state: :resolved)
       backdate_updated_at(conversation, 364)

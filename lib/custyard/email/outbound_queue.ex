@@ -19,6 +19,10 @@ defmodule Custyard.Email.OutboundQueue do
 
   @scan_interval_ms 30_000
   @batch_size 100
+  # A delivery attempt that has not reported back after this long died
+  # mid-send (the mailer times out well before). Such rows are failed, not
+  # re-sent: the provider may already have accepted the email.
+  @stale_sending_seconds 600
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -32,6 +36,8 @@ defmodule Custyard.Email.OutboundQueue do
 
   @doc "Drain one batch synchronously, used by the worker and focused tests."
   def drain_pending do
+    fail_stale_sending()
+
     pending =
       from(m in Message,
         where: m.source == :operator and m.delivery_status == :pending,
@@ -48,6 +54,39 @@ defmodule Custyard.Email.OutboundQueue do
     end)
 
     length(pending)
+  end
+
+  @doc """
+  Mark messages stuck in `:sending` past the grace period as `:failed`.
+
+  A row is `:sending` only between `Outbound.deliver/1` claiming it and the
+  mailer reporting back; one left there was interrupted by a crash. Whether
+  the provider accepted the email is unknown, so the operator decides on a
+  resend rather than the queue delivering it again automatically.
+  """
+  def fail_stale_sending(grace_seconds \\ @stale_sending_seconds) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    cutoff = DateTime.add(now, -grace_seconds, :second)
+
+    stale =
+      from(m in Message,
+        where: m.source == :operator and m.delivery_status == :sending,
+        where: m.updated_at < ^cutoff
+      )
+      |> Repo.all()
+
+    Enum.each(stale, fn message ->
+      from(m in Message, where: m.id == ^message.id and m.delivery_status == :sending)
+      |> Repo.update_all(set: [delivery_status: :failed, updated_at: now])
+
+      Logger.warning(
+        "Outbound message #{message.id} was interrupted mid-delivery; marked failed, not re-sent"
+      )
+
+      Outbound.broadcast_delivery_update(message)
+    end)
+
+    length(stale)
   end
 
   @impl true

@@ -1292,9 +1292,11 @@ defmodule CustyardWeb.Operator.ConversationLive do
     """
   end
 
-  attr :status, :atom, required: true, values: [:pending, :sent, :failed, :bounced, :withheld]
+  attr :status, :atom,
+    required: true,
+    values: [:pending, :sending, :sent, :failed, :bounced, :withheld]
 
-  defp delivery_indicator(%{status: :pending} = assigns) do
+  defp delivery_indicator(%{status: status} = assigns) when status in [:pending, :sending] do
     ~H"""
     <span
       class="inline-flex items-center text-xs text-gray-400 dark:text-zinc-500"
