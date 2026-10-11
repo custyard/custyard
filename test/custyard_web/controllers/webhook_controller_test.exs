@@ -550,7 +550,7 @@ defmodule CustyardWeb.WebhookControllerTest do
       conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
       assert conversation.subject == "(no subject)"
 
-      [message] = Repo.all(Ecto.Query.where(Custyard.Message, conversation_id: ^conversation.id))
+      message = Repo.get_by!(Custyard.Message, conversation_id: conversation.id)
       assert message.body == "Only HTML"
     end
   end
