@@ -427,6 +427,8 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
   end
 
   describe "reset_recovered_notifications/1" do
+    require Ecto.Query
+
     test "clears the notification level once the operator has acted" do
       thresholds = Settings.get_neglect_thresholds()
       {warning_hours, _critical_hours} = thresholds.standard
@@ -471,11 +473,11 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
 
       assert NeglectChecker.reset_recovered_notifications() == 1
 
+      neglected_at = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+
       Repo.update_all(
-        Ecto.Query.where(Custyard.Conversation, id: ^conv.id),
-        set: [
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
-        ]
+        Ecto.Query.from(c in Custyard.Conversation, where: c.id == ^conv.id),
+        set: [last_operator_action_at: neglected_at]
       )
 
       assert {:ok, 1} = NeglectChecker.check_and_notify()
