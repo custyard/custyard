@@ -35,9 +35,12 @@ defmodule CustyardWeb.Plugs.CacheRawBody do
         conn = Plug.Conn.put_private(conn, :raw_body, body)
         {:ok, body, conn}
 
-      {:more, _partial, conn} ->
-        # Body exceeds limit - return error
-        {:error, :body_too_large, conn}
+      {:more, partial, conn} ->
+        # Body exceeds the limit. Hand the `{:more, ...}` tuple back unchanged:
+        # Plug.Parsers.JSON and Plug.Parsers.URLENCODED translate it into a
+        # `Plug.Parsers.RequestTooLargeError` (HTTP 413). Any other shape is
+        # not a result those parsers recognize and surfaces as a 500.
+        {:more, partial, conn}
 
       {:error, reason} ->
         {:error, reason}
