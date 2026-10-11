@@ -148,8 +148,9 @@ defmodule Custyard.Email.SenderMatcher do
   Handles the `Name <email>` form. Returns `nil` when `from` carries nothing
   that can be stored as a contact: `nil` or non-string input, a blank string,
   a bare display name (`Name <>`), or a chat identifier such as a Slack user
-  id. Validity is the `Custyard.EmailAddress` rule `Contact.changeset/2`
-  enforces, so an unstorable sender is detected before any insert.
+  id. Validity is `Custyard.EmailAddress.valid?/1`, every rule
+  `Contact.changeset/2` enforces, so an unstorable sender is detected before
+  any insert.
   """
   @spec extract_email(term()) :: String.t() | nil
   def extract_email(from) when is_binary(from) do
@@ -161,7 +162,7 @@ defmodule Custyard.Email.SenderMatcher do
 
     candidate = candidate |> String.trim() |> String.downcase()
 
-    if Regex.match?(EmailAddress.regex(), candidate), do: candidate, else: nil
+    if EmailAddress.valid?(candidate), do: candidate, else: nil
   end
 
   def extract_email(_from), do: nil

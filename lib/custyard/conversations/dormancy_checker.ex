@@ -35,8 +35,12 @@ defmodule Custyard.Conversations.DormancyChecker do
   Returns the count of transitioned conversations.
   """
   def transition_stale_conversations do
-    stale_conversations()
-    |> Enum.map(&transition_to_dormant/1)
+    thresholds = Settings.get_neglect_thresholds()
+
+    thresholds
+    |> stale_query()
+    |> Repo.all()
+    |> Enum.map(&transition_to_dormant(&1, thresholds))
     |> Enum.count(& &1)
   end
 
@@ -57,15 +61,17 @@ defmodule Custyard.Conversations.DormancyChecker do
   def stale_conversations do
     # Thresholds are database-configurable; the critical threshold doubles as
     # the dormancy cutoff.
-    thresholds = Settings.get_neglect_thresholds()
+    Settings.get_neglect_thresholds()
+    |> stale_query()
+    |> Repo.all()
+  end
 
+  defp stale_query(thresholds) do
     from(c in Conversation,
       left_join: o in assoc(c, :organization),
       where: c.state == :waiting,
-      where: ^past_dormancy_cutoff(thresholds),
-      select: c
+      where: ^past_dormancy_cutoff(thresholds)
     )
-    |> Repo.all()
   end
 
   # One OR branch per tier, plus the unlinked branch. Composed rather than
@@ -112,14 +118,16 @@ defmodule Custyard.Conversations.DormancyChecker do
     DateTime.add(DateTime.utc_now(), -hours, :hour)
   end
 
-  # Guarded by the state the row was selected in: a customer reply that
-  # reactivated the conversation between the SELECT above and this UPDATE
-  # must win, not be overwritten with :dormant from a stale struct.
-  defp transition_to_dormant(%Conversation{id: id} = conversation) do
+  # Guarded by the whole stale condition, re-evaluated by the UPDATE itself:
+  # a customer reply that reactivated the conversation, or an operator reply
+  # that left it :waiting, between the SELECT above and this UPDATE must win,
+  # not be overwritten with :dormant from a stale struct.
+  defp transition_to_dormant(%Conversation{id: id} = conversation, thresholds) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
+    still_stale = from(c in stale_query(thresholds), where: c.id == ^id, select: c.id)
 
     {count, _} =
-      from(c in Conversation, where: c.id == ^id and c.state == :waiting)
+      from(c in Conversation, where: c.id in subquery(still_stale))
       |> Repo.update_all(set: [state: :dormant, updated_at: now])
 
     if count == 1 do

@@ -281,5 +281,13 @@ defmodule Custyard.Email.SenderMatcherTest do
       assert SenderMatcher.extract_email(nil) == nil
       assert SenderMatcher.extract_email(%{}) == nil
     end
+
+    test "rejects an address a contact could not store" do
+      # Matches the format regex, but the local part exceeds 64 characters.
+      long_local = String.duplicate("a", 65) <> "@example.com"
+
+      assert SenderMatcher.extract_email(long_local) == nil
+      assert SenderMatcher.extract_email(String.duplicate("a", 64) <> "@example.com")
+    end
   end
 end

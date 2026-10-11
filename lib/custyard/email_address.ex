@@ -32,22 +32,41 @@ defmodule Custyard.EmailAddress do
         changeset
 
       email ->
-        cond do
-          # Check for control characters or null bytes
-          String.match?(email, ~r/[\x00-\x1F\x7F]/) ->
-            add_error(changeset, field, "must not contain control characters")
-
-          # Validate format with regex
-          not Regex.match?(@email_regex, email) ->
-            add_error(changeset, field, "must be a valid email address")
-
-          # Validate local part length (before @)
-          String.split(email, "@") |> hd() |> String.length() > 64 ->
-            add_error(changeset, field, "local part must be at most 64 characters")
-
-          true ->
-            changeset
+        case format_error(email) do
+          nil -> changeset
+          message -> add_error(changeset, field, message)
         end
+    end
+  end
+
+  @max_length 320
+
+  @doc """
+  Whether `email` passes every rule a stored address must: `validate_email/2`
+  and the #{@max_length}-character length limit `Custyard.Contact` applies.
+  For callers that must know before an insert whether it can succeed.
+  """
+  def valid?(email) when is_binary(email),
+    do: String.length(email) <= @max_length and format_error(email) == nil
+
+  def valid?(_email), do: false
+
+  defp format_error(email) do
+    cond do
+      # Check for control characters or null bytes
+      String.match?(email, ~r/[\x00-\x1F\x7F]/) ->
+        "must not contain control characters"
+
+      # Validate format with regex
+      not Regex.match?(@email_regex, email) ->
+        "must be a valid email address"
+
+      # Validate local part length (before @)
+      String.split(email, "@") |> hd() |> String.length() > 64 ->
+        "local part must be at most 64 characters"
+
+      true ->
+        nil
     end
   end
 

@@ -36,7 +36,6 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   """
   require Logger
 
-  import Ecto.Query, only: [from: 2]
   import Plug.Conn
   alias Custyard.{Organization, Repo}
 
@@ -65,18 +64,13 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   end
 
   defp resolve_custom_domain(conn, host) do
-    # Hostnames are case-insensitive; stored values are normalized to
-    # lowercase on save, and the comparison is case-insensitive for rows
-    # saved before that.
+    # Hostnames are case-insensitive. Stored values are lowercase (normalized
+    # on save, and by a migration for rows saved before that), so an exact
+    # match on the lowercased host uses the unique index and finds at most
+    # one organization.
     lowered = String.downcase(host)
 
-    query =
-      from(o in Organization,
-        where: fragment("lower(?)", o.custom_domain) == ^lowered,
-        limit: 1
-      )
-
-    case Repo.one(query) do
+    case Repo.get_by(Organization, custom_domain: lowered) do
       nil ->
         # Unknown host - let the request proceed normally
         # (may 404 or be handled by other routes)

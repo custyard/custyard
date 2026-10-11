@@ -976,26 +976,22 @@ defmodule Custyard.Conversations do
   # audited webhook delivery writes one), and the sweep then retries the same
   # failing statement forever. Detach the audit rows first, in the same
   # transaction, so the trail survives the purge and the purge survives the
-  # trail. Ids go in bounded chunks to stay under SQLite's parameter limit.
-  @cleanup_chunk_size 500
-
+  # trail.
+  #
+  # Both statements evaluate the retention query itself rather than a list
+  # of ids read beforehand: the detach is the transaction's first write, so
+  # SQLite holds the write lock from then until commit, and no reply, note
+  # or reopen can land between the two statements and make them disagree.
   defp delete_conversations_with_audit_trail(query) do
-    ids = Repo.all(from(c in query, select: c.id))
-
     {:ok, count} =
       Repo.transaction(fn ->
-        ids
-        |> Enum.chunk_every(@cleanup_chunk_size)
-        |> Enum.reduce(0, fn chunk, acc ->
-          from(a in Custyard.AuditEvent, where: a.conversation_id in ^chunk)
-          |> Repo.update_all(set: [conversation_id: nil])
+        expired_ids = from(c in query, select: c.id)
 
-          {deleted, _} =
-            from(c in Conversation, where: c.id in ^chunk and c.state == :resolved)
-            |> Repo.delete_all()
+        from(a in Custyard.AuditEvent, where: a.conversation_id in subquery(expired_ids))
+        |> Repo.update_all(set: [conversation_id: nil])
 
-          acc + deleted
-        end)
+        {deleted, _} = Repo.delete_all(query)
+        deleted
       end)
 
     count

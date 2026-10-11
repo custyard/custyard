@@ -310,8 +310,11 @@ defmodule Custyard.Email.Parser do
     end
   end
 
-  # Top-level headers only: part headers live in the body section, where
-  # mimemail has already turned any marker into "?" (as it did before).
+  # Top-level headers only. Part headers live in the body section, escaped
+  # with the body marker, which mimemail's header parser turns into "?": a
+  # raw 8-bit byte in a part header (non-standard; RFC 2231 and encoded
+  # words are ASCII) comes out as "?" plus two escape digits instead of the
+  # bare "?" mimemail produced without escaping. Garbled either way.
   defp unescape_headers(headers) when is_list(headers) do
     Enum.map(headers, fn
       {key, value} when is_binary(value) -> {key, unescape_high_bytes(value, @header_escape)}
@@ -494,21 +497,22 @@ defmodule Custyard.Email.Parser do
         _ -> nil
       end
 
-    # Fall back to Content-Type name parameter
-    (filename ||
-       case Map.get(props, :content_type_params, []) do
-         params when is_list(params) ->
-           case List.keyfind(params, "name", 0) do
-             {"name", name} -> name
-             _ -> nil
-           end
+    # Fall back to Content-Type name parameter. Part headers are never
+    # escaped with the header marker (see unescape_headers/1), so the value
+    # is used as mimemail returns it.
+    filename ||
+      case Map.get(props, :content_type_params, []) do
+        params when is_list(params) ->
+          case List.keyfind(params, "name", 0) do
+            {"name", name} -> name
+            _ -> nil
+          end
 
-         _ ->
-           nil
-       end ||
-       get_header(headers, "Content-Disposition")
-       |> extract_filename_from_header())
-    |> unescape_high_bytes(@header_escape)
+        _ ->
+          nil
+      end ||
+      get_header(headers, "Content-Disposition")
+      |> extract_filename_from_header()
   end
 
   defp extract_filename_from_header(nil), do: nil

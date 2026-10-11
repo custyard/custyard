@@ -1,6 +1,8 @@
 defmodule CustyardWeb.Operator.SessionController do
   use CustyardWeb, :controller
 
+  import Ecto.Query, only: [from: 2]
+
   alias Custyard.{OperatorAccount, RateLimit, Repo}
   alias Custyard.Auth.LoginEmail
 
@@ -70,13 +72,27 @@ defmodule CustyardWeb.Operator.SessionController do
   # requests an hour from anyone, so rotating on each of them let a stranger
   # who knew an operator's address invalidate the link that operator was
   # about to click.
+  #
+  # The fresh token is written only while no valid one is stored, and the
+  # link is built from whatever the row then holds: two concurrent requests
+  # (a double-submitted form) converge on one token instead of the second
+  # write invalidating the email the first one already sent.
   defp ensure_login_token(operator) do
     if OperatorAccount.login_token_valid?(operator) do
       operator
     else
-      operator
-      |> OperatorAccount.login_token_changeset()
-      |> Repo.update!()
+      %{changes: fresh} = OperatorAccount.login_token_changeset(operator)
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      from(o in OperatorAccount,
+        where: o.id == ^operator.id,
+        where:
+          is_nil(o.login_token) or is_nil(o.login_token_expires_at) or
+            o.login_token_expires_at <= ^now
+      )
+      |> Repo.update_all(set: Map.to_list(fresh))
+
+      Repo.get!(OperatorAccount, operator.id)
     end
   end
 
@@ -107,25 +123,28 @@ defmodule CustyardWeb.Operator.SessionController do
   end
 
   def consume(conn, %{"token" => token}) do
-    case lookup_login_token(token) do
-      {:ok, operator} ->
-        # Clear the token so it can't be reused
-        operator
-        |> OperatorAccount.clear_login_token_changeset()
-        |> Repo.update!()
-
-        conn
-        |> configure_session(renew: true)
-        |> put_session(:operator_id, operator.id)
-        |> put_flash(:info, "Welcome back")
-        |> redirect(to: ~p"/operator")
-
-      {:error, :expired} ->
-        render_expired_token(conn)
-
-      {:error, :invalid} ->
-        render_invalid_token(conn)
+    with {:ok, operator} <- lookup_login_token(token),
+         :ok <- clear_login_token(operator, token) do
+      conn
+      |> configure_session(renew: true)
+      |> put_session(:operator_id, operator.id)
+      |> put_flash(:info, "Welcome back")
+      |> redirect(to: ~p"/operator")
+    else
+      {:error, :expired} -> render_expired_token(conn)
+      {:error, :invalid} -> render_invalid_token(conn)
     end
+  end
+
+  # Clear the token so it can't be reused. Conditional on the token still
+  # being stored, so of two concurrent POSTs with one link only the first
+  # gets a session.
+  defp clear_login_token(operator, token) do
+    {cleared, _} =
+      from(o in OperatorAccount, where: o.id == ^operator.id and o.login_token == ^token)
+      |> Repo.update_all(set: [login_token: nil, login_token_expires_at: nil])
+
+    if cleared == 1, do: :ok, else: {:error, :invalid}
   end
 
   defp lookup_login_token(token) do

@@ -294,10 +294,21 @@ defmodule Custyard.Email.ImapPoller do
             {:error, reason}
         end
       rescue
-        # A poison message (malformed MIME, unexpected payload shape, a DB
-        # error) must not escape before mark_as_seen/2 runs below: it would
-        # crash the poller and be re-fetched as UNSEEN on every poll, blocking
-        # every message behind it.
+        # The database being busy or unreachable says nothing about the
+        # message: leave it unseen so the next poll retries it, rather than
+        # marking it seen below and dropping it for good.
+        error in [DBConnection.ConnectionError, Exqlite.Error] ->
+          Logger.warning(
+            "Database unavailable for IMAP message UID #{uid}, will retry: " <>
+              Exception.message(error)
+          )
+
+          {:retry, error}
+
+        # A poison message (malformed MIME, unexpected payload shape) must not
+        # escape before mark_as_seen/2 runs below: it would crash the poller
+        # and be re-fetched as UNSEEN on every poll, blocking every message
+        # behind it.
         error ->
           Logger.error(
             "Exception processing IMAP message UID #{uid}: #{Exception.message(error)}"
@@ -311,10 +322,10 @@ defmodule Custyard.Email.ImapPoller do
           {:error, {kind, value}}
       end
 
-    # Always mark as seen to prevent infinite retry loops on messages that
+    # Otherwise mark as seen to prevent infinite retry loops on messages that
     # consistently fail processing. Failed messages are logged but won't block
     # the poller from advancing.
-    mark_as_seen(conn, uid)
+    if not match?({:retry, _}, result), do: mark_as_seen(conn, uid)
 
     result
   end

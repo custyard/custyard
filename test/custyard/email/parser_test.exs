@@ -789,6 +789,22 @@ defmodule Custyard.Email.ParserTest do
                parsed.attachments
     end
 
+    test "keeps tildes in attachment filenames as sent" do
+      # "~~" and "~.-" have the shape of header-marker escapes; part headers
+      # are never escaped with that marker, so neither may be rewritten.
+      raw =
+        @hdr <>
+          "Subject: S\r\nContent-Type: multipart/mixed; boundary=\"b1\"\r\n\r\n" <>
+          "--b1\r\nContent-Type: text/plain\r\n\r\nSee attached\r\n" <>
+          "--b1\r\nContent-Type: application/pdf\r\n" <>
+          "Content-Disposition: attachment; filename=\"report~~v2~.-.pdf\"\r\n" <>
+          "Content-Transfer-Encoding: base64\r\n\r\n" <>
+          Base.encode64("%PDF") <> "\r\n--b1--\r\n"
+
+      assert {:ok, parsed} = Parser.parse(raw)
+      assert [%{filename: "report~~v2~.-.pdf"}] = parsed.attachments
+    end
+
     test "an unsupported charset still yields valid UTF-8" do
       raw =
         @hdr <>

@@ -127,26 +127,22 @@ defmodule Custyard.Notifications.NeglectChecker do
     # so the disjunction is NULL rather than false whenever its own branch
     # is false, and NOT NULL would never select it. coalesce makes "not past
     # the cutoff" mean exactly that.
-    ids =
+    recovered =
       from(c in Conversation,
         left_join: o in assoc(c, :organization),
         where: not is_nil(c.last_neglect_notification),
         where: ^dynamic(not coalesce(^past_cutoff, false)),
         select: c.id
       )
-      |> Repo.all()
 
-    case ids do
-      [] ->
-        0
+    # A subquery, not a list of ids: the first pass after this reset became
+    # reachable covers every conversation ever alerted on, which can exceed
+    # SQLite's bound-parameter limit.
+    {count, _} =
+      from(c in Conversation, where: c.id in subquery(recovered))
+      |> Repo.update_all(set: [last_neglect_notification: nil])
 
-      ids ->
-        {count, _} =
-          from(c in Conversation, where: c.id in ^ids)
-          |> Repo.update_all(set: [last_neglect_notification: nil])
-
-        count
-    end
+    count
   end
 
   defp warning_cutoff(thresholds, tier) do
