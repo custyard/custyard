@@ -144,10 +144,14 @@ defmodule Custyard.Email.Parser do
   end
 
   def parse(raw_email) when is_binary(raw_email) do
-    # Normalize line endings to CRLF (RFC 5322 requirement)
-    normalized = normalize_line_endings(raw_email)
+    # Normalize line endings to CRLF (RFC 5322 requirement), then make the
+    # message pure ASCII (see escape_high_bytes/1) so mimemail cannot drop
+    # the non-ASCII bytes of 8bit/binary parts and raw 8-bit headers.
+    normalized = raw_email |> normalize_line_endings() |> escape_high_bytes()
 
-    # Decode with encoding: :none to handle charset conversion ourselves
+    # encoding: :none keeps mimemail off charset conversion (that would need
+    # the iconv NIF); mimemail still decodes the transfer encoding of every
+    # part, so this module must not decode it a second time.
     opts = [{:allow_missing_version, true}, {:encoding, :none}]
 
     case :mimemail.decode(normalized, opts) do
@@ -159,6 +163,10 @@ defmodule Custyard.Email.Parser do
     end
   rescue
     e -> {:error, {:parse_failed, e}}
+  catch
+    # mimemail reports malformed Content-Type / Content-Disposition parameters
+    # and bad quoted-printable input with throw/1, which rescue does not see.
+    kind, value -> {:error, {:parse_failed, {kind, value}}}
   end
 
   # Normalize LF to CRLF for RFC 5322 compliance
@@ -167,7 +175,88 @@ defmodule Custyard.Email.Parser do
     String.replace(text, ~r/(?<!\r)\n/, "\r\n")
   end
 
+  # mimemail, when told not to convert charsets (encoding: :none), deletes
+  # every byte >= 0x80 from each body before decoding its transfer encoding,
+  # and replaces them with "?" in headers. Base64 and quoted-printable parts
+  # are ASCII on the wire and survive; 8bit/binary bodies and raw 8-bit
+  # headers lose all their non-ASCII text ("Grüße" -> "Gre").
+  #
+  # So the message is made pure ASCII first: each high byte becomes a
+  # three-character sequence `<marker>XY` whose two digits come from a
+  # 16-letter alphabet that is neither base64 nor quoted-printable
+  # significant, and a literal marker byte is doubled. The structure mimemail
+  # parses (boundaries, header names, parameters, transfer encodings) is
+  # ASCII and unaffected, and whatever comes back untouched is reversed with
+  # unescape_high_bytes/2.
+  #
+  # Two markers, because the two sections are handled differently:
+  #
+  #   * The header section uses `~`: mimemail replaces control characters in
+  #     header values with "?" but keeps printable ASCII, and header values
+  #     are not transfer-decoded, so the doubling stays unambiguous.
+  #   * The body section uses 0x01: mimemail keeps control characters in
+  #     bodies, and 0x01 cannot appear literally in quoted-printable or
+  #     base64 wire text, so a decoded QP/base64 part never carries escapes
+  #     except for illegal 8-bit bytes (dropped by base64, garbage either way
+  #     in QP), while a passthrough (7bit/8bit/binary) part is restored
+  #     exactly. A printable marker would collide with the same character
+  #     produced by QP decoding (`=7E` -> `~`).
+  @header_escape ?~
+  @body_escape 0x01
+  @escape_digits ~c"!#$%&'()*,-.:;<>"
+
+  defp escape_high_bytes(message) do
+    case :binary.split(message, "\r\n\r\n") do
+      [headers, body] ->
+        escape_section(headers, @header_escape) <>
+          "\r\n\r\n" <> escape_section(body, @body_escape)
+
+      [headers] ->
+        escape_section(headers, @header_escape)
+    end
+  end
+
+  defp escape_section(bin, marker) do
+    for <<byte <- bin>>, into: "", do: escape_byte(byte, marker)
+  end
+
+  defp escape_byte(marker, marker), do: <<marker, marker>>
+
+  defp escape_byte(byte, marker) when byte >= 0x80 do
+    <<marker, Enum.at(@escape_digits, div(byte, 16)), Enum.at(@escape_digits, rem(byte, 16))>>
+  end
+
+  defp escape_byte(byte, _marker), do: <<byte>>
+
+  defp unescape_high_bytes(bin, marker) when is_binary(bin) do
+    if :binary.match(bin, <<marker>>) == :nomatch, do: bin, else: do_unescape(bin, marker, <<>>)
+  end
+
+  defp unescape_high_bytes(other, _marker), do: other
+
+  defp do_unescape(<<>>, _marker, acc), do: acc
+
+  defp do_unescape(<<marker, marker, rest::binary>>, marker, acc),
+    do: do_unescape(rest, marker, <<acc::binary, marker>>)
+
+  defp do_unescape(<<marker, hi, lo, rest::binary>>, marker, acc)
+       when hi in @escape_digits and lo in @escape_digits do
+    byte = escape_digit(hi) * 16 + escape_digit(lo)
+    do_unescape(rest, marker, <<acc::binary, byte>>)
+  end
+
+  defp do_unescape(<<byte, rest::binary>>, marker, acc),
+    do: do_unescape(rest, marker, <<acc::binary, byte>>)
+
+  defp escape_digit(char), do: Enum.find_index(@escape_digits, &(&1 == char))
+
+  # Transfer encodings mimemail leaves untouched; only these can still carry
+  # escape sequences after decoding.
+  @passthrough_encodings ["7bit", "8bit", "binary", ""]
+
   defp build_normalized_map(mime_tuple, headers) do
+    headers = unescape_headers(headers)
+
     %{
       from: extract_email_address(get_header(headers, "From")),
       to: extract_email_address(get_header(headers, "To")),
@@ -220,6 +309,17 @@ defmodule Custyard.Email.Parser do
       String.trim(value)
     end
   end
+
+  # Top-level headers only: part headers live in the body section, where
+  # mimemail has already turned any marker into "?" (as it did before).
+  defp unescape_headers(headers) when is_list(headers) do
+    Enum.map(headers, fn
+      {key, value} when is_binary(value) -> {key, unescape_high_bytes(value, @header_escape)}
+      other -> other
+    end)
+  end
+
+  defp unescape_headers(headers), do: headers
 
   # Get header value (case-insensitive key lookup)
   defp get_header(headers, name) when is_list(headers) do
@@ -395,19 +495,20 @@ defmodule Custyard.Email.Parser do
       end
 
     # Fall back to Content-Type name parameter
-    filename ||
-      case Map.get(props, :content_type_params, []) do
-        params when is_list(params) ->
-          case List.keyfind(params, "name", 0) do
-            {"name", name} -> name
-            _ -> nil
-          end
+    (filename ||
+       case Map.get(props, :content_type_params, []) do
+         params when is_list(params) ->
+           case List.keyfind(params, "name", 0) do
+             {"name", name} -> name
+             _ -> nil
+           end
 
-        _ ->
-          nil
-      end ||
-      get_header(headers, "Content-Disposition")
-      |> extract_filename_from_header()
+         _ ->
+           nil
+       end ||
+       get_header(headers, "Content-Disposition")
+       |> extract_filename_from_header())
+    |> unescape_high_bytes(@header_escape)
   end
 
   defp extract_filename_from_header(nil), do: nil
@@ -419,25 +520,32 @@ defmodule Custyard.Email.Parser do
     end
   end
 
+  # mimemail has already decoded base64 and quoted-printable parts; a part it
+  # passed through may still carry escaped high bytes.
   defp decode_attachment_body(body, headers, props) when is_binary(body) do
-    encoding = get_transfer_encoding(headers, props)
-    decode_transfer_encoding(body, encoding)
+    restore_passthrough_bytes(body, get_transfer_encoding(headers, props))
   end
 
   defp decode_attachment_body(body, _headers, _props), do: body
 
-  # Decode body based on content-transfer-encoding and charset
+  # Decode a text body: restore any escaped bytes of a passthrough part,
+  # then convert its charset (mimemail decoded the transfer encoding).
   defp decode_body(body, headers, props) when is_binary(body) do
     encoding = get_transfer_encoding(headers, props)
     charset = get_charset(props)
 
     body
-    |> decode_transfer_encoding(encoding)
+    |> restore_passthrough_bytes(encoding)
     |> convert_charset(charset)
     |> normalize_crlf_to_lf()
   end
 
   defp decode_body(body, _headers, _props), do: to_string(body)
+
+  defp restore_passthrough_bytes(body, encoding) when encoding in @passthrough_encodings,
+    do: unescape_high_bytes(body, @body_escape)
+
+  defp restore_passthrough_bytes(body, _encoding), do: body
 
   # Convert CRLF back to LF for internal processing
   defp normalize_crlf_to_lf(text) when is_binary(text) do
@@ -469,20 +577,7 @@ defmodule Custyard.Email.Parser do
     end
   end
 
-  defp decode_transfer_encoding(body, "base64") do
-    case Base.decode64(String.replace(body, ~r/\s/, "")) do
-      {:ok, decoded} -> decoded
-      :error -> body
-    end
-  end
-
-  defp decode_transfer_encoding(body, "quoted-printable") do
-    decode_quoted_printable(body)
-  end
-
-  defp decode_transfer_encoding(body, _), do: body
-
-  # Decode quoted-printable encoding
+  # Decode quoted-printable encoding (RFC 2047 "Q" header words)
   defp decode_quoted_printable(text) do
     text
     # Handle soft line breaks (=\r\n or =\n)
@@ -497,10 +592,17 @@ defmodule Custyard.Email.Parser do
     end)
   end
 
-  # Convert charset to UTF-8
+  # Convert charset to UTF-8. Whatever the branch, the result is scrubbed:
+  # a charset this module cannot convert (windows-1251, koi8-r, shift_jis,
+  # ...) and a body that lies about being UTF-8 must still yield valid UTF-8,
+  # because Jason raises on invalid bytes when the LiveView renders them.
   defp convert_charset(text, charset) when is_binary(text) do
-    charset_lower = String.downcase(charset)
+    text |> convert_charset_bytes(String.downcase(charset)) |> scrub_utf8()
+  end
 
+  defp convert_charset(text, _charset), do: to_string(text)
+
+  defp convert_charset_bytes(text, charset_lower) do
     case charset_lower do
       c when c in ["utf-8", "utf8", "us-ascii", "ascii"] ->
         text
@@ -522,12 +624,21 @@ defmodule Custyard.Email.Parser do
         convert_cp1252_to_utf8(text)
 
       _ ->
-        # Best effort - try as-is
+        # Best effort - try as-is; scrub_utf8/1 replaces what is not UTF-8
         text
     end
   end
 
-  defp convert_charset(text, _charset), do: to_string(text)
+  # Replace invalid UTF-8 sequences with U+FFFD, keeping valid runs intact.
+  defp scrub_utf8(text) do
+    if String.valid?(text) do
+      text
+    else
+      text
+      |> String.chunk(:valid)
+      |> Enum.map_join(fn chunk -> if String.valid?(chunk), do: chunk, else: "\uFFFD" end)
+    end
+  end
 
   defp normalize_unicode_result(result) when is_binary(result), do: result
   defp normalize_unicode_result({:error, _, _}), do: ""

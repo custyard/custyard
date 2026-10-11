@@ -2279,4 +2279,92 @@ defmodule Custyard.Email.LMTPServerTest do
       :gen_tcp.close(socket)
     end
   end
+
+  describe "LMTP transactions" do
+    setup do
+      {:ok, pid} = LMTPServer.start_link(port: @test_port)
+      on_exit(fn -> LMTPServer.stop(pid) end)
+      {:ok, server: pid}
+    end
+
+    defp open_session do
+      {:ok, socket} =
+        :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
+
+      {:ok, _greeting} = :gen_tcp.recv(socket, 0, 5000)
+      :ok = :gen_tcp.send(socket, "LHLO test.client\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+      socket
+    end
+
+    defp deliver(socket, recipients) do
+      :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
+      {:ok, mail_resp} = :gen_tcp.recv(socket, 0, 5000)
+      assert mail_resp =~ "250"
+
+      for recipient <- recipients do
+        :ok = :gen_tcp.send(socket, "RCPT TO:<#{recipient}>\r\n")
+        {:ok, rcpt_resp} = :gen_tcp.recv(socket, 0, 5000)
+        assert rcpt_resp =~ "250", "RCPT TO:<#{recipient}> was refused: #{rcpt_resp}"
+      end
+
+      :ok = :gen_tcp.send(socket, "DATA\r\n")
+      {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
+
+      msg_id = :erlang.unique_integer([:positive])
+
+      email =
+        "From: sender@external.com\r\n" <>
+          "To: #{Enum.join(recipients, ", ")}\r\n" <>
+          "Subject: Transaction test #{msg_id}\r\n" <>
+          "Message-ID: <#{msg_id}@external.com>\r\n" <>
+          "Content-Type: text/plain; charset=utf-8\r\n\r\nBody\r\n"
+
+      :ok = :gen_tcp.send(socket, email <> "\r\n.\r\n")
+      recv_lines(socket, length(recipients))
+    end
+
+    # Collects `count` complete reply lines (replies to one DATA may arrive in
+    # one or several TCP packets).
+    defp recv_lines(socket, count, acc \\ "") do
+      lines = acc |> String.split("\r\n") |> Enum.reject(&(&1 == ""))
+
+      if length(lines) >= count do
+        lines
+      else
+        case :gen_tcp.recv(socket, 0, 5000) do
+          {:ok, data} ->
+            recv_lines(socket, count, acc <> data)
+
+          {:error, reason} ->
+            flunk("expected #{count} DATA replies, got #{inspect(lines)} (#{inspect(reason)})")
+        end
+      end
+    end
+
+    test "DATA is answered once per recipient (RFC 2033)" do
+      socket = open_session()
+
+      replies = deliver(socket, ["support@custyard.test", "team@custyard.test"])
+
+      assert length(replies) == 2
+      assert Enum.all?(replies, &(&1 =~ ~r/^250 2\.0\.0/))
+
+      :gen_tcp.close(socket)
+    end
+
+    test "a connection can deliver to different organizations in successive transactions" do
+      socket = open_session()
+
+      assert [first] = deliver(socket, ["support@custyard.test"])
+      assert first =~ "250"
+
+      # The second transaction targets example.com; before the transaction
+      # state was reset after DATA this RCPT TO was refused with 550.
+      assert [second] = deliver(socket, ["alice@example.com"])
+      assert second =~ "250"
+
+      :gen_tcp.close(socket)
+    end
+  end
 end

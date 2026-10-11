@@ -778,9 +778,9 @@ defmodule Custyard.Email.LMTPServer do
   end
 
   @impl true
-  def handle_DATA(_from, _to, <<>>, state) do
+  def handle_DATA(_from, to, <<>>, state) do
     # Empty data
-    {:error, "552 Empty message", state}
+    reply(:error, "552 Empty message", to, state)
   end
 
   @impl true
@@ -797,7 +797,7 @@ defmodule Custyard.Email.LMTPServer do
     with :ok <- check_message_size(data_size, state),
          :ok <- check_mail_loop(data, state),
          :ok <- check_rate_limits(state) do
-      process_and_respond(data, state)
+      process_and_respond(data, to, state)
     else
       {:error, :message_too_large, actual_size, max_size} ->
         Logger.warning("LMTP message too large",
@@ -806,7 +806,7 @@ defmodule Custyard.Email.LMTPServer do
           sender: state[:from]
         )
 
-        {:error, "552 5.3.4 Message size exceeds fixed maximum message size", state}
+        reply(:error, "552 5.3.4 Message size exceeds fixed maximum message size", to, state)
 
       {:error, :mail_loop, count} ->
         :telemetry.execute(
@@ -821,7 +821,7 @@ defmodule Custyard.Email.LMTPServer do
           sender: state[:from]
         )
 
-        {:error, "554 5.4.6 Mail loop detected", state}
+        reply(:error, "554 5.4.6 Mail loop detected", to, state)
 
       {:error, :connection_limit} ->
         :telemetry.execute(
@@ -836,7 +836,7 @@ defmodule Custyard.Email.LMTPServer do
           sender: state[:from]
         )
 
-        {:error, "421 4.7.1 Too many messages on this connection", state}
+        reply(:error, "421 4.7.1 Too many messages on this connection", to, state)
 
       {:error, :global_limit} ->
         :telemetry.execute(
@@ -850,11 +850,33 @@ defmodule Custyard.Email.LMTPServer do
           sender: state[:from]
         )
 
-        {:error, "421 4.7.1 Server busy, try again later", state}
+        reply(:error, "421 4.7.1 Server busy, try again later", to, state)
     end
   end
 
-  defp process_and_respond(data, state) do
+  # Every DATA outcome ends the mail transaction. gen_smtp resets its own
+  # envelope but keeps the callback state, and MTAs reuse one LMTP connection
+  # for many messages: without this reset the next transaction inherits this
+  # one's recipients and organization, so mail for a second organization is
+  # bounced as a cross-organization delivery and the recipient count keeps
+  # growing until every RCPT TO is refused.
+  defp reset_transaction(state) do
+    %{state | from: nil, to: [], data: nil, declared_size: nil, organization: nil}
+  end
+
+  # LMTP (RFC 2033 section 4.2) answers DATA with one reply per accepted
+  # recipient. gen_smtp sends exactly one line for `{:ok, _, _}` and
+  # `{:error, _, _}`, which left the MTA waiting for the missing replies of a
+  # multi-recipient message until its DATA timeout, then redelivering. gen_smtp
+  # prefixes an :ok reply with "250 " itself, so the success text carries only
+  # the enhanced status code.
+  defp reply(status, message, recipients, state) when recipients != [] do
+    {:multiple, Enum.map(recipients, fn _ -> {status, message} end), reset_transaction(state)}
+  end
+
+  defp reply(status, message, [], state), do: {status, message, reset_transaction(state)}
+
+  defp process_and_respond(data, recipients, state) do
     metadata = %{
       size: byte_size(data),
       from: state[:from],
@@ -884,7 +906,7 @@ defmodule Custyard.Email.LMTPServer do
         # Increment counters after successful processing
         new_state = increment_message_count(state)
         record_global_message()
-        {:ok, "250 2.0.0 Message accepted", new_state}
+        reply(:ok, "2.0.0 Message accepted", recipients, new_state)
 
       {:error, error_type, reason} ->
         # Emit stop event with error info
@@ -904,7 +926,7 @@ defmodule Custyard.Email.LMTPServer do
               sender: state[:from]
             )
 
-            {:error, "421 4.7.0 Temporary failure, try again later", state}
+            reply(:error, "421 4.7.0 Temporary failure, try again later", recipients, state)
 
           :permanent ->
             Logger.warning("LMTP permanent processing error",
@@ -913,7 +935,7 @@ defmodule Custyard.Email.LMTPServer do
               sender: state[:from]
             )
 
-            {:error, "550 5.7.0 Permanent failure", state}
+            reply(:error, "550 5.7.0 Permanent failure", recipients, state)
         end
     end
   end
@@ -1009,6 +1031,12 @@ defmodule Custyard.Email.LMTPServer do
       {:error, :no_organization} ->
         {:error, :permanent, :no_organization}
 
+      # A validation failure is deterministic: the same message fails the
+      # same way on every retry, so a 421 only makes the MTA requeue it for
+      # days and then bounce it. 550 bounces it now.
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, :permanent, {:validation_failed, changeset.errors}}
+
       {:error, reason} ->
         # Default to temporary for unknown errors (allows retry)
         {:error, :temporary, reason}
@@ -1080,9 +1108,13 @@ defmodule Custyard.Email.LMTPServer do
       |> String.split(~r/\r?\n/)
       |> Enum.filter(&String.starts_with?(&1, "Received:"))
 
-    # Count occurrences of our hostname in Received headers
-    # Match case-insensitively as hostnames are not case-sensitive
-    hostname_pattern = Regex.compile!(Regex.escape(hostname), [:caseless])
+    # Count the Received headers that name this host as the receiving MTA
+    # ("by <hostname>"). A bare substring match counted the sending side and
+    # the "(localhost [127.0.0.1])" of every content-filter hop too, so with
+    # the default hostname "localhost" ordinary filtered mail tripped the
+    # loop threshold. Hostnames are not case-sensitive.
+    hostname_pattern =
+      Regex.compile!("\\bby\\s+" <> Regex.escape(hostname) <> "(?![A-Za-z0-9.-])", [:caseless])
 
     Enum.count(received_headers, fn header ->
       Regex.match?(hostname_pattern, header)

@@ -149,7 +149,7 @@ defmodule Custyard.Email.ImapPoller do
   defp do_poll(state) do
     Logger.debug("IMAP polling #{state.folder} on #{state.host}")
 
-    case poll_mailbox(state) do
+    case safe_poll_mailbox(state) do
       {:ok, processed_count} ->
         Logger.info("IMAP poll complete: #{processed_count} messages processed")
 
@@ -200,6 +200,18 @@ defmodule Custyard.Email.ImapPoller do
             current_backoff: new_backoff
         }
     end
+  end
+
+  # An exception anywhere in a poll must become a failed poll (backoff,
+  # circuit-breaker telemetry), never a GenServer crash: the supervisor would
+  # restart the poller with fresh state and the next poll would hit the same
+  # message again, a crash loop that stalls the mailbox.
+  defp safe_poll_mailbox(state) do
+    poll_mailbox(state)
+  rescue
+    error -> {:error, {:exception, error}}
+  catch
+    kind, value -> {:error, {kind, value}}
   end
 
   defp poll_mailbox(state) do
@@ -268,17 +280,35 @@ defmodule Custyard.Email.ImapPoller do
     Logger.debug("Processing IMAP message UID: #{uid}")
 
     result =
-      with {:ok, raw_email} <- fetch_raw_email(conn, uid),
-           {:ok, parsed} <- Parser.parse(raw_email),
-           {:ok, normalized} <- EmailAdapter.normalize(parsed),
-           {:ok, route} <- resolve_route(organization_id),
-           {:ok, _conversation} <- Dispatcher.dispatch(route, normalized) do
-        Logger.debug("Successfully processed IMAP message UID: #{uid}")
-        :ok
-      else
-        {:error, reason} ->
-          Logger.warning("Failed to process IMAP message UID #{uid}: #{inspect(reason)}")
-          {:error, reason}
+      try do
+        with {:ok, raw_email} <- fetch_raw_email(conn, uid),
+             {:ok, parsed} <- Parser.parse(raw_email),
+             {:ok, normalized} <- EmailAdapter.normalize(parsed),
+             {:ok, route} <- resolve_route(organization_id),
+             {:ok, _conversation} <- Dispatcher.dispatch(route, normalized) do
+          Logger.debug("Successfully processed IMAP message UID: #{uid}")
+          :ok
+        else
+          {:error, reason} ->
+            Logger.warning("Failed to process IMAP message UID #{uid}: #{inspect(reason)}")
+            {:error, reason}
+        end
+      rescue
+        # A poison message (malformed MIME, unexpected payload shape, a DB
+        # error) must not escape before mark_as_seen/2 runs below: it would
+        # crash the poller and be re-fetched as UNSEEN on every poll, blocking
+        # every message behind it.
+        error ->
+          Logger.error(
+            "Exception processing IMAP message UID #{uid}: #{Exception.message(error)}"
+          )
+
+          {:error, {:exception, error}}
+      catch
+        kind, value ->
+          Logger.error("Exception processing IMAP message UID #{uid}: #{inspect({kind, value})}")
+
+          {:error, {kind, value}}
       end
 
     # Always mark as seen to prevent infinite retry loops on messages that

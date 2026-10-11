@@ -721,4 +721,94 @@ defmodule Custyard.Email.ParserTest do
       end
     end
   end
+
+  describe "transfer encodings and charsets" do
+    @hdr "From: a@b.com\r\nTo: s@custyard.test\r\nMIME-Version: 1.0\r\n"
+
+    test "keeps the non-ASCII bytes of an 8bit UTF-8 body and raw 8-bit headers" do
+      raw =
+        "From: Grüße <a@b.com>\r\nTo: s@custyard.test\r\nMIME-Version: 1.0\r\n" <>
+          "Subject: Grüße\r\nContent-Type: text/plain; charset=utf-8\r\n" <>
+          "Content-Transfer-Encoding: 8bit\r\n\r\nGrüße aus Köln\r\n"
+
+      assert {:ok, parsed} = Parser.parse(raw)
+      assert parsed.text == "Grüße aus Köln\n"
+      assert parsed.subject == "Grüße"
+    end
+
+    test "converts an 8bit latin-1 body" do
+      raw =
+        @hdr <>
+          "Subject: S\r\nContent-Type: text/plain; charset=iso-8859-1\r\n" <>
+          "Content-Transfer-Encoding: 8bit\r\n\r\ncaf" <> <<0xE9>> <> "\r\n"
+
+      assert {:ok, parsed} = Parser.parse(raw)
+      assert parsed.text == "café\n"
+    end
+
+    test "decodes base64 exactly once" do
+      raw =
+        @hdr <>
+          "Subject: S\r\nContent-Type: text/plain; charset=utf-8\r\n" <>
+          "Content-Transfer-Encoding: base64\r\n\r\n" <>
+          Base.encode64("Please call me back") <> "\r\n"
+
+      assert {:ok, parsed} = Parser.parse(raw)
+      assert parsed.text == "Please call me back"
+    end
+
+    test "decodes quoted-printable exactly once" do
+      raw =
+        @hdr <>
+          "Subject: S\r\nContent-Type: text/plain; charset=utf-8\r\n" <>
+          "Content-Transfer-Encoding: quoted-printable\r\n\r\na=3D20b caf=C3=A9\r\n"
+
+      assert {:ok, parsed} = Parser.parse(raw)
+      assert parsed.text == "a=20b café\n"
+    end
+
+    test "keeps every byte of a binary attachment and decodes a base64 one once" do
+      content = <<0, 1, 255, 254, 1, 0x21, 0x22, ?~, ?~>>
+
+      raw =
+        @hdr <>
+          "Subject: S\r\nContent-Type: multipart/mixed; boundary=\"b1\"\r\n\r\n" <>
+          "--b1\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nGrüße\r\n" <>
+          "--b1\r\nContent-Type: application/octet-stream; name=\"x.bin\"\r\n" <>
+          "Content-Disposition: attachment; filename=\"x.bin\"\r\nContent-Transfer-Encoding: base64\r\n\r\n" <>
+          Base.encode64(content) <>
+          "\r\n" <>
+          "--b1\r\nContent-Type: application/octet-stream; name=\"y.bin\"\r\n" <>
+          "Content-Disposition: attachment; filename=\"y.bin\"\r\nContent-Transfer-Encoding: binary\r\n\r\n" <>
+          content <> "\r\n--b1--\r\n"
+
+      assert {:ok, parsed} = Parser.parse(raw)
+      assert parsed.text == "Grüße"
+
+      assert [%{filename: "x.bin", content: ^content}, %{filename: "y.bin", content: ^content}] =
+               parsed.attachments
+    end
+
+    test "an unsupported charset still yields valid UTF-8" do
+      raw =
+        @hdr <>
+          "Subject: S\r\nContent-Type: text/plain; charset=windows-1251\r\n" <>
+          "Content-Transfer-Encoding: quoted-printable\r\n\r\n=CF=F0=E8=E2=E5=F2\r\n"
+
+      assert {:ok, parsed} = Parser.parse(raw)
+      assert String.valid?(parsed.text)
+    end
+
+    test "malformed MIME parameters and bad quoted-printable are reported, not thrown" do
+      bad_type = @hdr <> "Subject: S\r\nContent-Type: multipart/mixed; boundary\r\n\r\nbody\r\n"
+
+      bad_qp =
+        @hdr <>
+          "Subject: S\r\nContent-Type: text/plain; charset=utf-8\r\n" <>
+          "Content-Transfer-Encoding: quoted-printable\r\n\r\nprice=high\r\n"
+
+      assert {:error, {:parse_failed, _}} = Parser.parse(bad_type)
+      assert {:error, {:parse_failed, _}} = Parser.parse(bad_qp)
+    end
+  end
 end
