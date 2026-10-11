@@ -92,9 +92,10 @@ defmodule CustyardWeb.WebhookController do
   # normalize is a provider or template problem, not an auth failure, so it is
   # reported as 422 (and logged as such) rather than folded into the 401 path;
   # a payload shape the adapter never anticipated is contained to the same 422
-  # instead of escaping as a 500.
+  # instead of escaping as a 500, and still reaches Sentry as the adapter bug
+  # it is.
   defp handle_payload(conn, route, adapter, params) do
-    case normalize(adapter, params) do
+    case normalize(route, adapter, params) do
       {:ok, normalized} ->
         dispatch_normalized(conn, route, normalized)
 
@@ -113,10 +114,16 @@ defmodule CustyardWeb.WebhookController do
     end
   end
 
-  defp normalize(adapter, params) do
+  defp normalize(route, adapter, params) do
     adapter.normalize(params)
   rescue
-    error -> {:error, Exception.message(error)}
+    error ->
+      Sentry.capture_exception(error,
+        stacktrace: __STACKTRACE__,
+        extra: %{route_id: route.id, source: route.source}
+      )
+
+      {:error, Exception.message(error)}
   end
 
   defp dispatch_normalized(conn, route, normalized) do
