@@ -139,20 +139,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           org -> Organizations.update_organization(org, attrs)
         end
 
-      # Files follow the database: the replaced logo goes only once the new
-      # one is persisted (deleting it first left logo_url pointing at nothing
-      # when validation failed), and a rejected save discards the new file.
-      case result do
-        {:ok, _org} when is_binary(new_logo_url) and is_binary(old_logo_url) ->
-          delete_old_logo(old_logo_url)
-
-        {:error, _changeset} when is_binary(new_logo_url) ->
-          delete_old_logo(new_logo_url)
-
-        _ ->
-          :ok
-      end
-
+      cleanup_logo_files(result, old_logo_url, new_logo_url)
       handle_save_result(socket, result)
     else
       {:noreply, put_flash(socket, :error, "You do not have permission to perform this action")}
@@ -181,6 +168,19 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
       _ -> nil
     end
   end
+
+  # Files follow the database: the replaced logo goes only once the new one
+  # is persisted (deleting it first left logo_url pointing at nothing when
+  # validation failed), and a rejected save discards the new file.
+  defp cleanup_logo_files({:ok, _org}, old_logo_url, new_logo_url)
+       when is_binary(new_logo_url) and is_binary(old_logo_url),
+       do: delete_old_logo(old_logo_url)
+
+  defp cleanup_logo_files({:error, _changeset}, _old_logo_url, new_logo_url)
+       when is_binary(new_logo_url),
+       do: delete_old_logo(new_logo_url)
+
+  defp cleanup_logo_files(_result, _old_logo_url, _new_logo_url), do: :ok
 
   defp delete_old_logo("/uploads/logos/" <> filename) do
     upload_dir = Application.get_env(:custyard, :upload_dir)

@@ -21,6 +21,8 @@ defmodule CustyardWeb.Live.PortalAuthTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
+  alias CustyardWeb.Live.PortalAuth
+
   describe "on_mount/4 - session validation" do
     test "allows access when valid portal_org_id in session and URL token matches", %{conn: conn} do
       org = insert_organization()
@@ -251,7 +253,7 @@ defmodule CustyardWeb.Live.PortalAuthTest do
       }
 
       assert {:halt, _} =
-               CustyardWeb.Live.PortalAuth.on_mount(
+               PortalAuth.on_mount(
                  :default,
                  %{"org_token" => other.token},
                  session,
@@ -259,7 +261,7 @@ defmodule CustyardWeb.Live.PortalAuthTest do
                )
 
       assert {:cont, _} =
-               CustyardWeb.Live.PortalAuth.on_mount(
+               PortalAuth.on_mount(
                  :default,
                  %{"org_token" => org.token},
                  session,
@@ -268,7 +270,7 @@ defmodule CustyardWeb.Live.PortalAuthTest do
 
       # The custom-domain connect carries no token at all
       assert {:cont, _} =
-               CustyardWeb.Live.PortalAuth.on_mount(:default, %{"id" => "5"}, session, socket)
+               PortalAuth.on_mount(:default, %{"id" => "5"}, session, socket)
     end
   end
 

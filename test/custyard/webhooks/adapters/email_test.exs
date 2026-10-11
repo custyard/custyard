@@ -178,7 +178,7 @@ defmodule Custyard.Webhooks.Adapters.EmailTest do
         headers: %{}
       }
 
-      assert {:ok, normalized} = Custyard.Webhooks.Adapters.Email.normalize(parsed)
+      assert {:ok, normalized} = EmailAdapter.normalize(parsed)
       assert normalized.subject == "(no subject)"
       assert normalized.body == "Hi there"
     end
