@@ -26,16 +26,12 @@ defmodule Mix.Tasks.Dev.CreateOperator do
 
     Mix.Task.run("app.start")
 
-    alias Custyard.{OperatorAccount, Repo}
+    alias Custyard.{OperatorAccount, OperatorAccounts}
 
     email = opts |> Keyword.get(:email, @default_email) |> OperatorAccount.normalize_email()
 
-    case Repo.get_by(OperatorAccount, email: email) do
-      nil ->
-        %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: email})
-        |> Repo.insert!()
-
+    case OperatorAccounts.ensure_exists(email) do
+      {:ok, :created} ->
         Mix.shell().info("""
 
         ========================================
@@ -48,8 +44,11 @@ defmodule Mix.Tasks.Dev.CreateOperator do
         ========================================
         """)
 
-      _existing ->
+      {:ok, :exists} ->
         Mix.shell().info("Operator account already exists for: #{email}")
+
+      {:error, changeset} ->
+        Mix.raise("Could not create operator account: #{inspect(changeset.errors)}")
     end
   end
 end

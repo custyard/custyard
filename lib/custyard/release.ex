@@ -41,24 +41,18 @@ defmodule Custyard.Release do
     load_app()
     Custyard.Storage.validate_fly_storage!()
 
-    alias Custyard.OperatorAccount
-
-    email = OperatorAccount.normalize_email(email)
-
-    {:ok, _, _} =
-      Ecto.Migrator.with_repo(Custyard.Repo, fn repo ->
-        case repo.get_by(OperatorAccount, email: email) do
-          nil ->
-            %OperatorAccount{}
-            |> OperatorAccount.changeset(%{email: email})
-            |> repo.insert!()
-
-          _existing ->
-            :already_exists
-        end
+    {:ok, result, _} =
+      Ecto.Migrator.with_repo(Custyard.Repo, fn _repo ->
+        Custyard.OperatorAccounts.ensure_exists(email)
       end)
 
-    :ok
+    case result do
+      {:ok, _created_or_exists} ->
+        :ok
+
+      {:error, changeset} ->
+        raise Ecto.InvalidChangesetError, action: :insert, changeset: changeset
+    end
   end
 
   defp load_app do
