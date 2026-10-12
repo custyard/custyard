@@ -53,6 +53,13 @@ step "migrate and provision before the server starts (entrypoint.sh order)"
 "$rel" eval 'Custyard.Release.migrate()'
 "$rel" eval 'Custyard.Release.setup_operator()'
 
+# Otherwise the health checks below could be answered by that process while
+# our server dies on :eaddrinuse.
+if curl -s -o /dev/null "http://localhost:$PORT/" 2>/dev/null; then
+  echo "something is already listening on port $PORT; set PORT to a free port" >&2
+  exit 1
+fi
+
 step "start the server on port $PORT"
 "$rel" start >"$work/server.log" 2>&1 &
 server_pid=$!
@@ -62,8 +69,8 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-if ! curl -fsS "$health" >/dev/null 2>&1; then
-  echo "server did not come up:" >&2
+if ! curl -fsS "$health" >/dev/null 2>&1 || ! kill -0 "$server_pid" 2>/dev/null; then
+  echo "server did not come up on port $PORT:" >&2
   cat "$work/server.log" >&2
   exit 1
 fi
@@ -86,6 +93,7 @@ step "check the stored accounts"
 '
 
 step "server still serving"
+kill -0 "$server_pid"
 curl -fsS "$health" >/dev/null
 
 echo "release smoke test passed"
