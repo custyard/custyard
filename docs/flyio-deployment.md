@@ -128,12 +128,18 @@ Production subscribes to Colonel acknowledgments by default. The consumer
 starts once both secrets are set; until then the app boots without it and logs
 which variables are missing. Setting only one of them stops the app from
 starting, and the machine restarts in a loop until the other is set or the
-first is unset with `fly secrets unset`. Each `fly secrets set` restarts the
-app, so set both in one command as below.
+first is unset with `fly secrets unset`. Each secrets change restarts the app,
+so set both in one import as below. The URL carries the broker password, so
+keep it off the command line: in bash, `read -rs` takes it without echo or
+shell history, and `printf` (a builtin) hands it to `fly secrets import` on
+stdin, out of the process list. The URL has the form
+`amqps://USER:PASSWORD@BROKER:5671/VHOST?cacertfile=/etc/ssl/certs/ca-certificates.crt&verify=verify_peer`.
 
 ```bash
-fly secrets set ACKNOWLEDGMENTS_AMQP_URL='amqps://<user>:<password>@<broker>:5671/<vhost>?cacertfile=/etc/ssl/certs/ca-certificates.crt&verify=verify_peer' \
-  ACKNOWLEDGMENTS_SOURCE=ots.eu.production
+read -rs amqp_url   # paste the URL; nothing is echoed
+printf 'ACKNOWLEDGMENTS_AMQP_URL=%s\nACKNOWLEDGMENTS_SOURCE=ots.eu.production\n' "$amqp_url" |
+  fly secrets import -a custyard
+unset amqp_url
 
 # Explicitly off, for an instance that does not take acknowledgments
 fly secrets set ACKNOWLEDGMENTS_ENABLED=false

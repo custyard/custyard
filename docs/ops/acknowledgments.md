@@ -18,19 +18,13 @@ magic-link mail using [the deployment guide](../flyio-deployment.md).
 Development and test shells stay off unless `ACKNOWLEDGMENTS_ENABLED=true`, so a
 shell holding production broker secrets never consumes the production queue.
 
-On Fly, set the two secrets together:
+On Fly, set the two secrets together. The URL carries the broker password, so
+never put it on a command line: in bash, `read -rs` takes it without echo or
+shell history (dash's `read` has no `-s`), and `printf`, a shell builtin, hands
+it to `fly secrets import` on stdin, out of the process list:
 
-```sh
-fly secrets set -a custyard \
-  ACKNOWLEDGMENTS_AMQP_URL='amqps://custyard:<password>@broker.example.com:5671/ots-eu-production?cacertfile=/etc/ssl/certs/ca-certificates.crt&verify=verify_peer' \
-  ACKNOWLEDGMENTS_SOURCE=ots.eu.production
-```
-
-To keep the URL out of shell history and the process list, read it without
-echo and pipe it to `fly secrets import` instead (`printf` is a shell builtin):
-
-```sh
-read -rs amqp_url
+```bash
+read -rs amqp_url   # paste the URL; nothing is echoed
 printf 'ACKNOWLEDGMENTS_AMQP_URL=%s\nACKNOWLEDGMENTS_SOURCE=ots.eu.production\n' "$amqp_url" |
   fly secrets import -a custyard
 unset amqp_url
@@ -89,9 +83,23 @@ is not authentication. Never log the AMQP URL or commit it to `fly.toml`.
 
   Write on each queue (not only on the default exchange) is what lets the status
   view count the retry queues.
-* A separate provisioning credential declares the queues. Declaring the retry
-  queues with a dead-letter target needs configure, write and read on the vhost,
-  so give it all three (`'.*' '.*' '.*'`) and use it only for `provision`.
+* A separate provisioning credential declares the queues, and nothing else
+  should use it. Declaring a retry queue with a dead-letter target also needs
+  read on that queue and write on its dead-letter exchange (the default
+  exchange). For the default queue name this is the least that `provision`
+  needs, verified against RabbitMQ 4.2:
+
+  ```sh
+  rabbitmqctl set_permissions -p ots-eu-production custyard-provision \
+    '^custyard\.acknowledgments(\.retry\.[0-9]+|\.failed)?$' \
+    '^amq\.default$' \
+    '^custyard\.acknowledgments\.retry\.[0-9]+$'
+  ```
+
+  Once provisioning succeeds, remove its access with
+  `rabbitmqctl clear_permissions -p ots-eu-production custyard-provision`, or
+  delete the user with `rabbitmqctl delete_user custyard-provision`, and grant it
+  again only to change the topology.
 
 Outside a trusted local network use TLS with certificate verification:
 
@@ -125,7 +133,7 @@ fly ssh console -a custyard -C "/app/bin/acknowledgments replay SUBMISSION_ID"
 | `provision` | Declare the work, retry and failure queues; idempotent |
 | `bind SOURCE SOURCE_ORG_ID CUSTYARD_ORG_ID` | Attribute a source organization's evidence to a Custyard organization |
 | `inspect` | Source, submission ID, failure category and attempt of the oldest failed message |
-| `inspect --evidence` | The same, followed by the full original evidence, after a warning line |
+| `inspect --evidence` | The same, followed by the full original evidence, after a warning line. Every evidence line is prefixed with `  \| `, and control, bidi and zero-width characters are printed as escapes |
 | `replay SUBMISSION_ID` | Replay the oldest failed message only while it is still that submission |
 | `replay` | Replay the oldest failed message, whatever it is |
 
@@ -139,10 +147,12 @@ Provision before either OTS publication or enabling Custyard's consumer. The
 running server holds the runtime credential, so supply the provisioning
 credential for that one command, without putting it in shell history or a
 process list. Either run `mix acknowledgments.provision` from a trusted
-workstation with `ACKNOWLEDGMENTS_SOURCE` set and the URL read the same way, or
-inside the machine:
+workstation with `ACKNOWLEDGMENTS_SOURCE` set and the URL read the same way
+(the Mix tasks load configuration without starting the application, so no
+consumer ever subscribes with that credential), or inside the machine, whose
+root shell is bash:
 
-```sh
+```bash
 fly ssh console -a custyard
 # then, on the machine (nothing is echoed while you paste):
 read -rs provision_url
@@ -150,6 +160,8 @@ ACKNOWLEDGMENTS_AMQP_URL="$provision_url" /app/bin/acknowledgments provision
 unset provision_url
 exit
 ```
+
+Then clear the provisioning credential's permissions, as described above.
 
 Then bind organizations and check the topology with the runtime credential:
 
@@ -180,9 +192,12 @@ Acknowledgments link in the operator navigation):
   `inspect --evidence` from an authorized terminal for that. A message that
   cannot be identified is shown as unreadable and can only be replayed from the
   command line.
-* Replay, after a confirmation, of the message that was inspected. If another
-  message has become the oldest since, nothing is replayed and the page asks
-  you to inspect again.
+* Replay, after a confirmation, of the message that was inspected: the same
+  submission ID and the identical body (two retained failures can share a
+  submission ID when one is conflicting evidence). If another message has
+  become the oldest since, nothing is replayed and the page asks you to inspect
+  again. If the broker is slow to answer, the page stops waiting after 30
+  seconds; the replay may still complete, so inspect again before retrying.
 * All bindings, and a form to bind an organization of the configured source,
   with a confirmation that names the source, the source organization ID and the
   Custyard organization. Other sources are bound with `bin/acknowledgments bind`.
@@ -196,7 +211,8 @@ admin binds it.
 
 Every replay attempt and every new binding is recorded in the audit log
 (`acknowledgment_replayed`, `acknowledgment_binding_created`) with the operator,
-or `cli` or `mix` for commands.
+or `cli` or `mix` for commands. There is no unaudited replay function: even a
+direct `Custyard.Acknowledgments.Operations.replay/2` call records its actor.
 
 ## Retry and failure retention
 
@@ -212,7 +228,11 @@ dead-letter to the work queue using quorum at-least-once transfer and
 `reject-publish` overflow. Delay expiry transfers work; it does not discard it.
 Work/failure queues have no TTL, auto-delete, or delivery limit. Do not apply
 operator policies that silently expire, evict, or cap delivery of these queues.
-Monitor queue growth, broker disk capacity, and nonempty failure queues.
+In particular never apply a delivery-limit policy: every inspection, from the
+operator page or the command line, counts as a delivery of the oldest failed
+message (its `x-delivery-count` rises by one each time), so a limit would
+eventually drop or dead-letter a retained failure that was only being looked
+at. Monitor queue growth, broker disk capacity, and nonempty failure queues.
 
 Failure headers carry attempt count and a sanitized failure category. Original
 JSON bytes, timestamp, submission ID, and all evidence remain intact. Routine
