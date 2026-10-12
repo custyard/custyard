@@ -59,7 +59,7 @@ defmodule Custyard.Webhooks.Purposes.Audit do
   defp build_payload(normalized) do
     %{
       source: normalized[:source],
-      sender_email: normalized[:sender_email],
+      sender_email: normalized[:from],
       subject: normalized[:subject],
       timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
     }

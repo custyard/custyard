@@ -101,7 +101,7 @@ defmodule CustyardWeb.Layouts.PortalLayoutTest do
         )
 
       conn = %{conn | host: org.custom_domain}
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/requests")
 
       assert html =~ ~s(content="Acme Service")
       assert html =~ ~s(content="Customer portal for Acme Service")

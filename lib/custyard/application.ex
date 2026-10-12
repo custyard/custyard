@@ -137,26 +137,43 @@ defmodule Custyard.Application do
 
   defp maybe_add_imap_poller(children) do
     imap_config = Application.get_env(:custyard, :imap, [])
+    organization_id = Keyword.get(imap_config, :organization_id)
 
-    if Keyword.get(imap_config, :enabled, false) do
-      # Build credential_fetcher from env var name to avoid storing credentials
-      # in Application config (visible in crash dumps and :sys.get_state).
-      cred_env_var = Keyword.get(imap_config, :credential_env_var, "IMAP_PASSWORD")
-      credential_fetcher = fn -> System.get_env(cred_env_var) || "" end
+    cond do
+      not Keyword.get(imap_config, :enabled, false) ->
+        children
 
-      opts = [
-        host: Keyword.get(imap_config, :host, "localhost"),
-        port: Keyword.get(imap_config, :port, 993),
-        username: Keyword.get(imap_config, :username, ""),
-        credential_fetcher: credential_fetcher,
-        folder: Keyword.get(imap_config, :folder, "INBOX"),
-        poll_interval: Keyword.get(imap_config, :poll_interval, 60_000),
-        ssl: Keyword.get(imap_config, :ssl, true)
-      ]
+      # ImapPoller.init/1 fetches :organization_id with Keyword.fetch!/2; a
+      # poller started without it would crash until the supervisor gives up
+      # and takes the whole application down with it.
+      is_nil(organization_id) ->
+        require Logger
 
-      children ++ [{Custyard.Email.ImapPoller, opts}]
-    else
-      children
+        Logger.error(
+          "IMAP poller not started: config :custyard, :imap is missing :organization_id " <>
+            "(set IMAP_ORGANIZATION_ID)"
+        )
+
+        children
+
+      true ->
+        # Build credential_fetcher from env var name to avoid storing credentials
+        # in Application config (visible in crash dumps and :sys.get_state).
+        cred_env_var = Keyword.get(imap_config, :credential_env_var, "IMAP_PASSWORD")
+        credential_fetcher = fn -> System.get_env(cred_env_var) || "" end
+
+        opts = [
+          host: Keyword.get(imap_config, :host, "localhost"),
+          port: Keyword.get(imap_config, :port, 993),
+          username: Keyword.get(imap_config, :username, ""),
+          credential_fetcher: credential_fetcher,
+          organization_id: organization_id,
+          folder: Keyword.get(imap_config, :folder, "INBOX"),
+          poll_interval: Keyword.get(imap_config, :poll_interval, 60_000),
+          ssl: Keyword.get(imap_config, :ssl, true)
+        ]
+
+        children ++ [{Custyard.Email.ImapPoller, opts}]
     end
   end
 

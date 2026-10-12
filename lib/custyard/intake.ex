@@ -20,7 +20,8 @@ defmodule Custyard.Intake do
     Message,
     Prospect,
     Repo,
-    Scoring
+    Scoring,
+    Slugs
   }
 
   alias Custyard.Auth.Token
@@ -536,9 +537,28 @@ defmodule Custyard.Intake do
       %Prospect{} = prospect ->
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-        with {:ok, prospect} <- prospect |> Prospect.revoke_changeset(now) |> Repo.update() do
-          broadcast_conversation_access_changed(conversation.id)
-          {:ok, prospect}
+        Repo.transaction(fn ->
+          case prospect |> Prospect.revoke_changeset(now) |> Repo.update() do
+            {:ok, prospect} ->
+              # Revocation is the abuse control. A pending claim stays
+              # confirmable from the emailed link after it, and a confirmed
+              # claim never expires, so the revoked prospect would otherwise
+              # keep (or still win) the name. Release it in the same
+              # transaction; confirming the old link then finds nothing.
+              Slugs.release_claim_for_conversation(conversation.id)
+              prospect
+
+            {:error, reason} ->
+              Repo.rollback(reason)
+          end
+        end)
+        |> case do
+          {:ok, prospect} ->
+            broadcast_conversation_access_changed(conversation.id)
+            {:ok, prospect}
+
+          {:error, reason} ->
+            {:error, reason}
         end
     end
   end

@@ -877,4 +877,38 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert Conversations.get_conversation!(conv.id).organization_id == nil
     end
   end
+
+  describe "stale task rows" do
+    test "acting on a deleted task shows a notice instead of crashing", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      {:ok, task} = Conversations.create_task(%{title: "Gone soon", conversation_id: conv.id})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      # Deleted from another session: nothing tells this view
+      {:ok, _} = Conversations.delete_task(task)
+
+      html = render_click(view, "toggle_task", %{"id" => "#{task.id}"})
+      assert html =~ "no longer exists"
+      assert Process.alive?(view.pid)
+
+      html = render_click(view, "delete_task", %{"id" => "#{task.id}"})
+      assert html =~ "no longer exists"
+      assert Process.alive?(view.pid)
+    end
+
+    test "a task of another conversation cannot be edited through this view", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      other = insert_conversation(organization_id: org.id)
+      {:ok, task} = Conversations.create_task(%{title: "Elsewhere", conversation_id: other.id})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      html = render_click(view, "toggle_task", %{"id" => "#{task.id}"})
+      assert html =~ "no longer exists"
+      assert Conversations.get_task!(task.id).state == :open
+    end
+  end
 end

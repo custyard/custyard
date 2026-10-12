@@ -966,9 +966,35 @@ defmodule Custyard.Conversations do
     if dry_run do
       Repo.aggregate(query, :count)
     else
-      {count, _} = Repo.delete_all(query)
-      count
+      delete_conversations_with_audit_trail(query)
     end
+  end
+
+  # audit_events.conversation_id is a plain FK (ON DELETE NO ACTION), so a
+  # single DELETE over every expired conversation fails as a whole as soon as
+  # one of them has an audit event (every conversion, slug release and
+  # audited webhook delivery writes one), and the sweep then retries the same
+  # failing statement forever. Detach the audit rows first, in the same
+  # transaction, so the trail survives the purge and the purge survives the
+  # trail.
+  #
+  # Both statements evaluate the retention query itself rather than a list
+  # of ids read beforehand: the detach is the transaction's first write, so
+  # SQLite holds the write lock from then until commit, and no reply, note
+  # or reopen can land between the two statements and make them disagree.
+  defp delete_conversations_with_audit_trail(query) do
+    {:ok, count} =
+      Repo.transaction(fn ->
+        expired_ids = from(c in query, select: c.id)
+
+        from(a in Custyard.AuditEvent, where: a.conversation_id in subquery(expired_ids))
+        |> Repo.update_all(set: [conversation_id: nil])
+
+        {deleted, _} = Repo.delete_all(query)
+        deleted
+      end)
+
+    count
   end
 
   @doc """

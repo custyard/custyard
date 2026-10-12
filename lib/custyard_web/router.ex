@@ -112,6 +112,7 @@ defmodule CustyardWeb.Router do
     post "/login", SessionController, :create
     get "/login/sent", SessionController, :sent
     get "/login/verify/:token", SessionController, :verify
+    post "/login/verify/:token", SessionController, :consume
     delete "/logout", SessionController, :delete
   end
 
@@ -145,25 +146,42 @@ defmodule CustyardWeb.Router do
     end
   end
 
-  # Portal routes - accessed via unguessable org token or custom domain
-  scope "/p/:org_token", CustyardWeb.Portal, as: :portal do
+  # Portal routes - accessed via unguessable org token or custom domain.
+  #
+  # Every portal LiveView is declared twice, inside ONE live_session:
+  #
+  #   * under /p/:org_token, the app-host form of the URL;
+  #   * at the root, the custom-domain form. On a custom domain the
+  #     CustomDomain plug (endpoint) rewrites the HTTP request onto the
+  #     /p/:token routes, but the browser URL stays un-prefixed, and that is
+  #     the URL the LiveView client sends on connect. The router must resolve
+  #     it to the same view in the same live_session, or the connected mount
+  #     is refused and the page reloads forever. "/" belongs to HomeLive on
+  #     the app host, so the list lives at /requests here and "/" redirects.
+  #
+  # On the app host the root aliases 404 in the PortalAuth plug (no token, no
+  # custom domain), so they expose nothing new.
+  scope "/", CustyardWeb.Portal do
     pipe_through [:browser, :portal_auth]
 
     live_session :portal,
       on_mount: [{CustyardWeb.Live.PortalAuth, :default}],
       layout: {CustyardWeb.Layouts, :portal} do
-      live "/", RequestListLive, :index
+      scope "/p/:org_token", as: :portal do
+        live "/", RequestListLive, :index
+        live "/request/:id", ConversationLive, :show
+        live "/new", NewRequestLive, :new
+        live "/projects", ProjectsListLive, :index
+        live "/projects/:id", ProjectLive, :show
+      end
+
+      live "/requests", RequestListLive, :index
       live "/request/:id", ConversationLive, :show
       live "/new", NewRequestLive, :new
       live "/projects", ProjectsListLive, :index
       live "/projects/:id", ProjectLive, :show
     end
   end
-
-  # Note: Custom domain portal routes are handled by the CustomDomain plug
-  # which rewrites paths from / -> /p/:token, /request/:id -> /p/:token/request/:id, etc.
-  # This allows organizations to use their own domain (e.g., support.acme.com)
-  # and have requests routed to the portal routes transparently.
 
   # Development-only routes. dev_routes is set to true only in config/dev.exs,
   # so nothing here mounts in prod.

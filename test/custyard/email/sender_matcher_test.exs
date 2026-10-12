@@ -59,6 +59,13 @@ defmodule Custyard.Email.SenderMatcherTest do
       assert matched_contact.id == contact.id
     end
 
+    test "address that cannot be stored as a contact files under the catchall with no contact" do
+      assert {:ok, org, nil} = SenderMatcher.match("not-an-email")
+      assert org.domain == "_unmatched_"
+      assert Custyard.Repo.aggregate(Custyard.Contact, :count) == 0
+    end
+
+    @tag :skip
     test "address without a domain returns a changeset error" do
       # No domain -> unmatched-org fallback, but contact creation fails
       # email format validation. No contact row is created.
@@ -224,6 +231,63 @@ defmodule Custyard.Email.SenderMatcherTest do
 
       assert Repo.aggregate(Organization, :count) == org_count
       assert Repo.aggregate(Contact, :count) == contact_count
+    end
+  end
+
+  describe "senders without a storable address" do
+    test "match_within_org/2 resolves a Slack user id to the organization with no contact" do
+      org = insert_organization()
+
+      assert {:ok, matched_org, nil} = SenderMatcher.match_within_org("U12345", org.id)
+      assert matched_org.id == org.id
+      assert Custyard.Repo.aggregate(Custyard.Contact, :count) == 0
+    end
+
+    test "match_within_org/2 tolerates a missing, blank or address-less From" do
+      org = insert_organization()
+
+      assert {:ok, _org, nil} = SenderMatcher.match_within_org(nil, org.id)
+      assert {:ok, _org, nil} = SenderMatcher.match_within_org("", org.id)
+      assert {:ok, _org, nil} = SenderMatcher.match_within_org("Alice <>", org.id)
+    end
+
+    test "match_within_org/2 still matches and creates real addresses" do
+      org = insert_organization()
+
+      assert {:ok, _org, contact} =
+               SenderMatcher.match_within_org("Alice <Alice@Example.com>", org.id)
+
+      assert contact.email == "alice@example.com"
+      assert contact.name == "Alice"
+    end
+
+    test "match/1 tolerates a missing From" do
+      assert {:ok, org, nil} = SenderMatcher.match(nil)
+      assert org.domain == "_unmatched_"
+    end
+
+    test "resolve/1 returns :none for a missing or unusable address" do
+      assert SenderMatcher.resolve(nil) == :none
+      assert SenderMatcher.resolve("U12345") == :none
+    end
+  end
+
+  describe "extract_email/1" do
+    test "returns the downcased address or nil" do
+      assert SenderMatcher.extract_email("Bob <Bob@Example.com>") == "bob@example.com"
+      assert SenderMatcher.extract_email("  bob@example.com ") == "bob@example.com"
+      assert SenderMatcher.extract_email("Bob <>") == nil
+      assert SenderMatcher.extract_email("U12345") == nil
+      assert SenderMatcher.extract_email(nil) == nil
+      assert SenderMatcher.extract_email(%{}) == nil
+    end
+
+    test "rejects an address a contact could not store" do
+      # Matches the format regex, but the local part exceeds 64 characters.
+      long_local = String.duplicate("a", 65) <> "@example.com"
+
+      assert SenderMatcher.extract_email(long_local) == nil
+      assert SenderMatcher.extract_email(String.duplicate("a", 64) <> "@example.com")
     end
   end
 end

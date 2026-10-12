@@ -34,6 +34,7 @@ defmodule Custyard.Notifications.NeglectChecker do
   def check_and_notify do
     # Load thresholds once for all candidates to avoid repeated Settings calls
     thresholds = Settings.get_neglect_thresholds()
+    reset_recovered_notifications(thresholds)
     candidates = list_notification_candidates(thresholds)
 
     notifications_sent =
@@ -105,6 +106,43 @@ defmodule Custyard.Notifications.NeglectChecker do
              coalesce(c.last_operator_action_at, c.inserted_at) <= ^cutoff)
       )
     end)
+  end
+
+  @doc """
+  Clear `last_neglect_notification` on conversations an operator has since
+  acted on, so the next time one of them is neglected a fresh alert goes out.
+
+  Such conversations never reach `check_and_notify_single/2`: the candidate
+  query only loads rows already past their warning cutoff, which means the
+  `:ok` branch there (and its reset) is unreachable, and a conversation that
+  once went `:critical` would never be alerted on again.
+
+  Returns the number of conversations reset.
+  """
+  def reset_recovered_notifications(thresholds \\ nil) do
+    thresholds = thresholds || Settings.get_neglect_thresholds()
+    past_cutoff = past_warning_cutoff(thresholds)
+
+    # For an unlinked conversation every tier branch of the cutoff is NULL,
+    # so the disjunction is NULL rather than false whenever its own branch
+    # is false, and NOT NULL would never select it. coalesce makes "not past
+    # the cutoff" mean exactly that.
+    recovered =
+      from(c in Conversation,
+        left_join: o in assoc(c, :organization),
+        where: not is_nil(c.last_neglect_notification),
+        where: ^dynamic(not coalesce(^past_cutoff, false)),
+        select: c.id
+      )
+
+    # A subquery, not a list of ids: the first pass after this reset became
+    # reachable covers every conversation ever alerted on, which can exceed
+    # SQLite's bound-parameter limit.
+    {count, _} =
+      from(c in Conversation, where: c.id in subquery(recovered))
+      |> Repo.update_all(set: [last_neglect_notification: nil])
+
+    count
   end
 
   defp warning_cutoff(thresholds, tier) do

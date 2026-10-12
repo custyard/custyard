@@ -712,4 +712,22 @@ defmodule Custyard.Email.OutboundTest do
 
     {conversation, prospect, message}
   end
+
+  describe "delivery claim" do
+    test "a message that is not pending is not delivered", %{operator_msg: msg} do
+      {:ok, sent} = msg |> Message.delivery_status_changeset(:sent) |> Repo.update()
+
+      assert {:error, :not_pending, reloaded} = Outbound.deliver(sent)
+      assert reloaded.delivery_status == :sent
+      assert_no_email_sent()
+    end
+
+    test "a message already claimed by another attempt is not delivered again",
+         %{operator_msg: msg} do
+      {:ok, claimed} = msg |> Message.delivery_status_changeset(:sending) |> Repo.update()
+
+      assert {:error, :not_pending, _} = Outbound.deliver(claimed)
+      assert_no_email_sent()
+    end
+  end
 end

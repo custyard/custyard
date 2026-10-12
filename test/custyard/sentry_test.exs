@@ -294,4 +294,19 @@ defmodule Custyard.SentryTest do
       assert Application.get_env(:sentry, :dsn) == nil
     end
   end
+
+  describe "token_path?/1" do
+    test "recognizes every path that carries a bearer credential" do
+      assert Scrub.token_path?("/c/abc123")
+      assert Scrub.token_path?("/claim/abc123/confirm")
+      assert Scrub.token_path?("/operator/login/verify/abc123")
+      assert Scrub.token_path?("/api/webhook/route/abc123")
+      assert Scrub.token_path?("/p/orgtoken/request/5")
+
+      refute Scrub.token_path?("/")
+      refute Scrub.token_path?("/operator/login")
+      refute Scrub.token_path?("/i/quote")
+      refute Scrub.token_path?(nil)
+    end
+  end
 end

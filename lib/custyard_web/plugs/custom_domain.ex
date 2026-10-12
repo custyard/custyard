@@ -64,36 +64,64 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   end
 
   defp resolve_custom_domain(conn, host) do
-    case Repo.get_by(Organization, custom_domain: host) do
+    # Hostnames are case-insensitive. Stored values are lowercase (normalized
+    # on save, and by a migration for rows saved before that), so an exact
+    # match on the lowercased host uses the unique index and finds at most
+    # one organization.
+    lowered = String.downcase(host)
+
+    case Repo.get_by(Organization, custom_domain: lowered) do
       nil ->
         # Unknown host - let the request proceed normally
         # (may 404 or be handled by other routes)
         conn
 
       org ->
-        # Found org with this custom domain - rewrite path to use portal routes
-        # /          -> /p/:token
-        # /request/1 -> /p/:token/request/1
-        # /new       -> /p/:token/new
-        # Guard against double-prefix if path already starts with /p/
-        rewritten_path =
-          if String.starts_with?(conn.request_path, "/p/") do
-            Logger.warning(
-              "CustomDomain plug received path already prefixed with /p/: #{conn.request_path}"
-            )
-
-            conn.request_path
-          else
-            "/p/#{org.token}#{conn.request_path}"
-          end
-
-        conn
-        |> assign(:organization, org)
-        |> assign(:custom_domain_request, true)
-        |> put_private(:custyard_custom_domain, true)
-        |> Map.put(:request_path, rewritten_path)
-        |> Map.put(:path_info, String.split(rewritten_path, "/", trim: true))
+        rewrite_to_portal(conn, org)
     end
+  end
+
+  # Found org with this custom domain - rewrite the path onto the portal
+  # routes under /p/:token so the HTTP request renders the portal.
+  #
+  # The browser keeps the un-prefixed URL, and that URL is what the LiveView
+  # client sends on connect: the router has to resolve it to the same
+  # LiveView and live_session as the dead render, or the connected mount is
+  # refused and the page reloads forever. So the portal LiveViews also exist
+  # at the root of the router (see CustyardWeb.Router): /request/:id, /new,
+  # /projects, /projects/:id, and /requests for the list. "/" is the one
+  # path the app host's home page already owns, so on a custom domain it
+  # redirects to /requests.
+  defp rewrite_to_portal(conn, org) do
+    conn =
+      conn
+      |> assign(:organization, org)
+      |> assign(:custom_domain_request, true)
+      |> put_private(:custyard_custom_domain, true)
+
+    case conn.request_path do
+      "/" ->
+        conn
+        |> Phoenix.Controller.redirect(to: "/requests")
+        |> halt()
+
+      "/requests" ->
+        put_path(conn, "/p/#{org.token}")
+
+      "/p/" <> _ = path ->
+        # Guard against double-prefix if path already starts with /p/
+        Logger.warning("CustomDomain plug received path already prefixed with /p/: #{path}")
+        conn
+
+      path ->
+        put_path(conn, "/p/#{org.token}#{path}")
+    end
+  end
+
+  defp put_path(conn, rewritten_path) do
+    conn
+    |> Map.put(:request_path, rewritten_path)
+    |> Map.put(:path_info, String.split(rewritten_path, "/", trim: true))
   end
 
   @doc """

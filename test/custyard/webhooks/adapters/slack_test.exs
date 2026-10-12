@@ -130,4 +130,13 @@ defmodule Custyard.Webhooks.Adapters.SlackTest do
                Slack.verify_request(body, old_timestamp, signature, secret)
     end
   end
+
+  describe "verify_request/4 without a signature header" do
+    test "returns an error instead of raising" do
+      timestamp = Integer.to_string(System.system_time(:second))
+
+      assert {:error, "missing signature header"} =
+               Slack.verify_request("body", timestamp, nil, "secret")
+    end
+  end
 end

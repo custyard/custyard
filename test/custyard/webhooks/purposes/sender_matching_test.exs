@@ -296,4 +296,141 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert conversation.organization_id == org.id
     end
   end
+
+  describe "chat providers and blank payloads" do
+    alias Custyard.Webhooks.Adapters.{Intercom, Slack}
+
+    test "a Slack event creates a conversation with no contact" do
+      org = insert_organization(domain: "slack.example.com")
+      route_context = %{organization_id: org.id, route_id: 7}
+
+      {:ok, event} =
+        Slack.normalize(%{
+          "team_id" => "T1",
+          "event" => %{
+            "type" => "message",
+            "user" => "U12345",
+            "channel" => "C1",
+            "ts" => "1700000000.000100",
+            "text" => "hello from slack"
+          }
+        })
+
+      assert {:ok, conversation} = SenderMatching.process(event, route_context)
+      assert conversation.organization_id == org.id
+      assert conversation.contact_id == nil
+      assert conversation.source == :slack
+
+      [message] = Message |> Ecto.Query.where(conversation_id: ^conversation.id) |> Repo.all()
+      assert message.sender_email == "U12345"
+      assert message.body == "hello from slack"
+    end
+
+    test "Intercom replies thread together when the root event was never stored" do
+      org = insert_organization(domain: "intercom.example.com")
+      route_context = %{organization_id: org.id, route_id: 8}
+
+      reply = fn part_id, body ->
+        {:ok, event} =
+          Intercom.normalize(%{
+            "topic" => "conversation.user.replied",
+            "data" => %{
+              "item" => %{
+                "id" => "555",
+                "source" => %{
+                  "subject" => "Hi",
+                  "author" => %{"email" => "alice@example.com", "name" => "Alice"}
+                },
+                "conversation_parts" => %{
+                  "conversation_parts" => [
+                    %{
+                      "id" => part_id,
+                      "body" => body,
+                      "author" => %{"email" => "alice@example.com", "type" => "user"}
+                    }
+                  ]
+                }
+              }
+            }
+          })
+
+        event
+      end
+
+      assert {:ok, first} = SenderMatching.process(reply.("p1", "First"), route_context)
+      assert {:ok, second} = SenderMatching.process(reply.("p2", "Second"), route_context)
+      assert second.id == first.id
+
+      messages = Message |> Ecto.Query.where(conversation_id: ^first.id) |> Repo.all()
+      assert Enum.sort(Enum.map(messages, & &1.body)) == ["First", "Second"]
+    end
+
+    test "blank subject and body are stored with placeholders instead of rejecting the message" do
+      org = insert_organization(domain: "blank.example.com")
+
+      normalized = %{
+        from: "alice@blank.example.com",
+        subject: "",
+        body: "   ",
+        message_id: "blank-1@example.com",
+        in_reply_to: nil,
+        references: nil,
+        headers: %{},
+        source: :email
+      }
+
+      assert {:ok, conversation} =
+               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+
+      assert conversation.subject == "(no subject)"
+
+      [message] = Message |> Ecto.Query.where(conversation_id: ^conversation.id) |> Repo.all()
+      assert message.body == "(empty message)"
+    end
+
+    test "a missing From yields a conversation without a contact" do
+      org = insert_organization(domain: "nofrom.example.com")
+
+      normalized = %{
+        from: nil,
+        subject: "No sender",
+        body: "body",
+        message_id: "nofrom-1@example.com",
+        in_reply_to: nil,
+        references: nil,
+        headers: %{},
+        source: :email
+      }
+
+      assert {:ok, conversation} =
+               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+
+      assert conversation.contact_id == nil
+    end
+  end
+
+  describe "customer replies to waiting conversations" do
+    test "an inbound email reactivates a conversation waiting on the customer" do
+      org = insert_organization(domain: "acme.example.com")
+      waiting = insert_conversation(organization_id: org.id, state: :waiting, subject: "Pending")
+      existing = insert_message(conversation_id: waiting.id, message_id: "waiting-1@example.com")
+
+      normalized = %{
+        from: "alice@acme.example.com",
+        subject: "Re: Pending",
+        body: "Here is the information you asked for",
+        message_id: "waiting-reply-1@example.com",
+        in_reply_to: existing.message_id,
+        references: nil,
+        headers: %{},
+        source: :email
+      }
+
+      assert {:ok, conversation} =
+               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+
+      assert conversation.id == waiting.id
+      assert conversation.state == :active
+    end
+  end
 end

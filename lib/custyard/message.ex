@@ -22,12 +22,15 @@ defmodule Custyard.Message do
   ]
 
   # Delivery status for outbound messages (nil for inbound)
+  # :sending — claimed by a delivery attempt that has not reported back yet
+  # (see Custyard.Email.Outbound.deliver/1); a row left in this state by a
+  # crash is failed by the queue's recovery scan, never re-sent.
   # :withheld — recorded but deliberately not emailed (prospect reply channel
   # without reply-notification opt-in, or no recipient at all). Deliberately
   # distinct from the provider-side :suppressed failure state reserved for
   # the status webhook (issue #25): consent-withheld is an expected state,
   # provider-suppressed is a delivery failure.
-  @delivery_statuses [:pending, :sent, :failed, :bounced, :withheld]
+  @delivery_statuses [:pending, :sending, :sent, :failed, :bounced, :withheld]
 
   schema "messages" do
     field :source, Ecto.Enum, values: @sources

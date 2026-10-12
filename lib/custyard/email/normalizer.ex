@@ -27,18 +27,33 @@ defmodule Custyard.Email.Normalizer do
 
   Tries an exact key match first, then falls back to a case-insensitive scan.
   """
-  @spec get_header(map(), String.t()) :: String.t() | nil
-  def get_header(headers, name) do
+  @spec get_header(term(), String.t()) :: String.t() | nil
+  def get_header(headers, name) when is_map(headers) do
     headers[name] || find_header_case_insensitive(headers, name)
   end
+
+  def get_header(_headers, _name), do: nil
+
+  @doc """
+  Returns `text` when it is a non-blank string, otherwise `nil`.
+
+  Provider payloads carry `""` for absent fields as often as they omit them,
+  and `""` is truthy, so `params["text"] || fallback` never falls back.
+  """
+  @spec presence(term()) :: String.t() | nil
+  def presence(text) when is_binary(text) do
+    if String.trim(text) == "", do: nil, else: text
+  end
+
+  def presence(_text), do: nil
 
   @doc """
   Strip HTML tags from a string, collapsing whitespace.
 
   Returns `nil` when given `nil`.
   """
-  @spec strip_html(String.t() | nil) :: String.t() | nil
-  def strip_html(nil), do: nil
+  @spec strip_html(term()) :: String.t() | nil
+  def strip_html(html) when not is_binary(html), do: nil
 
   def strip_html(html) do
     html
@@ -52,8 +67,8 @@ defmodule Custyard.Email.Normalizer do
 
   Returns `""` when given `nil`.
   """
-  @spec truncate(String.t() | nil, non_neg_integer()) :: String.t()
-  def truncate(nil, _max_length), do: ""
+  @spec truncate(term(), non_neg_integer()) :: String.t()
+  def truncate(text, _max_length) when not is_binary(text), do: ""
   def truncate(_text, max_length) when max_length == 0, do: ""
   def truncate(text, max_length) when max_length < 4, do: String.slice(text, 0, max_length)
 

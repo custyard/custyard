@@ -140,6 +140,18 @@ defmodule Custyard.Sentry do
   end
 
   @doc """
+  Whether `path` carries one of Custyard's path-borne bearer credentials
+  (the same prefixes `scrub_path/1` redacts). `CustyardWeb.Endpoint` uses it
+  to keep those requests out of the request log.
+  """
+  @spec token_path?(String.t() | nil) :: boolean()
+  def token_path?(path) when is_binary(path) do
+    Enum.any?(@path_patterns, &Regex.match?(&1, path))
+  end
+
+  def token_path?(_path), do: false
+
+  @doc """
   Redacts the credential segment after each known sensitive path prefix. Works
   on a bare path or on free-form text containing such a path. `nil` passes
   through.

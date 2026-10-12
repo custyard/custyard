@@ -955,4 +955,35 @@ defmodule Custyard.InboundRoutesTest do
       assert InboundRoutes.is_last_general_route?(general_route)
     end
   end
+
+  describe "create_route/1 project scoping" do
+    test "rejects a project that belongs to another organization" do
+      org = Factory.insert_organization()
+      other_org = Factory.insert_organization()
+      foreign_project = Factory.insert_project(organization_id: other_org.id)
+
+      assert {:error, changeset} =
+               InboundRoutes.create_route(%{
+                 organization_id: org.id,
+                 route_type: :project,
+                 project_id: foreign_project.id
+               })
+
+      assert {"must belong to the same organization", _} = changeset.errors[:project_id]
+    end
+
+    test "accepts a project of the same organization" do
+      org = Factory.insert_organization()
+      project = Factory.insert_project(organization_id: org.id)
+
+      assert {:ok, route} =
+               InboundRoutes.create_route(%{
+                 organization_id: org.id,
+                 route_type: :project,
+                 project_id: project.id
+               })
+
+      assert route.project_id == project.id
+    end
+  end
 end

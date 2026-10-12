@@ -158,4 +158,11 @@ defmodule Custyard.OrganizationTest do
       assert "has already been taken" in errors_on(changeset).token
     end
   end
+
+  describe "custom_domain normalization" do
+    test "stores the domain lowercased and trimmed" do
+      org = insert_organization(custom_domain: "  Support.ACME.com ")
+      assert org.custom_domain == "support.acme.com"
+    end
+  end
 end

@@ -120,7 +120,14 @@ defmodule Custyard.MessageTest do
 
   describe "delivery_statuses/0" do
     test "returns expected list" do
-      assert Message.delivery_statuses() == [:pending, :sent, :failed, :bounced, :withheld]
+      assert Message.delivery_statuses() == [
+               :pending,
+               :sending,
+               :sent,
+               :failed,
+               :bounced,
+               :withheld
+             ]
     end
 
     test "delivery_status_changeset accepts :withheld" do

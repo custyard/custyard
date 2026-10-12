@@ -25,13 +25,38 @@ defmodule CustyardWeb.Plugs.CacheRawBodyTest do
       assert conn.private[:raw_body] == ""
     end
 
-    test "returns error for body exceeding default limit" do
+    test "returns {:more, ...} for body exceeding default limit" do
       # Default limit is 1MB (1_000_000 bytes)
       large_body = String.duplicate("a", 1_000_001)
       conn = conn(:post, "/webhook", large_body)
 
-      # Plug converts {:more, ...} from Plug.Conn.read_body to {:error, :body_too_large, conn}
-      assert {:error, :body_too_large, _conn} = CacheRawBody.read_body(conn, [])
+      # Plug.Parsers maps the untouched {:more, ...} tuple to a 413
+      # (Plug.Parsers.RequestTooLargeError); any other shape would be a 500.
+      assert {:more, _partial, conn} = CacheRawBody.read_body(conn, [])
+      refute Map.has_key?(conn.private, :raw_body)
+    end
+
+    test "oversized JSON body raises RequestTooLargeError through Plug.Parsers" do
+      Application.put_env(:custyard, :webhook_max_body_size, 10)
+
+      try do
+        opts =
+          Plug.Parsers.init(
+            parsers: [:json],
+            body_reader: {CacheRawBody, :read_body, []},
+            json_decoder: Jason
+          )
+
+        conn =
+          conn(:post, "/webhook", String.duplicate("a", 11))
+          |> Plug.Conn.put_req_header("content-type", "application/json")
+
+        assert_raise Plug.Parsers.RequestTooLargeError, fn ->
+          Plug.Parsers.call(conn, opts)
+        end
+      after
+        Application.delete_env(:custyard, :webhook_max_body_size)
+      end
     end
 
     test "respects custom length option" do
@@ -79,8 +104,8 @@ defmodule CustyardWeb.Plugs.CacheRawBodyTest do
         body = String.duplicate("a", 11)
         conn = conn(:post, "/webhook", body)
 
-        # Should return error because body exceeds 10 bytes
-        assert {:error, :body_too_large, _conn} = CacheRawBody.read_body(conn, [])
+        # Body exceeds 10 bytes, so the reader reports a partial read
+        assert {:more, _partial, _conn} = CacheRawBody.read_body(conn, [])
       after
         # Restore original config
         if original do

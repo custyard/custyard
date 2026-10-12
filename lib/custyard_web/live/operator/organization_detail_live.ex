@@ -166,34 +166,11 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     if socket.assigns.can_manage_routes do
       with :ok <- validate_param(purpose, @valid_purposes, "purpose"),
            {:ok, id} <- parse_id(route_id) do
-        org = socket.assigns.organization
-        route = InboundRoutes.get_route!(id)
+        purpose_atom = String.to_existing_atom(purpose)
 
-        if route.organization_id != org.id do
-          Logger.warning(
-            "Unauthorized webhook toggle on route #{route.id} by operator in org #{org.id}"
-          )
-
-          {:noreply, put_flash(socket, :error, "You do not have permission to manage this route")}
-        else
-          purpose_atom = String.to_existing_atom(purpose)
-
-          result =
-            case enabled do
-              "true" -> InboundRoutes.enable_webhook(route, purpose_atom)
-              "false" -> InboundRoutes.disable_webhook(route, purpose_atom)
-              _ -> {:error, :invalid_enabled_value}
-            end
-
-          case result do
-            {:ok, _webhook} ->
-              {:noreply, load_tab_data(socket, org, "routes")}
-
-            {:error, reason} ->
-              Logger.error("Failed to toggle webhook: #{inspect(reason)}")
-              {:noreply, put_flash(socket, :error, "Failed to toggle webhook")}
-          end
-        end
+        with_org_route(socket, id, "webhook toggle", fn route ->
+          toggle_route_webhook(socket, route, purpose_atom, enabled)
+        end)
       else
         {:error, message} when is_binary(message) ->
           {:noreply, put_flash(socket, :error, message)}
@@ -221,41 +198,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     if socket.assigns.can_manage_routes do
       case parse_id(route_id) do
         {:ok, id} ->
-          org = socket.assigns.organization
-          route = InboundRoutes.get_route!(id)
-
-          if route.organization_id != org.id do
-            Logger.warning(
-              "Unauthorized delete on route #{route.id} by operator in org #{org.id}"
-            )
-
-            {:noreply,
-             put_flash(socket, :error, "You do not have permission to manage this route")}
-          else
-            if InboundRoutes.is_last_general_route?(route) do
-              {:noreply,
-               put_flash(
-                 socket,
-                 :error,
-                 "Cannot delete the last general route for this organization"
-               )}
-            else
-              case InboundRoutes.delete_route(route) do
-                {:ok, _} ->
-                  socket =
-                    socket
-                    |> put_flash(:info, "Route deleted")
-                    |> assign(:confirm_delete_route_id, nil)
-                    |> load_tab_data(org, "routes")
-
-                  {:noreply, socket}
-
-                {:error, reason} ->
-                  Logger.error("Failed to delete route: #{inspect(reason)}")
-                  {:noreply, put_flash(socket, :error, "Failed to delete route")}
-              end
-            end
-          end
+          with_org_route(socket, id, "delete", &delete_org_route(socket, &1))
 
         :error ->
           {:noreply, put_flash(socket, :error, "Invalid route ID")}
@@ -263,6 +206,75 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     else
       {:noreply, put_flash(socket, :error, "You do not have permission to delete routes")}
     end
+  end
+
+  # Runs `fun` on the route the page referred to, once it is known to still
+  # exist and to belong to this organization; the stale and foreign cases
+  # are answered here.
+  defp with_org_route(socket, id, action, fun) do
+    org = socket.assigns.organization
+
+    case InboundRoutes.get_route(id) do
+      nil ->
+        {:noreply, stale_route(socket, org)}
+
+      %{organization_id: org_id} = route when org_id == org.id ->
+        fun.(route)
+
+      route ->
+        Logger.warning("Unauthorized #{action} on route #{route.id} by operator in org #{org.id}")
+        {:noreply, put_flash(socket, :error, "You do not have permission to manage this route")}
+    end
+  end
+
+  defp toggle_route_webhook(socket, route, purpose, enabled) do
+    result =
+      case enabled do
+        "true" -> InboundRoutes.enable_webhook(route, purpose)
+        "false" -> InboundRoutes.disable_webhook(route, purpose)
+        _ -> {:error, :invalid_enabled_value}
+      end
+
+    case result do
+      {:ok, _webhook} ->
+        {:noreply, load_tab_data(socket, socket.assigns.organization, "routes")}
+
+      {:error, reason} ->
+        Logger.error("Failed to toggle webhook: #{inspect(reason)}")
+        {:noreply, put_flash(socket, :error, "Failed to toggle webhook")}
+    end
+  end
+
+  defp delete_org_route(socket, route) do
+    if InboundRoutes.is_last_general_route?(route) do
+      {:noreply,
+       put_flash(socket, :error, "Cannot delete the last general route for this organization")}
+    else
+      case InboundRoutes.delete_route(route) do
+        {:ok, _} ->
+          socket =
+            socket
+            |> put_flash(:info, "Route deleted")
+            |> assign(:confirm_delete_route_id, nil)
+            |> load_tab_data(socket.assigns.organization, "routes")
+
+          {:noreply, socket}
+
+        {:error, reason} ->
+          Logger.error("Failed to delete route: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, "Failed to delete route")}
+      end
+    end
+  end
+
+  # A route deleted from another session is still on this operator's screen
+  # until the tab reloads; a raising lookup turned that click into a LiveView
+  # crash.
+  defp stale_route(socket, org) do
+    socket
+    |> put_flash(:error, "That route no longer exists")
+    |> assign(:confirm_delete_route_id, nil)
+    |> load_tab_data(org, "routes")
   end
 
   @impl true

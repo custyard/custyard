@@ -14,7 +14,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       normalized = %{
         source: :lettermint,
-        sender_email: "alice@example.com",
+        from: "alice@example.com",
         subject: "Test webhook",
         message_id: "msg-123@example.com"
       }
@@ -40,7 +40,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       normalized = %{
         source: :zendesk,
-        sender_email: "bob@example.com",
+        from: "bob@example.com",
         subject: "Zendesk ticket"
       }
 

@@ -393,4 +393,33 @@ defmodule CustyardWeb.Operator.SettingsLiveTest do
     on_exit(fn -> File.rm(path) end)
     {"/uploads/logos/#{filename}", path}
   end
+
+  describe "score weights" do
+    test "shows every weight and accepts an edit", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/operator/settings")
+
+      for key <- ~w(idle state tier urgency velocity neglect) do
+        assert html =~ "operator-settings-weight-#{key}"
+      end
+
+      view |> element("[phx-click=edit_weights]") |> render_click()
+
+      weights = %{
+        "idle" => "0.5",
+        "state" => "1.0",
+        "tier" => "1.0",
+        "urgency" => "1.0",
+        "velocity" => "1.0",
+        "neglect" => "1.0"
+      }
+
+      html =
+        view
+        |> element("[data-testid=operator-settings-weights-form]")
+        |> render_submit(%{"weights" => weights})
+
+      assert html =~ "Weights updated successfully"
+      assert Settings.get_weights().idle == 0.5
+    end
+  end
 end

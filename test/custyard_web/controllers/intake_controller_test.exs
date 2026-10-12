@@ -501,6 +501,9 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert "/c/" <> _token = redirected_to(conn)
       assert Repo.one!(Prospect).email == nil
 
+      # The prospect is told their address was not saved
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "doesn't look valid"
+
       assert recipients() == ["ops@example.com"]
     end
 

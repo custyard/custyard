@@ -39,6 +39,95 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
     assert request_login({10, 44, 5, 6}, unknown).status == 429
   end
 
+  test "re-sends the outstanding link instead of rotating a still-valid token" do
+    operator = insert_operator_account()
+
+    assert request_login({10, 44, 6, 1}, operator.email).status == 302
+    first = Repo.get!(OperatorAccount, operator.id).login_token
+    assert is_binary(first)
+
+    assert request_login({10, 44, 6, 2}, operator.email).status == 302
+    assert Repo.get!(OperatorAccount, operator.id).login_token == first
+  end
+
+  test "mints a new token once the previous one has expired" do
+    operator = insert_operator_account()
+    assert request_login({10, 44, 7, 1}, operator.email).status == 302
+    first = Repo.get!(OperatorAccount, operator.id)
+
+    expired = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
+
+    first
+    |> Ecto.Changeset.change(login_token_expires_at: expired)
+    |> Repo.update!()
+
+    assert request_login({10, 44, 7, 2}, operator.email).status == 302
+    assert Repo.get!(OperatorAccount, operator.id).login_token != first.login_token
+  end
+
+  describe "magic link verification" do
+    setup do
+      operator =
+        insert_operator_account()
+        |> OperatorAccount.login_token_changeset()
+        |> Repo.update!()
+
+      {:ok, operator: operator, token: operator.login_token}
+    end
+
+    test "GET peeks without consuming the token or starting a session",
+         %{conn: conn, operator: operator, token: token} do
+      conn = get(conn, "/operator/login/verify/#{token}")
+
+      assert html_response(conn, 200) =~ "auth-verify-form"
+      refute get_session(conn, :operator_id)
+      assert Repo.get!(OperatorAccount, operator.id).login_token == token
+
+      # A scanner can fetch the link any number of times
+      assert html_response(get(build_conn(), "/operator/login/verify/#{token}"), 200) =~
+               "auth-verify-form"
+    end
+
+    test "POST consumes the token and starts the session",
+         %{conn: conn, operator: operator, token: token} do
+      conn = post(conn, "/operator/login/verify/#{token}")
+
+      assert redirected_to(conn) == "/operator"
+      assert get_session(conn, :operator_id) == operator.id
+      assert Repo.get!(OperatorAccount, operator.id).login_token == nil
+
+      # The link works once
+      again = post(build_conn(), "/operator/login/verify/#{token}")
+      assert html_response(again, 200) =~ "Invalid or expired login link"
+      refute get_session(again, :operator_id)
+    end
+
+    test "an expired token is refused on GET and POST", %{
+      conn: conn,
+      operator: operator,
+      token: token
+    } do
+      expired = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
+
+      operator
+      |> Ecto.Changeset.change(login_token_expires_at: expired)
+      |> Repo.update!()
+
+      assert html_response(get(conn, "/operator/login/verify/#{token}"), 200) =~ "has expired"
+      posted = post(build_conn(), "/operator/login/verify/#{token}")
+      assert html_response(posted, 200) =~ "has expired"
+      refute get_session(posted, :operator_id)
+    end
+
+    test "unknown and malformed tokens render the same invalid page", %{conn: conn} do
+      unknown = get(conn, "/operator/login/verify/" <> String.duplicate("a", 43))
+      malformed = get(build_conn(), "/operator/login/verify/not%20a%20token")
+
+      assert html_response(unknown, 200) =~ "Invalid or expired login link"
+      assert html_response(malformed, 200) =~ "Invalid or expired login link"
+    end
+  end
+
   defp request_login(ip, email) do
     build_conn()
     |> Map.put(:remote_ip, ip)

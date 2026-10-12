@@ -430,4 +430,46 @@ defmodule Custyard.SlugsTest do
       assert message =~ "CHECK"
     end
   end
+
+  describe "delete_expired_claims/1 and purged conversations" do
+    import Ecto.Query
+
+    test "removes claimed and confirmed rows whose conversation was purged" do
+      claimed = intake_conversation()
+      {:ok, claimed_slug, _token} = Slugs.claim("orphan-claimed", "a@example.com", claimed)
+
+      confirmed = intake_conversation()
+      {:ok, _slug, token} = Slugs.claim("orphan-confirmed", "b@example.com", confirmed)
+      {:ok, confirmed_slug} = Slugs.confirm(token)
+
+      # The retention purge nilifies slugs.conversation_id (ON DELETE SET NULL)
+      Custyard.Repo.update_all(
+        from(s in Slug, where: s.id in ^[claimed_slug.id, confirmed_slug.id]),
+        set: [conversation_id: nil]
+      )
+
+      assert Slugs.delete_expired_claims() == 2
+      assert Slugs.available?("orphan-claimed")
+      assert Slugs.available?("orphan-confirmed")
+    end
+
+    test "keeps provisioned rows and live claims" do
+      live = intake_conversation()
+      {:ok, _slug, _token} = Slugs.claim("still-live", "c@example.com", live)
+
+      promoted = intake_conversation()
+      {:ok, promoted_slug, _token} = Slugs.claim("promoted-co", "d@example.com", promoted)
+      org = insert_organization()
+
+      # A provisioned row carries its organization (CHECK constraint).
+      Custyard.Repo.update_all(
+        from(s in Slug, where: s.id == ^promoted_slug.id),
+        set: [status: :provisioned, organization_id: org.id, conversation_id: nil]
+      )
+
+      assert Slugs.delete_expired_claims() == 0
+      refute Slugs.available?("still-live")
+      refute Slugs.available?("promoted-co")
+    end
+  end
 end

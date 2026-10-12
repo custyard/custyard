@@ -195,13 +195,15 @@ defmodule Custyard.Scoring.SchedulerTest do
     test "transitions waiting conversation past threshold to dormant" do
       org = insert_organization(tier: :standard)
 
-      # 50 hours idle - past standard dormancy threshold (48h)
+      # 50 hours idle on both sides - past standard dormancy threshold (48h)
+      idle_since = DateTime.add(DateTime.utc_now(), -50, :hour)
+
       conversation =
         insert_conversation(
           organization_id: org.id,
           state: :waiting,
-          last_customer_action_at: DateTime.add(DateTime.utc_now(), -50, :hour),
-          last_operator_action_at: DateTime.utc_now()
+          last_customer_action_at: idle_since,
+          last_operator_action_at: idle_since
         )
 
       count = DormancyChecker.transition_stale_conversations()
@@ -235,13 +237,15 @@ defmodule Custyard.Scoring.SchedulerTest do
     test "respects enterprise tier threshold (8 hours)" do
       org = insert_organization(tier: :enterprise)
 
-      # 10 hours idle - past enterprise threshold (8h)
+      # 10 hours idle on both sides - past enterprise threshold (8h)
+      idle_since = DateTime.add(DateTime.utc_now(), -10, :hour)
+
       conversation =
         insert_conversation(
           organization_id: org.id,
           state: :waiting,
-          last_customer_action_at: DateTime.add(DateTime.utc_now(), -10, :hour),
-          last_operator_action_at: DateTime.utc_now()
+          last_customer_action_at: idle_since,
+          last_operator_action_at: idle_since
         )
 
       count = DormancyChecker.transition_stale_conversations()
@@ -255,13 +259,15 @@ defmodule Custyard.Scoring.SchedulerTest do
     test "respects basic tier threshold (72 hours)" do
       org = insert_organization(tier: :basic)
 
-      # 50 hours idle - under basic threshold (72h)
+      # 50 hours idle on both sides - under basic threshold (72h)
+      idle_since = DateTime.add(DateTime.utc_now(), -50, :hour)
+
       conversation =
         insert_conversation(
           organization_id: org.id,
           state: :waiting,
-          last_customer_action_at: DateTime.add(DateTime.utc_now(), -50, :hour),
-          last_operator_action_at: DateTime.utc_now()
+          last_customer_action_at: idle_since,
+          last_operator_action_at: idle_since
         )
 
       count = DormancyChecker.transition_stale_conversations()
@@ -272,10 +278,12 @@ defmodule Custyard.Scoring.SchedulerTest do
       assert updated.state == :waiting
 
       # Now test past threshold
+      idle_since = DateTime.utc_now() |> DateTime.add(-75, :hour) |> DateTime.truncate(:second)
+
       Repo.update!(
         Ecto.Changeset.change(updated,
-          last_customer_action_at:
-            DateTime.utc_now() |> DateTime.add(-75, :hour) |> DateTime.truncate(:second)
+          last_customer_action_at: idle_since,
+          last_operator_action_at: idle_since
         )
       )
 

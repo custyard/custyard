@@ -391,39 +391,40 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   def handle_event("toggle_task", %{"id" => id}, socket) do
-    task = get_scoped_task!(socket, id)
+    with_scoped_task(socket, id, fn task ->
+      new_state =
+        case task.state do
+          :open -> :in_progress
+          :in_progress -> :done
+          :done -> :open
+        end
 
-    new_state =
-      case task.state do
-        :open -> :in_progress
-        :in_progress -> :done
-        :done -> :open
+      case conversation_mutation(socket, fn _current, _operator ->
+             Conversations.update_task_state(task, new_state)
+           end) do
+        {:ok, _} ->
+          {:noreply, reload_conversation(socket)}
+
+        {:error, :unauthorized} ->
+          {:noreply, access_revoked(socket)}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to update task")}
       end
-
-    case conversation_mutation(socket, fn _current, _operator ->
-           Conversations.update_task_state(task, new_state)
-         end) do
-      {:ok, _} ->
-        {:noreply, reload_conversation(socket)}
-
-      {:error, :unauthorized} ->
-        {:noreply, access_revoked(socket)}
-
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to update task")}
-    end
+    end)
   end
 
   def handle_event("edit_task", %{"id" => id}, socket) do
-    task = get_scoped_task!(socket, id)
-    due_at_str = if task.due_at, do: format_datetime_local(task.due_at), else: ""
+    with_scoped_task(socket, id, fn task ->
+      due_at_str = if task.due_at, do: format_datetime_local(task.due_at), else: ""
 
-    {:noreply,
-     socket
-     |> assign(:editing_task_id, task.id)
-     |> assign(:edit_task_title, task.title)
-     |> assign(:edit_task_due_at, due_at_str)
-     |> assign(:edit_task_portal_visible, task.portal_visible)}
+      {:noreply,
+       socket
+       |> assign(:editing_task_id, task.id)
+       |> assign(:edit_task_title, task.title)
+       |> assign(:edit_task_due_at, due_at_str)
+       |> assign(:edit_task_portal_visible, task.portal_visible)}
+    end)
   end
 
   def handle_event("cancel_edit_task", _params, socket) do
@@ -444,37 +445,42 @@ defmodule CustyardWeb.Operator.ConversationLive do
     title = params["title"] || ""
 
     if byte_size(title) > 0 do
-      task = get_scoped_task!(socket, socket.assigns.editing_task_id)
-      due_at = parse_due_at(params["due_at"])
-      portal_visible = params["portal_visible"] == "true"
+      with_scoped_task(socket, socket.assigns.editing_task_id, fn task ->
+        due_at = parse_due_at(params["due_at"])
+        portal_visible = params["portal_visible"] == "true"
 
-      case conversation_mutation(socket, fn _current, _operator ->
-             Conversations.update_task(task, %{
-               title: title,
-               due_at: due_at,
-               portal_visible: portal_visible
-             })
-           end) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> assign(:editing_task_id, nil)
-           |> reload_conversation()}
+        case conversation_mutation(socket, fn _current, _operator ->
+               Conversations.update_task(task, %{
+                 title: title,
+                 due_at: due_at,
+                 portal_visible: portal_visible
+               })
+             end) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> assign(:editing_task_id, nil)
+             |> reload_conversation()}
 
-        {:error, :unauthorized} ->
-          {:noreply, access_revoked(socket)}
+          {:error, :unauthorized} ->
+            {:noreply, access_revoked(socket)}
 
-        {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "Failed to save task")}
-      end
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Failed to save task")}
+        end
+      end)
     else
       {:noreply, socket}
     end
   end
 
   def handle_event("delete_task", %{"id" => id}, socket) do
-    task = get_scoped_task!(socket, id)
+    with_scoped_task(socket, id, fn task ->
+      delete_scoped_task(socket, task)
+    end)
+  end
 
+  defp delete_scoped_task(socket, task) do
     case conversation_mutation(socket, fn _current, _operator ->
            Conversations.delete_task(task)
          end) do
@@ -585,23 +591,43 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
-  defp get_scoped_task!(socket, task_id) when is_binary(task_id) do
-    case Integer.parse(task_id) do
-      {int_id, ""} -> get_scoped_task!(socket, int_id)
-      _ -> raise Ecto.NoResultsError, queryable: Custyard.Task
+  # Resolve a task id from the UI against this conversation and run `fun`
+  # with it. A task that was deleted from another session (nothing
+  # broadcasts task deletions, so the row stays on screen), an id from
+  # another conversation, or a malformed id ends in a flash and a reload
+  # rather than a raise that would crash the LiveView and drop any draft
+  # reply or note the operator was typing.
+  defp with_scoped_task(socket, task_id, fun) do
+    case scoped_task(socket, task_id) do
+      %Custyard.Task{} = task ->
+        fun.(task)
+
+      nil ->
+        {:noreply,
+         socket
+         |> assign(:editing_task_id, nil)
+         |> put_flash(:error, "That task no longer exists")
+         |> reload_conversation()}
     end
   end
 
-  defp get_scoped_task!(socket, task_id) when is_integer(task_id) do
-    task = Conversations.get_task!(task_id)
+  defp scoped_task(socket, task_id) when is_binary(task_id) do
+    case Integer.parse(task_id) do
+      {int_id, ""} -> scoped_task(socket, int_id)
+      _ -> nil
+    end
+  end
+
+  defp scoped_task(socket, task_id) when is_integer(task_id) do
     conversation_id = socket.assigns.conversation.id
 
-    unless task.conversation_id == conversation_id do
-      raise Ecto.NoResultsError, queryable: Custyard.Task
+    case Custyard.Repo.get(Custyard.Task, task_id) do
+      %Custyard.Task{conversation_id: ^conversation_id} = task -> task
+      _ -> nil
     end
-
-    task
   end
+
+  defp scoped_task(_socket, _task_id), do: nil
 
   defp load_conversation(id) do
     Conversations.get_with_messages(id)
@@ -1292,9 +1318,11 @@ defmodule CustyardWeb.Operator.ConversationLive do
     """
   end
 
-  attr :status, :atom, required: true, values: [:pending, :sent, :failed, :bounced, :withheld]
+  attr :status, :atom,
+    required: true,
+    values: [:pending, :sending, :sent, :failed, :bounced, :withheld]
 
-  defp delivery_indicator(%{status: :pending} = assigns) do
+  defp delivery_indicator(%{status: status} = assigns) when status in [:pending, :sending] do
     ~H"""
     <span
       class="inline-flex items-center text-xs text-gray-400 dark:text-zinc-500"

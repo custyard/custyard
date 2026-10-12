@@ -68,7 +68,21 @@ defmodule CustyardWeb.Endpoint do
   end
 
   plug Plug.RequestId
-  plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
+
+  plug Plug.Telemetry,
+    event_prefix: [:phoenix, :endpoint],
+    log: {__MODULE__, :request_log_level, []}
+
+  @doc false
+  # Custyard's bearer credentials travel in the path: conversation resume
+  # tokens (/c/:token, multi-use and months-lived), slug-claim tokens,
+  # operator magic links, webhook callback tokens and the portal organization
+  # token. Phoenix.Logger writes the request line ("GET /c/<token>") at :info,
+  # so every visit put a live credential into the log stream. Those requests
+  # are not logged; Custyard.Sentry scrubs the same paths in error reports.
+  def request_log_level(%Plug.Conn{request_path: path}) do
+    if Custyard.Sentry.token_path?(path), do: false, else: :info
+  end
 
   # Debug plug for origin header diagnosis. Uncomment to trace check_origin issues.
   # See: docs/lessons-learned/06-phoenix-check-origin-fly.md, PR #34
@@ -110,9 +124,14 @@ defmodule CustyardWeb.Endpoint do
     Plug.Session.call(conn, Plug.Session.init(session_options()))
   end
 
-  # Trust Fly.io proxy headers - rewrites conn.scheme/host/port from x-forwarded-*
-  # Required for check_origin validation (Origin scheme must match conn.scheme)
-  plug Plug.RewriteOn, [:x_forwarded_host, :x_forwarded_port, :x_forwarded_proto]
+  # Trust Fly.io proxy headers - rewrites conn.scheme/port from x-forwarded-*
+  # Required for check_origin validation (Origin scheme must match conn.scheme).
+  # X-Forwarded-Host is deliberately NOT trusted: the proxy preserves the
+  # Host header, and CustyardWeb.Plugs.CustomDomain resolves conn.host to an
+  # organization's white-label portal, so honoring a client-supplied
+  # X-Forwarded-Host let anyone reach any organization's portal without its
+  # token by naming its (public) custom domain in that header.
+  plug Plug.RewriteOn, [:x_forwarded_port, :x_forwarded_proto]
 
   # Attach request context (method, scrubbed URL, headers) to Sentry events.
   # Placed after RewriteOn so the URL reflects the real external scheme/host.

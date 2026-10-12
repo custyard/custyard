@@ -425,4 +425,94 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert escalation_count >= 0
     end
   end
+
+  describe "reset_recovered_notifications/1" do
+    require Ecto.Query
+
+    test "clears the notification level once the operator has acted" do
+      thresholds = Settings.get_neglect_thresholds()
+      {warning_hours, _critical_hours} = thresholds.standard
+      org = insert_organization(tier: :standard)
+
+      recovered =
+        insert_conversation(
+          organization_id: org.id,
+          state: :active,
+          last_operator_action_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        )
+        |> with_notification_level(:critical)
+
+      still_neglected =
+        insert_conversation(
+          organization_id: org.id,
+          state: :active,
+          last_operator_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+        )
+        |> with_notification_level(:critical)
+
+      assert {:ok, _count} = NeglectChecker.check_and_notify()
+
+      assert Repo.get!(Custyard.Conversation, recovered.id).last_neglect_notification == nil
+
+      assert Repo.get!(Custyard.Conversation, still_neglected.id).last_neglect_notification ==
+               :critical
+    end
+
+    # Unlinked rows make every tier branch of the cutoff NULL; one that is
+    # within the standard cutoff but past a shorter tier's must still reset.
+    test "clears the notification level on a recovered unlinked conversation" do
+      thresholds = Settings.get_neglect_thresholds()
+      {enterprise_warning, _} = thresholds.enterprise
+      {standard_warning, _} = thresholds.standard
+      assert enterprise_warning + 1 < standard_warning
+
+      conv =
+        insert_conversation(
+          organization_id: nil,
+          source: :disambiguation,
+          state: :active,
+          last_operator_action_at:
+            DateTime.utc_now()
+            |> DateTime.add(-(enterprise_warning + 1), :hour)
+            |> DateTime.truncate(:second)
+        )
+        |> with_notification_level(:warning)
+
+      assert NeglectChecker.reset_recovered_notifications() == 1
+      assert Repo.get!(Custyard.Conversation, conv.id).last_neglect_notification == nil
+    end
+
+    test "a conversation neglected again after recovery is alerted again" do
+      thresholds = Settings.get_neglect_thresholds()
+      {warning_hours, _critical_hours} = thresholds.standard
+      org = insert_organization(tier: :standard)
+
+      conv =
+        insert_conversation(
+          organization_id: org.id,
+          state: :active,
+          last_operator_action_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        )
+        |> with_notification_level(:critical)
+
+      assert NeglectChecker.reset_recovered_notifications() == 1
+
+      neglected_at = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+
+      Repo.update_all(
+        Ecto.Query.from(c in Custyard.Conversation, where: c.id == ^conv.id),
+        set: [last_operator_action_at: neglected_at]
+      )
+
+      assert {:ok, 1} = NeglectChecker.check_and_notify()
+    end
+  end
+
+  # last_neglect_notification is system-managed: the factory's public
+  # changeset drops it, so set it the way NeglectChecker does.
+  defp with_notification_level(conversation, level) do
+    conversation
+    |> Custyard.Conversation.internal_changeset(%{last_neglect_notification: level})
+    |> Repo.update!()
+  end
 end

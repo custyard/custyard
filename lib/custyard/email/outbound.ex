@@ -23,6 +23,8 @@ defmodule Custyard.Email.Outbound do
 
   alias Custyard.Email.{Headers, ThreadHeaders}
   alias Custyard.{Conversations, Message, Repo, Settings}
+  # Swoosh.Email also exports from/2, so Ecto.Query is not imported here.
+  require Ecto.Query
   import Swoosh.Email
 
   @doc """
@@ -38,10 +40,36 @@ defmodule Custyard.Email.Outbound do
   without opt-in marks the message `:withheld` and returns
   `{:error, :no_consent, updated_message}`, so no caller can bypass policy.
 
+  Only a `:pending` message is delivered. The row is flipped to `:sending`
+  before the email is handed to the mailer, so a message that is already
+  claimed, sent, failed or withheld returns `{:error, :not_pending, message}`
+  without contacting the provider.
+
   Returns `{:ok, updated_message}` on success or
   `{:error, reason, updated_message}` on failure.
   """
   def deliver(%Message{} = message) do
+    case claim_for_delivery(message) do
+      {:ok, message} -> deliver_claimed(message)
+      :error -> {:error, :not_pending, Repo.reload!(message)}
+    end
+  end
+
+  # Atomic :pending -> :sending. Without this claim the row stayed :pending
+  # while the provider was accepting the email, and a crash (deploy, OOM, a
+  # locked database on the status update) before :sent was recorded left it
+  # :pending for the queue's recovery scan to deliver a second time.
+  defp claim_for_delivery(%Message{id: id} = message) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {claimed, _} =
+      Ecto.Query.from(m in Message, where: m.id == ^id and m.delivery_status == :pending)
+      |> Repo.update_all(set: [delivery_status: :sending, updated_at: now])
+
+    if claimed == 1, do: {:ok, %{message | delivery_status: :sending}}, else: :error
+  end
+
+  defp deliver_claimed(message) do
     # force: true — the consent re-check must read committed consent state;
     # without it a caller passing a preloaded conversation would silently
     # turn this defense-in-depth layer into a stale-read no-op.
@@ -242,9 +270,10 @@ defmodule Custyard.Email.Outbound do
   defp provider_attrs(%{id: id}) when is_binary(id), do: %{lettermint_message_id: id}
   defp provider_attrs(_metadata), do: %{}
 
+  @doc false
   # Nudge subscribed LiveViews (ConversationLive) to refresh the delivery
   # indicator once the async delivery lands on :sent or :failed.
-  defp broadcast_delivery_update(%Message{} = message) do
+  def broadcast_delivery_update(%Message{} = message) do
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
       "conversation:#{message.conversation_id}",

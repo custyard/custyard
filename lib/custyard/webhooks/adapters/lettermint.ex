@@ -78,15 +78,20 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
 
   @impl true
   def normalize(params) do
-    headers = params["headers"] || %{}
-    body = params["text"] || Normalizer.strip_html(params["html"]) || ""
+    headers = if is_map(params["headers"]), do: params["headers"], else: %{}
+
+    body =
+      Normalizer.presence(params["text"]) || Normalizer.strip_html(params["html"]) || ""
 
     {:ok,
      %{
        from: params["from"] || params["sender"],
        to: params["to"] || params["recipient"],
        subject:
-         Normalizer.truncate(params["subject"] || "(no subject)", Normalizer.max_subject_length()),
+         Normalizer.truncate(
+           Normalizer.presence(params["subject"]) || "(no subject)",
+           Normalizer.max_subject_length()
+         ),
        body: Normalizer.truncate(body, Normalizer.max_body_length()),
        message_id: Normalizer.get_header(headers, "message-id"),
        in_reply_to: Normalizer.get_header(headers, "in-reply-to"),

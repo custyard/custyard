@@ -34,10 +34,12 @@ defmodule Custyard.Webhooks.Adapters.Email do
   @impl true
   def normalize(parsed) when is_map(parsed) do
     headers = field(parsed, :headers) || %{}
-    subject = field(parsed, :subject) || "(no subject)"
+    subject = Normalizer.presence(field(parsed, :subject)) || "(no subject)"
 
-    # Collapse text/html into single body — same logic as Processor.parse_payload
-    body = field(parsed, :text) || Normalizer.strip_html(field(parsed, :html)) || ""
+    # Collapse text/html into a single body, preferring a non-blank text part
+    body =
+      Normalizer.presence(field(parsed, :text)) ||
+        Normalizer.strip_html(field(parsed, :html)) || ""
 
     {:ok,
      %{

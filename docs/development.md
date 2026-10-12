@@ -74,6 +74,7 @@ Polls an IMAP mailbox for new messages.
 
 ```bash
 IMAP_ENABLED=true           # Enable IMAP poller
+IMAP_ORGANIZATION_ID=1      # Organization whose inbound route receives the mailbox (required)
 IMAP_HOST=imap.example.com  # IMAP server
 IMAP_PORT=993               # Port (default: 993)
 IMAP_USERNAME=user@example.com

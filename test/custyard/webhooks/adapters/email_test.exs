@@ -166,4 +166,21 @@ defmodule Custyard.Webhooks.Adapters.EmailTest do
       assert normalized.body == ""
     end
   end
+
+  describe "blank fields" do
+    test "an empty subject and text fall back instead of passing blanks through" do
+      parsed = %{
+        from: "a@b.com",
+        to: "s@c.test",
+        subject: "",
+        text: "",
+        html: "<p>Hi there</p>",
+        headers: %{}
+      }
+
+      assert {:ok, normalized} = EmailAdapter.normalize(parsed)
+      assert normalized.subject == "(no subject)"
+      assert normalized.body == "Hi there"
+    end
+  end
 end

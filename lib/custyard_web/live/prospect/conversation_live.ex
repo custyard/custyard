@@ -28,7 +28,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   use CustyardWeb, :live_view
 
   alias Custyard.Email.Normalizer
-  alias Custyard.Intake.ClaimEmail
+  alias Custyard.Intake.{ClaimEmail, ReceiptEmail}
   alias Custyard.{Conversations, Intake, IntakeSource, RateLimit, Slug, Slugs}
 
   @unavailable_path "/c/unavailable"
@@ -219,9 +219,12 @@ defmodule CustyardWeb.Prospect.ConversationLive do
       # regardless of whether the email matched a contact, an org domain, or
       # nothing — and nothing rendered below depends on the link outcome.
       {:ok, _conversation} ->
+        prospect = Intake.get_prospect(conversation)
+        send_capture_receipt(socket, prospect)
+
         {:noreply,
          socket
-         |> assign(:prospect, Intake.get_prospect(conversation))
+         |> assign(:prospect, prospect)
          |> assign(:email_form, empty_email_form())
          |> put_flash(:info, "Email saved.")}
 
@@ -235,6 +238,26 @@ defmodule CustyardWeb.Prospect.ConversationLive do
         {:noreply, put_flash(socket, :error, "That email address doesn't look valid.")}
     end
   end
+
+  # The receipt carries the resume URL and is the prospect's only durable way
+  # back to the thread once the cookie is gone (spec: sent whenever an email
+  # is captured, regardless of the reply-notification choice). The intake
+  # POST already sends it; this standalone prompt did not, so a prospect who
+  # added their email here and left notifications off could never return.
+  # Result ignored: ReceiptEmail owns its gating, rate limit and logging.
+  defp send_capture_receipt(socket, %{email: email}) when is_binary(email) do
+    case socket.assigns.intake_source do
+      %IntakeSource{} = source ->
+        ReceiptEmail.send_receipt(email, source,
+          conversation_url: CustyardWeb.Endpoint.url() <> ~p"/c/#{socket.assigns.access_token}"
+        )
+
+      _no_source ->
+        :skipped
+    end
+  end
+
+  defp send_capture_receipt(_socket, _prospect), do: :skipped
 
   # Order is deliberate and tested: (1) the claim commits in its own
   # transaction; (2) email capture is best-effort AFTER it — a capture

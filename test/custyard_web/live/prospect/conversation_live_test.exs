@@ -849,4 +849,33 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     |> String.replace(~r/data-phx-session="[^"]*"/, ~s(data-phx-session=""))
     |> String.replace(~r/data-phx-static="[^"]*"/, ~s(data-phx-static=""))
   end
+
+  describe "standalone email prompt receipt" do
+    setup do
+      original = Application.get_env(:custyard, :email_enabled)
+      Application.put_env(:custyard, :email_enabled, true)
+
+      on_exit(fn ->
+        if is_nil(original),
+          do: Application.delete_env(:custyard, :email_enabled),
+          else: Application.put_env(:custyard, :email_enabled, original)
+      end)
+
+      :ok
+    end
+
+    test "capturing an email on the thread page sends the resume URL even without notify" do
+      %{access_token: token} = create_intake!()
+      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+
+      view
+      |> form(~s([data-testid="resume-email-form"]), %{
+        "capture" => %{"email" => "late@example.com", "notify" => "false"}
+      })
+      |> render_submit()
+
+      assert_receive {:email, %Swoosh.Email{to: [{_, "late@example.com"}]} = email}
+      assert email.text_body =~ "/c/#{token}"
+    end
+  end
 end

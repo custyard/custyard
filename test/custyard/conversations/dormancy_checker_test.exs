@@ -329,4 +329,61 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
       assert_receive {:conversation_updated, ^conv_id}, 1000
     end
   end
+
+  describe "operator activity" do
+    test "a conversation the operator replied to within the threshold is not stale" do
+      org = insert_organization(tier: :standard)
+
+      past_threshold =
+        DateTime.utc_now() |> DateTime.add(-49, :hour) |> DateTime.truncate(:second)
+
+      recent = DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
+
+      conv =
+        insert_conversation(
+          organization_id: org.id,
+          state: :waiting,
+          last_customer_action_at: past_threshold,
+          last_operator_action_at: recent
+        )
+
+      refute conv.id in Enum.map(DormancyChecker.stale_conversations(), & &1.id)
+    end
+
+    test "a conversation quiet on both sides past the threshold is stale" do
+      org = insert_organization(tier: :standard)
+
+      past_threshold =
+        DateTime.utc_now() |> DateTime.add(-49, :hour) |> DateTime.truncate(:second)
+
+      conv =
+        insert_conversation(
+          organization_id: org.id,
+          state: :waiting,
+          last_customer_action_at: past_threshold,
+          last_operator_action_at: past_threshold
+        )
+
+      assert conv.id in Enum.map(DormancyChecker.stale_conversations(), & &1.id)
+    end
+
+    test "transition only applies to rows still waiting" do
+      org = insert_organization(tier: :standard)
+
+      past_threshold =
+        DateTime.utc_now() |> DateTime.add(-49, :hour) |> DateTime.truncate(:second)
+
+      conv =
+        insert_conversation(
+          organization_id: org.id,
+          state: :waiting,
+          last_customer_action_at: past_threshold
+        )
+
+      assert DormancyChecker.transition_stale_conversations() == 1
+      assert Custyard.Repo.get!(Custyard.Conversation, conv.id).state == :dormant
+      # The row is no longer waiting, so a second pass changes nothing.
+      assert DormancyChecker.transition_stale_conversations() == 0
+    end
+  end
 end

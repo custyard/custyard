@@ -220,8 +220,19 @@ end
 imap_enabled = System.get_env("IMAP_ENABLED") == "true"
 
 if imap_enabled do
+  # The poller dispatches every polled message through this organization's
+  # inbound route; Custyard.Email.ImapPoller.init/1 requires it, so a missing
+  # value is a configuration error, not a crash loop at boot.
+  imap_organization_id =
+    parse_int.("IMAP_ORGANIZATION_ID", nil) ||
+      raise """
+      IMAP_ENABLED=true requires IMAP_ORGANIZATION_ID (the integer id of the
+      organization whose inbound route receives the polled mailbox).
+      """
+
   config :custyard, :imap,
     enabled: true,
+    organization_id: imap_organization_id,
     host: System.get_env("IMAP_HOST") || "localhost",
     port: parse_int.("IMAP_PORT", 993),
     username: System.get_env("IMAP_USERNAME") || "",
