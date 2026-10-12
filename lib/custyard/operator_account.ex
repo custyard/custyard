@@ -252,7 +252,9 @@ defmodule Custyard.OperatorAccount do
   def session_claim_matches?(_operator, _claim), do: false
 
   @doc """
-  Returns true for an admin or agent with no organization.
+  Returns true for any account that is not a super_admin and has no
+  organization: an admin or agent whose organization was deleted, or a row
+  with an unexpected role (fails closed).
 
   Deleting an organization sets its operators' organization_id to NULL
   (ON DELETE SET NULL). `scoped_organization_id/1` then returns nil, which
@@ -260,7 +262,7 @@ defmodule Custyard.OperatorAccount do
   account must never be authorized. Login, the `:require_operator` plug and
   the LiveView auth hooks all refuse it.
   """
-  def orphaned?(%__MODULE__{role: role, organization_id: nil}) when role in ["admin", "agent"],
+  def orphaned?(%__MODULE__{role: role, organization_id: nil}) when role != "super_admin",
     do: true
 
   def orphaned?(_), do: false

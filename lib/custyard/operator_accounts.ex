@@ -16,6 +16,9 @@ defmodule Custyard.OperatorAccounts do
 
   @placeholder_email "admin@custyard.local"
 
+  # Ids are signed 64-bit integers in SQLite (and Postgres bigserial).
+  @max_id 9_223_372_036_854_775_807
+
   @doc """
   The address older images seeded as the first super_admin. Nothing routes
   mail to it in production, so it can never receive a login link.
@@ -67,25 +70,61 @@ defmodule Custyard.OperatorAccounts do
   def insert_operator(email, opts) do
     via = Keyword.fetch!(opts, :via)
 
-    changeset =
-      OperatorAccount.changeset(%OperatorAccount{}, %{
-        email: email,
-        role: Keyword.get(opts, :role, "super_admin"),
-        organization_id: Keyword.get(opts, :organization_id)
-      })
+    with {:ok, role} <- fetch_role(opts),
+         {:ok, organization_id} <- fetch_organization_id(opts) do
+      changeset =
+        OperatorAccount.changeset(%OperatorAccount{}, %{
+          email: email,
+          role: role,
+          organization_id: organization_id
+        })
 
-    cond do
-      not changeset.valid? ->
-        {:error, describe_errors(changeset)}
+      cond do
+        not changeset.valid? ->
+          {:error, describe_errors(changeset)}
 
-      Ecto.Changeset.get_field(changeset, :email) == @placeholder_email and
-          not Keyword.get(opts, :allow_placeholder, false) ->
-        {:error,
-         "#{@placeholder_email} is a non-routable placeholder that can never receive " <>
-           "a login link; use a real address"}
+        Ecto.Changeset.get_field(changeset, :email) == @placeholder_email and
+            not Keyword.get(opts, :allow_placeholder, false) ->
+          {:error,
+           "#{@placeholder_email} is a non-routable placeholder that can never receive " <>
+             "a login link; use a real address"}
 
-      true ->
-        insert_with_audit(changeset, via)
+        true ->
+          insert_with_audit(changeset, via)
+      end
+    end
+  end
+
+  @doc """
+  Whether `id` can be a database id: an integer from 1 to the largest
+  signed 64-bit value. Anything larger makes the SQLite driver raise.
+  """
+  def valid_id?(id), do: is_integer(id) and id >= 1 and id <= @max_id
+
+  # A role is either absent (default super_admin) or one of the roles. A
+  # present but empty one must be refused here: cast/4 turns "" into the
+  # field default, so `--role ""` would otherwise create a super_admin.
+  defp fetch_role(opts) do
+    case Keyword.fetch(opts, :role) do
+      :error ->
+        {:ok, "super_admin"}
+
+      {:ok, role} ->
+        if role in OperatorAccount.roles(),
+          do: {:ok, role},
+          else: {:error, "role: must be one of: #{Enum.join(OperatorAccount.roles(), ", ")}"}
+    end
+  end
+
+  defp fetch_organization_id(opts) do
+    case Keyword.get(opts, :organization_id) do
+      nil ->
+        {:ok, nil}
+
+      id ->
+        if valid_id?(id),
+          do: {:ok, id},
+          else: {:error, "organization_id: must be an integer from 1 to #{@max_id}"}
     end
   end
 
@@ -153,8 +192,9 @@ defmodule Custyard.OperatorAccounts do
   collided) can share a normalized value; then the exact stored email
   picks one, and anything else is refused as ambiguous.
 
-  Refuses to remove the last super_admin who can log in
-  (#{@placeholder_email} does not count). `messages.deleted_by_operator_id`
+  Refuses to remove the last super_admin who can log in (one with a
+  normalized email other than #{@placeholder_email}), and refuses to remove
+  any super_admin while no such account exists. `messages.deleted_by_operator_id`
   is ON DELETE SET NULL, so the ids of messages this operator soft-deleted
   are kept in the audit event before the column is cleared. A foreign key
   that blocks the delete is reported, not raised.
@@ -247,24 +287,36 @@ defmodule Custyard.OperatorAccounts do
 
   # Runs after the delete, inside the transaction, so a concurrent removal
   # cannot slip between the count and the delete.
-  defp keep_a_super_admin(%OperatorAccount{role: "super_admin"}) do
+  defp keep_a_super_admin(%OperatorAccount{role: "super_admin"} = removed) do
     remaining =
-      Repo.aggregate(
-        from(o in OperatorAccount,
-          where: o.role == "super_admin" and o.email != ^@placeholder_email
-        ),
-        :count
-      )
+      from(o in OperatorAccount, where: o.role == "super_admin")
+      |> Repo.all()
+      |> Enum.count(&can_log_in?/1)
 
-    if remaining > 0,
-      do: :ok,
-      else:
+    cond do
+      remaining > 0 ->
+        :ok
+
+      can_log_in?(removed) ->
         {:error,
          "refusing to remove the last super_admin who can log in; add another super_admin " <>
-           "first (#{@placeholder_email} cannot log in and does not count)"}
+           "first (#{@placeholder_email} and emails that are not normalized cannot log in " <>
+           "and do not count)"}
+
+      true ->
+        {:error,
+         "refusing to remove #{removed.email}: no super_admin who can log in exists yet. " <>
+           "Add one first with `bin/operator add you@example.com`, then remove #{removed.email}."}
+    end
   end
 
   defp keep_a_super_admin(_operator), do: :ok
+
+  # Login looks emails up normalized, and nothing delivers mail to the
+  # placeholder, so only these accounts can ever sign in. Compared in Elixir
+  # because normalization is Unicode-aware and SQLite lower() is not.
+  defp can_log_in?(%OperatorAccount{email: email}),
+    do: email == OperatorAccount.normalize_email(email) and email != @placeholder_email
 
   # organization_id goes in the payload only: audit_events.organization_id is
   # a foreign key without ON DELETE, so setting the column would block

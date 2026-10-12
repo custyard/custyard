@@ -75,7 +75,24 @@ defmodule Custyard.ReleaseTest do
             ["list", "--all"],
             ["remove"],
             ["remove", "a@example.com", "b@example.com"],
-            ["remove", "a@example.com", "--force"]
+            ["remove", "a@example.com", "--force"],
+            # cast/4 would turn an empty role into the super_admin default
+            ["add", "a@example.com", "--role", ""],
+            ["add", "a@example.com", "--role", "  "],
+            ["add", "a@example.com", "--role", "owner"],
+            ["add", "a@example.com", "--role", "Super_Admin"],
+            # ids are signed 64-bit; anything else made the driver raise
+            ["add", "a@example.com", "--role", "agent", "--organization", "0"],
+            ["add", "a@example.com", "--role", "agent", "--organization", "-1"],
+            [
+              "add",
+              "a@example.com",
+              "--role",
+              "agent",
+              "--organization",
+              "99999999999999999999999"
+            ],
+            ["add", "a@example.com", "--role", "agent", "--organization", "9223372036854775808"]
           ] do
         assert {1, "", stderr} = run_cli(argv), "expected a usage error for #{inspect(argv)}"
         assert stderr =~ "Usage: bin/operator COMMAND"
@@ -162,6 +179,19 @@ defmodule Custyard.ReleaseTest do
 
       assert {1, "", stderr} = run_cli(["add", "admin@custyard.local"])
       assert stderr =~ "non-routable placeholder"
+
+      # The largest valid id parses, and is reported missing rather than raising.
+      assert {1, "", stderr} =
+               run_cli([
+                 "add",
+                 "big@example.com",
+                 "--role",
+                 "agent",
+                 "--organization",
+                 "9223372036854775807"
+               ])
+
+      assert stderr =~ "organization 9223372036854775807 does not exist"
 
       assert operator_count() == 0
     end
@@ -398,6 +428,16 @@ defmodule Custyard.ReleaseTest do
       assert_raise ArgumentError, ~r/must be a valid email address/, fn ->
         Release.setup_operator("nope")
       end
+    end
+
+    test "raises on an empty or unknown role instead of creating a super_admin" do
+      for role <- ["", "   ", nil, "owner"] do
+        assert_raise ArgumentError, ~r/role: must be one of: super_admin, admin, agent/, fn ->
+          Release.setup_operator("empty-role@example.com", role: role)
+        end
+      end
+
+      assert operator_count() == 0
     end
   end
 end

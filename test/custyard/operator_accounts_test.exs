@@ -138,6 +138,38 @@ defmodule Custyard.OperatorAccountsTest do
       assert audit_events(:operator_created) == []
     end
 
+    test "refuses a present but empty, blank or unknown role instead of defaulting it" do
+      # cast/4 turns "" into the field default, which is super_admin.
+      for role <- ["", "   ", nil, "owner"] do
+        assert {:error, "role: must be one of: super_admin, admin, agent"} =
+                 OperatorAccounts.create_operator("empty-role@example.com",
+                   via: "cli",
+                   role: role
+                 )
+
+        assert {:error, "role: must be one of: super_admin, admin, agent"} =
+                 OperatorAccounts.insert_operator("empty-role@example.com",
+                   via: "cli",
+                   role: role
+                 )
+      end
+
+      assert Repo.aggregate(OperatorAccount, :count) == 0
+    end
+
+    test "refuses an organization id outside 1..2^63-1 without touching the database" do
+      for id <- [0, -1, 9_223_372_036_854_775_808, 99_999_999_999_999_999_999_999, "3"] do
+        assert {:error, "organization_id: must be an integer from 1 to 9223372036854775807"} =
+                 OperatorAccounts.create_operator("agent@example.com",
+                   via: "cli",
+                   role: "agent",
+                   organization_id: id
+                 )
+      end
+
+      assert Repo.aggregate(OperatorAccount, :count) == 0
+    end
+
     test "checks that the organization exists before inserting" do
       assert {:error, "organization 999999 does not exist"} =
                OperatorAccounts.create_operator("agent@example.com",
@@ -240,6 +272,33 @@ defmodule Custyard.OperatorAccountsTest do
 
       assert {:ok, _} = OperatorAccounts.remove_operator("admin@custyard.local", via: "cli")
       assert Repo.get(OperatorAccount, placeholder.id) == nil
+    end
+
+    test "does not count a super_admin whose email is not normalized" do
+      insert_raw_operator("Mixed@Example.com")
+      real = insert_operator_account(email: "real@example.com")
+
+      assert {:error, message} = OperatorAccounts.remove_operator("real@example.com", via: "cli")
+      assert message =~ "refusing to remove the last super_admin who can log in"
+      assert Repo.get(OperatorAccount, real.id)
+    end
+
+    test "explains the refusal when the placeholder is the only super_admin" do
+      placeholder = insert_operator_account(email: "admin@custyard.local")
+
+      assert {:error, message} =
+               OperatorAccounts.remove_operator("admin@custyard.local", via: "cli")
+
+      assert message ==
+               "refusing to remove admin@custyard.local: no super_admin who can log in exists " <>
+                 "yet. Add one first with `bin/operator add you@example.com`, then remove " <>
+                 "admin@custyard.local."
+
+      assert Repo.get(OperatorAccount, placeholder.id)
+
+      # Once a real super_admin exists, the placeholder can go.
+      insert_operator_account(email: "real@example.com")
+      assert {:ok, _} = OperatorAccounts.remove_operator("admin@custyard.local", via: "cli")
     end
 
     test "removes an admin or agent even when no super_admin exists" do

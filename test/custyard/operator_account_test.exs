@@ -417,6 +417,11 @@ defmodule Custyard.OperatorAccountTest do
       assert OperatorAccount.orphaned?(%OperatorAccount{role: "agent", organization_id: nil})
     end
 
+    test "fails closed for an unexpected role without an organization" do
+      assert OperatorAccount.orphaned?(%OperatorAccount{role: "owner", organization_id: nil})
+      assert OperatorAccount.orphaned?(%OperatorAccount{role: nil, organization_id: nil})
+    end
+
     test "is false for a scoped admin or agent and for any super_admin" do
       refute OperatorAccount.orphaned?(%OperatorAccount{role: "admin", organization_id: 1})
       refute OperatorAccount.orphaned?(%OperatorAccount{role: "agent", organization_id: 1})

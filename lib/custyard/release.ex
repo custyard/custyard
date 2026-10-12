@@ -203,15 +203,18 @@ defmodule Custyard.Release do
 
   # :keep so a repeated switch is seen and refused; by default OptionParser
   # silently keeps the last value, and `--role agent --role super_admin`
-  # must not quietly mean one of them.
+  # must not quietly mean one of them. The values are checked here too: an
+  # empty --role would otherwise become the super_admin default, and an
+  # organization id beyond 64 bits makes the SQLite driver raise.
   defp parse_operator_argv(["add" | args]) do
     case OptionParser.parse(args,
            strict: [role: [:string, :keep], organization: [:integer, :keep]]
          ) do
       {opts, [email], []} ->
-        if Keyword.keys(opts) == Enum.uniq(Keyword.keys(opts)),
-          do: {:add, email, add_opts(opts)},
-          else: :usage
+        if Keyword.keys(opts) == Enum.uniq(Keyword.keys(opts)) and
+             Enum.all?(opts, &valid_add_opt?/1),
+           do: {:add, email, add_opts(opts)},
+           else: :usage
 
       _ ->
         :usage
@@ -230,6 +233,9 @@ defmodule Custyard.Release do
   end
 
   defp parse_operator_argv(_argv), do: :usage
+
+  defp valid_add_opt?({:role, role}), do: role in OperatorAccount.roles()
+  defp valid_add_opt?({:organization, id}), do: OperatorAccounts.valid_id?(id)
 
   defp add_opts(opts) do
     Enum.map(opts, fn

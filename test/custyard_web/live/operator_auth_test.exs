@@ -592,6 +592,37 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       assert_redirect(settings, "/operator/login")
     end
 
+    test "a valid claim for a deleted operator is refused, with no id reuse",
+         %{conn: conn, leaver: leaver} do
+      # A newer account holds the highest id, so the deleted id stays free.
+      create_operator(%{email: "newer@example.com", role: "super_admin"})
+
+      stale = session_for(conn, leaver)
+      {:ok, queue, _html} = live(session_for(conn, leaver), ~p"/operator")
+
+      session = %{
+        "operator_id" => leaver.id,
+        "operator_created" => OperatorAccount.session_claim(leaver)
+      }
+
+      Repo.delete!(leaver)
+      refute Repo.get(OperatorAccount, leaver.id)
+
+      denied = get(stale, "/operator")
+      assert redirected_to(denied) == "/operator/login"
+      refute get_session(denied, :operator_id)
+      refute get_session(denied, :operator_created)
+
+      assert {:error, {:redirect, %{to: "/operator/login"}}} =
+               live(session_for(conn, leaver), ~p"/operator")
+
+      assert {:halt, %{redirected: {:redirect, %{to: "/operator/login"}}}} =
+               OperatorAuth.on_mount(:default, %{}, session, socket())
+
+      send(queue.pid, :debounced_reload)
+      assert_redirect(queue, "/operator/login")
+    end
+
     test "a session without the claim is signed out", %{conn: conn, leaver: leaver} do
       legacy =
         conn
