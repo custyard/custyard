@@ -11,6 +11,14 @@ defmodule Custyard.OperatorAccountTest do
       assert %{email: ["can't be blank"]} = errors_on(changeset)
     end
 
+    test "stores the email trimmed and lowercased" do
+      attrs = Factory.build_operator_account(email: "  Ops@Example.COM ")
+      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :email) == "ops@example.com"
+    end
+
     test "validates email format" do
       attrs = Factory.build_operator_account(email: "invalid")
       changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)

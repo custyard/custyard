@@ -31,10 +31,22 @@ defmodule Custyard.OperatorAccount do
   """
   def login_token_ttl_minutes, do: @login_token_ttl_minutes
 
+  @doc """
+  Trims and downcases an email address the way it is stored.
+
+  The login form looks accounts up by the normalized address, so every
+  lookup and every write must go through this.
+  """
+  def normalize_email(email) when is_binary(email),
+    do: email |> String.trim() |> String.downcase()
+
+  def normalize_email(email), do: email
+
   @doc false
   def changeset(operator_account, attrs) do
     operator_account
     |> cast(attrs, [:email, :password, :role, :organization_id])
+    |> update_change(:email, &normalize_email/1)
     |> validate_required([:email])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
       message: "must be a valid email address"
