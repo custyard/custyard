@@ -16,6 +16,23 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    services:
+      rabbitmq:
+        image: rabbitmq:4.2
+        env:
+          RABBITMQ_DEFAULT_USER: custyard_test
+          RABBITMQ_DEFAULT_PASS: custyard_test
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      ACKNOWLEDGMENTS_TEST_AMQP_URL: amqp://custyard_test:custyard_test@localhost:5672
+
     steps:
       - uses: actions/checkout@v4
 
@@ -49,3 +66,4 @@ jobs:
           otp-version: ${{ env.OTP_VERSION }}
       - run: mix deps.get
       - run: mix sobelow --exit
+      - run: mix hex.audit

@@ -6,6 +6,10 @@ config :custyard,
   generators: [timestamp_type: :utc_datetime],
   upload_dir: Path.expand("../priv/static/uploads", __DIR__)
 
+# Enabled explicitly only after the independently provisioned broker topology
+# and source-qualified organization mappings are ready.
+config :custyard, :acknowledgments, enabled: false
+
 config :custyard, CustyardWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
@@ -62,7 +66,9 @@ config :logger, :console,
     :recipient_count,
     :sender,
     :size_bytes,
-    :source_key
+    :source_key,
+    :source,
+    :submission_id
   ]
 
 config :phoenix, :json_library, Jason

@@ -73,6 +73,122 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
              live(authenticate_conn(conn, operator), ~p"/operator/organizations/#{foreign.id}")
   end
 
+  defp acknowledgment_fixture(org, attrs \\ %{}) do
+    source_org = "ots-org-#{org.id}"
+
+    unless Custyard.Acknowledgments.get_binding("ots.test", source_org) do
+      {:ok, _} =
+        Custyard.Acknowledgments.create_binding(%{
+          source: "ots.test",
+          source_organization_id: source_org,
+          organization_id: org.id
+        })
+    end
+
+    text =
+      Map.get(
+        attrs,
+        "statement_text",
+        "Original wording\n  with indentation <script>alert('x')</script>"
+      )
+
+    payload =
+      Map.merge(
+        %{
+          "schema_version" => 1,
+          "source" => "ots.test",
+          "submission_id" => "submission-#{System.unique_integer([:positive])}",
+          "organization_id" => source_org,
+          "actor_id" => "colonel-123",
+          "actor_role" => "colonel",
+          "actor_type" => "internal_operator",
+          "statement_key" => "pilot_attestation",
+          "statement_version" => "v1",
+          "statement_text" => text,
+          "statement_hash" => Base.encode16(:crypto.hash(:sha256, text), case: :lower),
+          "acknowledged_at" => "2026-09-30T17:31:42Z"
+        },
+        attrs
+      )
+
+    {:ok, record} = Custyard.Acknowledgments.ingest(payload)
+    record
+  end
+
+  describe "Acknowledgments tab" do
+    test "displays exact escaped evidence independently of conversations", %{conn: conn} do
+      org = insert_organization()
+      record = acknowledgment_fixture(org)
+
+      {:ok, view, html} =
+        live(
+          authenticate_conn(conn, create_admin(org)),
+          ~p"/operator/organizations/#{org.id}?tab=acknowledgments"
+        )
+
+      assert has_element?(view, "[data-testid=org-acknowledgment-#{record.id}]")
+      assert html =~ "ots.test"
+      assert html =~ record.submission_id
+      assert html =~ "colonel-123"
+      assert html =~ "internal_operator"
+      assert html =~ "2026-09-30T17:31:42Z"
+      assert html =~ DateTime.to_iso8601(record.received_at)
+      assert html =~ "pilot_attestation"
+      assert html =~ "v1"
+      assert html =~ record.statement_hash
+      assert html =~ "&lt;script&gt;"
+      refute html =~ "<script>alert"
+      assert has_element?(view, "pre.whitespace-pre-wrap")
+      assert html =~ "Original wording\n  with indentation"
+      refute has_element?(view, "[data-testid=org-conversations-list]")
+    end
+
+    test "admin cannot read another organization's acknowledgment tab", %{conn: conn} do
+      own = insert_organization()
+      foreign = insert_organization()
+      acknowledgment_fixture(foreign)
+
+      assert {:error, {:redirect, %{to: "/operator/organizations"}}} =
+               live(
+                 authenticate_conn(conn, create_admin(own)),
+                 ~p"/operator/organizations/#{foreign.id}?tab=acknowledgments"
+               )
+    end
+
+    test "lists only the selected organization and pages bounded results", %{conn: conn} do
+      org = insert_organization()
+      foreign = insert_organization()
+      foreign_record = acknowledgment_fixture(foreign)
+      Enum.each(1..21, fn _ -> acknowledgment_fixture(org) end)
+
+      {:ok, view, html} =
+        live(
+          authenticate_conn(conn, create_super_admin()),
+          ~p"/operator/organizations/#{org.id}?tab=acknowledgments"
+        )
+
+      assert length(
+               Floki.find(
+                 Floki.parse_document!(html),
+                 "article[data-testid^=org-acknowledgment-]"
+               )
+             ) == 20
+
+      refute has_element?(view, "[data-testid=org-acknowledgment-#{foreign_record.id}]")
+      html = view |> element("[data-testid=acknowledgments-next]") |> render_click()
+
+      assert length(
+               Floki.find(
+                 Floki.parse_document!(html),
+                 "article[data-testid^=org-acknowledgment-]"
+               )
+             ) == 1
+
+      refute has_element?(view, "[data-testid=acknowledgments-next]")
+      assert has_element?(view, "[data-testid=acknowledgments-previous]")
+    end
+  end
+
   describe "Routes tab rendering" do
     setup %{conn: conn} do
       org = insert_organization(name: "Routes Test Org")
@@ -155,7 +271,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
   end
 
   describe "Route creation" do
-    setup %{conn: conn} do
+    setup _context do
       org = insert_organization(name: "Create Routes Org")
 
       {:ok, _general_route} =
@@ -255,7 +371,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
   end
 
   describe "Webhook toggling" do
-    setup %{conn: conn} do
+    setup _context do
       org = insert_organization(name: "Webhook Toggle Org")
 
       {:ok, route} =
@@ -369,7 +485,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
   end
 
   describe "Route deletion" do
-    setup %{conn: conn} do
+    setup _context do
       org = insert_organization(name: "Delete Routes Org")
 
       {:ok, general_route} =
@@ -502,7 +618,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
   end
 
   describe "Role-based access" do
-    setup %{conn: conn} do
+    setup _context do
       org = insert_organization(name: "RBAC Test Org")
 
       {:ok, _route} =
@@ -544,7 +660,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Routes") |> render_click()
 
       # Admin should see create and toggle controls
       assert has_element?(view, "[data-testid=create-route-btn]")

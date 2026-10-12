@@ -29,6 +29,32 @@ blank_to_nil = fn
   value -> value
 end
 
+acknowledgments_enabled =
+  case System.get_env("ACKNOWLEDGMENTS_ENABLED") do
+    value when value in [nil, "", "false"] -> false
+    "true" -> true
+    _ -> raise "ACKNOWLEDGMENTS_ENABLED must be true or false"
+  end
+
+acknowledgments_prefetch =
+  case System.get_env("ACKNOWLEDGMENTS_PREFETCH") do
+    value when value in [nil, ""] ->
+      1
+
+    value ->
+      case Integer.parse(value) do
+        {count, ""} when count > 0 and count <= 100 -> count
+        _ -> raise "ACKNOWLEDGMENTS_PREFETCH must be an integer between 1 and 100"
+      end
+  end
+
+config :custyard, :acknowledgments,
+  enabled: acknowledgments_enabled,
+  url: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_AMQP_URL")),
+  source: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_SOURCE")),
+  queue: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_QUEUE")) || "custyard.acknowledgments",
+  prefetch: acknowledgments_prefetch
+
 # Helper to add webhook secret from env var if set
 maybe_put_env_secret = fn map, key, env_var ->
   case System.get_env(env_var) do

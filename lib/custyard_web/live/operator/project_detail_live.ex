@@ -244,6 +244,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
       <%= if @show_task_form do %>
         <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 mb-4">
           <form
+            id="operator-project-task-form"
             phx-submit="add_task"
             phx-change="update_new_task"
             class="space-y-3"

@@ -2,7 +2,7 @@
 
 **Version:** 0.1
 **Date:** 2026-09-30
-**Status:** Agreed design; implementation pending
+**Status:** Custyard implementation available; OTS producer and production pilot pending
 
 ## Summary
 
@@ -147,9 +147,17 @@ flowchart LR
 
 ## Open Questions
 
-- **Statement:** The exact wording, statement key, and initial version require agreement before the publisher and display are implemented.
-- **Message contract and mapping:** Field names, source identifiers, routing names, validation limits, and provisioning of pilot organization mappings require a shared OTS/Custyard contract.
-- **Retry and failure policy:** Backoff intervals, attempt limits, safe transfer to retry/failure queues, failure retention, and the replay interface require explicit configuration before production acceptance.
+- **Statement:** The exact wording, statement key, and initial version require agreement before the OTS producer is enabled. Custyard preserves and displays the submitted wording.
+- **OTS rollout:** Implement the Colonel action and confirmed publication in OTS using the [message contract](colonel-acknowledgment-contract.md). Agree the production source identity and provision pilot mappings before enabling publication.
+
+## Implemented Custyard decisions
+
+- The [v1 message contract](colonel-acknowledgment-contract.md) defines exact fields, limits, source attribution, hashing, and routing.
+- Dedicated evidence records and explicit source/organization mappings enforce database idempotency and preserve historical wording.
+- The bounded consumer defaults to prefetch 1 and manual acknowledgment after commit.
+- Retry delays are 10 seconds, 60 seconds, and 300 seconds, followed by a retained failure queue. Confirmed transfers and quorum at-least-once retry routing preserve recoverability.
+- The organization detail page exposes a paginated acknowledgment tab to authorized operators.
+- Provisioning, idempotent mapping, status, inspection, and replay are available via Mix and production release operations; see the [operations guide](../ops/acknowledgments.md).
 
 ## References
 
@@ -157,3 +165,5 @@ flowchart LR
 - [RabbitMQ reliability guide](https://www.rabbitmq.com/docs/reliability)
 - [Quorum queues](https://www.rabbitmq.com/docs/quorum-queues) — reference for later availability requirements.
 - [Custyard deployment](../flyio-deployment.md)
+- [Message contract](colonel-acknowledgment-contract.md)
+- [Acknowledgment operations](../ops/acknowledgments.md)
