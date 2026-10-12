@@ -110,6 +110,19 @@ inactive_class =
             Slugs
           </.link>
           <.link
+            navigate={~p"/operator/acknowledgments"}
+            class={
+              if nav_active?.("/operator/acknowledgments", [
+                   CustyardWeb.Operator.AcknowledgmentsLive
+                 ]),
+                 do: active_class,
+                 else: inactive_class
+            }
+            data-testid="operator-nav-acknowledgments"
+          >
+            Acknowledgments
+          </.link>
+          <.link
             navigate={~p"/operator/settings"}
             class={
               if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
@@ -221,6 +234,17 @@ inactive_class =
         }
       >
         Slugs
+      </.link>
+      <.link
+        navigate={~p"/operator/acknowledgments"}
+        class={
+          if nav_active?.("/operator/acknowledgments", [CustyardWeb.Operator.AcknowledgmentsLive]),
+            do: active_class,
+            else: inactive_class
+        }
+        data-testid="operator-nav-mobile-acknowledgments"
+      >
+        Acknowledgments
       </.link>
       <.link
         navigate={~p"/operator/settings"}
