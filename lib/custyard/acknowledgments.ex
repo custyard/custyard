@@ -2,7 +2,45 @@ defmodule Custyard.Acknowledgments do
   @moduledoc "Stores immutable Colonel evidence and explicit organization mappings. Callers authorize operator reads."
   import Ecto.Query
   alias Custyard.Repo
-  alias Custyard.Acknowledgments.{Acknowledgment, Evidence, OrganizationBinding}
+  alias Custyard.Acknowledgments.{Acknowledgment, Config, Consumer, Evidence, OrganizationBinding}
+
+  @doc """
+  `:disabled`, `:not_configured`, `:connecting` or `:connected`. Reads published
+  state only, so it never waits on the consumer.
+  """
+  def subscription_status do
+    case Config.mode(Config.load()) do
+      :disabled -> :disabled
+      :configured -> Consumer.status()
+      _ -> :not_configured
+    end
+  end
+
+  @doc """
+  What the operator UI may show about the subscription. Deliberately excludes
+  the URL: the map is assigned to LiveView sockets.
+  """
+  def subscription_overview do
+    config = Config.load()
+
+    %{
+      status: subscription_status(),
+      broker_configured?: Config.connection_mode(config) == :configured,
+      source: present(config[:source]),
+      queue: config[:queue],
+      prefetch: config[:prefetch],
+      required_variables: Config.required_variables()
+    }
+  end
+
+  @doc "The configured source when it is a valid identity, for source-pinned binding."
+  def configured_source do
+    source = Config.load()[:source]
+    if Evidence.valid_identity?(source), do: source
+  end
+
+  defp present(value) when is_binary(value) and value != "", do: value
+  defp present(_), do: nil
 
   def create_binding(attrs),
     do: %OrganizationBinding{} |> OrganizationBinding.changeset(attrs) |> Repo.insert()

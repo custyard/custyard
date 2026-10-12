@@ -35,6 +35,8 @@ defmodule Custyard.Acknowledgments.TransportTest do
 
   test "retry headers accept only nonnegative integers" do
     assert Consumer.attempts(nil) == 0
+    # amqp_client reports a message published without headers as :undefined.
+    assert Consumer.attempts(:undefined) == 0
     assert Consumer.attempts([{"custyard-attempt", :long, 2}]) == 2
     assert Consumer.attempts([{"custyard-attempt", :longstr, "2"}]) == 0
     assert Consumer.attempts([{"custyard-attempt", :long, -1}]) == 0
