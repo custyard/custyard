@@ -401,11 +401,13 @@ swaks --to support@example.com --server localhost:2024 --protocol lmtp \
 
 ### IEx debugging
 
-```elixir
-# Connect to running application
-iex --sname debug --remsh custyard@hostname
+Releases run with Erlang distribution off (`RELEASE_DISTRIBUTION=none`), so
+there is no remote shell into a running node. Run one-off code in a separate VM
+with `bin/custyard eval '...'` (configuration loaded, app not started), or debug
+locally:
 
-# Or in development
+```elixir
+# In development
 iex -S mix
 
 # Test parser directly

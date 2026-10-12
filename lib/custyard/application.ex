@@ -224,14 +224,11 @@ defmodule Custyard.Application do
   end
 
   defp do_setup_dev_operator do
-    alias Custyard.{OperatorAccount, Repo}
-
-    case Repo.get_by(OperatorAccount, email: @default_operator_email) do
-      nil ->
-        %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: @default_operator_email})
-        |> Repo.insert!()
-
+    case Custyard.OperatorAccounts.create_operator(@default_operator_email,
+           via: "boot",
+           allow_placeholder: true
+         ) do
+      {:created, _operator} ->
         Logger.info("""
 
         ========================================
@@ -245,8 +242,11 @@ defmodule Custyard.Application do
         ========================================
         """)
 
-      _operator ->
+      {:exists, _operator} ->
         Logger.debug("Dev operator account exists, skipping creation")
+
+      {:error, message} ->
+        Logger.warning("Failed to setup dev operator: #{message}")
     end
   end
 

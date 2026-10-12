@@ -1,0 +1,16 @@
+#!/bin/sh
+# Operator accounts: add, list, remove; full usage comes from `operator help`.
+set -eu
+bin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+
+# `fly ssh console` runs as root, but the app and its SQLite WAL files belong to
+# custyard. Root-owned -wal/-shm files would leave the app with a read-only database.
+if [ "$(id -u)" = "0" ]; then
+  if id custyard >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
+    exec runuser -u custyard -- "$bin_dir/operator" "$@"
+  fi
+  echo "operator: refusing to run as root; run as the user that owns the database" >&2
+  exit 1
+fi
+
+exec "$bin_dir/custyard" eval 'Custyard.Release.operator_cli(System.argv())' "$@"

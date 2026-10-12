@@ -36,8 +36,15 @@ COPY priv/repo priv/repo
 # (enable_source_code_context). Must run before the release is assembled.
 RUN mix sentry.package_source_code
 
+# Release overlays (bin/operator, bin/acknowledgments) and env.sh.eex, which
+# turns Erlang distribution off. Copied late so edits here rebuild only the
+# release, and checked so a missing or non-executable overlay fails the build.
+COPY rel rel
+
 # Build release
 RUN mix release
+RUN test -x _build/prod/rel/custyard/bin/operator && \
+    test -x _build/prod/rel/custyard/bin/acknowledgments
 
 # Runtime stage
 # Use Debian 12 (bookworm) to match the Elixir builder image base.
@@ -50,7 +57,7 @@ LABEL org.opencontainers.image.description="Custyard Service Platform"
 LABEL org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libstdc++6 openssl libncurses6 locales curl && \
+      libstdc++6 openssl libncurses6 locales curl ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 

@@ -63,15 +63,59 @@ mix dev.create_operator --email you@example.com
 
 ### Production (Docker / Fly)
 
-The container entrypoint runs `Custyard.Release.setup_operator()`, which creates
-`admin@custyard.local` (`super_admin`) on first boot if no operator exists. Log in
-the same way via `/operator/login` — but delivery needs a real mailer, so set
-`MAIL_ADAPTER` (`mailgun` | `sendgrid` | `smtp` | `postmark`) and its credentials
-(see `.env.sample`). To create an operator with a specific email:
+Login links need a real mailer, so set `MAIL_ADAPTER` (`lettermint` | `postmark` |
+`sendgrid` | `mailgun` | `smtp`) and its credentials (see `.env.sample`). Then create
+the first `super_admin` in one of two ways.
+
+On the next boot: set `OPERATOR_EMAIL` and the entrypoint creates that account if
+it does not exist. An existing account is never modified.
 
 ```bash
-bin/custyard eval 'Custyard.Release.setup_operator("ops@example.com")'
+fly secrets set OPERATOR_EMAIL=you@example.com
 ```
+
+Log in at `/operator/login`, then `fly secrets unset OPERATOR_EMAIL`. While it is
+set, every boot logs a reminder, and an operator you remove with that address is
+recreated on the next boot.
+
+From a shell on the running machine: `bin/operator` starts only the database,
+never the app, so it is safe while the server runs. Under `fly ssh console` it
+switches to the `custyard` user itself.
+
+```bash
+fly ssh console -a custyard -C "/app/bin/operator add you@example.com"
+fly ssh console -a custyard -C "/app/bin/operator add lead@example.com --role admin --organization 3"
+fly ssh console -a custyard -C "/app/bin/operator add helper@example.com --role agent --organization 3"
+fly ssh console -a custyard -C "/app/bin/operator list"
+fly ssh console -a custyard -C "/app/bin/operator remove helper@example.com"
+fly ssh console -a custyard -C "/app/bin/operator help"
+```
+
+With Docker, run `docker exec <container> bin/operator ...` instead.
+
+- The default role is `super_admin`. `admin` and `agent` need `--organization ID`
+  (the number in `/operator/organizations/ID`). `add` reports an existing account
+  as "exists (role X), not modified" and never changes its role.
+- Emails are case-insensitive: `Ops@Example.com` and `ops@example.com` are the
+  same account, stored lowercased.
+- The "check your email" page looks the same whether or not the address has an
+  account, so a typo looks like success. Check `bin/operator list`.
+- `remove` refuses to remove the last `super_admin` who can log in.
+- An `admin` or `agent` whose organization was deleted cannot log in ("No
+  organization assigned; ask a super admin"); `list` flags them. Remove the
+  account and add it again with `--organization`.
+
+Older images seeded `admin@custyard.local` as a `super_admin`. Nothing delivers
+mail to that address, so it can never log in; each boot logs a warning while it
+exists and `list` flags it. Once your own `super_admin` can log in, remove it:
+
+```bash
+fly ssh console -a custyard -C "/app/bin/operator remove admin@custyard.local"
+```
+
+Erlang distribution is off in the release, so `bin/custyard remote` and
+`bin/custyard rpc` do not work. Use `bin/operator`, or `bin/custyard eval` for
+one-off code (a separate VM with the app's configuration; the app is not started).
 
 ## Phoenix.new / Remote VM Setup
 
