@@ -28,6 +28,18 @@ defmodule Custyard.Acknowledgments.BrokerIntegrationTest do
     %{connection: connection, channel: channel, config: config}
   end
 
+  # TTL expiry and dead-lettering are asynchronous, so poll within a bound instead of sleeping.
+  defp await_message(channel, queue, attempts \\ 250) do
+    case AMQP.Basic.get(channel, queue, no_ack: false) do
+      {:empty, _} when attempts > 1 ->
+        Process.sleep(20)
+        await_message(channel, queue, attempts - 1)
+
+      result ->
+        result
+    end
+  end
+
   test "confirms routing and retains exact evidence through delayed retry", %{
     connection: connection,
     channel: channel,
@@ -45,8 +57,7 @@ defmodule Custyard.Acknowledgments.BrokerIntegrationTest do
              )
 
     assert {:empty, _} = AMQP.Basic.get(channel, config[:queue])
-    Process.sleep(250)
-    assert {:ok, ^body, meta} = AMQP.Basic.get(channel, config[:queue], no_ack: false)
+    assert {:ok, ^body, meta} = await_message(channel, config[:queue])
     assert meta.persistent
     assert :ok = AMQP.Basic.ack(channel, meta.delivery_tag)
   end

@@ -2,7 +2,7 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
   use Custyard.DataCase, async: false
   import Custyard.Factory
   alias Custyard.Acknowledgments
-  alias Custyard.Acknowledgments.{Broker, Consumer, Topology}
+  alias Custyard.Acknowledgments.{Broker, Consumer, Operations, Topology}
 
   @moduletag :rabbitmq
   @moduletag skip: is_nil(System.get_env("ACKNOWLEDGMENTS_TEST_AMQP_URL"))
@@ -21,6 +21,11 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     {:ok, connection, channel} = Broker.open(config)
     :ok = Topology.provision(channel, config)
     org = insert_organization()
+
+    # Recovery operations load configuration as the Mix and release commands do.
+    previous = Application.get_env(:custyard, :acknowledgments)
+    Application.put_env(:custyard, :acknowledgments, config)
+    on_exit(fn -> Application.put_env(:custyard, :acknowledgments, previous) end)
 
     on_exit(fn ->
       case Broker.open(config) do
@@ -117,6 +122,16 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     end)
   end
 
+  # Counts ready messages only, so this also waits for a rejected delivery to return.
+  defp await_failures(ctx, count) do
+    eventually(fn ->
+      match?(
+        {:ok, %{message_count: ^count}},
+        AMQP.Queue.declare(ctx.channel, Topology.failure(ctx.config), passive: true)
+      )
+    end)
+  end
+
   test "missing topology reconnects until provisioned, then consumes", ctx do
     bind(ctx.org)
     {:ok, _} = AMQP.Queue.delete(ctx.channel, ctx.config[:queue])
@@ -198,16 +213,38 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     consumer = start_consumer(ctx.config)
     :ok = Broker.publish(ctx.connection, ctx.config[:queue], body, [], 5_000)
     {^body, meta} = get_failed(ctx.channel, ctx.config)
+    :ok = AMQP.Basic.reject(ctx.channel, meta.delivery_tag, requeue: true)
+    await_failures(ctx, 1)
     assert Acknowledgments.list_for_organization(ctx.org.id) == []
     bind(ctx.org)
-    :ok = Broker.publish(ctx.connection, ctx.config[:queue], body, [], 5_000)
-    :ok = AMQP.Basic.ack(ctx.channel, meta.delivery_tag)
+    assert :ok = Operations.replay()
     eventually(fn -> length(Acknowledgments.list_for_organization(ctx.org.id)) == 1 end)
     assert [record] = Acknowledgments.list_for_organization(ctx.org.id)
     assert record.submission_id == "stable"
     assert record.acknowledged_at == evidence()["acknowledged_at"]
     eventually(fn -> drained(ctx.config, ctx.channel, consumer) end)
+    await_failures(ctx, 0)
+    assert :empty = Operations.replay()
     stop_supervised!(Consumer)
     assert {:empty, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: false)
+  end
+
+  test "inspect returns the failure to its queue, and an unroutable replay keeps it", ctx do
+    assert :empty = Operations.inspect_failure()
+    body = Jason.encode!(evidence())
+    start_consumer(ctx.config)
+    :ok = Broker.publish(ctx.connection, ctx.config[:queue], body, [], 5_000)
+    await_failures(ctx, 1)
+    stop_supervised!(Consumer)
+
+    assert {:ok, %{body: ^body, headers: headers}} = Operations.inspect_failure()
+    assert List.keyfind(headers, "custyard-attempt", 0) == {"custyard-attempt", :long, 2}
+    await_failures(ctx, 1)
+
+    {:ok, _} = AMQP.Queue.delete(ctx.channel, ctx.config[:queue])
+    assert {:error, {:unroutable, 312}} = Operations.replay()
+    await_failures(ctx, 1)
+    assert {^body, meta} = get_failed(ctx.channel, ctx.config)
+    :ok = AMQP.Basic.ack(ctx.channel, meta.delivery_tag)
   end
 end
