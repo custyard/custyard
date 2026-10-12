@@ -1,12 +1,15 @@
 defmodule CustyardWeb.Plugs.RequireOperator do
   @moduledoc """
   Plug that requires an authenticated operator session.
-  Redirects to login if no operator_id in session or if operator no longer exists.
+  Redirects to login if no operator_id in session, if operator no longer exists,
+  or if the operator is an admin or agent without an organization
+  (`OperatorAccount.orphaned?/1`).
   """
   import Plug.Conn
   import Phoenix.Controller
 
   alias Custyard.{OperatorAccount, Repo}
+  alias CustyardWeb.Live.OperatorAuth
 
   def init(opts), do: opts
 
@@ -23,7 +26,13 @@ defmodule CustyardWeb.Plugs.RequireOperator do
             |> redirect_to_login("Session expired")
 
           operator ->
-            assign(conn, :current_operator, operator)
+            if OperatorAccount.orphaned?(operator) do
+              conn
+              |> delete_session(:operator_id)
+              |> redirect_to_login(OperatorAuth.no_organization_message())
+            else
+              assign(conn, :current_operator, operator)
+            end
         end
     end
   end

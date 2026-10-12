@@ -5,6 +5,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
   import Custyard.Factory
 
   alias Custyard.{Conversation, OperatorAccount, Repo, Scoring}
+  alias CustyardWeb.Live.OperatorAuth
 
   # Helpers for creating operators and authenticated connections
 
@@ -21,6 +22,13 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
     conn
     |> Phoenix.ConnTest.init_test_session(%{})
     |> Plug.Conn.put_session(:operator_id, operator.id)
+  end
+
+  # The real deletion path (its "Deleting organization" warning is expected).
+  defp delete_organization(org) do
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert {:ok, _} = Custyard.Organizations.delete_organization(org)
+    end)
   end
 
   describe "on_mount/4 - authentication" do
@@ -375,6 +383,117 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
       assert_redirect(view, "/operator")
       assert Repo.get!(Conversation, conversation.id).state == :active
+    end
+  end
+
+  # Deleting an organization nulls its operators' organization_id (ON DELETE
+  # SET NULL); scoped_organization_id/1 then returns nil, which the queue and
+  # neglect views read as "all organizations".
+  describe "admin or agent whose organization was deleted" do
+    setup do
+      own = insert_organization(name: "Deleted organization")
+      other = insert_organization(name: "Other organization")
+      conversation = insert_conversation(organization_id: other.id, subject: "Other org ticket")
+      Scoring.calculate_and_cache(conversation.id)
+
+      admin =
+        create_operator(%{
+          email: "orphan-admin@example.com",
+          role: "admin",
+          organization_id: own.id
+        })
+
+      agent =
+        create_operator(%{
+          email: "orphan-agent@example.com",
+          role: "agent",
+          organization_id: own.id
+        })
+
+      delete_organization(own)
+
+      {:ok,
+       admin: Repo.get!(OperatorAccount, admin.id), agent: Repo.get!(OperatorAccount, agent.id)}
+    end
+
+    test "cannot load the queue or neglect pages", %{conn: conn, admin: admin, agent: agent} do
+      assert admin.organization_id == nil
+
+      for operator <- [admin, agent], path <- ["/operator", "/operator/neglect"] do
+        denied = get(login(conn, operator), path)
+
+        assert redirected_to(denied) == "/operator/login"
+
+        assert Phoenix.Flash.get(denied.assigns.flash, :error) ==
+                 OperatorAuth.no_organization_message()
+
+        # The plug also drops the session.
+        refute get_session(denied, :operator_id)
+
+        assert {:error, {:redirect, %{to: "/operator/login"}}} = live(login(conn, operator), path)
+      end
+    end
+
+    test "the login page tells them why", %{conn: conn, admin: admin} do
+      denied = get(login(conn, admin), "/operator/neglect")
+      page = get(recycle(denied), "/operator/login")
+
+      assert html_response(page, 200) =~ "No organization assigned; ask a super admin."
+    end
+
+    # A connected (websocket) mount does not pass through the router's
+    # :require_operator plug, so the on_mount hook must refuse on its own.
+    test "on_mount refuses them on a connected mount", %{admin: admin, agent: agent} do
+      for operator <- [admin, agent], mode <- [:default, :require_admin] do
+        socket = %Phoenix.LiveView.Socket{
+          endpoint: CustyardWeb.Endpoint,
+          assigns: %{__changed__: %{}, flash: %{}},
+          private: %{live_temp: %{}}
+        }
+
+        assert {:halt, halted} =
+                 OperatorAuth.on_mount(mode, %{}, %{"operator_id" => operator.id}, socket)
+
+        assert {:redirect, %{to: "/operator/login"}} = halted.redirected
+        assert halted.assigns.flash["error"] == OperatorAuth.no_organization_message()
+        refute Map.has_key?(halted.assigns, :current_operator)
+      end
+    end
+
+    test "an open view is closed on its next event once the organization is deleted",
+         %{conn: conn} do
+      org = insert_organization()
+
+      operator =
+        create_operator(%{
+          email: "soon-orphaned@example.com",
+          role: "admin",
+          organization_id: org.id
+        })
+
+      {:ok, queue, _html} = live(login(conn, operator), ~p"/operator")
+      {:ok, neglect, _html} = live(login(conn, operator), ~p"/operator/neglect")
+      {:ok, orgs, _html} = live(login(conn, operator), ~p"/operator/organizations")
+
+      delete_organization(org)
+
+      send(queue.pid, :debounced_reload)
+      assert_redirect(queue, "/operator/login")
+
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, 0})
+      assert_redirect(neglect, "/operator/login")
+
+      render_click(orgs, "show_form", %{})
+      assert_redirect(orgs, "/operator/login")
+    end
+
+    test "super_admin is unaffected", %{conn: conn} do
+      super_admin = create_operator(%{email: "still-super@example.com", role: "super_admin"})
+
+      {:ok, _view, html} = live(login(conn, super_admin), ~p"/operator")
+      assert html =~ "Other org ticket"
+
+      {:ok, _view, _html} = live(login(conn, super_admin), ~p"/operator/neglect")
     end
   end
 end

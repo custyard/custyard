@@ -9,11 +9,23 @@ defmodule CustyardWeb.Live.OperatorAuth do
 
   All modes assign `:current_operator`, `:scoped_organization_id`,
   `:current_role`, and `:is_super_admin` to the socket.
+
+  An admin or agent without an organization (`OperatorAccount.orphaned?/1`,
+  e.g. after their organization was deleted) is never authorized: on mount
+  or on any later event they are sent to the login page with
+  `no_organization_message/0`.
   """
   import Phoenix.LiveView
   import Phoenix.Component
 
   alias Custyard.{Authorization, OperatorAccount, Repo}
+
+  @no_organization_message "No organization assigned; ask a super admin."
+
+  @doc """
+  Shown wherever an orphaned admin or agent is turned away.
+  """
+  def no_organization_message, do: @no_organization_message
 
   def on_mount(:default, _params, session, socket) do
     authenticate(session, socket)
@@ -51,13 +63,23 @@ defmodule CustyardWeb.Live.OperatorAuth do
             {:halt, redirect(socket, to: "/operator/login")}
 
           operator ->
-            {:cont,
-             socket
-             |> assign(:operator_id, operator_id)
-             |> assign_operator(operator)
-             |> attach_refresh_hooks()}
+            if OperatorAccount.orphaned?(operator) do
+              {:halt, deny_no_organization(socket)}
+            else
+              {:cont,
+               socket
+               |> assign(:operator_id, operator_id)
+               |> assign_operator(operator)
+               |> attach_refresh_hooks()}
+            end
         end
     end
+  end
+
+  defp deny_no_organization(socket) do
+    socket
+    |> put_flash(:error, @no_organization_message)
+    |> redirect(to: "/operator/login")
   end
 
   defp assign_operator(socket, operator) do
@@ -92,12 +114,18 @@ defmodule CustyardWeb.Live.OperatorAuth do
       operator ->
         previous = socket.assigns.current_operator
 
-        if operator.role == previous.role and operator.organization_id == previous.organization_id do
-          {:cont, assign_operator(socket, operator)}
-        else
-          # Remount under the new role and organization before any existing
-          # view can render or act on resources loaded under the old scope.
-          {:halt, redirect(socket, to: "/operator")}
+        cond do
+          # Organization deleted under an open view (ON DELETE SET NULL).
+          OperatorAccount.orphaned?(operator) ->
+            {:halt, deny_no_organization(socket)}
+
+          operator.role == previous.role and operator.organization_id == previous.organization_id ->
+            {:cont, assign_operator(socket, operator)}
+
+          true ->
+            # Remount under the new role and organization before any existing
+            # view can render or act on resources loaded under the old scope.
+            {:halt, redirect(socket, to: "/operator")}
         end
     end
   end

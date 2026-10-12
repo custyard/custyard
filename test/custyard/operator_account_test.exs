@@ -410,4 +410,23 @@ defmodule Custyard.OperatorAccountTest do
       assert %{email: ["has already been taken"]} = errors_on(changeset)
     end
   end
+
+  describe "orphaned?/1" do
+    test "is true for an admin or agent without an organization" do
+      assert OperatorAccount.orphaned?(%OperatorAccount{role: "admin", organization_id: nil})
+      assert OperatorAccount.orphaned?(%OperatorAccount{role: "agent", organization_id: nil})
+    end
+
+    test "is false for a scoped admin or agent and for any super_admin" do
+      refute OperatorAccount.orphaned?(%OperatorAccount{role: "admin", organization_id: 1})
+      refute OperatorAccount.orphaned?(%OperatorAccount{role: "agent", organization_id: 1})
+
+      refute OperatorAccount.orphaned?(%OperatorAccount{
+               role: "super_admin",
+               organization_id: nil
+             })
+
+      refute OperatorAccount.orphaned?(nil)
+    end
+  end
 end

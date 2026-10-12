@@ -229,8 +229,23 @@ defmodule Custyard.OperatorAccount do
   def can_access_organization?(_, _), do: false
 
   @doc """
+  Returns true for an admin or agent with no organization.
+
+  Deleting an organization sets its operators' organization_id to NULL
+  (ON DELETE SET NULL). `scoped_organization_id/1` then returns nil, which
+  the queue and neglect views read as "all organizations", so such an
+  account must never be authorized. Login, the `:require_operator` plug and
+  the LiveView auth hooks all refuse it.
+  """
+  def orphaned?(%__MODULE__{role: role, organization_id: nil}) when role in ["admin", "agent"],
+    do: true
+
+  def orphaned?(_), do: false
+
+  @doc """
   Returns the organization_id this operator is scoped to, or nil for super_admins.
-  Useful for filtering queries.
+  Useful for filtering queries. An `orphaned?/1` account also returns nil, so
+  callers must have refused it first (the auth layer does).
   """
   def scoped_organization_id(%__MODULE__{role: "super_admin"}), do: nil
   def scoped_organization_id(%__MODULE__{organization_id: org_id}), do: org_id

@@ -148,6 +148,63 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
     end
   end
 
+  describe "admin or agent whose organization was deleted" do
+    setup do
+      org = insert_organization()
+      admin = insert_operator_account(role: "admin", organization_id: org.id)
+      Repo.delete!(org)
+      orphan = Repo.get!(OperatorAccount, admin.id)
+      assert orphan.organization_id == nil
+
+      {:ok, orphan: orphan}
+    end
+
+    test "gets no login link, and the response matches an unknown email", %{orphan: orphan} do
+      orphaned = request_login({10, 44, 10, 1}, orphan.email)
+      unknown = request_login({10, 44, 10, 2}, "nobody-#{orphan.id}@example.com")
+
+      assert redirected_to(orphaned) == "/operator/login/sent"
+      assert redirected_to(unknown) == "/operator/login/sent"
+      assert Repo.get!(OperatorAccount, orphan.id).login_token == nil
+
+      sent = get(recycle(orphaned), "/operator/login/sent")
+      unknown_sent = get(recycle(unknown), "/operator/login/sent")
+
+      # Identical apart from the echoed address and the per-session CSRF token.
+      normalize = fn html, email ->
+        html
+        |> String.replace(email, "EMAIL")
+        |> String.replace(~r/name="csrf-token" content="[^"]+"/, "CSRF")
+      end
+
+      assert normalize.(html_response(sent, 200), orphan.email) ==
+               normalize.(html_response(unknown_sent, 200), "nobody-#{orphan.id}@example.com")
+    end
+
+    test "a link minted before the deletion never yields a session", %{conn: conn, orphan: orphan} do
+      %{login_token: token} =
+        orphan |> OperatorAccount.login_token_changeset() |> Repo.update!()
+
+      peek = get(conn, "/operator/login/verify/#{token}")
+      assert html_response(peek, 200) =~ "No organization assigned; ask a super admin."
+      refute html_response(peek, 200) =~ "auth-verify-form"
+
+      posted = post(build_conn(), "/operator/login/verify/#{token}")
+      assert html_response(posted, 200) =~ "No organization assigned; ask a super admin."
+      refute get_session(posted, :operator_id)
+    end
+  end
+
+  describe "login page" do
+    test "shows the flash that sent the operator there", %{conn: conn} do
+      denied = get(conn, "/operator")
+      assert redirected_to(denied) == "/operator/login"
+
+      login = get(recycle(denied), "/operator/login")
+      assert html_response(login, 200) =~ "Please log in"
+    end
+  end
+
   defp request_login(ip, email) do
     build_conn()
     |> Map.put(:remote_ip, ip)
