@@ -331,7 +331,7 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 | Login link never arrives | The "check your email" page is shown even for unknown addresses. Confirm the account with `/app/bin/operator list`, then check `MAIL_ADAPTER` and `fly logs` |
 | Boot fails with `OPERATOR_EMAIL: ...` | The value is not a valid address (or is `admin@custyard.local`). Fix or unset it: `fly secrets unset OPERATOR_EMAIL` |
 | "No organization assigned; ask a super admin" | The operator's organization was deleted. Remove the account with `/app/bin/operator remove EMAIL` and add it again with `--role` and `--organization` |
-| Database becomes read-only after an SSH session | Something wrote the database as root. Run app commands as `custyard` (`bin/operator` does), and `chown custyard:custyard /data/custyard.db*` |
+| Database becomes read-only after an SSH session | Something wrote the database as root. Run app commands as `custyard` (`bin/operator` does). Assuming the default `DATABASE_PATH`, run `chown custyard:custyard /data/custyard.db*`, then restart the app (`fly apps restart custyard`) |
 | `bin/custyard remote` or `rpc` fails | Erlang distribution is off. Use `/app/bin/operator` or `bin/custyard eval` |
 
 ## References

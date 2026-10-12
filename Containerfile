@@ -71,11 +71,17 @@ RUN groupadd --system custyard && \
 
 WORKDIR /app
 
-# Copy release from builder
+# Copy release from builder. It stays root-owned: under `fly ssh console`
+# root runs /app/bin/operator and /app/bin/acknowledgments before they drop
+# to custyard, so an app user able to write /app could plant code root runs.
 COPY --from=builder /app/_build/prod/rel/custyard ./
 
-# Create data directory for SQLite and set ownership
-RUN mkdir -p /data && chown -R custyard:custyard /app /data
+# custyard writes only /data (SQLite, uploads) and /app/tmp (RELEASE_TMP,
+# which `bin/custyard daemon` uses for its pipe and log, and crash dumps).
+RUN mkdir -p /data /app/tmp && chown custyard:custyard /data /app/tmp
+
+# The VM writes erl_crash.dump to its working directory (/app) by default.
+ENV ERL_CRASH_DUMP=/app/tmp/erl_crash.dump
 
 # Entrypoint script
 COPY entrypoint.sh /entrypoint.sh

@@ -14,7 +14,8 @@ services:
       PORT: "4000"
       DATABASE_PATH: /data/custyard.db
       # SECRET_KEY_BASE: "generate-with-mix-phx.gen.secret"
-      # OPERATOR_PASSWORD: "set-a-stable-password-here"
+      # First super_admin, created on boot if absent; remove after first login.
+      # OPERATOR_EMAIL: you@example.com
       # MAIL_ADAPTER: smtp
       # LMTP_ENABLED: "false"
       # IMAP_ENABLED: "false"
