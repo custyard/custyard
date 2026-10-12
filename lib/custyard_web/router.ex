@@ -143,6 +143,7 @@ defmodule CustyardWeb.Router do
       live "/settings", SettingsLive, :index
       live "/intake-sources", IntakeSourcesLive, :index
       live "/slugs", SlugsLive, :index
+      live "/acknowledgments", AcknowledgmentsLive, :index
     end
   end
 

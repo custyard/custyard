@@ -6,8 +6,8 @@ config :custyard,
   generators: [timestamp_type: :utc_datetime],
   upload_dir: Path.expand("../priv/static/uploads", __DIR__)
 
-# Enabled explicitly only after the independently provisioned broker topology
-# and source-qualified organization mappings are ready.
+# config/runtime.exs decides at boot: on by default in production, off by
+# default elsewhere, and ACKNOWLEDGMENTS_ENABLED overrides either way.
 config :custyard, :acknowledgments, enabled: false
 
 config :custyard, CustyardWeb.Endpoint,

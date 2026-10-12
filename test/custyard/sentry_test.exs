@@ -142,6 +142,41 @@ defmodule Custyard.SentryTest do
     end
   end
 
+  describe "scrub_text/1 redacts URI userinfo" do
+    test "redacts user and password, keeping scheme, host and vhost" do
+      text = "connect failed: amqps://custyard:s3cret@broker.example:5671/ots-vhost"
+
+      assert Scrub.scrub_text(text) ==
+               "connect failed: amqps://#{@redacted}@broker.example:5671/ots-vhost"
+    end
+
+    test "redacts the amqp_client parse error shape (an inspected charlist)" do
+      # :amqp_uri.parse/1 returns {:error, {Reason, Uri}} with the whole URI.
+      text =
+        inspect({:error, {{:port_out_of_range, 99_999}, ~c"amqp://user:pa'ss,w@localhost:99999"}})
+
+      result = Scrub.scrub_text(text)
+
+      refute result =~ "pa'ss"
+      refute result =~ "user:"
+      assert result =~ ~s|~c"amqp://#{@redacted}@localhost:99999"|
+    end
+
+    test "stops at the closing quote of an inspected value" do
+      text = ~s|url: "amqp://u:p@host", note: "mail me at a@b.example"|
+
+      assert Scrub.scrub_text(text) ==
+               ~s|url: "amqp://#{@redacted}@host", note: "mail me at a@b.example"|
+    end
+
+    test "redacts a username-only userinfo and leaves plain URLs alone" do
+      assert Scrub.scrub_text("amqp://guest@localhost") == "amqp://#{@redacted}@localhost"
+
+      assert Scrub.scrub_text("https://custyard.fly.dev/health") ==
+               "https://custyard.fly.dev/health"
+    end
+  end
+
   describe "scrub_url/1 scrubs path and query together" do
     test "redacts both a path token and a query token" do
       url = "https://custyard.fly.dev/c/tok?token=abc&keep=1"
@@ -264,6 +299,30 @@ defmodule Custyard.SentryTest do
 
       assert %Sentry.Event{} = scrubbed
       assert scrubbed.request.url == "[SCRUBBING_FAILED]"
+    end
+
+    test "scrubs broker credentials from messages, exception values and extra" do
+      uri = "amqp://custyard:brokerpass@broker.internal/ots"
+      crash = "** (MatchError) no match of right hand side value: {:error, ~c\"#{uri}\"}"
+
+      event =
+        event(
+          message: %Message{formatted: crash, message: crash},
+          exception: [%Sentry.Interfaces.Exception{type: "MatchError", value: crash}],
+          extra: %{crash_reason: crash}
+        )
+
+      scrubbed = Scrub.before_send(event)
+
+      for text <- [
+            scrubbed.message.formatted,
+            scrubbed.message.message,
+            hd(scrubbed.exception).value,
+            scrubbed.extra.crash_reason
+          ] do
+        refute text =~ "brokerpass"
+        assert text =~ "amqp://#{@redacted}@broker.internal/ots"
+      end
     end
   end
 

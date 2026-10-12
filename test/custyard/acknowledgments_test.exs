@@ -93,10 +93,10 @@ defmodule Custyard.AcknowledgmentsTest do
   end
 
   test "mapping provisioning is idempotent and never reassigns attribution", %{organization: org} do
-    assert {:ok, binding} = Acknowledgments.bind("ots.test", "org-new", org.id)
-    assert {:ok, ^binding} = Acknowledgments.bind("ots.test", "org-new", org.id)
+    assert {:ok, :created, binding} = Acknowledgments.bind("ots.test", "org-new", org.id)
+    assert {:ok, :existing, ^binding} = Acknowledgments.bind("ots.test", "org-new", org.id)
 
-    assert {:ok, ^binding} =
+    assert {:ok, :existing, ^binding} =
              Acknowledgments.bind("ots.test", "org-new", Integer.to_string(org.id))
 
     other =
@@ -107,6 +107,79 @@ defmodule Custyard.AcknowledgmentsTest do
     assert {:error, :conflicting_binding} = Acknowledgments.bind("ots.test", "org-new", other.id)
     assert Acknowledgments.get_binding("ots.test", "org-new").organization_id == org.id
     assert {:error, _} = Acknowledgments.bind(" ots.test", "org-new", org.id)
+  end
+
+  describe "binding audit" do
+    defp binding_audits do
+      Repo.all(
+        from e in Custyard.AuditEvent, where: e.event_type == :acknowledgment_binding_created
+      )
+    end
+
+    test "only a real insert is audited, with the operator who made it", %{organization: org} do
+      operator = Custyard.Factory.insert_operator_account()
+
+      assert {:ok, :created, binding} =
+               Acknowledgments.bind("ots.test", "org-audited", org.id, operator)
+
+      assert {:ok, :existing, _} = Acknowledgments.bind("ots.test", "org-audited", org.id, "cli")
+
+      other = Custyard.Factory.insert_organization()
+
+      assert {:error, :conflicting_binding} =
+               Acknowledgments.bind("ots.test", "org-audited", other.id, "cli")
+
+      assert [event] = binding_audits()
+      assert event.source == "operator"
+      assert event.organization_id == org.id
+
+      assert event.payload == %{
+               "actor" => "operator",
+               "operator_id" => operator.id,
+               "operator_email" => operator.email,
+               "source" => "ots.test",
+               "source_organization_id" => "org-audited",
+               "organization_id" => binding.organization_id
+             }
+    end
+
+    test "release commands are audited by channel", %{organization: org} do
+      assert {:ok, :created, _} = Acknowledgments.bind("ots.test", "org-cli", org.id, "cli")
+      assert [%{source: "cli", payload: %{"actor" => "cli"} = payload}] = binding_audits()
+      refute Map.has_key?(payload, "operator_id")
+    end
+
+    test "a missing organization is reported before any insert" do
+      assert {:error, :organization_not_found} =
+               Acknowledgments.bind("ots.test", "org-orphan", 999_999_999, "cli")
+
+      assert Acknowledgments.get_binding("ots.test", "org-orphan") == nil
+      assert binding_audits() == []
+    end
+
+    test "invalid identities are rejected without an audit row", %{organization: org} do
+      assert {:error, %Ecto.Changeset{}} =
+               Acknowledgments.bind("ots.test", "org\e[31m", org.id, "cli")
+
+      assert binding_audits() == []
+    end
+  end
+
+  test "bindings list with organization names, all or per organization", %{organization: org} do
+    other = Custyard.Factory.insert_organization(name: "Other organization")
+    {:ok, :created, _} = Acknowledgments.bind("ots.test", "org-2", other.id, "cli")
+
+    assert [
+             %{source: "ots.test", source_organization_id: "org-1", organization_name: "Pilot"},
+             %{source_organization_id: "org-2", organization_name: "Other organization"}
+           ] = Acknowledgments.list_bindings()
+
+    assert [%{source_organization_id: "org-1", organization_id: id}] =
+             Acknowledgments.list_bindings_for_organization(org.id)
+
+    assert id == org.id
+    # Rows carry the name only, never the organization (and its portal token).
+    refute Enum.any?(Acknowledgments.list_bindings(), &Map.has_key?(&1, :organization))
   end
 
   test "rejects unsupported, malformed, oversized or altered evidence" do

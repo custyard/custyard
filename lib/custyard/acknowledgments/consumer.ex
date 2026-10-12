@@ -4,14 +4,54 @@ defmodule Custyard.Acknowledgments.Consumer do
   require Logger
   alias Custyard.Acknowledgments.{Broker, Config, Evidence, Topology}
 
+  # Failure headers, and so the operator UI, only ever carry one of these.
+  @failure_categories ~w(message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error)
+
+  # Published state, so status reads never wait behind message processing.
+  # Replacing an atom value needs no global garbage collection.
+  @status_key {__MODULE__, :status}
+
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+
+  @doc "Every category a failure header can carry."
+  def failure_categories, do: @failure_categories
+
+  @doc """
+  `:connected` while this node's consumer holds a subscribed channel, otherwise
+  `:connecting`, including while the consumer is not running.
+  """
+  def status do
+    if Process.whereis(__MODULE__),
+      do: :persistent_term.get(@status_key, :connecting),
+      else: :connecting
+  end
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    publish_status(:connecting)
     config = Keyword.get(opts, :config, Config.load()) |> Config.validate!()
     send(self(), :connect)
     {:ok, %{config: config, connection: nil, channel: nil, monitors: [], consumer_tag: nil}}
   end
+
+  # Crash reports and :sys.get_status/1 render the state; the URL carries the
+  # broker password.
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, %{config: config} = state} when is_list(config) ->
+        {:state, %{state | config: Keyword.replace(config, :url, "[REDACTED]")}}
+
+      other ->
+        other
+    end)
+  end
+
+  # Without a catch-all, an unexpected call would crash the consumer and put
+  # its state in the crash report.
+  @impl true
+  def handle_call(_request, _from, state), do: {:reply, {:error, :unsupported}, state}
 
   @impl true
   def handle_info(:connect, %{connection: connection} = state) when not is_nil(connection),
@@ -25,6 +65,7 @@ defmodule Custyard.Acknowledgments.Consumer do
 
         case subscribe(channel, state.config) do
           {:ok, tag} ->
+            publish_status(:connected)
             {:noreply, %{state | connection: connection, channel: channel, consumer_tag: tag}}
 
           _ ->
@@ -102,8 +143,12 @@ defmodule Custyard.Acknowledgments.Consumer do
   def handle_info(_, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_, %{connection: nil}), do: :ok
-  def terminate(_, state), do: close_subscription(state)
+  def terminate(_, %{connection: nil}), do: publish_status(:connecting)
+
+  def terminate(_, state) do
+    publish_status(:connecting)
+    close_subscription(state)
+  end
 
   def process(body, source, ingest \\ &Custyard.Acknowledgments.ingest/1) do
     if byte_size(body) > Evidence.max_message_bytes(),
@@ -125,12 +170,17 @@ defmodule Custyard.Acknowledgments.Consumer do
     end
   end
 
-  def attempts(headers) do
-    case List.keyfind(headers || [], "custyard-attempt", 0) do
+  # A message published without headers (OTS's first delivery) carries
+  # `:undefined`; List.keyfind/3 raising on it would crash the consumer on every
+  # redelivery of a failing message.
+  def attempts(headers) when is_list(headers) do
+    case List.keyfind(headers, "custyard-attempt", 0) do
       {_, _, value} when is_integer(value) and value >= 0 -> value
       _ -> 0
     end
   end
+
+  def attempts(_), do: 0
 
   defp trace(body, source) do
     with true <- byte_size(body) <= Evidence.max_message_bytes(),
@@ -143,12 +193,21 @@ defmodule Custyard.Acknowledgments.Consumer do
     end
   end
 
-  defp failure_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp failure_reason({reason, _}) when is_atom(reason), do: Atom.to_string(reason)
-  defp failure_reason(_), do: "processing_error"
+  @doc false
+  def failure_reason({reason, _}) when is_atom(reason), do: failure_reason(reason)
+
+  def failure_reason(reason) when is_atom(reason) do
+    category = Atom.to_string(reason)
+    if category in @failure_categories, do: category, else: "processing_error"
+  end
+
+  def failure_reason(_), do: "processing_error"
+
+  defp publish_status(status), do: :persistent_term.put(@status_key, status)
 
   defp reconnect(state) do
     Logger.warning("Acknowledgment broker unavailable; connection retry scheduled")
+    publish_status(:connecting)
     Enum.each(state.monitors, &Process.demonitor(&1, [:flush]))
     close_subscription(state)
     Process.send_after(self(), :connect, state.config[:reconnect_delay])

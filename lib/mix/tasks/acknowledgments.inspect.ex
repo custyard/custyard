@@ -1,14 +1,16 @@
 defmodule Mix.Tasks.Acknowledgments.Inspect do
-  @shortdoc "Inspect acknowledgment broker work"
+  @shortdoc "Summarize the oldest failed acknowledgment (--evidence prints it whole)"
+  @moduledoc "Usage: `mix acknowledgments.inspect [--evidence]`. See `bin/acknowledgments help`."
   use Mix.Task
-  alias Custyard.Acknowledgments.Operations
+  alias Custyard.Release.Acknowledgments, as: Commands
+
   @impl true
-  def run([]) do
+  def run(args) do
     Mix.Task.run("app.start")
 
-    case Operations.inspect_failure() do
-      {:error, _} -> Mix.raise("Acknowledgment inspect failed; messages remain recoverable")
-      result -> Mix.shell().info(inspect(result, limit: :infinity, printable_limit: :infinity))
+    case Commands.run(["inspect" | args], actor: "mix") do
+      0 -> :ok
+      status -> exit({:shutdown, status})
     end
   end
 end

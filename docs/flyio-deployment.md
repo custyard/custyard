@@ -122,6 +122,30 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 | `IMAP_ENABLED` | `false` | IMAP polling (disabled — ports blocked on Fly.io) |
 | `UPLOAD_DIR` | `/data/uploads` | Persistent upload directory (must be on the mounted volume) |
 
+## Colonel acknowledgments
+
+Production subscribes to Colonel acknowledgments by default. The consumer
+starts once both secrets are set; until then the app boots without it and logs
+which variables are missing. Setting only one of them stops the app from
+starting, and the machine restarts in a loop until the other is set or the
+first is unset with `fly secrets unset`. Each `fly secrets set` restarts the
+app, so set both in one command as below.
+
+```bash
+fly secrets set ACKNOWLEDGMENTS_AMQP_URL='amqps://<user>:<password>@<broker>:5671/<vhost>?cacertfile=/etc/ssl/certs/ca-certificates.crt&verify=verify_peer' \
+  ACKNOWLEDGMENTS_SOURCE=ots.eu.production
+
+# Explicitly off, for an instance that does not take acknowledgments
+fly secrets set ACKNOWLEDGMENTS_ENABLED=false
+
+# Status, queue counts and recovery from the machine
+fly ssh console -a custyard -C "/app/bin/acknowledgments status"
+```
+
+Provision the broker queues and bind organizations before enabling publication.
+See [Operating Colonel acknowledgments](ops/acknowledgments.md) for credentials,
+TLS, the operator page at `/operator/acknowledgments`, and the full command set.
+
 ## Health check
 
 `GET /api/health` returns `{"status":"ok"}` with a 200 status. Fly.io uses this to verify machine readiness. Configured in `fly.toml` under `[checks.health]`.

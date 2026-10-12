@@ -1,71 +1,16 @@
 defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
   use Custyard.DataCase, async: false
   import Custyard.Factory
+  import Custyard.AcknowledgmentsBroker
   alias Custyard.Acknowledgments
   alias Custyard.Acknowledgments.{Broker, Consumer, Operations, Topology}
 
   @moduletag :rabbitmq
   @moduletag skip: is_nil(System.get_env("ACKNOWLEDGMENTS_TEST_AMQP_URL"))
 
+  # Recovery operations load configuration as the Mix and release commands do.
   setup do
-    config = [
-      url: System.get_env("ACKNOWLEDGMENTS_TEST_AMQP_URL"),
-      source: "ots.integration",
-      queue: "custyard.consumer.test.#{System.unique_integer([:positive])}",
-      prefetch: 1,
-      retry_delays: [50],
-      confirm_timeout: 5_000,
-      reconnect_delay: 50
-    ]
-
-    {:ok, connection, channel} = Broker.open(config)
-    :ok = Topology.provision(channel, config)
-    org = insert_organization()
-
-    # Recovery operations load configuration as the Mix and release commands do.
-    previous = Application.get_env(:custyard, :acknowledgments)
-    Application.put_env(:custyard, :acknowledgments, config)
-    on_exit(fn -> Application.put_env(:custyard, :acknowledgments, previous) end)
-
-    on_exit(fn ->
-      case Broker.open(config) do
-        {:ok, cleanup_connection, cleanup_channel} ->
-          for queue <- [config[:queue], Topology.failure(config), Topology.retry(config, 1)] do
-            AMQP.Queue.delete(cleanup_channel, queue)
-          end
-
-          AMQP.Connection.close(cleanup_connection)
-
-        _ ->
-          :ok
-      end
-
-      if Process.alive?(connection.pid), do: AMQP.Connection.close(connection)
-    end)
-
-    %{config: config, connection: connection, channel: channel, org: org}
-  end
-
-  defp evidence(attrs \\ %{}) do
-    text = "Versioned Colonel statement\n  preserved exactly"
-
-    Map.merge(
-      %{
-        "schema_version" => 1,
-        "source" => "ots.integration",
-        "submission_id" => "stable",
-        "organization_id" => "ots-org",
-        "actor_id" => "operator",
-        "actor_role" => "colonel",
-        "actor_type" => "internal_operator",
-        "statement_key" => "pilot",
-        "statement_version" => "v1",
-        "statement_text" => text,
-        "statement_hash" => Base.encode16(:crypto.hash(:sha256, text), case: :lower),
-        "acknowledged_at" => "2026-09-30T17:31:42Z"
-      },
-      attrs
-    )
+    Map.put(setup_topology(), :org, insert_organization())
   end
 
   defp bind(org) do
@@ -94,50 +39,13 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     end
   end
 
-  defp eventually(fun, attempts \\ 100)
-
-  defp eventually(fun, attempts) when attempts > 0 do
-    case fun.() do
-      false ->
-        Process.sleep(20)
-        eventually(fun, attempts - 1)
-
-      nil ->
-        Process.sleep(20)
-        eventually(fun, attempts - 1)
-
-      result ->
-        result
-    end
-  end
-
-  defp eventually(_, 0), do: flunk("RabbitMQ condition did not converge")
-
-  defp get_failed(channel, config) do
-    eventually(fn ->
-      case AMQP.Basic.get(channel, Topology.failure(config), no_ack: false) do
-        {:ok, body, meta} -> {body, meta}
-        {:empty, _} -> false
-      end
-    end)
-  end
-
-  # Counts ready messages only, so this also waits for a rejected delivery to return.
-  defp await_failures(ctx, count) do
-    eventually(fn ->
-      match?(
-        {:ok, %{message_count: ^count}},
-        AMQP.Queue.declare(ctx.channel, Topology.failure(ctx.config), passive: true)
-      )
-    end)
-  end
-
   test "missing topology reconnects until provisioned, then consumes", ctx do
     bind(ctx.org)
     {:ok, _} = AMQP.Queue.delete(ctx.channel, ctx.config[:queue])
     consumer = start_consumer(ctx.config)
     Process.sleep(ctx.config[:reconnect_delay] * 4)
     assert Process.alive?(consumer)
+    assert Consumer.status() == :connecting
     assert :ok = Topology.provision(ctx.channel, ctx.config)
     body = Jason.encode!(evidence())
     assert :ok = Broker.publish(ctx.connection, ctx.config[:queue], body, [], 5_000)
@@ -194,7 +102,7 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
 
     Enum.each(bodies, fn body ->
       :ok = Broker.publish(ctx.connection, ctx.config[:queue], body, [], 5_000)
-      {retained, meta} = get_failed(ctx.channel, ctx.config)
+      {retained, meta} = get_failed(ctx)
       assert retained == body
       assert List.keyfind(meta.headers, "custyard-attempt", 0) == {"custyard-attempt", :long, 2}
       assert List.keyfind(meta.headers, "custyard-failure", 0)
@@ -208,11 +116,58 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     assert {:empty, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: false)
   end
 
+  # The producer contract requires no headers, and amqp_client reports their
+  # absence as :undefined rather than an empty list.
+  test "a failing message published without headers retries without crashing", ctx do
+    consumer = start_consumer(ctx.config)
+    body = Jason.encode!(evidence())
+    :ok = AMQP.Basic.publish(ctx.channel, "", ctx.config[:queue], body, persistent: true)
+
+    {^body, meta} = get_failed(ctx)
+    assert List.keyfind(meta.headers, "custyard-attempt", 0) == {"custyard-attempt", :long, 2}
+
+    assert List.keyfind(meta.headers, "custyard-failure", 0) ==
+             {"custyard-failure", :longstr, "unmapped_organization"}
+
+    :ok = AMQP.Basic.ack(ctx.channel, meta.delivery_tag)
+    assert Process.whereis(Consumer) == consumer
+  end
+
+  test "status is published without calling the consumer", ctx do
+    Application.put_env(:custyard, :acknowledgments, Keyword.put(ctx.config, :enabled, true))
+    assert Acknowledgments.subscription_status() == :connecting
+
+    consumer = start_consumer(ctx.config)
+    eventually(fn -> Acknowledgments.subscription_status() == :connected end)
+
+    # A busy consumer cannot delay the answer: suspend it and ask again.
+    :sys.suspend(consumer)
+    assert Acknowledgments.subscription_status() == :connected
+    :sys.resume(consumer)
+
+    stop_supervised!(Consumer)
+    assert Acknowledgments.subscription_status() == :connecting
+  end
+
+  test "the consumer's status and crash reports never render the broker URL", ctx do
+    consumer = start_consumer(ctx.config)
+    eventually(fn -> Consumer.status() == :connected end)
+
+    status = consumer |> :sys.get_status() |> inspect(limit: :infinity)
+    refute status =~ ctx.config[:url]
+    refute status =~ URI.parse(ctx.config[:url]).userinfo
+    assert status =~ "[REDACTED]"
+
+    # An unknown call is answered, not a crash with the state in the report.
+    assert GenServer.call(Consumer, :unexpected) == {:error, :unsupported}
+    assert Process.whereis(Consumer) == consumer
+  end
+
   test "unmapped evidence retries then replays after binding with original identity", ctx do
     body = Jason.encode!(evidence())
     consumer = start_consumer(ctx.config)
     :ok = Broker.publish(ctx.connection, ctx.config[:queue], body, [], 5_000)
-    {^body, meta} = get_failed(ctx.channel, ctx.config)
+    {^body, meta} = get_failed(ctx)
     :ok = AMQP.Basic.reject(ctx.channel, meta.delivery_tag, requeue: true)
     await_failures(ctx, 1)
     assert Acknowledgments.list_for_organization(ctx.org.id) == []
@@ -237,14 +192,14 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     await_failures(ctx, 1)
     stop_supervised!(Consumer)
 
-    assert {:ok, %{body: ^body, headers: headers}} = Operations.inspect_failure()
-    assert List.keyfind(headers, "custyard-attempt", 0) == {"custyard-attempt", :long, 2}
+    assert {:ok, %{body: ^body, summary: summary}} = Operations.inspect_failure()
+    assert %{attempt: 2, category: "unmapped_organization", submission_id: "stable"} = summary
     await_failures(ctx, 1)
 
     {:ok, _} = AMQP.Queue.delete(ctx.channel, ctx.config[:queue])
     assert {:error, {:unroutable, 312}} = Operations.replay()
     await_failures(ctx, 1)
-    assert {^body, meta} = get_failed(ctx.channel, ctx.config)
+    assert {^body, meta} = get_failed(ctx)
     :ok = AMQP.Basic.ack(ctx.channel, meta.delivery_tag)
   end
 end

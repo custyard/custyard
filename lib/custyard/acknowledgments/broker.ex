@@ -1,20 +1,56 @@
 defmodule Custyard.Acknowledgments.Broker do
   @moduledoc "Mandatory, persistent publication with correlated publisher confirms."
+  alias Custyard.Acknowledgments.Config
+
+  # Bounds the TCP connect and TLS handshake; amqp_client's default is a minute.
+  @connection_timeout 5_000
+
+  @doc """
+  Opens a connection and channel. Every failure is a fixed atom: amqp_client
+  errors can embed the URI with its password, so none is passed through.
+  """
   def open(config) do
-    with {:ok, connection} <- AMQP.Connection.open(config[:url]) do
+    with {:ok, _} <- Config.network_params(config[:url]),
+         {:ok, connection} <-
+           AMQP.Connection.open(config[:url], connection_timeout: @connection_timeout) do
       case AMQP.Channel.open(connection) do
         {:ok, channel} ->
           {:ok, connection, channel}
 
-        error ->
-          AMQP.Connection.close(connection)
-          error
+        _ ->
+          close_quietly(connection)
+          {:error, :channel_failed}
       end
+    else
+      :error -> {:error, :invalid_url}
+      {:error, reason} -> {:error, connection_error(reason)}
+      _ -> {:error, :connection_failed}
     end
   rescue
-    _ -> {:error, :broker_connection_failed}
+    _ -> {:error, :connection_failed}
   catch
-    :exit, _ -> {:error, :broker_connection_failed}
+    :exit, _ -> {:error, :connection_failed}
+  end
+
+  @unreachable ~w(econnrefused ehostunreach enetunreach nxdomain unknown_host closed econnreset eafnosupport)a
+  @timeouts ~w(timeout etimedout handshake_receive_timed_out)a
+
+  defp connection_error(reason) when reason in @unreachable, do: :unreachable
+  defp connection_error(reason) when reason in @timeouts, do: :timeout
+  defp connection_error({:auth_failure, _}), do: :auth_failed
+  defp connection_error(:auth_failure), do: :auth_failed
+  # Refused access to the vhost after a successful login.
+  defp connection_error(reason) when reason in [:not_allowed, :access_refused],
+    do: :access_refused
+
+  defp connection_error({:tls_alert, _}), do: :tls_failed
+  defp connection_error({:options, _}), do: :tls_failed
+  defp connection_error(_), do: :connection_failed
+
+  defp close_quietly(connection) do
+    AMQP.Connection.close(connection)
+  catch
+    :exit, _ -> :ok
   end
 
   # One fresh channel per transfer prevents stale returns/confirms being mistaken

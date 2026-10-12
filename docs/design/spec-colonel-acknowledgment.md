@@ -156,8 +156,9 @@ flowchart LR
 - Dedicated evidence records and explicit source/organization mappings enforce database idempotency and preserve historical wording.
 - The bounded consumer defaults to prefetch 1 and manual acknowledgment after commit.
 - Retry delays are 10 seconds, 60 seconds, and 300 seconds, followed by a retained failure queue. Confirmed transfers and quorum at-least-once retry routing preserve recoverability.
-- The organization detail page exposes a paginated acknowledgment tab to authorized operators.
-- Provisioning, idempotent mapping, status, inspection, and replay are available via Mix and production release operations; see the [operations guide](../ops/acknowledgments.md).
+- The organization detail page exposes a paginated acknowledgment tab, with the organization's source bindings, to authorized operators.
+- The consumer is on by default in production once its URL and source are set; incomplete configuration refuses to start the application.
+- Provisioning, idempotent mapping, status, inspection, and replay are available via Mix and the `bin/acknowledgments` release command. Super admins also see status and queue counts, inspect the oldest failure (sanitized), replay it guarded by its submission ID, and bind organizations at `/operator/acknowledgments`; replays and new bindings are audited. See the [operations guide](../ops/acknowledgments.md).
 
 ## References
 

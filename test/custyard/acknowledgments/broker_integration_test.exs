@@ -11,7 +11,7 @@ defmodule Custyard.Acknowledgments.BrokerIntegrationTest do
     config = [
       url: url,
       source: "test",
-      queue: "custyard.test.#{System.unique_integer([:positive])}",
+      queue: Custyard.AcknowledgmentsBroker.unique_queue("custyard.test"),
       retry_delays: [100]
     ]
 
@@ -70,6 +70,31 @@ defmodule Custyard.Acknowledgments.BrokerIntegrationTest do
              Broker.publish(connection, config[:queue] <> ".missing", "original", [], 5_000)
 
     assert :ok = Broker.publish(connection, config[:queue], "next", [], 5_000)
+  end
+
+  # amqp_client errors can embed the URI with its password; open/1 reports a
+  # fixed atom for each kind of failure instead.
+  test "connection failures are fixed atoms that carry no credentials", %{config: config} do
+    uri = URI.parse(config[:url])
+    [user, _password] = String.split(uri.userinfo, ":", parts: 2)
+    with_url = fn url -> Keyword.put(config, :url, url) end
+
+    wrong_password = URI.to_string(%{uri | userinfo: "#{user}:not-the-password"})
+    assert Broker.open(with_url.(wrong_password)) == {:error, :auth_failed}
+
+    missing_vhost = URI.to_string(%{uri | path: "/custyard-missing-vhost"})
+    assert Broker.open(with_url.(missing_vhost)) == {:error, :access_refused}
+
+    closed_port =
+      URI.to_string(%{uri | userinfo: "#{user}:secret-pw", host: "127.0.0.1", port: 1})
+
+    assert Broker.open(with_url.(closed_port)) == {:error, :unreachable}
+
+    # A parse error would otherwise return {:error, {reason, full_uri}}.
+    assert Broker.open(with_url.("amqp://#{user}:secret-pw@localhost:99999")) ==
+             {:error, :invalid_url}
+
+    assert Broker.open(with_url.("amqp://")) == {:error, :invalid_url}
   end
 
   test "closing before acknowledgement redelivers committed payload", %{
