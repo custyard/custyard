@@ -16,7 +16,7 @@ defmodule Custyard.Migrations.NormalizeOperatorAccountEmailsUnicodeTest do
   test "normalizes Unicode emails, keeps the owner on collision, and logs skipped rows" do
     rows =
       insert_emails([
-        # Lone non-ASCII uppercase, which SQLite's lower() leaves alone
+        # Lone non-ASCII uppercase, which 20261012022249 leaves alone
         "ÜNAL@BÜCHER.DE",
         # Decomposed accent
         "José@Example.com",

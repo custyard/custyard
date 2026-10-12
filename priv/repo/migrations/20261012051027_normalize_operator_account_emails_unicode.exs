@@ -5,9 +5,8 @@ defmodule Custyard.Repo.Migrations.NormalizeOperatorAccountEmailsUnicode do
 
   require Logger
 
-  # 20261012022249 lowercased emails with SQL lower(), which folds only ASCII
-  # on SQLite (and on Postgres depends on the database locale), and neither
-  # trimmed nor NFC-normalized them. OperatorAccount.normalize_email/1 stores
+  # 20261012022249 folded only ASCII letters, and neither trimmed nor
+  # NFC-normalized emails. OperatorAccount.normalize_email/1 stores
   # emails trimmed, lowercased with full Unicode case mapping, and in NFC;
   # this brings existing rows to the same form so the login lookup finds
   # them. It runs in Elixir so the result does not depend on the database.

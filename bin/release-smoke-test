@@ -47,16 +47,23 @@ mkdir -p "$UPLOAD_DIR"
 
 health="http://localhost:$PORT/api/health"
 
+# Bounded, so a listener that accepts and never answers cannot hang the run.
+curl_opts=(--connect-timeout 2 --max-time 5)
+
 step() { echo "==> $*"; }
 
 step "migrate and provision before the server starts (entrypoint.sh order)"
 "$rel" eval 'Custyard.Release.migrate()'
 "$rel" eval 'Custyard.Release.setup_operator()'
 
-# Otherwise the health checks below could be answered by that process while
-# our server dies on :eaddrinuse.
-if curl -s -o /dev/null "http://localhost:$PORT/" 2>/dev/null; then
-  echo "something is already listening on port $PORT; set PORT to a free port" >&2
+# curl exits 7 only when the connection is refused. Anything else, a reply or
+# a listener that accepts and never answers, means the port is taken, and the
+# health checks below could be answered by that process while our server dies
+# on :eaddrinuse.
+rc=0
+curl -s -o /dev/null "${curl_opts[@]}" "http://localhost:$PORT/" 2>/dev/null || rc=$?
+if [ "$rc" -ne 7 ]; then
+  echo "port $PORT is in use (curl exit $rc); set PORT to a free port" >&2
   exit 1
 fi
 
@@ -65,11 +72,11 @@ step "start the server on port $PORT"
 server_pid=$!
 
 for _ in $(seq 1 60); do
-  curl -fsS "$health" >/dev/null 2>&1 && break
+  curl -fsS "${curl_opts[@]}" "$health" >/dev/null 2>&1 && break
   sleep 1
 done
 
-if ! curl -fsS "$health" >/dev/null 2>&1 || ! kill -0 "$server_pid" 2>/dev/null; then
+if ! curl -fsS "${curl_opts[@]}" "$health" >/dev/null 2>&1 || ! kill -0 "$server_pid" 2>/dev/null; then
   echo "server did not come up on port $PORT:" >&2
   cat "$work/server.log" >&2
   exit 1
@@ -94,6 +101,6 @@ step "check the stored accounts"
 
 step "server still serving"
 kill -0 "$server_pid"
-curl -fsS "$health" >/dev/null
+curl -fsS "${curl_opts[@]}" "$health" >/dev/null
 
 echo "release smoke test passed"
