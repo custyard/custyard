@@ -15,6 +15,11 @@ defmodule Custyard.OperatorAccount do
     # Role for RBAC: super_admin can access all orgs, admin manages their org, agent handles support
     field :role, :string, default: "super_admin"
 
+    # Random, set once on insert and never changed; see session_claim/1.
+    field :session_claim, :string,
+      autogenerate: {__MODULE__, :generate_session_claim, []},
+      redact: true
+
     # Nullable: super_admin operators have no organization_id (can access all)
     belongs_to :organization, Custyard.Organization
 
@@ -229,25 +234,28 @@ defmodule Custyard.OperatorAccount do
   def can_access_organization?(_, _), do: false
 
   @doc """
-  The value stored in the session at login next to the operator id: the
-  account's creation time as Unix seconds.
+  The value stored in the session at login next to the operator id: a
+  random string generated when the account is created.
 
   The id alone does not identify an account over time. operator_accounts.id
   is INTEGER PRIMARY KEY without AUTOINCREMENT, so SQLite gives the next new
   row the id of a deleted highest-id row; a removed operator's still-valid
-  cookie would then sign in as whoever was created next. A session counts
-  only while the row with its id also has the creation time it was issued for.
+  cookie would then sign in as whoever was created next, even within the same
+  second. A session counts only while the row with its id also has the claim
+  it was issued for.
   """
-  def session_claim(%__MODULE__{inserted_at: %DateTime{} = inserted_at}),
-    do: DateTime.to_unix(inserted_at)
+  def session_claim(%__MODULE__{session_claim: claim}), do: claim
+
+  @doc false
+  def generate_session_claim, do: Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
 
   @doc """
   Whether `claim` (from the session) was issued for this account. A missing
   claim (a session from before claims existed) never matches.
   """
-  def session_claim_matches?(%__MODULE__{inserted_at: %DateTime{}} = operator, claim)
-      when is_integer(claim),
-      do: session_claim(operator) == claim
+  def session_claim_matches?(%__MODULE__{session_claim: stored}, claim)
+      when is_binary(stored) and is_binary(claim),
+      do: Plug.Crypto.secure_compare(stored, claim)
 
   def session_claim_matches?(_operator, _claim), do: false
 

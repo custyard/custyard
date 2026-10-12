@@ -102,10 +102,14 @@ defmodule Mix.Tasks.AcknowledgmentsTest do
       {:ok, output} = run_task(Mix.Tasks.Acknowledgments.Replay, ["stable"])
       assert output =~ "Replayed the oldest failed message"
 
-      assert [%{source: "mix", payload: %{"outcome" => "replayed"}}] =
+      assert [
+               %{source: "mix", payload: %{"outcome" => "started"}},
+               %{source: "mix", payload: %{"outcome" => "replayed"}}
+             ] =
                Repo.all(
                  from e in Custyard.AuditEvent,
-                   where: e.event_type == :acknowledgment_replayed
+                   where: e.event_type == :acknowledgment_replayed,
+                   order_by: e.id
                )
     end
   end

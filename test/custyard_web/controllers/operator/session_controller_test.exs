@@ -95,7 +95,7 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
       assert redirected_to(conn) == "/operator"
       assert get_session(conn, :operator_id) == operator.id
       # Binds the session to this account, not just to its (reusable) id.
-      assert get_session(conn, :operator_created) == OperatorAccount.session_claim(operator)
+      assert get_session(conn, :operator_claim) == OperatorAccount.session_claim(operator)
       assert Repo.get!(OperatorAccount, operator.id).login_token == nil
 
       # The session it issued is accepted
@@ -211,7 +211,7 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
 
     assert redirected_to(conn) == "/operator/login"
     refute get_session(conn, :operator_id)
-    refute get_session(conn, :operator_created)
+    refute get_session(conn, :operator_claim)
   end
 
   describe "login page" do

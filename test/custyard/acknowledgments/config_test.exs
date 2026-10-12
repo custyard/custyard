@@ -182,6 +182,42 @@ defmodule Custyard.Acknowledgments.ConfigTest do
         refute log =~ "plaintext", "unexpected warning for #{url}"
       end
     end
+
+    test "amqps without certificate verification refuses a remote host, in every environment" do
+      unverified =
+        "amqps://custyard:#{@password}@broker.example.com:5671/ots?" <>
+          "cacertfile=/etc/ssl/certs/ca-certificates.crt&verify=verify_none"
+
+      for env <- [:prod, :dev] do
+        error =
+          assert_raise ArgumentError, fn ->
+            Config.startup(config(url: unverified, source: "ots.test"), env)
+          end
+
+        assert error.message =~ "verify=verify_peer"
+        refute error.message =~ @password
+        refute error.message =~ "broker.example.com"
+      end
+
+      assert Config.validation_error(config(url: unverified, source: "ots.test")) =~
+               "TLS certificate verification"
+
+      # Omitting verify keeps OTP's default, verify_peer; local and Fly
+      # private hosts may opt out, as they may use plaintext.
+      for url <- [
+            "amqps://u:p@broker.example.com?cacertfile=/etc/ssl/certs/ca-certificates.crt",
+            "amqps://u:p@localhost?verify=verify_none",
+            "amqps://u:p@rabbit.internal?verify=verify_none",
+            "amqps://u:p@rabbit.flycast/ots?verify=verify_none"
+          ] do
+        log =
+          capture_log(fn ->
+            assert Config.startup(config(url: url, source: "ots.test"), :prod) == :enabled
+          end)
+
+        refute log =~ "plaintext", "unexpected warning for #{url}"
+      end
+    end
   end
 
   describe "subscription status and overview" do

@@ -2,7 +2,7 @@ defmodule CustyardWeb.Plugs.RequireOperator do
   @moduledoc """
   Plug that requires an authenticated operator session.
   Redirects to login if no operator_id in session, if no operator matches both
-  the session's id and its creation-time claim (deleted, or the id reused by a
+  the session's id and its session claim (deleted, or the id reused by a
   newer account; see `CustyardWeb.Live.OperatorAuth.session_operator/2`), or
   if the operator is an admin or agent without an organization
   (`OperatorAccount.orphaned?/1`). Every refusal of a stored session clears it.
@@ -21,7 +21,7 @@ defmodule CustyardWeb.Plugs.RequireOperator do
         redirect_to_login(conn, "Please log in")
 
       operator_id ->
-        case OperatorAuth.session_operator(operator_id, get_session(conn, :operator_created)) do
+        case OperatorAuth.session_operator(operator_id, get_session(conn, :operator_claim)) do
           nil ->
             conn
             |> clear_operator_session()
@@ -42,7 +42,7 @@ defmodule CustyardWeb.Plugs.RequireOperator do
   defp clear_operator_session(conn) do
     conn
     |> delete_session(:operator_id)
-    |> delete_session(:operator_created)
+    |> delete_session(:operator_claim)
   end
 
   defp redirect_to_login(conn, message) do

@@ -11,7 +11,7 @@ defmodule CustyardWeb.Live.OperatorAuth do
   `:current_role`, and `:is_super_admin` to the socket.
 
   A session is accepted only while the operator row with its id still has
-  the creation time recorded at login (`session_operator/2`), checked on
+  the session claim recorded at login (`session_operator/2`), checked on
   mount and again on every later event.
 
   An admin or agent without an organization (`OperatorAccount.orphaned?/1`,
@@ -34,8 +34,8 @@ defmodule CustyardWeb.Live.OperatorAuth do
   @doc """
   The operator a session belongs to, or nil.
 
-  The session holds the operator id and, since login, the account's
-  creation time (`OperatorAccount.session_claim/1`). The id alone is not
+  The session holds the operator id and, since login, the account's random
+  session claim (`OperatorAccount.session_claim/1`). The id alone is not
   enough: SQLite reuses the highest id after a delete, so a removed
   operator's cookie would otherwise sign in as the next account created.
   A session without the claim (issued before it existed) is signed out.
@@ -77,7 +77,7 @@ defmodule CustyardWeb.Live.OperatorAuth do
   end
 
   defp authenticate(session, socket) do
-    claim = session["operator_created"]
+    claim = session["operator_claim"]
 
     case session_operator(session["operator_id"], claim) do
       nil ->

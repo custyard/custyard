@@ -334,7 +334,9 @@ defmodule Custyard.Release.AcknowledgmentsTest do
 
       assert outcomes == [
                {"cli", "changed", "first"},
+               {"cli", "started", "first"},
                {"cli", "replayed", "first"},
+               {"cli", "started", "second"},
                {"cli", "replayed", "second"},
                {"cli", "empty", nil}
              ]

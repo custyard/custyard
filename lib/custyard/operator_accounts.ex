@@ -187,10 +187,15 @@ defmodule Custyard.OperatorAccounts do
   Deletes the operator with this email, in one transaction with its
   `:operator_removed` audit event.
 
-  The email is matched case-insensitively. Rows whose stored email is not
+  A row whose stored email is exactly `email` is the one removed. Otherwise
+  the email is matched case-insensitively. Rows whose stored email is not
   normalized (left behind by the normalization migration when they
-  collided) can share a normalized value; then the exact stored email
+  collided) can share a normalized value; then only the exact stored email
   picks one, and anything else is refused as ambiguous.
+
+  The lookup, the checks and the delete share one immediate transaction,
+  which holds SQLite's write lock throughout: a concurrent removal or
+  creation cannot change which row matches, or its role, before the delete.
 
   Refuses to remove the last super_admin who can log in (one with a
   normalized email other than #{@placeholder_email}), and refuses to remove
@@ -205,70 +210,19 @@ defmodule Custyard.OperatorAccounts do
   def remove_operator(email, opts) when is_binary(email) do
     via = Keyword.fetch!(opts, :via)
 
-    with {:ok, operator} <- find_for_removal(email) do
-      delete_with_audit(operator, via)
-    end
-  end
-
-  defp find_for_removal(email) do
-    normalized = OperatorAccount.normalize_email(email)
-
-    matches =
-      Enum.filter(list_operators(), &(OperatorAccount.normalize_email(&1.email) == normalized))
-
-    case matches do
-      [] ->
-        {:error, "no operator with email #{normalized}"}
-
-      [operator] ->
-        {:ok, operator}
-
-      several ->
-        case Enum.filter(several, &(&1.email == String.trim(email))) do
-          [operator] ->
-            {:ok, operator}
-
-          _ ->
-            ids = Enum.map_join(several, ", ", & &1.id)
-
-            {:error,
-             "#{length(several)} operators match #{normalized} ignoring case (ids #{ids}); " <>
-               "pass the exact email shown by `bin/operator list`"}
-        end
-    end
-  end
-
-  defp delete_with_audit(operator, via) do
     result =
-      Repo.transaction(fn ->
-        message_ids =
-          Repo.all(
-            from(m in Message,
-              where: m.deleted_by_operator_id == ^operator.id,
-              order_by: m.id,
-              select: m.id
-            )
-          )
-
-        with {:deleted, {:ok, _deleted}} <-
-               {:deleted, Repo.delete(operator, stale_error_field: :id)},
-             :ok <- keep_a_super_admin(operator),
-             :ok <-
-               audit(:operator_removed, operator, via, %{
-                 "soft_deleted_message_ids" => message_ids
-               }) do
-          message_ids
-        else
-          {:deleted, {:error, _stale}} ->
-            Repo.rollback("operator #{operator.id} no longer exists")
-
-          {:error, reason} ->
-            Repo.rollback(reason)
-        end
-      end)
+      Repo.transaction(
+        fn ->
+          case find_for_removal(email) do
+            {:ok, operator} -> delete_with_audit(operator, via)
+            {:error, message} -> Repo.rollback(message)
+          end
+        end,
+        mode: :immediate
+      )
 
     case result do
-      {:ok, message_ids} ->
+      {:ok, {operator, message_ids}} ->
         Logger.info(
           "Removed operator #{operator.id} #{operator.email} " <>
             "(role #{operator.role}, organization #{operator.organization_id || "none"}) via #{via}"
@@ -278,6 +232,67 @@ defmodule Custyard.OperatorAccounts do
 
       {:error, message} when is_binary(message) ->
         {:error, message}
+    end
+  end
+
+  defp find_for_removal(email) do
+    normalized = OperatorAccount.normalize_email(email)
+
+    case Repo.get_by(OperatorAccount, email: email) do
+      %OperatorAccount{} = exact ->
+        {:ok, exact}
+
+      nil ->
+        matches =
+          Enum.filter(
+            list_operators(),
+            &(OperatorAccount.normalize_email(&1.email) == normalized)
+          )
+
+        case matches do
+          [] ->
+            {:error, "no operator with email #{normalized}"}
+
+          [operator] ->
+            {:ok, operator}
+
+          several ->
+            ids = Enum.map_join(several, ", ", & &1.id)
+
+            {:error,
+             "#{length(several)} operators match #{normalized} ignoring case (ids #{ids}); " <>
+               "pass the exact email shown by `bin/operator list`"}
+        end
+    end
+  end
+
+  # Runs inside remove_operator/2's transaction; returns its result or rolls back.
+  defp delete_with_audit(operator, via) do
+    message_ids =
+      Repo.all(
+        from(m in Message,
+          where: m.deleted_by_operator_id == ^operator.id,
+          order_by: m.id,
+          select: m.id
+        )
+      )
+
+    with :ok <- delete(operator),
+         :ok <- keep_a_super_admin(operator),
+         :ok <-
+           audit(:operator_removed, operator, via, %{
+             "soft_deleted_message_ids" => message_ids
+           }) do
+      {operator, message_ids}
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp delete(operator) do
+    case Repo.delete(operator, stale_error_field: :id) do
+      {:ok, _deleted} -> :ok
+      {:error, _stale} -> {:error, "operator #{operator.id} no longer exists"}
     end
   rescue
     Ecto.ConstraintError ->

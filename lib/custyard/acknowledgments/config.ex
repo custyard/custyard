@@ -17,8 +17,8 @@ defmodule Custyard.Acknowledgments.Config do
   @url_variable "ACKNOWLEDGMENTS_AMQP_URL"
   @source_variable "ACKNOWLEDGMENTS_SOURCE"
 
-  # Plaintext amqp is acceptable only where traffic stays on the machine or on
-  # Fly's private network.
+  # Plaintext amqp, or amqps without certificate verification, is acceptable
+  # only where traffic stays on the machine or on Fly's private network.
   @local_hosts ~w(localhost 127.0.0.1 ::1)
   @private_host_suffixes ~w(.internal .flycast)
 
@@ -134,14 +134,28 @@ defmodule Custyard.Acknowledgments.Config do
   defp plaintext_remote?(url) do
     case network_params(url) do
       {:ok, params} ->
-        host = params |> amqp_params_network(:host) |> to_string() |> String.downcase()
-
-        amqp_params_network(params, :ssl_options) == :none and host not in @local_hosts and
-          not String.ends_with?(host, @private_host_suffixes)
+        amqp_params_network(params, :ssl_options) == :none and not trusted_host?(params)
 
       :error ->
         false
     end
+  end
+
+  # An amqps URI without `verify` leaves OTP's client default, verify_peer;
+  # any other value (verify_none) lets anyone on the path read the broker
+  # password and impersonate the broker.
+  defp unverified_tls_remote?(url) do
+    with {:ok, params} <- network_params(url),
+         options when is_list(options) <- amqp_params_network(params, :ssl_options) do
+      Keyword.get(options, :verify, :verify_peer) != :verify_peer and not trusted_host?(params)
+    else
+      _ -> false
+    end
+  end
+
+  defp trusted_host?(params) do
+    host = params |> amqp_params_network(:host) |> to_string() |> String.downcase()
+    host in @local_hosts or String.ends_with?(host, @private_host_suffixes)
   end
 
   defp present?(value), do: is_binary(value) and value != ""
@@ -174,6 +188,14 @@ defmodule Custyard.Acknowledgments.Config do
 
     unless match?({:ok, _}, network_params(config[:url])),
       do: raise(ArgumentError, "acknowledgments URL is not a valid AMQP URI with a host")
+
+    if unverified_tls_remote?(config[:url]),
+      do:
+        raise(
+          ArgumentError,
+          "acknowledgments URL turns off TLS certificate verification for a host outside " <>
+            "localhost, *.internal and *.flycast; use verify=verify_peer with a cacertfile"
+        )
 
     unless Evidence.valid_identity?(config[:source]),
       do: raise(ArgumentError, "acknowledgments source is invalid")

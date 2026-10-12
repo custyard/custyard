@@ -38,7 +38,7 @@ defmodule CustyardWeb.ConnCase do
 
   @doc """
   Puts an operator session the way login does: the operator id plus the
-  account's creation-time claim (see
+  account's session claim (see
   `CustyardWeb.Live.OperatorAuth.session_operator/2`). Takes an operator
   or an id; an id without a row gets no claim. The session must already
   be initialized (`init_test_session/2`).
@@ -46,7 +46,7 @@ defmodule CustyardWeb.ConnCase do
   def put_operator_session(conn, %Custyard.OperatorAccount{} = operator) do
     conn
     |> Plug.Conn.put_session(:operator_id, operator.id)
-    |> Plug.Conn.put_session(:operator_created, Custyard.OperatorAccount.session_claim(operator))
+    |> Plug.Conn.put_session(:operator_claim, Custyard.OperatorAccount.session_claim(operator))
   end
 
   def put_operator_session(conn, operator_id) do

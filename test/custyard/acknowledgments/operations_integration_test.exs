@@ -170,9 +170,10 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       assert Operations.replay("other", operator) == {:error, :changed}
       assert Operations.replay("audited", operator) == :ok
 
-      assert [changed, replayed] = Enum.sort_by(replay_audits(), & &1.id)
+      assert [changed, started, replayed] = Enum.sort_by(replay_audits(), & &1.id)
       assert changed.payload["outcome"] == "changed"
       assert replayed.source == "operator"
+      assert started.payload == %{replayed.payload | "outcome" => "started"}
 
       assert replayed.payload == %{
                "actor" => "operator",
@@ -185,6 +186,30 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
                "attempt" => 4,
                "outcome" => "replayed"
              }
+    end
+
+    test "nothing is replayed when the attempt cannot be audited", ctx do
+      put_failure(ctx, body("unaudited"))
+      await_failures(ctx, 1)
+
+      # SQLite DDL is transactional, so the sandbox drops the trigger again.
+      Repo.query!(
+        "CREATE TRIGGER refuse_audit BEFORE INSERT ON audit_events " <>
+          "BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END"
+      )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Operations.replay("unaudited", "cli") == {:error, :audit_failed}
+        end)
+
+      assert log =~ "Failed to record acknowledgment_replayed audit event"
+      assert Operations.error_message(:audit_failed) =~ "nothing was replayed"
+      Repo.query!("DROP TRIGGER refuse_audit")
+
+      assert replay_audits() == []
+      assert {:ok, %{submission_id: "unaudited"}} = Operations.failure_summary()
+      assert {:empty, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
     end
 
     test "release replays are audited with the channel, including empty ones" do

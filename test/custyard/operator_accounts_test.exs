@@ -329,6 +329,41 @@ defmodule Custyard.OperatorAccountsTest do
                OperatorAccounts.remove_operator("bob@example.com", via: "cli")
     end
 
+    test "an exact stored email wins over a trimmed or case-folded match" do
+      insert_operator_account(email: "keeper@example.com")
+      padded = insert_raw_operator(" Foo@Example.com ")
+      plain = insert_raw_operator("Foo@Example.com")
+
+      assert {:ok, %{operator: %{id: ^padded}}} =
+               OperatorAccounts.remove_operator(" Foo@Example.com ", via: "cli")
+
+      assert Repo.get(OperatorAccount, plain)
+    end
+
+    test "a stale row cannot be removed: the lookup runs inside the removal" do
+      insert_operator_account(email: "keeper@example.com")
+
+      leaver =
+        insert_operator_account(
+          email: "leaver@example.com",
+          role: "agent",
+          organization_id: insert_organization().id
+        )
+
+      assert {:ok, _} = OperatorAccounts.remove_operator("leaver@example.com", via: "cli")
+
+      # A replacement takes the freed id with a different email and role.
+      assert {:created, joiner} =
+               OperatorAccounts.create_operator("joiner@example.com", via: "cli")
+
+      assert joiner.id == leaver.id
+
+      assert {:error, "no operator with email leaver@example.com"} =
+               OperatorAccounts.remove_operator("leaver@example.com", via: "cli")
+
+      assert Repo.get(OperatorAccount, joiner.id).email == "joiner@example.com"
+    end
+
     test "keeps the ids of messages the operator soft-deleted in the audit event" do
       insert_operator_account(email: "keeper@example.com")
       org = insert_organization()

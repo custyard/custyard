@@ -453,7 +453,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
         session = %{
           "operator_id" => operator.id,
-          "operator_created" => OperatorAccount.session_claim(operator)
+          "operator_claim" => OperatorAccount.session_claim(operator)
         }
 
         assert {:halt, halted} = OperatorAuth.on_mount(mode, %{}, session, socket)
@@ -503,17 +503,12 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
   # operator_accounts.id has no AUTOINCREMENT: SQLite gives the next row the
   # id of a deleted highest-id row, so the id alone cannot identify a session.
-  describe "session bound to the account's creation time" do
+  describe "session bound to the account's session claim" do
     setup do
       _keeper = create_operator(%{email: "keeper@example.com", role: "super_admin"})
       leaver = create_operator(%{email: "leaver@example.com", role: "super_admin"})
 
-      # Created a while ago, as a removed account would have been.
-      earlier = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
-
-      leaver |> Ecto.Changeset.change(inserted_at: earlier) |> Repo.update!()
-
-      {:ok, leaver: Repo.get!(OperatorAccount, leaver.id)}
+      {:ok, leaver: leaver}
     end
 
     defp session_for(conn, operator) do
@@ -523,7 +518,8 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
     end
 
     # Removes `leaver` (the highest id) and creates a new account, which
-    # SQLite gives the same id.
+    # SQLite gives the same id, usually within the same second as leaver's
+    # creation; the creation time alone would not tell them apart.
     defp reuse_id(leaver) do
       assert {:ok, _} = Custyard.OperatorAccounts.remove_operator(leaver.email, via: "cli")
 
@@ -531,6 +527,10 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
                Custyard.OperatorAccounts.create_operator("joiner@example.com", via: "cli")
 
       assert joiner.id == leaver.id
+
+      # Pin the replacement to leaver's creation second: only the claim differs.
+      joiner = joiner |> Ecto.Changeset.change(inserted_at: leaver.inserted_at) |> Repo.update!()
+
       assert OperatorAccount.session_claim(joiner) != OperatorAccount.session_claim(leaver)
       joiner
     end
@@ -556,7 +556,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       denied = get(stale, "/operator")
       assert redirected_to(denied) == "/operator/login"
       refute get_session(denied, :operator_id)
-      refute get_session(denied, :operator_created)
+      refute get_session(denied, :operator_claim)
 
       assert {:error, {:redirect, %{to: "/operator/login"}}} =
                live(session_for(conn, leaver), ~p"/operator")
@@ -565,7 +565,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
     test "the LiveView mount rejects it", %{leaver: leaver} do
       session = %{
         "operator_id" => leaver.id,
-        "operator_created" => OperatorAccount.session_claim(leaver)
+        "operator_claim" => OperatorAccount.session_claim(leaver)
       }
 
       reuse_id(leaver)
@@ -602,7 +602,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
       session = %{
         "operator_id" => leaver.id,
-        "operator_created" => OperatorAccount.session_claim(leaver)
+        "operator_claim" => OperatorAccount.session_claim(leaver)
       }
 
       Repo.delete!(leaver)
@@ -611,7 +611,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       denied = get(stale, "/operator")
       assert redirected_to(denied) == "/operator/login"
       refute get_session(denied, :operator_id)
-      refute get_session(denied, :operator_created)
+      refute get_session(denied, :operator_claim)
 
       assert {:error, {:redirect, %{to: "/operator/login"}}} =
                live(session_for(conn, leaver), ~p"/operator")

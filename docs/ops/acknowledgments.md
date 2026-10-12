@@ -48,7 +48,7 @@ not in runtime configuration, so release commands such as `bin/operator` and
 | Disabled | No consumer. The operator page shows Disabled |
 | Enabled, neither URL nor source set | The application starts without a consumer and logs one line naming `ACKNOWLEDGMENTS_AMQP_URL` and `ACKNOWLEDGMENTS_SOURCE`. The operator page shows Not configured and lists the secrets to set |
 | Enabled, only one of them set | The application refuses to start; the error names the missing variable |
-| Enabled, URL invalid | The application refuses to start; the error names the rule that failed (for example an unparsable URI or a missing host) |
+| Enabled, URL invalid | The application refuses to start; the error names the rule that failed (for example an unparsable URI, a missing host, or `verify=verify_none` to a remote host) |
 | Enabled and configured | The consumer starts and reconnects every five seconds while the broker is unavailable |
 
 Errors and logs name variables, never their values. In production a plaintext
@@ -107,8 +107,11 @@ Outside a trusted local network use TLS with certificate verification:
 amqps://user:password@broker.example.com:5671/vhost?cacertfile=/etc/ssl/certs/ca-certificates.crt&verify=verify_peer
 ```
 
-The release image ships the system CA bundle at that path. Never use
-`verify=verify_none`. Percent-encode a `/` in a vhost name as `%2F`.
+The release image ships the system CA bundle at that path. Leaving out `verify`
+keeps the default, `verify_peer`. Any other value, such as `verify=verify_none`,
+is refused for hosts other than `localhost`, `*.internal` and `*.flycast`: the
+application does not start and commands report an invalid configuration.
+Percent-encode a `/` in a vhost name as `%2F`.
 
 ## Commands
 
@@ -213,6 +216,9 @@ Every replay attempt and every new binding is recorded in the audit log
 (`acknowledgment_replayed`, `acknowledgment_binding_created`) with the operator,
 or `cli` or `mix` for commands. There is no unaudited replay function: even a
 direct `Custyard.Acknowledgments.Operations.replay/2` call records its actor.
+A replay publishes only after a row with outcome `started` is written; if the
+database refuses it, nothing is replayed and the message stays in place. A
+second row records the outcome (`replayed`, or why it was not).
 
 ## Retry and failure retention
 

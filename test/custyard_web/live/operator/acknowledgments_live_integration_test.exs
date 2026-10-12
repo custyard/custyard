@@ -27,7 +27,10 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveIntegrationTest do
   defp body(submission_id), do: Jason.encode!(evidence(%{"submission_id" => submission_id}))
 
   defp replay_audits,
-    do: Repo.all(from e in AuditEvent, where: e.event_type == :acknowledgment_replayed)
+    do:
+      Repo.all(
+        from e in AuditEvent, where: e.event_type == :acknowledgment_replayed, order_by: e.id
+      )
 
   test "queue counts load after the connected mount", ctx do
     put_failure(ctx, body("one"))
@@ -84,7 +87,9 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveIntegrationTest do
     assert {:ok, replayed, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
     assert replayed == body("ui-1")
 
-    assert [%{source: "operator", payload: payload}] = replay_audits()
+    assert [%{payload: %{"outcome" => "started"}}, %{source: "operator", payload: payload}] =
+             replay_audits()
+
     assert payload["operator_id"] == ctx.operator.id
     assert payload["operator_email"] == ctx.operator.email
     assert payload["submission_id"] == "ui-1"
@@ -185,8 +190,10 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveIntegrationTest do
     eventually(fn -> ready_count(ctx, Topology.failure(ctx.config)) == 0 end)
     Process.exit(view.pid, :kill)
 
-    assert %{payload: %{"outcome" => "replayed", "submission_id" => "confirmed"}} =
-             eventually(fn -> List.first(replay_audits()) end)
+    assert [
+             %{payload: %{"outcome" => "started", "submission_id" => "confirmed"}},
+             %{payload: %{"outcome" => "replayed", "submission_id" => "confirmed"}}
+           ] = eventually(fn -> match?([_, _], replay_audits()) and replay_audits() end)
 
     await_failures(ctx, 0)
     assert {:ok, replayed, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)

@@ -67,9 +67,14 @@ defmodule Custyard.Acknowledgments.Operations do
   end
 
   @doc """
-  Replays the oldest failed message to the work queue and writes an
-  `:acknowledgment_replayed` audit row in this process, whatever the outcome.
-  This is the only replay entry point, so no replay goes unaudited.
+  Replays the oldest failed message to the work queue, auditing it in this
+  process. This is the only replay entry point, so no replay goes unaudited.
+
+  Before publishing, an `:acknowledgment_replayed` row with outcome
+  `"started"` must be written; if it cannot be, nothing is published, the
+  message stays in place and the result is `{:error, :audit_failed}`. A
+  second row then records the outcome, whatever it is (a failure to write
+  that one is logged, and the started row remains as evidence).
 
   `expected` guards the replay: `nil` replays whatever is oldest (release and
   Mix commands); a submission ID replays only while the oldest message has it;
@@ -83,23 +88,28 @@ defmodule Custyard.Acknowledgments.Operations do
     if !Audit.actor?(actor), do: raise(ArgumentError, "unknown audit actor")
 
     {result, summary} =
-      case with_channel(&replay_message(&1, &2, &3, expected)) do
+      case with_channel(&replay_message(&1, &2, &3, expected, actor)) do
         {:replay, result, summary} -> {result, summary}
         other -> {other, %{}}
       end
 
-    Audit.record(:acknowledgment_replayed, actor, nil, %{
+    Audit.record(:acknowledgment_replayed, actor, nil, replay_payload(summary, result))
+
+    result
+  end
+
+  defp replay_payload(summary, result) do
+    %{
       "source" => summary[:source],
       "submission_id" => summary[:submission_id],
       "body_sha256" => summary[:body_sha256],
       "category" => summary[:category],
       "attempt" => summary[:attempt],
       "outcome" => replay_outcome(result)
-    })
-
-    result
+    }
   end
 
+  defp replay_outcome(:started), do: "started"
   defp replay_outcome(:ok), do: "replayed"
   defp replay_outcome(:empty), do: "empty"
   defp replay_outcome({:error, {:unroutable, _}}), do: "unroutable"
@@ -114,20 +124,33 @@ defmodule Custyard.Acknowledgments.Operations do
   defp expected?(%{submission_id: id, body_sha256: hash}, summary),
     do: expected?(id, summary) and summary.body_sha256 == hash
 
-  defp replay_message(channel, connection, config, expected) do
+  defp replay_message(channel, connection, config, expected, actor) do
     case fetch_failure(channel, config) do
       {:ok, body, meta} ->
         summary = summarize(body, meta)
 
-        if expected?(expected, summary) do
-          result =
-            with :ok <-
-                   Broker.publish(connection, config[:queue], body, [], config[:confirm_timeout]),
-                 do: AMQP.Basic.ack(channel, meta.delivery_tag)
+        cond do
+          not expected?(expected, summary) ->
+            {:replay, {:error, :changed}, summary}
 
-          {:replay, result, summary}
-        else
-          {:replay, {:error, :changed}, summary}
+          # The attempt is on record before the message moves, or it does not move.
+          Audit.record(:acknowledgment_replayed, actor, nil, replay_payload(summary, :started)) ==
+              :error ->
+            {:replay, {:error, :audit_failed}, summary}
+
+          true ->
+            result =
+              with :ok <-
+                     Broker.publish(
+                       connection,
+                       config[:queue],
+                       body,
+                       [],
+                       config[:confirm_timeout]
+                     ),
+                   do: AMQP.Basic.ack(channel, meta.delivery_tag)
+
+            {:replay, result, summary}
         end
 
       other ->
@@ -149,6 +172,7 @@ defmodule Custyard.Acknowledgments.Operations do
     precondition_failed: "An existing queue has incompatible properties",
     operation_failed: "The broker operation failed; messages remain recoverable",
     changed: "The oldest failed message changed; inspect again",
+    audit_failed: "The replay could not be audited, so nothing was replayed",
     unroutable: "The work queue is missing; provision the topology",
     publication_failed: "The replay was not confirmed; the message is still retained",
     publication_rejected: "The broker rejected the replay; the message is still retained",
