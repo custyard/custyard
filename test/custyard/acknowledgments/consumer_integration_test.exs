@@ -172,14 +172,14 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     await_failures(ctx, 1)
     assert Acknowledgments.list_for_organization(ctx.org.id) == []
     bind(ctx.org)
-    assert :ok = Operations.replay()
+    assert :ok = Operations.replay(nil, "console")
     eventually(fn -> length(Acknowledgments.list_for_organization(ctx.org.id)) == 1 end)
     assert [record] = Acknowledgments.list_for_organization(ctx.org.id)
     assert record.submission_id == "stable"
     assert record.acknowledged_at == evidence()["acknowledged_at"]
     eventually(fn -> drained(ctx.config, ctx.channel, consumer) end)
     await_failures(ctx, 0)
-    assert :empty = Operations.replay()
+    assert :empty = Operations.replay(nil, "console")
     stop_supervised!(Consumer)
     assert {:empty, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: false)
   end
@@ -197,7 +197,7 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     await_failures(ctx, 1)
 
     {:ok, _} = AMQP.Queue.delete(ctx.channel, ctx.config[:queue])
-    assert {:error, {:unroutable, 312}} = Operations.replay()
+    assert {:error, {:unroutable, 312}} = Operations.replay(nil, "console")
     await_failures(ctx, 1)
     assert {^body, meta} = get_failed(ctx)
     :ok = AMQP.Basic.ack(ctx.channel, meta.delivery_tag)

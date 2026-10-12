@@ -13,6 +13,7 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
 
   defp failed_queue(ctx), do: Topology.failure(ctx.config)
   defp body(submission_id), do: Jason.encode!(evidence(%{"submission_id" => submission_id}))
+  defp sha256(body), do: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
 
   describe "status" do
     test "reports ready and consumer counts for every queue, in order", ctx do
@@ -53,7 +54,8 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
         source: "ots.integration",
         submission_id: "first",
         category: "unmapped_organization",
-        attempt: 4
+        attempt: 4,
+        body_sha256: sha256(body("first"))
       }
 
       assert Operations.failure_summary() == {:ok, expected}
@@ -72,7 +74,14 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
 
       assert Operations.failure_summary() ==
                {:ok,
-                %{readable: false, source: nil, submission_id: nil, category: nil, attempt: nil}}
+                %{
+                  readable: false,
+                  source: nil,
+                  submission_id: nil,
+                  category: nil,
+                  attempt: nil,
+                  body_sha256: sha256("{not json")
+                }}
     end
 
     test "an invalid identity or an oversized body is unreadable", ctx do
@@ -98,11 +107,11 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       put_failure(ctx, body("second"))
       await_failures(ctx, 2)
 
-      assert Operations.replay("second") == {:error, :changed}
+      assert Operations.replay("second", "console") == {:error, :changed}
       await_failures(ctx, 2)
       assert {:ok, %{submission_id: "first"}} = Operations.failure_summary()
 
-      assert Operations.replay("first") == :ok
+      assert Operations.replay("first", "console") == :ok
       await_failures(ctx, 1)
       assert {:ok, %{submission_id: "second"}} = Operations.failure_summary()
       assert {:ok, replayed, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
@@ -113,22 +122,53 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       put_failure(ctx, "{not json")
       await_failures(ctx, 1)
 
-      assert Operations.replay("anything") == {:error, :changed}
+      assert Operations.replay("anything", "console") == {:error, :changed}
       await_failures(ctx, 1)
+    end
+
+    # Conflicting evidence reuses a submission ID, so two retained failures can
+    # share one; the inspected body digest tells them apart.
+    test "the inspected body must match too, not only the submission ID", ctx do
+      original = body("shared")
+      conflicting = Jason.encode!(evidence(%{"submission_id" => "shared", "actor_id" => "other"}))
+      put_failure(ctx, original)
+      put_failure(ctx, conflicting)
+      await_failures(ctx, 2)
+
+      assert {:ok, %{submission_id: "shared", body_sha256: inspected}} =
+               Operations.failure_summary()
+
+      assert inspected == sha256(original)
+      await_failures(ctx, 2)
+
+      # The inspected message leaves the queue another way before the replay.
+      {^original, meta} = get_failed(ctx)
+      :ok = AMQP.Basic.ack(ctx.channel, meta.delivery_tag)
+
+      expected = %{submission_id: "shared", body_sha256: inspected}
+      assert Operations.replay(expected, "console") == {:error, :changed}
+      await_failures(ctx, 1)
+      assert {:empty, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
+
+      matching = %{submission_id: "shared", body_sha256: sha256(conflicting)}
+      assert Operations.replay(matching, "console") == :ok
+
+      assert {:ok, ^conflicting, _} =
+               AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
     end
   end
 
-  describe "replay_failure/2 audit" do
+  describe "replay audit" do
     defp replay_audits,
       do: Repo.all(from e in AuditEvent, where: e.event_type == :acknowledgment_replayed)
 
-    test "records operator, sanitized identity and outcome", ctx do
+    test "records operator, sanitized identity, body digest and outcome", ctx do
       operator = Custyard.Factory.insert_operator_account()
       put_failure(ctx, body("audited"))
       await_failures(ctx, 1)
 
-      assert Acknowledgments.replay_failure("other", operator) == {:error, :changed}
-      assert Acknowledgments.replay_failure("audited", operator) == :ok
+      assert Operations.replay("other", operator) == {:error, :changed}
+      assert Operations.replay("audited", operator) == :ok
 
       assert [changed, replayed] = Enum.sort_by(replay_audits(), & &1.id)
       assert changed.payload["outcome"] == "changed"
@@ -140,6 +180,7 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
                "operator_email" => operator.email,
                "source" => "ots.integration",
                "submission_id" => "audited",
+               "body_sha256" => sha256(body("audited")),
                "category" => "unmapped_organization",
                "attempt" => 4,
                "outcome" => "replayed"
@@ -147,10 +188,27 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
     end
 
     test "release replays are audited with the channel, including empty ones" do
-      assert Acknowledgments.replay_failure(nil, "cli") == :empty
+      assert Operations.replay(nil, "cli") == :empty
 
       assert [%{source: "cli", payload: %{"actor" => "cli", "outcome" => "empty"}}] =
                replay_audits()
+    end
+
+    test "there is no unaudited replay entry point", ctx do
+      Code.ensure_loaded!(Operations)
+
+      for {name, arity} <- [replay: 0, replay: 1, replay_head: 1],
+          do: refute(function_exported?(Operations, name, arity))
+
+      refute function_exported?(Acknowledgments, :replay_failure, 2)
+
+      # An actor that cannot be recorded is refused before any broker work.
+      put_failure(ctx, body("kept"))
+      await_failures(ctx, 1)
+      assert_raise ArgumentError, fn -> Operations.replay(nil, "someone") end
+      assert_raise ArgumentError, fn -> Operations.replay(nil, nil) end
+      await_failures(ctx, 1)
+      assert replay_audits() == []
     end
   end
 

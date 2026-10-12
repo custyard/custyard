@@ -153,7 +153,25 @@ defmodule Custyard.AcknowledgmentsTest do
       assert {:error, :organization_not_found} =
                Acknowledgments.bind("ots.test", "org-orphan", 999_999_999, "cli")
 
+      # Beyond signed 64 bits the SQLite driver would raise.
+      assert {:error, :organization_not_found} =
+               Acknowledgments.bind("ots.test", "org-orphan", 9_223_372_036_854_775_808, "cli")
+
+      assert {:error, :organization_not_found} =
+               Acknowledgments.bind("ots.test", "org-orphan", "99999999999999999999", "cli")
+
       assert Acknowledgments.get_binding("ots.test", "org-orphan") == nil
+      assert binding_audits() == []
+    end
+
+    test "an actor that cannot be recorded is refused before anything is written", %{
+      organization: org
+    } do
+      assert_raise ArgumentError, fn ->
+        Acknowledgments.bind("ots.test", "org-x", org.id, "web")
+      end
+
+      assert Acknowledgments.get_binding("ots.test", "org-x") == nil
       assert binding_audits() == []
     end
 

@@ -14,7 +14,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   """
   use CustyardWeb, :live_view
 
-  alias Custyard.{Acknowledgments, OperatorAccount, Organizations}
+  alias Custyard.{Acknowledgments, OperatorAccount, OperatorAccounts, Organizations}
   alias Custyard.Acknowledgments.{Evidence, Operations}
 
   # Longer than a connect timeout plus a publisher confirm; a broker that
@@ -78,16 +78,17 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   def handle_event("cancel_replay", _params, socket),
     do: {:noreply, assign(socket, :confirming_replay, false)}
 
-  # The submission ID comes from the inspected summary held server-side,
-  # never from the client.
+  # The submission ID and body digest come from the inspected summary held
+  # server-side, never from the client.
   def handle_event("replay", _params, socket) do
     when_allowed(socket, fn ->
       confirmed? = socket.assigns.confirming_replay
       socket = assign(socket, :confirming_replay, false)
 
       case socket.assigns.failure do
-        {:summary, %{readable: true, submission_id: id}} when confirmed? ->
-          start_operation(socket, {:replay, id, socket.assigns.current_operator})
+        {:summary, %{readable: true, submission_id: id, body_sha256: hash}} when confirmed? ->
+          expected = %{submission_id: id, body_sha256: hash}
+          start_operation(socket, {:replay, expected, socket.assigns.current_operator})
 
         _ ->
           socket
@@ -234,12 +235,10 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   # awaits, so closing the tab cannot interrupt it between publishing and
   # acknowledging, and the audit record (written in that task, never in
   # handle_async) always follows the broker outcome.
-  defp operation_fun({:replay, submission_id, operator}) do
+  defp operation_fun({:replay, expected, operator}) do
     fn ->
       Custyard.TaskSupervisor
-      |> Task.Supervisor.async_nolink(fn ->
-        Acknowledgments.replay_failure(submission_id, operator)
-      end)
+      |> Task.Supervisor.async_nolink(fn -> Operations.replay(expected, operator) end)
       |> Task.await(:infinity)
     end
   end
@@ -297,9 +296,22 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
       |> finish_operation()
       |> then(fn socket ->
         case key do
-          :counts -> assign(socket, :counts, message)
-          :inspect -> assign(socket, :failure, message)
-          :replay -> assign(socket, :replay_result, message)
+          :counts ->
+            assign(socket, :counts, message)
+
+          :inspect ->
+            assign(socket, :failure, message)
+
+          # Only the wait is cancelled: the unlinked replay may still finish
+          # (and is audited either way), so the inspected summary is stale.
+          :replay ->
+            socket
+            |> assign(:failure, nil)
+            |> assign(
+              :replay_result,
+              {:error,
+               "The broker has not answered yet. The replay may still complete; inspect again before retrying."}
+            )
         end
       end)
 
@@ -326,8 +338,9 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   end
 
   defp find_organization(id) when is_binary(id) do
+    # An id beyond signed 64 bits would make the SQLite driver raise.
     case Integer.parse(id) do
-      {id, ""} when id > 0 -> Organizations.get_organization(id)
+      {id, ""} -> if OperatorAccounts.valid_id?(id), do: Organizations.get_organization(id)
       _ -> nil
     end
   end

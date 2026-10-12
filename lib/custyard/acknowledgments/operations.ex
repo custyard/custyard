@@ -7,9 +7,9 @@ defmodule Custyard.Acknowledgments.Operations do
   error atoms and sanitized fields only; `inspect_failure/0` alone returns
   original evidence, for authorized terminals.
   """
-  alias Custyard.Acknowledgments.{Broker, Config, Consumer, Evidence, Topology}
+  alias Custyard.Acknowledgments.{Audit, Broker, Config, Consumer, Evidence, Topology}
 
-  @doc "Declares the work, retry and failure queues. Needs a configure-capable credential."
+  @doc "Declares the work, retry and failure queues. Needs the provisioning credential."
   def provision,
     do: with_channel(fn channel, _connection, config -> Topology.provision(channel, config) end)
 
@@ -66,32 +66,60 @@ defmodule Custyard.Acknowledgments.Operations do
     end)
   end
 
-  @doc "Replays the oldest failed message, whatever it is. Not audited; see `Custyard.Acknowledgments.replay_failure/2`."
-  def replay, do: replay_head(nil) |> elem(0)
-
   @doc """
-  Replays the oldest failed message only when it is still the one inspected.
-  A different or unreadable head stays in place and returns `{:error, :changed}`.
-  """
-  def replay(submission_id) when is_binary(submission_id),
-    do: replay_head(submission_id) |> elem(0)
+  Replays the oldest failed message to the work queue and writes an
+  `:acknowledgment_replayed` audit row in this process, whatever the outcome.
+  This is the only replay entry point, so no replay goes unaudited.
 
-  @doc false
-  # `{result, summary | nil}`: the summary describes the message the replay
-  # fetched, so the caller can audit without seeing the body.
-  def replay_head(expected) do
-    case with_channel(&replay_message(&1, &2, &3, expected)) do
-      {:replay, result, summary} -> {result, summary}
-      other -> {other, nil}
-    end
+  `expected` guards the replay: `nil` replays whatever is oldest (release and
+  Mix commands); a submission ID replays only while the oldest message has it;
+  `%{submission_id: id, body_sha256: hash}` (the operator page's inspected
+  summary) also requires the identical body, since two retained failures can
+  share a submission ID with different evidence. Otherwise the message stays
+  in place and the result is `{:error, :changed}`. `actor` is an operator
+  account or `"cli"`, `"mix"` or `"console"`.
+  """
+  def replay(expected, actor) do
+    if !Audit.actor?(actor), do: raise(ArgumentError, "unknown audit actor")
+
+    {result, summary} =
+      case with_channel(&replay_message(&1, &2, &3, expected)) do
+        {:replay, result, summary} -> {result, summary}
+        other -> {other, %{}}
+      end
+
+    Audit.record(:acknowledgment_replayed, actor, nil, %{
+      "source" => summary[:source],
+      "submission_id" => summary[:submission_id],
+      "body_sha256" => summary[:body_sha256],
+      "category" => summary[:category],
+      "attempt" => summary[:attempt],
+      "outcome" => replay_outcome(result)
+    })
+
+    result
   end
+
+  defp replay_outcome(:ok), do: "replayed"
+  defp replay_outcome(:empty), do: "empty"
+  defp replay_outcome({:error, {:unroutable, _}}), do: "unroutable"
+  defp replay_outcome({:error, reason}) when is_atom(reason), do: Atom.to_string(reason)
+  defp replay_outcome(_), do: "operation_failed"
+
+  defp expected?(nil, _summary), do: true
+
+  defp expected?(submission_id, summary) when is_binary(submission_id),
+    do: summary.readable and summary.submission_id == submission_id
+
+  defp expected?(%{submission_id: id, body_sha256: hash}, summary),
+    do: expected?(id, summary) and summary.body_sha256 == hash
 
   defp replay_message(channel, connection, config, expected) do
     case fetch_failure(channel, config) do
       {:ok, body, meta} ->
         summary = summarize(body, meta)
 
-        if is_nil(expected) or (summary.readable and summary.submission_id == expected) do
+        if expected?(expected, summary) do
           result =
             with :ok <-
                    Broker.publish(connection, config[:queue], body, [], config[:confirm_timeout]),
@@ -103,7 +131,7 @@ defmodule Custyard.Acknowledgments.Operations do
         end
 
       other ->
-        {:replay, other, nil}
+        {:replay, other, %{}}
     end
   end
 
@@ -228,9 +256,15 @@ defmodule Custyard.Acknowledgments.Operations do
   defp summarize(body, meta) do
     headers = if is_list(meta[:headers]), do: meta[:headers], else: []
 
+    # The digest identifies the exact body for a guarded replay without the
+    # body itself leaving this process.
     body
     |> identity()
-    |> Map.merge(%{category: category(headers), attempt: attempt(headers)})
+    |> Map.merge(%{
+      category: category(headers),
+      attempt: attempt(headers),
+      body_sha256: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
+    })
   end
 
   # Source and submission ID are shown only from a body the consumer could

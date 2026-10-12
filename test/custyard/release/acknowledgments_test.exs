@@ -150,11 +150,16 @@ defmodule Custyard.Release.AcknowledgmentsTest do
       assert missing.status == 1
       assert missing.err =~ "Organization 999999999 does not exist"
 
-      for id <- ["0", "-4", "12abc", "one"] do
+      # Beyond signed 64 bits the SQLite driver would raise.
+      for id <- ["0", "-4", "12abc", "one", "9223372036854775808", String.duplicate("9", 40)] do
         result = cli(["bind", "ots.test", "org-new", id])
         assert result.status == 1
-        assert result.err =~ "positive integer"
+        assert result.err =~ "CUSTYARD_ORG_ID must be an integer from 1 to 9223372036854775807"
       end
+
+      largest = cli(["bind", "ots.test", "org-new", "9223372036854775807"])
+      assert largest.status == 1
+      assert largest.err =~ "Organization 9223372036854775807 does not exist"
 
       invalid = cli(["bind", "ots.test", " padded", "#{org.id}"])
       assert invalid.status == 1
@@ -162,6 +167,45 @@ defmodule Custyard.Release.AcknowledgmentsTest do
 
       assert Acknowledgments.get_binding("ots.test", "org-new") == nil
       assert length(binding_audits()) == 1
+    end
+
+    test "prints identities with format and separator characters escaped" do
+      org = Custyard.Factory.insert_organization()
+      # Valid identities: only C0 controls and DEL are refused there.
+      external_id = "org\u202Eevil\u200B\u2028x"
+
+      result = cli(["bind", "ots.test", external_id, "#{org.id}"])
+      assert result.status == 0
+      assert result.out =~ "Bound ots.test org\\u{202E}evil\\u{200B}\\u{2028}x to organization"
+      refute result.out =~ ~r/[\x{202E}\x{200B}\x{2028}]/u
+    end
+  end
+
+  # Release.migrate's order: opening SQLite before the check would create an
+  # empty database on the root filesystem when the Fly volume is missing.
+  describe "storage check" do
+    setup do
+      previous = System.get_env("FLY_APP_NAME")
+      System.put_env("FLY_APP_NAME", "custyard-test")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("FLY_APP_NAME", previous),
+          else: System.delete_env("FLY_APP_NAME")
+      end)
+    end
+
+    test "runs before the Repo starts and before anything is written" do
+      org = Custyard.Factory.insert_organization()
+
+      for argv <- [["bind", "ots.test", "org-fly", "#{org.id}"], ["replay"]] do
+        assert_raise RuntimeError, ~r/DATABASE_PATH must point inside the mounted \/data/, fn ->
+          with_io(:stderr, fn -> with_io(fn -> CLI.run(argv, mode: :release) end) end)
+        end
+      end
+
+      assert Acknowledgments.list_bindings() == []
+      assert binding_audits() == []
     end
   end
 
@@ -220,18 +264,45 @@ defmodule Custyard.Release.AcknowledgmentsTest do
       full = cli(["inspect", "--evidence"])
       assert full.status == 0
       assert full.err =~ "WARNING: the full original evidence follows"
-      assert full.out =~ body
+      assert full.out =~ "\n  | " <> body <> "\n"
       await_failures(ctx, 1)
     end
 
     test "inspect --evidence escapes a body with terminal control bytes", ctx do
-      put_failure(ctx, "\e]0;owned\a{bad")
+      put_failure(ctx, "\e]0;owned\a{bad\r\xFF")
       await_failures(ctx, 1)
 
       full = cli(["inspect", "--evidence"])
       assert full.out =~ "unreadable"
-      refute full.out =~ "\e"
-      assert full.out =~ ~S("\e]0;owned\a{bad")
+      refute full.out =~ ~r/[\e\a\r]/
+      assert full.out =~ "  | \\u{1B}]0;owned\\u{7}{bad\\u{D}\\xFF\n"
+    end
+
+    # Every body line is prefixed, so a newline in the evidence cannot start a
+    # line that reads like part of the summary.
+    test "inspect --evidence cannot forge summary lines", ctx do
+      put_failure(ctx, "{bad\n  Submission ID: forged\n\u2028Attempt: 1")
+      await_failures(ctx, 1)
+
+      full = cli(["inspect", "--evidence"])
+      [_summary, evidence] = String.split(full.out, ~r/^Evidence.*\n/m, parts: 2)
+
+      assert String.split(evidence, "\n", trim: true) == [
+               "  | {bad",
+               "  |   Submission ID: forged",
+               "  | \\u{2028}Attempt: 1"
+             ]
+
+      refute full.out =~ ~r/^  Submission ID: forged/m
+    end
+
+    test "inspect escapes bidi, zero-width and separator characters in identities", ctx do
+      put_failure(ctx, Jason.encode!(evidence(%{"submission_id" => "ok\u202Edi\u200Bx\u2029y"})))
+      await_failures(ctx, 1)
+
+      summary = cli(["inspect"])
+      assert summary.out =~ "  Submission ID: ok\\u{202E}di\\u{200B}x\\u{2029}y\n"
+      refute summary.out =~ ~r/[\x{202E}\x{200B}\x{2029}]/u
     end
 
     test "replay with a submission ID is guarded, and audited as cli", ctx do

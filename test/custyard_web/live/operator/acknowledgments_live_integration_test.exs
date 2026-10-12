@@ -119,6 +119,36 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveIntegrationTest do
     assert [%{payload: %{"outcome" => "changed", "submission_id" => "next"}}] = replay_audits()
   end
 
+  # Conflicting evidence reuses a submission ID; the page replays only the
+  # exact body it inspected.
+  test "a different body under the same submission ID is not replayed", ctx do
+    inspected = body("shared")
+    conflicting = Jason.encode!(evidence(%{"submission_id" => "shared", "actor_id" => "other"}))
+    put_failure(ctx, inspected)
+    put_failure(ctx, conflicting)
+    await_failures(ctx, 2)
+
+    {:ok, view, _html} = live(ctx.conn, ~p"/operator/acknowledgments")
+    render_async(view)
+    view |> element("[data-testid=acknowledgments-inspect]") |> render_click()
+    render_async(view)
+    await_failures(ctx, 2)
+
+    {^inspected, meta} = get_failed(ctx)
+    :ok = AMQP.Basic.ack(ctx.channel, meta.delivery_tag)
+
+    view |> element("[data-testid=acknowledgments-replay]") |> render_click()
+    view |> element("[data-testid=acknowledgments-confirm-replay]") |> render_click()
+    render_async(view)
+
+    assert view |> element("[data-testid=acknowledgments-replay-result]") |> render() =~
+             "changed; inspect again"
+
+    await_failures(ctx, 1)
+    assert {:empty, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
+    assert [%{payload: %{"outcome" => "changed", "submission_id" => "shared"}}] = replay_audits()
+  end
+
   test "an unreadable message offers no replay", ctx do
     put_failure(ctx, "{not json")
     await_failures(ctx, 1)

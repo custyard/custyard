@@ -185,6 +185,17 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       assert errors =~ "Choose an existing organization"
       refute has_element?(view, "[data-testid=acknowledgments-bind-confirmation]")
 
+      # An id beyond signed 64 bits is refused before it reaches SQLite.
+      render_submit(view, "review_bind", %{
+        "binding" => %{
+          "source_organization_id" => "big",
+          "organization_id" => "9223372036854775808"
+        }
+      })
+
+      assert view |> element("[data-testid=acknowledgments-bind-errors]") |> render() =~
+               "Choose an existing organization"
+
       view
       |> form("[data-testid=acknowledgments-bind-form]",
         binding: %{source_organization_id: "taken", organization_id: org.id}
@@ -299,6 +310,29 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
              ) == {:noreply, socket}
 
       assert Acknowledgments.list_bindings() == []
+    end
+
+    # Only the page's wait is cancelled; the unlinked replay task may still
+    # publish and acknowledge, so the page must not claim it failed.
+    test "a replay timeout says the replay may still complete" do
+      ref = make_ref()
+
+      socket =
+        socket(insert_operator_account(), %{
+          in_flight: :replay,
+          operation_ref: ref,
+          replay_result: nil,
+          failure: {:summary, %{readable: true, submission_id: "s-1", body_sha256: "ab"}}
+        })
+
+      assert {:noreply, returned} =
+               AcknowledgmentsLive.handle_info({:operation_timeout, ref}, socket)
+
+      assert {:error, message} = returned.assigns.replay_result
+      assert message =~ "may still complete; inspect again"
+      refute message =~ "did not respond"
+      assert returned.assigns.failure == nil
+      assert returned.assigns.in_flight == nil
     end
   end
 end

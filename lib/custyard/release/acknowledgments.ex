@@ -9,10 +9,12 @@ defmodule Custyard.Release.Acknowledgments do
   credentials come from the environment and are never accepted as arguments
   or printed.
   """
-  alias Custyard.Acknowledgments
+  alias Custyard.{Acknowledgments, OperatorAccounts}
   alias Custyard.Acknowledgments.{Config, Evidence, Operations}
 
   @app :custyard
+  # The largest id OperatorAccounts.valid_id?/1 accepts (signed 64 bits).
+  @max_id 9_223_372_036_854_775_807
 
   @usage """
   Usage: bin/acknowledgments COMMAND
@@ -20,8 +22,8 @@ defmodule Custyard.Release.Acknowledgments do
 
   Commands:
     status                    Show configuration and per-queue ready and consumer counts
-    provision                 Declare the work, retry and failure queues (needs a
-                              configure-capable credential)
+    provision                 Declare the work, retry and failure queues (needs the
+                              provisioning credential, not the runtime one)
     bind SOURCE SOURCE_ORG_ID CUSTYARD_ORG_ID
                               Attribute a source organization's evidence to a Custyard
                               organization. Permanent: bindings cannot be removed or
@@ -51,8 +53,9 @@ defmodule Custyard.Release.Acknowledgments do
 
   @doc """
   Runs a command and returns its exit status. Options: `:mode` is `:release`
-  (start only what the command needs) or `:running` (the application already
-  runs, as in Mix tasks and tests); `:actor` names the audit channel.
+  (start only what the command needs: the release command and the Mix tasks)
+  or `:running` (the Repo and `:amqp` already run, as in tests); `:actor` names
+  the audit channel.
   """
   def run(argv, opts \\ []) do
     opts = Keyword.merge([mode: :running, actor: "cli"], opts)
@@ -123,9 +126,12 @@ defmodule Custyard.Release.Acknowledgments do
   end
 
   defp execute({"bind", _, [source, external_id, organization_id]}, opts) do
-    case Integer.parse(organization_id) do
-      {id, ""} when id > 0 -> with_repo(opts, fn -> bind(source, external_id, id, opts) end)
-      _ -> fail("CUSTYARD_ORG_ID must be a positive integer")
+    # Bounded to signed 64 bits: anything larger makes the SQLite driver raise.
+    with {id, ""} <- Integer.parse(organization_id),
+         true <- OperatorAccounts.valid_id?(id) do
+      with_repo(opts, fn -> bind(source, external_id, id, opts) end)
+    else
+      _ -> fail("CUSTYARD_ORG_ID must be an integer from 1 to #{@max_id}")
     end
   end
 
@@ -137,12 +143,11 @@ defmodule Custyard.Release.Acknowledgments do
     end)
   end
 
+  # The replay writes its audit row through the Repo, so the Repo starts first.
   defp execute({"replay", _, args}, opts) do
     with_repo(opts, fn ->
       with_broker(opts, fn ->
-        Custyard.Storage.validate_fly_storage!()
-
-        case Acknowledgments.replay_failure(List.first(args), opts[:actor]) do
+        case Operations.replay(List.first(args), opts[:actor]) do
           :ok -> ok("Replayed the oldest failed message to the work queue")
           :empty -> ok("No failed messages")
           error -> fail(Operations.error_message(error))
@@ -152,20 +157,17 @@ defmodule Custyard.Release.Acknowledgments do
   end
 
   defp bind(source, external_id, id, opts) do
-    Custyard.Storage.validate_fly_storage!()
+    binding = "#{printable(source)} #{printable(external_id)}"
 
     case Acknowledgments.bind(source, external_id, id, opts[:actor]) do
       {:ok, :created, _} ->
-        ok("Bound #{source} #{external_id} to organization #{id}")
+        ok("Bound #{binding} to organization #{id}")
 
       {:ok, :existing, _} ->
-        ok("#{source} #{external_id} is already bound to organization #{id}; nothing changed")
+        ok("#{binding} is already bound to organization #{id}; nothing changed")
 
       {:error, :conflicting_binding} ->
-        fail(
-          "#{source} #{external_id} is already bound to another organization; " <>
-            "bindings cannot be reassigned"
-        )
+        fail("#{binding} is already bound to another organization; bindings cannot be reassigned")
 
       {:error, :organization_not_found} ->
         fail("Organization #{id} does not exist")
@@ -184,7 +186,7 @@ defmodule Custyard.Release.Acknowledgments do
 
     source =
       if Evidence.valid_identity?(config[:source]),
-        do: config[:source],
+        do: printable(config[:source]),
         else: if(is_nil(config[:source]), do: "not set", else: "set but invalid")
 
     IO.puts("Consumer: #{enabled}")
@@ -233,8 +235,13 @@ defmodule Custyard.Release.Acknowledgments do
         )
 
         print_summary_lines(summary)
-        IO.puts("Evidence:")
-        IO.puts(printable(body))
+        IO.puts("Evidence (each line prefixed with \"  | \"):")
+        # Raw newlines in the body cannot start a line that reads like a
+        # summary line: every body line carries the prefix.
+        body
+        |> String.split("\n")
+        |> Enum.each(&IO.puts("  | " <> printable(&1)))
+
         0
 
       :empty ->
@@ -269,10 +276,14 @@ defmodule Custyard.Release.Acknowledgments do
     fun.()
   end
 
+  # The storage check runs before the Repo starts, as Release.migrate does:
+  # opening SQLite first would create an empty database on the container's
+  # root filesystem when the Fly volume is missing.
   defp with_repo(opts, fun) do
-    if opts[:mode] == :release do
-      load(opts)
+    load(opts)
+    Custyard.Storage.validate_fly_storage!()
 
+    if opts[:mode] == :release do
       case Ecto.Migrator.with_repo(Custyard.Repo, fn _repo -> fun.() end) do
         {:ok, status, _} -> status
         {:error, _} -> fail("The database is unavailable")
@@ -282,18 +293,29 @@ defmodule Custyard.Release.Acknowledgments do
     end
   end
 
-  # A failed message's body (or a misconfigured name) may hold terminal control
-  # sequences; String.printable?/1 accepts escape and bell, so check directly.
-  # Anything with C0/C1 controls other than newline and tab is printed escaped.
-  @terminal_controls ~r/[\x00-\x08\x0b-\x1f\x7f\x{80}-\x{9f}]/u
+  # Printed text can come from a failed message or the environment. Every
+  # control, format (bidi override, zero-width), surrogate, private-use or
+  # unassigned code point, and the Unicode line and paragraph separators, is
+  # printed as an escape, so nothing printed can move the cursor, reorder text
+  # or start a new line. Invalid UTF-8 bytes are printed as \xNN.
+  @unsafe ~r/[\p{C}\x{2028}\x{2029}]/u
 
   defp printable(value) when is_binary(value) do
-    if String.valid?(value) and not Regex.match?(@terminal_controls, value),
-      do: value,
-      else: inspect(value, limit: :infinity, printable_limit: :infinity, binaries: :as_strings)
+    value
+    |> String.chunk(:valid)
+    |> Enum.map_join(fn chunk ->
+      if String.valid?(chunk),
+        do: Regex.replace(@unsafe, chunk, &escape_code_point/1),
+        else: for(<<byte <- chunk>>, into: "", do: "\\x" <> Base.encode16(<<byte>>))
+    end)
   end
 
   defp printable(value), do: inspect(value)
+
+  defp escape_code_point(char) do
+    [code_point] = String.to_charlist(char)
+    "\\u{" <> Integer.to_string(code_point, 16) <> "}"
+  end
 
   defp plural(1, word), do: word
   defp plural(_, word), do: word <> "s"
