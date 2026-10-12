@@ -31,10 +31,23 @@ defmodule Custyard.OperatorAccount do
   """
   def login_token_ttl_minutes, do: @login_token_ttl_minutes
 
+  @doc """
+  Normalizes an email address for storage and lookup: trims surrounding
+  whitespace and lowercases it (Unicode-aware).
+
+  Every place that stores an operator email or looks one up goes through
+  this, so `Ops@Example.com` and `ops@example.com` are the same account.
+  """
+  def normalize_email(nil), do: nil
+
+  def normalize_email(email) when is_binary(email),
+    do: email |> String.trim() |> String.downcase()
+
   @doc false
   def changeset(operator_account, attrs) do
     operator_account
     |> cast(attrs, [:email, :password, :role, :organization_id])
+    |> update_change(:email, &normalize_email/1)
     |> validate_required([:email])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
       message: "must be a valid email address"

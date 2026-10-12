@@ -19,7 +19,9 @@ defmodule CustyardWeb.Operator.SessionController do
   end
 
   def create(conn, %{"email" => email}) when is_binary(email) and email != "" do
-    email = email |> String.trim() |> String.downcase()
+    # The same normalization the account was stored with, for both the
+    # per-email rate-limit key and the lookup.
+    email = OperatorAccount.normalize_email(email)
 
     case RateLimit.check_rate(:operator_login_email, email) do
       {:deny, retry_after_ms} ->

@@ -372,4 +372,42 @@ defmodule Custyard.OperatorAccountTest do
       assert OperatorAccount.roles() == ~w(super_admin admin agent)
     end
   end
+
+  describe "normalize_email/1" do
+    test "trims and lowercases" do
+      assert OperatorAccount.normalize_email("  Ops@Example.COM \n") == "ops@example.com"
+    end
+
+    test "lowercases beyond ASCII" do
+      assert OperatorAccount.normalize_email("ÉLODIE@Exemple.FR") == "élodie@exemple.fr"
+    end
+
+    test "leaves a normalized email unchanged" do
+      assert OperatorAccount.normalize_email("ops@example.com") == "ops@example.com"
+    end
+
+    test "is nil-safe" do
+      assert OperatorAccount.normalize_email(nil) == nil
+    end
+  end
+
+  describe "changeset/2 email normalization" do
+    test "stores the email trimmed and lowercased" do
+      changeset = OperatorAccount.changeset(%OperatorAccount{}, %{email: " Mixed@Case.Example "})
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :email) == "mixed@case.example"
+    end
+
+    test "a case variant of an existing email violates the unique index" do
+      Factory.insert_operator_account(email: "taken@example.com")
+
+      assert {:error, changeset} =
+               %OperatorAccount{}
+               |> OperatorAccount.changeset(%{email: "TAKEN@example.com"})
+               |> Repo.insert()
+
+      assert %{email: ["has already been taken"]} = errors_on(changeset)
+    end
+  end
 end

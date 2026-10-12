@@ -128,6 +128,26 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
     end
   end
 
+  describe "email normalization" do
+    test "a mixed-case, padded email finds the account" do
+      operator = insert_operator_account(email: "casey@example.com")
+
+      assert request_login({10, 44, 8, 1}, "  Casey@Example.COM ").status == 302
+      assert is_binary(Repo.get!(OperatorAccount, operator.id).login_token)
+    end
+
+    test "case variants share one per-email rate-limit bucket" do
+      operator = insert_operator_account()
+      variants = [operator.email, String.upcase(operator.email), " " <> operator.email]
+
+      for {email, n} <- Enum.with_index(Stream.cycle(variants) |> Enum.take(5), 1) do
+        assert request_login({10, 44, 9, n}, email).status == 302
+      end
+
+      assert request_login({10, 44, 9, 6}, String.upcase(operator.email)).status == 429
+    end
+  end
+
   defp request_login(ip, email) do
     build_conn()
     |> Map.put(:remote_ip, ip)
