@@ -15,7 +15,9 @@ defmodule Custyard.AuditEvent do
     :webhook_processed,
     :webhook_error,
     :slug_released,
-    :prospect_converted
+    :prospect_converted,
+    :acknowledgment_replayed,
+    :acknowledgment_binding_created
   ]
 
   schema "audit_events" do

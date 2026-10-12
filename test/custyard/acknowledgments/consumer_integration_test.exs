@@ -192,8 +192,8 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     await_failures(ctx, 1)
     stop_supervised!(Consumer)
 
-    assert {:ok, %{body: ^body, headers: headers}} = Operations.inspect_failure()
-    assert List.keyfind(headers, "custyard-attempt", 0) == {"custyard-attempt", :long, 2}
+    assert {:ok, %{body: ^body, summary: summary}} = Operations.inspect_failure()
+    assert %{attempt: 2, category: "unmapped_organization", submission_id: "stable"} = summary
     await_failures(ctx, 1)
 
     {:ok, _} = AMQP.Queue.delete(ctx.channel, ctx.config[:queue])
