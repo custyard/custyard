@@ -17,7 +17,7 @@ defmodule CustyardWeb.HomeLiveTest do
   defp login(conn, operator) do
     conn
     |> Phoenix.ConnTest.init_test_session(%{})
-    |> Plug.Conn.put_session(:operator_id, operator.id)
+    |> put_operator_session(operator.id)
   end
 
   describe "GET /" do
@@ -41,7 +41,7 @@ defmodule CustyardWeb.HomeLiveTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, 999_999)
+        |> put_operator_session(999_999)
 
       {:ok, _view, html} = live(conn, ~p"/")
 

@@ -15,7 +15,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
     conn =
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> Plug.Conn.put_session(:operator_id, operator.id)
+      |> put_operator_session(operator.id)
 
     {:ok, conn: conn, operator: operator}
   end
@@ -42,7 +42,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       })
       |> Repo.insert!()
 
-    Plug.Conn.put_session(conn, :operator_id, operator.id)
+    put_operator_session(conn, operator.id)
   end
 
   test "open project detail rejects task mutations after reassignment", %{conn: conn} do
@@ -308,7 +308,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       project = create_project(%{title: "Own Project", organization_id: org.id})
       operator = insert_scoped_operator(org)
 
-      conn = Plug.Conn.put_session(conn, :operator_id, operator.id)
+      conn = put_operator_session(conn, operator.id)
 
       {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
 
@@ -321,7 +321,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       foreign_project = create_project(%{title: "Foreign Project", organization_id: org_b.id})
       operator = insert_scoped_operator(org_a)
 
-      conn = Plug.Conn.put_session(conn, :operator_id, operator.id)
+      conn = put_operator_session(conn, operator.id)
 
       {:error, {:live_redirect, %{to: redirect_path}}} =
         live(conn, ~p"/operator/projects/#{foreign_project.id}")

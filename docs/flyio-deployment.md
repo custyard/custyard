@@ -214,6 +214,9 @@ fly ssh console -a custyard -C "/app/bin/operator help"
   comes back on the next boot.
 - Every account created or removed outside the web UI is recorded as an
   `operator_created` or `operator_removed` audit event.
+- A login session is tied to the account, not only to its id, so removing an
+  operator ends their sessions even if a later account reuses the id. Sessions
+  issued before this was introduced are signed out once; log in again.
 
 ### Removing the old admin@custyard.local
 

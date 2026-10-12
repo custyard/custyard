@@ -17,7 +17,7 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
     conn =
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> Plug.Conn.put_session(:operator_id, operator.id)
+      |> put_operator_session(operator.id)
 
     {:ok, conn: conn, operator: operator}
   end
@@ -682,7 +682,7 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
     defp conn_for_operator(operator) do
       Phoenix.ConnTest.build_conn()
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> Plug.Conn.put_session(:operator_id, operator.id)
+      |> put_operator_session(operator.id)
     end
 
     test "renders a nil-org conversation without crashing", %{conn: conn} do

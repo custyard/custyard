@@ -52,7 +52,7 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
     operator_conn =
       Phoenix.ConnTest.build_conn()
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> Plug.Conn.put_session(:operator_id, operator.id)
+      |> put_operator_session(operator.id)
 
     {:ok, operator_view, _} = live(operator_conn, "/operator/projects/#{project.id}")
 

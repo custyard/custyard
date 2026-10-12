@@ -16,7 +16,7 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
     conn =
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> Plug.Conn.put_session(:operator_id, operator.id)
+      |> put_operator_session(operator.id)
 
     {:ok, conn: conn, operator: operator}
   end
@@ -35,7 +35,7 @@ defmodule CustyardWeb.Operator.OrganizationsLiveTest do
         })
         |> Repo.insert!()
 
-      conn = Plug.Conn.put_session(conn, :operator_id, operator.id)
+      conn = put_operator_session(conn, operator.id)
       {:ok, _view, html} = live(conn, ~p"/operator/organizations")
 
       assert html =~ "/p/#{own.token}"

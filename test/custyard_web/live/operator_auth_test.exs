@@ -21,7 +21,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
   defp login(conn, operator) do
     conn
     |> Phoenix.ConnTest.init_test_session(%{})
-    |> Plug.Conn.put_session(:operator_id, operator.id)
+    |> put_operator_session(operator.id)
   end
 
   # The real deletion path (its "Deleting organization" warning is expected).
@@ -45,7 +45,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, 999_999)
+        |> put_operator_session(999_999)
 
       assert {:error, {:redirect, %{to: "/operator/login"}}} =
                live(conn, ~p"/operator")
@@ -60,7 +60,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       {:ok, _view, html} = live(conn, ~p"/operator")
 
@@ -91,7 +91,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, super_admin.id)
+        |> put_operator_session(super_admin.id)
 
       {:ok, _view, html} = live(conn, ~p"/operator")
 
@@ -122,7 +122,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, scoped_operator.id)
+        |> put_operator_session(scoped_operator.id)
 
       {:ok, _view, html} = live(conn, ~p"/operator")
 
@@ -451,8 +451,12 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
           private: %{live_temp: %{}}
         }
 
-        assert {:halt, halted} =
-                 OperatorAuth.on_mount(mode, %{}, %{"operator_id" => operator.id}, socket)
+        session = %{
+          "operator_id" => operator.id,
+          "operator_created" => OperatorAccount.session_claim(operator)
+        }
+
+        assert {:halt, halted} = OperatorAuth.on_mount(mode, %{}, session, socket)
 
         assert {:redirect, %{to: "/operator/login"}} = halted.redirected
         assert halted.assigns.flash["error"] == OperatorAuth.no_organization_message()
@@ -494,6 +498,116 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
       assert html =~ "Other org ticket"
 
       {:ok, _view, _html} = live(login(conn, super_admin), ~p"/operator/neglect")
+    end
+  end
+
+  # operator_accounts.id has no AUTOINCREMENT: SQLite gives the next row the
+  # id of a deleted highest-id row, so the id alone cannot identify a session.
+  describe "session bound to the account's creation time" do
+    setup do
+      _keeper = create_operator(%{email: "keeper@example.com", role: "super_admin"})
+      leaver = create_operator(%{email: "leaver@example.com", role: "super_admin"})
+
+      # Created a while ago, as a removed account would have been.
+      earlier = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      leaver |> Ecto.Changeset.change(inserted_at: earlier) |> Repo.update!()
+
+      {:ok, leaver: Repo.get!(OperatorAccount, leaver.id)}
+    end
+
+    defp session_for(conn, operator) do
+      conn
+      |> init_test_session(%{})
+      |> put_operator_session(operator)
+    end
+
+    # Removes `leaver` (the highest id) and creates a new account, which
+    # SQLite gives the same id.
+    defp reuse_id(leaver) do
+      assert {:ok, _} = Custyard.OperatorAccounts.remove_operator(leaver.email, via: "cli")
+
+      assert {:created, joiner} =
+               Custyard.OperatorAccounts.create_operator("joiner@example.com", via: "cli")
+
+      assert joiner.id == leaver.id
+      assert OperatorAccount.session_claim(joiner) != OperatorAccount.session_claim(leaver)
+      joiner
+    end
+
+    defp socket do
+      %Phoenix.LiveView.Socket{
+        endpoint: CustyardWeb.Endpoint,
+        assigns: %{__changed__: %{}, flash: %{}},
+        private: %{live_temp: %{}}
+      }
+    end
+
+    test "a normal session still works", %{conn: conn, leaver: leaver} do
+      assert html_response(get(session_for(conn, leaver), "/operator"), 200)
+      {:ok, _view, _html} = live(session_for(conn, leaver), ~p"/operator")
+    end
+
+    test "the plug rejects a removed operator's session once its id is reused and clears it",
+         %{conn: conn, leaver: leaver} do
+      stale = session_for(conn, leaver)
+      reuse_id(leaver)
+
+      denied = get(stale, "/operator")
+      assert redirected_to(denied) == "/operator/login"
+      refute get_session(denied, :operator_id)
+      refute get_session(denied, :operator_created)
+
+      assert {:error, {:redirect, %{to: "/operator/login"}}} =
+               live(session_for(conn, leaver), ~p"/operator")
+    end
+
+    test "the LiveView mount rejects it", %{leaver: leaver} do
+      session = %{
+        "operator_id" => leaver.id,
+        "operator_created" => OperatorAccount.session_claim(leaver)
+      }
+
+      reuse_id(leaver)
+
+      for mode <- [:default, :require_admin, :require_super_admin] do
+        assert {:halt, halted} = OperatorAuth.on_mount(mode, %{}, session, socket())
+        assert {:redirect, %{to: "/operator/login"}} = halted.redirected
+        refute Map.has_key?(halted.assigns, :current_operator)
+      end
+    end
+
+    test "the refresh hook rejects it on an open view, even with the same role",
+         %{conn: conn, leaver: leaver} do
+      {:ok, queue, _html} = live(session_for(conn, leaver), ~p"/operator")
+      {:ok, settings, _html} = live(session_for(conn, leaver), ~p"/operator/settings")
+
+      # Same id, same role, same (nil) organization: only the claim differs.
+      %{role: "super_admin", organization_id: nil} = reuse_id(leaver)
+
+      send(queue.pid, :debounced_reload)
+      assert_redirect(queue, "/operator/login")
+
+      render_click(settings, "edit_weights", %{})
+      assert_redirect(settings, "/operator/login")
+    end
+
+    test "a session without the claim is signed out", %{conn: conn, leaver: leaver} do
+      legacy =
+        conn
+        |> init_test_session(%{})
+        |> Plug.Conn.put_session(:operator_id, leaver.id)
+
+      denied = get(legacy, "/operator")
+      assert redirected_to(denied) == "/operator/login"
+      refute get_session(denied, :operator_id)
+
+      assert {:halt, %{redirected: {:redirect, %{to: "/operator/login"}}}} =
+               OperatorAuth.on_mount(:default, %{}, %{"operator_id" => leaver.id}, socket())
+
+      # The landing page treats it as anonymous instead of redirecting.
+      {:ok, _view, html} = live(legacy, ~p"/")
+      assert html =~ "home-container"
     end
   end
 end

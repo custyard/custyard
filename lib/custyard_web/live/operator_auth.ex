@@ -10,6 +10,10 @@ defmodule CustyardWeb.Live.OperatorAuth do
   All modes assign `:current_operator`, `:scoped_organization_id`,
   `:current_role`, and `:is_super_admin` to the socket.
 
+  A session is accepted only while the operator row with its id still has
+  the creation time recorded at login (`session_operator/2`), checked on
+  mount and again on every later event.
+
   An admin or agent without an organization (`OperatorAccount.orphaned?/1`,
   e.g. after their organization was deleted) is never authorized: on mount
   or on any later event they are sent to the login page with
@@ -26,6 +30,26 @@ defmodule CustyardWeb.Live.OperatorAuth do
   Shown wherever an orphaned admin or agent is turned away.
   """
   def no_organization_message, do: @no_organization_message
+
+  @doc """
+  The operator a session belongs to, or nil.
+
+  The session holds the operator id and, since login, the account's
+  creation time (`OperatorAccount.session_claim/1`). The id alone is not
+  enough: SQLite reuses the highest id after a delete, so a removed
+  operator's cookie would otherwise sign in as the next account created.
+  A session without the claim (issued before it existed) is signed out.
+  Shared by the `:require_operator` plug, this hook and the landing page.
+  """
+  def session_operator(operator_id, claim) do
+    with id when not is_nil(id) <- operator_id,
+         %OperatorAccount{} = operator <- Repo.get(OperatorAccount, id),
+         true <- OperatorAccount.session_claim_matches?(operator, claim) do
+      operator
+    else
+      _ -> nil
+    end
+  end
 
   def on_mount(:default, _params, session, socket) do
     authenticate(session, socket)
@@ -53,25 +77,24 @@ defmodule CustyardWeb.Live.OperatorAuth do
   end
 
   defp authenticate(session, socket) do
-    case session["operator_id"] do
+    claim = session["operator_created"]
+
+    case session_operator(session["operator_id"], claim) do
       nil ->
         {:halt, redirect(socket, to: "/operator/login")}
 
-      operator_id ->
-        case Repo.get(OperatorAccount, operator_id) do
-          nil ->
-            {:halt, redirect(socket, to: "/operator/login")}
-
-          operator ->
-            if OperatorAccount.orphaned?(operator) do
-              {:halt, deny_no_organization(socket)}
-            else
-              {:cont,
-               socket
-               |> assign(:operator_id, operator_id)
-               |> assign_operator(operator)
-               |> attach_refresh_hooks()}
-            end
+      operator ->
+        if OperatorAccount.orphaned?(operator) do
+          {:halt, deny_no_organization(socket)}
+        else
+          # The claim captured here is what refresh_operator/1 compares
+          # against: the id could be reused while this socket is open.
+          {:cont,
+           socket
+           |> assign(:operator_id, operator.id)
+           |> assign(:operator_session_claim, claim)
+           |> assign_operator(operator)
+           |> attach_refresh_hooks()}
         end
     end
   end
@@ -107,7 +130,7 @@ defmodule CustyardWeb.Live.OperatorAuth do
   end
 
   defp refresh_operator(socket) do
-    case Repo.get(OperatorAccount, socket.assigns.operator_id) do
+    case session_operator(socket.assigns.operator_id, socket.assigns.operator_session_claim) do
       nil ->
         {:halt, redirect(socket, to: "/operator/login")}
 

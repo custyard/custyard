@@ -27,7 +27,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
   defp authenticate_conn(conn, operator) do
     conn
     |> Phoenix.ConnTest.init_test_session(%{})
-    |> Plug.Conn.put_session(:operator_id, operator.id)
+    |> put_operator_session(operator.id)
   end
 
   defp create_operator(attrs) do

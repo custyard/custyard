@@ -31,7 +31,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       # Create two organizations with neglected conversations
       org1 = insert_organization(name: "Org One", tier: :standard)
@@ -68,7 +68,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       # Create neglected conversations in both orgs
       conv1 = insert_neglected_conversation(org1.id)
@@ -102,7 +102,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       # Create neglected conversations in both orgs
       conv1 = insert_neglected_conversation(org1.id)
@@ -129,7 +129,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       {:ok, conn: conn, operator: operator}
     end
@@ -205,7 +205,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       conn =
         conn
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       {:ok, conn: conn}
     end

@@ -229,6 +229,29 @@ defmodule Custyard.OperatorAccount do
   def can_access_organization?(_, _), do: false
 
   @doc """
+  The value stored in the session at login next to the operator id: the
+  account's creation time as Unix seconds.
+
+  The id alone does not identify an account over time. operator_accounts.id
+  is INTEGER PRIMARY KEY without AUTOINCREMENT, so SQLite gives the next new
+  row the id of a deleted highest-id row; a removed operator's still-valid
+  cookie would then sign in as whoever was created next. A session counts
+  only while the row with its id also has the creation time it was issued for.
+  """
+  def session_claim(%__MODULE__{inserted_at: %DateTime{} = inserted_at}),
+    do: DateTime.to_unix(inserted_at)
+
+  @doc """
+  Whether `claim` (from the session) was issued for this account. A missing
+  claim (a session from before claims existed) never matches.
+  """
+  def session_claim_matches?(%__MODULE__{inserted_at: %DateTime{}} = operator, claim)
+      when is_integer(claim),
+      do: session_claim(operator) == claim
+
+  def session_claim_matches?(_operator, _claim), do: false
+
+  @doc """
   Returns true for an admin or agent with no organization.
 
   Deleting an organization sets its operators' organization_id to NULL

@@ -16,7 +16,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
     conn =
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> Plug.Conn.put_session(:operator_id, operator.id)
+      |> put_operator_session(operator.id)
 
     {:ok, conn: conn, operator: operator}
   end
@@ -32,7 +32,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       })
       |> Repo.insert!()
 
-    Plug.Conn.put_session(conn, :operator_id, operator.id)
+    put_operator_session(conn, operator.id)
   end
 
   test "scoped admin cannot filter, edit, or take over a foreign project", %{conn: conn} do

@@ -151,6 +151,9 @@ defmodule CustyardWeb.Operator.SessionController do
       conn
       |> configure_session(renew: true)
       |> put_session(:operator_id, operator.id)
+      # The id alone could later name a different account (SQLite reuses
+      # the highest id after a delete); see OperatorAuth.session_operator/2.
+      |> put_session(:operator_created, OperatorAccount.session_claim(operator))
       |> put_flash(:info, "Welcome back")
       |> redirect(to: ~p"/operator")
     else
@@ -198,6 +201,7 @@ defmodule CustyardWeb.Operator.SessionController do
   def delete(conn, _params) do
     conn
     |> delete_session(:operator_id)
+    |> delete_session(:operator_created)
     |> put_flash(:info, "Logged out")
     |> redirect(to: ~p"/operator/login")
   end

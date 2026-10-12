@@ -94,7 +94,12 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
 
       assert redirected_to(conn) == "/operator"
       assert get_session(conn, :operator_id) == operator.id
+      # Binds the session to this account, not just to its (reusable) id.
+      assert get_session(conn, :operator_created) == OperatorAccount.session_claim(operator)
       assert Repo.get!(OperatorAccount, operator.id).login_token == nil
+
+      # The session it issued is accepted
+      assert html_response(get(recycle(conn), "/operator"), 200)
 
       # The link works once
       again = post(build_conn(), "/operator/login/verify/#{token}")
@@ -193,6 +198,20 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
       assert html_response(posted, 200) =~ "No organization assigned; ask a super admin."
       refute get_session(posted, :operator_id)
     end
+  end
+
+  test "logout clears the operator id and its claim", %{conn: conn} do
+    operator = insert_operator_account()
+
+    conn =
+      conn
+      |> init_test_session(%{})
+      |> put_operator_session(operator)
+      |> delete("/operator/logout")
+
+    assert redirected_to(conn) == "/operator/login"
+    refute get_session(conn, :operator_id)
+    refute get_session(conn, :operator_created)
   end
 
   describe "login page" do
