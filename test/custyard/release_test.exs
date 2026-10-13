@@ -11,5 +11,10 @@ defmodule Custyard.ReleaseTest do
       assert [%OperatorAccount{email: "ops@example.com", role: "super_admin"}] =
                Repo.all(OperatorAccount)
     end
+
+    test "raises on an invalid email" do
+      assert_raise Ecto.InvalidChangesetError, fn -> Release.setup_operator("not-an-email") end
+      assert Repo.all(OperatorAccount) == []
+    end
   end
 end
