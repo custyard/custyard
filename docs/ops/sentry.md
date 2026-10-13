@@ -29,8 +29,13 @@ so it stays out of git and can be rotated or disabled without a code change.
 
 ```sh
 # emit one test event and confirm it lands in catch.onetimesecret.com/11
-fly ssh console -C "/app/bin/custyard rpc 'Sentry.capture_message(\"custyard sentry smoke test\")'"
+fly ssh console -a custyard -C "/app/bin/custyard eval 'Application.ensure_all_started(:sentry); IO.inspect(Sentry.capture_message(\"custyard sentry smoke test\", result: :sync))'"
 ```
+
+Erlang distribution is off, so `bin/custyard rpc` does not work. The `eval`
+above starts a separate VM with the production configuration (including
+`SENTRY_DSN`) and only the Sentry client, not the app; it prints `{:ok, id}`
+when the event was accepted.
 
 Source-code context is baked into the release image (`mix
 sentry.package_source_code` runs in the `Containerfile` before `mix release`),

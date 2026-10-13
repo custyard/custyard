@@ -1,14 +1,20 @@
 defmodule Mix.Tasks.Acknowledgments.Replay do
-  @shortdoc "Replay acknowledgment broker work"
+  @shortdoc "Replay the oldest failed acknowledgment to the work queue"
+  @moduledoc """
+  Usage: `mix acknowledgments.replay [SUBMISSION_ID]`. See
+  `bin/acknowledgments help`. Starts only `:amqp` and the Repo (for the audit
+  row), never the application.
+  """
   use Mix.Task
-  alias Custyard.Acknowledgments.Operations
-  @impl true
-  def run([]) do
-    Mix.Task.run("app.start")
+  alias Custyard.Release.Acknowledgments, as: Commands
 
-    case Operations.replay() do
-      {:error, _} -> Mix.raise("Acknowledgment replay failed; messages remain recoverable")
-      result -> Mix.shell().info(inspect(result, limit: :infinity, printable_limit: :infinity))
+  @impl true
+  def run(args) do
+    Mix.Task.run("app.config")
+
+    case Commands.run(["replay" | args], mode: :release, actor: "mix") do
+      0 -> :ok
+      status -> exit({:shutdown, status})
     end
   end
 end

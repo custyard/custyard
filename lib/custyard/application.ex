@@ -5,6 +5,9 @@ defmodule Custyard.Application do
 
   require Logger
 
+  alias Custyard.Acknowledgments.Config, as: AcknowledgmentsConfig
+  alias Custyard.Acknowledgments.Consumer, as: AcknowledgmentsConsumer
+
   @default_operator_email "admin@custyard.local"
 
   @impl true
@@ -98,11 +101,15 @@ defmodule Custyard.Application do
     end
   end
 
+  # Decided here rather than in config/runtime.exs, so release commands such as
+  # bin/operator still boot when acknowledgment configuration is incomplete.
+  # Incomplete or invalid configuration raises (without values) and the
+  # application refuses to start. The consumer loads its configuration itself:
+  # a child spec carrying the URL would put the password in supervisor reports.
   defp maybe_add_acknowledgment_consumer(children) do
-    if Application.get_env(:custyard, :acknowledgments, [])[:enabled] do
-      children ++ [Custyard.Acknowledgments.Consumer]
-    else
-      children
+    case AcknowledgmentsConfig.startup() do
+      :enabled -> children ++ [AcknowledgmentsConsumer]
+      _ -> children
     end
   end
 
@@ -224,8 +231,11 @@ defmodule Custyard.Application do
   end
 
   defp do_setup_dev_operator do
-    case Custyard.OperatorAccounts.ensure_exists(@default_operator_email) do
-      {:ok, :created} ->
+    case Custyard.OperatorAccounts.create_operator(@default_operator_email,
+           via: "boot",
+           allow_placeholder: true
+         ) do
+      {:created, _operator} ->
         Logger.info("""
 
         ========================================
@@ -239,11 +249,11 @@ defmodule Custyard.Application do
         ========================================
         """)
 
-      {:ok, :exists} ->
+      {:exists, _operator} ->
         Logger.debug("Dev operator account exists, skipping creation")
 
-      {:error, changeset} ->
-        Logger.warning("Failed to setup dev operator: #{inspect(changeset.errors)}")
+      {:error, message} ->
+        Logger.warning("Failed to setup dev operator: #{message}")
     end
   end
 

@@ -76,6 +76,13 @@ defmodule Custyard.Sentry do
   @atom_kv_pattern ~r/((?:#{@key_alternation}):\s*)\\*"[^"\\]*\\*"/
   @string_kv_pattern ~r/(\\*"(?:#{@key_alternation})\\*"\s*=>\s*)\\*"[^"\\]*\\*"/
 
+  # URI userinfo (`scheme://user:password@host`), e.g. the AMQP broker URL that
+  # amqp_client embeds whole in its parse errors. RFC 3986 userinfo cannot
+  # contain a raw `/`, `?`, `#` or `@` delimiter, so the greedy class runs to
+  # the last `@` before the host; a double quote or backslash ends it so an
+  # inspected term's closing delimiter is never consumed.
+  @userinfo_pattern ~r{([a-z][a-z0-9+.\-]*://)[^/?#\s"\\]+@}i
+
   @doc """
   `:url_scrubber` for `Sentry.PlugContext` — `(Plug.Conn.t()) -> String.t()`.
 
@@ -166,7 +173,8 @@ defmodule Custyard.Sentry do
   end
 
   @doc """
-  Scrubs free-form text (crash messages, `:extra` string values): redacts
+  Scrubs free-form text (crash messages, `:extra` string values): redacts URI
+  userinfo (`amqp://user:password@host` -> `amqp://[REDACTED]@host`),
   sensitive URL path tokens *and* the value of any sensitive key in inspected
   Elixir terms (`access_token: "..."`, `"token" => "..."`). `nil` passes
   through. This is what protects the LiveView/process-crash path, where the
@@ -177,6 +185,7 @@ defmodule Custyard.Sentry do
 
   def scrub_text(text) when is_binary(text) do
     text
+    |> then(&Regex.replace(@userinfo_pattern, &1, "\\1#{@redacted}@"))
     |> scrub_path()
     |> then(&Regex.replace(@atom_kv_pattern, &1, "\\1\"#{@redacted}\""))
     |> then(&Regex.replace(@string_kv_pattern, &1, "\\1\"#{@redacted}\""))
@@ -222,8 +231,27 @@ defmodule Custyard.Sentry do
     event
     |> scrub_request()
     |> scrub_message()
+    |> scrub_exceptions()
     |> scrub_extra()
   end
+
+  # An exception's value is its rendered message; a MatchError on an
+  # amqp_client parse error, for one, renders the broker URI with its password.
+  defp scrub_exceptions(%Sentry.Event{exception: exceptions} = event) when is_list(exceptions) do
+    %{
+      event
+      | exception:
+          Enum.map(exceptions, fn
+            %Sentry.Interfaces.Exception{value: value} = exception when is_binary(value) ->
+              %{exception | value: scrub_text(value)}
+
+            other ->
+              other
+          end)
+    }
+  end
+
+  defp scrub_exceptions(event), do: event
 
   defp scrub_request(%Sentry.Event{request: %Sentry.Interfaces.Request{} = req} = event) do
     scrubbed = %{
@@ -321,10 +349,24 @@ defmodule Custyard.Sentry do
     |> put_in_request(:url, @scrub_failed)
     |> put_in_request(:query_string, @scrub_failed)
     |> blank_message()
+    |> blank_exceptions()
     |> blank_extra()
   end
 
   defp fail_closed(event), do: event
+
+  defp blank_exceptions(%Sentry.Event{exception: exceptions} = event) when is_list(exceptions) do
+    %{
+      event
+      | exception:
+          Enum.map(exceptions, fn
+            %Sentry.Interfaces.Exception{} = exception -> %{exception | value: @scrub_failed}
+            other -> other
+          end)
+    }
+  end
+
+  defp blank_exceptions(event), do: event
 
   defp put_in_request(
          %Sentry.Event{request: %Sentry.Interfaces.Request{} = req} = event,

@@ -89,6 +89,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   @acknowledgment_page_size 20
 
+  # `org` is always socket.assigns.organization, set in mount after the access
+  # check; a patched URL's id never selects whose bindings are shown.
   defp load_tab_data(socket, org, "acknowledgments") do
     page = Map.get(socket.assigns, :acknowledgment_page, 1)
 
@@ -101,6 +103,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     socket
     |> assign(:acknowledgments, Enum.take(records, @acknowledgment_page_size))
     |> assign(:acknowledgment_has_next, length(records) > @acknowledgment_page_size)
+    |> assign(:acknowledgment_bindings, Acknowledgments.list_bindings_for_organization(org.id))
   end
 
   defp acknowledgment_page(params) do
@@ -419,6 +422,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           <% "projects" -> %>
             <.projects_tab projects={@projects} />
           <% "acknowledgments" -> %>
+            <.acknowledgment_bindings bindings={@acknowledgment_bindings} />
             <.acknowledgments_tab
               records={@acknowledgments}
               organization={@organization}
@@ -462,6 +466,31 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     >
       {render_slot(@inner_block)}
     </.link>
+    """
+  end
+
+  attr :bindings, :list, required: true
+
+  # Read-only: bindings are made by super admins on the Acknowledgments page.
+  defp acknowledgment_bindings(assigns) do
+    ~H"""
+    <section class="mb-6" data-testid="org-acknowledgment-bindings">
+      <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">Source bindings</h2>
+      <p
+        :if={@bindings == []}
+        class="mt-2 text-sm text-gray-600 dark:text-zinc-400"
+        data-testid="org-acknowledgment-bindings-empty"
+      >
+        No source is bound to this organization. Evidence for this organization arrives only
+        after a super admin binds it.
+      </p>
+      <ul :if={@bindings != []} class="mt-2 space-y-1 text-sm text-gray-600 dark:text-zinc-400">
+        <li :for={binding <- @bindings} data-testid={"org-acknowledgment-binding-#{binding.id}"}>
+          <span class="break-all">{binding.source}</span>
+          · <span class="break-all">{binding.source_organization_id}</span>
+        </li>
+      </ul>
+    </section>
     """
   end
 

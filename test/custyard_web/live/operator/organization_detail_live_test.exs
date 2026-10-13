@@ -27,7 +27,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
   defp authenticate_conn(conn, operator) do
     conn
     |> Phoenix.ConnTest.init_test_session(%{})
-    |> Plug.Conn.put_session(:operator_id, operator.id)
+    |> put_operator_session(operator.id)
   end
 
   defp create_operator(attrs) do
@@ -141,6 +141,59 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       assert has_element?(view, "pre.whitespace-pre-wrap")
       assert html =~ "Original wording\n  with indentation"
       refute has_element?(view, "[data-testid=org-conversations-list]")
+    end
+
+    test "shows this organization's source bindings, read-only", %{conn: conn} do
+      org = insert_organization()
+      record = acknowledgment_fixture(org)
+      binding = Custyard.Acknowledgments.get_binding("ots.test", record.source_organization_id)
+
+      {:ok, view, _html} =
+        live(
+          authenticate_conn(conn, create_admin(org)),
+          ~p"/operator/organizations/#{org.id}?tab=acknowledgments"
+        )
+
+      assert view
+             |> element("[data-testid=org-acknowledgment-binding-#{binding.id}]")
+             |> render() =~ record.source_organization_id
+
+      refute has_element?(view, "[data-testid=org-acknowledgment-bindings-empty]")
+      refute has_element?(view, "[data-testid=org-acknowledgment-bindings] form")
+      refute has_element?(view, "[data-testid=org-acknowledgment-bindings] button")
+    end
+
+    test "explains that unbound organizations receive no evidence", %{conn: conn} do
+      org = insert_organization()
+
+      {:ok, view, _html} =
+        live(
+          authenticate_conn(conn, create_admin(org)),
+          ~p"/operator/organizations/#{org.id}?tab=acknowledgments"
+        )
+
+      message = view |> element("[data-testid=org-acknowledgment-bindings-empty]") |> render()
+      assert String.replace(message, ~r/\s+/, " ") =~ "arrives only after a super admin binds it"
+    end
+
+    test "an admin patching to another organization's id never sees its bindings", %{
+      conn: conn
+    } do
+      own = insert_organization()
+      foreign = insert_organization()
+      foreign_record = acknowledgment_fixture(foreign)
+
+      {:ok, view, _html} =
+        live(
+          authenticate_conn(conn, create_admin(own)),
+          ~p"/operator/organizations/#{own.id}?tab=conversations"
+        )
+
+      html = render_patch(view, ~p"/operator/organizations/#{foreign.id}?tab=acknowledgments")
+
+      refute html =~ foreign_record.source_organization_id
+      refute html =~ foreign_record.submission_id
+      assert has_element?(view, "[data-testid=org-acknowledgment-bindings-empty]")
     end
 
     test "admin cannot read another organization's acknowledgment tab", %{conn: conn} do

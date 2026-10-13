@@ -1,0 +1,16 @@
+#!/bin/sh
+# Colonel acknowledgment status, provision, bind, inspect and replay; full usage comes from `acknowledgments help`
+set -eu
+bin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+
+# `fly ssh console` runs as root, but the app runs as custyard. Run as root on a
+# fresh volume, a command would create a root-owned database the app cannot write.
+if [ "$(id -u)" = "0" ]; then
+  if id custyard >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
+    exec runuser -u custyard -- "$bin_dir/acknowledgments" "$@"
+  fi
+  echo "acknowledgments: refusing to run as root; run as the user that owns the database" >&2
+  exit 1
+fi
+
+exec "$bin_dir/custyard" eval 'Custyard.Release.Acknowledgments.main(System.argv())' "$@"

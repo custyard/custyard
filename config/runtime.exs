@@ -29,10 +29,17 @@ blank_to_nil = fn
   value -> value
 end
 
+# Colonel acknowledgments are on by default in production only. Unset means
+# disabled in dev and test, so a shell holding production broker secrets never
+# consumes the production queue (the same reasoning as the prod-only Sentry
+# block below). Whether URL and source are complete is decided at application
+# start (Custyard.Acknowledgments.Config.startup/2), not here, so release
+# commands such as bin/operator still run when that configuration is broken.
 acknowledgments_enabled =
   case System.get_env("ACKNOWLEDGMENTS_ENABLED") do
-    value when value in [nil, "", "false"] -> false
+    value when value in [nil, ""] -> config_env() == :prod
     "true" -> true
+    "false" -> false
     _ -> raise "ACKNOWLEDGMENTS_ENABLED must be true or false"
   end
 

@@ -16,7 +16,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
     conn =
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> Plug.Conn.put_session(:operator_id, operator.id)
+      |> put_operator_session(operator.id)
 
     {:ok, conn: conn, operator: operator}
   end
@@ -218,7 +218,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conn =
         Phoenix.ConnTest.build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, admin_operator.id)
+        |> put_operator_session(admin_operator.id)
 
       {:ok, _view, html} = live(conn, ~p"/operator")
 
@@ -265,7 +265,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conn =
         Phoenix.ConnTest.build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, agent_operator.id)
+        |> put_operator_session(agent_operator.id)
 
       {:ok, _view, html} = live(conn, ~p"/operator")
 
@@ -293,7 +293,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conn =
         Phoenix.ConnTest.build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, admin_operator.id)
+        |> put_operator_session(admin_operator.id)
 
       {:ok, view, _html} = live(conn, ~p"/operator")
 
@@ -333,7 +333,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conn =
         Phoenix.ConnTest.build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, agent_operator.id)
+        |> put_operator_session(agent_operator.id)
 
       {:ok, _view, html} = live(conn, ~p"/operator")
 
@@ -402,7 +402,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conn =
         Phoenix.ConnTest.build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, agent_operator.id)
+        |> put_operator_session(agent_operator.id)
 
       {:ok, _view, html} = live(conn, ~p"/operator")
 

@@ -6,6 +6,14 @@ on:
   # No base-branch filter: `branches:` matches the PR's base, so scoping it to
   # main leaves stacked PRs (base feat/*, fix/*) with no checks at all.
   pull_request:
+  # Daily, so an advisory published against an unchanged lockfile still fails
+  # a check. GitHub disables schedules after 60 days without repository activity.
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   MIX_ENV: test
@@ -14,6 +22,7 @@ env:
 
 jobs:
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
 
     services:
@@ -98,3 +107,4 @@ jobs:
       - run: mix deps.get
       - run: mix sobelow --exit
       - run: mix hex.audit
+      - run: mix deps.audit

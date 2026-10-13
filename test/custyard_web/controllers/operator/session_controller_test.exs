@@ -130,7 +130,12 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
 
       assert redirected_to(conn) == "/operator"
       assert get_session(conn, :operator_id) == operator.id
+      # Binds the session to this account, not just to its (reusable) id.
+      assert get_session(conn, :operator_claim) == OperatorAccount.session_claim(operator)
       assert Repo.get!(OperatorAccount, operator.id).login_token == nil
+
+      # The session it issued is accepted
+      assert html_response(get(recycle(conn), "/operator"), 200)
 
       # The link works once
       again = post(build_conn(), "/operator/login/verify/#{token}")
@@ -161,6 +166,97 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
 
       assert html_response(unknown, 200) =~ "Invalid or expired login link"
       assert html_response(malformed, 200) =~ "Invalid or expired login link"
+    end
+  end
+
+  describe "email normalization" do
+    test "a mixed-case, padded email finds the account" do
+      operator = insert_operator_account(email: "casey@example.com")
+
+      assert request_login({10, 44, 8, 1}, "  Casey@Example.COM ").status == 302
+      assert is_binary(Repo.get!(OperatorAccount, operator.id).login_token)
+    end
+
+    test "case variants share one per-email rate-limit bucket" do
+      operator = insert_operator_account()
+      variants = [operator.email, String.upcase(operator.email), " " <> operator.email]
+
+      for {email, n} <- Enum.with_index(Stream.cycle(variants) |> Enum.take(5), 1) do
+        assert request_login({10, 44, 9, n}, email).status == 302
+      end
+
+      assert request_login({10, 44, 9, 6}, String.upcase(operator.email)).status == 429
+    end
+  end
+
+  describe "admin or agent whose organization was deleted" do
+    setup do
+      org = insert_organization()
+      admin = insert_operator_account(role: "admin", organization_id: org.id)
+      Repo.delete!(org)
+      orphan = Repo.get!(OperatorAccount, admin.id)
+      assert orphan.organization_id == nil
+
+      {:ok, orphan: orphan}
+    end
+
+    test "gets no login link, and the response matches an unknown email", %{orphan: orphan} do
+      orphaned = request_login({10, 44, 10, 1}, orphan.email)
+      unknown = request_login({10, 44, 10, 2}, "nobody-#{orphan.id}@example.com")
+
+      assert redirected_to(orphaned) == "/operator/login/sent"
+      assert redirected_to(unknown) == "/operator/login/sent"
+      assert Repo.get!(OperatorAccount, orphan.id).login_token == nil
+
+      sent = get(recycle(orphaned), "/operator/login/sent")
+      unknown_sent = get(recycle(unknown), "/operator/login/sent")
+
+      # Identical apart from the echoed address and the per-session CSRF token.
+      normalize = fn html, email ->
+        html
+        |> String.replace(email, "EMAIL")
+        |> String.replace(~r/name="csrf-token" content="[^"]+"/, "CSRF")
+      end
+
+      assert normalize.(html_response(sent, 200), orphan.email) ==
+               normalize.(html_response(unknown_sent, 200), "nobody-#{orphan.id}@example.com")
+    end
+
+    test "a link minted before the deletion never yields a session", %{conn: conn, orphan: orphan} do
+      %{login_token: token} =
+        orphan |> OperatorAccount.login_token_changeset() |> Repo.update!()
+
+      peek = get(conn, "/operator/login/verify/#{token}")
+      assert html_response(peek, 200) =~ "No organization assigned; ask a super admin."
+      refute html_response(peek, 200) =~ "auth-verify-form"
+
+      posted = post(build_conn(), "/operator/login/verify/#{token}")
+      assert html_response(posted, 200) =~ "No organization assigned; ask a super admin."
+      refute get_session(posted, :operator_id)
+    end
+  end
+
+  test "logout clears the operator id and its claim", %{conn: conn} do
+    operator = insert_operator_account()
+
+    conn =
+      conn
+      |> init_test_session(%{})
+      |> put_operator_session(operator)
+      |> delete("/operator/logout")
+
+    assert redirected_to(conn) == "/operator/login"
+    refute get_session(conn, :operator_id)
+    refute get_session(conn, :operator_claim)
+  end
+
+  describe "login page" do
+    test "shows the flash that sent the operator there", %{conn: conn} do
+      denied = get(conn, "/operator")
+      assert redirected_to(denied) == "/operator/login"
+
+      login = get(recycle(denied), "/operator/login")
+      assert html_response(login, 200) =~ "Please log in"
     end
   end
 

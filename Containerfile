@@ -36,8 +36,15 @@ COPY priv/repo priv/repo
 # (enable_source_code_context). Must run before the release is assembled.
 RUN mix sentry.package_source_code
 
+# Release overlays (bin/operator, bin/acknowledgments) and env.sh.eex, which
+# turns Erlang distribution off. Copied late so edits here rebuild only the
+# release, and checked so a missing or non-executable overlay fails the build.
+COPY rel rel
+
 # Build release
 RUN mix release
+RUN test -x _build/prod/rel/custyard/bin/operator && \
+    test -x _build/prod/rel/custyard/bin/acknowledgments
 
 # Runtime stage
 # Use Debian 12 (bookworm) to match the Elixir builder image base.
@@ -50,7 +57,7 @@ LABEL org.opencontainers.image.description="Custyard Service Platform"
 LABEL org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libstdc++6 openssl libncurses6 locales curl && \
+      libstdc++6 openssl libncurses6 locales curl ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 
@@ -64,11 +71,17 @@ RUN groupadd --system custyard && \
 
 WORKDIR /app
 
-# Copy release from builder
+# Copy release from builder. It stays root-owned: under `fly ssh console`
+# root runs /app/bin/operator and /app/bin/acknowledgments before they drop
+# to custyard, so an app user able to write /app could plant code root runs.
 COPY --from=builder /app/_build/prod/rel/custyard ./
 
-# Create data directory for SQLite and set ownership
-RUN mkdir -p /data && chown -R custyard:custyard /app /data
+# custyard writes only /data (SQLite, uploads) and /app/tmp (RELEASE_TMP,
+# which `bin/custyard daemon` uses for its pipe and log, and crash dumps).
+RUN mkdir -p /data /app/tmp && chown custyard:custyard /data /app/tmp
+
+# The VM writes erl_crash.dump to its working directory (/app) by default.
+ENV ERL_CRASH_DUMP=/app/tmp/erl_crash.dump
 
 # Entrypoint script
 COPY entrypoint.sh /entrypoint.sh

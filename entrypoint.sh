@@ -23,12 +23,12 @@ fi
 # LIVE_VIEW_SIGNING_SALT: optional, derived from SECRET_KEY_BASE in runtime.exs if not set
 # Only set this if you need a different salt than the derived default
 
-# Run migrations
-echo "Running database migrations..."
-bin/custyard eval "Custyard.Release.migrate()"
-
-# Create operator account if it doesn't exist (email-only auth, no password needed)
-bin/custyard eval "Custyard.Release.setup_operator()"
+# Run migrations, then the operator bootstrap: when OPERATOR_EMAIL is set,
+# create that super_admin if it does not exist yet (never modifying an
+# existing account). One eval, so the VM boots once; neither step starts the
+# application. An invalid OPERATOR_EMAIL exits nonzero and fails the boot.
+echo "Running database migrations and operator bootstrap..."
+bin/custyard eval "Custyard.Release.migrate(); Custyard.Release.bootstrap_operator()"
 
 echo "Custyard ready. Starting server..."
 exec "$@"

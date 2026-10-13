@@ -15,7 +15,7 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
     conn =
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> Plug.Conn.put_session(:operator_id, operator.id)
+      |> put_operator_session(operator.id)
 
     {:ok, conn: conn, operator: operator}
   end
@@ -162,7 +162,7 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
       conn =
         build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       assert {:error, {:redirect, %{to: "/operator"}}} = live(conn, ~p"/operator/slugs")
     end
@@ -173,7 +173,7 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
       conn =
         build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       assert {:error, {:redirect, %{to: "/operator"}}} = live(conn, ~p"/operator/slugs")
     end

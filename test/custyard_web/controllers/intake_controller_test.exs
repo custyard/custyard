@@ -289,7 +289,7 @@ defmodule CustyardWeb.IntakeControllerTest do
       operator_conn =
         Phoenix.ConnTest.build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:operator_id, operator.id)
+        |> put_operator_session(operator.id)
 
       {:ok, _view, html} = live(operator_conn, ~p"/operator")
 
