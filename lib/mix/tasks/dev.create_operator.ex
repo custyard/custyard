@@ -24,11 +24,11 @@ defmodule Mix.Tasks.Dev.CreateOperator do
   def run(args) do
     {opts, _, _} = OptionParser.parse(args, strict: [email: :string])
 
-    email = Keyword.get(opts, :email, @default_email)
-
     Mix.Task.run("app.start")
 
     alias Custyard.{OperatorAccount, Repo}
+
+    email = opts |> Keyword.get(:email, @default_email) |> OperatorAccount.normalize_email()
 
     case Repo.get_by(OperatorAccount, email: email) do
       nil ->

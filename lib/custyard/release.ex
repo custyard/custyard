@@ -28,6 +28,10 @@ defmodule Custyard.Release do
 
   Email-only auth means no password is needed. Operators log in via magic link.
 
+  Starts only the Repo, not the application: on a running machine the
+  Endpoint already holds the HTTP port, so starting the application from
+  `bin/custyard eval` would fail binding a second listener.
+
   ## Examples
 
       Custyard.Release.setup_operator()
@@ -35,20 +39,24 @@ defmodule Custyard.Release do
   """
   def setup_operator(email \\ @default_operator_email) do
     load_app()
+    Custyard.Storage.validate_fly_storage!()
 
-    {:ok, _} = Application.ensure_all_started(@app)
+    alias Custyard.OperatorAccount
 
-    alias Custyard.{OperatorAccount, Repo}
+    email = OperatorAccount.normalize_email(email)
 
-    case Repo.get_by(OperatorAccount, email: email) do
-      nil ->
-        %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: email})
-        |> Repo.insert!()
+    {:ok, _, _} =
+      Ecto.Migrator.with_repo(Custyard.Repo, fn repo ->
+        case repo.get_by(OperatorAccount, email: email) do
+          nil ->
+            %OperatorAccount{}
+            |> OperatorAccount.changeset(%{email: email})
+            |> repo.insert!()
 
-      _existing ->
-        :already_exists
-    end
+          _existing ->
+            :already_exists
+        end
+      end)
 
     :ok
   end
