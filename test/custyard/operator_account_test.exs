@@ -11,6 +11,43 @@ defmodule Custyard.OperatorAccountTest do
       assert %{email: ["can't be blank"]} = errors_on(changeset)
     end
 
+    test "stores the email trimmed and lowercased" do
+      attrs = Factory.build_operator_account(email: "  Ops@Example.COM ")
+      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :email) == "ops@example.com"
+    end
+
+    test "lowercases non-ASCII letters with Unicode case mapping" do
+      changeset = OperatorAccount.changeset(%OperatorAccount{}, %{email: "ÜNAL@BÜCHER.DE"})
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :email) == "ünal@bücher.de"
+    end
+
+    test "stores a decomposed accent in composed (NFC) form" do
+      # "e" followed by U+0301 COMBINING ACUTE ACCENT, as some input methods send it
+      changeset =
+        OperatorAccount.changeset(%OperatorAccount{}, %{email: "Jose\u0301@Example.com"})
+
+      assert Ecto.Changeset.get_change(changeset, :email) == "jos\u00e9@example.com"
+    end
+
+    test "rejects an email that is not valid UTF-8" do
+      changeset =
+        OperatorAccount.changeset(%OperatorAccount{}, %{email: <<0xFF>> <> "ops@example.com"})
+
+      assert %{email: ["must be a valid email address"]} = errors_on(changeset)
+    end
+
+    test "rejects non-ASCII whitespace inside the address" do
+      changeset =
+        OperatorAccount.changeset(%OperatorAccount{}, %{email: "ops\u00A0team@example.com"})
+
+      assert %{email: ["must be a valid email address"]} = errors_on(changeset)
+    end
+
     test "validates email format" do
       attrs = Factory.build_operator_account(email: "invalid")
       changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
@@ -84,6 +121,47 @@ defmodule Custyard.OperatorAccountTest do
 
       assert changeset.changes[:password_hash]
       refute changeset.changes[:password_hash] == attrs.password
+    end
+  end
+
+  describe "normalize_email/1" do
+    test "is idempotent" do
+      for email <- [
+            " Ops@Example.COM ",
+            "ÜNAL@BÜCHER.DE",
+            "Jose\u0301@Example.com",
+            "İstanbul@Example.TR",
+            "ΣΟΦΙΑ@Example.GR",
+            "\u00A0ops@example.com\u3000"
+          ] do
+        once = OperatorAccount.normalize_email(email)
+        assert OperatorAccount.normalize_email(once) == once
+      end
+    end
+
+    test "trims non-ASCII whitespace at the ends" do
+      assert OperatorAccount.normalize_email("\u00A0Ops@Example.com\u3000") == "ops@example.com"
+    end
+
+    test "returns invalid UTF-8 unchanged" do
+      bad = <<0xFF>> <> " Ops@Example.com"
+      assert OperatorAccount.normalize_email(bad) == bad
+    end
+
+    test "trims and lowercases" do
+      assert OperatorAccount.normalize_email("  Ops@Example.COM \n") == "ops@example.com"
+    end
+
+    test "lowercases beyond ASCII" do
+      assert OperatorAccount.normalize_email("ÉLODIE@Exemple.FR") == "élodie@exemple.fr"
+    end
+
+    test "leaves a normalized email unchanged" do
+      assert OperatorAccount.normalize_email("ops@example.com") == "ops@example.com"
+    end
+
+    test "is nil-safe" do
+      assert OperatorAccount.normalize_email(nil) == nil
     end
   end
 
@@ -370,24 +448,6 @@ defmodule Custyard.OperatorAccountTest do
   describe "roles/0" do
     test "returns list of valid roles" do
       assert OperatorAccount.roles() == ~w(super_admin admin agent)
-    end
-  end
-
-  describe "normalize_email/1" do
-    test "trims and lowercases" do
-      assert OperatorAccount.normalize_email("  Ops@Example.COM \n") == "ops@example.com"
-    end
-
-    test "lowercases beyond ASCII" do
-      assert OperatorAccount.normalize_email("ÉLODIE@Exemple.FR") == "élodie@exemple.fr"
-    end
-
-    test "leaves a normalized email unchanged" do
-      assert OperatorAccount.normalize_email("ops@example.com") == "ops@example.com"
-    end
-
-    test "is nil-safe" do
-      assert OperatorAccount.normalize_email(nil) == nil
     end
   end
 

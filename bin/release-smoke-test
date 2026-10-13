@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+
+# bin/release-smoke-test - Boot the built release and provision operators
+# against it the way the entrypoint and operators do.
+#
+# USAGE:
+#   $ MIX_ENV=prod mix release
+#   $ bin/release-smoke-test [path/to/bin/custyard]
+#
+# Guards the Custyard.Release tasks (the OPERATOR_EMAIL bootstrap,
+# setup_operator and bin/operator): they must start only the Repo. If one
+# starts the application, running it on a live machine (the documented
+# `fly ssh console` commands) brings up a second Endpoint, which fails to
+# bind the port the server holds.
+#
+# Uses a throwaway SQLite database and MAIL_ADAPTER=local.
+# Env: PORT (default 4099).
+
+set -euo pipefail
+
+rel=${1:-_build/prod/rel/custyard/bin/custyard}
+operator="$(dirname "$rel")/operator"
+
+if [ ! -x "$rel" ] || [ ! -x "$operator" ]; then
+  echo "release not found at $rel (build it with: MIX_ENV=prod mix release)" >&2
+  exit 1
+fi
+
+work=$(mktemp -d)
+server_pid=""
+
+cleanup() {
+  if [ -n "$server_pid" ]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+SECRET_KEY_BASE=$(openssl rand -hex 64)
+export SECRET_KEY_BASE
+export MAIL_ADAPTER=local
+export PHX_HOST=localhost
+export PORT=${PORT:-4099}
+export DATABASE_PATH="$work/custyard.db"
+export UPLOAD_DIR="$work/uploads"
+mkdir -p "$UPLOAD_DIR"
+
+health="http://localhost:$PORT/api/health"
+
+# Bounded, so a listener that accepts and never answers cannot hang the run.
+curl_opts=(--connect-timeout 2 --max-time 5)
+
+step() { echo "==> $*"; }
+
+step "migrate and bootstrap OPERATOR_EMAIL before the server starts (entrypoint.sh)"
+OPERATOR_EMAIL=" Boot@Example.COM " \
+  "$rel" eval 'Custyard.Release.migrate(); Custyard.Release.bootstrap_operator()'
+
+# curl exits 7 only when the connection is refused. Anything else, a reply or
+# a listener that accepts and never answers, means the port is taken, and the
+# health checks below could be answered by that process while our server dies
+# on :eaddrinuse.
+rc=0
+curl -s -o /dev/null "${curl_opts[@]}" "http://localhost:$PORT/" 2>/dev/null || rc=$?
+if [ "$rc" -ne 7 ]; then
+  echo "port $PORT is in use (curl exit $rc); set PORT to a free port" >&2
+  exit 1
+fi
+
+step "start the server on port $PORT"
+"$rel" start >"$work/server.log" 2>&1 &
+server_pid=$!
+
+for _ in $(seq 1 60); do
+  curl -fsS "${curl_opts[@]}" "$health" >/dev/null 2>&1 && break
+  sleep 1
+done
+
+if ! curl -fsS "${curl_opts[@]}" "$health" >/dev/null 2>&1 || ! kill -0 "$server_pid" 2>/dev/null; then
+  echo "server did not come up on port $PORT:" >&2
+  cat "$work/server.log" >&2
+  exit 1
+fi
+
+step "provision while the server holds the port"
+"$rel" eval 'Custyard.Release.setup_operator(" Ops@Example.COM ")'
+"$rel" eval 'Custyard.Release.setup_operator("OPS@example.com")'
+"$operator" add Second@Example.COM
+listing=$("$operator" list)
+grep -q 'second@example.com' <<<"$listing" || {
+  echo "bin/operator list did not show second@example.com:" >&2
+  echo "$listing" >&2
+  exit 1
+}
+"$operator" remove second@example.com
+
+step "check the stored accounts"
+"$rel" eval '
+  import Ecto.Query
+
+  {:ok, emails, _} =
+    Ecto.Migrator.with_repo(Custyard.Repo, fn repo ->
+      repo.all(from o in "operator_accounts", select: o.email, order_by: o.email)
+    end)
+
+  expected = ["boot@example.com", "ops@example.com"]
+  emails == expected || raise "expected #{inspect(expected)}, got #{inspect(emails)}"
+'
+
+step "server still serving"
+kill -0 "$server_pid"
+curl -fsS "${curl_opts[@]}" "$health" >/dev/null
+
+echo "release smoke test passed"

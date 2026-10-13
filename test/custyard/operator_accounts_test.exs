@@ -106,6 +106,21 @@ defmodule Custyard.OperatorAccountsTest do
       assert audit_events(:operator_created) == []
     end
 
+    test "matches an existing account across Unicode case and normalization form" do
+      assert {:created, %{id: id}} =
+               OperatorAccounts.create_operator("ünal@bücher.de", via: "cli")
+
+      assert {:exists, %{id: ^id}} =
+               OperatorAccounts.create_operator("ÜNAL@BÜCHER.DE", via: "cli")
+
+      # "u" followed by a combining diaeresis is the same address in NFC.
+      assert {:exists, %{id: ^id}} =
+               OperatorAccounts.create_operator("u\u0308nal@bu\u0308cher.de", via: "cli")
+
+      assert [%OperatorAccount{email: "ünal@bücher.de"}] = Repo.all(OperatorAccount)
+      assert length(audit_events(:operator_created)) == 1
+    end
+
     test "validates only when creating" do
       existing = insert_operator_account(email: "valid@example.com")
 

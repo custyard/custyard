@@ -398,7 +398,7 @@ defmodule Custyard.ReleaseTest do
       output =
         capture_io(fn ->
           assert {:created, %OperatorAccount{email: "ops@example.com"}} =
-                   Release.setup_operator("Ops@Example.com")
+                   Release.setup_operator(" Ops@Example.COM ")
         end)
 
       assert output =~ "Created operator"
@@ -406,7 +406,7 @@ defmodule Custyard.ReleaseTest do
 
       output =
         capture_io(fn ->
-          assert {:exists, _} = Release.setup_operator("ops@example.com", role: "agent")
+          assert {:exists, _} = Release.setup_operator("OPS@example.com", role: "agent")
         end)
 
       assert output =~ "ops@example.com exists (role super_admin), not modified"

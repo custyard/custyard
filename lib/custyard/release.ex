@@ -55,6 +55,10 @@ defmodule Custyard.Release do
 
   Kept for shell history; `bin/operator add` is the supported command.
 
+  Starts only the Repo, not the application: on a running machine the
+  Endpoint already holds the HTTP port, so starting the application from
+  `bin/custyard eval` would fail binding a second listener.
+
   ## Examples
 
       Custyard.Release.setup_operator("ops@example.com")

@@ -65,6 +65,42 @@ defmodule CustyardWeb.Operator.SessionControllerTest do
     assert Repo.get!(OperatorAccount, operator.id).login_token != first.login_token
   end
 
+  test "logs in an account that was created with a mixed-case email" do
+    n = System.unique_integer([:positive])
+
+    operator =
+      %OperatorAccount{}
+      |> OperatorAccount.changeset(%{email: "Ops-#{n}@Example.com"})
+      |> Repo.insert!()
+
+    assert request_login({10, 44, 8, 1}, "Ops-#{n}@Example.com").status == 302
+    token = Repo.get!(OperatorAccount, operator.id).login_token
+    assert is_binary(token)
+
+    conn = post(build_conn(), "/operator/login/verify/#{token}")
+    assert redirected_to(conn) == "/operator"
+    assert get_session(conn, :operator_id) == operator.id
+  end
+
+  test "logs in a non-ASCII address typed in a different case and composition" do
+    n = System.unique_integer([:positive])
+
+    operator =
+      %OperatorAccount{}
+      |> OperatorAccount.changeset(%{email: "Ünal-#{n}@Bücher.de"})
+      |> Repo.insert!()
+
+    # Uppercase, with each umlaut as "U"/"u" followed by U+0308 COMBINING DIAERESIS
+    typed = "U\u0308NAL-#{n}@BU\u0308CHER.DE"
+
+    assert request_login({10, 44, 9, 1}, typed).status == 302
+    token = Repo.get!(OperatorAccount, operator.id).login_token
+    assert is_binary(token)
+
+    conn = post(build_conn(), "/operator/login/verify/#{token}")
+    assert get_session(conn, :operator_id) == operator.id
+  end
+
   describe "magic link verification" do
     setup do
       operator =

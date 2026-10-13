@@ -37,16 +37,25 @@ defmodule Custyard.OperatorAccount do
   def login_token_ttl_minutes, do: @login_token_ttl_minutes
 
   @doc """
-  Normalizes an email address for storage and lookup: trims surrounding
-  whitespace and lowercases it (Unicode-aware).
+  Normalizes an email address to the form it is stored in: trimmed,
+  lowercased with full Unicode case mapping, and in Unicode NFC.
 
-  Every place that stores an operator email or looks one up goes through
-  this, so `Ops@Example.com` and `ops@example.com` are the same account.
+  The login form looks accounts up by the normalized address, so every
+  lookup and every write must go through this. NFC makes a precomposed
+  "é" and "e" followed by a combining accent the same address.
+
+  A binary that is not valid UTF-8 is returned unchanged; the changeset
+  rejects it.
   """
-  def normalize_email(nil), do: nil
+  def normalize_email(email) when is_binary(email) do
+    if String.valid?(email) do
+      email |> String.trim() |> String.downcase() |> :unicode.characters_to_nfc_binary()
+    else
+      email
+    end
+  end
 
-  def normalize_email(email) when is_binary(email),
-    do: email |> String.trim() |> String.downcase()
+  def normalize_email(email), do: email
 
   @doc false
   def changeset(operator_account, attrs) do
@@ -54,15 +63,28 @@ defmodule Custyard.OperatorAccount do
     |> cast(attrs, [:email, :password, :role, :organization_id])
     |> update_change(:email, &normalize_email/1)
     |> validate_required([:email])
-    |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
-      message: "must be a valid email address"
-    )
+    |> validate_email_format()
     |> maybe_validate_password()
     |> validate_inclusion(:role, @roles, message: "must be one of: #{Enum.join(@roles, ", ")}")
     |> validate_org_for_role()
     |> unique_constraint(:email)
     |> foreign_key_constraint(:organization_id)
     |> hash_password()
+  end
+
+  # The unicode regex treats non-ASCII whitespace (a no-break space pasted
+  # into the address) as whitespace, but raises on invalid UTF-8, so
+  # validity is checked first.
+  defp validate_email_format(changeset) do
+    case get_change(changeset, :email) do
+      email when is_binary(email) ->
+        if String.valid?(email) and Regex.match?(~r/^[^\s]+@[^\s]+\.[^\s]+$/u, email),
+          do: changeset,
+          else: add_error(changeset, :email, "must be a valid email address", validation: :format)
+
+      _ ->
+        changeset
+    end
   end
 
   # Only validate password if one is provided
