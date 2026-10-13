@@ -152,6 +152,33 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       assert operator_id == operator.id
     end
 
+    # organizations is AUTOINCREMENT, so SQLite never gives a deleted
+    # organization's id to a new one: a confirmation left open cannot bind
+    # an organization created after its review.
+    test "confirming after the organization was deleted binds nothing, even once another exists",
+         %{conn: conn} do
+      org = insert_organization(name: "Reviewed")
+      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+
+      view
+      |> form("[data-testid=acknowledgments-bind-form]",
+        binding: %{source_organization_id: "ots-org-9", organization_id: org.id}
+      )
+      |> render_submit()
+
+      Repo.delete!(org)
+      replacement = insert_organization(name: "Replacement")
+      assert replacement.id > org.id
+
+      view |> element("[data-testid=acknowledgments-confirm-bind]") |> render_click()
+
+      assert view |> element("[data-testid=acknowledgments-bind-result]") |> render() =~
+               "That organization no longer exists"
+
+      assert Acknowledgments.list_bindings() == []
+      assert binding_audits() == []
+    end
+
     test "cancel leaves nothing bound", %{conn: conn} do
       org = insert_organization()
       {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
