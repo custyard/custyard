@@ -2,5 +2,7 @@
   # Skip infrastructure-level security (handled by reverse proxy)
   ignore: ["Config.CSP", "Config.HTTPS"],
   # Only fail on medium/high confidence findings
-  threshold: :medium
+  threshold: :medium,
+  # Honour `# sobelow_skip [...]` annotations on reviewed false positives
+  skip: true
 ]

@@ -16,6 +16,12 @@ defmodule CustyardWeb.Operator.AttachmentController do
 
   @inline_safe_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain)
 
+  # Sobelow flags the two variables below as user-controlled; neither is. The
+  # content type is one of the literals in @inline_safe_types or the
+  # octet-stream fallback (served_type/1), and the path is built by
+  # Custyard.Attachments.file_path/1 from the row's content hash, never from
+  # request input or the declared filename.
+  # sobelow_skip ["XSS.ContentType", "Traversal.SendDownload"]
   def show(conn, %{"id" => id}) do
     with {int_id, ""} <- Integer.parse(id),
          %MessageAttachment{} = attachment <-
