@@ -34,6 +34,23 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "Hello from customer"
     end
 
+    test "renders a stored HTML body as markup with the plain text behind a toggle",
+         %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        body: "Hello bold",
+        html_body: "<p>Hello <b>bold</b></p>"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(view, ~s([data-testid="operator-message-html"] b), "bold")
+      assert has_element?(view, ~s([data-testid="operator-message-body"]), "Hello bold")
+    end
+
     test "transitions new conversation to active on view", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, state: :new)

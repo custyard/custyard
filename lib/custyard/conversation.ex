@@ -58,6 +58,9 @@ defmodule Custyard.Conversation do
     # unknown sender (spec-inbound-channels D6). A badge and a notification
     # suppressor, never a filter; cleared via suspect_changeset/2.
     field :suspect, :boolean, default: false
+    # ISO 639-1 code detected from the first customer message (enrichment);
+    # nil when the text was too short or ambiguous.
+    field :language, :string
 
     belongs_to :organization, Custyard.Organization
     belongs_to :inbound_channel, Custyard.InboundChannel
@@ -90,11 +93,13 @@ defmodule Custyard.Conversation do
       :organization_id,
       :contact_id,
       :project_id,
-      :inbound_channel_id
+      :inbound_channel_id,
+      :language
     ])
     |> validate_required_organization()
     |> validate_required([:subject])
     |> validate_length(:subject, max: 500)
+    |> validate_length(:language, max: 8)
     # Note: :state, :urgency, :source use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:contact_id)

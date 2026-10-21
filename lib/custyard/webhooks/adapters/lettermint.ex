@@ -101,7 +101,7 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
     end
   end
 
-  alias Custyard.Email.Normalizer
+  alias Custyard.Email.{HtmlSanitizer, Normalizer}
 
   @impl true
   def normalize(%{"event" => "message.inbound", "data" => data} = params) when is_map(data) do
@@ -129,7 +129,7 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
        references: Normalizer.get_header(headers, "references"),
        headers: headers,
        source: :lettermint,
-       metadata: %{}
+       metadata: %{html_body: HtmlSanitizer.sanitize(params["html"])}
      }}
   end
 
@@ -227,6 +227,8 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
       # Anchor hrefs from the HTML body, for verification-link extraction
       # only (strip_html/1 drops them); never persisted on the message.
       links: html_links(body_map["html"]),
+      # Allowlist-sanitised HTML (D9); the raw markup goes no further.
+      html_body: HtmlSanitizer.sanitize(body_map["html"]),
       authentication: %{
         dkim: auth_field(auth["dkim"], "result"),
         dkim_domain: auth_field(auth["dkim"], "domain"),

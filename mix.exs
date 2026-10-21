@@ -62,6 +62,8 @@ defmodule Custyard.MixProject do
       {:swoosh, "~> 1.5"},
       {:gen_smtp, "~> 1.2"},
       {:plover, "~> 0.6"},
+      # Allowlist HTML sanitiser for inbound email bodies (spec-inbound-channels D9)
+      {:html_sanitize_ex, "~> 1.5"},
       {:domainatrex, "~> 3.2"},
 
       # Error tracking / diagnostics (self-hosted Sentry at catch.onetimesecret.com).

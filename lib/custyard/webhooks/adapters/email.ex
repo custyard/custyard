@@ -52,7 +52,8 @@ defmodule Custyard.Webhooks.Adapters.Email do
        references: parsed[:references] || Normalizer.get_header(headers, "references"),
        headers: headers,
        source: :email,
-       metadata: %{}
+       # Sanitised at ingest (spec-inbound-channels D9); the raw HTML is dropped.
+       metadata: %{html_body: Custyard.Email.HtmlSanitizer.sanitize(field(parsed, :html))}
      }}
   end
 

@@ -1424,8 +1424,24 @@ defmodule CustyardWeb.Operator.ConversationLive do
         >
           This message was deleted
         </div>
+        <%= if not @is_deleted and @message.html_body do %>
+          <%!-- Sanitised at ingest by Custyard.Email.HtmlSanitizer (D9); the
+          stored markup is the allowlisted output, never provider HTML. --%>
+          <div
+            class="email-html text-sm break-words text-gray-800 dark:text-zinc-200"
+            data-testid="operator-message-html"
+          >
+            {Phoenix.HTML.raw(@message.html_body)}
+          </div>
+          <details class="mt-1 text-xs text-gray-500 dark:text-zinc-400">
+            <summary class="cursor-pointer select-none">Plain text</summary>
+            <div class="mt-1 whitespace-pre-wrap break-words" data-testid="operator-message-body">
+              {@message.body}
+            </div>
+          </details>
+        <% end %>
         <div
-          :if={not @is_deleted}
+          :if={not @is_deleted and is_nil(@message.html_body)}
           class={[
             "text-sm whitespace-pre-wrap break-words",
             if(@is_system,

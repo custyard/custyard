@@ -239,8 +239,8 @@ inactive_class =
         navigate={~p"/operator/acknowledgments"}
         class={
           if nav_active?.("/operator/acknowledgments", [CustyardWeb.Operator.AcknowledgmentsLive]),
-            do: active_class,
-            else: inactive_class
+             do: active_class,
+             else: inactive_class
         }
         data-testid="operator-nav-mobile-acknowledgments"
       >

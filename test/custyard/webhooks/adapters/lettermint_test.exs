@@ -266,6 +266,7 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
                reply_to: "customer@example.com",
                cc: ["boss@example.com"],
                links: [],
+               html_body: "<p>Hi, where is my order?</p>",
                authentication: %{
                  dkim: "pass",
                  dkim_domain: "example.com",
@@ -283,6 +284,24 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
       refute inspect(metadata) =~ "203.0.113.42"
       refute inspect(metadata) =~ "storage.lettermint.co"
       refute inspect(metadata) =~ "JVBERi0"
+    end
+
+    test "the HTML body is sanitised into metadata and the raw markup is dropped" do
+      html =
+        ~S|<p onclick="x()">Hi <b>there</b><script>alert(1)</script><img src="https://t.example/p"></p>|
+
+      envelope = inbound_envelope(%{"body" => %{"text" => "Hi there", "html" => html}})
+
+      assert {:ok, %{metadata: metadata} = normalized} = Lettermint.normalize(envelope)
+      assert metadata.html_body == "<p>Hi <b>there</b> </p>"
+      assert normalized.body == "Hi there"
+      refute inspect(normalized) =~ "alert"
+      refute inspect(normalized) =~ "t.example"
+    end
+
+    test "a text-only message stores no HTML body" do
+      envelope = inbound_envelope(%{"body" => %{"text" => "plain", "html" => nil}})
+      assert {:ok, %{metadata: %{html_body: nil}}} = Lettermint.normalize(envelope)
     end
 
     test "metadata tolerates missing optional sections" do
@@ -373,7 +392,7 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
       assert {:ok, normalized} = Lettermint.normalize(params)
       assert normalized.from == "alice@example.com"
       assert normalized.message_id == "flat@example.com"
-      assert normalized.metadata == %{}
+      assert normalized.metadata == %{html_body: nil}
     end
   end
 end
