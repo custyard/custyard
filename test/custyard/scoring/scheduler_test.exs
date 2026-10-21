@@ -2,13 +2,13 @@ defmodule Custyard.Scoring.SchedulerTest do
   @moduledoc """
   Tests for the Scoring.Scheduler GenServer and related batch operations.
 
-  These tests focus on the Recalculator and DormancyChecker modules that
-  the Scheduler orchestrates, avoiding conflicts with the application-started
-  Scheduler process.
+  These tests focus on the Recalculator, DormancyChecker and InboundChannels
+  quiet-check functions that the Scheduler orchestrates, avoiding conflicts
+  with the application-started Scheduler process.
   """
   use Custyard.DataCase, async: true
 
-  alias Custyard.{Conversation, Repo, Scoring}
+  alias Custyard.{Conversation, InboundChannels, Repo, Scoring}
   alias Custyard.Conversations.DormancyChecker
   alias Custyard.Scoring.Recalculator
 
@@ -349,6 +349,20 @@ defmodule Custyard.Scoring.SchedulerTest do
         updated = Repo.get!(Conversation, conv.id)
         assert updated.state == :dormant
       end
+    end
+  end
+
+  describe "InboundChannels.check_quiet_channels/1" do
+    test "returns the number of channels notified in the scheduler's result shape" do
+      assert {:ok, 0} = InboundChannels.check_quiet_channels()
+
+      quiet_since =
+        DateTime.utc_now() |> DateTime.add(-100, :hour) |> DateTime.truncate(:second)
+
+      insert_inbound_channel(state: :active, last_received_at: quiet_since)
+
+      assert {:ok, 1} = InboundChannels.check_quiet_channels()
+      assert {:ok, 0} = InboundChannels.check_quiet_channels()
     end
   end
 

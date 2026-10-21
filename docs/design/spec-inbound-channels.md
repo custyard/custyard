@@ -2,7 +2,7 @@
 
 **Version:** 0.1 — Supplements SDD v0.4 and the Prospect Conversation Loop; extends the Design Decisions: Data Model + Lettermint Integration document
 **Date:** 2026-10-20
-**Status:** Design. No code. Functional impacts and decisions recorded here are the input to implementation planning.
+**Status:** Phases 0 and 1 implemented (see Implementation status). Phases 2 and 3 are design only.
 
 Visual companion: the "Inbound Mail Channels" artifact published alongside this document (topology, identity options, data model, onboarding sequence, roadmap).
 
@@ -19,13 +19,13 @@ The repository is further along than the request assumes. The design below is a 
 | Capability | Where | State |
 | --- | --- | --- |
 | Per-org and per-project inbound routes, provisioned in Lettermint, 256-bit callback token in the webhook URL | `Custyard.InboundRoute`, `Custyard.InboundRoutes` | Done |
-| Lettermint signature verification (`t=…,v1=…` over raw body, 5-minute skew) | `Custyard.Webhooks.Adapters.Lettermint` | Done, payload shape outdated (see Risks) |
+| Lettermint signature verification (`t=…,v1=…` over raw body, 5-minute skew) | `Custyard.Webhooks.Adapters.Lettermint` | Done, payload shape aligned in Phase 0 |
 | Sender resolution within route scope, thread matching by In-Reply-To / References scoped to org, idempotent message insert | `Purposes.SenderMatching`, `Email.ThreadMatcher`, `Message.insert_idempotent/1` | Done |
 | Operator reply from the conversation view, threaded headers, async delivery queue, send-side status | `Conversations.send_reply/3`, `Email.Outbound`, `Email.OutboundQueue` | Done |
-| Reply From resolution: route `from_address` → operator email → instance fallback | `Conversations.resolve_sender_email/2` | Done, becomes channel-level |
+| Reply From resolution: channel → route `from_address` → operator email → instance fallback | `Conversations.reply_identity/2` | Done, channel step added in Phase 1 |
 | LMTP server and IMAP poller feeding the same dispatcher | `Email.LMTPServer`, `Email.ImapPoller` | Done, IMAP is one global mailbox |
-| Provider delivery-status webhook (delivered, bounced, suppressed) | — | Open (custyard/custyard#25 lineage, still listed Partial in sdd-status) |
-| Auto-reply, bounce and loop detection | — | Absent |
+| Provider delivery-status webhook (delivered, bounced, suppressed) | `Custyard.Email.DeliveryStatus` | Done in Phase 0 |
+| Auto-reply, bounce and loop detection | `Custyard.Webhooks.Triage` | Done in Phase 1 |
 | HTML body rendering, attachments, CC/Reply-To handling | — | Absent (text body only, single recipient) |
 
 The one conceptual gap is that routes are documented as "invisible infrastructure" while the forwarding integration needs an operator-facing object with an address, a lifecycle and a health state. That object is the channel.
@@ -217,13 +217,29 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 
 ## Roadmap
 
-**Phase 0, prerequisites.** Adapter payload alignment with dedup on Lettermint `id`; capture route domain from the create-route response; provider status webhook (delivered, bounced, suppressed) so operators can see replies land. Verify the two Lettermint *confirm* items.
+**Phase 0, prerequisites** (done). Adapter payload alignment with dedup on Lettermint `id`; capture route domain from the create-route response; provider status webhook (delivered, bounced, suppressed) so operators can see replies land. Verify the two Lettermint *confirm* items.
 
-**Phase 1, forwarding channels.** Channel model and migrations; triage stage with own-echo, verification capture and auto-response classes; per-channel From identity with sending-domain check; setup wizard for Proton and Gmail; channel health; channels tab; conversation view badges and recipients display. Onetime Secret pilot on one `support@` channel.
+**Phase 1, forwarding channels** (done, pilot pending). Channel model and migrations; triage stage with own-echo, verification capture and auto-response classes; per-channel From identity with sending-domain check; setup wizard for Proton and Gmail; channel health; channels tab; conversation view badges and recipients display. Onetime Secret pilot on one `support@` channel.
 
 **Phase 2, email fidelity.** CC and Reply-To handling in the composer; sanitised HTML; attachments via signed URLs; archive copy (D4); operator-sent capture and manual-forward unwrap for backlog import; rejection log UI; DSAR coverage for CC participants; language detection as an enrichment purpose.
 
 **Phase 3, other ingress kinds.** Direct-MX channels on a custom inbound domain with subdomain From identity; per-channel IMAP with encrypted credentials replacing the global poller; Google Workspace admin-routing guide.
+
+## Implementation status
+
+**Phase 0** (commit 6c90d5b): enveloped Lettermint payload with the delivery `id` as a second dedup key; `inbound_routes.lettermint_route_domain` captured at creation and backfillable; `POST /api/webhook/email-status/lettermint` advancing `messages.delivery_status`.
+
+**Phase 1** (this branch) landed the design above with these notes:
+
+- **Model.** `Custyard.InboundChannel` and `Custyard.InboundChannelRejection`, context `Custyard.InboundChannels`. Conversations carry `inbound_channel_id` and `suspect`; messages carry `inbound_channel_id`, `to_addresses`, `cc_addresses`, `reply_to`, `authentication`, `spam_score` and `triage_class` (`customer | auto_response | suspect`). A channel is created directly in `pending_verification`; `draft` exists in the state machine but nothing writes it. Verification confirmation is accepted only from `pending_verification`.
+- **Routing.** `InboundChannels.resolve_for_delivery/2` matches `data.recipient` (falling back to `To` when the metadata is absent) against the current token and a rotated token inside its grace period. A route with no channels returns `:legacy` and dispatches exactly as before. The dispatcher now returns `{:ignored, reason}` for deliveries that were deliberately dropped; the webhook controller answers 200 with `status: "ignored"`, the LMTP server answers 250, the IMAP poller marks the message seen.
+- **Triage** (`Custyard.Webhooks.Triage`) implements the own-echo, provider-verification, auto-response, suspect and customer classes. Operator-sent capture and manual-forward unwrap are Phase 2 as planned. Own echoes are recorded as an `:inbound_triaged` audit event rather than a field on the outbound message. Verification senders are configurable (`:forwarding_verification_senders`); any `@google.com` sender with a "forwarding confirmation" subject is also accepted. Suspect conversations are created with `urgency: :normal` and `suspect: true`, skip operator notification, and can be dismissed from the thread header.
+- **Reply identity.** `Conversations.reply_identity/2` returns address, name and source (`:channel | :route | :operator | :platform`). The `reply_from: :ingress_address` fallback sends from the full ingress address. `Email.Outbound` honours a customer's `Reply-To` only for customer-class messages and never for prospect conversations.
+- **Sending-domain check.** `Lettermint.Client.list_domains/0` (team-level `GET /domains`, paginated) feeds `InboundChannels.check_sending_domain/2`; the result is stored on the channel and summarised as verified, pending, failed, not found or unchecked.
+- **Health.** `InboundChannels.check_quiet_channels/1` runs on the scoring scheduler tick, writes a `:channel_quiet` audit event once per quiet period and sends an operator email when email is enabled. `last_delivered_at` from D7 was not added; `last_received_at` is enough for the quiet alert.
+- **Retention.** `InboundChannels.sweep_expired/1` runs inside `Conversations.RetentionSweep`: rejection rows after 14 days, expired verification captures, rotated tokens past their grace period.
+- **UI.** Channels tab on the organization page (the Routes tab survives as an "Advanced" disclosure inside it), setup wizard for Proton, Google and other providers with live verification capture, token reveal and rotation with confirmation, pause, resume and revoke. Conversation thread shows channel and suspect badges, per-message To, CC, Reply-To, authentication and spam score, and the composer states which identity a reply will use. Attention queue rows show the same badges.
+- **Open.** Onetime Secret pilot on one `support@` channel; the Proton envelope and header check (Risks item 3) happens on that first forward.
 
 ## Rejected alternatives
 

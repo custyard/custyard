@@ -261,6 +261,7 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
                lettermint_message_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
                recipient: "support@acme.com",
                subaddress: nil,
+               mail_from: "customer@example.com",
                reply_to: "customer@example.com",
                cc: ["boss@example.com"],
                authentication: %{
@@ -296,6 +297,25 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
       assert metadata.authentication == %{dkim: nil, dkim_domain: nil, spf: nil, dmarc: nil}
       assert metadata.is_spam == nil
       assert metadata.spam_score == nil
+    end
+
+    test "an empty envelope sender is preserved as the DSN marker" do
+      envelope = inbound_envelope(%{"envelope" => %{"mail_from" => "", "remote_ip" => "1.2.3.4"}})
+
+      assert {:ok, %{metadata: metadata}} = Lettermint.normalize(envelope)
+      assert metadata.mail_from == ""
+      refute inspect(metadata) =~ "1.2.3.4"
+    end
+
+    test "mail_from is nil when the envelope is absent or malformed" do
+      assert {:ok, %{metadata: %{mail_from: nil}}} =
+               Lettermint.normalize(inbound_envelope(%{"envelope" => nil}))
+
+      assert {:ok, %{metadata: %{mail_from: nil}}} =
+               Lettermint.normalize(inbound_envelope(%{"envelope" => "bogus"}))
+
+      assert {:ok, %{metadata: %{mail_from: nil}}} =
+               Lettermint.normalize(inbound_envelope(%{"envelope" => %{"mail_from" => 7}}))
     end
 
     test "a non-inbound event is bypassed as ignored" do

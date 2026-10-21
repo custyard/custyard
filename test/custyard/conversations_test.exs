@@ -1501,4 +1501,146 @@ defmodule Custyard.ConversationsTest do
       set: [updated_at: backdated]
     )
   end
+
+  describe "reply identity with inbound channels (D3)" do
+    setup do
+      org = insert_organization(name: "Channel Corp")
+      contact = insert_contact(organization_id: org.id, email: "customer@example.com")
+
+      route =
+        insert_inbound_route(
+          organization_id: org.id,
+          route_type: :general,
+          source: :lettermint,
+          from_address: "route@acme.example.com",
+          lettermint_route_id: "lm_#{System.unique_integer([:positive])}",
+          lettermint_route_domain: "r#{System.unique_integer([:positive])}.lettermint.app"
+        )
+
+      %{org: org, contact: contact, route: route}
+    end
+
+    test "the channel public address wins over the route from_address", %{
+      org: org,
+      contact: contact,
+      route: route
+    } do
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "help@acme.example.com",
+          display_name: "Acme Help",
+          state: :active
+        )
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          inbound_channel_id: channel.id
+        )
+
+      {:ok, message} =
+        Conversations.send_reply(conversation, "Reply", operator_email: "agent@corp.com")
+
+      assert message.sender_email == "help@acme.example.com"
+
+      assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
+               address: "help@acme.example.com",
+               name: "Acme Help",
+               source: :channel
+             }
+    end
+
+    test "a channel without a display name reports the organization name", %{
+      org: org,
+      route: route
+    } do
+      channel = insert_inbound_channel(inbound_route_id: route.id, state: :active)
+      conversation = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+
+      assert %{name: "Channel Corp", source: :channel} =
+               Conversations.reply_identity(conversation)
+    end
+
+    test "the ingress fallback replies from local+token@domain", %{org: org, route: route} do
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "help@acme.example.com",
+          reply_from: :ingress_address,
+          state: :active
+        )
+
+      conversation = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+
+      expected = "help+#{channel.ingress_token}@#{route.lettermint_route_domain}"
+      assert Custyard.InboundChannels.ingress_address(channel) == expected
+
+      {:ok, message} = Conversations.send_reply(conversation, "Reply")
+      assert message.sender_email == expected
+
+      assert %{address: ^expected, source: :channel} = Conversations.reply_identity(conversation)
+    end
+
+    test "a preloaded channel association is used without a lookup", %{org: org, route: route} do
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "help@acme.example.com",
+          state: :active
+        )
+
+      conversation =
+        insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+        |> Repo.preload(:inbound_channel)
+
+      assert %{address: "help@acme.example.com", source: :channel} =
+               Conversations.reply_identity(conversation)
+    end
+
+    test "without a channel the route from_address is the identity", %{org: org} do
+      conversation = insert_conversation(organization_id: org.id)
+
+      assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
+               address: "route@acme.example.com",
+               name: "Channel Corp",
+               source: :route
+             }
+    end
+
+    test "without a route identity the operator email is used, else the platform" do
+      org = insert_organization(name: "No Route Inc")
+      conversation = insert_conversation(organization_id: org.id)
+
+      assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
+               address: "agent@corp.com",
+               name: "No Route Inc",
+               source: :operator
+             }
+
+      assert Conversations.reply_identity(conversation) == %{
+               address: nil,
+               name: "No Route Inc",
+               source: :platform
+             }
+    end
+
+    test "public-intake conversations always use the platform identity", %{route: route} do
+      channel = insert_inbound_channel(inbound_route_id: route.id, state: :active)
+
+      conversation =
+        insert_conversation(
+          source: :public_intake,
+          organization_id: route.organization_id,
+          inbound_channel_id: channel.id
+        )
+
+      assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
+               address: nil,
+               name: nil,
+               source: :platform
+             }
+    end
+  end
 end

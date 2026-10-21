@@ -632,5 +632,49 @@ defmodule CustyardWeb.WebhookControllerTest do
       assert Repo.aggregate(Custyard.Conversation, :count) == 0
       assert Repo.aggregate(Custyard.Message, :count) == 0
     end
+
+    test "a delivery the dispatcher ignores is acknowledged with 200", %{
+      conn: conn,
+      route: route
+    } do
+      # A route with channels routes by token (D2); a recipient matching none
+      # is logged and must not be retried by Lettermint.
+      channel = insert_inbound_channel(inbound_route_id: route.id, state: :active)
+      params = lettermint_event("message.inbound")
+      params = put_in(params, ["data", "recipient"], "support+nosuchtoken@lettermint.app")
+
+      response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", params)
+        |> json_response(200)
+
+      assert response == %{"status" => "ignored", "reason" => "no_channel"}
+      assert Repo.aggregate(Custyard.Conversation, :count) == 0
+
+      assert [rejection] = Custyard.InboundChannels.list_rejections_for_route(route.id)
+      assert rejection.classification == :no_channel
+      assert rejection.inbound_channel_id == nil
+      assert Repo.reload!(channel).last_received_at == nil
+    end
+
+    test "a verification notice on a legacy route is acknowledged as a provider notice", %{
+      conn: conn,
+      route: route
+    } do
+      params = lettermint_event("message.inbound")
+
+      params =
+        params
+        |> put_in(["data", "from"], %{"email" => "forwarding-noreply@google.com", "name" => nil})
+        |> put_in(["data", "subject"], "(#123) Gmail Forwarding Confirmation")
+
+      response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", params)
+        |> json_response(200)
+
+      assert response == %{"status" => "ignored", "reason" => "provider_notice"}
+      assert Repo.aggregate(Custyard.Conversation, :count) == 0
+    end
   end
 end

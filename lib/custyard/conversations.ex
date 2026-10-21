@@ -754,8 +754,36 @@ defmodule Custyard.Conversations do
     |> Repo.one()
   end
 
-  # Determine the from address for outbound email.
-  #
+  @doc """
+  The From identity an operator reply on `conversation` carries
+  (spec-inbound-channels D3).
+
+  Returns `%{address, name, source}` where `source` is:
+
+    * `:channel` - the conversation arrived on an inbound channel; `address`
+      is the channel's public address (or its ingress address when the
+      channel falls back to that identity) and `name` its display name when
+      set, else the organization name
+    * `:route` - the project or general inbound route's `from_address`
+    * `:operator` - `opts[:operator_email]`, when no channel or route
+      identity exists
+    * `:platform` - nothing above applies; `address` is nil and the
+      configured `:email_from_address` fallback is used at delivery. Always
+      the case for public-intake conversations, whose `name` is nil because
+      the instance branding name applies.
+
+  ## Options
+
+    * `:operator_email` - the replying operator's address, used only for the
+      `:operator` source
+  """
+  @spec reply_identity(struct(), keyword()) :: %{
+          address: String.t() | nil,
+          name: String.t() | nil,
+          source: :channel | :route | :operator | :platform
+        }
+  def reply_identity(conversation, opts \\ [])
+
   # Public-intake conversations always send from the platform address: with a
   # nil sender_email, Outbound's :email_from_address fallback applies. Keyed
   # on the conversation's source, not org presence — no inbound route exists
@@ -763,15 +791,59 @@ defmodule Custyard.Conversations do
   # replying operator's personal address to prospects. The rule holds even
   # after the conversation links to an organization (source-keyed rule in the
   # public intake spec).
-  defp resolve_sender_email(%Conversation{source: :public_intake}, _opts), do: nil
+  def reply_identity(%Conversation{source: :public_intake}, _opts),
+    do: %{address: nil, name: nil, source: :platform}
 
-  # Priority: inbound route from_address > operator_email option > fallback
-  defp resolve_sender_email(conversation, opts) do
-    route_address = lookup_route_from_address(conversation)
-    operator_email = Keyword.get(opts, :operator_email)
+  # Priority: channel From identity > inbound route from_address >
+  # operator_email option > platform fallback
+  def reply_identity(%Conversation{} = conversation, opts) do
+    channel = reply_channel_record(conversation)
 
-    route_address || operator_email
+    cond do
+      address = channel && Custyard.InboundChannels.from_address(channel) ->
+        name = Custyard.InboundChannels.from_name(channel) || organization_name(conversation)
+        %{address: address, name: name, source: :channel}
+
+      address = lookup_route_from_address(conversation) ->
+        %{address: address, name: organization_name(conversation), source: :route}
+
+      address = Keyword.get(opts, :operator_email) ->
+        %{address: address, name: organization_name(conversation), source: :operator}
+
+      true ->
+        %{address: nil, name: organization_name(conversation), source: :platform}
+    end
   end
+
+  # Determine the from address for outbound email: the address of
+  # reply_identity/2, nil when the platform fallback applies.
+  defp resolve_sender_email(conversation, opts), do: reply_identity(conversation, opts).address
+
+  # The channel the conversation arrived on, from the preloaded association
+  # when present, else loaded by id. nil for legacy and non-email
+  # conversations.
+  defp reply_channel_record(%Conversation{inbound_channel: %Custyard.InboundChannel{} = channel}),
+    do: channel
+
+  defp reply_channel_record(%Conversation{inbound_channel_id: id}) when is_integer(id),
+    do: Custyard.InboundChannels.get_channel(id)
+
+  defp reply_channel_record(_conversation), do: nil
+
+  defp organization_name(%Conversation{organization: %Custyard.Organization{name: name}})
+       when is_binary(name) and name != "",
+       do: name
+
+  defp organization_name(%Conversation{organization: %Custyard.Organization{}}), do: nil
+
+  defp organization_name(%Conversation{organization_id: org_id}) when is_integer(org_id) do
+    case Repo.get(Custyard.Organization, org_id) do
+      %Custyard.Organization{name: name} when is_binary(name) and name != "" -> name
+      _organization -> nil
+    end
+  end
+
+  defp organization_name(_conversation), do: nil
 
   # Determine origin for outbound replies based on the conversation's source.
   # The origin reflects which integration/adapter the reply is routed through,

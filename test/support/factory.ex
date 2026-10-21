@@ -360,6 +360,9 @@ defmodule Custyard.Factory do
 
   defp maybe_change(changeset, _field, nil), do: changeset
 
+  defp maybe_change(changeset, field, %DateTime{} = value),
+    do: Ecto.Changeset.change(changeset, [{field, DateTime.truncate(value, :second)}])
+
   defp maybe_change(changeset, field, value),
     do: Ecto.Changeset.change(changeset, [{field, value}])
 

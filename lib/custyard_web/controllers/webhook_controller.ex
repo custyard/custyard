@@ -137,6 +137,13 @@ defmodule CustyardWeb.WebhookController do
       {:ok, conversation} ->
         json(conn, %{status: "ok", conversation_id: conversation.id})
 
+      # Channel resolution or triage decided the delivery must not become a
+      # customer message (unmatched recipient, paused channel, own echo,
+      # verification notice, orphan auto-response). It was logged or audited
+      # already; acknowledge with 200 so the provider does not retry.
+      {:ignored, reason} ->
+        json(conn, %{status: "ignored", reason: to_string(reason)})
+
       {:error, reason} ->
         conn |> put_status(422) |> json(%{status: "error", reason: format_error(reason)})
     end

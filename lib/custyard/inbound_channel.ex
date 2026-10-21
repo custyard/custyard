@@ -45,8 +45,11 @@ defmodule Custyard.InboundChannel do
   @token_alphabet ~c"0123456789abcdefghjkmnpqrstvwxyz"
   @token_regex ~r/\A[0-9abcdefghjkmnpqrstvwxyz]{20}\z/
   # The ingress local part is derived from the public address and must stay a
-  # conservative dot-atom so it never needs quoting in a forwarding rule.
-  @local_regex ~r/\A[a-z0-9](?:[a-z0-9._-]{0,62})\z/
+  # conservative dot-atom so it never needs quoting in a forwarding rule. It
+  # is capped so `local + "+" + token` stays within the 64-octet local-part
+  # limit of RFC 5321: 43 + 1 + 20 = 64.
+  @local_max_length 64 - 1 - @token_length
+  @local_regex ~r/\A[a-z0-9](?:[a-z0-9._-]{0,42})\z/
   @email_regex ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
   schema "inbound_channels" do
@@ -131,6 +134,7 @@ defmodule Custyard.InboundChannel do
     |> validate_format(:ingress_token, @token_regex)
     |> unique_constraint(:ingress_token)
     |> unique_constraint([:inbound_route_id, :public_address],
+      error_key: :public_address,
       message: "is already a channel on this route"
     )
     |> foreign_key_constraint(:inbound_route_id)
@@ -294,9 +298,8 @@ defmodule Custyard.InboundChannel do
           |> String.split("@", parts: 2)
           |> List.first()
           |> String.replace(~r/[^a-z0-9._-]/, "-")
-          |> String.trim_leading(".")
-          |> String.trim_leading("-")
-          |> String.slice(0, 63)
+          |> String.replace(~r/\A[._-]+/, "")
+          |> String.slice(0, @local_max_length)
 
         put_change(changeset, :ingress_local, if(local == "", do: "mail", else: local))
 

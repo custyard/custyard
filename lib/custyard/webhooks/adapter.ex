@@ -13,6 +13,12 @@ defmodule Custyard.Webhooks.Adapter do
   #   - `:lettermint_message_id` - Lettermint's own message UUID, stored on the
   #     message for delivery-status correlation.
   #   - `:external_priority` - provider priority consumed by Enrichment.
+  #   - `:recipient` - the SMTP envelope recipient; the only routing input for
+  #     inbound channels (Custyard.InboundChannels.resolve_for_delivery/2).
+  #   - `:mail_from` - the SMTP envelope sender; `""` (null reverse path)
+  #     marks a bounce/DSN for triage, nil when the adapter has no envelope.
+  #   - `:cc`, `:reply_to`, `:authentication`, `:is_spam`, `:spam_score` -
+  #     email facts read by Custyard.Webhooks.Triage and stored on the message.
   @type normalized_payload :: %{
           from: String.t(),
           to: String.t() | nil,

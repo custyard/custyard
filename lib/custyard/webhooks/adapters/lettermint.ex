@@ -27,7 +27,10 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
 
   Only a compact metadata map is retained: no raw-message URL, attachment
   content, spam symbols, remote IP or full header list (see
-  docs/design/spec-inbound-channels.md, "Privacy and compliance").
+  docs/design/spec-inbound-channels.md, "Privacy and compliance"). The
+  envelope sender (`envelope.mail_from`) is kept because an empty value marks
+  a delivery status notification for triage; `""` is preserved as-is and the
+  key is nil when the envelope is absent.
   """
   @behaviour Custyard.Webhooks.Adapter
 
@@ -212,6 +215,7 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
       lettermint_message_id: string_or_nil(data["message_id"]),
       recipient: string_or_nil(data["recipient"]),
       subaddress: string_or_nil(data["subaddress"]),
+      mail_from: envelope_mail_from(data["envelope"]),
       reply_to: string_or_nil(data["reply_to"]),
       cc: cc_emails(data["cc"]),
       authentication: %{
@@ -224,6 +228,10 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
       spam_score: if(is_number(data["spam_score"]), do: data["spam_score"])
     }
   end
+
+  # "" is a bounce or DSN (null reverse path) and must survive as "".
+  defp envelope_mail_from(%{"mail_from" => mail_from}) when is_binary(mail_from), do: mail_from
+  defp envelope_mail_from(_envelope), do: nil
 
   defp cc_emails(list) when is_list(list) do
     for %{"email" => email} <- list, is_binary(email), do: email

@@ -6,6 +6,7 @@ defmodule Custyard.Lettermint.FailingMockClient do
   - `{:failing_mock_client, :create_route}` - error tuple to return from create_route/1
   - `{:failing_mock_client, :get_route}` - error tuple to return from get_route/1
   - `{:failing_mock_client, :delete_route}` - error tuple to return from delete_route/1
+  - `{:failing_mock_client, :list_domains}` - error tuple to return from list_domains/0
 
   Example:
       Process.put({:failing_mock_client, :delete_route}, {:error, {:api_error, 500, "Internal Server Error"}})
@@ -32,6 +33,14 @@ defmodule Custyard.Lettermint.FailingMockClient do
   @impl true
   def delete_route(_lettermint_route_id) do
     case Process.get({:failing_mock_client, :delete_route}) do
+      nil -> {:error, {:api_error, 503, "Service Unavailable"}}
+      error -> error
+    end
+  end
+
+  @impl true
+  def list_domains do
+    case Process.get({:failing_mock_client, :list_domains}) do
       nil -> {:error, {:api_error, 503, "Service Unavailable"}}
       error -> error
     end

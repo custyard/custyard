@@ -27,6 +27,16 @@ defmodule Custyard.Lettermint.Client do
   The HTTP API wraps the route in `{"data": ...}` on create (201) but returns
   it bare on fetch; implementations must normalize so callers never see the
   wrapper. Older API responses may omit the domain keys.
+
+  ## Domain shape
+
+  `list_domains/0` returns `{:ok, domains}`: every sending domain on the
+  team, each a map with string keys `"id"`, `"domain"` and `"status"`.
+  Lettermint statuses are `verified`, `partially_verified`,
+  `pending_verification` and `failed_verification`. The channel
+  sending-domain check (docs/design/spec-inbound-channels.md, D3) compares a
+  channel's public address domain against this list. Implementations follow
+  pagination so callers always see the full list.
   """
 
   @doc """
@@ -47,6 +57,11 @@ defmodule Custyard.Lettermint.Client do
   Delete a route in Lettermint by its remote ID.
   """
   @callback delete_route(lettermint_route_id :: String.t()) :: :ok | {:error, term()}
+
+  @doc """
+  List the team's sending domains (see module doc, Domain shape).
+  """
+  @callback list_domains() :: {:ok, [map()]} | {:error, term()}
 
   @doc """
   Returns the configured Lettermint client module.

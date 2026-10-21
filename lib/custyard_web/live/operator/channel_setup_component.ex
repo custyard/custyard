@@ -1,0 +1,903 @@
+defmodule CustyardWeb.Operator.ChannelSetupComponent do
+  @moduledoc """
+  Guided setup for one inbound channel (spec-inbound-channels, "Operator
+  onboarding"). Four steps, each resumable from the channel state:
+
+  1. create: public address, route, provider
+  2. forward: ingress address plus provider instructions; waits for the
+     provider confirmation captured by triage and shows the code or link
+  3. test: send a test email; completes when the first delivery arrives
+  4. reply identity: sending-domain check and the ingress-address fallback
+
+  The parent LiveView owns the data. It passes the current `channel` (nil
+  for a new one) and reloads it on `{:channel_updated, id}`; this component
+  tells the parent about a newly created channel with
+  `{:channel_setup_created, id}` and about closing with
+  `:channel_setup_closed`. Admin-only: the parent renders it only for
+  operators who can manage the organization.
+  """
+  use CustyardWeb, :live_component
+
+  alias Custyard.{InboundChannel, InboundChannels, InboundRoute}
+
+  @steps [
+    {1, :create, "Address"},
+    {2, :forward, "Forward"},
+    {3, :test, "Test"},
+    {4, :reply, "Replies"}
+  ]
+
+  @providers [
+    {"google", "Google Workspace / Gmail"},
+    {"proton", "Proton Mail"},
+    {"other", "Other provider"}
+  ]
+
+  @impl true
+  def mount(socket) do
+    {:ok,
+     socket
+     |> assign(:step, 1)
+     |> assign(:revealed_for, nil)
+     |> assign(:previous_state, nil)
+     |> assign(:form, to_form(InboundChannels.change_channel(%InboundChannel{}), as: :channel))
+     |> assign(:local_flash, nil)}
+  end
+
+  @impl true
+  def update(assigns, socket) do
+    socket = assign(socket, assigns)
+    channel = socket.assigns.channel
+
+    socket =
+      if is_nil(channel),
+        do: assign(socket, step: 1, previous_state: nil),
+        else: sync_step(socket, channel)
+
+    {:ok, maybe_record_reveal(socket)}
+  end
+
+  # Follow the state machine when the channel moves, except that the first
+  # delivery while the operator watches step 3 shows the success panel there
+  # instead of jumping ahead; reopening an active channel lands on step 4.
+  defp sync_step(socket, channel) do
+    if channel.state == socket.assigns.previous_state do
+      socket
+    else
+      step =
+        if socket.assigns.step == 3 and channel.state == :active,
+          do: 3,
+          else: step_for_state(channel.state)
+
+      socket
+      |> assign(:step, step)
+      |> assign(:previous_state, channel.state)
+    end
+  end
+
+  # The full ingress address is shown on step 2; D7 asks for an audit event
+  # each time it is revealed. Once per channel per wizard session.
+  defp maybe_record_reveal(socket) do
+    %{channel: channel, step: step, revealed_for: revealed_for} = socket.assigns
+
+    if (step == 2 and channel) && channel.id != revealed_for do
+      InboundChannels.record_reveal(channel, operator: socket.assigns.current_operator)
+      assign(socket, :revealed_for, channel.id)
+    else
+      socket
+    end
+  end
+
+  defp step_for_state(:pending_verification), do: 2
+  defp step_for_state(:awaiting_first_message), do: 3
+  defp step_for_state(:active), do: 4
+  defp step_for_state(:paused), do: 4
+  defp step_for_state(:revoked), do: 4
+  defp step_for_state(_state), do: 1
+
+  # --- Events ---
+
+  @impl true
+  def handle_event("validate", %{"channel" => params}, socket) do
+    changeset = InboundChannels.change_channel(%InboundChannel{}, params)
+    {:noreply, assign(socket, :form, to_form(changeset, as: :channel, action: :validate))}
+  end
+
+  def handle_event("create", %{"channel" => params}, socket) do
+    attrs = Map.take(params, ~w(public_address display_name provider))
+
+    case selectable_route(socket.assigns.routes, Map.get(params, "inbound_route_id")) do
+      nil ->
+        {:noreply,
+         socket
+         |> assign(
+           :form,
+           to_form(InboundChannels.change_channel(%InboundChannel{}, attrs), as: :channel)
+         )
+         |> put_flash_local(:error, "Choose a route with a synced ingress domain")}
+
+      route ->
+        case InboundChannels.create_channel(route, attrs,
+               operator: socket.assigns.current_operator
+             ) do
+          {:ok, channel} ->
+            send(self(), {:channel_setup_created, channel.id})
+
+            {:noreply,
+             socket
+             |> assign(:channel, channel)
+             |> assign(:previous_state, channel.state)
+             |> assign(:step, 2)
+             |> assign(:local_flash, nil)
+             |> maybe_record_reveal()}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply, assign(socket, :form, to_form(changeset, as: :channel, action: :insert))}
+        end
+    end
+  end
+
+  def handle_event("confirm_forwarding", _params, socket) do
+    with_channel(socket, fn channel ->
+      InboundChannels.confirm_verification(channel, operator: socket.assigns.current_operator)
+    end)
+  end
+
+  def handle_event("check_domain", _params, socket) do
+    with_channel(socket, fn channel ->
+      case InboundChannels.check_sending_domain(channel,
+             operator: socket.assigns.current_operator
+           ) do
+        {:ok, _} = ok -> ok
+        {:error, reason} -> {:error, "Domain check failed: #{inspect(reason)}"}
+      end
+    end)
+  end
+
+  def handle_event("set_reply_from", %{"reply_from" => value}, socket)
+      when value in ~w(public_address ingress_address) do
+    with_channel(socket, fn channel ->
+      InboundChannels.update_channel(channel, %{reply_from: value},
+        operator: socket.assigns.current_operator
+      )
+    end)
+  end
+
+  def handle_event("goto_step", %{"step" => step}, socket) do
+    case {Integer.parse(step), socket.assigns.channel} do
+      {{n, ""}, %InboundChannel{}} when n in 2..4 ->
+        {:noreply, socket |> assign(:step, n) |> maybe_record_reveal()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("close", _params, socket) do
+    send(self(), :channel_setup_closed)
+    {:noreply, socket}
+  end
+
+  defp with_channel(%{assigns: %{channel: nil}} = socket, _fun), do: {:noreply, socket}
+
+  defp with_channel(socket, fun) do
+    case fun.(socket.assigns.channel) do
+      {:ok, %InboundChannel{} = channel} ->
+        channel = Custyard.Repo.preload(channel, [:inbound_route, :project])
+
+        socket =
+          socket
+          |> assign(:channel, channel)
+          |> assign(:local_flash, nil)
+          |> sync_step(channel)
+
+        {:noreply, socket}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, put_flash_local(socket, :error, changeset_message(changeset))}
+
+      {:error, message} when is_binary(message) ->
+        {:noreply, put_flash_local(socket, :error, message)}
+    end
+  end
+
+  # Flash inside the component: the parent's flash would survive closing the
+  # wizard, and these messages belong to the step they came from.
+  defp put_flash_local(socket, kind, message), do: assign(socket, :local_flash, {kind, message})
+
+  defp changeset_message(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, _opts} -> msg end)
+    |> Enum.map_join(", ", fn {field, msgs} -> "#{field} #{Enum.join(msgs, ", ")}" end)
+  end
+
+  defp selectable_route(routes, route_id) when is_binary(route_id) do
+    case Integer.parse(route_id) do
+      {id, ""} -> Enum.find(routes, &(&1.id == id and route_selectable?(&1)))
+      _ -> nil
+    end
+  end
+
+  defp selectable_route(_routes, _route_id), do: nil
+
+  defp route_selectable?(route),
+    do: route.source == :lettermint and not is_nil(InboundRoute.ingress_domain(route))
+
+  # --- Render ---
+
+  @impl true
+  def render(assigns) do
+    assigns =
+      assigns
+      |> assign(:steps, @steps)
+      |> assign(:providers, @providers)
+
+    ~H"""
+    <div
+      class="p-4 bg-white dark:bg-zinc-800 rounded-lg border border-indigo-300 dark:border-indigo-600 space-y-4"
+      data-testid="channel-setup"
+    >
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h3 class="text-sm font-medium text-gray-900 dark:text-zinc-100">
+            {if @channel, do: "Channel setup: #{@channel.public_address}", else: "New channel"}
+          </h3>
+          <p class="text-xs text-gray-500 dark:text-zinc-400 mt-0.5">
+            Forward a support mailbox into Custyard. Each step picks up where the channel left off.
+          </p>
+        </div>
+        <button
+          type="button"
+          phx-click="close"
+          phx-target={@myself}
+          class="text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-100"
+          data-testid="channel-setup-close"
+        >
+          Close
+        </button>
+      </div>
+
+      <.progress steps={@steps} step={@step} channel={@channel} myself={@myself} />
+
+      <p
+        :if={@local_flash}
+        class={[
+          "text-xs rounded px-2 py-1.5",
+          elem(@local_flash, 0) == :error &&
+            "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950",
+          elem(@local_flash, 0) != :error &&
+            "text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-950"
+        ]}
+        role="alert"
+        data-testid="channel-setup-flash"
+      >
+        {elem(@local_flash, 1)}
+      </p>
+
+      <%= case @step do %>
+        <% 1 -> %>
+          <.create_step form={@form} routes={@routes} providers={@providers} myself={@myself} />
+        <% 2 -> %>
+          <.forward_step channel={@channel} myself={@myself} />
+        <% 3 -> %>
+          <.test_step channel={@channel} />
+        <% 4 -> %>
+          <.reply_step channel={@channel} myself={@myself} />
+      <% end %>
+    </div>
+    """
+  end
+
+  attr :steps, :list, required: true
+  attr :step, :integer, required: true
+  attr :channel, :any, required: true
+  attr :myself, :any, required: true
+
+  defp progress(assigns) do
+    ~H"""
+    <ol class="flex flex-wrap items-center gap-2 text-xs" data-testid="channel-setup-progress">
+      <li :for={{number, _key, label} <- @steps} class="flex items-center gap-2">
+        <button
+          type="button"
+          phx-click="goto_step"
+          phx-value-step={number}
+          phx-target={@myself}
+          disabled={is_nil(@channel) or number == 1}
+          aria-current={if number == @step, do: "step", else: nil}
+          class={[
+            "inline-flex items-center gap-1.5 px-2 py-1 rounded border",
+            number == @step &&
+              "border-indigo-500 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950",
+            (number != @step and step_done?(@channel, number)) &&
+              "border-green-200 dark:border-green-800 text-green-700 dark:text-green-300",
+            (number != @step and not step_done?(@channel, number)) &&
+              "border-gray-200 dark:border-zinc-700 text-gray-500 dark:text-zinc-400",
+            (is_nil(@channel) or number == 1) && "cursor-default"
+          ]}
+          data-testid={"channel-setup-step-#{number}"}
+        >
+          <span class="font-semibold">{number}</span>
+          <span>{label}</span>
+        </button>
+        <span :if={number < 4} class="text-gray-300 dark:text-zinc-600" aria-hidden="true">
+          &rarr;
+        </span>
+      </li>
+      <li :if={@channel} class="ml-auto">
+        <.channel_state_badge state={@channel.state} id={@channel.id} />
+      </li>
+    </ol>
+    """
+  end
+
+  defp step_done?(nil, _number), do: false
+  defp step_done?(_channel, 1), do: true
+
+  defp step_done?(%{state: state}, 2),
+    do: state in [:awaiting_first_message, :active]
+
+  defp step_done?(%{state: :active}, 3), do: true
+  defp step_done?(%{sending_domain_status: "verified"}, 4), do: true
+  defp step_done?(%{reply_from: :ingress_address}, 4), do: true
+  defp step_done?(_channel, _number), do: false
+
+  # --- Step 1: create ---
+
+  attr :form, :any, required: true
+  attr :routes, :list, required: true
+  attr :providers, :list, required: true
+  attr :myself, :any, required: true
+
+  defp create_step(assigns) do
+    ~H"""
+    <.form
+      for={@form}
+      id="channel-create-form"
+      phx-change="validate"
+      phx-submit="create"
+      phx-target={@myself}
+      class="space-y-3"
+      data-testid="channel-create-form"
+    >
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label
+            for={@form[:public_address].id}
+            class="block text-xs font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
+            Public address
+          </label>
+          <input
+            type="email"
+            id={@form[:public_address].id}
+            name={@form[:public_address].name}
+            value={@form[:public_address].value}
+            placeholder="support@companyname.com"
+            required
+            class="w-full text-sm rounded-md border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
+            data-testid="channel-public-address"
+          />
+          <.field_errors field={@form[:public_address]} />
+        </div>
+        <div>
+          <label
+            for={@form[:display_name].id}
+            class="block text-xs font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
+            Display name (optional)
+          </label>
+          <input
+            type="text"
+            id={@form[:display_name].id}
+            name={@form[:display_name].name}
+            value={@form[:display_name].value}
+            placeholder="Acme Support"
+            maxlength="100"
+            class="w-full text-sm rounded-md border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
+            data-testid="channel-display-name"
+          />
+          <.field_errors field={@form[:display_name]} />
+        </div>
+        <div>
+          <label
+            for="channel-route-select"
+            class="block text-xs font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
+            Route
+          </label>
+          <select
+            id="channel-route-select"
+            name="channel[inbound_route_id]"
+            required
+            class="w-full text-sm rounded-md border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
+            data-testid="channel-route-select"
+          >
+            <option
+              :for={route <- @routes}
+              value={route.id}
+              disabled={not route_selectable?(route)}
+              data-testid={"channel-route-option-#{route.id}"}
+            >
+              {route_label(route)}
+            </option>
+          </select>
+          <p class="mt-1 text-xs text-gray-500 dark:text-zinc-400">
+            Organization-wide channels use the general route; project channels use that project's route.
+          </p>
+        </div>
+        <div>
+          <label
+            for={@form[:provider].id}
+            class="block text-xs font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
+            Mail provider
+          </label>
+          <select
+            id={@form[:provider].id}
+            name={@form[:provider].name}
+            class="w-full text-sm rounded-md border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
+            data-testid="channel-provider-select"
+          >
+            <option
+              :for={{value, label} <- @providers}
+              value={value}
+              selected={to_string(@form[:provider].value) == value}
+            >
+              {label}
+            </option>
+          </select>
+          <.field_errors field={@form[:provider]} />
+        </div>
+      </div>
+      <div class="flex justify-end">
+        <button
+          type="submit"
+          class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
+          data-testid="channel-create-submit"
+        >
+          Create channel
+        </button>
+      </div>
+    </.form>
+    """
+  end
+
+  attr :field, Phoenix.HTML.FormField, required: true
+
+  defp field_errors(assigns) do
+    errors =
+      if Phoenix.Component.used_input?(assigns.field),
+        do: assigns.field.errors,
+        else: []
+
+    assigns = assign(assigns, :errors, errors)
+
+    ~H"""
+    <p
+      :for={{msg, _opts} <- @errors}
+      class="mt-1 text-xs text-red-600 dark:text-red-400"
+      data-testid={"channel-error-#{@field.field}"}
+    >
+      {msg}
+    </p>
+    """
+  end
+
+  defp route_label(route) do
+    scope =
+      case route do
+        %{route_type: :general} -> "Organization-wide"
+        %{project: %{title: title}} -> title
+        %{route_type: type} -> to_string(type)
+      end
+
+    if route_selectable?(route),
+      do: "#{scope} (@#{InboundRoute.ingress_domain(route)})",
+      else: "#{scope} (domain not synced)"
+  end
+
+  # --- Step 2: forward ---
+
+  attr :channel, :any, required: true
+  attr :myself, :any, required: true
+
+  defp forward_step(assigns) do
+    channel = assigns.channel
+    now = DateTime.utc_now()
+
+    assigns =
+      assigns
+      |> assign(:ingress_address, InboundChannels.ingress_address(channel))
+      |> assign(:verification_live, InboundChannel.verification_valid?(channel, now))
+
+    ~H"""
+    <div class="space-y-4" data-testid="channel-forward-step">
+      <section>
+        <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-1">
+          1. Forward {@channel.public_address} to this address
+        </h4>
+        <div class="flex items-center gap-2">
+          <code
+            class="flex-1 text-sm bg-gray-50 dark:bg-zinc-900 text-gray-800 dark:text-zinc-200 px-2 py-1.5 rounded border border-gray-200 dark:border-zinc-700 break-all"
+            data-testid="channel-setup-ingress-address"
+          >
+            {@ingress_address || "Ingress domain not synced yet"}
+          </code>
+          <button
+            :if={@ingress_address}
+            type="button"
+            id={"copy-setup-ingress-#{@channel.id}"}
+            phx-hook="CopyToClipboard"
+            data-clipboard-text={@ingress_address}
+            class="text-xs px-2 py-1.5 text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors whitespace-nowrap"
+            data-testid="channel-setup-copy-ingress"
+          >
+            Copy
+          </button>
+        </div>
+      </section>
+
+      <.provider_instructions provider={@channel.provider} />
+
+      <section
+        class="rounded border border-gray-200 dark:border-zinc-700 p-3"
+        data-testid="channel-verification-panel"
+      >
+        <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-1">
+          2. Confirmation from your provider
+        </h4>
+        <%= if @verification_live do %>
+          <p class="text-sm text-gray-800 dark:text-zinc-200">
+            Confirmation received. Finish the step in your mail provider:
+          </p>
+          <dl class="mt-2 space-y-1 text-sm">
+            <div :if={@channel.verification_code} class="flex items-center gap-2">
+              <dt class="text-gray-500 dark:text-zinc-400">Code</dt>
+              <dd>
+                <code
+                  class="font-mono text-base text-gray-900 dark:text-zinc-100 bg-gray-50 dark:bg-zinc-900 px-2 py-0.5 rounded"
+                  data-testid="channel-verification-code"
+                >
+                  {@channel.verification_code}
+                </code>
+              </dd>
+            </div>
+            <div :if={@channel.verification_link} class="flex items-center gap-2">
+              <dt class="text-gray-500 dark:text-zinc-400">Link</dt>
+              <dd>
+                <a
+                  href={@channel.verification_link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-indigo-600 dark:text-indigo-400 underline break-all"
+                  data-testid="channel-verification-link"
+                >
+                  Open the confirmation link
+                </a>
+              </dd>
+            </div>
+          </dl>
+          <p class="mt-2 text-xs text-gray-500 dark:text-zinc-400">
+            The code expires 24 hours after it was received.
+          </p>
+        <% else %>
+          <p
+            class="text-sm text-gray-600 dark:text-zinc-400"
+            data-testid="channel-verification-waiting"
+          >
+            Waiting for the confirmation email. It is delivered to the ingress address and appears here
+            as soon as it arrives; nothing to do until then.
+          </p>
+        <% end %>
+      </section>
+
+      <div class="flex justify-end">
+        <button
+          type="button"
+          phx-click="confirm_forwarding"
+          phx-target={@myself}
+          class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
+          data-testid="channel-confirm-forwarding"
+        >
+          I've confirmed forwarding
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr :provider, :atom, required: true
+
+  defp provider_instructions(%{provider: :google} = assigns) do
+    ~H"""
+    <section
+      class="text-sm text-gray-700 dark:text-zinc-300 space-y-1"
+      data-testid="channel-provider-help"
+    >
+      <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">
+        In Gmail / Google Workspace
+      </h4>
+      <ol class="list-decimal list-inside space-y-0.5">
+        <li>Settings &rsaquo; See all settings &rsaquo; Forwarding and POP/IMAP.</li>
+        <li>Add a forwarding address and paste the ingress address above.</li>
+        <li>
+          Google emails a confirmation code to that address. It lands in Custyard and appears below;
+          enter the code back in Gmail, then choose "Forward a copy" and keep the original in your inbox.
+        </li>
+      </ol>
+      <p class="text-xs text-gray-500 dark:text-zinc-400">
+        Workspace admins can block per-user forwarding; admin routing in the Admin console is the alternative.
+      </p>
+    </section>
+    """
+  end
+
+  defp provider_instructions(%{provider: :proton} = assigns) do
+    ~H"""
+    <section
+      class="text-sm text-gray-700 dark:text-zinc-300 space-y-2"
+      data-testid="channel-provider-help"
+    >
+      <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">
+        In Proton Mail (paid plan required)
+      </h4>
+      <ol class="list-decimal list-inside space-y-0.5">
+        <li>Settings &rsaquo; Auto forward &rsaquo; Add forwarding rule.</li>
+        <li>Enter the ingress address above and save.</li>
+        <li>
+          Proton sends an "Accept forwarding" email to that address. It lands in Custyard and appears
+          below; open the link to accept.
+        </li>
+      </ol>
+      <p
+        class="rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 px-3 py-2 text-sm"
+        role="note"
+        data-testid="channel-proton-e2ee-notice"
+      >
+        Forwarding to an address outside Proton disables end-to-end encryption for all mail to and
+        from this Proton address. Mail is still encrypted in transit, but Proton can no longer
+        store it zero-access.
+      </p>
+    </section>
+    """
+  end
+
+  defp provider_instructions(assigns) do
+    ~H"""
+    <section
+      class="text-sm text-gray-700 dark:text-zinc-300 space-y-1"
+      data-testid="channel-provider-help"
+    >
+      <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">In your mail provider</h4>
+      <p>
+        Create a forwarding rule from the public address to the ingress address above, keeping the
+        original in the mailbox. If the provider sends a confirmation email to the destination, it
+        appears below.
+      </p>
+    </section>
+    """
+  end
+
+  # --- Step 3: test ---
+
+  attr :channel, :any, required: true
+
+  defp test_step(assigns) do
+    ~H"""
+    <div class="space-y-3" data-testid="channel-test-step">
+      <%= if @channel.state == :active do %>
+        <div
+          class="rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950 px-3 py-2 text-sm text-green-800 dark:text-green-200"
+          data-testid="channel-setup-complete"
+        >
+          First message received. Forwarding works and the channel is active.
+        </div>
+      <% else %>
+        <p class="text-sm text-gray-700 dark:text-zinc-300" data-testid="channel-test-prompt">
+          Send a test email to
+          <code class="text-gray-900 dark:text-zinc-100">{@channel.public_address}</code>
+          from any other mailbox. This panel updates when it arrives.
+        </p>
+        <p class="text-xs text-gray-500 dark:text-zinc-400">
+          A pass on the authentication badge does not make a request safe to act on; account changes
+          still need out-of-band verification.
+        </p>
+      <% end %>
+    </div>
+    """
+  end
+
+  # --- Step 4: reply identity ---
+
+  attr :channel, :any, required: true
+  attr :myself, :any, required: true
+
+  defp reply_step(assigns) do
+    channel = assigns.channel
+
+    assigns =
+      assigns
+      |> assign(:summary, InboundChannels.sending_domain_summary(channel))
+      |> assign(:domain, InboundChannel.public_domain(channel))
+      |> assign(:ingress_address, InboundChannels.ingress_address(channel))
+      |> assign(:data_path, data_path_text(channel))
+
+    ~H"""
+    <div class="space-y-4" data-testid="channel-reply-step">
+      <section class="rounded border border-gray-200 dark:border-zinc-700 p-3 space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">
+            Sending domain: {@domain}
+          </h4>
+          <div class="flex items-center gap-2">
+            <.sending_domain_pill summary={@summary} id={@channel.id} />
+            <button
+              type="button"
+              phx-click="check_domain"
+              phx-target={@myself}
+              class="text-xs px-2 py-1 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
+              data-testid="channel-setup-check-domain"
+            >
+              Check domain
+            </button>
+          </div>
+        </div>
+        <p class="text-sm text-gray-700 dark:text-zinc-300" data-testid="channel-domain-explanation">
+          <%= case @summary do %>
+            <% :verified -> %>
+              Replies go out as {@channel.public_address}. Customers answer the address they wrote to.
+            <% :unchecked -> %>
+              Not checked yet. Replies are sent as {@channel.public_address} once the domain is verified in Lettermint.
+            <% _ -> %>
+              {@domain} is not a verified sending domain in Lettermint. Add the DKIM CNAME records and the
+              SPF include for the root domain in Lettermint, then check again. Until then, replies from
+              the public address will fail authentication; the fallback below replies from the ingress
+              address instead.
+          <% end %>
+        </p>
+        <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-zinc-300">
+          <input
+            type="checkbox"
+            name="reply_from"
+            phx-click="set_reply_from"
+            phx-target={@myself}
+            phx-value-reply_from={
+              if @channel.reply_from == :ingress_address,
+                do: "public_address",
+                else: "ingress_address"
+            }
+            checked={@channel.reply_from == :ingress_address}
+            class="mt-0.5 rounded border-gray-300 dark:border-zinc-600 dark:bg-zinc-700"
+            data-testid="channel-reply-from-toggle"
+          />
+          <span>
+            Reply from the ingress address instead.
+            <span class="text-xs text-gray-500 dark:text-zinc-400">
+              Customers will then see {@ingress_address || "the ingress address"} as the sender and their
+              replies go straight to Custyard, bypassing your mailbox.
+            </span>
+          </span>
+        </label>
+      </section>
+
+      <section class="rounded border border-gray-200 dark:border-zinc-700 p-3 space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">
+            Data path (for your records of processing)
+          </h4>
+          <button
+            type="button"
+            id={"copy-data-path-#{@channel.id}"}
+            phx-hook="CopyToClipboard"
+            data-clipboard-text={@data_path}
+            class="text-xs px-2 py-1 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
+            data-testid="channel-copy-data-path"
+          >
+            Copy
+          </button>
+        </div>
+        <pre
+          class="whitespace-pre-wrap break-words font-sans text-xs text-gray-700 dark:text-zinc-300"
+          data-testid="channel-data-path"
+        >{@data_path}</pre>
+      </section>
+    </div>
+    """
+  end
+
+  @doc false
+  def data_path_text(channel) do
+    provider = provider_name(channel.provider)
+    domain = InboundChannel.public_domain(channel)
+
+    """
+    Inbound mail for #{channel.public_address}
+    1. Customer -> #{domain} (#{provider}): the public mailbox receives the message.
+    2. #{provider} -> Lettermint B.V., Zwolle, Netherlands (EU; GDPR Art. 28 processor, public DPA): the forwarding rule delivers a copy to the ingress address. Lettermint keeps the raw message for 28 days.
+    3. Lettermint -> this Custyard instance: parsed text body, addresses needed to reply, authentication summary and spam score are stored. Raw messages, signed URLs and full headers are not.
+    Replies: this Custyard instance -> Lettermint -> customer.
+    """
+  end
+
+  defp provider_name(:google), do: "Google Workspace / Gmail"
+  defp provider_name(:proton), do: "Proton Mail"
+  defp provider_name(_other), do: "operator's mail provider"
+
+  # --- Shared badges (also used by the channels tab) ---
+
+  @doc "State badge, one colour per channel state."
+  attr :state, :atom, required: true
+  attr :id, :any, required: true
+
+  def channel_state_badge(assigns) do
+    colors =
+      case assigns.state do
+        :draft ->
+          "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300"
+
+        :pending_verification ->
+          "bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
+
+        :awaiting_first_message ->
+          "bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300"
+
+        :active ->
+          "bg-green-100 dark:bg-green-950 text-green-800 dark:text-green-300"
+
+        :paused ->
+          "bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300"
+
+        :revoked ->
+          "bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300"
+      end
+
+    assigns = assign(assigns, :colors, colors)
+
+    ~H"""
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded whitespace-nowrap #{@colors}"}
+      data-testid={"channel-state-#{@id}"}
+      data-state={@state}
+    >
+      {@state |> to_string() |> String.replace("_", " ")}
+    </span>
+    """
+  end
+
+  @doc "Sending-domain summary pill."
+  attr :summary, :atom, required: true
+  attr :id, :any, required: true
+
+  def sending_domain_pill(assigns) do
+    {colors, label} =
+      case assigns.summary do
+        :verified ->
+          {"bg-green-100 dark:bg-green-950 text-green-800 dark:text-green-300", "domain verified"}
+
+        :pending ->
+          {"bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300", "domain pending"}
+
+        :failed ->
+          {"bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300", "domain failed"}
+
+        :not_found ->
+          {"bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300",
+           "domain not in Lettermint"}
+
+        _ ->
+          {"bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300", "domain unchecked"}
+      end
+
+    assigns = assigns |> assign(:colors, colors) |> assign(:label, label)
+
+    ~H"""
+    <span
+      class={"text-xs px-1.5 py-0.5 rounded whitespace-nowrap #{@colors}"}
+      data-testid={"channel-domain-#{@id}"}
+      data-summary={@summary}
+    >
+      {@label}
+    </span>
+    """
+  end
+end

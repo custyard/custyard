@@ -4,6 +4,10 @@ defmodule Custyard.Lettermint.HttpClient do
 
   Uses Finch to make HTTP requests. Requires `LETTERMINT_API_URL` and
   `LETTERMINT_API_KEY` to be configured at runtime.
+
+  Routes and sending domains are both read from the Team API at the
+  configured base URL with the same bearer token; `list_domains/0` pages
+  through `GET /domains` (`per_page=100`, `cursor=`) for at most five pages.
   """
 
   @behaviour Custyard.Lettermint.Client
@@ -69,6 +73,64 @@ defmodule Custyard.Lettermint.HttpClient do
         {:error, {:request_failed, reason}}
     end
   end
+
+  @domains_per_page 100
+  @domains_max_pages 5
+
+  @impl true
+  def list_domains do
+    list_domains_page(nil, [], @domains_max_pages)
+  end
+
+  # Cursor pagination over GET /domains, bounded so a misbehaving cursor can
+  # never loop. Pages are concatenated in API order.
+  defp list_domains_page(_cursor, acc, 0), do: {:ok, acc}
+
+  defp list_domains_page(cursor, acc, pages_left) do
+    url = api_url("/domains?" <> URI.encode_query(domains_query(cursor)))
+
+    case request(:get, url, nil) do
+      {:ok, %Finch.Response{status: status, body: response_body}} when status in 200..299 ->
+        with {:ok, {domains, next_cursor}} <- decode_domains_page(response_body) do
+          acc = acc ++ domains
+
+          if is_binary(next_cursor) and next_cursor != "" do
+            list_domains_page(next_cursor, acc, pages_left - 1)
+          else
+            {:ok, acc}
+          end
+        end
+
+      {:ok, %Finch.Response{status: status, body: response_body}} ->
+        {:error, {:api_error, status, response_body}}
+
+      {:error, reason} ->
+        {:error, {:request_failed, reason}}
+    end
+  end
+
+  defp domains_query(nil), do: [per_page: @domains_per_page]
+  defp domains_query(cursor), do: [per_page: @domains_per_page, cursor: cursor]
+
+  @doc false
+  # One page of GET /domains: `{"data": [domain, ...], "next_cursor": ...}`.
+  # The cursor may be absent or null on the last page, or live under "meta".
+  def decode_domains_page(response_body) when is_binary(response_body) do
+    case Jason.decode(response_body) do
+      {:ok, %{"data" => domains} = page} when is_list(domains) ->
+        {:ok, {domains, next_cursor(page)}}
+
+      {:ok, other} ->
+        {:error, {:unexpected_response, other}}
+
+      {:error, decode_error} ->
+        {:error, {:decode_failed, decode_error, response_body}}
+    end
+  end
+
+  defp next_cursor(%{"next_cursor" => cursor}), do: cursor
+  defp next_cursor(%{"meta" => %{"next_cursor" => cursor}}), do: cursor
+  defp next_cursor(_page), do: nil
 
   @doc false
   # Lettermint wraps the route in `{"data": route, "message": ...}` on create

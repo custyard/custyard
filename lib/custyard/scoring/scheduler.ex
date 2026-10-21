@@ -6,8 +6,9 @@ defmodule Custyard.Scoring.Scheduler do
   recalculation, so this GenServer invokes `Recalculator.recalculate_all/0`
   on a fixed interval.
 
-  Also runs dormancy checks to transition stale waiting conversations
-  and neglect notification checks.
+  Also runs dormancy checks to transition stale waiting conversations,
+  neglect notification checks, and the inbound channel quiet check
+  (`Custyard.InboundChannels.check_quiet_channels/1`).
   """
 
   use GenServer
@@ -15,6 +16,7 @@ defmodule Custyard.Scoring.Scheduler do
 
   alias Custyard.Conversations.DormancyChecker
   alias Custyard.Email.LMTPServer
+  alias Custyard.InboundChannels
   alias Custyard.Notifications.NeglectChecker
   alias Custyard.Scoring.Recalculator
 
@@ -47,6 +49,7 @@ defmodule Custyard.Scoring.Scheduler do
     Task.start(fn -> run_recalculate_task() end)
     Task.start(fn -> run_dormancy_check() end)
     Task.start(fn -> run_neglect_notifications() end)
+    Task.start(fn -> run_quiet_channel_check() end)
     Task.start(fn -> run_lmtp_cleanup() end)
   end
 
@@ -86,6 +89,27 @@ defmodule Custyard.Scoring.Scheduler do
       {:error, reason} ->
         Logger.error("Scoring.Scheduler: neglect notification check failed: #{inspect(reason)}")
     end
+  end
+
+  defp run_quiet_channel_check do
+    case safe_quiet_channel_check() do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("Scoring.Scheduler: sent #{count} quiet channel notices")
+
+      {:error, reason} ->
+        Logger.error("Scoring.Scheduler: quiet channel check failed: #{inspect(reason)}")
+    end
+  end
+
+  defp safe_quiet_channel_check do
+    InboundChannels.check_quiet_channels()
+  rescue
+    e -> {:error, e}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp safe_recalculate do

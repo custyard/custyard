@@ -75,6 +75,7 @@ Security:
 | Cross-Organization Isolation | All portal queries filter by org_id from authenticated session                                            | Done    |
 | Email as Untrusted Input     | HTML stripped to plain text, Phoenix template escaping prevents XSS                                       | Done    |
 | Data at Rest Encryption      | Not implemented — using SQLite for MVP                                                                    | Not Yet |
+| Inbound Channels             | Inbound-channels Phase 1: operator-visible `InboundChannel` per public support address under a route, `local+token@<route domain>` ingress, lifecycle pending_verification → awaiting_first_message → active (+ paused/revoked), triage stage (own echo, provider verification capture, auto-response, suspect) ahead of sender matching, per-channel reply identity with Lettermint sending-domain check, quiet-channel alert, 14-day rejection log, channels tab and setup wizard for Proton/Google forwarding. Spec: `docs/design/spec-inbound-channels.md`. | Done |
 | Outbound Email               | Platform-native outbound implemented (#26 merged): operator replies compose in-platform, send threaded via Lettermint, tracked send-side (pending/sent/failed). Provider status webhook landed (inbound-channels Phase 0): `POST /api/webhook/email-status/lettermint` advances delivered/bounced/suppressed/failed with rank-ordered transitions and an audit event per transition. | Done |
 
 ### Data Model (SDD §4)

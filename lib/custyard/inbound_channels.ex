@@ -5,16 +5,23 @@ defmodule Custyard.InboundChannels do
 
   Responsibilities:
 
-    * CRUD and the D7 lifecycle (`create_channel/2`, `confirm_verification/1`,
-      `pause/1`, `resume/1`, `revoke/1`, `rotate_token/2`)
+    * CRUD and the D7 lifecycle (`create_channel/3`, `confirm_verification/2`,
+      `pause/2`, `resume/2`, `revoke/2`, `rotate_token/2`)
+    * Reply identity (D3): `check_sending_domain/2` records whether the
+      public address domain is a verified Lettermint sending domain
     * Routing: `resolve_for_delivery/2` maps a delivery's envelope recipient
       to a channel on the route by token (D2)
-    * Health: `mark_received/2` on every accepted delivery, the quiet-channel
-      check, and the rejection log
-    * Audit events for every admin action
+    * Health: `mark_received/2` on every accepted delivery,
+      `check_quiet_channels/1` run by `Custyard.Scoring.Scheduler`, and the
+      rejection log; `sweep_expired/1` is run by
+      `Custyard.Conversations.RetentionSweep`
+    * Audit events for every admin action. Payloads never carry the ingress
+      token or message content.
 
   PubSub: channel changes broadcast `{:channel_updated, channel_id}` on
-  `"channel:<id>"` and on `"organization:<org_id>:channels"`.
+  `"channel:<id>"` and on `"organization:<org_id>:channels"`. A quiet
+  notice also broadcasts `{:channel_quiet, channel_id}` on
+  `"operator:notifications"`.
   """
 
   import Ecto.Query
@@ -22,6 +29,8 @@ defmodule Custyard.InboundChannels do
   require Logger
 
   alias Custyard.{AuditEvent, InboundChannel, InboundChannelRejection, InboundRoute, Repo}
+  alias Custyard.Lettermint.Client
+  alias Custyard.Notifications.Email, as: NotificationEmail
 
   @rejection_retention_days 14
   @default_rotation_grace_hours 7 * 24
@@ -172,14 +181,17 @@ defmodule Custyard.InboundChannels do
   Operator confirmed the forwarding rule: `pending_verification` ->
   `awaiting_first_message`. Consumes any captured verification.
   """
-  def confirm_verification(%InboundChannel{} = channel, opts \\ []) do
-    now = now()
+  def confirm_verification(channel, opts \\ [])
 
+  def confirm_verification(%InboundChannel{state: :pending_verification} = channel, opts) do
     channel
-    |> InboundChannel.state_changeset(:awaiting_first_message, %{verified_at: now})
+    |> InboundChannel.state_changeset(:awaiting_first_message, %{verified_at: now()})
     |> Ecto.Changeset.merge(InboundChannel.clear_verification_changeset(channel))
     |> transition(channel, opts)
   end
+
+  def confirm_verification(%InboundChannel{} = channel, _opts),
+    do: {:error, invalid_state(channel, :confirm_verification)}
 
   @doc "Store a provider forwarding confirmation captured by triage (D6)."
   def capture_verification(%InboundChannel{} = channel, %{} = capture, opts \\ []) do
@@ -293,6 +305,79 @@ defmodule Custyard.InboundChannels do
     |> Ecto.Changeset.add_error(:state, "cannot #{action} a channel in state #{channel.state}")
   end
 
+  # --- Sending domain (D3) ---
+
+  @doc """
+  Check whether the channel's public address domain is a Lettermint sending
+  domain and record the result (`sending_domain_status`, one of
+  `InboundChannel.sending_domain_statuses/0`; `"not_found"` when the team
+  has no such domain). Matching is case-insensitive.
+
+  Returns `{:ok, channel}` with the stored status, or `{:error, reason}` when
+  the API call fails or reports a status this module does not know; the
+  stored status is left untouched in both cases. `opts[:operator]` is
+  recorded on the audit event.
+  """
+  def check_sending_domain(%InboundChannel{} = channel, opts \\ []) do
+    domain = InboundChannel.public_domain(channel)
+
+    with {:ok, domains} <- Client.client().list_domains(),
+         {:ok, status} <- domain_status(domains, domain),
+         {:ok, updated} <-
+           channel |> InboundChannel.sending_domain_changeset(status, now()) |> Repo.update() do
+      audit(updated, :channel_sending_domain_checked, opts, %{domain: domain, status: status})
+      broadcast(updated)
+      {:ok, updated}
+    end
+  end
+
+  @doc "True when the last sending-domain check found the domain verified."
+  def sending_domain_verified?(%InboundChannel{sending_domain_status: "verified"}), do: true
+  def sending_domain_verified?(%InboundChannel{}), do: false
+
+  @doc """
+  Sending-domain state for the UI: `:verified`, `:pending` (Lettermint
+  `partially_verified` or `pending_verification`), `:failed`, `:not_found`,
+  or `:unchecked` before the first check.
+  """
+  def sending_domain_summary(%InboundChannel{sending_domain_status: status}) do
+    case status do
+      "verified" -> :verified
+      "partially_verified" -> :pending
+      "pending_verification" -> :pending
+      "failed_verification" -> :failed
+      "not_found" -> :not_found
+      _ -> :unchecked
+    end
+  end
+
+  defp domain_status(_domains, nil), do: {:ok, "not_found"}
+
+  defp domain_status(domains, domain) when is_list(domains) do
+    wanted = String.downcase(domain)
+
+    found =
+      Enum.find(domains, fn
+        %{"domain" => candidate} when is_binary(candidate) -> String.downcase(candidate) == wanted
+        _ -> false
+      end)
+
+    case found do
+      nil ->
+        {:ok, "not_found"}
+
+      %{"status" => status} when is_binary(status) ->
+        if status in InboundChannel.sending_domain_statuses(),
+          do: {:ok, status},
+          else: {:error, {:unknown_domain_status, status}}
+
+      _ ->
+        {:error, {:unexpected_response, found}}
+    end
+  end
+
+  defp domain_status(domains, _domain), do: {:error, {:unexpected_response, domains}}
+
   # --- Routing (D2) ---
 
   @doc """
@@ -312,13 +397,11 @@ defmodule Custyard.InboundChannels do
   consulted, never To/Cc. Local part and token are compared lowercased.
   """
   def resolve_for_delivery(%InboundRoute{id: route_id}, recipient) do
-    channels = list_for_route(route_id)
-
-    cond do
-      channels == [] ->
+    case list_for_route(route_id) do
+      [] ->
         :legacy
 
-      true ->
+      channels ->
         case parse_recipient(recipient) do
           {:ok, _local, token} -> match_token(channels, token)
           :error -> {:error, :no_channel}
@@ -423,13 +506,62 @@ defmodule Custyard.InboundChannels do
     |> Repo.update()
   end
 
+  @doc """
+  Quiet-channel health check (D7): for every channel `list_quiet_channels/1`
+  returns, write a `:channel_quiet` audit event, broadcast
+  `{:channel_quiet, channel_id}` on `"operator:notifications"` and the
+  channel topics, send the operator notice, and stamp `quiet_notified_at` so
+  the channel is notified once per quiet period (the next delivery clears
+  the stamp via `mark_received/2`).
+
+  Returns `{:ok, count}` of channels notified. Run by
+  `Custyard.Scoring.Scheduler` on every tick.
+  """
+  def check_quiet_channels(now \\ nil) do
+    now = now || now()
+    count = now |> list_quiet_channels() |> Enum.count(&notify_quiet(&1, now))
+    {:ok, count}
+  end
+
+  defp notify_quiet(%InboundChannel{} = channel, now) do
+    audit(channel, :channel_quiet, [], %{
+      public_address: channel.public_address,
+      last_received_at: channel.last_received_at && DateTime.to_iso8601(channel.last_received_at),
+      quiet_after_hours: channel.quiet_after_hours
+    })
+
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "operator:notifications",
+      {:channel_quiet, channel.id}
+    )
+
+    broadcast(channel)
+    NotificationEmail.deliver_channel_quiet(channel)
+
+    case mark_quiet_notified(channel, now) do
+      {:ok, _updated} ->
+        true
+
+      {:error, changeset} ->
+        Logger.warning(
+          "Quiet notice for channel #{channel.id} could not be recorded: #{inspect(Keyword.keys(changeset.errors))}"
+        )
+
+        false
+    end
+  end
+
   # --- Rejection log ---
 
   @doc """
   Record a delivery that did not become a customer message. `attrs` carries
   `sender_email`, `recipient`, `subject`, `provider_delivery_id`, and
   optionally `inbound_channel_id`. Never raises: a failure here must not
-  fail the webhook.
+  fail the webhook. Returns `{:ok, rejection}`, `{:error, changeset}` for
+  invalid attrs, or `{:error, exception}` when the database refuses the row
+  (SQLite does not name foreign-key violations, so the changeset cannot
+  absorb them).
   """
   def log_rejection(%InboundRoute{} = route, classification, attrs \\ %{}) do
     attrs =
@@ -453,6 +585,10 @@ defmodule Custyard.InboundChannels do
 
         {:error, changeset}
     end
+  rescue
+    e in Ecto.ConstraintError ->
+      Logger.warning("Inbound rejection log insert failed on route #{route.id}: constraint error")
+      {:error, e}
   end
 
   @doc "Rejections for a route, newest first."
