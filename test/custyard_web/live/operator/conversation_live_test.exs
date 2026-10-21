@@ -51,6 +51,52 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert has_element?(view, ~s([data-testid="operator-message-body"]), "Hello bold")
     end
 
+    test "lists attachments with a download link or the reason they were not fetched",
+         %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, body: "See attached")
+
+      url = Custyard.Attachments.StubClient.unique_url()
+      Custyard.Attachments.StubClient.put(url, "hello")
+
+      {:ok, [fetched]} =
+        Custyard.Attachments.fetch_for_message(message, [
+          %{filename: "notes.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
+        ])
+
+      {:ok, [skipped]} =
+        Custyard.Attachments.fetch_for_message(
+          message,
+          [
+            %{
+              filename: "big.zip",
+              content_type: "application/zip",
+              size: 99,
+              content_id: nil,
+              url: nil
+            }
+          ],
+          limit_bytes: 0
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(
+               view,
+               ~s(a[data-testid="attachment-#{fetched.id}"][href="/operator/attachments/#{fetched.id}"]),
+               "notes.txt"
+             )
+
+      assert has_element?(view, ~s([data-testid="attachment-#{skipped.id}"]), "big.zip")
+
+      assert has_element?(
+               view,
+               ~s([data-testid="attachment-skipped-#{skipped.id}"]),
+               "not fetched"
+             )
+    end
+
     test "transitions new conversation to active on view", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, state: :new)

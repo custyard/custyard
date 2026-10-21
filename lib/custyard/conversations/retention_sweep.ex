@@ -39,7 +39,8 @@ defmodule Custyard.Conversations.RetentionSweep do
     orphaned_tasks: 0,
     channel_rejections: 0,
     channel_verifications: 0,
-    channel_tokens: 0
+    channel_tokens: 0,
+    attachment_files: 0
   }
 
   def start_link(opts) do
@@ -95,7 +96,12 @@ defmodule Custyard.Conversations.RetentionSweep do
 
   defp channel_counts(opts) do
     if Keyword.get(opts, :dry_run, false) do
-      Map.take(@zero_counts, [:channel_rejections, :channel_verifications, :channel_tokens])
+      Map.take(@zero_counts, [
+        :channel_rejections,
+        :channel_verifications,
+        :channel_tokens,
+        :attachment_files
+      ])
     else
       %{rejections: rejections, verifications: verifications, tokens: tokens} =
         InboundChannels.sweep_expired()
@@ -103,7 +109,9 @@ defmodule Custyard.Conversations.RetentionSweep do
       %{
         channel_rejections: rejections,
         channel_verifications: verifications,
-        channel_tokens: tokens
+        channel_tokens: tokens,
+        # Files whose attachment rows went with their swept conversations.
+        attachment_files: Custyard.Attachments.sweep_orphan_files()
       }
     end
   end

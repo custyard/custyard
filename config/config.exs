@@ -4,7 +4,13 @@ config :custyard,
   ecto_repos: [Custyard.Repo],
   repo_adapter: Ecto.Adapters.SQLite3,
   generators: [timestamp_type: :utc_datetime],
-  upload_dir: Path.expand("../priv/static/uploads", __DIR__)
+  upload_dir: Path.expand("../priv/static/uploads", __DIR__),
+  # Inbound email attachments (spec-inbound-channels D9). Deliberately not
+  # under priv/static: Plug.Static serves everything below `uploads`, and
+  # attachments are only ever served through the authenticated download
+  # endpoint.
+  attachment_dir: Path.expand("../priv/attachments", __DIR__),
+  attachment_client: Custyard.Attachments.FinchClient
 
 # config/runtime.exs decides at boot: on by default in production, off by
 # default elsewhere, and ACKNOWLEDGMENTS_ENABLED overrides either way.

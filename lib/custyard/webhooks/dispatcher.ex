@@ -292,6 +292,14 @@ defmodule Custyard.Webhooks.Dispatcher do
   end
 
   defp run_async_purposes(conversation, normalized, route_context, enabled_purposes) do
+    # Attachments belong to the message itself, not to an optional purpose:
+    # they are fetched (or listed as skipped) whenever the delivery had any.
+    if Purposes.Attachments.descriptors(normalized) != [] do
+      start_purpose_task(:attachments, fn ->
+        Purposes.Attachments.process(conversation, normalized, route_context)
+      end)
+    end
+
     if MapSet.member?(enabled_purposes, :enrichment) do
       start_purpose_task(:enrichment, fn ->
         Purposes.Enrichment.process(conversation, normalized, route_context)

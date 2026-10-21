@@ -36,7 +36,9 @@ defmodule Custyard.Sentry do
   # keys in :extra. Covers the path-token names when they appear as params/keys,
   # generic secret-bearing names, and the dev-only `?as=<contact_id>`
   # impersonation param.
-  @sensitive_keys ~w(access_token org_token callback_token token key credential secret passphrase password email as verification_code verification_link)
+  # `attachments` holds the provider's signed download URLs while a delivery is
+  # in flight (spec-inbound-channels D9: never logged, never stored).
+  @sensitive_keys ~w(access_token org_token callback_token token key credential secret passphrase password email as verification_code verification_link attachments)
 
   # Path patterns. Each redacts the single credential segment that follows a
   # known prefix, leaving the prefix (and any trailing segments) intact for

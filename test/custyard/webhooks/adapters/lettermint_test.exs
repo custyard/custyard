@@ -267,6 +267,15 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
                cc: ["boss@example.com"],
                links: [],
                html_body: "<p>Hi, where is my order?</p>",
+               attachments: [
+                 %{
+                   filename: "receipt.pdf",
+                   content_type: "application/pdf",
+                   size: 45_678,
+                   content_id: nil,
+                   url: nil
+                 }
+               ],
                authentication: %{
                  dkim: "pass",
                  dkim_domain: "example.com",
@@ -277,7 +286,7 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
                spam_score: 1.2
              }
 
-      for key <- [:raw, :attachments, :spam_symbols, :envelope, :remote_ip, :headers] do
+      for key <- [:raw, :spam_symbols, :envelope, :remote_ip, :headers] do
         refute Map.has_key?(metadata, key)
       end
 
@@ -297,6 +306,36 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
       assert normalized.body == "Hi there"
       refute inspect(normalized) =~ "alert"
       refute inspect(normalized) =~ "t.example"
+    end
+
+    test "signed-URL attachments become descriptors the fetcher consumes in memory" do
+      envelope =
+        inbound_envelope(%{
+          "attachments" => [
+            %{
+              "filename" => "a.png",
+              "content_type" => "image/png",
+              "size" => 10,
+              "content_id" => "<img1>",
+              "url" => "https://storage.lettermint.co/att/1?sig=abc",
+              "expires_at" => "later"
+            },
+            "garbage",
+            %{"filename" => nil, "content_type" => "", "size" => "10", "url" => nil}
+          ]
+        })
+
+      assert {:ok, %{metadata: %{attachments: [first, second]}}} = Lettermint.normalize(envelope)
+
+      assert first == %{
+               filename: "a.png",
+               content_type: "image/png",
+               size: 10,
+               content_id: "<img1>",
+               url: "https://storage.lettermint.co/att/1?sig=abc"
+             }
+
+      assert second == %{filename: nil, content_type: nil, size: nil, content_id: nil, url: nil}
     end
 
     test "a text-only message stores no HTML body" do

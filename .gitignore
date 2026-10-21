@@ -30,6 +30,9 @@ erl_crash.dump
 # Temporary files, for example, from tests.
 /tmp/
 
+# Inbound email attachments fetched in dev (config :custyard, :attachment_dir).
+/priv/attachments/
+
 # Ignore package tarball (built via "mix hex.build").
 custyard-*.tar
 

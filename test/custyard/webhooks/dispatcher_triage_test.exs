@@ -8,6 +8,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
   import Custyard.Factory
 
   alias Custyard.{AuditEvent, Conversation, InboundChannelRejection, InboundChannels, Message}
+  alias Custyard.{Attachments, MessageAttachment}
+  alias Custyard.Attachments.StubClient
   alias Custyard.Webhooks.Dispatcher
 
   @notifications "operator:notifications"
@@ -78,6 +80,114 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
     do: Map.update!(normalized, :metadata, &Map.merge(&1, overrides))
 
   defp rejections(route), do: InboundChannels.list_rejections_for_route(route.id)
+
+  # The attachment purpose runs in a supervised task; poll for its rows.
+  defp wait_for_attachments(message_id, attempts \\ 100) do
+    case Attachments.list_for_message(message_id) do
+      [] when attempts > 0 ->
+        Process.sleep(10)
+        wait_for_attachments(message_id, attempts - 1)
+
+      rows ->
+        rows
+    end
+  end
+
+  describe "attachments (D9)" do
+    test "are fetched within the channel cap and the signed URL is never stored", %{
+      route: route
+    } do
+      channel = channel!(route, attachment_limit_mb: 1)
+      url = StubClient.unique_url()
+      StubClient.put(url, "%PDF-1.4 receipt")
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{
+          attachments: [
+            %{
+              filename: "receipt.pdf",
+              content_type: "application/pdf",
+              size: 16,
+              content_id: nil,
+              url: url
+            },
+            %{
+              filename: "huge.mov",
+              content_type: "video/quicktime",
+              size: 5_000_000,
+              content_id: nil,
+              url: StubClient.unique_url()
+            }
+          ]
+        })
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+
+      assert [receipt, huge] = wait_for_attachments(message.id)
+      assert %MessageAttachment{state: :fetched, sniffed_type: "application/pdf"} = receipt
+      assert %MessageAttachment{state: :skipped, skip_reason: "over_limit"} = huge
+      refute inspect(Repo.all(MessageAttachment)) =~ "storage.lettermint.test"
+      refute inspect(Repo.all(Message)) =~ "storage.lettermint.test"
+    end
+
+    test "a replayed delivery does not fetch twice", %{route: route} do
+      channel = channel!(route)
+      url = StubClient.unique_url()
+      StubClient.put(url, "hello")
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{
+          attachments: [
+            %{filename: "a.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
+          ]
+        })
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert [_row] = wait_for_attachments(message.id)
+
+      assert {:ok, _same} = Dispatcher.dispatch(route, payload)
+      Process.sleep(50)
+      assert [_row] = Attachments.list_for_message(message.id)
+    end
+
+    test "suspect mail lists its attachments without fetching them", %{route: route} do
+      channel = channel!(route)
+      url = StubClient.unique_url()
+      StubClient.put(url, "MZ payload")
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{
+          is_spam: true,
+          attachments: [
+            %{
+              filename: "invoice.exe",
+              content_type: "application/octet-stream",
+              size: 10,
+              content_id: nil,
+              url: url
+            }
+          ]
+        })
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      assert conversation.suspect
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+
+      assert [
+               %MessageAttachment{
+                 state: :skipped,
+                 skip_reason: "suspect",
+                 filename: "invoice.exe"
+               }
+             ] =
+               wait_for_attachments(message.id)
+    end
+  end
 
   defp triage_audits(org) do
     Repo.all(

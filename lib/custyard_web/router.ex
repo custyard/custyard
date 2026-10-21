@@ -123,6 +123,10 @@ defmodule CustyardWeb.Router do
   scope "/operator", CustyardWeb.Operator, as: :operator do
     pipe_through [:browser, :require_operator]
 
+    # Inbound email attachments: authenticated download, organization-scoped
+    # in the controller (spec-inbound-channels D9).
+    get "/attachments/:id", AttachmentController, :show
+
     # All authenticated operators
     live_session :operator,
       on_mount: [{CustyardWeb.Live.OperatorAuth, :default}] do

@@ -1453,11 +1453,76 @@ defmodule CustyardWeb.Operator.ConversationLive do
         >
           {@message.body}
         </div>
+        <.attachment_list :if={not @is_deleted} attachments={message_attachments(@message)} />
         <.message_details :if={@show_details} message={@message} />
       </div>
     </div>
     """
   end
+
+  # Attachments are preloaded by Conversations.get_with_messages/1; a message
+  # reached through another loader renders without them rather than raising.
+  defp message_attachments(%Message{attachments: attachments}) when is_list(attachments),
+    do: attachments
+
+  defp message_attachments(_message), do: []
+
+  # Fetched attachments link to the authenticated download (spec D9); the
+  # rest are listed so the operator knows they existed and why they were
+  # not fetched.
+  attr :attachments, :list, required: true
+
+  defp attachment_list(%{attachments: []} = assigns), do: ~H""
+
+  defp attachment_list(assigns) do
+    ~H"""
+    <ul class="mt-2 space-y-0.5 text-xs" data-testid="message-attachments">
+      <li :for={att <- @attachments} class="flex flex-wrap items-center gap-x-1.5">
+        <.icon name="hero-paper-clip" class="h-3 w-3 text-gray-400 dark:text-zinc-500" />
+        <%= if att.state == :fetched do %>
+          <a
+            href={~p"/operator/attachments/#{att.id}"}
+            class="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+            data-testid={"attachment-#{att.id}"}
+          >
+            {att.filename || "attachment"}
+          </a>
+          <span class="text-gray-400 dark:text-zinc-500">
+            {Custyard.Attachments.format_bytes(att.size)}
+          </span>
+        <% else %>
+          <span
+            class="text-gray-500 dark:text-zinc-400 break-all"
+            data-testid={"attachment-#{att.id}"}
+          >
+            {att.filename || "attachment"}
+          </span>
+          <span
+            class="text-gray-400 dark:text-zinc-500"
+            title={attachment_skip_title(att.skip_reason)}
+            data-testid={"attachment-skipped-#{att.id}"}
+          >
+            not fetched · {attachment_skip_label(att.skip_reason)}
+          </span>
+        <% end %>
+      </li>
+    </ul>
+    """
+  end
+
+  defp attachment_skip_label("over_limit"), do: "over the channel size limit"
+  defp attachment_skip_label("too_large"), do: "larger than declared"
+  defp attachment_skip_label("suspect"), do: "suspect message"
+  defp attachment_skip_label("disabled"), do: "fetching disabled on this channel"
+  defp attachment_skip_label("no_url"), do: "provider sent no download link"
+  defp attachment_skip_label("fetch_failed"), do: "download failed"
+  defp attachment_skip_label(_reason), do: "not fetched"
+
+  defp attachment_skip_title("suspect"),
+    do: "Attachments on suspect mail are listed but not downloaded until the flag is cleared"
+
+  defp attachment_skip_title(_reason),
+    do: "The provider keeps the original for 28 days; fetch it there if you need it"
 
   # Envelope data for email messages (spec-inbound-channels D5): collapsed by
   # default so the thread stays readable; the authentication badge is the

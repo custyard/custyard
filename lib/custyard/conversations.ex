@@ -181,7 +181,7 @@ defmodule Custyard.Conversations do
       :tasks,
       # Channel badge and the reply From identity (spec-inbound-channels D3)
       inbound_channel: :inbound_route,
-      messages: from(m in Message, order_by: m.inserted_at)
+      messages: {from(m in Message, order_by: m.inserted_at), [:attachments]}
     ])
   end
 

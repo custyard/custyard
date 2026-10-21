@@ -229,6 +229,9 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
       links: html_links(body_map["html"]),
       # Allowlist-sanitised HTML (D9); the raw markup goes no further.
       html_body: HtmlSanitizer.sanitize(body_map["html"]),
+      # Attachment descriptors with their signed URLs, for the fetcher only.
+      # Held in memory for the life of the dispatch; never stored or logged.
+      attachments: attachment_descriptors(data["attachments"]),
       authentication: %{
         dkim: auth_field(auth["dkim"], "result"),
         dkim_domain: auth_field(auth["dkim"], "domain"),
@@ -262,6 +265,25 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
   end
 
   defp html_links(_html), do: []
+
+  @max_attachments 50
+
+  defp attachment_descriptors(list) when is_list(list) do
+    list
+    |> Enum.filter(&is_map/1)
+    |> Enum.take(@max_attachments)
+    |> Enum.map(fn attachment ->
+      %{
+        filename: Normalizer.presence(attachment["filename"]),
+        content_type: Normalizer.presence(attachment["content_type"]),
+        size: if(is_integer(attachment["size"]), do: attachment["size"]),
+        content_id: Normalizer.presence(attachment["content_id"]),
+        url: Normalizer.presence(attachment["url"])
+      }
+    end)
+  end
+
+  defp attachment_descriptors(_other), do: []
 
   defp auth_field(%{} = section, key), do: string_or_nil(section[key])
   defp auth_field(_section, _key), do: nil
