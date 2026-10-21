@@ -41,6 +41,77 @@ defmodule CustyardWeb.Operator.OrganizationChannelsTabTest do
     view
   end
 
+  describe "rejection log (D6)" do
+    test "lists rejected deliveries with reason, sender and masked recipient", %{
+      conn: conn,
+      org: org
+    } do
+      route = insert_inbound_route(organization_id: org.id, source: :lettermint)
+
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "help@channels.example",
+          state: :active
+        )
+
+      {:ok, with_channel} =
+        InboundChannels.log_rejection(route, :auto_response, %{
+          sender_email: "noreply@vendor.example",
+          recipient: InboundChannels.ingress_address(channel),
+          subject: "Out of office",
+          inbound_channel_id: channel.id
+        })
+
+      {:ok, no_channel} =
+        InboundChannels.log_rejection(route, :no_channel, %{
+          sender_email: "lost@customer.example",
+          recipient: "nobody+zzzz0000zzzz0000zzzz@#{route.lettermint_route_domain}",
+          subject: nil
+        })
+
+      view = open_channels(conn, org)
+
+      assert has_element?(view, "[data-testid=org-rejection-count]", "(2)")
+
+      assert has_element?(
+               view,
+               "[data-testid=rejection-#{with_channel.id}]",
+               "noreply@vendor.example"
+             )
+
+      assert has_element?(view, "[data-testid=rejection-#{with_channel.id}]", "Out of office")
+
+      assert has_element?(
+               view,
+               "[data-testid=rejection-#{with_channel.id}]",
+               "help@channels.example"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=rejection-reason-#{with_channel.id}]",
+               "auto-reply, no thread"
+             )
+
+      assert has_element?(view, "[data-testid=rejection-#{no_channel.id}]", "(no subject)")
+
+      assert has_element?(
+               view,
+               "[data-testid=rejection-reason-#{no_channel.id}]",
+               "no matching channel"
+             )
+
+      assert has_element?(view, "[data-testid=rejection-#{no_channel.id}]", "nobody+…@")
+      refute render(view) =~ "zzzz0000zzzz0000zzzz"
+    end
+
+    test "says so when nothing was rejected", %{conn: conn, org: org} do
+      view = open_channels(conn, org)
+      assert has_element?(view, "[data-testid=org-rejection-empty]")
+    end
+  end
+
   describe "tab" do
     test "channels tab replaces the routes tab", %{conn: conn, org: org} do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")

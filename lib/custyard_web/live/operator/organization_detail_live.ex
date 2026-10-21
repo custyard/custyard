@@ -149,7 +149,12 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   defp load_channels(socket, org) do
     channels = InboundChannels.list_for_organization(org.id)
-    assign(socket, :channels, channels)
+
+    socket
+    |> assign(:channels, channels)
+    # Rejection log (spec-inbound-channels D6): "did my customer's mail get
+    # lost?" answered from the last 14 days, swept by retention.
+    |> assign(:rejections, InboundChannels.list_rejections_for_organization(org.id, limit: 50))
   end
 
   # --- Channel PubSub and wizard messages ---
@@ -634,6 +639,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           <% "channels" -> %>
             <.channels_tab
               channels={@channels}
+              rejections={@rejections}
               routes={@routes}
               can_manage={@can_manage_routes}
               setup_channel_id={@setup_channel_id}
@@ -968,6 +974,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   # --- Channels Tab ---
 
   attr :channels, :list, required: true
+  attr :rejections, :list, required: true
   attr :routes, :list, required: true
   attr :can_manage, :boolean, required: true
   attr :setup_channel_id, :any, required: true
@@ -1035,9 +1042,106 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         revealed={MapSet.member?(@revealed_channel_ids, channel.id)}
         confirm_action={@confirm_channel_action}
       />
+
+      <.rejection_log rejections={@rejections} channels={@channels} />
     </div>
     """
   end
+
+  # Deliveries that reached a route but became no customer message
+  # (spec-inbound-channels D6): sender, masked recipient, subject and the
+  # reason, kept 14 days. Bodies are never stored, so none are shown.
+  attr :rejections, :list, required: true
+  attr :channels, :list, required: true
+
+  defp rejection_log(assigns) do
+    channel_addresses = Map.new(assigns.channels, &{&1.id, &1.public_address})
+    assigns = assign(assigns, :channel_addresses, channel_addresses)
+
+    ~H"""
+    <details
+      class="rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-3"
+      data-testid="org-rejection-log"
+    >
+      <summary class="cursor-pointer text-sm font-medium text-gray-700 dark:text-zinc-300">
+        Rejected deliveries, last 14 days
+        <span class="text-gray-400 dark:text-zinc-500" data-testid="org-rejection-count">
+          ({length(@rejections)})
+        </span>
+      </summary>
+      <p class="mt-1 mb-3 text-xs text-gray-500 dark:text-zinc-400">
+        Mail that reached a route but did not become a conversation: auto-replies with no thread,
+        provider notices, copies of your own replies, and deliveries to a paused, revoked or
+        unknown address. Bodies are not kept.
+      </p>
+      <p
+        :if={@rejections == []}
+        class="text-sm text-gray-500 dark:text-zinc-400"
+        data-testid="org-rejection-empty"
+      >
+        Nothing rejected in the last 14 days.
+      </p>
+      <div :if={@rejections != []} class="overflow-x-auto">
+        <table class="min-w-full text-xs text-left" data-testid="org-rejection-table">
+          <thead class="text-gray-500 dark:text-zinc-400">
+            <tr>
+              <th class="pr-3 py-1 font-medium">When</th>
+              <th class="pr-3 py-1 font-medium">From</th>
+              <th class="pr-3 py-1 font-medium">Subject</th>
+              <th class="pr-3 py-1 font-medium">Reason</th>
+              <th class="pr-3 py-1 font-medium">Channel</th>
+            </tr>
+          </thead>
+          <tbody class="text-gray-700 dark:text-zinc-300 align-top">
+            <tr
+              :for={rejection <- @rejections}
+              class="border-t border-gray-100 dark:border-zinc-700"
+              data-testid={"rejection-#{rejection.id}"}
+            >
+              <td class="pr-3 py-1 whitespace-nowrap">
+                {Calendar.strftime(rejection.inserted_at, "%b %d %H:%M")}
+              </td>
+              <td class="pr-3 py-1 break-all">{rejection.sender_email || "unknown sender"}</td>
+              <td class="pr-3 py-1 break-words max-w-xs">{rejection.subject || "(no subject)"}</td>
+              <td class="pr-3 py-1 whitespace-nowrap" data-testid={"rejection-reason-#{rejection.id}"}>
+                {rejection_label(rejection.classification)}
+              </td>
+              <td class="pr-3 py-1 break-all">
+                {Map.get(@channel_addresses, rejection.inbound_channel_id) ||
+                  mask_recipient(rejection.recipient)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+    """
+  end
+
+  defp rejection_label(:no_channel), do: "no matching channel"
+  defp rejection_label(:channel_paused), do: "channel paused"
+  defp rejection_label(:channel_revoked), do: "channel revoked"
+  defp rejection_label(:auto_response), do: "auto-reply, no thread"
+  defp rejection_label(:provider_notice), do: "provider notice"
+  defp rejection_label(:own_echo), do: "copy of your own reply"
+  defp rejection_label(other), do: to_string(other)
+
+  # The recipient of a rejection is a route address, possibly carrying a
+  # channel token; the token stays masked here as it does on channel cards.
+  defp mask_recipient(recipient) when is_binary(recipient) do
+    case String.split(recipient, "@", parts: 2) do
+      [local, domain] ->
+        case String.split(local, "+", parts: 2) do
+          [base, _tag] -> "#{base}+…@#{domain}"
+          _plain -> "#{local}@#{domain}"
+        end
+
+      _other ->
+        recipient
+    end
+  end
+
+  defp mask_recipient(_recipient), do: "unknown address"
 
   attr :channel, InboundChannel, required: true
   attr :can_manage, :boolean, required: true

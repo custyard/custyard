@@ -91,9 +91,7 @@ defmodule Custyard.Email.ForwardUnwrapper do
     quoted = Enum.count(non_blank, &String.starts_with?(&1, ">"))
 
     if non_blank != [] and quoted * 2 > length(non_blank) do
-      lines
-      |> Enum.map(&Regex.replace(~r/^>\s?/, &1, ""))
-      |> Enum.join("\n")
+      Enum.map_join(lines, "\n", &Regex.replace(~r/^>\s?/, &1, ""))
     else
       block
     end
