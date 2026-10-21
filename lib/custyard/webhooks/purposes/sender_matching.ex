@@ -334,7 +334,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       in_reply_to: normalized.in_reply_to,
       is_internal_note: false,
       dedup_scope: dedup_scope,
-      to_addresses: to_addresses(normalized, metadata),
+      to_addresses: to_addresses(normalized, metadata, route_context),
       cc_addresses: cc_addresses(metadata)
     }
     |> put_present(:provider_delivery_id, provider_delivery_id(normalized))
@@ -352,17 +352,24 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   # The header To addresses, as the customer wrote them. The envelope
   # recipient is routing data: on a forwarding channel it is the secret
   # `local+token@domain` ingress address, which must not be shown to agents
-  # as the message's To. When the adapter supplied no header To, the
-  # delivery address stands in with its subaddress removed.
-  defp to_addresses(normalized, metadata) do
+  # as the message's To. Only redact a fallback that is the matched channel
+  # recipient; direct email and genuine header addresses keep their plus tags.
+  defp to_addresses(normalized, metadata, route_context) do
     case metadata[:to] do
       [_ | _] = to ->
-        Enum.filter(to, &is_binary/1)
+        bounded_addresses(to)
 
       _none ->
         case normalized[:to] do
-          to when is_binary(to) and to != "" -> [strip_subaddress(to)]
-          _other -> []
+          to when is_binary(to) and to != "" ->
+            recipient = Normalizer.presence(metadata[:recipient]) || to
+
+            if route_context[:channel_id] && to == recipient,
+              do: [strip_subaddress(to)],
+              else: [to]
+
+          _other ->
+            []
         end
     end
   end
@@ -374,8 +381,14 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     end
   end
 
-  defp cc_addresses(%{cc: cc}) when is_list(cc), do: Enum.filter(cc, &is_binary/1)
+  defp cc_addresses(%{cc: cc}) when is_list(cc), do: bounded_addresses(cc)
   defp cc_addresses(_metadata), do: []
+
+  # Message stores at most 50 addresses per header. Keep mail with longer
+  # recipient lists instead of rejecting the entire delivery at insertion.
+  defp bounded_addresses(addresses) do
+    addresses |> Enum.filter(&is_binary/1) |> Enum.take(50)
+  end
 
   # Stored string-keyed; omitted when the adapter learned nothing.
   defp authentication(%{} = auth) do

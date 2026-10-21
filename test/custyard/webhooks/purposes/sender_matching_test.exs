@@ -1,12 +1,32 @@
 defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
   use Custyard.DataCase, async: true
 
+  alias Custyard.Webhooks.Adapters.Email
   alias Custyard.Webhooks.Purposes.SenderMatching
   alias Custyard.{Message, Repo}
 
   import Custyard.Factory
 
   describe "process/2" do
+    test "direct email preserves a legitimate plus tag in the To header" do
+      org = insert_organization()
+
+      {:ok, normalized} =
+        Email.normalize(%{
+          from: "alice@customer.example.com",
+          to: "support+billing@example.com",
+          subject: "Billing question",
+          text: "Please help with billing",
+          message_id: "plus-tag@example.com"
+        })
+
+      assert {:ok, conversation} =
+               SenderMatching.process(normalized, %{organization_id: org.id})
+
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert message.to_addresses == ["support+billing@example.com"]
+    end
+
     test "creates new conversation and message for new sender" do
       org = insert_organization(domain: "acme.example.com")
 
