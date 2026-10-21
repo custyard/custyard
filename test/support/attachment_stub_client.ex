@@ -13,6 +13,9 @@ defmodule Custyard.Attachments.StubClient do
   def put(url, body) when is_binary(url) and is_binary(body),
     do: Agent.update(__MODULE__, &Map.put(&1, url, {:ok, body}))
 
+  def on_fetch(url, fun) when is_function(fun, 1),
+    do: Agent.update(__MODULE__, &Map.put(&1, url, fun))
+
   def fail(url, reason) when is_binary(url),
     do: Agent.update(__MODULE__, &Map.put(&1, url, {:error, reason}))
 
@@ -23,6 +26,7 @@ defmodule Custyard.Attachments.StubClient do
   def fetch(url, max_bytes) do
     case Agent.get(__MODULE__, &Map.get(&1, url)) do
       {:ok, body} when byte_size(body) > max_bytes -> {:error, :too_large}
+      callback when is_function(callback, 1) -> callback.(max_bytes)
       nil -> {:error, :not_stubbed}
       result -> result
     end
