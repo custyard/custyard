@@ -56,7 +56,7 @@ defmodule Custyard.MixProject do
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
-      {:gettext, "~> 0.20"},
+      {:gettext, "~> 1.0"},
       {:dns_cluster, "~> 0.3.1"},
       {:argon2_elixir, "~> 4.0"},
       {:swoosh, "~> 1.5"},
