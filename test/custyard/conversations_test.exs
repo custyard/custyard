@@ -818,6 +818,17 @@ defmodule Custyard.ConversationsTest do
       assert message.cc_addresses == ["boss@example.com", "ops@example.com"]
     end
 
+    test "public intake cannot accept CC recipients even through the context", %{
+      conversation: conv
+    } do
+      conv |> Ecto.Changeset.change(source: :public_intake) |> Repo.update!()
+      # Pass the old snapshot to exercise the transaction's current-source gate.
+      assert {:ok, reply} =
+               Conversations.send_reply(conv, "Private reply", cc: ["other@example.com"])
+
+      assert reply.cc_addresses == []
+    end
+
     test "rejects an invalid CC address before writing anything", %{conversation: conv} do
       before = Repo.aggregate(Message, :count)
 

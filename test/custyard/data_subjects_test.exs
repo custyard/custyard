@@ -90,4 +90,72 @@ defmodule Custyard.DataSubjectsTest do
     assert event.payload == %{"erased" => 2, "sent_by_subject" => 1}
     refute inspect(event) =~ "pat@example.com"
   end
+
+  test "sender wildcard characters are literal and matching roles agree", ctx do
+    exact =
+      insert_message(
+        conversation_id: ctx.cc.conversation_id,
+        sender_email: " Person <a_%!@example.com> "
+      )
+
+    unrelated =
+      insert_message(
+        conversation_id: ctx.cc.conversation_id,
+        sender_email: "Person <aZanything!@example.com>"
+      )
+
+    recipient =
+      insert_message(
+        conversation_id: ctx.cc.conversation_id,
+        sender_email: "someone@example.com",
+        cc_addresses: [" A_%!@example.com "]
+      )
+
+    found = DataSubjects.participations("a_%!@example.com", ctx.org.id)
+
+    assert Map.new(found, &{&1.message.id, &1.roles}) == %{
+             exact.id => [:sender],
+             recipient.id => [:cc]
+           }
+
+    refute Enum.any?(found, &(&1.message.id == unrelated.id))
+
+    assert {:ok, %{erased: 1, sent_by_subject: 1}} =
+             DataSubjects.erase_participation("a_%!@example.com", ctx.org.id)
+
+    assert Repo.get!(Message, recipient.id).cc_addresses == []
+  end
+
+  test "successive subject erasures preserve each other's recipient removals", ctx do
+    assert {:ok, _} = DataSubjects.erase_participation("pat@example.com", ctx.org.id)
+
+    assert {:ok, %{erased: 1, sent_by_subject: 0}} =
+             DataSubjects.erase_participation("boss@customer.example", ctx.org.id)
+
+    assert Repo.get!(Message, ctx.cc.id).cc_addresses == []
+
+    assert {:ok, %{erased: 0, sent_by_subject: 1}} =
+             DataSubjects.erase_participation("pat@example.com", ctx.org.id)
+  end
+
+  test "audit insert failure rolls back recipient erasure", ctx do
+    # Force the actual database write to fail rather than replacing the audit
+    # module; this proves the message updates and audit share a transaction.
+    Repo.query!("""
+    CREATE TRIGGER reject_dsar_audit BEFORE INSERT ON audit_events
+    WHEN NEW.event_type = 'data_subject_erasure'
+    BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END
+    """)
+
+    try do
+      assert_raise Exqlite.Error, fn ->
+        DataSubjects.erase_participation("pat@example.com", ctx.org.id)
+      end
+
+      assert Repo.get!(Message, ctx.cc.id).cc_addresses == ctx.cc.cc_addresses
+      assert Repo.get!(Message, ctx.reply_to.id).reply_to == "pat@example.com"
+    after
+      Repo.query!("DROP TRIGGER reject_dsar_audit")
+    end
+  end
 end

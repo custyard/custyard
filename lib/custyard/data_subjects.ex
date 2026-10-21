@@ -27,7 +27,11 @@ defmodule Custyard.DataSubjects do
 
   alias Custyard.{AuditEvent, Conversation, EmailAddress, Message, Repo}
 
-  require Logger
+  # The recipient arrays are JSON text on SQLite and native arrays on
+  # Postgres, so the containment test is adapter-specific. The adapter is
+  # compile-time configuration (see Custyard.Repo).
+  @postgres? Application.compile_env(:custyard, :repo_adapter, Ecto.Adapters.SQLite3) ==
+               Ecto.Adapters.Postgres
 
   @type role :: :sender | :to | :cc | :reply_to
 
@@ -47,6 +51,7 @@ defmodule Custyard.DataSubjects do
     |> Enum.map(fn {message, conversation} ->
       %{message: message, conversation: conversation, roles: roles(message, email)}
     end)
+    |> Enum.reject(&(&1.roles == []))
   end
 
   @doc "Export for a data subject request. See the moduledoc for what is included."
@@ -83,19 +88,29 @@ defmodule Custyard.DataSubjects do
   """
   def erase_participation(email, organization_id) when is_binary(email) do
     email = normalize(email)
-    found = participations(email, organization_id)
 
-    {sent, received} = Enum.split_with(found, fn %{roles: roles} -> :sender in roles end)
+    # Acquire SQLite's write reservation before reading, or lock matching
+    # PostgreSQL rows. Concurrent erasures must never overwrite one another's
+    # recipient changes from a stale message snapshot.
+    Repo.transaction(
+      fn ->
+        query = participation_query(email, organization_id)
+        query = if @postgres?, do: lock(query, "FOR UPDATE"), else: query
 
-    erased =
-      Repo.transaction(fn ->
-        Enum.count(received, fn %{message: message} -> scrub!(message, email) end)
-      end)
+        {sent, received} =
+          query
+          |> Repo.all()
+          |> Enum.reject(fn {message, _conversation} -> roles(message, email) == [] end)
+          |> Enum.split_with(fn {message, _conversation} ->
+            sender_matches?(message.sender_email, email)
+          end)
 
-    with {:ok, count} <- erased do
-      audit(organization_id, count, length(sent))
-      {:ok, %{erased: count, sent_by_subject: length(sent)}}
-    end
+        count = Enum.count(received, fn {message, _conversation} -> scrub!(message, email) end)
+        audit!(organization_id, count, length(sent))
+        %{erased: count, sent_by_subject: length(sent)}
+      end,
+      if(@postgres?, do: [], else: [mode: :immediate])
+    )
   end
 
   defp scrub!(%Message{} = message, email) do
@@ -127,19 +142,13 @@ defmodule Custyard.DataSubjects do
 
   # sender_email is stored as the adapter delivered it: bare, or `Name <addr>`.
   defp sender_matches?(sender, email) when is_binary(sender) do
-    sender = String.downcase(sender)
+    sender = normalize(sender)
     sender == email or String.ends_with?(sender, "<#{email}>")
   end
 
   defp sender_matches?(_sender, _email), do: false
 
   defp normalize(email), do: email |> String.trim() |> String.downcase()
-
-  # The recipient arrays are JSON text on SQLite and native arrays on
-  # Postgres, so the containment test is adapter-specific. The adapter is
-  # compile-time configuration (see Custyard.Repo).
-  @postgres? Application.compile_env(:custyard, :repo_adapter, Ecto.Adapters.SQLite3) ==
-               Ecto.Adapters.Postgres
 
   defp participation_query(email, organization_id) do
     base =
@@ -156,42 +165,57 @@ defmodule Custyard.DataSubjects do
   end
 
   defp postgres_participant(query, email) do
-    pattern = "%<#{email}>"
+    pattern = "%<#{escape_like(email)}>"
 
     where(
       query,
       [m],
-      fragment("lower(?) = ?", m.sender_email, ^email) or
-        fragment("lower(?) LIKE ?", m.sender_email, ^pattern) or
-        fragment("lower(?) = ?", m.reply_to, ^email) or
-        fragment("EXISTS (SELECT 1 FROM unnest(?) a WHERE lower(a) = ?)", m.to_addresses, ^email) or
-        fragment("EXISTS (SELECT 1 FROM unnest(?) a WHERE lower(a) = ?)", m.cc_addresses, ^email)
-    )
-  end
-
-  defp sqlite_participant(query, email) do
-    pattern = "%<#{email}>"
-
-    where(
-      query,
-      [m],
-      fragment("lower(?) = ?", m.sender_email, ^email) or
-        fragment("lower(?) LIKE ?", m.sender_email, ^pattern) or
-        fragment("lower(?) = ?", m.reply_to, ^email) or
+      fragment("lower(trim(?)) = ?", m.sender_email, ^email) or
+        fragment("lower(trim(?)) LIKE ? ESCAPE '!'", m.sender_email, ^pattern) or
+        fragment("lower(trim(?)) = ?", m.reply_to, ^email) or
         fragment(
-          "EXISTS (SELECT 1 FROM json_each(?) WHERE lower(value) = ?)",
+          "EXISTS (SELECT 1 FROM unnest(?) a WHERE lower(trim(a)) = ?)",
           m.to_addresses,
           ^email
         ) or
         fragment(
-          "EXISTS (SELECT 1 FROM json_each(?) WHERE lower(value) = ?)",
+          "EXISTS (SELECT 1 FROM unnest(?) a WHERE lower(trim(a)) = ?)",
           m.cc_addresses,
           ^email
         )
     )
   end
 
-  defp audit(organization_id, erased, sent_by_subject) do
+  defp sqlite_participant(query, email) do
+    pattern = "%<#{escape_like(email)}>"
+
+    where(
+      query,
+      [m],
+      fragment("lower(trim(?)) = ?", m.sender_email, ^email) or
+        fragment("lower(trim(?)) LIKE ? ESCAPE '!'", m.sender_email, ^pattern) or
+        fragment("lower(trim(?)) = ?", m.reply_to, ^email) or
+        fragment(
+          "EXISTS (SELECT 1 FROM json_each(?) WHERE lower(trim(value)) = ?)",
+          m.to_addresses,
+          ^email
+        ) or
+        fragment(
+          "EXISTS (SELECT 1 FROM json_each(?) WHERE lower(trim(value)) = ?)",
+          m.cc_addresses,
+          ^email
+        )
+    )
+  end
+
+  defp escape_like(email) do
+    email
+    |> String.replace("!", "!!")
+    |> String.replace("%", "!%")
+    |> String.replace("_", "!_")
+  end
+
+  defp audit!(organization_id, erased, sent_by_subject) do
     attrs = %{
       event_type: :data_subject_erasure,
       source: "dsar",
@@ -204,8 +228,7 @@ defmodule Custyard.DataSubjects do
         :ok
 
       {:error, changeset} ->
-        Logger.error("DSAR audit event failed: #{inspect(Keyword.keys(changeset.errors))}")
-        :ok
+        Repo.rollback(changeset)
     end
   end
 

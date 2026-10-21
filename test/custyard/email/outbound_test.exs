@@ -70,8 +70,32 @@ defmodule Custyard.Email.OutboundTest do
       # Verify persisted in DB
       reloaded = Repo.get!(Message, msg.id)
       assert reloaded.delivery_status == :sent
+      assert reloaded.to_addresses == ["alice@customer.com"]
       # Swoosh.Adapters.Test returns no provider id
       assert reloaded.lettermint_message_id == nil
+    end
+
+    test "stale queued message cannot restore a DSAR-erased CC", %{operator_msg: msg, org: org} do
+      stale =
+        msg |> Message.changeset(%{cc_addresses: ["bystander@example.com"]}) |> Repo.update!()
+
+      assert {:ok, %{erased: 1}} =
+               Custyard.DataSubjects.erase_participation("bystander@example.com", org.id)
+
+      assert {:ok, sent} = Outbound.deliver(stale)
+      assert sent.cc_addresses == []
+      assert Repo.get!(Message, msg.id).cc_addresses == []
+      assert_email_sent(fn email -> assert email.cc == [] end)
+    end
+
+    test "stores the actual Reply-To target for later redaction", %{
+      operator_msg: msg,
+      customer_msg: incoming
+    } do
+      incoming |> Message.changeset(%{reply_to: "delegate@example.com"}) |> Repo.update!()
+      assert {:ok, sent} = Outbound.deliver(msg)
+      assert sent.to_addresses == ["delegate@example.com"]
+      assert Repo.get!(Message, msg.id).to_addresses == ["delegate@example.com"]
     end
 
     test "captures the provider message id from the delivery response", %{operator_msg: msg} do
@@ -199,6 +223,21 @@ defmodule Custyard.Email.OutboundTest do
   end
 
   describe "compose/4" do
+    test "public intake ignores CC even on legacy pending messages", %{
+      conversation: conv,
+      operator_msg: msg
+    } do
+      email =
+        Outbound.compose(
+          %{msg | cc_addresses: ["other@example.com"]},
+          %{conv | source: :public_intake},
+          "alice@customer.com",
+          {"Support", "help@example.com"}
+        )
+
+      assert email.cc == []
+    end
+
     test "carries the reply's CC list, never the recipient twice", %{conversation: conv} do
       msg =
         insert_message(

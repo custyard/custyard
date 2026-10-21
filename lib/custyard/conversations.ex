@@ -758,6 +758,7 @@ defmodule Custyard.Conversations do
 
       # Recipient and consent decisions use the row and associations read after
       # acquiring the scope lock, never the LiveView's earlier snapshot.
+      opts = if conversation.source == :public_intake, do: Keyword.put(opts, :cc, []), else: opts
       deliverable? = reply_deliverable?(conversation)
       attempt_delivery? = deliverable? or conversation.source != :public_intake
 
