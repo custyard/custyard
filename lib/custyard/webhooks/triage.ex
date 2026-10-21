@@ -111,6 +111,7 @@ defmodule Custyard.Webhooks.Triage do
             join: c in Conversation,
             on: c.id == m.conversation_id,
             where: m.source == :operator,
+            where: is_nil(m.triage_class) or m.triage_class != :operator_sent,
             where: m.message_id in ^candidates,
             where: c.organization_id == ^organization_id,
             order_by: [asc: m.id],

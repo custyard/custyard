@@ -102,15 +102,15 @@ defmodule Custyard.Webhooks.Dispatcher do
       case resolve_channel(route, normalized) do
         {:ok, channel} ->
           case triage_and_process(route, normalized, channel) do
-            {:ok, conversation} = stored ->
-              context = route_context(route, channel, :customer)
+            {{:ok, conversation} = stored, class} when class != :auto_response ->
+              context = route_context(route, channel, class)
 
               case Purposes.Attachments.process(conversation, normalized, context) do
                 :ok -> stored
                 {:error, _reason} = error -> error
               end
 
-            other ->
+            {other, _class} ->
               other
           end
 
@@ -170,28 +170,33 @@ defmodule Custyard.Webhooks.Dispatcher do
   # --- Stage 2: triage (D6) ---
 
   defp triage_and_process(route, normalized, channel) do
-    case Triage.classify(normalized, route, channel) do
-      {:own_echo, message} ->
-        handle_own_echo(route, normalized, channel, message)
+    classification = Triage.classify(normalized, route, channel)
 
-      {:operator_sent, info} ->
-        handle_operator_sent(route, normalized, channel, info)
+    result =
+      case classification do
+        {:own_echo, message} ->
+          handle_own_echo(route, normalized, channel, message)
 
-      {:operator_forward, info} ->
-        handle_operator_forward(route, normalized, channel, info)
+        {:operator_sent, info} ->
+          handle_operator_sent(route, normalized, channel, info)
 
-      {:verification, capture} ->
-        handle_verification(route, normalized, channel, capture)
+        {:operator_forward, info} ->
+          handle_operator_forward(route, normalized, channel, info)
 
-      {:auto_response, reason} ->
-        handle_auto_response(route, normalized, channel, reason)
+        {:verification, capture} ->
+          handle_verification(route, normalized, channel, capture)
 
-      {:suspect, _reason} ->
-        process_customer(route, normalized, channel, :suspect)
+        {:auto_response, reason} ->
+          handle_auto_response(route, normalized, channel, reason)
 
-      {:customer, nil} ->
-        process_customer(route, normalized, channel, :customer)
-    end
+        {:suspect, _reason} ->
+          process_customer(route, normalized, channel, :suspect)
+
+        {:customer, nil} ->
+          process_customer(route, normalized, channel, :customer)
+      end
+
+    {result, elem(classification, 0)}
   end
 
   # Custyard's own reply forwarded back by the operator's mailbox (D4): the

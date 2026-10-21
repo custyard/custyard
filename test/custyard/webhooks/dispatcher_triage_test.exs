@@ -81,7 +81,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
 
   defp rejections(route), do: InboundChannels.list_rejections_for_route(route.id)
 
-  # The attachment purpose runs in a supervised task; poll for its rows.
+  # Attachment processing completes before dispatch returns; this helper also
+  # supports older asynchronous fixture setup.
   defp wait_for_attachments(message_id, attempts \\ 100) do
     case Attachments.list_for_message(message_id) do
       [] when attempts > 0 ->
@@ -162,6 +163,62 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert reloaded.last_operator_action_at
       refute_receive {:new_message, _id}, 100
       assert Repo.aggregate(Custyard.Contact, :count) == 1
+    end
+
+    test "an operator mailbox retry resumes failed attachments instead of becoming an own echo",
+         %{
+           org: org,
+           route: route
+         } do
+      channel = channel!(route)
+
+      insert_operator_account(
+        role: "admin",
+        organization_id: org.id,
+        email: "me@acme.example.com"
+      )
+
+      conversation = insert_conversation(organization_id: org.id, state: :resolved)
+
+      insert_message(
+        conversation_id: conversation.id,
+        message_id: "<mailbox-original@example.com>"
+      )
+
+      url = StubClient.unique_url()
+      StubClient.fail(url, :timeout)
+
+      payload =
+        operator_delivery(InboundChannels.ingress_address(channel), %{
+          in_reply_to: "<mailbox-original@example.com>"
+        })
+        |> put_metadata(%{
+          attachments: [
+            %{
+              filename: "reply.txt",
+              content_type: "text/plain",
+              size: 5,
+              content_id: nil,
+              url: url
+            }
+          ]
+        })
+
+      assert {:error, :attachment_fetch_failed} = Dispatcher.dispatch(route, payload)
+
+      message =
+        Repo.get_by!(Message, conversation_id: conversation.id, triage_class: :operator_sent)
+
+      assert [%{state: :failed} = attachment] = Attachments.list_for_message(message.id)
+
+      StubClient.put(url, "hello")
+      assert {:ok, returned} = Dispatcher.dispatch(route, payload)
+      assert returned.id == conversation.id
+      assert [%{state: :fetched, id: id}] = Attachments.list_for_message(message.id)
+      assert id == attachment.id
+
+      assert Repo.aggregate(from(m in Message, where: m.triage_class == :operator_sent), :count) ==
+               1
     end
 
     test "a manual forward creates the conversation for the original sender", %{
@@ -532,7 +589,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
   end
 
   describe "auto-response" do
-    test "is appended to its thread without reactivation or notification", %{
+    test "is appended without reactivation, notification, or attachment downloads", %{
       org: org,
       route: route
     } do
@@ -565,8 +622,31 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           headers: %{"Auto-Submitted" => "auto-replied"}
         })
 
+      url = StubClient.unique_url()
+      test_process = self()
+
+      StubClient.on_fetch(url, fn _limit ->
+        send(test_process, :auto_response_attachment_fetched)
+        {:error, :timeout}
+      end)
+
+      payload =
+        put_metadata(payload, %{
+          attachments: [
+            %{
+              filename: "bounce.txt",
+              content_type: "text/plain",
+              size: 5,
+              content_id: nil,
+              url: url
+            }
+          ]
+        })
+
       assert {:ok, returned} = Dispatcher.dispatch(route, payload)
       assert returned.id == conversation.id
+      refute_received :auto_response_attachment_fetched
+      assert Repo.all(MessageAttachment) == []
 
       reloaded = Repo.reload!(conversation)
       assert reloaded.state == :waiting
