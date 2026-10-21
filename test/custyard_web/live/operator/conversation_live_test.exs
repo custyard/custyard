@@ -4,8 +4,9 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
+  alias Custyard.Attachments.StubClient
   alias Custyard.Email.Outbound
-  alias Custyard.{Conversations, OperatorAccount, Repo, Scoring}
+  alias Custyard.{Attachments, Conversations, OperatorAccount, Repo, Scoring}
 
   setup %{conn: conn} do
     # Create and authenticate an operator
@@ -57,16 +58,16 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       conv = insert_conversation(organization_id: org.id)
       message = insert_message(conversation_id: conv.id, body: "See attached")
 
-      url = Custyard.Attachments.StubClient.unique_url()
-      Custyard.Attachments.StubClient.put(url, "hello")
+      url = StubClient.unique_url()
+      StubClient.put(url, "hello")
 
       {:ok, [fetched]} =
-        Custyard.Attachments.fetch_for_message(message, [
+        Attachments.fetch_for_message(message, [
           %{filename: "notes.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
         ])
 
       {:ok, [skipped]} =
-        Custyard.Attachments.fetch_for_message(
+        Attachments.fetch_for_message(
           message,
           [
             %{
@@ -129,6 +130,86 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "Acme Corp"
       assert html =~ "Alice"
       assert html =~ "alice@acme.com"
+    end
+  end
+
+  describe "reply-all CC in the composer (D5)" do
+    setup do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example")
+      route = insert_inbound_route(organization_id: org.id, source: :lettermint)
+
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "help@acme.example",
+          state: :active
+        )
+
+      conv =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          inbound_channel_id: channel.id
+        )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "Alice <alice@customer.example>",
+        to_addresses: ["help@acme.example", "ops@customer.example"],
+        cc_addresses: ["boss@customer.example", "Help@Acme.example"],
+        triage_class: :customer,
+        body: "Looping in my team"
+      )
+
+      %{conv: conv}
+    end
+
+    test "starts from the customer's To and CC minus our own addresses", %{
+      conn: conn,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(
+               view,
+               ~s(input[data-testid="operator-reply-cc"][value="boss@customer.example, ops@customer.example"])
+             )
+    end
+
+    test "an edited CC list is what the reply carries", %{conn: conn, conv: conv} do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Reply to all", cc: "boss@customer.example")
+      |> render_submit()
+
+      [reply] =
+        Conversations.list_public_messages(conv.id) |> Enum.filter(&(&1.source == :operator))
+
+      assert reply.cc_addresses == ["boss@customer.example"]
+      assert has_element?(view, ~s([data-testid="operator-message-cc"]), "boss@customer.example")
+    end
+
+    test "an invalid CC address blocks the send with a flash", %{conn: conn, conv: conv} do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      html =
+        view
+        |> form("form[phx-submit=send_reply]", body: "Oops", cc: "not an address")
+        |> render_submit()
+
+      assert html =~ "Invalid CC address: not an address"
+      assert Enum.all?(Conversations.list_public_messages(conv.id), &(&1.source != :operator))
+    end
+
+    test "prospect conversations have no CC field", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, source: :public_intake)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      refute has_element?(view, ~s([data-testid="operator-reply-cc"]))
     end
   end
 

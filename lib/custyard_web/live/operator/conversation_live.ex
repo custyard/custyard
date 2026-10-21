@@ -16,6 +16,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   import CustyardWeb.FormHelpers
 
   alias Custyard.{
+    Attachments,
     Authorization,
     Conversation,
     Conversations,
@@ -122,6 +123,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:conversation, conversation)
       |> assign_reply_delivery(conversation)
       |> assign_reply_identity(conversation)
+      |> assign(:reply_cc_edited?, false)
+      |> assign_reply_cc(conversation)
       |> assign(:breakdown, breakdown)
       |> assign(:neglect_status, neglect_status)
       |> assign(:other_conversations, other_conversations)
@@ -148,16 +151,21 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   @impl true
-  def handle_event("send_reply", %{"body" => body}, socket) when byte_size(body) > 0 do
+  def handle_event("send_reply", %{"body" => body} = params, socket) when byte_size(body) > 0 do
     conversation = socket.assigns.conversation
     operator = socket.assigns.current_operator
 
     case Conversations.send_reply(conversation, body,
            operator: operator,
-           operator_email: operator.email
+           operator_email: operator.email,
+           cc: Map.get(params, "cc", socket.assigns.reply_cc)
          ) do
       {:ok, message} ->
-        socket = socket |> assign(:reply_text, "") |> reload_conversation()
+        socket =
+          socket
+          |> assign(:reply_text, "")
+          |> assign(:reply_cc_edited?, false)
+          |> reload_conversation()
 
         socket =
           cond do
@@ -187,6 +195,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
+
+      {:error, {:invalid_cc, :too_many}} ->
+        {:noreply, put_flash(socket, :error, "At most 20 CC addresses")}
+
+      {:error, {:invalid_cc, invalid}} ->
+        {:noreply, put_flash(socket, :error, "Invalid CC address: #{Enum.join(invalid, ", ")}")}
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "Failed to send reply")}
@@ -268,8 +282,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
-  def handle_event("update_reply", %{"body" => body}, socket) do
-    {:noreply, assign(socket, :reply_text, body)}
+  def handle_event("update_reply", %{"body" => body} = params, socket) do
+    socket = assign(socket, :reply_text, body)
+
+    case Map.fetch(params, "cc") do
+      {:ok, cc} when is_binary(cc) ->
+        {:noreply, socket |> assign(:reply_cc, cc) |> assign(:reply_cc_edited?, true)}
+
+      _no_cc ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("update_note", %{"body" => body}, socket) do
@@ -701,6 +723,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           |> assign(:conversation, conversation)
           |> assign_reply_delivery(conversation)
           |> assign_reply_identity(conversation)
+          |> assign_reply_cc(conversation)
           |> assign(:breakdown, breakdown)
           |> assign(:neglect_status, neglect_status)
           |> assign(:other_conversations, other_conversations)
@@ -722,7 +745,21 @@ defmodule CustyardWeb.Operator.ConversationLive do
     |> assign(:reply_will_email?, reply_delivery in [:contact, :prospect_opted_in])
   end
 
-  # Unlinked (nil-org) conversations have no sibling org conversations to list.
+  # Reply-all CC the composer starts from (spec-inbound-channels D5). A list
+  # the operator has edited survives a reload triggered by an incoming
+  # message; an untouched one follows the latest customer message.
+  defp assign_reply_cc(%{assigns: %{reply_cc_edited?: true}} = socket, _conversation),
+    do: socket
+
+  defp assign_reply_cc(socket, conversation) do
+    cc =
+      Conversations.default_reply_cc(conversation,
+        operator_email: socket.assigns.current_operator.email
+      )
+
+    assign(socket, :reply_cc, Enum.join(cc, ", "))
+  end
+
   # The From identity the next reply will carry (spec-inbound-channels D3).
   # The platform fallback has no address of its own on the conversation, so
   # the configured instance sender is shown instead.
@@ -919,28 +956,47 @@ defmodule CustyardWeb.Operator.ConversationLive do
           <form
             id="operator-reply-form"
             phx-submit="send_reply"
-            class="flex gap-2"
+            phx-change="update_reply"
+            class="space-y-1.5"
             data-testid="operator-reply-form"
           >
-            <textarea
-              name="body"
-              rows="2"
-              phx-change="update_reply"
-              phx-hook="CtrlEnterSubmit"
-              id="operator-reply-textarea"
-              placeholder="Reply to customer... (Ctrl+Enter to send)"
-              aria-label="Reply to customer"
-              data-testid="operator-reply-input"
-              class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y dark:bg-zinc-700 dark:text-zinc-100"
-            >{@reply_text}</textarea>
-            <button
-              type="submit"
-              phx-disable-with="Sending..."
-              class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
-              data-testid="operator-reply-submit"
+            <%!-- Reply-all CC (spec-inbound-channels D5): visible and editable;
+            hidden for prospect conversations, which never carry a CC. --%>
+            <label
+              :if={@conversation.source != :public_intake}
+              class="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400"
             >
-              Send
-            </button>
+              <span class="w-6">CC</span>
+              <input
+                type="text"
+                name="cc"
+                value={@reply_cc}
+                placeholder="Nobody else"
+                aria-label="CC addresses, comma separated"
+                data-testid="operator-reply-cc"
+                class="flex-1 border border-gray-200 dark:border-zinc-600 rounded px-2 py-1 text-xs dark:bg-zinc-700 dark:text-zinc-100"
+              />
+            </label>
+            <div class="flex gap-2">
+              <textarea
+                name="body"
+                rows="2"
+                phx-hook="CtrlEnterSubmit"
+                id="operator-reply-textarea"
+                placeholder="Reply to customer... (Ctrl+Enter to send)"
+                aria-label="Reply to customer"
+                data-testid="operator-reply-input"
+                class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y dark:bg-zinc-700 dark:text-zinc-100"
+              >{@reply_text}</textarea>
+              <button
+                type="submit"
+                phx-disable-with="Sending..."
+                class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
+                data-testid="operator-reply-submit"
+              >
+                Send
+              </button>
+            </div>
           </form>
 
           <form
@@ -1454,6 +1510,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
           {@message.body}
         </div>
         <.attachment_list :if={not @is_deleted} attachments={message_attachments(@message)} />
+        <p
+          :if={
+            @is_operator and not @is_internal and not @is_deleted and
+              @message.cc_addresses not in [nil, []]
+          }
+          class="mt-1 text-xs text-gray-400 dark:text-zinc-500 break-all"
+          data-testid="operator-message-cc"
+        >
+          CC {Enum.join(@message.cc_addresses, ", ")}
+        </p>
         <.message_details :if={@show_details} message={@message} />
       </div>
     </div>
@@ -1488,7 +1554,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
             {att.filename || "attachment"}
           </a>
           <span class="text-gray-400 dark:text-zinc-500">
-            {Custyard.Attachments.format_bytes(att.size)}
+            {Attachments.format_bytes(att.size)}
           </span>
         <% else %>
           <span

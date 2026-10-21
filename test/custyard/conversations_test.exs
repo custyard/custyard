@@ -706,6 +706,83 @@ defmodule Custyard.ConversationsTest do
     end
   end
 
+  describe "default_reply_cc/2" do
+    setup do
+      org = insert_organization(name: "CC Corp")
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example")
+      route = insert_inbound_route(organization_id: org.id, source: :lettermint)
+
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "help@acme.example",
+          state: :active
+        )
+
+      conv =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          inbound_channel_id: channel.id
+        )
+
+      %{conv: conv, channel: channel}
+    end
+
+    test "returns the latest customer message's To and CC minus our side", %{
+      conv: conv,
+      channel: channel
+    } do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "Alice <alice@customer.example>",
+        reply_to: "alice-alt@customer.example",
+        to_addresses: ["help@acme.example", Custyard.InboundChannels.ingress_address(channel)],
+        cc_addresses: ["Boss@customer.example", "alice-alt@customer.example", "me@acme.example"],
+        triage_class: :customer
+      )
+
+      assert Conversations.default_reply_cc(conv, operator_email: "me@acme.example") ==
+               ["boss@customer.example"]
+    end
+
+    test "ignores auto-responses and suspect messages", %{conv: conv} do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "alice@customer.example",
+        cc_addresses: ["real@customer.example"],
+        triage_class: :customer
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "noreply@spammer.example",
+        cc_addresses: ["victim@elsewhere.example"],
+        triage_class: :auto_response
+      )
+
+      assert Conversations.default_reply_cc(conv) == ["real@customer.example"]
+    end
+
+    test "is empty without an email message, and always for prospects" do
+      org = insert_organization()
+      assert Conversations.default_reply_cc(insert_conversation(organization_id: org.id)) == []
+
+      prospect_conv = insert_conversation(organization_id: org.id, source: :public_intake)
+
+      insert_message(
+        conversation_id: prospect_conv.id,
+        source: :email,
+        cc_addresses: ["x@example.com"]
+      )
+
+      assert Conversations.default_reply_cc(prospect_conv) == []
+    end
+  end
+
   describe "send_reply/3" do
     setup do
       org = insert_organization(name: "Reply Corp")
@@ -730,6 +807,29 @@ defmodule Custyard.ConversationsTest do
         )
 
       {:ok, org: org, contact: contact, conversation: conversation}
+    end
+
+    test "stores a normalised CC list on the reply", %{conversation: conv} do
+      {:ok, message} =
+        Conversations.send_reply(conv, "Looping in",
+          cc: " Boss@Example.com, boss@example.com;ops@example.com "
+        )
+
+      assert message.cc_addresses == ["boss@example.com", "ops@example.com"]
+    end
+
+    test "rejects an invalid CC address before writing anything", %{conversation: conv} do
+      before = Repo.aggregate(Message, :count)
+
+      assert {:error, {:invalid_cc, ["nope"]}} =
+               Conversations.send_reply(conv, "Looping in", cc: ["ok@example.com", "nope"])
+
+      assert Repo.aggregate(Message, :count) == before
+    end
+
+    test "rejects more than 20 CC addresses", %{conversation: conv} do
+      cc = for n <- 1..21, do: "p#{n}@example.com"
+      assert {:error, {:invalid_cc, :too_many}} = Conversations.send_reply(conv, "Hi", cc: cc)
     end
 
     test "creates a message with correct attributes", %{conversation: conv} do

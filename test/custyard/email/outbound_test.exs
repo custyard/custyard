@@ -199,6 +199,25 @@ defmodule Custyard.Email.OutboundTest do
   end
 
   describe "compose/4" do
+    test "carries the reply's CC list, never the recipient twice", %{conversation: conv} do
+      msg =
+        insert_message(
+          conversation_id: conv.id,
+          source: :operator,
+          body: "Reply all",
+          delivery_status: :pending,
+          cc_addresses: ["boss@customer.com", "Alice@customer.com"]
+        )
+
+      email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
+      assert email.cc == [{"", "boss@customer.com"}]
+    end
+
+    test "has no CC header when the reply carries none", %{operator_msg: msg, conversation: conv} do
+      email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
+      assert email.cc == []
+    end
+
     test "builds email struct without delivering", %{operator_msg: msg, conversation: conv} do
       email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
 

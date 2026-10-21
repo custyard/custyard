@@ -3,7 +3,7 @@ defmodule Custyard.Conversations do
   Context for conversation queries and operations.
   """
 
-  alias Custyard.{Conversation, Message, OperatorAccess, OperatorAccount, Repo}
+  alias Custyard.{Conversation, EmailAddress, Message, OperatorAccess, OperatorAccount, Repo}
   alias Custyard.Email.OutboundQueue
   import Ecto.Query
 
@@ -611,6 +611,10 @@ defmodule Custyard.Conversations do
       platform address)
     * `:operator` - operator account whose current organization scope must be
       locked and authorized before the reply is inserted
+    * `:cc` - CC addresses (list or comma-separated string); each must be a
+      valid address, at most 20, or `{:error, {:invalid_cc, ...}}` is returned
+      before anything is written. See `default_reply_cc/2` for the list the
+      composer starts from
 
   ## Returns
 
@@ -623,10 +627,120 @@ defmodule Custyard.Conversations do
 
   """
   def send_reply(conversation, body, opts \\ []) do
-    conversation
-    |> reply_transaction(body, opts)
-    |> handle_reply_transaction()
+    with {:ok, cc} <- normalize_cc(Keyword.get(opts, :cc, [])) do
+      conversation
+      |> reply_transaction(body, Keyword.put(opts, :cc, cc))
+      |> handle_reply_transaction()
+    end
   end
+
+  @max_cc 20
+
+  # CC addresses the operator typed or accepted: trimmed, lowercased, unique,
+  # each a valid address. One bad address rejects the whole reply so nothing
+  # goes out to a partial recipient list.
+  defp normalize_cc(cc) when is_list(cc) do
+    cleaned =
+      cc
+      |> Enum.flat_map(fn
+        value when is_binary(value) -> String.split(value, [",", ";", "\n"])
+        _other -> []
+      end)
+      |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    case Enum.reject(cleaned, &EmailAddress.valid?/1) do
+      [] when length(cleaned) <= @max_cc -> {:ok, cleaned}
+      [] -> {:error, {:invalid_cc, :too_many}}
+      invalid -> {:error, {:invalid_cc, invalid}}
+    end
+  end
+
+  defp normalize_cc(cc) when is_binary(cc), do: normalize_cc([cc])
+  defp normalize_cc(_cc), do: {:ok, []}
+
+  @doc """
+  The CC list a reply on `conversation` starts with (spec-inbound-channels
+  D5, reply-all semantics): the To and CC participants of the latest
+  customer-class email message, minus every address that is the
+  conversation's own side of the exchange: the customer, the reply From
+  identity, the channel's public and ingress addresses, the route sender
+  address and the replying operator (`:operator_email`).
+
+  Empty for public-intake and non-email conversations: prospects never get
+  a CC, and chat or portal sources carry none.
+  """
+  def default_reply_cc(conversation, opts \\ [])
+
+  def default_reply_cc(%Conversation{source: source}, _opts)
+      when source in [:public_intake, :portal, :slack, :intercom, :zendesk],
+      do: []
+
+  def default_reply_cc(%Conversation{} = conversation, opts) do
+    case last_customer_email_message(conversation.id) do
+      nil ->
+        []
+
+      message ->
+        excluded = own_side_addresses(conversation, message, opts)
+
+        ((message.cc_addresses || []) ++ (message.to_addresses || []))
+        |> Enum.filter(&is_binary/1)
+        |> Enum.map(&String.downcase(String.trim(&1)))
+        |> Enum.reject(&(&1 == "" or MapSet.member?(excluded, &1)))
+        |> Enum.filter(&EmailAddress.valid?/1)
+        |> Enum.uniq()
+    end
+  end
+
+  defp last_customer_email_message(conversation_id) do
+    from(m in Message,
+      where: m.conversation_id == ^conversation_id,
+      where: m.source == :email,
+      where: m.is_internal_note == false,
+      where: is_nil(m.triage_class) or m.triage_class in [:customer, :operator_forward],
+      order_by: [desc: m.inserted_at, desc: m.id],
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  defp own_side_addresses(conversation, message, opts) do
+    channel = reply_channel_record(conversation)
+
+    [
+      reply_identity(conversation, opts).address,
+      Keyword.get(opts, :operator_email),
+      Custyard.Email.SenderMatcher.extract_email(message.sender_email),
+      message.reply_to,
+      contact_email(conversation),
+      channel && channel.public_address,
+      channel && Custyard.InboundChannels.ingress_address(channel),
+      channel && channel.previous_ingress_token &&
+        "#{channel.ingress_local}+#{channel.previous_ingress_token}@#{route_domain(channel)}",
+      lookup_route_from_address(conversation)
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.downcase/1)
+    |> MapSet.new()
+  end
+
+  defp contact_email(%Conversation{contact: %Custyard.Contact{email: email}}), do: email
+
+  defp contact_email(%Conversation{contact_id: id}) when is_integer(id) do
+    case Repo.get(Custyard.Contact, id) do
+      %Custyard.Contact{email: email} -> email
+      nil -> nil
+    end
+  end
+
+  defp contact_email(_conversation), do: nil
+
+  defp route_domain(%Custyard.InboundChannel{inbound_route: %Custyard.InboundRoute{} = route}),
+    do: route.lettermint_route_domain
+
+  defp route_domain(_channel), do: nil
 
   defp reply_transaction(conversation, body, opts) do
     Repo.transaction(fn ->
@@ -693,7 +807,9 @@ defmodule Custyard.Conversations do
       delivery_status: if(attempt_delivery?, do: :pending, else: :withheld),
       message_id: generate_outbound_message_id(conversation),
       in_reply_to: last_customer_msg && last_customer_msg.message_id,
-      sender_email: resolve_sender_email(conversation, opts)
+      sender_email: resolve_sender_email(conversation, opts),
+      # Reply-all CC (D5): accepted or edited by the operator in the composer.
+      cc_addresses: Keyword.get(opts, :cc, [])
     }
 
     %Message{}

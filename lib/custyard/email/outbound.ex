@@ -138,6 +138,7 @@ defmodule Custyard.Email.Outbound do
   def compose(%Message{} = message, conversation, recipient, from_address) do
     new()
     |> to(recipient)
+    |> put_cc(message, recipient)
     |> from(from_address)
     |> subject(compose_subject(conversation))
     |> text_body(message.body)
@@ -147,6 +148,20 @@ defmodule Custyard.Email.Outbound do
   end
 
   # --- Private ---
+
+  # Reply-all CC (spec-inbound-channels D5): the operator-approved list, never
+  # the recipient twice. Prospect conversations carry no CC by construction
+  # (Conversations.default_reply_cc/2 returns [] and the composer hides it).
+  defp put_cc(email, %Message{cc_addresses: cc}, recipient) when is_list(cc) and cc != [] do
+    recipient = String.downcase(recipient)
+
+    case Enum.reject(cc, &(String.downcase(&1) == recipient)) do
+      [] -> email
+      list -> cc(email, list)
+    end
+  end
+
+  defp put_cc(email, _message, _recipient), do: email
 
   # Recipient fallback: contact.email -> prospect.email -> no recipient.
   # The contact channel delivers unconditionally (established-customer path).
