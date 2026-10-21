@@ -56,8 +56,8 @@ defmodule Custyard.MixProject do
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
-      {:gettext, "~> 0.20"},
-      {:dns_cluster, "~> 0.1.1"},
+      {:gettext, "~> 1.0"},
+      {:dns_cluster, "~> 0.3.1"},
       {:argon2_elixir, "~> 4.0"},
       {:swoosh, "~> 1.5"},
       {:gen_smtp, "~> 1.2"},
@@ -69,7 +69,7 @@ defmodule Custyard.MixProject do
       # Error tracking / diagnostics (self-hosted Sentry at catch.onetimesecret.com).
       # hackney backs the default Sentry.HackneyClient with its own isolated
       # connection pool, so error reporting never contends with the app's Finch.
-      {:sentry, "~> 13.0"},
+      {:sentry, "~> 14.0"},
       {:hackney, "~> 4.5"},
 
       # QA tools
