@@ -27,7 +27,8 @@ defmodule Custyard.AuditEventTest do
                :channel_verification_captured,
                :channel_sending_domain_checked,
                :channel_quiet,
-               :inbound_triaged
+               :inbound_triaged,
+               :data_subject_erasure
              ]
     end
   end
