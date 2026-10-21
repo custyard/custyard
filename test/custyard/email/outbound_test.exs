@@ -213,6 +213,33 @@ defmodule Custyard.Email.OutboundTest do
       assert email.cc == [{"", "boss@customer.com"}]
     end
 
+    test "BCCs the channel's public address when the archive copy is on (D4)", %{
+      org: org,
+      operator_msg: msg,
+      conversation: conv
+    } do
+      route = insert_inbound_route(organization_id: org.id, source: :lettermint)
+
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "support@acme.com",
+          state: :active
+        )
+
+      {:ok, channel} = Custyard.InboundChannels.update_channel(channel, %{archive_copy: true})
+      conv = %{conv | inbound_channel: channel, inbound_channel_id: channel.id}
+
+      email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
+      assert email.bcc == [{"", "support@acme.com"}]
+
+      {:ok, channel} = Custyard.InboundChannels.update_channel(channel, %{archive_copy: false})
+      conv = %{conv | inbound_channel: channel}
+
+      assert Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"}).bcc ==
+               []
+    end
+
     test "has no CC header when the reply carries none", %{operator_msg: msg, conversation: conv} do
       email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
       assert email.cc == []

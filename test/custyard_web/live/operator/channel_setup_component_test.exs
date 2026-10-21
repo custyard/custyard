@@ -314,6 +314,34 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       assert InboundChannels.get_channel(channel.id).reply_from == :public_address
     end
 
+    test "the archive copy and attachment cap are set from the identity step", %{
+      conn: conn,
+      org: org,
+      channel: channel
+    } do
+      view = open_reply_step(conn, org, channel)
+
+      refute has_element?(view, "[data-testid=channel-archive-copy-toggle][checked]")
+      view |> element("[data-testid=channel-archive-copy-toggle]") |> render_click()
+      assert has_element?(view, "[data-testid=channel-archive-copy-toggle][checked]")
+      assert InboundChannels.get_channel(channel.id).archive_copy == true
+      assert render(view) =~ "A copy of each reply is BCC&#39;d to support@acme.example.com"
+
+      view |> element("[data-testid=channel-archive-copy-toggle]") |> render_click()
+      assert InboundChannels.get_channel(channel.id).archive_copy == false
+
+      view
+      |> element("form[phx-change=set_attachment_limit]")
+      |> render_change(%{"attachment_limit_mb" => "25"})
+
+      assert InboundChannels.get_channel(channel.id).attachment_limit_mb == 25
+      assert has_element?(view, ~s([data-testid=channel-attachment-limit][value="25"]))
+
+      assert Custyard.Repo.exists?(
+               Ecto.Query.from(e in Custyard.AuditEvent, where: e.event_type == :channel_updated)
+             )
+    end
+
     test "the data path panel names the processing hops", %{
       conn: conn,
       org: org,

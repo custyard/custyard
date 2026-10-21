@@ -204,6 +204,25 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert Enum.all?(Conversations.list_public_messages(conv.id), &(&1.source != :operator))
     end
 
+    test "the composer says when a copy of replies is kept in the mailbox (D4)", %{
+      conn: conn,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      refute has_element?(view, ~s([data-testid="composer-archive-copy"]))
+
+      channel = Custyard.InboundChannels.get_channel!(conv.inbound_channel_id)
+      {:ok, _} = Custyard.InboundChannels.update_channel(channel, %{archive_copy: true})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(
+               view,
+               ~s([data-testid="composer-archive-copy"]),
+               "a copy is kept in help@acme.example"
+             )
+    end
+
     test "prospect conversations have no CC field", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, source: :public_intake)

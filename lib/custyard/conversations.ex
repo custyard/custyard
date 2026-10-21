@@ -3,8 +3,18 @@ defmodule Custyard.Conversations do
   Context for conversation queries and operations.
   """
 
-  alias Custyard.{Conversation, EmailAddress, Message, OperatorAccess, OperatorAccount, Repo}
-  alias Custyard.Email.OutboundQueue
+  alias Custyard.{
+    Contact,
+    Conversation,
+    EmailAddress,
+    Message,
+    OperatorAccess,
+    OperatorAccount,
+    Repo
+  }
+
+  alias Custyard.Email.{OutboundQueue, SenderMatcher}
+  alias Custyard.InboundChannels
   import Ecto.Query
 
   @doc """
@@ -712,11 +722,11 @@ defmodule Custyard.Conversations do
     [
       reply_identity(conversation, opts).address,
       Keyword.get(opts, :operator_email),
-      Custyard.Email.SenderMatcher.extract_email(message.sender_email),
+      SenderMatcher.extract_email(message.sender_email),
       message.reply_to,
       contact_email(conversation),
       channel && channel.public_address,
-      channel && Custyard.InboundChannels.ingress_address(channel),
+      channel && InboundChannels.ingress_address(channel),
       channel && channel.previous_ingress_token &&
         "#{channel.ingress_local}+#{channel.previous_ingress_token}@#{route_domain(channel)}",
       lookup_route_from_address(conversation)
@@ -726,11 +736,11 @@ defmodule Custyard.Conversations do
     |> MapSet.new()
   end
 
-  defp contact_email(%Conversation{contact: %Custyard.Contact{email: email}}), do: email
+  defp contact_email(%Conversation{contact: %Contact{email: email}}), do: email
 
   defp contact_email(%Conversation{contact_id: id}) when is_integer(id) do
-    case Repo.get(Custyard.Contact, id) do
-      %Custyard.Contact{email: email} -> email
+    case Repo.get(Contact, id) do
+      %Contact{email: email} -> email
       nil -> nil
     end
   end

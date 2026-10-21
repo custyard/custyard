@@ -167,47 +167,48 @@ defmodule CustyardWeb.Operator.ConversationLive do
           |> assign(:reply_cc_edited?, false)
           |> reload_conversation()
 
-        socket =
-          cond do
-            # Ground truth for this message: :withheld is only ever set by the
-            # public-intake consent gate at send time, so this can't be fooled
-            # by a consent flip that happens before the reload below runs.
-            message.delivery_status == :withheld ->
-              socket
-
-            socket.assigns.reply_will_email? ->
-              socket
-
-            # The reply-box advisory already explains the withheld delivery
-            # for public-intake conversations; no flash needed.
-            socket.assigns.conversation.source == :public_intake ->
-              socket
-
-            true ->
-              put_flash(
-                socket,
-                :error,
-                "Reply saved, but the contact has no email address so it cannot be delivered"
-              )
-          end
-
-        {:noreply, socket}
+        {:noreply, flash_undeliverable_reply(socket, message)}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
 
-      {:error, {:invalid_cc, :too_many}} ->
-        {:noreply, put_flash(socket, :error, "At most 20 CC addresses")}
-
-      {:error, {:invalid_cc, invalid}} ->
-        {:noreply, put_flash(socket, :error, "Invalid CC address: #{Enum.join(invalid, ", ")}")}
-
-      {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to send reply")}
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reply_error_message(reason))}
     end
   end
 
   def handle_event("send_reply", _params, socket), do: {:noreply, socket}
+
+  # Ground truth for this message: :withheld is only ever set by the
+  # public-intake consent gate at send time, so this can't be fooled by a
+  # consent flip that happens before the reload runs. The reply-box advisory
+  # already explains the withheld delivery for public-intake conversations.
+  defp flash_undeliverable_reply(socket, message) do
+    cond do
+      message.delivery_status == :withheld ->
+        socket
+
+      socket.assigns.reply_will_email? ->
+        socket
+
+      socket.assigns.conversation.source == :public_intake ->
+        socket
+
+      true ->
+        put_flash(
+          socket,
+          :error,
+          "Reply saved, but the contact has no email address so it cannot be delivered"
+        )
+    end
+  end
+
+  defp reply_error_message({:invalid_cc, :too_many}), do: "At most 20 CC addresses"
+
+  defp reply_error_message({:invalid_cc, invalid}),
+    do: "Invalid CC address: #{Enum.join(invalid, ", ")}"
+
+  defp reply_error_message(_reason), do: "Failed to send reply"
 
   def handle_event("add_note", %{"body" => body}, socket) when byte_size(body) > 0 do
     conversation = socket.assigns.conversation
@@ -782,8 +783,18 @@ defmodule CustyardWeb.Operator.ConversationLive do
           id
       end
 
-    assign(socket, :reply_identity, identity)
+    socket
+    |> assign(:reply_identity, identity)
+    |> assign(:archive_copy_address, archive_copy_address(conversation))
   end
+
+  # D4: the mailbox that receives a BCC of every reply, when the channel asks.
+  defp archive_copy_address(%Conversation{
+         inbound_channel: %Custyard.InboundChannel{archive_copy: true, public_address: address}
+       }),
+       do: address
+
+  defp archive_copy_address(_conversation), do: nil
 
   defp fetch_other_org_conversations(%{organization_id: nil}), do: []
 
@@ -952,6 +963,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
               {@reply_identity.name}
             </span>
             <code class="text-gray-700 dark:text-zinc-300">&lt;{@reply_identity.address}&gt;</code>
+            <span :if={@archive_copy_address} data-testid="composer-archive-copy">
+              · a copy is kept in {@archive_copy_address}
+            </span>
           </p>
           <form
             id="operator-reply-form"

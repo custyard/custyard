@@ -139,6 +139,7 @@ defmodule Custyard.Email.Outbound do
     new()
     |> to(recipient)
     |> put_cc(message, recipient)
+    |> put_archive_bcc(conversation)
     |> from(from_address)
     |> subject(compose_subject(conversation))
     |> text_body(message.body)
@@ -162,6 +163,14 @@ defmodule Custyard.Email.Outbound do
   end
 
   defp put_cc(email, _message, _recipient), do: email
+
+  # Archive copy (spec-inbound-channels D4): BCC the channel's public address
+  # so the operator's mailbox keeps the reply. The copy is forwarded straight
+  # back and recognised by triage as an own echo, never a new conversation.
+  defp put_archive_bcc(email, %{inbound_channel: %InboundChannel{archive_copy: true} = channel}),
+    do: bcc(email, channel.public_address)
+
+  defp put_archive_bcc(email, _conversation), do: email
 
   # Recipient fallback: contact.email -> prospect.email -> no recipient.
   # The contact channel delivers unconditionally (established-customer path).
