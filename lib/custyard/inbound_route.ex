@@ -14,6 +14,19 @@ defmodule Custyard.InboundRoute do
   - `:zendesk` — Zendesk webhooks
   - `:intercom` — Intercom conversation webhooks
   - `:slack` — Slack events API
+
+  Lettermint routes also record where mail is received, captured from the
+  Lettermint API when the route is created (or backfilled via
+  `Custyard.InboundRoutes.sync_remote_route/1`):
+
+  - `lettermint_route_domain` — catch-all domain (`<id>.lettermint.app`);
+    any local part and plus tag reaches the route
+  - `lettermint_inbound_address` — permanent compatibility address
+    (`<uuid>@inbound.lettermint.co`)
+  - `lettermint_custom_domain` / `lettermint_custom_domain_verified_at` —
+    operator-configured domain and when Lettermint verified it
+
+  `ingress_domain/1` picks the domain operators should hand out.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -24,6 +37,10 @@ defmodule Custyard.InboundRoute do
 
   schema "inbound_routes" do
     field :lettermint_route_id, :string
+    field :lettermint_route_domain, :string
+    field :lettermint_inbound_address, :string
+    field :lettermint_custom_domain, :string
+    field :lettermint_custom_domain_verified_at, :utc_datetime
     field :callback_token, :string
     field :route_type, Ecto.Enum, values: @route_types, default: :general
     # Source determines which webhook adapter processes requests to this route.
@@ -36,6 +53,7 @@ defmodule Custyard.InboundRoute do
     belongs_to :organization, Custyard.Organization
     belongs_to :project, Custyard.Project
     has_many :webhooks, Custyard.InboundRouteWebhook
+    has_many :channels, Custyard.InboundChannel
 
     timestamps(type: :utc_datetime)
   end
@@ -43,11 +61,34 @@ defmodule Custyard.InboundRoute do
   def route_types, do: @route_types
   def sources, do: @sources
 
+  @doc """
+  The domain at which this route receives mail: the custom domain once
+  Lettermint has verified it, otherwise the Lettermint catch-all domain.
+  Returns nil when neither is known (non-Lettermint routes, or Lettermint
+  routes created before the domain was captured).
+  """
+  def ingress_domain(%__MODULE__{
+        lettermint_custom_domain: custom,
+        lettermint_custom_domain_verified_at: %DateTime{}
+      })
+      when is_binary(custom) and custom != "",
+      do: custom
+
+  def ingress_domain(%__MODULE__{lettermint_route_domain: domain})
+      when is_binary(domain) and domain != "",
+      do: domain
+
+  def ingress_domain(%__MODULE__{}), do: nil
+
   @doc false
   def changeset(route, attrs) do
     route
     |> cast(attrs, [
       :lettermint_route_id,
+      :lettermint_route_domain,
+      :lettermint_inbound_address,
+      :lettermint_custom_domain,
+      :lettermint_custom_domain_verified_at,
       :callback_token,
       :route_type,
       :source,
@@ -62,11 +103,35 @@ defmodule Custyard.InboundRoute do
     |> validate_format(:from_address, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
       message: "must be a valid email address"
     )
+    |> validate_length(:lettermint_inbound_address, max: 255)
+    |> validate_hostname(:lettermint_route_domain)
+    |> validate_hostname(:lettermint_custom_domain)
     |> unique_constraint(:callback_token)
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:project_id)
     |> validate_project_route()
   end
+
+  # Same hostname rule as Custyard.Organization domains. Hostnames are
+  # case-insensitive and the operator UI copies these verbatim, so store
+  # them lowercased.
+  @hostname_regex ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
+
+  defp validate_hostname(changeset, field) do
+    changeset
+    |> update_change(field, &normalize_hostname/1)
+    |> validate_length(field, max: 255)
+    |> validate_format(field, @hostname_regex, message: "must be a valid domain name")
+  end
+
+  defp normalize_hostname(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "" -> nil
+      hostname -> hostname
+    end
+  end
+
+  defp normalize_hostname(value), do: value
 
   defp validate_project_route(changeset) do
     route_type = get_field(changeset, :route_type)

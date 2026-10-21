@@ -1018,6 +1018,11 @@ defmodule Custyard.Email.LMTPServer do
          {:ok, _conversation} <- Dispatcher.dispatch(route, normalized) do
       :ok
     else
+      # Triage dropped the delivery deliberately and logged a rejection row;
+      # accept (250) so the MTA does not retry or bounce it.
+      {:ignored, _reason} ->
+        :ok
+
       {:error, {:parse_failed, reason}} ->
         {:error, :permanent, {:parse_failed, reason}}
 

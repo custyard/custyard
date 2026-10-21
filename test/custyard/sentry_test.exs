@@ -115,6 +115,32 @@ defmodule Custyard.SentryTest do
       assert Scrub.scrub_text(~s|email: "prospect@example.com"|) =~ ~s|email: "#{@redacted}"|
     end
 
+    test "redacts a channel's captured forwarding confirmation" do
+      # The setup wizard holds the channel struct in assigns; a crash there
+      # inspects the code and the one-click confirmation link.
+      text =
+        ~s|%Custyard.InboundChannel{ingress_token: "abcd1234abcd1234abcd", | <>
+          ~s|verification_code: "123456789", | <>
+          ~s|verification_link: "https://mail.google.com/mail/vf-%5BANGjdJ...", state: :pending}|
+
+      result = Scrub.scrub_text(text)
+
+      refute result =~ "abcd1234abcd1234abcd"
+      refute result =~ "123456789"
+      refute result =~ "ANGjdJ"
+      assert result =~ ~s|verification_code: "#{@redacted}"|
+      assert result =~ ~s|verification_link: "#{@redacted}"|
+      assert result =~ "state: :pending"
+    end
+
+    test "redacts the confirmation fields in string-keyed form" do
+      text = ~s|%{"verification_code" => "987", "verification_link" => "https://x.proton.me/y"}|
+      result = Scrub.scrub_text(text)
+
+      refute result =~ "987"
+      refute result =~ "x.proton.me"
+    end
+
     test "redacts the escaped-quote form (nested inspect in a crash report)" do
       # A crash report nests an already-inspected socket, so the outer inspect
       # renders the value with escaped quotes: access_token: \"...\"

@@ -289,6 +289,12 @@ defmodule Custyard.Email.ImapPoller do
           Logger.debug("Successfully processed IMAP message UID: #{uid}")
           :ok
         else
+          # Triage dropped the delivery deliberately and logged it; the
+          # message is handled, so mark it seen like any other.
+          {:ignored, reason} ->
+            Logger.debug("Ignored IMAP message UID #{uid}: #{inspect(reason)}")
+            :ok
+
           {:error, reason} ->
             Logger.warning("Failed to process IMAP message UID #{uid}: #{inspect(reason)}")
             {:error, reason}

@@ -16,7 +16,18 @@ defmodule Custyard.AuditEventTest do
                :operator_created,
                :operator_removed,
                :acknowledgment_replayed,
-               :acknowledgment_binding_created
+               :acknowledgment_binding_created,
+               :delivery_status_updated,
+               :channel_created,
+               :channel_updated,
+               :channel_deleted,
+               :channel_state_changed,
+               :channel_token_rotated,
+               :channel_token_revealed,
+               :channel_verification_captured,
+               :channel_sending_domain_checked,
+               :channel_quiet,
+               :inbound_triaged
              ]
     end
   end

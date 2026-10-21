@@ -255,6 +255,44 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "delivery-status-sent"
     end
 
+    test "delivery indicator shows delivered once the status webhook confirms", %{conn: conn} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "live@customer.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :operator,
+        body: "Confirmed by the provider",
+        delivery_status: :delivered
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "delivery-status-delivered"
+      assert html =~ "Delivered to recipient"
+      refute html =~ "delivery-status-sent"
+    end
+
+    test "delivery indicator shows suppressed distinctly from bounced", %{conn: conn} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "live@customer.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :operator,
+        body: "Refused by the provider",
+        delivery_status: :suppressed
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "delivery-status-suppressed"
+      assert html =~ "Suppressed by email provider"
+      refute html =~ "delivery-status-bounced"
+    end
+
     test "delivery indicator shows failed when delivery fails", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, contact_id: nil)
@@ -909,6 +947,226 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       html = render_click(view, "toggle_task", %{"id" => "#{task.id}"})
       assert html =~ "no longer exists"
       assert Conversations.get_task!(task.id).state == :open
+    end
+  end
+
+  describe "inbound channel surfaces" do
+    test "header shows the channel badge when the conversation arrived on a channel", %{
+      conn: conn
+    } do
+      org = insert_organization()
+
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          public_address: "support@acme.example.com",
+          state: :active
+        )
+
+      conv = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element("[data-testid=conversation-channel]") |> render() =~
+               "support@acme.example.com"
+
+      refute render(view) =~ channel.ingress_token
+    end
+
+    test "no channel badge without a channel", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute has_element?(view, "[data-testid=conversation-channel]")
+      refute has_element?(view, "[data-testid=conversation-suspect-badge]")
+    end
+
+    test "suspect badge can be dismissed", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      {:ok, _} = Conversations.set_suspect(conv, true)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(view, "[data-testid=conversation-suspect-badge]")
+      view |> element("[data-testid=dismiss-suspect]") |> render_click()
+
+      refute has_element?(view, "[data-testid=conversation-suspect-badge]")
+      refute Conversations.get_conversation!(conv.id).suspect
+    end
+
+    test "email messages carry a collapsed details line with envelope data", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      msg =
+        insert_message(
+          conversation_id: conv.id,
+          source: :email,
+          sender_email: "alice@customer.example",
+          to_addresses: ["support@acme.example.com"],
+          cc_addresses: ["bob@customer.example"],
+          reply_to: "alice-replies@customer.example",
+          spam_score: 1.5,
+          authentication: %{
+            "dkim" => "pass",
+            "dkim_domain" => "customer.example",
+            "spf" => "fail"
+          }
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      details =
+        view
+        |> element("[data-testid=operator-message-#{msg.id}] [data-testid=message-details]")
+        |> render()
+
+      assert details =~ "<details"
+      assert details =~ "alice@customer.example"
+      assert details =~ "support@acme.example.com"
+      assert details =~ "bob@customer.example"
+
+      assert view |> element("[data-testid=message-reply-to]") |> render() =~
+               "alice-replies@customer.example"
+
+      badge = view |> element("[data-testid=message-auth-badge]") |> render()
+      assert badge =~ "DKIM pass"
+      assert badge =~ "customer.example"
+      assert badge =~ ~s(data-auth-result="pass")
+    end
+
+    test "reply-to equal to the sender is not repeated", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "alice@customer.example",
+        reply_to: "Alice@Customer.example",
+        authentication: %{"dkim" => "fail", "dkim_domain" => "customer.example"}
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute has_element?(view, "[data-testid=message-reply-to]")
+      refute has_element?(view, "[data-testid=message-cc]")
+
+      badge = view |> element("[data-testid=message-auth-badge]") |> render()
+      assert badge =~ "DKIM fail"
+      assert badge =~ ~s(data-auth-result="fail")
+    end
+
+    test "authentication badge variants: unauthenticated and no data", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      none =
+        insert_message(
+          conversation_id: conv.id,
+          source: :email,
+          authentication: %{"spf" => "pass"}
+        )
+
+      missing = insert_message(conversation_id: conv.id, source: :email, authentication: nil)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view
+             |> element(
+               "[data-testid=operator-message-#{none.id}] [data-testid=message-auth-badge]"
+             )
+             |> render() =~ "unauthenticated"
+
+      assert view
+             |> element(
+               "[data-testid=operator-message-#{missing.id}] [data-testid=message-auth-badge]"
+             )
+             |> render() =~ "no auth data"
+    end
+
+    test "operator and portal messages have no details line", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      insert_message(conversation_id: conv.id, source: :operator, body: "Reply")
+      insert_message(conversation_id: conv.id, source: :portal, body: "Portal")
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute has_element?(view, "[data-testid=message-details]")
+      refute has_element?(view, "[data-testid=message-auth-badge]")
+    end
+
+    test "auto-responses render as muted system messages, suspect messages get a tag", %{
+      conn: conn
+    } do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      auto =
+        insert_message(
+          conversation_id: conv.id,
+          source: :email,
+          triage_class: :auto_response,
+          body: "I am out of the office"
+        )
+
+      suspect =
+        insert_message(
+          conversation_id: conv.id,
+          source: :email,
+          triage_class: :suspect,
+          body: "Urgent wire transfer"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      auto_html = view |> element("[data-testid=operator-message-#{auto.id}]") |> render()
+      assert auto_html =~ ~s(data-testid="message-system-tag")
+      assert auto_html =~ "auto-reply"
+      assert auto_html =~ "italic"
+      assert has_element?(view, "[data-testid=operator-message-delete-#{auto.id}]")
+
+      suspect_html = view |> element("[data-testid=operator-message-#{suspect.id}]") |> render()
+      assert suspect_html =~ ~s(data-testid="message-suspect-tag")
+      refute suspect_html =~ "message-system-tag"
+    end
+
+    test "composer shows the channel From identity", %{conn: conn} do
+      org = insert_organization(name: "Acme")
+
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          public_address: "support@acme.example.com",
+          display_name: "Acme Support",
+          state: :active
+        )
+
+      conv = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      identity = view |> element("[data-testid=composer-from-identity]") |> render()
+      assert identity =~ "Replies go out as"
+      assert identity =~ "Acme Support"
+      assert identity =~ "support@acme.example.com"
+      assert identity =~ ~s(data-identity-source="channel")
+    end
+
+    test "composer falls back to the platform sender for public intake", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      identity = view |> element("[data-testid=composer-from-identity]") |> render()
+      assert identity =~ ~s(data-identity-source="platform")
+
+      assert identity =~
+               Application.get_env(:custyard, :email_from_address, "support@custyard.local")
     end
   end
 end

@@ -1,12 +1,18 @@
 defmodule Custyard.Conversations.RetentionSweep do
   @moduledoc """
-  Daily sweep enforcing the documented conversation retention bounds.
+  Daily sweep enforcing the documented retention bounds.
 
-  `Conversations.run_cleanup/1` implements them — 90 days for resolved
-  conversations, 365 for resolved public-intake ones (spec: NFR Retention),
-  plus orphaned contacts and tasks — and was fully tested but had no
-  caller, so nothing ever ran it. Prospect emails accumulated indefinitely,
-  contradicting the stated policy.
+  `Conversations.run_cleanup/1` implements the conversation bounds — 90 days
+  for resolved conversations, 365 for resolved public-intake ones (spec: NFR
+  Retention), plus orphaned contacts and tasks — and was fully tested but
+  had no caller, so nothing ever ran it. Prospect emails accumulated
+  indefinitely, contradicting the stated policy.
+
+  `InboundChannels.sweep_expired/0` runs in the same sweep for the inbound
+  channel bounds (spec-inbound-channels, Privacy and compliance: Retention):
+  rejection log rows after 14 days, verification captures after 24 hours,
+  rotated tokens at the end of their grace period. It is skipped on a dry
+  run, which reports zero for its keys.
 
   Deliberately its own GenServer rather than a fifth task on
   `Scoring.Scheduler`: that runs every five minutes, and a bulk delete
@@ -24,9 +30,17 @@ defmodule Custyard.Conversations.RetentionSweep do
 
   require Logger
 
-  alias Custyard.Conversations
+  alias Custyard.{Conversations, InboundChannels}
 
   @interval :timer.hours(24)
+  @zero_counts %{
+    resolved_conversations: 0,
+    orphaned_contacts: 0,
+    orphaned_tasks: 0,
+    channel_rejections: 0,
+    channel_verifications: 0,
+    channel_tokens: 0
+  }
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -50,17 +64,25 @@ defmodule Custyard.Conversations.RetentionSweep do
 
   `opts` are passed through to `Conversations.run_cleanup/1`, so a caller
   can pass `dry_run: true` or override either bound. Returns the counts map
-  `run_cleanup/1` returns, or a zeroed map when the sweep fails — a failure
-  is logged and the next interval retries.
+  `run_cleanup/1` returns plus `channel_rejections`, `channel_verifications`
+  and `channel_tokens` from `InboundChannels.sweep_expired/0`, or a zeroed
+  map when the sweep fails — a failure is logged and the next interval
+  retries.
   """
   def sweep(opts \\ []) do
-    counts = Conversations.run_cleanup(opts)
+    counts =
+      opts
+      |> Conversations.run_cleanup()
+      |> Map.merge(channel_counts(opts))
 
     if Enum.any?(counts, fn {_key, count} -> count > 0 end) do
       Logger.info(
         "Conversations.RetentionSweep: deleted " <>
           "#{counts.resolved_conversations} conversations, " <>
-          "#{counts.orphaned_contacts} contacts, #{counts.orphaned_tasks} tasks"
+          "#{counts.orphaned_contacts} contacts, #{counts.orphaned_tasks} tasks, " <>
+          "#{counts.channel_rejections} channel rejections; cleared " <>
+          "#{counts.channel_verifications} channel verifications, " <>
+          "#{counts.channel_tokens} rotated channel tokens"
       )
     end
 
@@ -68,7 +90,22 @@ defmodule Custyard.Conversations.RetentionSweep do
   rescue
     e ->
       Logger.error("Conversations.RetentionSweep: sweep failed: #{inspect(e)}")
-      %{resolved_conversations: 0, orphaned_contacts: 0, orphaned_tasks: 0}
+      @zero_counts
+  end
+
+  defp channel_counts(opts) do
+    if Keyword.get(opts, :dry_run, false) do
+      Map.take(@zero_counts, [:channel_rejections, :channel_verifications, :channel_tokens])
+    else
+      %{rejections: rejections, verifications: verifications, tokens: tokens} =
+        InboundChannels.sweep_expired()
+
+      %{
+        channel_rejections: rejections,
+        channel_verifications: verifications,
+        channel_tokens: tokens
+      }
+    end
   end
 
   defp schedule_sweep do

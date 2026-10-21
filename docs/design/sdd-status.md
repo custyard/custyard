@@ -75,7 +75,8 @@ Security:
 | Cross-Organization Isolation | All portal queries filter by org_id from authenticated session                                            | Done    |
 | Email as Untrusted Input     | HTML stripped to plain text, Phoenix template escaping prevents XSS                                       | Done    |
 | Data at Rest Encryption      | Not implemented — using SQLite for MVP                                                                    | Not Yet |
-| Outbound Email               | Platform-native outbound implemented (#26 merged): operator replies compose in-platform, send threaded via Lettermint, tracked send-side (pending/sent/failed). Provider status webhook (bounced/delivered) still open in #25. | Partial |
+| Inbound Channels             | Inbound-channels Phase 1: operator-visible `InboundChannel` per public support address under a route, `local+token@<route domain>` ingress, lifecycle pending_verification → awaiting_first_message → active (+ paused/revoked), triage stage (own echo, provider verification capture, auto-response, suspect) ahead of sender matching, per-channel reply identity with Lettermint sending-domain check, quiet-channel alert, 14-day rejection log, channels tab and setup wizard for Proton/Google forwarding. Spec: `docs/design/spec-inbound-channels.md`. | Done |
+| Outbound Email               | Platform-native outbound implemented (#26 merged): operator replies compose in-platform, send threaded via Lettermint, tracked send-side (pending/sent/failed). Provider status webhook landed (inbound-channels Phase 0): `POST /api/webhook/email-status/lettermint` advances delivered/bounced/suppressed/failed with rank-ordered transitions and an audit event per transition. | Done |
 
 ### Data Model (SDD §4)
 
@@ -243,7 +244,7 @@ Security measures in place:
 - **Portal Account entity** (SDD §4.1) - Per-contact authentication with Rodauth. Currently using org-level token auth instead of individual contact accounts.
 - **Activity Log entity** (SDD §4.1) - Append-only log for organization timeline and audit trail. Organization timeline view exists but without dedicated log table.
 - **Attachment entity** (SDD §4.1) - File upload infrastructure exists but no Attachment schema linked to Message.
-- **Outbound delivery-status webhook** (SDD §5.2) - Platform-native outbound landed with #26 (composed in-platform, sent as threaded email, send-side delivery tracking). The provider-side status webhook (delivered/bounced) remains open in #25; nothing sets `delivery_status: :bounced` today.
+- ~~**Outbound delivery-status webhook** (SDD §5.2)~~ - Done in inbound-channels Phase 0: `Custyard.Email.DeliveryStatus` applies Lettermint lifecycle events to `messages.delivery_status` (rank rule, terminal states, `:withheld` and inbound rows never touched), writes a `:delivery_status_updated` audit event, and the conversation view shows delivered/suppressed indicators. Secret: `WEBHOOK_SECRET_LETTERMINT_STATUS`. Contact email-validity flagging from bounces remains deferred (spec-conversation-loop, Resolved Decisions).
 - **Task effort estimate / description fields** (SDD §4.1) - Task schema has title, state, due_at, portal_visible but not effort_estimate or description.
 - **Organization notes and custom fields** (SDD §4.1) - Not on Organization schema.
 - **Organization-scoped search** (SDD US-9) - No search implementation.

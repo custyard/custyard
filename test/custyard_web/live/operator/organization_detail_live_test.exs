@@ -1,6 +1,6 @@
 defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
   @moduledoc """
-  Tests for the Routes tab on the Organization Detail LiveView
+  Tests for the Routes section (under the Channels tab) on the Organization Detail LiveView
   (`CustyardWeb.Operator.OrganizationDetailLive`).
 
   These tests cover:
@@ -258,18 +258,18 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       {:ok, conn: conn, org: org, operator: operator, general_route: general_route}
     end
 
-    test "routes tab is visible in organization detail", %{conn: conn, org: org} do
+    test "channels tab is visible in organization detail", %{conn: conn, org: org} do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
       # The Routes tab should exist alongside Conversations, Contacts, Projects
-      assert has_element?(view, "[data-testid=org-tab-routes]")
+      assert has_element?(view, "[data-testid=org-tab-channels]")
     end
 
     test "routes tab shows route cards with callback URLs", %{conn: conn, org: org} do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
       # Click the Routes tab to show route content
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       # Callback URL should be displayed in the route card
       assert html =~ "/api/webhook/route/"
@@ -278,7 +278,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
     test "routes tab shows route type badge", %{conn: conn, org: org} do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       # General route should have a route_type_badge showing "general"
       assert html =~ "general"
@@ -287,7 +287,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
     test "routes tab shows source badge", %{conn: conn, org: org} do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       # Default source is lettermint
       assert html =~ "lettermint"
@@ -296,7 +296,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
     test "routes tab shows webhook purpose toggles", %{conn: conn, org: org} do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       # Should show toggle controls for webhook purposes
       assert html =~ "sender_matching" or html =~ "Sender Matching"
@@ -315,7 +315,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       # Should show both general and project route cards
       assert html =~ "general"
@@ -341,7 +341,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       # Admin should see a button/link to create a new route
       assert html =~ "New Route"
@@ -353,7 +353,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       assert html =~ "New Route"
     end
@@ -365,7 +365,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
       # Navigate to routes tab
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # Click the create button to show the inline form
       html =
@@ -386,7 +386,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
       # Navigate to routes tab
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # Open create form
       view
@@ -442,7 +442,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # Toggle the notification webhook on
       view
@@ -468,7 +468,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # Toggle the notification webhook off (sender_matching is always disabled in UI)
       view
@@ -490,7 +490,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # The sender_matching toggle button should have the disabled attribute
       assert has_element?(view, "[data-testid=webhook-toggle-btn-sender_matching][disabled]")
@@ -505,7 +505,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       # The wrapping div should contain a title attribute with the explanation
       assert html =~ "Sender matching always runs"
@@ -518,7 +518,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # The notification toggle should NOT be disabled for admin users
       refute has_element?(view, "[data-testid=webhook-toggle-btn-notification][disabled]")
@@ -567,7 +567,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # Click delete on the project route
       view
@@ -597,7 +597,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # The delete button for the last general route should be disabled
       assert has_element?(view, "[data-testid=delete-route-#{general_route.id}][disabled]")
@@ -620,7 +620,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # Now the delete button should be present for the first general route
       assert has_element?(view, "[data-testid=delete-route-#{general_route.id}]")
@@ -655,7 +655,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
     test "copy button is present next to callback URL", %{conn: conn, org: org, route: route} do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # A copy button (using the CopyToClipboard JS hook) should be next to the URL
       assert has_element?(view, "[data-testid=copy-url-#{route.id}]")
@@ -664,9 +664,64 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
     test "callback URL contains the route's token", %{conn: conn, org: org, route: route} do
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      html = view |> element("a", "Routes") |> render_click()
+      html = view |> element("a", "Channels") |> render_click()
 
       assert html =~ route.callback_token
+    end
+  end
+
+  describe "Ingress domain" do
+    setup %{conn: conn} do
+      org = insert_organization(name: "Ingress Domain Org")
+      operator = create_super_admin()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      conn = authenticate_conn(conn, operator)
+
+      {:ok, conn: conn, org: org, route: route}
+    end
+
+    test "routes tab shows where a Lettermint route receives mail", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
+
+      view |> element("a", "Channels") |> render_click()
+
+      assert route.lettermint_route_domain != nil
+
+      assert view
+             |> element("[data-testid=route-ingress-domain-#{route.id}]")
+             |> render() =~ "Receives mail at any address"
+
+      assert view
+             |> element("[data-testid=route-ingress-domain-#{route.id}]")
+             |> render() =~ "@#{route.lettermint_route_domain}"
+
+      assert has_element?(
+               view,
+               "[data-testid=copy-ingress-domain-#{route.id}][data-clipboard-text='#{route.lettermint_route_domain}']"
+             )
+    end
+
+    test "routes without a known domain omit the ingress line", %{conn: conn, org: org} do
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :zendesk
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
+
+      view |> element("a", "Channels") |> render_click()
+
+      assert has_element?(view, "[data-testid=route-card-#{route.id}]")
+      refute has_element?(view, "[data-testid=route-ingress-domain-#{route.id}]")
     end
   end
 
@@ -680,7 +735,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       {:ok, org: org}
     end
 
-    test "super_admin can access any organization's detail page and see routes tab", %{
+    test "super_admin can access any organization's detail page and see channels tab", %{
       conn: conn,
       org: org
     } do
@@ -691,10 +746,10 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       assert html =~ org.name
       # Routes tab should be available
-      assert has_element?(view, "[data-testid=org-tab-routes]")
+      assert has_element?(view, "[data-testid=org-tab-channels]")
     end
 
-    test "admin can access their own organization's detail page and see routes tab", %{
+    test "admin can access their own organization's detail page and see channels tab", %{
       conn: conn,
       org: org
     } do
@@ -704,7 +759,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       {:ok, view, html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
       assert html =~ org.name
-      assert has_element?(view, "[data-testid=org-tab-routes]")
+      assert has_element?(view, "[data-testid=org-tab-channels]")
     end
 
     test "admin sees mutation controls on their organization", %{conn: conn, org: org} do
@@ -713,7 +768,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       # Admin should see create and toggle controls
       assert has_element?(view, "[data-testid=create-route-btn]")
@@ -745,7 +800,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       {:ok, view, _html} =
         live(authenticate_conn(conn, operator), ~p"/operator/organizations/#{org.id}")
 
-      view |> element("a", "Routes") |> render_click()
+      view |> element("a", "Channels") |> render_click()
 
       html = render_click(view, "delete_route", %{"id" => "999999"})
       assert html =~ "no longer exists"

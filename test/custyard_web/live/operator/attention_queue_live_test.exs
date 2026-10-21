@@ -515,4 +515,40 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       assert html =~ ~s(data-testid="no-reply-channel-badge")
     end
   end
+
+  describe "channel and suspect badges" do
+    test "rows show the channel's public address and the suspect flag", %{conn: conn} do
+      org = insert_organization()
+
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          public_address: "support@acme.example.com",
+          state: :active
+        )
+
+      flagged =
+        insert_conversation(organization_id: org.id, state: :new, inbound_channel_id: channel.id)
+
+      {:ok, _} = Custyard.Conversations.set_suspect(flagged, true)
+      Scoring.calculate_and_cache(flagged.id)
+
+      plain = insert_conversation(organization_id: org.id, state: :new)
+      Scoring.calculate_and_cache(plain.id)
+
+      {:ok, view, html} = live(conn, ~p"/operator")
+
+      flagged_card =
+        view |> element("[data-testid=operator-queue-card-#{flagged.id}]") |> render()
+
+      assert flagged_card =~ ~s(data-testid="operator-queue-channel")
+      assert flagged_card =~ "support@acme.example.com"
+      assert flagged_card =~ ~s(data-testid="operator-queue-suspect")
+      refute html =~ channel.ingress_token
+
+      plain_card = view |> element("[data-testid=operator-queue-card-#{plain.id}]") |> render()
+      refute plain_card =~ "operator-queue-channel"
+      refute plain_card =~ "operator-queue-suspect"
+    end
+  end
 end

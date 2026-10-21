@@ -8,6 +8,14 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   When route context is available, uses it as the primary routing signal
   (organization_id and project_id from the inbound route). Falls back to
   sender matching when no route context is provided.
+
+  Route context may also carry the triage outcome
+  (docs/design/spec-inbound-channels.md, D5/D6): `channel_id` (nil on a
+  legacy route) is stamped on the conversation and every message as
+  `inbound_channel_id`; `triage_class` `:suspect` creates the conversation
+  with `suspect: true` and urgency pinned to `:normal`. Email facts (To, CC,
+  Reply-To, authentication summary, spam score) are copied from the
+  normalized metadata onto each inbound message.
   """
 
   alias Custyard.{Conversation, Conversations, Message, Repo, Scoring}
@@ -80,19 +88,75 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
 
   defp find_or_create_conversation(normalized, org, contact, route_context) do
     dedup_scope = delivery_scope(org.id, normalized, route_context)
-    # First check for duplicate message_id to prevent race condition:
-    # If this exact message was already processed (perhaps concurrently),
-    # return its existing conversation instead of creating a duplicate.
-    with :not_found <- find_by_message_id(normalized.message_id, org.id, dedup_scope),
+    # A retried provider delivery (same provider_delivery_id) is a replay of a
+    # message already stored, with or without a Message-ID header. Then check
+    # for a duplicate message_id to prevent a race condition: if this exact
+    # message was already processed (perhaps concurrently), return its existing
+    # conversation instead of creating a duplicate.
+    with :not_found <- find_by_provider_delivery_id(provider_delivery_id(normalized), org.id),
+         :not_found <- find_by_message_id(normalized.message_id, org.id, dedup_scope),
          :not_found <- find_thread(normalized, org.id, dedup_scope) do
       case create_conversation(normalized, org, contact, route_context) do
         {:ok, conversation} -> {:ok, conversation, true}
         error -> error
       end
     else
+      # A replayed delivery changes nothing: the first delivery already
+      # reactivated the conversation if that was warranted.
+      {:replay, conversation} ->
+        {:ok, conversation, false}
+
       {:ok, conversation} ->
         conversation = maybe_reactivate(conversation)
         {:ok, conversation, false}
+    end
+  end
+
+  defp provider_delivery_id(normalized) do
+    case get_in(normalized, [:metadata, :provider_delivery_id]) do
+      id when is_binary(id) -> id
+      _other -> nil
+    end
+  end
+
+  defp lettermint_message_id(normalized) do
+    case get_in(normalized, [:metadata, :lettermint_message_id]) do
+      id when is_binary(id) -> id
+      _other -> nil
+    end
+  end
+
+  # Find the conversation that already holds this provider delivery. Delivery
+  # ids are global, so the match is only honoured inside the resolved org; a
+  # cross-org hit is a provider or routing fault and is processed normally
+  # (the unique index then rejects the second copy).
+  defp find_by_provider_delivery_id(nil, _org_id), do: :not_found
+
+  defp find_by_provider_delivery_id(delivery_id, org_id) do
+    import Ecto.Query
+
+    query =
+      from m in Message,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where: m.provider_delivery_id == ^delivery_id,
+        select: c,
+        limit: 1
+
+    case Repo.one(query) do
+      nil ->
+        :not_found
+
+      %Conversation{organization_id: ^org_id} = conversation ->
+        {:replay, conversation}
+
+      %Conversation{organization_id: other_org_id} ->
+        Logger.warning(
+          "Provider delivery id already stored for organization #{other_org_id}, " <>
+            "resolved to organization #{org_id}; processing as a new message"
+        )
+
+        :not_found
     end
   end
 
@@ -162,6 +226,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp create_conversation(normalized, org, contact, route_context) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
+    suspect? = route_context[:triage_class] == :suspect
+
     base_attrs = %{
       organization_id: org.id,
       contact_id: contact && contact.id,
@@ -169,7 +235,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       state: :new,
       urgency: detect_urgency(normalized.subject, normalized.body),
       source: normalized[:source] || :email,
-      last_customer_action_at: now
+      last_customer_action_at: now,
+      inbound_channel_id: route_context[:channel_id]
     }
 
     # Set project_id from route context if available
@@ -182,30 +249,52 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     # Apply Sieve header overrides for email sources
     attrs = SieveHeaderMapper.merge_overrides(base_attrs, normalized.headers)
 
+    # A suspect delivery never earns an urgency bump, neither from its own
+    # words nor from a priority header it chose to send (D6). Pinned after
+    # the Sieve overrides so a mapped header cannot undo it.
+    attrs = if suspect?, do: Map.put(attrs, :urgency, :normal), else: attrs
+
     %Conversation{}
     |> Conversation.changeset(attrs)
+    |> Conversation.suspect_changeset(suspect?)
     |> Repo.insert()
   end
 
   # Create message and handle race condition where duplicate message_id means
   # a concurrent request already processed this email
   defp create_message_with_dedup(conversation, normalized, is_new, route_context) do
-    origin = normalized[:source]
-    source = message_source(origin)
     dedup_scope = delivery_scope(conversation.organization_id, normalized, route_context)
 
     # A previously imported message may have no dedup_scope. Its conversation
     # was found above; do not insert a second copy under the new scoped index.
-    if already_delivered?(normalized.message_id, conversation.id, dedup_scope) do
+    # Likewise a retried provider delivery already has its message stored.
+    if already_delivered?(normalized, conversation.id, dedup_scope) do
       {:ok, conversation, false}
     else
-      insert_message(conversation, normalized, is_new, source, origin, dedup_scope)
+      insert_message(conversation, normalized, is_new, route_context)
     end
   end
 
-  defp already_delivered?(nil, _conversation_id, _dedup_scope), do: false
+  defp already_delivered?(normalized, conversation_id, dedup_scope) do
+    delivery_recorded?(provider_delivery_id(normalized), conversation_id) or
+      message_recorded?(normalized.message_id, conversation_id, dedup_scope)
+  end
 
-  defp already_delivered?(message_id, conversation_id, dedup_scope) do
+  defp delivery_recorded?(nil, _conversation_id), do: false
+
+  defp delivery_recorded?(delivery_id, conversation_id) do
+    import Ecto.Query
+
+    Repo.exists?(
+      from m in Message,
+        where: m.conversation_id == ^conversation_id,
+        where: m.provider_delivery_id == ^delivery_id
+    )
+  end
+
+  defp message_recorded?(nil, _conversation_id, _dedup_scope), do: false
+
+  defp message_recorded?(message_id, conversation_id, dedup_scope) do
     import Ecto.Query
 
     Repo.exists?(
@@ -216,8 +305,24 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     )
   end
 
-  defp insert_message(conversation, normalized, is_new, source, origin, dedup_scope) do
-    attrs = %{
+  @doc """
+  Attributes for an inbound message in `conversation` built from the
+  normalized payload: source/origin, sender, body, threading ids, the dedup
+  scope and provider ids, and the D5 email facts. `route_context` supplies
+  `channel_id` and `triage_class`. The triage class is recorded for email
+  sources only (`:customer` by default); ticket, chat and portal sources
+  leave it nil.
+
+  Shared with the dispatcher, which appends auto-responses to an existing
+  thread without running sender matching.
+  """
+  def inbound_message_attrs(conversation, normalized, route_context) do
+    origin = normalized[:source]
+    source = message_source(origin)
+    dedup_scope = delivery_scope(conversation.organization_id, normalized, route_context)
+    metadata = normalized[:metadata] || %{}
+
+    %{
       conversation_id: conversation.id,
       source: source,
       origin: origin,
@@ -227,10 +332,77 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       body: Normalizer.presence(normalized.body) || "(empty message)",
       message_id: normalized.message_id,
       in_reply_to: normalized.in_reply_to,
-      is_internal_note: false
+      is_internal_note: false,
+      dedup_scope: dedup_scope,
+      to_addresses: to_addresses(normalized, metadata, route_context),
+      cc_addresses: cc_addresses(metadata)
     }
+    |> put_present(:provider_delivery_id, provider_delivery_id(normalized))
+    |> put_present(:lettermint_message_id, lettermint_message_id(normalized))
+    |> put_present(:inbound_channel_id, route_context[:channel_id])
+    |> put_present(:triage_class, triage_class(source, route_context))
+    |> put_present(:reply_to, SenderMatcher.extract_email(metadata[:reply_to]))
+    |> put_present(:authentication, authentication(metadata[:authentication]))
+    |> put_present(:spam_score, spam_score(metadata[:spam_score]))
+  end
 
-    attrs = Map.put(attrs, :dedup_scope, dedup_scope)
+  defp triage_class(:email, route_context), do: route_context[:triage_class] || :customer
+  defp triage_class(_source, _route_context), do: nil
+
+  # The header To addresses, as the customer wrote them. The envelope
+  # recipient is routing data: on a forwarding channel it is the secret
+  # `local+token@domain` ingress address, which must not be shown to agents
+  # as the message's To. Only redact a fallback that is the matched channel
+  # recipient; direct email and genuine header addresses keep their plus tags.
+  defp to_addresses(normalized, metadata, route_context) do
+    case metadata[:to] do
+      [_ | _] = to ->
+        bounded_addresses(to)
+
+      _none ->
+        case normalized[:to] do
+          to when is_binary(to) and to != "" ->
+            recipient = Normalizer.presence(metadata[:recipient]) || to
+
+            if route_context[:channel_id] && to == recipient,
+              do: [strip_subaddress(to)],
+              else: [to]
+
+          _other ->
+            []
+        end
+    end
+  end
+
+  defp strip_subaddress(address) do
+    case String.split(address, "@", parts: 2) do
+      [local, domain] -> "#{local |> String.split("+", parts: 2) |> hd()}@#{domain}"
+      _other -> address
+    end
+  end
+
+  defp cc_addresses(%{cc: cc}) when is_list(cc), do: bounded_addresses(cc)
+  defp cc_addresses(_metadata), do: []
+
+  # Message stores at most 50 addresses per header. Keep mail with longer
+  # recipient lists instead of rejecting the entire delivery at insertion.
+  defp bounded_addresses(addresses) do
+    addresses |> Enum.filter(&is_binary/1) |> Enum.take(50)
+  end
+
+  # Stored string-keyed; omitted when the adapter learned nothing.
+  defp authentication(%{} = auth) do
+    auth = Map.new(auth, fn {k, v} -> {to_string(k), v} end)
+    if Enum.all?(auth, fn {_k, v} -> is_nil(v) end), do: nil, else: auth
+  end
+
+  defp authentication(_auth), do: nil
+
+  defp spam_score(score) when is_number(score), do: score / 1
+  defp spam_score(_score), do: nil
+
+  defp insert_message(conversation, normalized, is_new, route_context) do
+    attrs = inbound_message_attrs(conversation, normalized, route_context)
 
     case Message.insert_idempotent(attrs) do
       {:ok, message} ->
@@ -255,6 +427,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
         {:error, changeset}
     end
   end
+
+  defp put_present(attrs, _key, nil), do: attrs
+  defp put_present(attrs, key, value), do: Map.put(attrs, key, value)
 
   defp update_conversation_timestamp(conversation) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)

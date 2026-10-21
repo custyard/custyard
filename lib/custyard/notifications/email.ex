@@ -28,9 +28,108 @@ defmodule Custyard.Notifications.Email do
     end
   end
 
+  @doc """
+  Deliver the quiet-channel notice for an inbound channel
+  (docs/design/spec-inbound-channels.md, D7): the channel was receiving mail
+  and nothing has arrived for its quiet window. Expects `inbound_route` and
+  `organization` preloaded, as `InboundChannels.list_quiet_channels/1`
+  returns them. The notice names the public address and the window; it
+  never carries message content, and the log stub never carries the address.
+  """
+  def deliver_channel_quiet(channel) do
+    if email_enabled?() do
+      send_channel_quiet(channel)
+    else
+      log_channel_quiet(channel)
+    end
+  end
+
   defp email_enabled? do
     Application.get_env(:custyard, :email_enabled, false)
   end
+
+  defp log_channel_quiet(channel) do
+    Logger.info(
+      "[Email stub] Quiet channel notice would be sent: channel #{channel.id} " <>
+        "quiet for more than #{channel.quiet_after_hours}h"
+    )
+
+    :ok
+  end
+
+  defp send_channel_quiet(channel) do
+    import Swoosh.Email
+
+    operator_email = Application.get_env(:custyard, :operator_email, "operator@example.com")
+    from_name = Application.get_env(:custyard, :email_from_name, "Custyard Alerts")
+    from_email = Application.get_env(:custyard, :email_from_address, "alerts@custyard.local")
+
+    email =
+      new()
+      |> to(operator_email)
+      |> from({from_name, from_email})
+      |> subject("Inbound channel quiet: #{channel.public_address}")
+      |> html_body(channel_quiet_html(channel))
+      |> text_body(channel_quiet_text(channel))
+
+    case Custyard.Mailer.deliver(email) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "Failed to send quiet channel notice for channel #{channel.id}: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  @channel_quiet_explanation "Forwarding rules get silently disabled when a mailbox password " <>
+                               "changes or a plan lapses; a quiet channel is the only way Custyard " <>
+                               "can tell. Check the forwarding rule at the mail provider and send " <>
+                               "yourself a test message."
+
+  defp channel_quiet_html(channel) do
+    safe_address = html_escape(channel.public_address)
+    safe_org_name = html_escape(organization_display(channel_organization(channel)))
+
+    """
+    <html>
+    <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background: #f59e0b; color: white; padding: 16px; border-radius: 8px 8px 0 0;">
+        <h2 style="margin: 0;">Inbound channel quiet</h2>
+      </div>
+      <div style="padding: 16px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+        <p><strong>Channel:</strong> #{safe_address}</p>
+        <p><strong>Organization:</strong> #{safe_org_name}</p>
+        <p><strong>Last message received:</strong> #{format_datetime(channel.last_received_at)}</p>
+        <p><strong>Quiet window:</strong> #{channel.quiet_after_hours} hours</p>
+        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
+        <p style="color: #6b7280; font-size: 14px;">
+          #{@channel_quiet_explanation}
+        </p>
+      </div>
+    </body>
+    </html>
+    """
+  end
+
+  defp channel_quiet_text(channel) do
+    """
+    INBOUND CHANNEL QUIET
+
+    Channel: #{channel.public_address}
+    Organization: #{organization_display(channel_organization(channel))}
+    Last message received: #{format_datetime(channel.last_received_at)}
+    Quiet window: #{channel.quiet_after_hours} hours
+
+    #{@channel_quiet_explanation}
+    """
+  end
+
+  defp channel_organization(%{organization: %{name: _} = organization}), do: organization
+  defp channel_organization(_channel), do: nil
 
   defp log_neglect_alert(conversation, level) do
     Logger.info("""

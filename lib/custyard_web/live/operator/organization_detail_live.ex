@@ -1,10 +1,19 @@
 defmodule CustyardWeb.Operator.OrganizationDetailLive do
   @moduledoc """
-  Organization detail view showing conversations, contacts, projects, and routes.
+  Organization detail view showing conversations, contacts, projects,
+  channels (with the routes behind them under an "Advanced" disclosure) and
+  acknowledgments.
+
+  Channel management follows spec-inbound-channels D7 and "Access": agents
+  see the public address, state and health; admins also see the masked
+  ingress address, may reveal it (audited), and run the lifecycle actions.
   """
   use CustyardWeb, :live_view
 
   import CustyardWeb.OperatorComponents
+
+  import CustyardWeb.Operator.ChannelSetupComponent,
+    only: [channel_state_badge: 1, sending_domain_pill: 1]
 
   require Logger
 
@@ -12,12 +21,16 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     Conversations,
     Organizations,
     Projects,
+    InboundChannels,
     InboundRoutes,
     Authorization,
     Acknowledgments
   }
 
-  alias Custyard.{InboundRoute, InboundRouteWebhook}
+  alias Custyard.{InboundChannel, InboundRoute, InboundRouteWebhook}
+  alias CustyardWeb.Operator.ChannelSetupComponent
+
+  @tabs ~w(conversations contacts projects channels acknowledgments)
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -29,21 +42,28 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
          |> redirect(to: ~p"/operator/organizations")}
 
       org ->
+        if connected?(socket), do: InboundChannels.subscribe_organization(org.id)
+
         socket =
           socket
           |> assign(:page_title, org.name)
           |> assign(:organization, org)
           |> assign(:tab, "conversations")
           |> assign(:can_manage_routes, false)
+          |> assign(:setup_channel_id, nil)
           |> load_tab_data(org, "conversations")
 
         {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
     end
   end
 
+  # `?tab=routes` stays valid: the routes tab became the channels tab and
+  # routes live under its "Advanced" disclosure.
   @impl true
-  def handle_params(%{"tab" => tab} = params, _uri, socket)
-      when tab in ~w(conversations contacts projects routes acknowledgments) do
+  def handle_params(%{"tab" => "routes"} = params, uri, socket),
+    do: handle_params(%{params | "tab" => "channels"}, uri, socket)
+
+  def handle_params(%{"tab" => tab} = params, _uri, socket) when tab in @tabs do
     socket =
       socket
       |> assign(:tab, tab)
@@ -70,6 +90,14 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   defp load_tab_data(socket, org, "projects") do
     projects = Projects.list_for_organization(org.id)
     assign(socket, :projects, projects)
+  end
+
+  defp load_tab_data(socket, org, "channels") do
+    socket
+    |> load_tab_data(org, "routes")
+    |> load_channels(org)
+    |> assign(:revealed_channel_ids, MapSet.new())
+    |> assign(:confirm_channel_action, nil)
   end
 
   defp load_tab_data(socket, org, "routes") do
@@ -119,9 +147,128 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     end
   end
 
-  # --- Route Event Handlers ---
+  defp load_channels(socket, org) do
+    channels = InboundChannels.list_for_organization(org.id)
+    assign(socket, :channels, channels)
+  end
+
+  # --- Channel PubSub and wizard messages ---
 
   @impl true
+  def handle_info({:channel_updated, _id}, socket), do: {:noreply, refresh_channels(socket)}
+  def handle_info({:channel_quiet, _id}, socket), do: {:noreply, refresh_channels(socket)}
+
+  def handle_info({:channel_setup_created, id}, socket) do
+    {:noreply, socket |> assign(:setup_channel_id, id) |> refresh_channels()}
+  end
+
+  def handle_info(:channel_setup_closed, socket) do
+    {:noreply, assign(socket, :setup_channel_id, nil)}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # --- Channel Event Handlers ---
+
+  @impl true
+  def handle_event("open_channel_setup", params, socket) do
+    if socket.assigns.can_manage_routes do
+      target =
+        case params do
+          %{"id" => id} ->
+            case parse_id(id) do
+              {:ok, parsed} -> parsed
+              :error -> nil
+            end
+
+          _ ->
+            :new
+        end
+
+      if target,
+        do: {:noreply, assign(socket, :setup_channel_id, target)},
+        else: {:noreply, socket}
+    else
+      {:noreply, put_flash(socket, :error, "You do not have permission to manage channels")}
+    end
+  end
+
+  def handle_event("close_channel_setup", _, socket) do
+    {:noreply, assign(socket, :setup_channel_id, nil)}
+  end
+
+  def handle_event("reveal_channel", %{"id" => id}, socket) do
+    with_managed_channel(socket, id, fn channel ->
+      InboundChannels.record_reveal(channel, operator: socket.assigns.current_operator)
+      revealed = MapSet.put(socket.assigns.revealed_channel_ids, channel.id)
+      {:noreply, assign(socket, :revealed_channel_ids, revealed)}
+    end)
+  end
+
+  def handle_event("hide_channel", %{"id" => id}, socket) do
+    case parse_id(id) do
+      {:ok, parsed} ->
+        revealed = MapSet.delete(socket.assigns.revealed_channel_ids, parsed)
+        {:noreply, assign(socket, :revealed_channel_ids, revealed)}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("check_channel_domain", %{"id" => id}, socket) do
+    with_managed_channel(socket, id, fn channel ->
+      case InboundChannels.check_sending_domain(channel,
+             operator: socket.assigns.current_operator
+           ) do
+        {:ok, _channel} ->
+          {:noreply, refresh_channels(socket)}
+
+        {:error, reason} ->
+          Logger.error(
+            "Sending-domain check failed for channel #{channel.id}: #{inspect(reason)}"
+          )
+
+          {:noreply, put_flash(socket, :error, "Could not check the sending domain")}
+      end
+    end)
+  end
+
+  def handle_event("pause_channel", %{"id" => id}, socket) do
+    channel_transition(socket, id, &InboundChannels.pause/2, "Channel paused")
+  end
+
+  def handle_event("resume_channel", %{"id" => id}, socket) do
+    channel_transition(socket, id, &InboundChannels.resume/2, "Channel resumed")
+  end
+
+  def handle_event("confirm_channel_action", %{"id" => id, "action" => action}, socket)
+      when action in ~w(rotate revoke) do
+    case parse_id(id) do
+      {:ok, parsed} -> {:noreply, assign(socket, :confirm_channel_action, {action, parsed})}
+      :error -> {:noreply, put_flash(socket, :error, "Invalid channel ID")}
+    end
+  end
+
+  def handle_event("cancel_channel_action", _, socket) do
+    {:noreply, assign(socket, :confirm_channel_action, nil)}
+  end
+
+  def handle_event("rotate_channel_token", %{"id" => id}, socket) do
+    channel_transition(
+      socket,
+      id,
+      &InboundChannels.rotate_token/2,
+      "Token rotated. The previous address keeps working for 7 days; update the forwarding rule."
+    )
+  end
+
+  def handle_event("revoke_channel", %{"id" => id}, socket) do
+    channel_transition(socket, id, &InboundChannels.revoke/2, "Channel revoked")
+  end
+
+  # --- Route Event Handlers ---
+
   def handle_event("show_create_route_form", _, socket) do
     if socket.assigns.can_manage_routes do
       {:noreply, assign(socket, :show_create_route_form, true)}
@@ -246,6 +393,61 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
       end
     else
       {:noreply, put_flash(socket, :error, "You do not have permission to delete routes")}
+    end
+  end
+
+  defp refresh_channels(%{assigns: %{tab: "channels"}} = socket),
+    do: load_channels(socket, socket.assigns.organization)
+
+  defp refresh_channels(socket), do: socket
+
+  defp channel_transition(socket, id, fun, success_message) do
+    with_managed_channel(socket, id, fn channel ->
+      case fun.(channel, operator: socket.assigns.current_operator) do
+        {:ok, _channel} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, success_message)
+           |> assign(:confirm_channel_action, nil)
+           |> refresh_channels()}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          message =
+            changeset
+            |> Ecto.Changeset.traverse_errors(fn {msg, _opts} -> msg end)
+            |> Enum.flat_map(fn {_field, msgs} -> msgs end)
+            |> Enum.join(", ")
+
+          {:noreply, socket |> assign(:confirm_channel_action, nil) |> put_flash(:error, message)}
+      end
+    end)
+  end
+
+  # Admin-only channel actions. The channel is re-read scoped to this
+  # organization so a stale or foreign id is answered here.
+  defp with_managed_channel(socket, id, fun) do
+    if socket.assigns.can_manage_routes do
+      case parse_id(id) do
+        {:ok, parsed} ->
+          org = socket.assigns.organization
+
+          case InboundChannels.get_channel_for_organization(parsed, org.id) do
+            nil ->
+              {:noreply,
+               socket
+               |> put_flash(:error, "That channel no longer exists")
+               |> assign(:confirm_channel_action, nil)
+               |> refresh_channels()}
+
+            channel ->
+              fun.(channel)
+          end
+
+        :error ->
+          {:noreply, put_flash(socket, :error, "Invalid channel ID")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "You do not have permission to manage channels")}
     end
   end
 
@@ -396,11 +598,11 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             Projects
           </.tab_link>
           <.tab_link
-            tab="routes"
+            tab="channels"
             current={@tab}
-            patch={~p"/operator/organizations/#{@organization.id}?tab=routes"}
+            patch={~p"/operator/organizations/#{@organization.id}?tab=channels"}
           >
-            Routes
+            Channels
           </.tab_link>
           <.tab_link
             tab="acknowledgments"
@@ -429,16 +631,38 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
               page={@acknowledgment_page}
               has_next={@acknowledgment_has_next}
             />
-          <% "routes" -> %>
-            <.routes_tab
+          <% "channels" -> %>
+            <.channels_tab
+              channels={@channels}
               routes={@routes}
-              available_projects={@available_projects}
               can_manage={@can_manage_routes}
-              show_create_form={@show_create_route_form}
-              confirm_delete_route_id={@confirm_delete_route_id}
+              setup_channel_id={@setup_channel_id}
+              revealed_channel_ids={@revealed_channel_ids}
+              confirm_channel_action={@confirm_channel_action}
               organization={@organization}
-              general_route_count={@general_route_count}
+              current_operator={@current_operator}
             />
+            <details
+              class="mt-6 rounded-lg border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-900 p-3"
+              data-testid="org-routes-advanced"
+            >
+              <summary class="cursor-pointer text-sm font-medium text-gray-700 dark:text-zinc-300">
+                Advanced: routes
+              </summary>
+              <p class="mt-1 mb-3 text-xs text-gray-500 dark:text-zinc-400">
+                Routes are the Lettermint ingress behind channels: callback URLs, webhook purposes and
+                ingress domains. Most setups never need to touch them.
+              </p>
+              <.routes_tab
+                routes={@routes}
+                available_projects={@available_projects}
+                can_manage={@can_manage_routes}
+                show_create_form={@show_create_route_form}
+                confirm_delete_route_id={@confirm_delete_route_id}
+                organization={@organization}
+                general_route_count={@general_route_count}
+              />
+            </details>
         <% end %>
       </div>
     </div>
@@ -741,6 +965,331 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
     """
   end
 
+  # --- Channels Tab ---
+
+  attr :channels, :list, required: true
+  attr :routes, :list, required: true
+  attr :can_manage, :boolean, required: true
+  attr :setup_channel_id, :any, required: true
+  attr :revealed_channel_ids, :any, required: true
+  attr :confirm_channel_action, :any, required: true
+  attr :organization, :map, required: true
+  attr :current_operator, :any, required: true
+
+  defp channels_tab(assigns) do
+    setup_channel =
+      case assigns.setup_channel_id do
+        id when is_integer(id) -> Enum.find(assigns.channels, &(&1.id == id))
+        _ -> nil
+      end
+
+    assigns = assign(assigns, :setup_channel, setup_channel)
+
+    ~H"""
+    <div class="space-y-4" data-testid="org-channels-list">
+      <div :if={@can_manage and is_nil(@setup_channel_id)} class="flex justify-end">
+        <button
+          phx-click="open_channel_setup"
+          class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
+          data-testid="new-channel-btn"
+        >
+          New channel
+        </button>
+      </div>
+
+      <.live_component
+        :if={@can_manage and not is_nil(@setup_channel_id)}
+        module={ChannelSetupComponent}
+        id="channel-setup"
+        organization={@organization}
+        current_operator={@current_operator}
+        routes={@routes}
+        channel={@setup_channel}
+      />
+
+      <div :if={@channels == []} class="text-center py-12" data-testid="org-channels-empty">
+        <div class="text-gray-400 dark:text-zinc-500 mb-4">
+          <svg
+            class="mx-auto h-12 w-12"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="1"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
+            />
+          </svg>
+        </div>
+        <p class="text-gray-600 dark:text-zinc-400 text-sm">
+          No channels yet. A channel forwards a support mailbox such as support@yourdomain into Custyard.
+        </p>
+      </div>
+
+      <.channel_card
+        :for={channel <- @channels}
+        channel={channel}
+        can_manage={@can_manage}
+        revealed={MapSet.member?(@revealed_channel_ids, channel.id)}
+        confirm_action={@confirm_channel_action}
+      />
+    </div>
+    """
+  end
+
+  attr :channel, InboundChannel, required: true
+  attr :can_manage, :boolean, required: true
+  attr :revealed, :boolean, required: true
+  attr :confirm_action, :any, required: true
+
+  defp channel_card(assigns) do
+    channel = assigns.channel
+
+    assigns =
+      assigns
+      |> assign(:quiet, channel_quiet?(channel))
+      |> assign(:summary, InboundChannels.sending_domain_summary(channel))
+      |> assign(:confirming, confirming(assigns.confirm_action, channel.id))
+      # The wizard is the only place reply identity and the sending-domain
+      # check live, so it stays reachable after the channel goes active;
+      # the label says which job it is doing.
+      |> assign(:setup_available, channel.state != :revoked)
+      |> assign(
+        :setup_label,
+        if(channel.state in [:pending_verification, :awaiting_first_message],
+          do: "Setup",
+          else: "Settings"
+        )
+      )
+
+    ~H"""
+    <div
+      class="p-4 bg-white dark:bg-zinc-800 rounded-lg border border-gray-200 dark:border-zinc-700 space-y-3"
+      data-testid={"channel-card-#{@channel.id}"}
+    >
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <span
+              class="font-medium text-gray-900 dark:text-zinc-100 break-all"
+              data-testid={"channel-public-address-#{@channel.id}"}
+            >
+              {@channel.public_address}
+            </span>
+            <.channel_state_badge state={@channel.state} id={@channel.id} />
+          </div>
+          <div class="mt-1 text-xs text-gray-500 dark:text-zinc-400 flex flex-wrap items-center gap-x-2">
+            <span :if={@channel.display_name} data-testid={"channel-display-name-#{@channel.id}"}>
+              {@channel.display_name}
+            </span>
+            <span data-testid={"channel-provider-#{@channel.id}"}>{provider_label(@channel.provider)}</span>
+            <span aria-hidden="true">·</span>
+            <span data-testid={"channel-scope-#{@channel.id}"}>
+              {if @channel.project, do: @channel.project.title, else: "Organization-wide"}
+            </span>
+          </div>
+        </div>
+
+        <div :if={@can_manage} class="flex flex-wrap items-center gap-2">
+          <%= case @confirming do %>
+            <% "rotate" -> %>
+              <span class="text-xs text-amber-700 dark:text-amber-300">
+                Rotate the token? The old address keeps working for 7 days.
+              </span>
+              <button
+                phx-click="rotate_channel_token"
+                phx-value-id={@channel.id}
+                class="text-xs px-2 py-1 text-white bg-amber-600 hover:bg-amber-700 rounded transition-colors"
+                data-testid={"confirm-rotate-channel-#{@channel.id}"}
+              >
+                Yes, rotate
+              </button>
+              <button
+                phx-click="cancel_channel_action"
+                class="text-xs px-2 py-1 text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-100"
+                data-testid={"cancel-channel-action-#{@channel.id}"}
+              >
+                Cancel
+              </button>
+            <% "revoke" -> %>
+              <span class="text-xs text-red-600 dark:text-red-400">
+                Revoke this channel? All tokens stop matching immediately.
+              </span>
+              <button
+                phx-click="revoke_channel"
+                phx-value-id={@channel.id}
+                class="text-xs px-2 py-1 text-white bg-red-600 hover:bg-red-700 rounded transition-colors"
+                data-testid={"confirm-revoke-channel-#{@channel.id}"}
+              >
+                Yes, revoke
+              </button>
+              <button
+                phx-click="cancel_channel_action"
+                class="text-xs px-2 py-1 text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-100"
+                data-testid={"cancel-channel-action-#{@channel.id}"}
+              >
+                Cancel
+              </button>
+            <% _ -> %>
+              <button
+                :if={@setup_available}
+                phx-click="open_channel_setup"
+                phx-value-id={@channel.id}
+                class="text-xs px-2 py-1 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
+                data-testid={"setup-channel-#{@channel.id}"}
+              >
+                {@setup_label}
+              </button>
+              <button
+                :if={@channel.state == :paused}
+                phx-click="resume_channel"
+                phx-value-id={@channel.id}
+                class="text-xs px-2 py-1 text-gray-700 dark:text-zinc-300 border border-gray-200 dark:border-zinc-600 rounded hover:bg-gray-50 dark:hover:bg-zinc-700 transition-colors"
+                data-testid={"resume-channel-#{@channel.id}"}
+              >
+                Resume
+              </button>
+              <button
+                :if={@channel.state in [:pending_verification, :awaiting_first_message, :active]}
+                phx-click="pause_channel"
+                phx-value-id={@channel.id}
+                class="text-xs px-2 py-1 text-gray-700 dark:text-zinc-300 border border-gray-200 dark:border-zinc-600 rounded hover:bg-gray-50 dark:hover:bg-zinc-700 transition-colors"
+                data-testid={"pause-channel-#{@channel.id}"}
+              >
+                Pause
+              </button>
+              <button
+                :if={@channel.state != :revoked}
+                phx-click="confirm_channel_action"
+                phx-value-id={@channel.id}
+                phx-value-action="rotate"
+                class="text-xs px-2 py-1 text-gray-700 dark:text-zinc-300 border border-gray-200 dark:border-zinc-600 rounded hover:bg-gray-50 dark:hover:bg-zinc-700 transition-colors"
+                data-testid={"rotate-channel-#{@channel.id}"}
+              >
+                Rotate token
+              </button>
+              <button
+                :if={@channel.state != :revoked}
+                phx-click="confirm_channel_action"
+                phx-value-id={@channel.id}
+                phx-value-action="revoke"
+                class="text-xs px-2 py-1 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 rounded hover:bg-red-50 dark:hover:bg-red-950 transition-colors"
+                data-testid={"revoke-channel-#{@channel.id}"}
+              >
+                Revoke
+              </button>
+          <% end %>
+        </div>
+      </div>
+
+      <%!-- Ingress address: masked unless explicitly revealed; admins only --%>
+      <div :if={@can_manage} class="flex flex-wrap items-center gap-2">
+        <span class="text-xs text-gray-500 dark:text-zinc-400">Forwarding to</span>
+        <%= if @revealed do %>
+          <code
+            class="text-xs bg-gray-50 dark:bg-zinc-900 text-gray-800 dark:text-zinc-200 px-2 py-1 rounded border border-gray-200 dark:border-zinc-700 break-all"
+            data-testid={"channel-ingress-#{@channel.id}"}
+          >
+            {InboundChannels.ingress_address(@channel) || "domain not synced"}
+          </code>
+          <button
+            :if={InboundChannels.ingress_address(@channel)}
+            id={"copy-ingress-#{@channel.id}"}
+            phx-hook="CopyToClipboard"
+            data-clipboard-text={InboundChannels.ingress_address(@channel)}
+            class="text-xs px-2 py-1 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
+            data-testid={"copy-ingress-#{@channel.id}"}
+          >
+            Copy
+          </button>
+          <button
+            phx-click="hide_channel"
+            phx-value-id={@channel.id}
+            class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200"
+            data-testid={"hide-channel-#{@channel.id}"}
+          >
+            Hide
+          </button>
+        <% else %>
+          <code
+            class="text-xs bg-gray-50 dark:bg-zinc-900 text-gray-600 dark:text-zinc-400 px-2 py-1 rounded border border-gray-200 dark:border-zinc-700 break-all"
+            data-testid={"channel-ingress-masked-#{@channel.id}"}
+          >
+            {InboundChannels.masked_ingress_address(@channel) || "domain not synced"}
+          </code>
+          <button
+            phx-click="reveal_channel"
+            phx-value-id={@channel.id}
+            class="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300"
+            data-testid={"reveal-channel-#{@channel.id}"}
+          >
+            Reveal
+          </button>
+        <% end %>
+      </div>
+
+      <%!-- Health --%>
+      <div class="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-zinc-400">
+        <span data-testid={"channel-last-received-#{@channel.id}"}>
+          <%= if @channel.last_received_at do %>
+            last received {relative_time(@channel.last_received_at)}
+          <% else %>
+            no mail yet
+          <% end %>
+        </span>
+        <span
+          :if={@quiet}
+          class="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
+          data-testid={"channel-quiet-#{@channel.id}"}
+        >
+          quiet for over {@channel.quiet_after_hours}h: check the forwarding rule
+        </span>
+        <span class="ml-auto flex items-center gap-2">
+          <.sending_domain_pill summary={@summary} id={@channel.id} />
+          <button
+            :if={@can_manage and @channel.state != :revoked}
+            phx-click="check_channel_domain"
+            phx-value-id={@channel.id}
+            class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300"
+            data-testid={"check-domain-#{@channel.id}"}
+          >
+            Check domain
+          </button>
+        </span>
+      </div>
+    </div>
+    """
+  end
+
+  defp confirming({action, id}, id), do: action
+  defp confirming(_confirm_action, _id), do: nil
+
+  defp provider_label(:google), do: "Google Workspace"
+  defp provider_label(:proton), do: "Proton Mail"
+  defp provider_label(:other), do: "Other provider"
+  defp provider_label(_provider), do: "Provider not set"
+
+  # D7: an active channel that was receiving mail and has gone quiet for its
+  # window is the only signal that a forwarding rule was disabled upstream.
+  defp channel_quiet?(%InboundChannel{state: :active, last_received_at: %DateTime{} = at} = ch) do
+    DateTime.diff(DateTime.utc_now(), at, :hour) >= ch.quiet_after_hours
+  end
+
+  defp channel_quiet?(_channel), do: false
+
+  defp relative_time(%DateTime{} = at) do
+    seconds = DateTime.diff(DateTime.utc_now(), at, :second)
+
+    cond do
+      seconds < 60 -> "just now"
+      seconds < 3600 -> "#{div(seconds, 60)} min ago"
+      seconds < 86_400 -> "#{div(seconds, 3600)}h ago"
+      true -> "#{div(seconds, 86_400)}d ago"
+    end
+  end
+
   # --- Routes Tab ---
 
   attr :routes, :list, required: true
@@ -943,6 +1492,29 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
               data-testid={"copy-url-#{route.id}"}
             >
               Copy URL
+            </button>
+          </div>
+        </div>
+
+        <%!-- Ingress domain (Lettermint routes with a known domain) --%>
+        <% ingress_domain = InboundRoute.ingress_domain(route) %>
+        <div :if={ingress_domain} class="mb-3">
+          <div class="flex items-center gap-2">
+            <p
+              class="flex-1 text-xs text-gray-600 dark:text-zinc-400"
+              data-testid={"route-ingress-domain-#{route.id}"}
+            >
+              Receives mail at any address
+              <code class="text-gray-800 dark:text-zinc-200">@{ingress_domain}</code>
+            </p>
+            <button
+              id={"copy-ingress-domain-#{route.id}"}
+              phx-hook="CopyToClipboard"
+              data-clipboard-text={ingress_domain}
+              class="text-xs px-2 py-1.5 text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors whitespace-nowrap"
+              data-testid={"copy-ingress-domain-#{route.id}"}
+            >
+              Copy domain
             </button>
           </div>
         </div>

@@ -36,7 +36,7 @@ defmodule Custyard.Sentry do
   # keys in :extra. Covers the path-token names when they appear as params/keys,
   # generic secret-bearing names, and the dev-only `?as=<contact_id>`
   # impersonation param.
-  @sensitive_keys ~w(access_token org_token callback_token token key credential secret passphrase password email as)
+  @sensitive_keys ~w(access_token org_token callback_token token key credential secret passphrase password email as verification_code verification_link)
 
   # Path patterns. Each redacts the single credential segment that follows a
   # known prefix, leaving the prefix (and any trailing segments) intact for
@@ -70,8 +70,10 @@ defmodule Custyard.Sentry do
   # Subset used for the free-form-text regex below: distinctive names only (no
   # bare `key`/`as`, which would over-match legitimate `key: "..."` fields
   # everywhere in inspected structs). Exact structured-key matching uses the
-  # broader @sensitive_keys above.
-  @sensitive_value_keys ~w(access_token org_token callback_token token credential passphrase secret password email)
+  # broader @sensitive_keys above. `verification_code` / `verification_link`
+  # are a channel's captured forwarding confirmation, held in the setup
+  # wizard's assigns; `token` already covers `ingress_token` as a substring.
+  @sensitive_value_keys ~w(access_token org_token callback_token token credential passphrase secret password email verification_code verification_link)
   @key_alternation Enum.join(@sensitive_value_keys, "|")
   @atom_kv_pattern ~r/((?:#{@key_alternation}):\s*)\\*"[^"\\]*\\*"/
   @string_kv_pattern ~r/(\\*"(?:#{@key_alternation})\\*"\s*=>\s*)\\*"[^"\\]*\\*"/

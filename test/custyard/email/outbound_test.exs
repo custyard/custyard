@@ -730,4 +730,161 @@ defmodule Custyard.Email.OutboundTest do
       assert_no_email_sent()
     end
   end
+
+  describe "inbound channel identity and Reply-To (D3, D5)" do
+    setup %{org: org, contact: contact} do
+      route =
+        insert_inbound_route(
+          organization_id: org.id,
+          route_type: :general,
+          source: :lettermint,
+          lettermint_route_id: "lm_#{System.unique_integer([:positive])}",
+          lettermint_route_domain: "r#{System.unique_integer([:positive])}.lettermint.app"
+        )
+
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "help@acme.example.com",
+          display_name: "Acme Help Desk",
+          state: :active
+        )
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          inbound_channel_id: channel.id,
+          subject: "Channel question"
+        )
+
+      %{route: route, channel: channel, channel_conversation: conversation}
+    end
+
+    defp pending_reply(conversation, in_reply_to \\ nil) do
+      insert_message(
+        conversation_id: conversation.id,
+        source: :operator,
+        sender_email: "help@acme.example.com",
+        message_id: "<reply-#{System.unique_integer([:positive])}@custyard.local>",
+        in_reply_to: in_reply_to,
+        body: "Reply body",
+        delivery_status: :pending
+      )
+    end
+
+    test "the From display name is the channel display name", %{channel_conversation: conv} do
+      {:ok, _} = Outbound.deliver(pending_reply(conv))
+
+      assert_email_sent(fn email ->
+        assert email.from == {"Acme Help Desk", "help@acme.example.com"}
+      end)
+    end
+
+    test "a channel without a display name falls back to the organization name", %{
+      channel: channel,
+      channel_conversation: conv
+    } do
+      channel |> Ecto.Changeset.change(display_name: nil) |> Repo.update!()
+
+      {:ok, _} = Outbound.deliver(pending_reply(conv))
+
+      assert_email_sent(fn email ->
+        assert email.from == {"Acme Support", "help@acme.example.com"}
+      end)
+    end
+
+    test "a differing Reply-To on the last customer message is the recipient", %{
+      channel_conversation: conv
+    } do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "alice@customer.com",
+        message_id: "<q1@customer.com>",
+        reply_to: "alice.work@customer.com",
+        triage_class: :customer,
+        body: "Please reply to my work address"
+      )
+
+      {:ok, _} = Outbound.deliver(pending_reply(conv, "<q1@customer.com>"))
+
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "alice.work@customer.com"}]
+      end)
+    end
+
+    test "a Reply-To equal to the contact address, or invalid, changes nothing", %{
+      channel_conversation: conv
+    } do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<q2@customer.com>",
+        reply_to: "Alice@Customer.com",
+        body: "Same address"
+      )
+
+      {:ok, _} = Outbound.deliver(pending_reply(conv))
+      assert_email_sent(fn email -> assert email.to == [{"", "alice@customer.com"}] end)
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<q3@customer.com>",
+        reply_to: "not-an-address",
+        body: "Broken header"
+      )
+
+      {:ok, _} = Outbound.deliver(pending_reply(conv))
+      assert_email_sent(fn email -> assert email.to == [{"", "alice@customer.com"}] end)
+    end
+
+    test "a Reply-To on an auto-response or suspect message never redirects", %{
+      channel_conversation: conv
+    } do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<q4@customer.com>",
+        reply_to: "ooo@customer.com",
+        triage_class: :auto_response,
+        body: "Out of office"
+      )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        message_id: "<q5@customer.com>",
+        reply_to: "phisher@evil.example",
+        triage_class: :suspect,
+        body: "Totally legitimate"
+      )
+
+      {:ok, _} = Outbound.deliver(pending_reply(conv))
+
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "alice@customer.com"}]
+      end)
+    end
+
+    test "the prospect channel is never redirected by a Reply-To" do
+      {conversation, _prospect, msg} =
+        intake_message_fixture(email: "p@example.com", notify_on_reply: true)
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :prospect,
+        message_id: "<p1@example.com>",
+        reply_to: "elsewhere@example.com",
+        body: "Prospect message"
+      )
+
+      {:ok, _} = Outbound.deliver(msg)
+
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "p@example.com"}]
+      end)
+    end
+  end
 end

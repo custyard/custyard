@@ -342,6 +342,9 @@ if config_env() == :prod do
   webhook_secrets =
     %{}
     |> maybe_put_env_secret.(:lettermint, "WEBHOOK_SECRET_LETTERMINT")
+    # Lettermint issues one whsec_ secret per webhook, so the delivery-status
+    # webhook (POST /api/webhook/email-status/lettermint) has its own.
+    |> maybe_put_env_secret.(:lettermint_status, "WEBHOOK_SECRET_LETTERMINT_STATUS")
     |> maybe_put_env_secret.(:zendesk, "WEBHOOK_SECRET_ZENDESK")
     |> maybe_put_env_secret.(:intercom, "WEBHOOK_SECRET_INTERCOM")
     |> maybe_put_env_secret.(:slack, "WEBHOOK_SECRET_SLACK")

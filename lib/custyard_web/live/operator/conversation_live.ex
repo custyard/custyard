@@ -121,6 +121,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:page_title, truncate_subject(conversation.subject))
       |> assign(:conversation, conversation)
       |> assign_reply_delivery(conversation)
+      |> assign_reply_identity(conversation)
       |> assign(:breakdown, breakdown)
       |> assign(:neglect_status, neglect_status)
       |> assign(:other_conversations, other_conversations)
@@ -245,6 +246,25 @@ defmodule CustyardWeb.Operator.ConversationLive do
           {:error, _changeset} ->
             {:noreply, put_flash(socket, :error, "Failed to delete message")}
         end
+    end
+  end
+
+  # Triage flagged the conversation as suspect (spec-inbound-channels D6).
+  # The flag is a notification suppressor, never a filter; clearing it is an
+  # operator judgement and goes through the same locked access check as
+  # every other mutation.
+  def handle_event("dismiss_suspect", _params, socket) do
+    case conversation_mutation(socket, fn current, _current_operator ->
+           Conversations.set_suspect(current, false)
+         end) do
+      {:ok, _conversation} ->
+        {:noreply, reload_conversation(socket)}
+
+      {:error, :unauthorized} ->
+        {:noreply, access_revoked(socket)}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Failed to update the conversation")}
     end
   end
 
@@ -680,6 +700,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           socket
           |> assign(:conversation, conversation)
           |> assign_reply_delivery(conversation)
+          |> assign_reply_identity(conversation)
           |> assign(:breakdown, breakdown)
           |> assign(:neglect_status, neglect_status)
           |> assign(:other_conversations, other_conversations)
@@ -702,6 +723,31 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   # Unlinked (nil-org) conversations have no sibling org conversations to list.
+  # The From identity the next reply will carry (spec-inbound-channels D3).
+  # The platform fallback has no address of its own on the conversation, so
+  # the configured instance sender is shown instead.
+  defp assign_reply_identity(socket, conversation) do
+    identity =
+      Conversations.reply_identity(conversation,
+        operator_email: socket.assigns.current_operator.email
+      )
+
+    identity =
+      case identity do
+        %{source: :platform, address: nil} = id ->
+          %{
+            id
+            | address:
+                Application.get_env(:custyard, :email_from_address, "support@custyard.local")
+          }
+
+        id ->
+          id
+      end
+
+    assign(socket, :reply_identity, identity)
+  end
+
   defp fetch_other_org_conversations(%{organization_id: nil}), do: []
 
   defp fetch_other_org_conversations(conversation) do
@@ -774,6 +820,30 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             {@conversation.subject}
           </span>
+          <span
+            :if={@conversation.inbound_channel}
+            class="text-xs px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300 truncate max-w-[14rem]"
+            title={"Received on channel #{@conversation.inbound_channel.public_address}"}
+            data-testid="conversation-channel"
+          >
+            {@conversation.inbound_channel.public_address}
+          </span>
+          <span
+            :if={@conversation.suspect}
+            class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
+            title="Triage flagged this conversation: notifications are suppressed until an operator clears it"
+            data-testid="conversation-suspect-badge"
+          >
+            suspect
+            <button
+              phx-click="dismiss_suspect"
+              class="underline hover:text-amber-950 dark:hover:text-amber-100"
+              aria-label="Mark this conversation as not suspect"
+              data-testid="dismiss-suspect"
+            >
+              Not suspect
+            </button>
+          </span>
           <.source_badge source={@conversation.source} />
           <.state_badge state={@conversation.state} />
           <button
@@ -834,6 +904,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             This prospect has not opted into email replies — replies are not
             emailed, but stay visible via their conversation link.
+          </p>
+          <p
+            class="text-xs text-gray-500 dark:text-zinc-400 truncate"
+            data-testid="composer-from-identity"
+            data-identity-source={@reply_identity.source}
+          >
+            Replies go out as
+            <span :if={@reply_identity.name} class="text-gray-700 dark:text-zinc-300">
+              {@reply_identity.name}
+            </span>
+            <code class="text-gray-700 dark:text-zinc-300">&lt;{@reply_identity.address}&gt;</code>
           </p>
           <form
             id="operator-reply-form"
@@ -1238,14 +1319,21 @@ defmodule CustyardWeb.Operator.ConversationLive do
   attr :prospect_email, :string, default: nil
 
   defp message_bubble(assigns) do
-    is_operator = assigns.message.source == :operator
-    is_internal = assigns.message.is_internal_note
-    is_deleted = Message.deleted?(assigns.message)
+    message = assigns.message
+    is_operator = message.source == :operator
+    is_internal = message.is_internal_note
+    is_deleted = Message.deleted?(message)
+    # Provider confirmations, vacation responders and other auto-replies
+    # (spec-inbound-channels D6) read as system messages, not as the customer.
+    is_system = message.triage_class == :auto_response and not is_internal
 
     bg_class =
       cond do
         is_internal ->
           "bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-700"
+
+        is_system ->
+          "bg-gray-50 dark:bg-zinc-900 border-dashed border-gray-200 dark:border-zinc-700 text-gray-500 dark:text-zinc-400"
 
         is_operator ->
           "bg-indigo-50 dark:bg-indigo-900/30 border-indigo-100 dark:border-indigo-700"
@@ -1259,6 +1347,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:is_operator, is_operator)
       |> assign(:is_internal, is_internal)
       |> assign(:is_deleted, is_deleted)
+      |> assign(:is_system, is_system)
+      |> assign(:show_details, message.source == :email and not is_deleted)
       |> assign(:bg_class, bg_class)
 
     ~H"""
@@ -1285,6 +1375,22 @@ defmodule CustyardWeb.Operator.ConversationLive do
               internal note
             </span>
           <% end %>
+          <span
+            :if={@is_system}
+            class="text-xs bg-gray-200 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300 px-1.5 py-0.5 rounded"
+            title="Classified as an automatic reply; not counted as a customer message"
+            data-testid="message-system-tag"
+          >
+            auto-reply
+          </span>
+          <span
+            :if={@message.triage_class == :suspect and not @is_internal}
+            class="text-xs bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 px-1.5 py-0.5 rounded"
+            title="Triage flagged this message as suspect"
+            data-testid="message-suspect-tag"
+          >
+            suspect
+          </span>
           <span class="text-xs text-gray-400 dark:text-zinc-500">
             {unless @is_internal, do: via_label(@message.source, @prospect_email)}
           </span>
@@ -1320,19 +1426,110 @@ defmodule CustyardWeb.Operator.ConversationLive do
         </div>
         <div
           :if={not @is_deleted}
-          class="text-sm text-gray-800 dark:text-zinc-200 whitespace-pre-wrap break-words"
+          class={[
+            "text-sm whitespace-pre-wrap break-words",
+            if(@is_system,
+              do: "text-gray-500 dark:text-zinc-400 italic",
+              else: "text-gray-800 dark:text-zinc-200"
+            )
+          ]}
           data-testid="operator-message-body"
         >
           {@message.body}
         </div>
+        <.message_details :if={@show_details} message={@message} />
       </div>
     </div>
     """
   end
 
+  # Envelope data for email messages (spec-inbound-channels D5): collapsed by
+  # default so the thread stays readable; the authentication badge is the
+  # trust signal operators are told to read before acting on a request.
+  attr :message, Message, required: true
+
+  defp message_details(assigns) do
+    message = assigns.message
+
+    reply_to =
+      if is_binary(message.reply_to) and message.reply_to != "" and
+           String.downcase(message.reply_to) != String.downcase(message.sender_email || ""),
+         do: message.reply_to
+
+    assigns = assign(assigns, :reply_to, reply_to)
+
+    ~H"""
+    <details class="mt-2 text-xs text-gray-500 dark:text-zinc-400" data-testid="message-details">
+      <summary class="cursor-pointer select-none inline-flex items-center gap-2">
+        <span>Details</span>
+        <.auth_badge authentication={@message.authentication} />
+      </summary>
+      <dl class="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 break-all">
+        <dt class="font-medium">From</dt>
+        <dd data-testid="message-from">{@message.sender_email || "unknown"}</dd>
+        <dt class="font-medium">To</dt>
+        <dd data-testid="message-to">{Enum.join(@message.to_addresses || [], ", ")}</dd>
+        <%= if @message.cc_addresses not in [nil, []] do %>
+          <dt class="font-medium">CC</dt>
+          <dd data-testid="message-cc">{Enum.join(@message.cc_addresses, ", ")}</dd>
+        <% end %>
+        <%= if @reply_to do %>
+          <dt class="font-medium">Reply-To</dt>
+          <dd data-testid="message-reply-to">{@reply_to}</dd>
+        <% end %>
+        <%= if @message.spam_score do %>
+          <dt class="font-medium">Spam score</dt>
+          <dd data-testid="message-spam-score">{@message.spam_score}</dd>
+        <% end %>
+      </dl>
+    </details>
+    """
+  end
+
+  # DKIM is the signal that survives forwarding; SPF evaluates the forwarder
+  # and is not shown (spec-inbound-channels, "Forwarding provider behaviour").
+  attr :authentication, :any, required: true
+
+  defp auth_badge(assigns) do
+    {colors, label, result} =
+      case assigns.authentication do
+        nil ->
+          {"bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300", "no auth data",
+           "none"}
+
+        %{"dkim" => "pass"} = auth ->
+          domain = auth["dkim_domain"]
+
+          {"bg-green-100 dark:bg-green-950 text-green-800 dark:text-green-300",
+           if(domain, do: "DKIM pass · #{domain}", else: "DKIM pass"), "pass"}
+
+        %{"dkim" => dkim} when is_binary(dkim) ->
+          {"bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300", "DKIM fail",
+           "fail"}
+
+        _ ->
+          {"bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300", "unauthenticated",
+           "unauthenticated"}
+      end
+
+    assigns =
+      assigns |> assign(:colors, colors) |> assign(:label, label) |> assign(:result, result)
+
+    ~H"""
+    <span
+      class={"px-1.5 py-0.5 rounded #{@colors}"}
+      title="DKIM result on the forwarded copy. A pass does not make a request safe to act on."
+      data-testid="message-auth-badge"
+      data-auth-result={@result}
+    >
+      {@label}
+    </span>
+    """
+  end
+
   attr :status, :atom,
     required: true,
-    values: [:pending, :sending, :sent, :failed, :bounced, :withheld]
+    values: [:pending, :sending, :sent, :delivered, :failed, :bounced, :suppressed, :withheld]
 
   defp delivery_indicator(%{status: status} = assigns) when status in [:pending, :sending] do
     ~H"""
@@ -1370,6 +1567,29 @@ defmodule CustyardWeb.Operator.ConversationLive do
         <path
           fill-rule="evenodd"
           d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
+    """
+  end
+
+  defp delivery_indicator(%{status: :delivered} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-green-600 dark:text-green-400"
+      title="Delivered to recipient's mail server"
+      data-testid="delivery-status-delivered"
+    >
+      <svg
+        class="h-3.5 w-3.5"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
           clip-rule="evenodd"
         />
       </svg>
@@ -1416,6 +1636,29 @@ defmodule CustyardWeb.Operator.ConversationLive do
         <path
           fill-rule="evenodd"
           d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
+    """
+  end
+
+  defp delivery_indicator(%{status: :suppressed} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-purple-500 dark:text-purple-400"
+      title="Suppressed by email provider"
+      data-testid="delivery-status-suppressed"
+    >
+      <svg
+        class="h-3.5 w-3.5"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M5.965 4.904l9.131 9.131a6.5 6.5 0 00-9.131-9.131zm8.07 10.192L4.904 5.965a6.5 6.5 0 009.131 9.131zM4.343 4.343a8 8 0 1111.314 11.314A8 8 0 014.343 4.343z"
           clip-rule="evenodd"
         />
       </svg>

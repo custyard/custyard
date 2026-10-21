@@ -357,6 +357,24 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           <.state_badge state={@item.conversation.state} />
           <.urgency_badge urgency={@item.conversation.urgency} />
           <.source_badge source={@item.conversation.source} />
+          <%!-- Channel the mail arrived on (spec-inbound-channels, "Attention
+               queue"): the public address, never the ingress address. --%>
+          <span
+            :if={@item.conversation.inbound_channel}
+            class="text-xs px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300 truncate max-w-[12rem]"
+            title={"Channel #{@item.conversation.inbound_channel.public_address}"}
+            data-testid="operator-queue-channel"
+          >
+            {@item.conversation.inbound_channel.public_address}
+          </span>
+          <span
+            :if={@item.conversation.suspect}
+            class="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
+            title="Triage flagged this conversation as suspect"
+            data-testid="operator-queue-suspect"
+          >
+            suspect
+          </span>
           <.intake_source_tag
             :if={@item.conversation.intake_source_key}
             source_key={@item.conversation.intake_source_key}

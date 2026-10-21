@@ -102,6 +102,9 @@ defmodule CustyardWeb.Router do
 
     # Routed webhooks — dispatched by callback_token with source-specific adapters
     post "/webhook/route/:callback_token", WebhookController, :routed
+
+    # Provider delivery-status events for outbound replies (separate from inbound intake)
+    post "/webhook/email-status/lettermint", EmailStatusController, :lettermint
   end
 
   # Operator routes - public (login/logout)

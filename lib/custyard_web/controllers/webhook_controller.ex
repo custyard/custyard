@@ -103,6 +103,12 @@ defmodule CustyardWeb.WebhookController do
       {:bypass, %{type: "url_verification", challenge: challenge}} ->
         json(conn, %{challenge: challenge})
 
+      # A provider event this endpoint does not process (e.g. a Lettermint
+      # delivery-status event). Acknowledge with 200 so the provider does not
+      # retry it.
+      {:bypass, %{type: "ignored_event"} = info} ->
+        json(conn, %{status: "ignored", event: info.event})
+
       {:error, reason} ->
         require Logger
 
@@ -130,6 +136,13 @@ defmodule CustyardWeb.WebhookController do
     case Dispatcher.dispatch(route, normalized) do
       {:ok, conversation} ->
         json(conn, %{status: "ok", conversation_id: conversation.id})
+
+      # Channel resolution or triage decided the delivery must not become a
+      # customer message (unmatched recipient, paused channel, own echo,
+      # verification notice, orphan auto-response). It was logged or audited
+      # already; acknowledge with 200 so the provider does not retry.
+      {:ignored, reason} ->
+        json(conn, %{status: "ignored", reason: to_string(reason)})
 
       {:error, reason} ->
         conn |> put_status(422) |> json(%{status: "error", reason: format_error(reason)})

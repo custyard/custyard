@@ -157,4 +157,85 @@ defmodule Custyard.Notifications.EmailTest do
       assert_no_email_sent()
     end
   end
+
+  describe "deliver_channel_quiet/1" do
+    setup %{org: org} do
+      last_received_at = ~U[2026-10-10 08:30:00Z]
+
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          state: :active,
+          public_address: "support@acme.example.com",
+          last_received_at: last_received_at
+        )
+        |> Repo.preload(:organization)
+
+      {:ok, channel: channel}
+    end
+
+    test "logs instead of sending when email is disabled", %{channel: channel} do
+      # The stub logs at info, below the test logger level; what matters here
+      # is that nothing is sent and nothing sensitive reaches the log.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Email.deliver_channel_quiet(channel) == :ok
+        end)
+
+      refute log =~ "support@acme.example.com"
+      refute log =~ channel.ingress_token
+      assert_no_email_sent()
+    end
+
+    test "sends the notice when email is enabled", %{channel: channel} do
+      Application.put_env(:custyard, :email_enabled, true)
+      Application.put_env(:custyard, :operator_email, "ops@custyard.test")
+
+      on_exit(fn ->
+        Application.delete_env(:custyard, :email_enabled)
+        Application.delete_env(:custyard, :operator_email)
+      end)
+
+      assert Email.deliver_channel_quiet(channel) == :ok
+
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "ops@custyard.test"}]
+        assert email.subject == "Inbound channel quiet: support@acme.example.com"
+
+        for body <- [email.html_body, email.text_body] do
+          assert body =~ "support@acme.example.com"
+          assert body =~ "Acme Corp"
+          assert body =~ "2026-10-10 08:30 UTC"
+          assert body =~ "72 hours"
+          assert body =~ "silently disabled"
+          refute body =~ channel.ingress_token
+        end
+      end)
+    end
+
+    test "escapes the address in the HTML body", %{channel: channel} do
+      Application.put_env(:custyard, :email_enabled, true)
+      on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
+
+      channel = %{channel | public_address: "a<b@acme.example.com"}
+      assert Email.deliver_channel_quiet(channel) == :ok
+
+      assert_email_sent(fn email ->
+        refute email.html_body =~ "a<b@"
+        assert email.html_body =~ "a&lt;b@acme.example.com"
+      end)
+    end
+
+    test "copes with an organization that is not preloaded", %{channel: channel} do
+      Application.put_env(:custyard, :email_enabled, true)
+      on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
+
+      channel = %{channel | organization: %Ecto.Association.NotLoaded{}}
+      assert Email.deliver_channel_quiet(channel) == :ok
+
+      assert_email_sent(fn email ->
+        assert email.text_body =~ "Unlinked prospect"
+      end)
+    end
+  end
 end

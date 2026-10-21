@@ -22,7 +22,17 @@ defmodule Custyard.Email.Outbound do
   require Logger
 
   alias Custyard.Email.{Headers, ThreadHeaders}
-  alias Custyard.{Conversations, Message, Repo, Settings}
+
+  alias Custyard.{
+    Conversations,
+    EmailAddress,
+    InboundChannel,
+    InboundChannels,
+    Message,
+    Repo,
+    Settings
+  }
+
   # Swoosh.Email also exports from/2, so Ecto.Query is not imported here.
   require Ecto.Query
   import Swoosh.Email
@@ -39,6 +49,16 @@ defmodule Custyard.Email.Outbound do
   `Conversations.send_reply/3` is the primary). A prospect-channel recipient
   without opt-in marks the message `:withheld` and returns
   `{:error, :no_consent, updated_message}`, so no caller can bypass policy.
+
+  On the contact channel, a valid `Reply-To` on the last customer message
+  that differs from the contact's address is the recipient instead
+  (spec-inbound-channels D5). Only messages triaged as customer mail are
+  consulted; auto-responses and suspect messages never redirect a reply, and
+  the prospect channel is never redirected.
+
+  The From display name is the inbound channel's display name when the
+  conversation arrived on a channel that has one, else the organization name
+  (D3); public-intake mail keeps the instance branding name.
 
   Only a `:pending` message is delivered. The row is flipped to `:sending`
   before the email is handed to the mailer, so a message that is already
@@ -74,7 +94,11 @@ defmodule Custyard.Email.Outbound do
     # without it a caller passing a preloaded conversation would silently
     # turn this defense-in-depth layer into a stale-read no-op.
     message =
-      Repo.preload(message, [conversation: [:contact, :organization, :prospect]], force: true)
+      Repo.preload(
+        message,
+        [conversation: [:contact, :organization, :prospect, :inbound_channel]],
+        force: true
+      )
 
     conversation = message.conversation
 
@@ -130,9 +154,37 @@ defmodule Custyard.Email.Outbound do
   # the prospect channel only needs the consent check here.
   defp resolve_recipient(conversation) do
     case Conversations.reply_channel(conversation) do
-      {:contact, email} -> {:ok, email}
+      {:contact, email} -> {:ok, reply_to_override(conversation, email) || email}
       {:prospect, email} -> prospect_recipient(conversation.prospect, email)
       :none -> {:error, :no_recipient_email}
+    end
+  end
+
+  # D5: the customer's Reply-To wins over the contact address when it is a
+  # valid, different address. Only the latest customer-class message counts
+  # (triage_class nil for legacy rows or :customer); an auto-response or a
+  # suspect message must never steer a reply elsewhere.
+  defp reply_to_override(conversation, contact_email) do
+    query =
+      Ecto.Query.from(m in Message,
+        where: m.conversation_id == ^conversation.id,
+        where: m.source != :operator,
+        where: m.is_internal_note == false,
+        where: is_nil(m.triage_class) or m.triage_class == :customer,
+        order_by: [desc: m.inserted_at, desc: m.id],
+        limit: 1,
+        select: m.reply_to
+      )
+
+    case Repo.one(query) do
+      reply_to when is_binary(reply_to) ->
+        reply_to = reply_to |> String.trim() |> String.downcase()
+
+        if reply_to != String.downcase(contact_email) and EmailAddress.valid?(reply_to),
+          do: reply_to
+
+      _other ->
+        nil
     end
   end
 
@@ -187,14 +239,23 @@ defmodule Custyard.Email.Outbound do
   # in the public intake spec).
   defp from_name(%{source: :public_intake}), do: header_safe_name(branding_name())
 
+  # Channel display name (D3) when the conversation arrived on a channel that
+  # has one, else the organization name.
   defp from_name(conversation) do
-    name =
-      case conversation.organization do
-        %{name: name} when is_binary(name) and name != "" -> name
-        _ -> "Custyard"
-      end
-
+    name = channel_display_name(conversation) || organization_name(conversation)
     header_safe_name(name)
+  end
+
+  defp channel_display_name(%{inbound_channel: %InboundChannel{} = channel}),
+    do: InboundChannels.from_name(channel)
+
+  defp channel_display_name(_conversation), do: nil
+
+  defp organization_name(conversation) do
+    case conversation.organization do
+      %{name: name} when is_binary(name) and name != "" -> name
+      _ -> "Custyard"
+    end
   end
 
   defp header_safe_name(name), do: name |> sanitize_header_text() |> quote_display_name()

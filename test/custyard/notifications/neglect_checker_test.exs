@@ -71,6 +71,36 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert Enum.empty?(candidates)
     end
 
+    test "excludes suspect conversations until an operator clears the flag" do
+      thresholds = Settings.get_neglect_thresholds()
+      {warning_hours, _critical_hours} = thresholds.standard
+
+      org = insert_organization(tier: :standard)
+      old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+
+      conv =
+        insert_conversation(
+          organization_id: org.id,
+          state: :new,
+          suspect: true,
+          last_operator_action_at: old_action_time
+        )
+
+      refute Enum.any?(
+               NeglectChecker.list_notification_candidates(thresholds),
+               &(&1.id == conv.id)
+             )
+
+      assert {:ok, 0} = NeglectChecker.check_and_notify()
+
+      {:ok, _} = Custyard.Conversations.set_suspect(conv, false)
+
+      assert Enum.any?(
+               NeglectChecker.list_notification_candidates(thresholds),
+               &(&1.id == conv.id)
+             )
+    end
+
     test "excludes snoozed conversations" do
       thresholds = Settings.get_neglect_thresholds()
       {warning_hours, _critical_hours} = thresholds.standard
