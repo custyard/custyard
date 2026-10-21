@@ -98,6 +98,15 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
              )
     end
 
+    test "shows the detected language in the header", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      {:ok, _} = conv |> Custyard.Conversation.changeset(%{language: "de"}) |> Repo.update()
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      assert has_element?(view, ~s([data-testid="conversation-language"]), "de")
+    end
+
     test "transitions new conversation to active on view", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, state: :new)

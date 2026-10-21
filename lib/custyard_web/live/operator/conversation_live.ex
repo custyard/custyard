@@ -892,6 +892,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
               Not suspect
             </button>
           </span>
+          <span
+            :if={@conversation.language}
+            class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300 uppercase"
+            title={"Detected language: #{Custyard.Email.LanguageDetector.name(@conversation.language)}"}
+            data-testid="conversation-language"
+          >
+            {@conversation.language}
+          </span>
           <.source_badge source={@conversation.source} />
           <.state_badge state={@conversation.state} />
           <button

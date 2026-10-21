@@ -375,6 +375,14 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           >
             suspect
           </span>
+          <span
+            :if={@item.conversation.language}
+            class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300 uppercase"
+            title={"Detected language: #{Custyard.Email.LanguageDetector.name(@item.conversation.language)}"}
+            data-testid="operator-queue-language"
+          >
+            {@item.conversation.language}
+          </span>
           <.intake_source_tag
             :if={@item.conversation.intake_source_key}
             source_key={@item.conversation.intake_source_key}
