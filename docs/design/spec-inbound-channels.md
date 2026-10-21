@@ -2,7 +2,7 @@
 
 **Version:** 0.1 — Supplements SDD v0.4 and the Prospect Conversation Loop; extends the Design Decisions: Data Model + Lettermint Integration document
 **Date:** 2026-10-20
-**Status:** Phases 0 and 1 implemented (see Implementation status). Phases 2 and 3 are design only.
+**Status:** Phases 0, 1 and 2 implemented (see Implementation status). Phase 3 is design only.
 
 Visual companion: the "Inbound Mail Channels" artifact published alongside this document (topology, identity options, data model, onboarding sequence, roadmap).
 
@@ -168,7 +168,7 @@ The channel row carries `ingress_kind`: `forward` (this document), `mx` (operato
 
 ### D9. Attachments and HTML (Phase 2)
 
-Route attachment mode is set to signed URLs. An attachment worker fetches within the expiry window into Custyard's `UPLOAD_DIR` under a content-addressed path, records filename, declared type, sniffed type and size, and never trusts the declared filename as a path. Default per-channel cap 10 MB per message, remainder listed but not fetched. Signed URLs are never logged, never rendered to the browser, and never stored. HTML bodies are sanitised at ingest with an allowlist, remote images blocked by default, and stored alongside the text body. Until Phase 2, text body with the existing `strip_html` fallback stands.
+Route attachment mode is set to signed URLs. An attachment worker fetches within the expiry window into a dedicated attachment directory (`ATTACHMENT_DIR`, never a static path) under a content-addressed path, records filename, declared type, sniffed type and size, and never trusts the declared filename as a path. Default per-channel cap 10 MB per message, remainder listed but not fetched. Signed URLs are never logged, never rendered to the browser, and never stored. HTML bodies are sanitised at ingest with an allowlist, images removed, and stored alongside the text body. Implemented in Phase 2; see Implementation status.
 
 ### D10. Portal and reply visibility
 
@@ -221,7 +221,7 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 
 **Phase 1, forwarding channels** (done, pilot pending). Channel model and migrations; triage stage with own-echo, verification capture and auto-response classes; per-channel From identity with sending-domain check; setup wizard for Proton and Gmail; channel health; channels tab; conversation view badges and recipients display. Onetime Secret pilot on one `support@` channel.
 
-**Phase 2, email fidelity.** CC and Reply-To handling in the composer; sanitised HTML; attachments via signed URLs; archive copy (D4); operator-sent capture and manual-forward unwrap for backlog import; rejection log UI; DSAR coverage for CC participants; language detection as an enrichment purpose.
+**Phase 2, email fidelity** (done). CC and Reply-To handling in the composer; sanitised HTML; attachments via signed URLs; archive copy (D4); operator-sent capture and manual-forward unwrap for backlog import; rejection log UI; DSAR coverage for CC participants; language detection as an enrichment purpose.
 
 **Phase 3, other ingress kinds.** Direct-MX channels on a custom inbound domain with subdomain From identity; per-channel IMAP with encrypted credentials replacing the global poller; Google Workspace admin-routing guide.
 
@@ -240,6 +240,18 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 - **Retention.** `InboundChannels.sweep_expired/1` runs inside `Conversations.RetentionSweep`: rejection rows after 14 days, expired verification captures, rotated tokens past their grace period.
 - **UI.** Channels tab on the organization page (the Routes tab survives as an "Advanced" disclosure inside it), setup wizard for Proton, Google and other providers with live verification capture, token reveal and rotation with confirmation, pause, resume and revoke. Conversation thread shows channel and suspect badges, per-message To, CC, Reply-To, authentication and spam score, and the composer states which identity a reply will use. Attention queue rows show the same badges.
 - **Open.** Onetime Secret pilot on one `support@` channel; the Proton envelope and header check (Risks item 3) happens on that first forward.
+
+**Phase 2** (branch `agent/custyard-inbound-phase2`) landed email fidelity with these notes:
+
+- **HTML.** `Custyard.Email.HtmlSanitizer` (on `html_sanitize_ex`) runs inside both adapters, so raw provider HTML never leaves normalisation. Allowlist: text markup, lists, headings, blockquotes, code, tables and `http`/`https`/`mailto` links; `script`, `style`, `head`, `iframe`, `object`, `embed`, `svg` and `math` blocks are removed with their contents before parsing; no `style`, `class`, `id` or handler attributes survive; images are removed outright rather than blocked (inline `cid:` images can return once attachments render). Links open in a new tab with `rel="noopener noreferrer"`. Raw HTML over 300 KB, or markup with no text, stores nothing. The result lives in `messages.html_body`; the operator thread renders it with the plain text behind a toggle.
+- **Attachments.** The adapter keeps the signed-URL descriptors in the in-memory metadata only; `Custyard.Webhooks.Purposes.Attachments` runs after the message is stored (for customer, suspect, operator-forward and operator-sent deliveries, never auto-responses) and `Custyard.Attachments.fetch_for_message/3` fetches each within the channel's `attachment_limit_mb` (default 10, 0 disables) into `ATTACHMENT_DIR/<ab>/<sha256>`, sniffs the type from the bytes and records a `message_attachments` row (`fetched | skipped | failed`, with `over_limit`, `too_large`, `suspect`, `disabled`, `no_url`, `fetch_failed` as skip reasons). Suspect mail is listed, never fetched. Download is `GET /operator/attachments/:id`, organization-scoped, always `Content-Disposition: attachment`, served under the sniffed type when it is on a small allowlist and `application/octet-stream` otherwise. The retention sweep deletes files no row references. Only `https` URLs with a hostname are fetched. Portal download is not implemented.
+- **CC.** `Conversations.default_reply_cc/2` is the To and CC of the latest customer-class message minus the conversation's own side; the composer shows it editable and `send_reply/3` takes `:cc`, validating every address first. Outbound sends it as the CC header. Prospect conversations never carry a CC.
+- **Archive copy (D4).** `inbound_channels.archive_copy`, off by default, set on the identity step of the wizard; Outbound BCCs the public address and triage's own-echo class absorbs the forwarded copy. The composer says when a copy is kept.
+- **Operator-sent and manual forward.** Both require the sender to be an operator account of the organization (any role scoped to it, or a super admin) or the channel's public address, *and* a DKIM pass whose signing domain is aligned with the sender's domain (exact or parent/child). `operator_sent` appends an operator message with no delivery status, stamps `last_operator_action_at`, reactivates nothing and notifies nobody. `operator_forward` unwraps the forwarded block (`Custyard.Email.ForwardUnwrapper`: Gmail, Apple Mail, Outlook, Thunderbird, Proton, quoted or not), runs the customer pipeline with the original sender as contact, stamps `forwarded_by_operator_id` / `forwarded_by_email`, drops the forward's own authentication, spam score, CC and HTML, and does not notify. A forward that cannot be unwrapped is customer mail from the operator's address, visibly, rather than dropped. The `X-Forwarded-For` alternative from D6 is not implemented.
+- **Rejection log UI.** The channels tab lists the organization's rejections from the last 14 days with reason, sender, subject and the channel or masked route address.
+- **DSAR.** `Custyard.DataSubjects` finds every message an address appears on as sender, To, CC or Reply-To; `export/2` includes the body only for messages the person sent, `erase_participation/2` scrubs recipient lists and Reply-To on messages they did not send and writes a `data_subject_erasure` audit event with counts only. `mix custyard.dsar export|erase EMAIL --org ID [--yes]`. Contact-level erasure of a sender's own messages remains the contact tooling's job.
+- **Language.** `Custyard.Email.LanguageDetector` (function-word scoring, no dependency; en, de, fr, es, nl, pt, it) runs in the enrichment purpose and sets `conversations.language` from the first detectable message; the thread header and attention queue show it.
+- **Open.** Portal attachment download; inline `cid:` images; contact-level erasure; Reply-To display in the composer (the thread already shows it).
 
 ## Rejected alternatives
 
