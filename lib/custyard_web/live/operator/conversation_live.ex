@@ -15,6 +15,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
   import CustyardWeb.OperatorComponents
   import CustyardWeb.FormHelpers
 
+  alias Custyard.Attachments.Recovery
+
   alias Custyard.{
     Attachments,
     Authorization,
@@ -233,6 +235,13 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
+  def handle_event("retry_attachments", _params, socket) do
+    case conversation_mutation(socket, fn current, _operator -> {:ok, current} end) do
+      {:ok, _conversation} -> {:noreply, begin_attachment_recovery(socket)}
+      _ -> {:noreply, access_revoked(socket)}
+    end
+  end
+
   # Triage flagged the conversation as suspect (spec-inbound-channels D6).
   # The flag is a notification suppressor, never a filter; clearing it is an
   # operator judgement and goes through the same locked access check as
@@ -242,7 +251,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
            Conversations.set_suspect(current, false)
          end) do
       {:ok, _conversation} ->
-        {:noreply, reload_conversation(socket)}
+        {:noreply, begin_attachment_recovery(reload_conversation(socket))}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
@@ -257,7 +266,13 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
     case Map.fetch(params, "cc") do
       {:ok, cc} when is_binary(cc) ->
-        {:noreply, socket |> assign(:reply_cc, cc) |> assign(:reply_cc_edited?, true)}
+        {:noreply,
+         socket
+         |> assign(:reply_cc, cc)
+         |> assign(
+           :reply_cc_edited?,
+           socket.assigns.reply_cc_edited? or cc != socket.assigns.reply_cc
+         )}
 
       _no_cc ->
         {:noreply, socket}
@@ -675,6 +690,26 @@ defmodule CustyardWeb.Operator.ConversationLive do
     |> push_navigate(to: ~p"/operator")
   end
 
+  defp begin_attachment_recovery(socket) do
+    id = socket.assigns.conversation.id
+    start_async(socket, :recover_attachments, fn -> Recovery.recover(id) end)
+  end
+
+  @impl true
+  def handle_async(:recover_attachments, {:ok, :ok}, socket) do
+    {:noreply, reload_conversation(socket)}
+  end
+
+  def handle_async(:recover_attachments, _result, socket) do
+    {:noreply,
+     socket
+     |> reload_conversation()
+     |> put_flash(
+       :error,
+       "Some attachments could not be recovered. Retry while the provider still retains the original delivery (28 days)."
+     )}
+  end
+
   defp reload_conversation(socket) do
     case load_conversation(socket.assigns.conversation.id) do
       nil ->
@@ -876,6 +911,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             {@conversation.inbound_channel.public_address}
           </span>
+          <button
+            :if={not @conversation.suspect and recoverable_attachments?(@conversation)}
+            type="button"
+            phx-click="retry_attachments"
+            phx-disable-with="Recovering…"
+            class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+            data-testid="retry-attachments"
+          >
+            Retry attachment recovery
+          </button>
           <span
             :if={@conversation.suspect}
             class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
@@ -1564,6 +1609,15 @@ defmodule CustyardWeb.Operator.ConversationLive do
     """
   end
 
+  defp recoverable_attachments?(conversation) do
+    Enum.any?(conversation.messages, fn message ->
+      Enum.any?(
+        message_attachments(message),
+        &(&1.skip_reason == "suspect" or &1.state in [:failed, :pending])
+      )
+    end)
+  end
+
   # Attachments are preloaded by Conversations.get_with_messages/1; a message
   # reached through another loader renders without them rather than raising.
   defp message_attachments(%Message{attachments: attachments}) when is_list(attachments),
@@ -1623,7 +1677,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
   defp attachment_skip_label(_reason), do: "not fetched"
 
   defp attachment_skip_title("suspect"),
-    do: "Attachments on suspect mail are listed but not downloaded until the flag is cleared"
+    do:
+      "Clearing the suspect flag requests recovery from the retained provider delivery; expired or unavailable files stay listed"
 
   defp attachment_skip_title(_reason),
     do: "The provider keeps the original for 28 days; fetch it there if you need it"

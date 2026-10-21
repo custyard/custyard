@@ -23,6 +23,29 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
     {:ok, conn: conn, operator: operator}
   end
 
+  test "clearing suspect starts recovery and retains an explicit retry when unavailable", %{
+    conn: conn
+  } do
+    org = insert_organization()
+    conv = insert_conversation(organization_id: org.id, suspect: true)
+    message = insert_message(conversation_id: conv.id)
+
+    {:ok, [_]} =
+      Attachments.fetch_for_message(
+        message,
+        [%{filename: "withheld.txt", url: StubClient.unique_url()}],
+        skip: "suspect"
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+    view |> element(~s([data-testid="dismiss-suspect"])) |> render_click()
+    html = render_async(view)
+    assert html =~ "Some attachments could not be recovered"
+    assert has_element?(view, ~s([data-testid="retry-attachments"]))
+    view |> element(~s([data-testid="retry-attachments"])) |> render_click()
+    assert render_async(view) =~ "Some attachments could not be recovered"
+  end
+
   describe "mount/3" do
     test "renders conversation view", %{conn: conn} do
       org = insert_organization()
@@ -66,9 +89,11 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
           %{filename: "notes.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
         ])
 
+      another_message = insert_message(conversation_id: conv.id)
+
       {:ok, [skipped]} =
         Attachments.fetch_for_message(
-          message,
+          another_message,
           [
             %{
               filename: "big.zip",
@@ -184,6 +209,33 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert has_element?(
                view,
                ~s(input[data-testid="operator-reply-cc"][value="boss@customer.example, ops@customer.example"])
+             )
+    end
+
+    test "typing the body does not freeze untouched CC defaults", %{conn: conn, conv: conv} do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]",
+        body: "Draft",
+        cc: "boss@customer.example, ops@customer.example"
+      )
+      |> render_change()
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "alice@customer.example",
+        cc_addresses: ["new@customer.example"],
+        triage_class: :customer,
+        body: "New participants"
+      )
+
+      send(view.pid, {:message_added, conv.id})
+
+      assert has_element?(
+               view,
+               ~s(input[data-testid="operator-reply-cc"][value="new@customer.example"])
              )
     end
 
