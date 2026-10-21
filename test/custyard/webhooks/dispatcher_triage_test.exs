@@ -742,6 +742,32 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert message.to_addresses == ["#{channel.ingress_local}@#{route.lettermint_route_domain}"]
     end
 
+    test "recipient overflow does not reject the delivery", %{route: route} do
+      channel = channel!(route)
+      addresses = Enum.map(1..51, &"recipient#{&1}@example.com")
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{to: addresses, cc: addresses})
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert message.to_addresses == Enum.take(addresses, 50)
+      assert message.cc_addresses == Enum.take(addresses, 50)
+    end
+
+    test "a real header To keeps its plus tag on a channel", %{route: route} do
+      channel = channel!(route)
+
+      payload =
+        delivery("help+billing@acme.example.com")
+        |> put_metadata(%{recipient: InboundChannels.ingress_address(channel)})
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert message.to_addresses == ["help+billing@acme.example.com"]
+    end
+
     test "a successful delivery promotes the channel to active", %{route: route} do
       channel = channel!(route, state: :awaiting_first_message)
 
