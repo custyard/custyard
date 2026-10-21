@@ -47,7 +47,7 @@ defmodule Custyard.Attachments.Recovery do
   defp recover_message(message, conversation, opts) do
     client = Keyword.get_lazy(opts, :client, &Client.client/0)
 
-    with %InboundChannel{} = channel <- Repo.get(InboundChannel, conversation.inbound_channel_id),
+    with %InboundChannel{} = channel <- Repo.get(InboundChannel, message.inbound_channel_id),
          true <- channel.organization_id == conversation.organization_id,
          true <- is_binary(message.provider_delivery_id),
          true <-
