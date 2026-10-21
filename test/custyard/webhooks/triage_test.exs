@@ -137,6 +137,166 @@ defmodule Custyard.Webhooks.TriageTest do
     end
   end
 
+  describe "operator-sent capture and manual forward" do
+    setup %{org: org} do
+      operator =
+        insert_operator_account(
+          role: "admin",
+          organization_id: org.id,
+          email: "me@acme.example.com"
+        )
+
+      conv = insert_conversation(organization_id: org.id)
+      insert_message(conversation_id: conv.id, message_id: "<orig@customer.example.com>")
+      %{operator: operator, conv: conv}
+    end
+
+    defp operator_mail(overrides) do
+      normalized(
+        Map.merge(
+          %{
+            from: "Me <me@acme.example.com>",
+            metadata: %{
+              recipient: "support@acme.example.com",
+              mail_from: "me@acme.example.com",
+              authentication: %{
+                dkim: "pass",
+                dkim_domain: "acme.example.com",
+                spf: "pass",
+                dmarc: "pass"
+              },
+              is_spam: false,
+              spam_score: 0.1
+            }
+          },
+          overrides
+        )
+      )
+    end
+
+    @forward_body """
+    ---------- Forwarded message ---------
+    From: Alice <alice@customer.example.com>
+    Date: Mon
+    Subject: Login broken
+
+    I cannot log in.
+    """
+
+    test "an authenticated operator reply into a known thread is operator_sent", %{
+      route: route,
+      operator: operator,
+      conv: conv
+    } do
+      payload =
+        operator_mail(%{in_reply_to: "<orig@customer.example.com>", body: "Fixed it for you."})
+
+      assert {:operator_sent,
+              %{
+                conversation: %{id: conv_id},
+                operator: %{id: op_id},
+                email: "me@acme.example.com"
+              }} =
+               Triage.classify(payload, route, nil)
+
+      assert conv_id == conv.id
+      assert op_id == operator.id
+    end
+
+    test "an authenticated operator forward with no thread is operator_forward", %{route: route} do
+      payload = operator_mail(%{subject: "Fwd: Login broken", body: @forward_body})
+
+      assert {:operator_forward,
+              %{original: %{email: "alice@customer.example.com", subject: "Login broken"}}} =
+               Triage.classify(payload, route, nil)
+    end
+
+    test "a forwarded block without a Fwd: subject still unwraps", %{route: route} do
+      payload = operator_mail(%{subject: "see below", body: @forward_body})
+      assert {:operator_forward, _info} = Triage.classify(payload, route, nil)
+    end
+
+    test "a forward that cannot be unwrapped is customer mail", %{route: route} do
+      payload = operator_mail(%{subject: "Fwd: something", body: "no block here"})
+      assert {:customer, nil} = Triage.classify(payload, route, nil)
+    end
+
+    test "without an aligned DKIM pass the operator address is just a sender", %{route: route} do
+      for auth <- [
+            %{dkim: "fail", dkim_domain: "acme.example.com", dmarc: "pass"},
+            %{dkim: "pass", dkim_domain: "evil.example", dmarc: "pass"},
+            %{dkim: nil, dkim_domain: nil, dmarc: nil}
+          ] do
+        payload =
+          operator_mail(%{in_reply_to: "<orig@customer.example.com>"})
+          |> put_metadata(%{authentication: auth})
+
+        assert {:customer, nil} = Triage.classify(payload, route, nil), inspect(auth)
+      end
+    end
+
+    test "a subdomain signature is aligned", %{route: route} do
+      payload =
+        operator_mail(%{in_reply_to: "<orig@customer.example.com>"})
+        |> put_metadata(%{
+          authentication: %{dkim: "pass", dkim_domain: "mail.acme.example.com", dmarc: "pass"}
+        })
+
+      assert {:operator_sent, _info} = Triage.classify(payload, route, nil)
+    end
+
+    test "an operator of another organization is not operator-owned here", %{route: route} do
+      other = insert_organization()
+
+      insert_operator_account(
+        role: "admin",
+        organization_id: other.id,
+        email: "them@acme.example.com"
+      )
+
+      payload =
+        operator_mail(%{
+          from: "them@acme.example.com",
+          in_reply_to: "<orig@customer.example.com>"
+        })
+
+      assert {:customer, nil} = Triage.classify(payload, route, nil)
+    end
+
+    test "a super admin is operator-owned everywhere", %{route: route} do
+      insert_operator_account(role: "super_admin", email: "root@acme.example.com")
+
+      payload =
+        operator_mail(%{
+          from: "root@acme.example.com",
+          in_reply_to: "<orig@customer.example.com>"
+        })
+
+      assert {:operator_sent, %{operator: %{role: "super_admin"}}} =
+               Triage.classify(payload, route, nil)
+    end
+
+    test "the channel's public address counts as operator-owned with no account", %{route: route} do
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "support@acme.example.com",
+          state: :active
+        )
+
+      payload =
+        operator_mail(%{
+          from: "Acme Support <support@acme.example.com>",
+          in_reply_to: "<orig@customer.example.com>"
+        })
+
+      assert {:operator_sent, %{operator: nil, email: "support@acme.example.com"}} =
+               Triage.classify(payload, route, channel)
+
+      assert {:customer, nil} = Triage.classify(payload, route, nil)
+    end
+  end
+
   describe "provider verification" do
     test "Gmail confirmation carries the code from the subject and the google.com link", %{
       route: route

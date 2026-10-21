@@ -179,37 +179,6 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   def handle_event("send_reply", _params, socket), do: {:noreply, socket}
 
-  # Ground truth for this message: :withheld is only ever set by the
-  # public-intake consent gate at send time, so this can't be fooled by a
-  # consent flip that happens before the reload runs. The reply-box advisory
-  # already explains the withheld delivery for public-intake conversations.
-  defp flash_undeliverable_reply(socket, message) do
-    cond do
-      message.delivery_status == :withheld ->
-        socket
-
-      socket.assigns.reply_will_email? ->
-        socket
-
-      socket.assigns.conversation.source == :public_intake ->
-        socket
-
-      true ->
-        put_flash(
-          socket,
-          :error,
-          "Reply saved, but the contact has no email address so it cannot be delivered"
-        )
-    end
-  end
-
-  defp reply_error_message({:invalid_cc, :too_many}), do: "At most 20 CC addresses"
-
-  defp reply_error_message({:invalid_cc, invalid}),
-    do: "Invalid CC address: #{Enum.join(invalid, ", ")}"
-
-  defp reply_error_message(_reason), do: "Failed to send reply"
-
   def handle_event("add_note", %{"body" => body}, socket) when byte_size(body) > 0 do
     conversation = socket.assigns.conversation
 
@@ -745,6 +714,37 @@ defmodule CustyardWeb.Operator.ConversationLive do
     |> assign(:reply_delivery, reply_delivery)
     |> assign(:reply_will_email?, reply_delivery in [:contact, :prospect_opted_in])
   end
+
+  # Ground truth for this message: :withheld is only ever set by the
+  # public-intake consent gate at send time, so this can't be fooled by a
+  # consent flip that happens before the reload runs. The reply-box advisory
+  # already explains the withheld delivery for public-intake conversations.
+  defp flash_undeliverable_reply(socket, message) do
+    cond do
+      message.delivery_status == :withheld ->
+        socket
+
+      socket.assigns.reply_will_email? ->
+        socket
+
+      socket.assigns.conversation.source == :public_intake ->
+        socket
+
+      true ->
+        put_flash(
+          socket,
+          :error,
+          "Reply saved, but the contact has no email address so it cannot be delivered"
+        )
+    end
+  end
+
+  defp reply_error_message({:invalid_cc, :too_many}), do: "At most 20 CC addresses"
+
+  defp reply_error_message({:invalid_cc, invalid}),
+    do: "Invalid CC address: #{Enum.join(invalid, ", ")}"
+
+  defp reply_error_message(_reason), do: "Failed to send reply"
 
   # Reply-all CC the composer starts from (spec-inbound-channels D5). A list
   # the operator has edited survives a reload triggered by an incoming
@@ -1461,6 +1461,22 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             suspect
           </span>
+          <span
+            :if={@message.triage_class == :operator_sent}
+            class="text-xs bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 px-1.5 py-0.5 rounded"
+            title="Sent from the operator's mailbox, outside Custyard, and captured from the forwarded copy"
+            data-testid="message-operator-sent-tag"
+          >
+            sent from mailbox
+          </span>
+          <span
+            :if={@message.triage_class == :operator_forward}
+            class="text-xs bg-gray-200 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300 px-1.5 py-0.5 rounded"
+            title={"Forwarded into Custyard by #{@message.forwarded_by_email}"}
+            data-testid="message-forwarded-tag"
+          >
+            forwarded by {@message.forwarded_by_email}
+          </span>
           <span class="text-xs text-gray-400 dark:text-zinc-500">
             {unless @is_internal, do: via_label(@message.source, @prospect_email)}
           </span>
@@ -1857,6 +1873,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   defp sender_name(message) do
     cond do
+      message.triage_class == :operator_sent -> message.sender_email || "Operator"
       message.source == :operator -> "You"
       message.sender_email -> message.sender_email
       true -> "Customer"

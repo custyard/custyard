@@ -724,7 +724,7 @@ defmodule Custyard.Conversations do
       Keyword.get(opts, :operator_email),
       SenderMatcher.extract_email(message.sender_email),
       message.reply_to,
-      contact_email(conversation),
+      conversation_contact_email(conversation),
       channel && channel.public_address,
       channel && InboundChannels.ingress_address(channel),
       channel && channel.previous_ingress_token &&
@@ -736,16 +736,16 @@ defmodule Custyard.Conversations do
     |> MapSet.new()
   end
 
-  defp contact_email(%Conversation{contact: %Contact{email: email}}), do: email
+  defp conversation_contact_email(%Conversation{contact: %Contact{email: email}}), do: email
 
-  defp contact_email(%Conversation{contact_id: id}) when is_integer(id) do
+  defp conversation_contact_email(%Conversation{contact_id: id}) when is_integer(id) do
     case Repo.get(Contact, id) do
       %Contact{email: email} -> email
       nil -> nil
     end
   end
 
-  defp contact_email(_conversation), do: nil
+  defp conversation_contact_email(_conversation), do: nil
 
   defp route_domain(%Custyard.InboundChannel{inbound_route: %Custyard.InboundRoute{} = route}),
     do: route.lettermint_route_domain

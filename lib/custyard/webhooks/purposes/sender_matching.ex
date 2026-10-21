@@ -345,6 +345,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     |> put_present(:authentication, authentication(metadata[:authentication]))
     |> put_present(:spam_score, spam_score(metadata[:spam_score]))
     |> put_present(:html_body, html_body(metadata[:html_body]))
+    # Manual-forward provenance (D6): who brought this message in.
+    |> put_present(:forwarded_by_operator_id, route_context[:forwarded_by_operator_id])
+    |> put_present(:forwarded_by_email, route_context[:forwarded_by_email])
   end
 
   # Already sanitised by the adapter (D9); anything else is not trusted.

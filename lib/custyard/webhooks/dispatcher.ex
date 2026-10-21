@@ -160,6 +160,12 @@ defmodule Custyard.Webhooks.Dispatcher do
       {:own_echo, message} ->
         handle_own_echo(route, normalized, channel, message)
 
+      {:operator_sent, info} ->
+        handle_operator_sent(route, normalized, channel, info)
+
+      {:operator_forward, info} ->
+        handle_operator_forward(route, normalized, channel, info)
+
       {:verification, capture} ->
         handle_verification(route, normalized, channel, capture)
 
@@ -180,6 +186,85 @@ defmodule Custyard.Webhooks.Dispatcher do
   defp handle_own_echo(route, normalized, channel, %Message{} = message) do
     audit_triaged(route, normalized, channel, "own_echo", message.conversation_id)
     {:ignored, :own_echo}
+  end
+
+  # A reply the operator sent from their own mailbox (D6 "operator-sent
+  # capture"): appended as an operator message so the thread is complete,
+  # with the operator's action stamped on the conversation. No reactivation,
+  # no contact resolution, no notification; the operator already knows.
+  defp handle_operator_sent(route, normalized, channel, %{conversation: conversation} = info) do
+    route_context =
+      route
+      |> route_context(channel, :operator_sent)
+      |> Map.merge(forwarder_context(info))
+
+    attrs =
+      conversation
+      |> Purposes.SenderMatching.inbound_message_attrs(normalized, route_context)
+      |> Map.put(:source, :operator)
+      |> Map.put(:sender_email, info.email)
+      |> Map.put(:triage_class, :operator_sent)
+
+    case Message.insert_idempotent(attrs) do
+      {:ok, message} ->
+        conversation = stamp_operator_action(Repo.get!(Conversation, message.conversation_id))
+
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversation:#{conversation.id}",
+          {:message_added, conversation.id}
+        )
+
+        mark_received(channel)
+        audit_triaged(route, normalized, channel, "operator_sent", conversation.id)
+        run_async_attachments(conversation, normalized, route_context)
+        {:ok, conversation}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  # Customer mail forwarded in by an operator (D6 "operator manual forward",
+  # the backlog-import path): the unwrapped original runs through the
+  # customer pipeline with the original sender as the contact, stamped with
+  # who forwarded it. The forward's own authentication, spam score and HTML
+  # describe the operator's copy, not the customer's mail, and are dropped.
+  defp handle_operator_forward(route, normalized, channel, %{original: original} = info) do
+    unwrapped =
+      normalized
+      |> Map.put(:from, original.from)
+      |> Map.put(:subject, original.subject || normalized[:subject])
+      |> Map.put(:body, original.body)
+      |> Map.update(:metadata, %{}, fn metadata ->
+        metadata
+        |> Map.merge(%{
+          to: [],
+          cc: [],
+          reply_to: nil,
+          authentication: nil,
+          spam_score: nil,
+          is_spam: false,
+          html_body: nil
+        })
+      end)
+
+    process_customer(route, unwrapped, channel, :operator_forward, forwarder_context(info))
+  end
+
+  defp forwarder_context(%{operator: operator, email: email}) do
+    %{
+      forwarded_by_operator_id: operator && operator.id,
+      forwarded_by_email: email
+    }
+  end
+
+  defp stamp_operator_action(%Conversation{} = conversation) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    conversation
+    |> Ecto.Changeset.change(last_operator_action_at: now)
+    |> Repo.update!()
   end
 
   defp handle_verification(
@@ -249,8 +334,8 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   # --- Customer and suspect mail: the existing purpose pipeline ---
 
-  defp process_customer(route, normalized, channel, triage_class) do
-    route_context = route_context(route, channel, triage_class)
+  defp process_customer(route, normalized, channel, triage_class, extra_context \\ %{}) do
+    route_context = route |> route_context(channel, triage_class) |> Map.merge(extra_context)
     enabled_purposes = enabled_purposes(route)
 
     # Step 1: Sender matching (synchronous, blocking)
@@ -292,13 +377,7 @@ defmodule Custyard.Webhooks.Dispatcher do
   end
 
   defp run_async_purposes(conversation, normalized, route_context, enabled_purposes) do
-    # Attachments belong to the message itself, not to an optional purpose:
-    # they are fetched (or listed as skipped) whenever the delivery had any.
-    if Purposes.Attachments.descriptors(normalized) != [] do
-      start_purpose_task(:attachments, fn ->
-        Purposes.Attachments.process(conversation, normalized, route_context)
-      end)
-    end
+    run_async_attachments(conversation, normalized, route_context)
 
     if MapSet.member?(enabled_purposes, :enrichment) do
       start_purpose_task(:enrichment, fn ->
@@ -325,6 +404,18 @@ defmodule Custyard.Webhooks.Dispatcher do
     :ok
   end
 
+  # Attachments belong to the message itself, not to an optional purpose:
+  # they are fetched (or listed as skipped) whenever the delivery had any.
+  defp run_async_attachments(conversation, normalized, route_context) do
+    if Purposes.Attachments.descriptors(normalized) != [] do
+      start_purpose_task(:attachments, fn ->
+        Purposes.Attachments.process(conversation, normalized, route_context)
+      end)
+    end
+
+    :ok
+  end
+
   defp run_audit_purpose(conversation, normalized, route_context, enabled_purposes) do
     if MapSet.member?(enabled_purposes, :audit) do
       start_purpose_task(:audit, fn ->
@@ -341,8 +432,10 @@ defmodule Custyard.Webhooks.Dispatcher do
   # delivery on its own classified as customer mail.
   defp notify?(%Conversation{suspect: true}, _route_context), do: false
 
-  defp notify?(_conversation, %{triage_class: class}) when class in [:suspect, :auto_response],
-    do: false
+  # A manual forward is the operator importing mail they have already read.
+  defp notify?(_conversation, %{triage_class: class})
+       when class in [:suspect, :auto_response, :operator_forward],
+       do: false
 
   defp notify?(_conversation, _route_context), do: true
 

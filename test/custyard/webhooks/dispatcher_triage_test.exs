@@ -93,6 +93,150 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
     end
   end
 
+  describe "operator-sent capture and manual forward (D6)" do
+    @forward_body """
+    ---------- Forwarded message ---------
+    From: Alice <alice@customer.example.com>
+    Date: Mon, 6 Oct 2025
+    Subject: Login broken
+    To: support@acme.example.com
+
+    I cannot log in since this morning.
+    """
+
+    defp operator_delivery(recipient, overrides) do
+      delivery(recipient, overrides)
+      |> Map.put(:from, "Me <me@acme.example.com>")
+      |> put_metadata(%{
+        mail_from: "me@acme.example.com",
+        authentication: %{
+          dkim: "pass",
+          dkim_domain: "acme.example.com",
+          spf: "pass",
+          dmarc: "pass"
+        }
+      })
+    end
+
+    test "an operator's mailbox reply is appended as an operator message, quietly", %{
+      org: org,
+      route: route
+    } do
+      channel = channel!(route)
+
+      operator =
+        insert_operator_account(
+          role: "admin",
+          organization_id: org.id,
+          email: "me@acme.example.com"
+        )
+
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
+
+      conv =
+        insert_conversation(organization_id: org.id, contact_id: contact.id, state: :resolved)
+
+      insert_message(conversation_id: conv.id, message_id: "<orig@customer.example.com>")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
+
+      payload =
+        operator_delivery(InboundChannels.ingress_address(channel), %{
+          in_reply_to: "<orig@customer.example.com>",
+          body: "Fixed it for you.",
+          subject: "Re: Login broken"
+        })
+
+      assert {:ok, %Conversation{id: conv_id}} = Dispatcher.dispatch(route, payload)
+      assert conv_id == conv.id
+
+      message = Repo.get_by!(Message, conversation_id: conv.id, triage_class: :operator_sent)
+      assert message.source == :operator
+      assert message.sender_email == "me@acme.example.com"
+      assert message.forwarded_by_operator_id == operator.id
+      assert message.forwarded_by_email == "me@acme.example.com"
+      assert message.delivery_status == nil
+      assert message.body == "Fixed it for you."
+
+      reloaded = Repo.get!(Conversation, conv.id)
+      assert reloaded.state == :resolved
+      assert reloaded.last_operator_action_at
+      refute_receive {:new_message, _id}, 100
+      assert Repo.aggregate(Custyard.Contact, :count) == 1
+    end
+
+    test "a manual forward creates the conversation for the original sender", %{
+      org: org,
+      route: route
+    } do
+      channel = channel!(route)
+
+      operator =
+        insert_operator_account(
+          role: "admin",
+          organization_id: org.id,
+          email: "me@acme.example.com"
+        )
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
+
+      payload =
+        operator_delivery(InboundChannels.ingress_address(channel), %{
+          subject: "Fwd: Login broken",
+          body: @forward_body
+        })
+        |> put_metadata(%{is_spam: true, spam_score: 9.0, cc: ["colleague@acme.example.com"]})
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      assert conversation.subject == "Login broken"
+      assert conversation.suspect == false
+      assert conversation.inbound_channel_id == channel.id
+
+      contact = Repo.get!(Custyard.Contact, conversation.contact_id)
+      assert contact.email == "alice@customer.example.com"
+
+      [message] =
+        Repo.all(Ecto.Query.from(m in Message, where: m.conversation_id == ^conversation.id))
+
+      assert message.source == :email
+      assert message.triage_class == :operator_forward
+      assert message.sender_email == "Alice <alice@customer.example.com>"
+      assert message.body == "I cannot log in since this morning."
+      assert message.forwarded_by_operator_id == operator.id
+      assert message.forwarded_by_email == "me@acme.example.com"
+      assert message.cc_addresses == []
+      assert message.authentication == nil
+      assert message.spam_score == nil
+
+      refute_receive {:new_message, _id}, 100
+    end
+
+    test "an unauthenticated 'operator' address is ordinary customer mail", %{
+      org: org,
+      route: route
+    } do
+      channel = channel!(route)
+
+      insert_operator_account(
+        role: "admin",
+        organization_id: org.id,
+        email: "me@acme.example.com"
+      )
+
+      payload =
+        operator_delivery(InboundChannels.ingress_address(channel), %{
+          subject: "Fwd: Login broken",
+          body: @forward_body
+        })
+        |> put_metadata(%{
+          authentication: %{dkim: "fail", dkim_domain: "acme.example.com", dmarc: "fail"}
+        })
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      assert Repo.get!(Custyard.Contact, conversation.contact_id).email == "me@acme.example.com"
+      assert conversation.suspect
+    end
+  end
+
   describe "attachments (D9)" do
     test "are fetched within the channel cap and the signed URL is never stored", %{
       route: route
