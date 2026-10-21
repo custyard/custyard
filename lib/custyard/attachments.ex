@@ -311,8 +311,9 @@ defmodule Custyard.Attachments do
 
   defp process_descriptor(_descriptor, used, 0, _skip), do: {skipped("disabled"), used}
 
-  defp process_descriptor(descriptor, used, _limit, _skip)
-       when not is_map(descriptor), do: {skipped("invalid_descriptor"), used}
+  defp process_descriptor(descriptor, used, _limit, _skip) when not is_map(descriptor) do
+    {skipped("invalid_descriptor"), used}
+  end
 
   defp process_descriptor(descriptor, used, limit, skip) when not is_map_key(descriptor, :url),
     do: process_descriptor(Map.put(descriptor, :url, nil), used, limit, skip)
