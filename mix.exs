@@ -67,7 +67,7 @@ defmodule Custyard.MixProject do
       # Error tracking / diagnostics (self-hosted Sentry at catch.onetimesecret.com).
       # hackney backs the default Sentry.HackneyClient with its own isolated
       # connection pool, so error reporting never contends with the app's Finch.
-      {:sentry, "~> 13.0"},
+      {:sentry, "~> 14.0"},
       {:hackney, "~> 4.5"},
 
       # QA tools
