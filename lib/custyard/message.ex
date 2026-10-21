@@ -37,6 +37,8 @@ defmodule Custyard.Message do
   # Ranking (spec-conversation-loop, Delivery Tracking): pending < sending <
   # sent < delivered; bounced, suppressed and failed are terminal. A status
   # event only advances a message when its rank is higher or it is terminal.
+  @triage_classes [:customer, :auto_response, :suspect]
+
   @delivery_statuses [
     :pending,
     :sending,
@@ -68,6 +70,20 @@ defmodule Custyard.Message do
     # Delivery status tracks outbound message lifecycle (nil for inbound messages)
     field :delivery_status, Ecto.Enum, values: @delivery_statuses
 
+    # Email facts for inbound messages (spec-inbound-channels D5). Recipients
+    # as bare addresses; CC'd parties are participants, not contacts.
+    field :to_addresses, {:array, :string}, default: []
+    field :cc_addresses, {:array, :string}, default: []
+    field :reply_to, :string
+    # Compact authentication summary: %{"dkim", "dkim_domain", "spf", "dmarc"}
+    field :authentication, :map
+    field :spam_score, :float
+    # Triage class (D6): :customer, :auto_response (system message appended
+    # to a thread), :suspect (spam-flagged or unauthenticated unknown sender).
+    # nil for operator, portal and legacy rows.
+    field :triage_class, Ecto.Enum, values: @triage_classes
+    belongs_to :inbound_channel, Custyard.InboundChannel
+
     # Soft delete (GitHub-style tombstone): the body stays in the database and
     # rendering surfaces show "This message was deleted" instead. There is no
     # hard-delete path. Set only via soft_delete_changeset/2.
@@ -82,6 +98,7 @@ defmodule Custyard.Message do
   def sources, do: @sources
   def origins, do: @origins
   def delivery_statuses, do: @delivery_statuses
+  def triage_classes, do: @triage_classes
 
   @doc false
   def changeset(message, attrs) do
@@ -98,13 +115,24 @@ defmodule Custyard.Message do
       :lettermint_message_id,
       :provider_delivery_id,
       :delivery_status,
+      :to_addresses,
+      :cc_addresses,
+      :reply_to,
+      :authentication,
+      :spam_score,
+      :triage_class,
+      :inbound_channel_id,
       :conversation_id
     ])
     |> validate_required([:source, :body, :conversation_id])
     |> validate_length(:body, max: 100_000)
     |> validate_length(:provider_delivery_id, max: 255)
+    |> validate_length(:reply_to, max: 255)
+    |> validate_length(:to_addresses, max: 50)
+    |> validate_length(:cc_addresses, max: 50)
     # Note: :source and :origin use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:inbound_channel_id)
     |> unique_constraint([:dedup_scope, :message_id],
       name: :messages_dedup_scope_message_id_index
     )

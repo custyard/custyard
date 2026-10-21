@@ -54,7 +54,13 @@ defmodule Custyard.Conversation do
     # Prevents duplicate alerts when recalculating
     field :last_neglect_notification, Ecto.Enum, values: @neglect_levels
 
+    # Triage flagged the first message as spam or unauthenticated from an
+    # unknown sender (spec-inbound-channels D6). A badge and a notification
+    # suppressor, never a filter; cleared via suspect_changeset/2.
+    field :suspect, :boolean, default: false
+
     belongs_to :organization, Custyard.Organization
+    belongs_to :inbound_channel, Custyard.InboundChannel
     belongs_to :contact, Custyard.Contact
     belongs_to :project, Custyard.Project
     has_one :prospect, Custyard.Prospect
@@ -83,7 +89,8 @@ defmodule Custyard.Conversation do
       :snoozed_until,
       :organization_id,
       :contact_id,
-      :project_id
+      :project_id,
+      :inbound_channel_id
     ])
     |> validate_required_organization()
     |> validate_required([:subject])
@@ -92,6 +99,16 @@ defmodule Custyard.Conversation do
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:contact_id)
     |> foreign_key_constraint(:project_id)
+    |> foreign_key_constraint(:inbound_channel_id)
+  end
+
+  @doc """
+  Changeset for the triage suspect flag. Deliberately outside `changeset/2`
+  so the flag is set only by triage at creation and cleared only by an
+  explicit operator action.
+  """
+  def suspect_changeset(conversation, suspect?) when is_boolean(suspect?) do
+    change(conversation, suspect: suspect?)
   end
 
   @doc """

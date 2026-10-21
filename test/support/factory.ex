@@ -314,6 +314,83 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Build inbound channel attributes.
+
+      build_inbound_channel(public_address: "support@acme.example.com")
+  """
+  def build_inbound_channel(overrides \\ []) do
+    id = unique_id()
+
+    defaults = %{
+      public_address: "support-#{id}@acme-#{id}.example.com",
+      display_name: nil,
+      ingress_kind: :forward,
+      provider: :google,
+      reply_from: :public_address,
+      inbound_route_id: nil,
+      organization_id: nil,
+      project_id: nil
+    }
+
+    Map.merge(defaults, Map.new(overrides))
+  end
+
+  @doc """
+  Insert an inbound channel. Requires inbound_route_id or creates a general
+  Lettermint route (with a route domain) for the organization. The channel
+  starts `pending_verification` unless `state` is overridden; `ingress_token`
+  may be overridden for deterministic routing tests.
+  """
+  def insert_inbound_channel(overrides \\ []) do
+    overrides = ensure_channel_route(overrides)
+    {state, overrides} = Keyword.pop(overrides, :state, :pending_verification)
+    {token, overrides} = Keyword.pop(overrides, :ingress_token)
+    {last_received_at, overrides} = Keyword.pop(overrides, :last_received_at)
+    {verified_at, overrides} = Keyword.pop(overrides, :verified_at)
+
+    %Custyard.InboundChannel{}
+    |> Custyard.InboundChannel.changeset(build_inbound_channel(overrides))
+    |> Ecto.Changeset.change(state: state)
+    |> maybe_change(:ingress_token, token)
+    |> maybe_change(:last_received_at, last_received_at)
+    |> maybe_change(:verified_at, verified_at)
+    |> Custyard.Repo.insert!()
+    |> Custyard.Repo.preload([:inbound_route, :project])
+  end
+
+  defp maybe_change(changeset, _field, nil), do: changeset
+
+  defp maybe_change(changeset, field, value),
+    do: Ecto.Changeset.change(changeset, [{field, value}])
+
+  # A channel needs a route with an ingress domain so ingress_address/1
+  # resolves; mirror the organization and project of an explicit route.
+  defp ensure_channel_route(overrides) do
+    case Keyword.get(overrides, :inbound_route_id) do
+      nil ->
+        overrides = ensure_organization(overrides)
+
+        route =
+          insert_inbound_route(
+            organization_id: Keyword.fetch!(overrides, :organization_id),
+            route_type: :general,
+            source: :lettermint,
+            lettermint_route_id: "lm_route_#{unique_id()}",
+            lettermint_route_domain: "r#{unique_id()}.lettermint.app"
+          )
+
+        Keyword.put(overrides, :inbound_route_id, route.id)
+
+      route_id ->
+        route = Custyard.Repo.get!(Custyard.InboundRoute, route_id)
+
+        overrides
+        |> Keyword.put_new(:organization_id, route.organization_id)
+        |> Keyword.put_new(:project_id, route.project_id)
+    end
+  end
+
+  @doc """
   Build inbound route webhook attributes.
   """
   def build_inbound_route_webhook(overrides \\ []) do

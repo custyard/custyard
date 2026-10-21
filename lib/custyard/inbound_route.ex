@@ -53,6 +53,7 @@ defmodule Custyard.InboundRoute do
     belongs_to :organization, Custyard.Organization
     belongs_to :project, Custyard.Project
     has_many :webhooks, Custyard.InboundRouteWebhook
+    has_many :channels, Custyard.InboundChannel
 
     timestamps(type: :utc_datetime)
   end

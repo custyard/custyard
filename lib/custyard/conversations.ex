@@ -36,12 +36,13 @@ defmodule Custyard.Conversations do
         left_join: ct in assoc(c, :contact),
         # Prospect preload feeds reply_channel/1 without N+1 queries
         left_join: p in assoc(c, :prospect),
+        left_join: ch in assoc(c, :inbound_channel),
         left_join: mc in subquery(message_count_subquery),
         on: mc.conversation_id == c.id,
         # Exclude resolved conversations (snoozed filter handled separately)
         where: c.state != :resolved,
         order_by: [desc: c.cached_score],
-        preload: [organization: o, contact: ct, prospect: p],
+        preload: [organization: o, contact: ct, prospect: p, inbound_channel: ch],
         select: %{conversation: c, message_count: coalesce(mc.count, 0)}
 
     query
@@ -178,8 +179,28 @@ defmodule Custyard.Conversations do
       # Feeds reply_channel/1 and reply_deliverable?/1 without extra queries
       :prospect,
       :tasks,
+      # Channel badge and the reply From identity (spec-inbound-channels D3)
+      inbound_channel: :inbound_route,
       messages: from(m in Message, order_by: m.inserted_at)
     ])
+  end
+
+  @doc """
+  Clear or set the triage suspect flag on a conversation (operator action).
+  """
+  def set_suspect(%Conversation{} = conversation, suspect?) when is_boolean(suspect?) do
+    with {:ok, updated} <-
+           conversation |> Conversation.suspect_changeset(suspect?) |> Repo.update() do
+      broadcast_to_org(updated.organization_id, {:conversation_updated, updated.id})
+
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
+        "conversations",
+        {:conversation_updated, updated.id}
+      )
+
+      {:ok, updated}
+    end
   end
 
   @doc """
