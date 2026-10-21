@@ -17,10 +17,16 @@ defmodule Custyard.MessageAttachment do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @states [:fetched, :skipped, :failed]
-  @skip_reasons ~w(over_limit suspect disabled fetch_failed too_large no_url)
+  @states [:pending, :fetched, :skipped, :failed]
+  @skip_reasons ~w(over_limit suspect disabled fetch_failed too_large no_url invalid_descriptor)
 
   schema "message_attachments" do
+    field :position, :integer
+    field :descriptor_hash, :string
+    field :batch_processing_token, :string
+    field :batch_processing_expires_at, :utc_datetime
+    field :processing_token, :string
+    field :processing_expires_at, :utc_datetime
     field :filename, :string
     field :content_type, :string
     field :sniffed_type, :string
@@ -43,6 +49,12 @@ defmodule Custyard.MessageAttachment do
   def changeset(attachment, attrs) do
     attachment
     |> cast(attrs, [
+      :position,
+      :descriptor_hash,
+      :batch_processing_token,
+      :batch_processing_expires_at,
+      :processing_token,
+      :processing_expires_at,
       :filename,
       :content_type,
       :sniffed_type,
@@ -64,6 +76,7 @@ defmodule Custyard.MessageAttachment do
     |> validate_format(:sha256, ~r/\A[0-9a-f]{64}\z/)
     |> validate_fetched()
     |> foreign_key_constraint(:message_id)
+    |> unique_constraint([:message_id, :position])
   end
 
   # A fetched attachment must point at a file.

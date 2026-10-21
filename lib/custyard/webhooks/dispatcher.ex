@@ -100,8 +100,22 @@ defmodule Custyard.Webhooks.Dispatcher do
 
     result =
       case resolve_channel(route, normalized) do
-        {:ok, channel} -> triage_and_process(route, normalized, channel)
-        {:ignored, _reason} = ignored -> ignored
+        {:ok, channel} ->
+          case triage_and_process(route, normalized, channel) do
+            {:ok, conversation} = stored ->
+              context = route_context(route, channel, :customer)
+
+              case Purposes.Attachments.process(conversation, normalized, context) do
+                :ok -> stored
+                {:error, _reason} = error -> error
+              end
+
+            other ->
+              other
+          end
+
+        {:ignored, _reason} = ignored ->
+          ignored
       end
 
     # Emit telemetry for webhook dispatch
@@ -217,7 +231,6 @@ defmodule Custyard.Webhooks.Dispatcher do
 
         mark_received(channel)
         audit_triaged(route, normalized, channel, "operator_sent", conversation.id)
-        run_async_attachments(conversation, normalized, route_context)
         {:ok, conversation}
 
       {:error, changeset} ->
@@ -377,8 +390,6 @@ defmodule Custyard.Webhooks.Dispatcher do
   end
 
   defp run_async_purposes(conversation, normalized, route_context, enabled_purposes) do
-    run_async_attachments(conversation, normalized, route_context)
-
     if MapSet.member?(enabled_purposes, :enrichment) do
       start_purpose_task(:enrichment, fn ->
         Purposes.Enrichment.process(conversation, normalized, route_context)
@@ -399,18 +410,6 @@ defmodule Custyard.Webhooks.Dispatcher do
     if MapSet.member?(enabled_purposes, :disambiguation) do
       # TODO: Implement Purposes.Disambiguation.process/3
       :noop
-    end
-
-    :ok
-  end
-
-  # Attachments belong to the message itself, not to an optional purpose:
-  # they are fetched (or listed as skipped) whenever the delivery had any.
-  defp run_async_attachments(conversation, normalized, route_context) do
-    if Purposes.Attachments.descriptors(normalized) != [] do
-      start_purpose_task(:attachments, fn ->
-        Purposes.Attachments.process(conversation, normalized, route_context)
-      end)
     end
 
     :ok

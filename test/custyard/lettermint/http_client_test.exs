@@ -12,6 +12,19 @@ defmodule Custyard.Lettermint.HttpClientTest do
     "inbound_domain_verified_at" => nil
   }
 
+  test "delivery retrieval exposes only valid retained payloads and fixed errors" do
+    payload = %{"event" => "message.inbound", "id" => "delivery"}
+
+    assert {:ok, %{"payload" => ^payload}} =
+             HttpClient.decode_delivery(Jason.encode!(%{"payload" => payload}))
+
+    assert {:ok, %{"payload" => ^payload}} =
+             HttpClient.decode_delivery(Jason.encode!(%{"data" => %{"payload" => payload}}))
+
+    assert {:error, :delivery_content_unavailable} = HttpClient.decode_delivery("secret-url")
+    assert {:error, :delivery_content_unavailable} = HttpClient.decode_delivery("{}")
+  end
+
   describe "normalize_route_response/1" do
     test "unwraps the data envelope returned by POST /projects/:id/routes" do
       assert HttpClient.normalize_route_response(%{"data" => @route, "message" => "Created"}) ==

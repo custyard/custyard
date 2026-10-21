@@ -1,11 +1,11 @@
 defmodule Custyard.Webhooks.Purposes.Attachments do
   @moduledoc """
-  Async fetch of a delivery's attachments after its message is stored
+  Recoverable fetch of a delivery's attachments after its message is stored
   (spec-inbound-channels D9).
 
   Finds the message the delivery produced (by provider delivery id, else by
-  Message-ID inside the conversation), skips when it already has attachment
-  rows (a replayed delivery), applies the channel's per-message cap and
+  Message-ID inside the conversation), resumes durable attachment slots on
+  replay, applies the channel's per-message cap and
   records every attachment as fetched or skipped. Suspect mail is listed but
   never fetched: the operator sees the filenames and can clear the flag
   before anything is downloaded.
@@ -20,29 +20,29 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
   def process(conversation, normalized, route_context) do
     descriptors = descriptors(normalized)
 
-    with [_ | _] <- descriptors,
-         %Message{} = message <- find_message(conversation.id, normalized),
-         [] <- Attachments.list_for_message(message.id) do
-      opts = [limit_bytes: limit(route_context), skip: skip_reason(route_context)]
-      {:ok, _rows} = Attachments.fetch_for_message(message, descriptors, opts)
-      broadcast(conversation.id)
-      :ok
-    else
-      _no_work -> :ok
+    case find_message(conversation.id, normalized) do
+      %Message{} = message ->
+        opts = [limit_bytes: limit(route_context), skip: skip_reason(conversation, route_context)]
+        {:ok, rows} = Attachments.fetch_for_message(message, descriptors, opts)
+        broadcast(conversation.id)
+
+        if Enum.any?(rows, &(&1.state in [:failed, :pending])),
+          do: {:error, :attachment_fetch_failed},
+          else: :ok
+
+      _no_work ->
+        :ok
     end
   rescue
-    error ->
-      Logger.error(
-        "Attachment processing failed for conversation #{conversation.id}: #{inspect(error)}"
-      )
-
-      :ok
+    _error ->
+      Logger.error("Attachment processing failed for conversation #{conversation.id}")
+      {:error, :attachment_processing_failed}
   end
 
   @doc false
   def descriptors(normalized) do
     case get_in(normalized, [:metadata, :attachments]) do
-      list when is_list(list) -> Enum.filter(list, &is_map/1)
+      list when is_list(list) -> list
       _other -> []
     end
   end
@@ -73,8 +73,9 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
 
   defp limit(_route_context), do: Attachments.default_limit_bytes()
 
-  defp skip_reason(%{triage_class: :suspect}), do: "suspect"
-  defp skip_reason(_route_context), do: nil
+  defp skip_reason(%{suspect: true}, _context), do: "suspect"
+  defp skip_reason(_conversation, %{triage_class: :suspect}), do: "suspect"
+  defp skip_reason(_conversation, _route_context), do: nil
 
   defp broadcast(conversation_id) do
     Phoenix.PubSub.broadcast(

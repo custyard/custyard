@@ -74,6 +74,32 @@ defmodule Custyard.Lettermint.HttpClient do
     end
   end
 
+  @impl true
+  def get_webhook_delivery(webhook_id, delivery_id) do
+    # Provider IDs are opaque path segments, never URLs supplied by a message.
+    path =
+      "/webhooks/#{URI.encode_www_form(webhook_id)}/deliveries/#{URI.encode_www_form(delivery_id)}"
+
+    case request(:get, api_url(path), nil) do
+      {:ok, %Finch.Response{status: 200, body: body}} -> decode_delivery(body)
+      {:ok, %Finch.Response{status: status}} -> {:error, {:provider_status, status}}
+      {:error, _reason} -> {:error, :provider_unavailable}
+    end
+  rescue
+    _error -> {:error, :provider_unavailable}
+  end
+
+  @doc false
+  def decode_delivery(body) do
+    with {:ok, %{} = response} <- Jason.decode(body),
+         %{} = delivery <- Map.get(response, "data", response),
+         %{} = payload <- delivery["payload"] do
+      {:ok, Map.put(delivery, "payload", payload)}
+    else
+      _ -> {:error, :delivery_content_unavailable}
+    end
+  end
+
   @domains_per_page 100
   @domains_max_pages 5
 

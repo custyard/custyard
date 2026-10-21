@@ -276,6 +276,31 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       refute inspect(Repo.all(Message)) =~ "storage.lettermint.test"
     end
 
+    test "a failed attachment withholds success and delivery replay resumes the same slot", %{
+      route: route
+    } do
+      channel = channel!(route)
+      url = StubClient.unique_url()
+      StubClient.fail(url, :timeout)
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{
+          attachments: [
+            %{filename: "a.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
+          ]
+        })
+
+      assert {:error, :attachment_fetch_failed} = Dispatcher.dispatch(route, payload)
+      [message] = Repo.all(Message)
+      assert [%{state: :failed} = row] = Attachments.list_for_message(message.id)
+      StubClient.put(url, "hello")
+      assert {:ok, _conversation} = Dispatcher.dispatch(route, payload)
+      assert [%{state: :fetched, id: id}] = Attachments.list_for_message(message.id)
+      assert id == row.id
+      assert Repo.aggregate(Message, :count) == 1
+    end
+
     test "a replayed delivery does not fetch twice", %{route: route} do
       channel = channel!(route)
       url = StubClient.unique_url()
