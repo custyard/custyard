@@ -20,7 +20,9 @@ defmodule Custyard.AuditEvent do
     :operator_created,
     :operator_removed,
     :acknowledgment_replayed,
-    :acknowledgment_binding_created
+    :acknowledgment_binding_created,
+    # Provider delivery-status webhook advanced an outbound message's status
+    :delivery_status_updated
   ]
 
   schema "audit_events" do

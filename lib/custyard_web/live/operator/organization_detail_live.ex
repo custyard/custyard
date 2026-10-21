@@ -947,6 +947,29 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           </div>
         </div>
 
+        <%!-- Ingress domain (Lettermint routes with a known domain) --%>
+        <% ingress_domain = InboundRoute.ingress_domain(route) %>
+        <div :if={ingress_domain} class="mb-3">
+          <div class="flex items-center gap-2">
+            <p
+              class="flex-1 text-xs text-gray-600 dark:text-zinc-400"
+              data-testid={"route-ingress-domain-#{route.id}"}
+            >
+              Receives mail at any address
+              <code class="text-gray-800 dark:text-zinc-200">@{ingress_domain}</code>
+            </p>
+            <button
+              id={"copy-ingress-domain-#{route.id}"}
+              phx-hook="CopyToClipboard"
+              data-clipboard-text={ingress_domain}
+              class="text-xs px-2 py-1.5 text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors whitespace-nowrap"
+              data-testid={"copy-ingress-domain-#{route.id}"}
+            >
+              Copy domain
+            </button>
+          </div>
+        </div>
+
         <%!-- Webhook purpose toggles --%>
         <div>
           <div class="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-1">

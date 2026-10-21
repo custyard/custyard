@@ -61,11 +61,12 @@ Verified against the Lettermint documentation on 2026-10-20. Items marked *confi
 - Every inbound route gets a catch-all domain `<route-id>.lettermint.app` where the route id is a random 10-character string. Any local part reaches the route; plus addressing is parsed and delivered as `data.subaddress`. No DNS needed.
 - A route can be given one custom catch-all domain (exact or wildcard subdomain) by publishing `MX 10 lettermint.mx`. Plus addressing works there too.
 - Webhook envelope is `{id, event: "message.inbound", timestamp, data}`. `id` is reused on retries and is the documented dedup key. `data` carries `from {email,name}`, `to[]`, `cc[]`, `recipient` (envelope recipient, the documented routing key), `subaddress`, `reply_to`, `envelope.mail_from`, `body {text, html}`, `headers[]` as `{name, value}` pairs, `authentication_results {spf, dkim, dmarc}`, `is_spam`, `spam_score`, `attachments[]`, and `raw {url, expires_at}`.
-- `headers[]` excludes "standard address, subject and date headers". *Confirm* that `Message-ID`, `In-Reply-To` and `References` are included. If not, threading needs the raw `.eml` (signed URL, 28-day retention), which changes the ingestion cost model.
+- `headers[]` excludes "standard address, subject and date headers" but does carry `Message-ID` (the documented example shows it), so `In-Reply-To` and `References` are expected there too and threading does not need the raw `.eml`. Still worth one check against a real reply during the pilot.
 - Messages at or above the route spam threshold (default 5) are quarantined and send no webhook. Release is manual in the dashboard or `POST /v1/messages/{id}/process`.
 - Attachments arrive as Base64 or as signed URLs, per route setting. Raw message and attachments are retained 28 days. Signed URLs are secrets.
 - Lettermint B.V., Zwolle, Netherlands. Email data hosted and processed in the EU, GDPR Article 28 processor with a public DPA and subprocessor list. The DPA names two different legal entities across versions; confirm the contracting entity before the first customer channel.
-- Current `Lettermint.HttpClient.create_route/1` posts `name` and `route_type` only and stores `id`. The response's route slug / domain is not captured today, so the ingress domain cannot yet be displayed.
+- The Team API wraps the create-route response in `data` (`POST /projects/{id}/routes`), while `GET /routes/{id}` returns the route unwrapped. The route object carries `inbound_route_domain`, `inbound_address` (compatibility address), `inbound_domain` and `inbound_domain_verified_at`. Before Phase 0 the client read `id` at the top level and discarded the domain.
+- Lettermint issues one `whsec_` signing secret per webhook, so the status webhook has its own secret (`WEBHOOK_SECRET_LETTERMINT_STATUS`), separate from the inbound route webhook's.
 
 ## Forwarding provider behaviour
 
@@ -207,8 +208,8 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 
 ## Risks and items to confirm before implementation
 
-1. **Lettermint payload shape.** `Adapters.Lettermint.normalize/1` reads a flat payload with `from` as a string and `headers` as a map. The documented event is enveloped with `from` as an object and `headers` as an array of pairs. Either the adapter has never seen production traffic or the shape changed. Confirm with a captured delivery; fix the adapter first.
-2. **Threading headers in `headers[]`.** If Message-ID, In-Reply-To and References are excluded as "standard" headers, threading needs the raw `.eml` on every delivery. Confirm with a test message. This is the single largest cost risk.
+1. **Lettermint payload shape.** *Resolved in Phase 0.* The adapter now accepts the enveloped event (`from` as an object, `headers` as an array of pairs) and keeps the legacy flat shape for fixtures. Dedup uses the top-level delivery `id` as a second key.
+2. **Threading headers in `headers[]`.** *Resolved by documentation.* The documented example carries `Message-ID` in `headers[]`, so threading headers are delivered and no raw `.eml` fetch is needed. One check against a real reply remains on the pilot checklist.
 3. **Proton envelope and header behaviour** on forwarded mail is undocumented. One test forward and a header inspection settle it, and the setup wizard can do that inspection automatically on the first delivery.
 4. **Root-domain sending verification** for D3 depends on the operator's willingness to edit DNS on their primary mail domain. The subdomain fallback is designed in; the setup copy must make the trade-off explicit.
 5. **Webhook secrets** are per source today (`WEBHOOK_SECRET_LETTERMINT`, optionally keyed by callback token). Lettermint issues one signing secret per webhook. Channel creation must not create new webhooks; one webhook per route stays the rule.

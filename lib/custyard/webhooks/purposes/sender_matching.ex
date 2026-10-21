@@ -80,19 +80,75 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
 
   defp find_or_create_conversation(normalized, org, contact, route_context) do
     dedup_scope = delivery_scope(org.id, normalized, route_context)
-    # First check for duplicate message_id to prevent race condition:
-    # If this exact message was already processed (perhaps concurrently),
-    # return its existing conversation instead of creating a duplicate.
-    with :not_found <- find_by_message_id(normalized.message_id, org.id, dedup_scope),
+    # A retried provider delivery (same provider_delivery_id) is a replay of a
+    # message already stored, with or without a Message-ID header. Then check
+    # for a duplicate message_id to prevent a race condition: if this exact
+    # message was already processed (perhaps concurrently), return its existing
+    # conversation instead of creating a duplicate.
+    with :not_found <- find_by_provider_delivery_id(provider_delivery_id(normalized), org.id),
+         :not_found <- find_by_message_id(normalized.message_id, org.id, dedup_scope),
          :not_found <- find_thread(normalized, org.id, dedup_scope) do
       case create_conversation(normalized, org, contact, route_context) do
         {:ok, conversation} -> {:ok, conversation, true}
         error -> error
       end
     else
+      # A replayed delivery changes nothing: the first delivery already
+      # reactivated the conversation if that was warranted.
+      {:replay, conversation} ->
+        {:ok, conversation, false}
+
       {:ok, conversation} ->
         conversation = maybe_reactivate(conversation)
         {:ok, conversation, false}
+    end
+  end
+
+  defp provider_delivery_id(normalized) do
+    case get_in(normalized, [:metadata, :provider_delivery_id]) do
+      id when is_binary(id) -> id
+      _other -> nil
+    end
+  end
+
+  defp lettermint_message_id(normalized) do
+    case get_in(normalized, [:metadata, :lettermint_message_id]) do
+      id when is_binary(id) -> id
+      _other -> nil
+    end
+  end
+
+  # Find the conversation that already holds this provider delivery. Delivery
+  # ids are global, so the match is only honoured inside the resolved org; a
+  # cross-org hit is a provider or routing fault and is processed normally
+  # (the unique index then rejects the second copy).
+  defp find_by_provider_delivery_id(nil, _org_id), do: :not_found
+
+  defp find_by_provider_delivery_id(delivery_id, org_id) do
+    import Ecto.Query
+
+    query =
+      from m in Message,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where: m.provider_delivery_id == ^delivery_id,
+        select: c,
+        limit: 1
+
+    case Repo.one(query) do
+      nil ->
+        :not_found
+
+      %Conversation{organization_id: ^org_id} = conversation ->
+        {:replay, conversation}
+
+      %Conversation{organization_id: other_org_id} ->
+        Logger.warning(
+          "Provider delivery id already stored for organization #{other_org_id}, " <>
+            "resolved to organization #{org_id}; processing as a new message"
+        )
+
+        :not_found
     end
   end
 
@@ -196,16 +252,34 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
 
     # A previously imported message may have no dedup_scope. Its conversation
     # was found above; do not insert a second copy under the new scoped index.
-    if already_delivered?(normalized.message_id, conversation.id, dedup_scope) do
+    # Likewise a retried provider delivery already has its message stored.
+    if already_delivered?(normalized, conversation.id, dedup_scope) do
       {:ok, conversation, false}
     else
       insert_message(conversation, normalized, is_new, source, origin, dedup_scope)
     end
   end
 
-  defp already_delivered?(nil, _conversation_id, _dedup_scope), do: false
+  defp already_delivered?(normalized, conversation_id, dedup_scope) do
+    delivery_recorded?(provider_delivery_id(normalized), conversation_id) or
+      message_recorded?(normalized.message_id, conversation_id, dedup_scope)
+  end
 
-  defp already_delivered?(message_id, conversation_id, dedup_scope) do
+  defp delivery_recorded?(nil, _conversation_id), do: false
+
+  defp delivery_recorded?(delivery_id, conversation_id) do
+    import Ecto.Query
+
+    Repo.exists?(
+      from m in Message,
+        where: m.conversation_id == ^conversation_id,
+        where: m.provider_delivery_id == ^delivery_id
+    )
+  end
+
+  defp message_recorded?(nil, _conversation_id, _dedup_scope), do: false
+
+  defp message_recorded?(message_id, conversation_id, dedup_scope) do
     import Ecto.Query
 
     Repo.exists?(
@@ -230,7 +304,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       is_internal_note: false
     }
 
-    attrs = Map.put(attrs, :dedup_scope, dedup_scope)
+    attrs =
+      attrs
+      |> Map.put(:dedup_scope, dedup_scope)
+      |> put_present(:provider_delivery_id, provider_delivery_id(normalized))
+      |> put_present(:lettermint_message_id, lettermint_message_id(normalized))
 
     case Message.insert_idempotent(attrs) do
       {:ok, message} ->
@@ -255,6 +333,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
         {:error, changeset}
     end
   end
+
+  defp put_present(attrs, _key, nil), do: attrs
+  defp put_present(attrs, key, value), do: Map.put(attrs, key, value)
 
   defp update_conversation_timestamp(conversation) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)

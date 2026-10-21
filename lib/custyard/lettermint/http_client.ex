@@ -13,22 +13,35 @@ defmodule Custyard.Lettermint.HttpClient do
     project_id = Map.fetch!(params, :lettermint_project_id)
     url = api_url("/projects/#{project_id}/routes")
 
+    # attachment_delivery "url": signed URLs rather than inline Base64
+    # (docs/design/spec-inbound-channels.md, D9).
     body =
       Jason.encode!(%{
         name: Map.fetch!(params, :name),
-        route_type: Map.fetch!(params, :route_type)
+        route_type: Map.fetch!(params, :route_type),
+        attachment_delivery: "url"
       })
 
     case request(:post, url, body) do
       {:ok, %Finch.Response{status: status, body: response_body}}
       when status in [200, 201] ->
-        case Jason.decode(response_body) do
-          {:ok, decoded} ->
-            {:ok, decoded}
+        decode_route(response_body)
 
-          {:error, decode_error} ->
-            {:error, {:decode_failed, decode_error, response_body}}
-        end
+      {:ok, %Finch.Response{status: status, body: response_body}} ->
+        {:error, {:api_error, status, response_body}}
+
+      {:error, reason} ->
+        {:error, {:request_failed, reason}}
+    end
+  end
+
+  @impl true
+  def get_route(lettermint_route_id) do
+    url = api_url("/routes/#{lettermint_route_id}")
+
+    case request(:get, url, nil) do
+      {:ok, %Finch.Response{status: 200, body: response_body}} ->
+        decode_route(response_body)
 
       {:ok, %Finch.Response{status: status, body: response_body}} ->
         {:error, {:api_error, status, response_body}}
@@ -54,6 +67,25 @@ defmodule Custyard.Lettermint.HttpClient do
 
       {:error, reason} ->
         {:error, {:request_failed, reason}}
+    end
+  end
+
+  @doc false
+  # Lettermint wraps the route in `{"data": route, "message": ...}` on create
+  # (201) but returns it bare on GET. Accept both so callers see one shape.
+  def normalize_route_response(%{"data" => %{} = route}), do: route
+  def normalize_route_response(%{} = route), do: route
+
+  defp decode_route(response_body) do
+    case Jason.decode(response_body) do
+      {:ok, %{} = decoded} ->
+        {:ok, normalize_route_response(decoded)}
+
+      {:ok, other} ->
+        {:error, {:unexpected_response, other}}
+
+      {:error, decode_error} ->
+        {:error, {:decode_failed, decode_error, response_body}}
     end
   end
 

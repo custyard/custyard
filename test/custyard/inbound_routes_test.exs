@@ -986,4 +986,170 @@ defmodule Custyard.InboundRoutesTest do
       assert route.project_id == project.id
     end
   end
+
+  describe "Lettermint ingress domain" do
+    defp with_failing_client(_context) do
+      original_config = Application.get_env(:custyard, :lettermint)
+      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
+      on_exit(fn -> Application.put_env(:custyard, :lettermint, original_config) end)
+      :ok
+    end
+
+    defp clear_domain_fields(route) do
+      {:ok, cleared} =
+        route
+        |> Ecto.Changeset.change(
+          lettermint_route_domain: nil,
+          lettermint_inbound_address: nil,
+          lettermint_custom_domain: nil,
+          lettermint_custom_domain_verified_at: nil
+        )
+        |> Repo.update()
+
+      cleared
+    end
+
+    test "create_route stores the route domain and inbound address from Lettermint" do
+      org = Factory.insert_organization()
+
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      assert route.lettermint_route_domain =~ ~r/^[a-z0-9]{10}\.lettermint\.app$/
+      assert route.lettermint_inbound_address =~ ~r/^[0-9a-f]{32}@inbound\.lettermint\.co$/
+      assert route.lettermint_custom_domain == nil
+      assert route.lettermint_custom_domain_verified_at == nil
+      assert InboundRoute.ingress_domain(route) == route.lettermint_route_domain
+    end
+
+    test "webhook-only routes have no ingress domain" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :zendesk
+        })
+
+      assert route.lettermint_route_domain == nil
+      assert InboundRoute.ingress_domain(route) == nil
+    end
+
+    test "ingress_domain/1 prefers a verified custom domain over the route domain" do
+      route = %InboundRoute{
+        lettermint_route_domain: "ab12cd34ef.lettermint.app",
+        lettermint_custom_domain: "support.acme.com",
+        lettermint_custom_domain_verified_at: ~U[2026-10-20 12:00:00Z]
+      }
+
+      assert InboundRoute.ingress_domain(route) == "support.acme.com"
+
+      unverified = %{route | lettermint_custom_domain_verified_at: nil}
+      assert InboundRoute.ingress_domain(unverified) == "ab12cd34ef.lettermint.app"
+
+      assert InboundRoute.ingress_domain(%InboundRoute{}) == nil
+    end
+
+    test "changeset lowercases and validates Lettermint hostnames" do
+      changeset =
+        InboundRoute.changeset(%InboundRoute{}, %{
+          organization_id: 1,
+          lettermint_route_domain: " AB12cd34EF.Lettermint.App ",
+          lettermint_custom_domain: "not a hostname"
+        })
+
+      assert Ecto.Changeset.get_change(changeset, :lettermint_route_domain) ==
+               "ab12cd34ef.lettermint.app"
+
+      assert {"must be a valid domain name", _} = changeset.errors[:lettermint_custom_domain]
+    end
+
+    test "sync_remote_route/1 backfills a route created without a domain" do
+      org = Factory.insert_organization()
+      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      cleared = clear_domain_fields(route)
+      assert cleared.lettermint_route_domain == nil
+
+      assert {:ok, synced} = InboundRoutes.sync_remote_route(cleared)
+
+      assert synced.lettermint_route_id == route.lettermint_route_id
+      assert synced.lettermint_route_domain =~ ~r/^[a-z0-9]{10}\.lettermint\.app$/
+      assert synced.lettermint_inbound_address =~ ~r/^[0-9a-f]{32}@inbound\.lettermint\.co$/
+
+      assert InboundRoutes.get_route(route.id).lettermint_route_domain ==
+               synced.lettermint_route_domain
+    end
+
+    test "sync_remote_route/1 rejects routes without a Lettermint ID" do
+      org = Factory.insert_organization()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :zendesk
+        })
+
+      assert {:error, :not_a_lettermint_route} = InboundRoutes.sync_remote_route(route)
+    end
+
+    test "sync_remote_routes_missing_domain/0 syncs only routes lacking a domain" do
+      org = Factory.insert_organization()
+
+      {:ok, complete} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      {:ok, stale} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :disambiguation})
+
+      clear_domain_fields(stale)
+
+      assert %{synced: 1, failed: 0} = InboundRoutes.sync_remote_routes_missing_domain()
+
+      assert InboundRoutes.get_route(complete.id).lettermint_route_domain ==
+               complete.lettermint_route_domain
+
+      assert InboundRoutes.get_route(stale.id).lettermint_route_domain != nil
+    end
+  end
+
+  describe "Lettermint ingress domain with a failing client" do
+    setup :with_failing_client
+
+    test "sync_remote_route/1 returns the error and leaves the row unchanged" do
+      org = Factory.insert_organization()
+
+      route =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{
+          organization_id: org.id,
+          route_type: :general,
+          lettermint_route_id: "lm_route_legacy"
+        })
+        |> Repo.insert!()
+
+      Process.put({:failing_mock_client, :get_route}, {:error, {:api_error, 500, "boom"}})
+
+      assert {:error, {:api_error, 500, "boom"}} = InboundRoutes.sync_remote_route(route)
+
+      reloaded = InboundRoutes.get_route(route.id)
+      assert reloaded.lettermint_route_domain == nil
+      assert reloaded.lettermint_inbound_address == nil
+      assert reloaded.updated_at == route.updated_at
+    end
+
+    test "sync_remote_routes_missing_domain/0 counts failures" do
+      org = Factory.insert_organization()
+
+      %InboundRoute{}
+      |> InboundRoute.changeset(%{
+        organization_id: org.id,
+        route_type: :general,
+        lettermint_route_id: "lm_route_legacy"
+      })
+      |> Repo.insert!()
+
+      assert %{synced: 0, failed: 1} = InboundRoutes.sync_remote_routes_missing_domain()
+    end
+  end
 end

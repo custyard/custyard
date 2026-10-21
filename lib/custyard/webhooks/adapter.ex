@@ -7,6 +7,12 @@ defmodule Custyard.Webhooks.Adapter do
   2. Normalize the payload into a unified message format
   """
 
+  # `metadata` is adapter-specific and may be empty. Keys the pipeline reads:
+  #   - `:provider_delivery_id` - the provider's webhook delivery id, reused on
+  #     retries of the same delivery; SenderMatching dedups on it.
+  #   - `:lettermint_message_id` - Lettermint's own message UUID, stored on the
+  #     message for delivery-status correlation.
+  #   - `:external_priority` - provider priority consumed by Enrichment.
   @type normalized_payload :: %{
           from: String.t(),
           to: String.t() | nil,

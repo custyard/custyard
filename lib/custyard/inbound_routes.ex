@@ -10,6 +10,12 @@ defmodule Custyard.InboundRoutes do
   via foreign key constraints, but does not call the Lettermint API to remove
   remote routes. Use `delete_route/1` directly for explicit cleanup.
 
+  Lettermint provisioning records the remote route ID together with where the
+  route receives mail (`lettermint_route_domain`, `lettermint_inbound_address`
+  and the optional custom domain). Routes created before those fields existed
+  have a nil domain; `sync_remote_route/1` and `sync_remote_routes_missing_domain/0`
+  (also `mix custyard.lettermint.sync_routes`) backfill them from the API.
+
   Provides CRUD operations for InboundRoute and InboundRouteWebhook,
   following the context pattern used elsewhere in the application.
   """
@@ -141,12 +147,88 @@ defmodule Custyard.InboundRoutes do
       {:ok, remote} ->
         changeset
         |> Changeset.put_change(:lettermint_route_id, remote["id"])
+        |> InboundRoute.changeset(remote_domain_attrs(remote))
         |> Repo.insert()
 
       {:error, _reason} = error ->
         error
     end
   end
+
+  @doc """
+  Refresh a Lettermint route's domain fields from the Lettermint API.
+
+  Backfill path for routes created before the domain was captured. Routes
+  without a `lettermint_route_id` return `{:error, :not_a_lettermint_route}`.
+  """
+  def sync_remote_route(%InboundRoute{lettermint_route_id: nil}),
+    do: {:error, :not_a_lettermint_route}
+
+  def sync_remote_route(%InboundRoute{lettermint_route_id: route_id} = route) do
+    with {:ok, remote} <- Client.client().get_route(route_id) do
+      route
+      |> InboundRoute.changeset(remote_domain_attrs(remote))
+      |> Repo.update()
+    end
+  end
+
+  @doc """
+  Sync every Lettermint route whose `lettermint_route_domain` is still nil.
+
+  Returns `%{synced: n, failed: n}`. Failures are logged at warning level
+  with the route ID only.
+  """
+  def sync_remote_routes_missing_domain do
+    from(r in InboundRoute,
+      where:
+        r.source == :lettermint and not is_nil(r.lettermint_route_id) and
+          is_nil(r.lettermint_route_domain),
+      order_by: [asc: r.id]
+    )
+    |> Repo.all()
+    |> Enum.reduce(%{synced: 0, failed: 0}, fn route, acc ->
+      case sync_remote_route(route) do
+        {:ok, _route} ->
+          %{acc | synced: acc.synced + 1}
+
+        {:error, reason} ->
+          Logger.warning(
+            "Failed to sync Lettermint route #{route.id}: #{inspect(error_summary(reason))}"
+          )
+
+          %{acc | failed: acc.failed + 1}
+      end
+    end)
+  end
+
+  # Keep response bodies (which may echo the request or route details) out
+  # of the logs; the status and error class are enough to act on.
+  defp error_summary({:api_error, status, _body}), do: {:api_error, status}
+  defp error_summary({:request_failed, %{__struct__: mod}}), do: {:request_failed, mod}
+  defp error_summary(%Changeset{errors: errors}), do: {:invalid, Keyword.keys(errors)}
+  defp error_summary(other), do: other
+
+  # Tolerates older API responses that omit these keys: missing values stay nil.
+  defp remote_domain_attrs(remote) when is_map(remote) do
+    %{
+      lettermint_route_domain: Map.get(remote, "inbound_route_domain"),
+      lettermint_inbound_address: Map.get(remote, "inbound_address"),
+      lettermint_custom_domain: Map.get(remote, "inbound_domain"),
+      lettermint_custom_domain_verified_at:
+        parse_datetime(Map.get(remote, "inbound_domain_verified_at"))
+    }
+  end
+
+  defp parse_datetime(%DateTime{} = dt), do: dt
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _offset} -> dt
+      {:error, _} -> nil
+    end
+  end
+
+  defp parse_datetime(_), do: nil
 
   @doc """
   Update an inbound route.

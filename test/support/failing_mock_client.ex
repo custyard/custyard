@@ -4,6 +4,7 @@ defmodule Custyard.Lettermint.FailingMockClient do
 
   Configure behavior via process dictionary:
   - `{:failing_mock_client, :create_route}` - error tuple to return from create_route/1
+  - `{:failing_mock_client, :get_route}` - error tuple to return from get_route/1
   - `{:failing_mock_client, :delete_route}` - error tuple to return from delete_route/1
 
   Example:
@@ -15,6 +16,14 @@ defmodule Custyard.Lettermint.FailingMockClient do
   @impl true
   def create_route(_params) do
     case Process.get({:failing_mock_client, :create_route}) do
+      nil -> {:error, {:api_error, 503, "Service Unavailable"}}
+      error -> error
+    end
+  end
+
+  @impl true
+  def get_route(_lettermint_route_id) do
+    case Process.get({:failing_mock_client, :get_route}) do
       nil -> {:error, {:api_error, 503, "Service Unavailable"}}
       error -> error
     end

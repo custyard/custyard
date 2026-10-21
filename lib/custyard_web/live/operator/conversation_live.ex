@@ -1332,7 +1332,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   attr :status, :atom,
     required: true,
-    values: [:pending, :sending, :sent, :failed, :bounced, :withheld]
+    values: [:pending, :sending, :sent, :delivered, :failed, :bounced, :suppressed, :withheld]
 
   defp delivery_indicator(%{status: status} = assigns) when status in [:pending, :sending] do
     ~H"""
@@ -1370,6 +1370,29 @@ defmodule CustyardWeb.Operator.ConversationLive do
         <path
           fill-rule="evenodd"
           d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
+    """
+  end
+
+  defp delivery_indicator(%{status: :delivered} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-green-600 dark:text-green-400"
+      title="Delivered to recipient's mail server"
+      data-testid="delivery-status-delivered"
+    >
+      <svg
+        class="h-3.5 w-3.5"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
           clip-rule="evenodd"
         />
       </svg>
@@ -1416,6 +1439,29 @@ defmodule CustyardWeb.Operator.ConversationLive do
         <path
           fill-rule="evenodd"
           d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
+    """
+  end
+
+  defp delivery_indicator(%{status: :suppressed} = assigns) do
+    ~H"""
+    <span
+      class="inline-flex items-center text-xs text-purple-500 dark:text-purple-400"
+      title="Suppressed by email provider"
+      data-testid="delivery-status-suppressed"
+    >
+      <svg
+        class="h-3.5 w-3.5"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M5.965 4.904l9.131 9.131a6.5 6.5 0 00-9.131-9.131zm8.07 10.192L4.904 5.965a6.5 6.5 0 009.131 9.131zM4.343 4.343a8 8 0 1111.314 11.314A8 8 0 014.343 4.343z"
           clip-rule="evenodd"
         />
       </svg>

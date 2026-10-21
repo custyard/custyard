@@ -255,6 +255,44 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "delivery-status-sent"
     end
 
+    test "delivery indicator shows delivered once the status webhook confirms", %{conn: conn} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "live@customer.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :operator,
+        body: "Confirmed by the provider",
+        delivery_status: :delivered
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "delivery-status-delivered"
+      assert html =~ "Delivered to recipient"
+      refute html =~ "delivery-status-sent"
+    end
+
+    test "delivery indicator shows suppressed distinctly from bounced", %{conn: conn} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "live@customer.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :operator,
+        body: "Refused by the provider",
+        delivery_status: :suppressed
+      )
+
+      {:ok, _view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "delivery-status-suppressed"
+      assert html =~ "Suppressed by email provider"
+      refute html =~ "delivery-status-bounced"
+    end
+
     test "delivery indicator shows failed when delivery fails", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, contact_id: nil)

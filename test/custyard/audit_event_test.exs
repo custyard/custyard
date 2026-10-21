@@ -16,7 +16,8 @@ defmodule Custyard.AuditEventTest do
                :operator_created,
                :operator_removed,
                :acknowledgment_replayed,
-               :acknowledgment_binding_created
+               :acknowledgment_binding_created,
+               :delivery_status_updated
              ]
     end
   end

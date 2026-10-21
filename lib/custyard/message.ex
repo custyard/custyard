@@ -25,12 +25,28 @@ defmodule Custyard.Message do
   # :sending — claimed by a delivery attempt that has not reported back yet
   # (see Custyard.Email.Outbound.deliver/1); a row left in this state by a
   # crash is failed by the queue's recovery scan, never re-sent.
+  # :delivered — the provider's status webhook reported acceptance by the
+  # recipient's mail server (see Custyard.Email.DeliveryStatus).
+  # :suppressed — the provider refused to send because the recipient is on a
+  # suppression list; a delivery failure reported by the status webhook.
   # :withheld — recorded but deliberately not emailed (prospect reply channel
   # without reply-notification opt-in, or no recipient at all). Deliberately
-  # distinct from the provider-side :suppressed failure state reserved for
-  # the status webhook (issue #25): consent-withheld is an expected state,
-  # provider-suppressed is a delivery failure.
-  @delivery_statuses [:pending, :sending, :sent, :failed, :bounced, :withheld]
+  # distinct from provider-side :suppressed: consent-withheld is an expected
+  # state, provider-suppressed is a delivery failure.
+  #
+  # Ranking (spec-conversation-loop, Delivery Tracking): pending < sending <
+  # sent < delivered; bounced, suppressed and failed are terminal. A status
+  # event only advances a message when its rank is higher or it is terminal.
+  @delivery_statuses [
+    :pending,
+    :sending,
+    :sent,
+    :delivered,
+    :failed,
+    :bounced,
+    :suppressed,
+    :withheld
+  ]
 
   schema "messages" do
     field :source, Ecto.Enum, values: @sources
@@ -45,6 +61,10 @@ defmodule Custyard.Message do
     field :dedup_scope, :string
     field :in_reply_to, :string
     field :lettermint_message_id, :string
+    # Provider webhook delivery id (Lettermint's top-level `id`, reused on
+    # retries). Second idempotency key for inbound deliveries, alongside
+    # (dedup_scope, message_id). nil for outbound messages.
+    field :provider_delivery_id, :string
     # Delivery status tracks outbound message lifecycle (nil for inbound messages)
     field :delivery_status, Ecto.Enum, values: @delivery_statuses
 
@@ -76,16 +96,19 @@ defmodule Custyard.Message do
       :dedup_scope,
       :in_reply_to,
       :lettermint_message_id,
+      :provider_delivery_id,
       :delivery_status,
       :conversation_id
     ])
     |> validate_required([:source, :body, :conversation_id])
     |> validate_length(:body, max: 100_000)
+    |> validate_length(:provider_delivery_id, max: 255)
     # Note: :source and :origin use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:conversation_id)
     |> unique_constraint([:dedup_scope, :message_id],
       name: :messages_dedup_scope_message_id_index
     )
+    |> unique_constraint(:provider_delivery_id, name: :messages_provider_delivery_id_index)
   end
 
   @doc """
@@ -143,21 +166,32 @@ defmodule Custyard.Message do
     end
   end
 
+  # Postgres reports one violated unique index per insert, so the two dedup
+  # keys are checked in turn: the provider delivery id (a retried webhook
+  # delivery) and the (dedup_scope, message_id) pair (the same mail arriving
+  # twice through one route).
   defp recover_duplicate(attrs, %Ecto.Changeset{errors: errors} = cs) do
-    if duplicate_constraint?(errors) && attrs[:message_id] && attrs[:dedup_scope] do
-      existing =
-        Repo.get_by(__MODULE__,
-          dedup_scope: attrs[:dedup_scope],
-          message_id: attrs[:message_id]
-        )
+    existing =
+      cond do
+        delivery_constraint?(errors) && attrs[:provider_delivery_id] ->
+          Repo.get_by(__MODULE__, provider_delivery_id: attrs[:provider_delivery_id])
 
-      if existing && same_organization?(attrs[:conversation_id], existing.conversation_id),
-        do: {:ok, existing},
-        else: {:error, cs}
-    else
-      {:error, cs}
-    end
+        duplicate_constraint?(errors) && attrs[:message_id] && attrs[:dedup_scope] ->
+          Repo.get_by(__MODULE__,
+            dedup_scope: attrs[:dedup_scope],
+            message_id: attrs[:message_id]
+          )
+
+        true ->
+          nil
+      end
+
+    if existing && same_organization?(attrs[:conversation_id], existing.conversation_id),
+      do: {:ok, existing},
+      else: {:error, cs}
   end
+
+  defp delivery_constraint?(errors), do: Keyword.has_key?(errors, :provider_delivery_id)
 
   defp duplicate_constraint?(errors),
     do: Keyword.has_key?(errors, :message_id) or Keyword.has_key?(errors, :dedup_scope)

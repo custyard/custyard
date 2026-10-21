@@ -670,6 +670,61 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
     end
   end
 
+  describe "Ingress domain" do
+    setup %{conn: conn} do
+      org = insert_organization(name: "Ingress Domain Org")
+      operator = create_super_admin()
+
+      {:ok, route} =
+        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+
+      conn = authenticate_conn(conn, operator)
+
+      {:ok, conn: conn, org: org, route: route}
+    end
+
+    test "routes tab shows where a Lettermint route receives mail", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
+
+      view |> element("a", "Routes") |> render_click()
+
+      assert route.lettermint_route_domain != nil
+
+      assert view
+             |> element("[data-testid=route-ingress-domain-#{route.id}]")
+             |> render() =~ "Receives mail at any address"
+
+      assert view
+             |> element("[data-testid=route-ingress-domain-#{route.id}]")
+             |> render() =~ "@#{route.lettermint_route_domain}"
+
+      assert has_element?(
+               view,
+               "[data-testid=copy-ingress-domain-#{route.id}][data-clipboard-text='#{route.lettermint_route_domain}']"
+             )
+    end
+
+    test "routes without a known domain omit the ingress line", %{conn: conn, org: org} do
+      {:ok, route} =
+        InboundRoutes.create_route(%{
+          organization_id: org.id,
+          route_type: :general,
+          source: :zendesk
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}")
+
+      view |> element("a", "Routes") |> render_click()
+
+      assert has_element?(view, "[data-testid=route-card-#{route.id}]")
+      refute has_element?(view, "[data-testid=route-ingress-domain-#{route.id}]")
+    end
+  end
+
   describe "Role-based access" do
     setup _context do
       org = insert_organization(name: "RBAC Test Org")

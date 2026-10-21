@@ -433,4 +433,100 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert conversation.state == :active
     end
   end
+
+  describe "provider delivery id dedup" do
+    alias Custyard.Conversation
+    alias Custyard.Webhooks.Adapters.Lettermint
+
+    defp lettermint_envelope(delivery_id, headers) do
+      %{
+        "id" => delivery_id,
+        "event" => "message.inbound",
+        "timestamp" => "2025-10-02T14:30:00.000Z",
+        "data" => %{
+          "message_id" => "lm-#{delivery_id}",
+          "from" => %{"email" => "alice@acme.example.com", "name" => "Alice"},
+          "to" => [%{"email" => "support@acme.example.com", "name" => nil}],
+          "cc" => [],
+          "recipient" => "support@acme.example.com",
+          "subject" => "Delivery #{delivery_id}",
+          "body" => %{"text" => "Body for #{delivery_id}", "html" => nil},
+          "headers" => headers,
+          "is_spam" => false,
+          "spam_score" => 0.1
+        }
+      }
+    end
+
+    test "a retried delivery creates exactly one conversation and one message" do
+      org = insert_organization(domain: "acme.example.com")
+      route_context = %{organization_id: org.id, route_id: 3}
+
+      {:ok, normalized} =
+        Lettermint.normalize(
+          lettermint_envelope("delivery-1", [
+            %{"name" => "Message-ID", "value" => "<retry-1@acme.example.com>"}
+          ])
+        )
+
+      assert {:ok, first} = SenderMatching.process(normalized, route_context)
+      assert {:ok, retry} = SenderMatching.process(normalized, route_context)
+      assert retry.id == first.id
+
+      assert Repo.aggregate(Conversation, :count) == 1
+      assert Repo.aggregate(Message, :count) == 1
+    end
+
+    test "a retried delivery without a Message-ID header still dedups" do
+      org = insert_organization(domain: "acme.example.com")
+      route_context = %{organization_id: org.id, route_id: 3}
+
+      {:ok, normalized} = Lettermint.normalize(lettermint_envelope("delivery-2", []))
+      assert normalized.message_id == nil
+
+      assert {:ok, first} = SenderMatching.process(normalized, route_context)
+      assert {:ok, retry} = SenderMatching.process(normalized, route_context)
+      assert retry.id == first.id
+
+      assert Repo.aggregate(Conversation, :count) == 1
+      [message] = Repo.all(Message)
+      assert message.conversation_id == first.id
+      assert message.message_id == nil
+    end
+
+    test "provider_delivery_id and lettermint_message_id are stored on the message" do
+      org = insert_organization(domain: "acme.example.com")
+
+      {:ok, normalized} =
+        Lettermint.normalize(
+          lettermint_envelope("delivery-3", [
+            %{"name" => "Message-ID", "value" => "<stored-3@acme.example.com>"}
+          ])
+        )
+
+      assert {:ok, conversation} =
+               SenderMatching.process(normalized, %{organization_id: org.id, route_id: 3})
+
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert message.provider_delivery_id == "delivery-3"
+      assert message.lettermint_message_id == "lm-delivery-3"
+      assert message.message_id == "<stored-3@acme.example.com>"
+    end
+
+    test "a replayed delivery does not reactivate a resolved conversation" do
+      org = insert_organization(domain: "acme.example.com")
+      route_context = %{organization_id: org.id, route_id: 3}
+
+      {:ok, normalized} = Lettermint.normalize(lettermint_envelope("delivery-4", []))
+      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
+
+      conversation
+      |> Conversation.state_changeset(:resolved)
+      |> Repo.update!()
+
+      assert {:ok, replayed} = SenderMatching.process(normalized, route_context)
+      assert replayed.id == conversation.id
+      assert replayed.state == :resolved
+    end
+  end
 end

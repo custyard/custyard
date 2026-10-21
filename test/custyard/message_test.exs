@@ -124,8 +124,10 @@ defmodule Custyard.MessageTest do
                :pending,
                :sending,
                :sent,
+               :delivered,
                :failed,
                :bounced,
+               :suppressed,
                :withheld
              ]
     end

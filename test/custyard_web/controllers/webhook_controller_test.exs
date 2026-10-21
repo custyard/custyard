@@ -554,4 +554,83 @@ defmodule CustyardWeb.WebhookControllerTest do
       assert message.body == "Only HTML"
     end
   end
+
+  describe "Lettermint enveloped events" do
+    setup do
+      Application.put_env(:custyard, :env, :test)
+      on_exit(fn -> Application.delete_env(:custyard, :env) end)
+
+      org = insert_organization()
+      _contact = insert_contact(organization_id: org.id, email: "customer@example.com")
+
+      {:ok, route} =
+        %InboundRoute{}
+        |> InboundRoute.changeset(%{organization_id: org.id, source: :lettermint})
+        |> Repo.insert()
+
+      %{org: org, route: route}
+    end
+
+    defp lettermint_event(event) do
+      %{
+        "id" => "e3d4f5a6-#{System.unique_integer([:positive])}",
+        "event" => event,
+        "timestamp" => "2025-10-02T14:30:00.000Z",
+        "data" => %{
+          "route" => "support-inbox",
+          "message_id" => "f47ac10b-#{System.unique_integer([:positive])}",
+          "from" => %{"email" => "customer@example.com", "name" => "John Doe"},
+          "to" => [%{"email" => "support@acme.com", "name" => nil}],
+          "cc" => [],
+          "recipient" => "support@acme.com",
+          "subject" => "Question about my order",
+          "body" => %{"text" => "Hi, where is my order?", "html" => nil},
+          "headers" => [
+            %{
+              "name" => "Message-ID",
+              "value" => "<env-#{System.unique_integer([:positive])}@mail.example.com>"
+            }
+          ],
+          "is_spam" => false,
+          "spam_score" => 1.2
+        }
+      }
+    end
+
+    test "an enveloped message.inbound creates a conversation", %{conn: conn, route: route} do
+      params = lettermint_event("message.inbound")
+
+      response =
+        conn
+        |> post(~p"/api/webhook/route/#{route.callback_token}", params)
+        |> json_response(200)
+
+      assert response["status"] == "ok"
+      assert is_integer(response["conversation_id"])
+
+      conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
+      assert conversation.subject == "Question about my order"
+
+      message = Repo.get_by!(Custyard.Message, conversation_id: conversation.id)
+      assert message.provider_delivery_id == params["id"]
+      assert message.sender_email == "John Doe <customer@example.com>"
+    end
+
+    test "a message.delivered envelope is ignored and creates nothing", %{
+      conn: conn,
+      route: route
+    } do
+      response =
+        conn
+        |> post(
+          ~p"/api/webhook/route/#{route.callback_token}",
+          lettermint_event("message.delivered")
+        )
+        |> json_response(200)
+
+      assert response == %{"status" => "ignored", "event" => "message.delivered"}
+      assert Repo.aggregate(Custyard.Conversation, :count) == 0
+      assert Repo.aggregate(Custyard.Message, :count) == 0
+    end
+  end
 end

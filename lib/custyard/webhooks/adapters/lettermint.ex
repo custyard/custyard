@@ -4,6 +4,30 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
 
   Lettermint signs `timestamp.raw_body` with HMAC-SHA256 and sends the timestamp
   and hex digest together in `X-Lettermint-Signature: t=...,v1=...`.
+
+  ## Payload shapes
+
+  Lettermint posts an enveloped event:
+
+      %{"id" => delivery_id, "event" => "message.inbound", "timestamp" => ..., "data" => %{...}}
+
+  `id` is the webhook delivery id and is reused on every retry of the same
+  delivery, so it is surfaced as `metadata.provider_delivery_id` for dedup.
+  `data` carries the parsed mail: `from` (`%{"email", "name"}`), `to`/`cc`
+  (lists of the same), `recipient` (SMTP envelope recipient, the routing key),
+  `subject`, `body` (`%{"text", "html"}`), `headers` (a list of
+  `%{"name", "value"}` holding Message-ID, In-Reply-To, References and any
+  non-standard headers), `authentication_results`, `is_spam`, `spam_score`.
+  Events other than `message.inbound` return
+  `{:bypass, %{type: "ignored_event", event: event}}` so the controller can
+  acknowledge them without processing.
+
+  The flat legacy shape (`from`, `to`, `subject`, `text`, `html` and a
+  `headers` map) is still accepted for dev fixtures and direct posts.
+
+  Only a compact metadata map is retained: no raw-message URL, attachment
+  content, spam symbols, remote IP or full header list (see
+  docs/design/spec-inbound-channels.md, "Privacy and compliance").
   """
   @behaviour Custyard.Webhooks.Adapter
 
@@ -77,6 +101,14 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
   alias Custyard.Email.Normalizer
 
   @impl true
+  def normalize(%{"event" => "message.inbound", "data" => data} = params) when is_map(data) do
+    normalize_inbound(data, params["id"])
+  end
+
+  def normalize(%{"event" => event, "data" => data}) when is_map(data) do
+    {:bypass, %{type: "ignored_event", event: event}}
+  end
+
   def normalize(params) do
     headers = if is_map(params["headers"]), do: params["headers"], else: %{}
 
@@ -87,11 +119,7 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
      %{
        from: params["from"] || params["sender"],
        to: params["to"] || params["recipient"],
-       subject:
-         Normalizer.truncate(
-           Normalizer.presence(params["subject"]) || "(no subject)",
-           Normalizer.max_subject_length()
-         ),
+       subject: normalize_subject(params["subject"]),
        body: Normalizer.truncate(body, Normalizer.max_body_length()),
        message_id: Normalizer.get_header(headers, "message-id"),
        in_reply_to: Normalizer.get_header(headers, "in-reply-to"),
@@ -101,4 +129,111 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
        metadata: %{}
      }}
   end
+
+  defp normalize_inbound(data, delivery_id) do
+    headers = headers_map(data["headers"])
+    body_map = if is_map(data["body"]), do: data["body"], else: %{}
+
+    body =
+      Normalizer.presence(body_map["text"]) || Normalizer.strip_html(body_map["html"]) || ""
+
+    {:ok,
+     %{
+       from: format_from(data["from"]),
+       to: Normalizer.presence(data["recipient"]) || first_email(data["to"]),
+       subject: normalize_subject(data["subject"]),
+       body: Normalizer.truncate(body, Normalizer.max_body_length()),
+       message_id: Normalizer.get_header(headers, "message-id"),
+       in_reply_to: Normalizer.get_header(headers, "in-reply-to"),
+       references: Normalizer.get_header(headers, "references"),
+       headers: headers,
+       source: :lettermint,
+       metadata: metadata(delivery_id, data)
+     }}
+  end
+
+  defp normalize_subject(subject) do
+    Normalizer.truncate(
+      Normalizer.presence(subject) || "(no subject)",
+      Normalizer.max_subject_length()
+    )
+  end
+
+  # `Name <email>` when a safe display name is present, else the bare address.
+  # SenderMatcher.extract_email/1 parses this form; a name carrying angle
+  # brackets or control characters would corrupt that parse (or a later
+  # header), so it is dropped rather than escaped.
+  defp format_from(%{"email" => email} = from) when is_binary(email) do
+    case safe_display_name(from["name"]) do
+      nil -> email
+      name -> "#{name} <#{email}>"
+    end
+  end
+
+  defp format_from(_from), do: nil
+
+  @unsafe_name ~r/[<>\x00-\x1F\x7F]/
+
+  defp safe_display_name(name) when is_binary(name) do
+    case Normalizer.presence(name) do
+      nil -> nil
+      present -> if Regex.match?(@unsafe_name, present), do: nil, else: String.trim(present)
+    end
+  end
+
+  defp safe_display_name(_name), do: nil
+
+  defp first_email([%{"email" => email} | _rest]) when is_binary(email), do: email
+  defp first_email([_other | rest]), do: first_email(rest)
+  defp first_email(_list), do: nil
+
+  # Lettermint sends headers as [%{"name", "value"}]; the rest of the pipeline
+  # (Normalizer.get_header/2, SieveHeaderMapper) expects a map. The first
+  # occurrence of a name wins. Entries of any other shape are ignored.
+  defp headers_map(list) when is_list(list) do
+    Enum.reduce(list, %{}, fn
+      %{"name" => name, "value" => value}, acc when is_binary(name) and is_binary(value) ->
+        Map.put_new(acc, name, value)
+
+      _entry, acc ->
+        acc
+    end)
+  end
+
+  defp headers_map(map) when is_map(map), do: map
+  defp headers_map(_other), do: %{}
+
+  defp metadata(delivery_id, data) do
+    auth =
+      if is_map(data["authentication_results"]), do: data["authentication_results"], else: %{}
+
+    %{
+      provider_delivery_id: string_or_nil(delivery_id),
+      lettermint_message_id: string_or_nil(data["message_id"]),
+      recipient: string_or_nil(data["recipient"]),
+      subaddress: string_or_nil(data["subaddress"]),
+      reply_to: string_or_nil(data["reply_to"]),
+      cc: cc_emails(data["cc"]),
+      authentication: %{
+        dkim: auth_field(auth["dkim"], "result"),
+        dkim_domain: auth_field(auth["dkim"], "domain"),
+        spf: auth_field(auth["spf"], "result"),
+        dmarc: auth_field(auth["dmarc"], "result")
+      },
+      is_spam: if(is_boolean(data["is_spam"]), do: data["is_spam"]),
+      spam_score: if(is_number(data["spam_score"]), do: data["spam_score"])
+    }
+  end
+
+  defp cc_emails(list) when is_list(list) do
+    for %{"email" => email} <- list, is_binary(email), do: email
+  end
+
+  defp cc_emails(_other), do: []
+
+  defp auth_field(%{} = section, key), do: string_or_nil(section[key])
+  defp auth_field(_section, _key), do: nil
+
+  defp string_or_nil(value) when is_binary(value), do: value
+  defp string_or_nil(_value), do: nil
 end

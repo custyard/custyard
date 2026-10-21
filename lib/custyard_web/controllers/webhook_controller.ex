@@ -103,6 +103,12 @@ defmodule CustyardWeb.WebhookController do
       {:bypass, %{type: "url_verification", challenge: challenge}} ->
         json(conn, %{challenge: challenge})
 
+      # A provider event this endpoint does not process (e.g. a Lettermint
+      # delivery-status event). Acknowledge with 200 so the provider does not
+      # retry it.
+      {:bypass, %{type: "ignored_event"} = info} ->
+        json(conn, %{status: "ignored", event: info.event})
+
       {:error, reason} ->
         require Logger
 
