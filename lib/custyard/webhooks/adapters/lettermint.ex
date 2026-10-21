@@ -210,14 +210,23 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
     auth =
       if is_map(data["authentication_results"]), do: data["authentication_results"], else: %{}
 
+    body_map = if is_map(data["body"]), do: data["body"], else: %{}
+
     %{
       provider_delivery_id: string_or_nil(delivery_id),
       lettermint_message_id: string_or_nil(data["message_id"]),
       recipient: string_or_nil(data["recipient"]),
       subaddress: string_or_nil(data["subaddress"]),
+      # Header To addresses, kept apart from the envelope recipient: for a
+      # forwarded delivery the recipient is the secret ingress address and
+      # must not be displayed as the customer's To.
+      to: address_emails(data["to"]),
       mail_from: envelope_mail_from(data["envelope"]),
       reply_to: string_or_nil(data["reply_to"]),
-      cc: cc_emails(data["cc"]),
+      cc: address_emails(data["cc"]),
+      # Anchor hrefs from the HTML body, for verification-link extraction
+      # only (strip_html/1 drops them); never persisted on the message.
+      links: html_links(body_map["html"]),
       authentication: %{
         dkim: auth_field(auth["dkim"], "result"),
         dkim_domain: auth_field(auth["dkim"], "domain"),
@@ -233,11 +242,24 @@ defmodule Custyard.Webhooks.Adapters.Lettermint do
   defp envelope_mail_from(%{"mail_from" => mail_from}) when is_binary(mail_from), do: mail_from
   defp envelope_mail_from(_envelope), do: nil
 
-  defp cc_emails(list) when is_list(list) do
+  defp address_emails(list) when is_list(list) do
     for %{"email" => email} <- list, is_binary(email), do: email
   end
 
-  defp cc_emails(_other), do: []
+  defp address_emails(_other), do: []
+
+  @href_regex ~r/href\s*=\s*["']?(https:\/\/[^"'\s>]+)/i
+  @max_links 50
+
+  defp html_links(html) when is_binary(html) do
+    @href_regex
+    |> Regex.scan(html, capture: :all_but_first)
+    |> Enum.map(fn [url] -> String.replace(url, "&amp;", "&") end)
+    |> Enum.uniq()
+    |> Enum.take(@max_links)
+  end
+
+  defp html_links(_html), do: []
 
   defp auth_field(%{} = section, key), do: string_or_nil(section[key])
   defp auth_field(_section, _key), do: nil

@@ -1052,9 +1052,16 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
       |> assign(:quiet, channel_quiet?(channel))
       |> assign(:summary, InboundChannels.sending_domain_summary(channel))
       |> assign(:confirming, confirming(assigns.confirm_action, channel.id))
+      # The wizard is the only place reply identity and the sending-domain
+      # check live, so it stays reachable after the channel goes active;
+      # the label says which job it is doing.
+      |> assign(:setup_available, channel.state != :revoked)
       |> assign(
-        :setup_available,
-        channel.state in [:pending_verification, :awaiting_first_message]
+        :setup_label,
+        if(channel.state in [:pending_verification, :awaiting_first_message],
+          do: "Setup",
+          else: "Settings"
+        )
       )
 
     ~H"""
@@ -1133,7 +1140,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
                 class="text-xs px-2 py-1 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
                 data-testid={"setup-channel-#{@channel.id}"}
               >
-                Setup
+                {@setup_label}
               </button>
               <button
                 :if={@channel.state == :paused}

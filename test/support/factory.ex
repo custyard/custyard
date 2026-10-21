@@ -235,11 +235,15 @@ defmodule Custyard.Factory do
     # intake_source_key is creation-only (not in the operator changeset cast
     # list); apply it as a raw change like cached_score
     {intake_source_key, attrs} = Map.pop(attrs, :intake_source_key)
+    # The triage suspect flag has its own changeset, deliberately outside
+    # changeset/2 (operators must not toggle it through the edit form).
+    {suspect, attrs} = Map.pop(attrs, :suspect, false)
 
     %Custyard.Conversation{}
     |> Custyard.Conversation.changeset(attrs)
     |> Ecto.Changeset.change(cached_score: cached_score)
     |> maybe_change_intake_source_key(intake_source_key)
+    |> Custyard.Conversation.suspect_changeset(suspect)
     |> Custyard.Repo.insert!()
   end
 

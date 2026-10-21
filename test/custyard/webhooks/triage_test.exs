@@ -1,5 +1,8 @@
 defmodule Custyard.Webhooks.TriageTest do
-  use Custyard.DataCase, async: true
+  # Not async: "the sender list is configurable" swaps the application-wide
+  # :forwarding_verification_senders, which would race any other module
+  # classifying a Proton or Gmail notice at the same time.
+  use Custyard.DataCase, async: false
 
   import Custyard.Factory
 
@@ -201,6 +204,28 @@ defmodule Custyard.Webhooks.TriageTest do
       assert {:verification, %{link: nil}} = Triage.classify(payload, route, nil)
     end
 
+    test "an HTML-only notice keeps the link the adapter lifted from its anchors", %{
+      route: route
+    } do
+      # strip_html/1 removes the href, so the text body has no URL; the
+      # adapter puts anchor hrefs in metadata.links for exactly this case.
+      payload =
+        normalized(%{
+          from: "Proton <no-reply@notify.proton.me>",
+          subject: "Confirm forwarding",
+          body: "Confirm forwarding Click here to confirm"
+        })
+        |> put_metadata(%{
+          links: [
+            "https://tracking.example.net/open",
+            "https://account.proton.me/forward/confirm?token=xyz&amp;x=1"
+          ]
+        })
+
+      assert {:verification, capture} = Triage.classify(payload, route, nil)
+      assert capture.link == "https://account.proton.me/forward/confirm?token=xyz&amp;x=1"
+    end
+
     test "the sender list is configurable", %{route: route} do
       Application.put_env(:custyard, :forwarding_verification_senders, %{
         google: ["Forwarding@Example.test"],
@@ -249,11 +274,17 @@ defmodule Custyard.Webhooks.TriageTest do
       assert {:customer, nil} = Triage.classify(payload, route, nil)
     end
 
-    test "X-Autoreply, X-Autorespond and X-Auto-Response-Suppress", %{route: route} do
-      for name <- ["X-Autoreply", "x-autorespond", "X-Auto-Response-Suppress"] do
+    test "X-Autoreply and X-Autorespond", %{route: route} do
+      for name <- ["X-Autoreply", "x-autorespond"] do
         payload = normalized(%{headers: %{name => "yes"}})
         assert {:auto_response, :auto_reply_header} = Triage.classify(payload, route, nil)
       end
+    end
+
+    test "X-Auto-Response-Suppress is a request to the recipient, not an auto-response marker",
+         %{route: route} do
+      payload = normalized(%{headers: %{"X-Auto-Response-Suppress" => "All"}})
+      assert {:customer, nil} = Triage.classify(payload, route, nil)
     end
 
     test "an empty envelope sender is a bounce", %{route: route} do
@@ -336,6 +367,32 @@ defmodule Custyard.Webhooks.TriageTest do
 
       payload = normalized() |> put_metadata(%{is_spam: true})
       assert {:suspect, :spam_flagged} = Triage.classify(payload, route, nil)
+    end
+
+    test "a contact whose only conversations are suspect does not exempt the sender", %{
+      org: org,
+      route: route
+    } do
+      # Sender matching created this contact from the first suspect delivery.
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
+      insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+
+      payload = normalized() |> put_metadata(%{is_spam: true})
+      assert {:suspect, :spam_flagged} = Triage.classify(payload, route, nil)
+    end
+
+    test "one accepted conversation makes the sender known", %{org: org, route: route} do
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
+      insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+
+      cleared =
+        insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+
+      # The operator dismissing the flag is what whitelists the sender.
+      {:ok, _} = Custyard.Conversations.set_suspect(cleared, false)
+
+      payload = normalized() |> put_metadata(%{is_spam: true})
+      assert {:customer, nil} = Triage.classify(payload, route, nil)
     end
   end
 end

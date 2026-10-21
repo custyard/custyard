@@ -304,7 +304,10 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert appended.inbound_channel_id == channel.id
       assert appended.in_reply_to == "<op-1.c#{conversation.id}@custyard.local>"
       assert appended.provider_delivery_id == payload.metadata.provider_delivery_id
-      assert appended.to_addresses == [InboundChannels.ingress_address(channel)]
+      # No header To in the fixture: the delivery address stands in, minus the token.
+      assert appended.to_addresses == [
+               "#{channel.ingress_local}@#{route.lettermint_route_domain}"
+             ]
 
       refute_receive {:new_message, _}, 100
       assert Repo.aggregate(Custyard.Contact, :count) == 1
@@ -366,6 +369,31 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       refute_receive {:new_message, _}, 100
     end
 
+    test "the contact created by suspect mail does not whitelist the sender", %{route: route} do
+      channel = channel!(route)
+      Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
+
+      spam = fn subject ->
+        delivery(InboundChannels.ingress_address(channel), %{subject: subject})
+        |> put_metadata(%{is_spam: true})
+      end
+
+      assert {:ok, first} = Dispatcher.dispatch(route, spam.("URGENT one"))
+      assert first.suspect == true
+
+      # Second spam from the same sender: a contact row now exists for it.
+      assert {:ok, second} = Dispatcher.dispatch(route, spam.("URGENT two"))
+      assert second.suspect == true
+      assert second.urgency == :normal
+      assert Repo.get_by!(Message, conversation_id: second.id).triage_class == :suspect
+
+      # A replay of the first delivery is quiet as well.
+      assert {:ok, replayed} = Dispatcher.dispatch(route, spam.("URGENT one"))
+      assert replayed.suspect == true
+
+      refute_receive {:new_message, _}, 100
+    end
+
     test "an existing contact is exempt", %{org: org, route: route} do
       channel = channel!(route)
       insert_contact(organization_id: org.id, email: "alice@customer.example.com")
@@ -394,6 +422,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       payload =
         delivery(recipient)
         |> put_metadata(%{
+          to: ["help@acme.example.com"],
           reply_to: "Alice Work <alice.work@customer.example.com>",
           cc: ["boss@customer.example.com", "pm@customer.example.com"],
           spam_score: 1
@@ -406,7 +435,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       message = Repo.get_by!(Message, conversation_id: conversation.id)
       assert message.inbound_channel_id == channel.id
       assert message.triage_class == :customer
-      assert message.to_addresses == [recipient]
+      assert message.to_addresses == ["help@acme.example.com"]
       assert message.cc_addresses == ["boss@customer.example.com", "pm@customer.example.com"]
       assert message.reply_to == "alice.work@customer.example.com"
       assert message.spam_score == 1.0
@@ -445,6 +474,18 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
       message = Repo.get_by!(Message, conversation_id: conversation.id)
       assert message.to_addresses == ["support@acme.example.com"]
+    end
+
+    test "the ingress token never reaches to_addresses", %{route: route} do
+      channel = channel!(route)
+      recipient = InboundChannels.ingress_address(channel)
+
+      # No header To at all: the delivery address stands in, minus its subaddress.
+      assert {:ok, conversation} = Dispatcher.dispatch(route, delivery(recipient))
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+
+      refute Enum.any?(message.to_addresses, &(&1 =~ channel.ingress_token))
+      assert message.to_addresses == ["#{channel.ingress_local}@#{route.lettermint_route_domain}"]
     end
 
     test "a successful delivery promotes the channel to active", %{route: route} do

@@ -152,8 +152,19 @@ defmodule CustyardWeb.Operator.OrganizationChannelsTabTest do
                "no mail yet"
 
       refute has_element?(view, "[data-testid=channel-quiet-#{fresh.id}]")
-      assert has_element?(view, "[data-testid=setup-channel-#{fresh.id}]")
-      refute has_element?(view, "[data-testid=setup-channel-#{quiet.id}]")
+
+      # The wizard stays reachable once active: it is where reply identity
+      # and the sending-domain check are changed.
+      assert view |> element("[data-testid=setup-channel-#{fresh.id}]") |> render() =~ "Setup"
+      assert view |> element("[data-testid=setup-channel-#{quiet.id}]") |> render() =~ "Settings"
+    end
+
+    test "a revoked channel offers no setup entry point", %{conn: conn, org: org} do
+      revoked = insert_inbound_channel(organization_id: org.id, state: :revoked)
+
+      view = open_channels(conn, org)
+
+      refute has_element?(view, "[data-testid=setup-channel-#{revoked.id}]")
     end
 
     test "the ingress token never appears in the list without a reveal", %{conn: conn, org: org} do

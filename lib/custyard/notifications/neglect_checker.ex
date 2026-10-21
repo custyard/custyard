@@ -63,6 +63,7 @@ defmodule Custyard.Notifications.NeglectChecker do
   Excludes:
   - Resolved conversations (no longer need attention)
   - Currently snoozed conversations
+  - Suspect conversations (triage flagged, not yet cleared by an operator)
   """
   def list_notification_candidates(thresholds \\ nil) do
     now = DateTime.utc_now()
@@ -75,6 +76,10 @@ defmodule Custyard.Notifications.NeglectChecker do
       left_join: ct in assoc(c, :contact),
       where: c.state != :resolved,
       where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
+      # Suspect mail is excluded from operator notifications until an operator
+      # clears the flag (spec-inbound-channels D6); unattended spam must not
+      # page anyone.
+      where: c.suspect == false,
       # Only load conversations that have exceeded their tier's warning threshold
       # This is the key optimization - we filter in the DB instead of loading all
       where: ^past_warning_cutoff(thresholds),

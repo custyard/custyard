@@ -42,7 +42,9 @@ defmodule Custyard.Email.DeliveryStatusTest do
         {:bounced, :failed, true},
         {:pending, :sent, true},
         {:sending, :delivered, true},
-        {:suppressed, :suppressed, true}
+        {:suppressed, :suppressed, false},
+        {:bounced, :bounced, false},
+        {:failed, :suppressed, true}
       ]
 
       for {current, incoming, expected} <- table do
@@ -195,6 +197,18 @@ defmodule Custyard.Email.DeliveryStatusTest do
       assert audit.payload["enhanced_status_code"] == "5.1.1"
       refute Map.has_key?(audit.payload, "content")
       refute Map.has_key?(audit.payload, "recipient")
+    end
+
+    test "a retried terminal event is ignored and writes no second audit event", %{
+      outbound: outbound
+    } do
+      envelope = envelope("message.hard_bounced", "evt-b", %{"message_id" => @provider_id})
+
+      assert {:ok, :updated, _} = DeliveryStatus.apply_event(envelope)
+      assert {:ok, :ignored, :not_advanced} = DeliveryStatus.apply_event(envelope)
+
+      assert Repo.get!(Message, outbound.id).delivery_status == :bounced
+      assert Repo.aggregate(AuditEvent, :count) == 1
     end
 
     test "a later terminal event replaces an earlier terminal status", %{outbound: outbound} do

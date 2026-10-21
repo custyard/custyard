@@ -210,6 +210,16 @@ defmodule Custyard.InboundChannelsTest do
       assert event.payload["to"] == "awaiting_first_message"
     end
 
+    test "confirm_verification/2 does not regress a channel a delivery just activated" do
+      stale = insert_inbound_channel(state: :pending_verification)
+      {:ok, active} = InboundChannels.mark_received(stale)
+      assert active.state == :active
+
+      assert {:error, %Ecto.Changeset{} = changeset} = InboundChannels.confirm_verification(stale)
+      assert Keyword.has_key?(changeset.errors, :state)
+      assert Repo.reload!(stale).state == :active
+    end
+
     test "confirm_verification/2 only applies to pending_verification" do
       for state <- [:awaiting_first_message, :active, :paused, :revoked, :draft] do
         channel = insert_inbound_channel(state: state)
@@ -563,6 +573,25 @@ defmodule Custyard.InboundChannelsTest do
       assert_receive {:channel_updated, id}
       assert_receive {:channel_updated, ^id}
       assert id == channel.id
+    end
+
+    test "does not reactivate a channel revoked or paused since it was loaded" do
+      for {action, expected} <- [
+            {&InboundChannels.revoke/1, :revoked},
+            {&InboundChannels.pause/1, :paused}
+          ] do
+        stale = insert_inbound_channel(state: :awaiting_first_message)
+        {:ok, _} = action.(stale)
+
+        assert {:error, %Ecto.Changeset{} = changeset} = InboundChannels.mark_received(stale)
+        assert Keyword.has_key?(changeset.errors, :state)
+
+        current = Repo.reload!(stale)
+        assert current.state == expected
+        assert is_nil(current.last_received_at)
+      end
+
+      refute Enum.any?(audit_events(:channel_state_changed), &(&1.payload["to"] == "active"))
     end
   end
 

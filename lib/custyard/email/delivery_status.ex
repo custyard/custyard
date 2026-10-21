@@ -5,11 +5,17 @@ defmodule Custyard.Email.DeliveryStatus do
 
   Statuses are rank-ordered: pending < sending < sent < delivered. Bounced,
   suppressed and failed are terminal. An event advances a message only when
-  its rank is higher than the current status or it is terminal, so retried,
-  duplicated and out-of-order webhooks are harmless no-ops. `:withheld`
-  (consent withheld, never handed to the provider) is never changed by a
-  provider event, and inbound messages (`delivery_status` nil) are never
-  touched even if they carry a `lettermint_message_id`.
+  its rank is higher than the current status or it is a terminal status
+  different from the current one, so retried, duplicated and out-of-order
+  webhooks are harmless no-ops. `:withheld` (consent withheld, never handed
+  to the provider) is never changed by a provider event, and inbound
+  messages (`delivery_status` nil) are never touched even if they carry a
+  `lettermint_message_id`.
+
+  The status write is conditional on the status that was read. When two
+  webhooks for one message overlap and the write loses, the event is
+  re-evaluated against the stored status rather than acknowledged: a bounce
+  that lost to a concurrent `delivered` still applies and is retried.
 
   Every applied transition writes an append-only `:delivery_status_updated`
   audit event. The audit payload deliberately omits recipient addresses,
@@ -40,6 +46,10 @@ defmodule Custyard.Email.DeliveryStatus do
 
   @source "lettermint"
 
+  # Rounds of read-check-write before a persistently losing event is handed
+  # back as an error (422) for the provider to retry later.
+  @max_attempts 3
+
   @doc "Rank of a non-terminal status; nil for terminal statuses and `:withheld`."
   def rank(status), do: Map.get(@ranks, status)
 
@@ -53,11 +63,14 @@ defmodule Custyard.Email.DeliveryStatus do
   @doc """
   Whether `incoming` should replace `current`.
 
-  False for inbound messages (nil) and `:withheld`; true when `incoming` is
-  terminal (even over another terminal status) or outranks `current`.
+  False for inbound messages (nil) and `:withheld`, and for a status equal
+  to the current one (a retried terminal event changes nothing); true when
+  `incoming` is terminal (even over a different terminal status) or outranks
+  `current`.
   """
   def advance?(nil, _incoming), do: false
   def advance?(:withheld, _incoming), do: false
+  def advance?(current, current), do: false
 
   def advance?(current, incoming) do
     cond do
@@ -73,21 +86,19 @@ defmodule Custyard.Email.DeliveryStatus do
 
   Returns `{:ok, :updated, message}`, `{:ok, :ignored, reason}` for events
   that are not status changes, unknown messages, or non-advancing transitions,
-  or `{:error, term}` when the write failed.
+  or `{:error, term}` when the write failed (including
+  `{:error, :concurrent_update}` when an advancing event kept losing to
+  overlapping writes; the caller answers non-2xx so the provider retries).
   """
   def apply_event(%{"event" => event} = envelope) when is_binary(event) do
     data = map_or_empty(envelope["data"])
 
     result =
       with {:ok, status} <- resolve_status(event),
-           {:ok, provider_id} <- provider_message_id(data),
-           {:ok, message} <- find_message(provider_id),
-           :ok <- check_advance(message, status),
-           {:ok, updated} <- transition(message, status, event, envelope["id"], data) do
-        {:ok, :updated, updated}
+           {:ok, provider_id} <- provider_message_id(data) do
+        apply_status(provider_id, status, event, envelope["id"], data, @max_attempts)
       else
         {:ignored, reason} -> {:ok, :ignored, reason}
-        {:error, reason} -> {:error, reason}
       end
 
     emit_telemetry(event, result)
@@ -95,6 +106,30 @@ defmodule Custyard.Email.DeliveryStatus do
   end
 
   def apply_event(_envelope), do: {:error, :invalid_payload}
+
+  # A conditional write that touched 0 rows means another webhook moved the
+  # status between our read and our write. The event may still apply (a
+  # hard bounce that lost to a concurrent `delivered` must still win), so
+  # re-read and decide again instead of acknowledging it as ignored.
+  defp apply_status(_provider_id, _status, _event, _delivery_id, _data, 0),
+    do: {:error, :concurrent_update}
+
+  defp apply_status(provider_id, status, event, delivery_id, data, attempts) do
+    with {:ok, message} <- find_message(provider_id),
+         :ok <- check_advance(message, status),
+         {:ok, updated} <- transition(message, status, event, delivery_id, data) do
+      {:ok, :updated, updated}
+    else
+      {:ignored, :concurrent_update} ->
+        apply_status(provider_id, status, event, delivery_id, data, attempts - 1)
+
+      {:ignored, reason} ->
+        {:ok, :ignored, reason}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   defp resolve_status(event) do
     case event_status(event) do
@@ -127,9 +162,9 @@ defmodule Custyard.Email.DeliveryStatus do
 
   # The status write is conditional on the status we read, so two concurrent
   # webhooks for the same message cannot both win; the loser sees 0 rows and
-  # is treated as a no-op. The audit event is written in the same transaction
-  # so a transition is never recorded without its history entry. The LiveView
-  # nudge goes out only after commit.
+  # `apply_status/6` re-evaluates it. The audit event is written in the same
+  # transaction so a transition is never recorded without its history entry.
+  # The LiveView nudge goes out only after commit.
   defp transition(%Message{} = message, to_status, event, delivery_id, data) do
     changeset = Message.delivery_status_changeset(message, to_status)
 

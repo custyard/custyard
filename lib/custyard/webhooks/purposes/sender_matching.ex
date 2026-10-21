@@ -233,9 +233,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       contact_id: contact && contact.id,
       subject: Normalizer.presence(normalized.subject) || "(no subject)",
       state: :new,
-      # A suspect delivery never earns an urgency bump from its own words (D6).
-      urgency:
-        if(suspect?, do: :normal, else: detect_urgency(normalized.subject, normalized.body)),
+      urgency: detect_urgency(normalized.subject, normalized.body),
       source: normalized[:source] || :email,
       last_customer_action_at: now,
       inbound_channel_id: route_context[:channel_id]
@@ -250,6 +248,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
 
     # Apply Sieve header overrides for email sources
     attrs = SieveHeaderMapper.merge_overrides(base_attrs, normalized.headers)
+
+    # A suspect delivery never earns an urgency bump, neither from its own
+    # words nor from a priority header it chose to send (D6). Pinned after
+    # the Sieve overrides so a mapped header cannot undo it.
+    attrs = if suspect?, do: Map.put(attrs, :urgency, :normal), else: attrs
 
     %Conversation{}
     |> Conversation.changeset(attrs)
@@ -346,13 +349,28 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp triage_class(:email, route_context), do: route_context[:triage_class] || :customer
   defp triage_class(_source, _route_context), do: nil
 
-  # The envelope recipient is the address the mail was actually delivered to;
-  # without one, the adapter's `to` stands in.
+  # The header To addresses, as the customer wrote them. The envelope
+  # recipient is routing data: on a forwarding channel it is the secret
+  # `local+token@domain` ingress address, which must not be shown to agents
+  # as the message's To. When the adapter supplied no header To, the
+  # delivery address stands in with its subaddress removed.
   defp to_addresses(normalized, metadata) do
-    case {metadata[:recipient], normalized[:to]} do
-      {recipient, _to} when is_binary(recipient) and recipient != "" -> [recipient]
-      {_recipient, to} when is_binary(to) and to != "" -> [to]
-      _other -> []
+    case metadata[:to] do
+      [_ | _] = to ->
+        Enum.filter(to, &is_binary/1)
+
+      _none ->
+        case normalized[:to] do
+          to when is_binary(to) and to != "" -> [strip_subaddress(to)]
+          _other -> []
+        end
+    end
+  end
+
+  defp strip_subaddress(address) do
+    case String.split(address, "@", parts: 2) do
+      [local, domain] -> "#{local |> String.split("+", parts: 2) |> hd()}@#{domain}"
+      _other -> address
     end
   end
 

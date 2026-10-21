@@ -100,6 +100,7 @@ defmodule Custyard.Scoring do
       from(m in Message,
         where: m.conversation_id in ^conversation_ids,
         where: m.inserted_at >= ^cutoff,
+        where: is_nil(m.triage_class) or m.triage_class != :auto_response,
         group_by: m.conversation_id,
         select: {m.conversation_id, count(m.id)}
       )
@@ -317,12 +318,16 @@ defmodule Custyard.Scoring do
     DateTime.diff(DateTime.utc_now(), datetime, :hour)
   end
 
+  # Auto-responses (vacation notices, bounces appended to the thread) are
+  # system messages and must not read as conversation activity; the batch
+  # query above applies the same exclusion.
   defp message_count_24h(conversation) do
     cutoff = DateTime.add(DateTime.utc_now(), -24, :hour)
 
     from(m in Message,
       where: m.conversation_id == ^conversation.id,
       where: m.inserted_at >= ^cutoff,
+      where: is_nil(m.triage_class) or m.triage_class != :auto_response,
       select: count(m.id)
     )
     |> Repo.one()

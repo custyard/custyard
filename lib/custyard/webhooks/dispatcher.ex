@@ -298,7 +298,7 @@ defmodule Custyard.Webhooks.Dispatcher do
       end)
     end
 
-    if MapSet.member?(enabled_purposes, :notification) and notify?(route_context) do
+    if MapSet.member?(enabled_purposes, :notification) and notify?(conversation, route_context) do
       start_purpose_task(:notification, fn ->
         Purposes.Notification.process(conversation, normalized, route_context)
       end)
@@ -328,8 +328,15 @@ defmodule Custyard.Webhooks.Dispatcher do
   end
 
   # D6: suspect mail and auto-responses never reach operator notifications.
-  defp notify?(%{triage_class: class}) when class in [:suspect, :auto_response], do: false
-  defp notify?(_route_context), do: true
+  # The stored flag is checked too: a replayed or follow-up delivery into a
+  # conversation an operator has not yet cleared stays quiet even when this
+  # delivery on its own classified as customer mail.
+  defp notify?(%Conversation{suspect: true}, _route_context), do: false
+
+  defp notify?(_conversation, %{triage_class: class}) when class in [:suspect, :auto_response],
+    do: false
+
+  defp notify?(_conversation, _route_context), do: true
 
   # --- Channel health (D7) ---
 

@@ -287,6 +287,26 @@ defmodule Custyard.ScoringTest do
       # ln(51) * 3 ~= 11.8, capped at 10
       assert breakdown.velocity == 10
     end
+
+    test "auto-responses appended to the thread do not count as activity" do
+      org = insert_organization(tier: :standard)
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          last_operator_action_at: DateTime.utc_now()
+        )
+
+      for _ <- 1..5 do
+        insert_message(conversation_id: conversation.id, triage_class: :auto_response)
+      end
+
+      assert Scoring.breakdown(conversation).velocity == 0
+
+      # The batch path applies the same exclusion.
+      assert Scoring.calculate_and_cache_batch([conversation.id]) == 1
+      assert Repo.reload!(conversation).cached_score == Scoring.calculate(conversation)
+    end
   end
 
   describe "neglect_status and neglect_bonus" do

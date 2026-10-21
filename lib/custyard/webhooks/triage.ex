@@ -16,7 +16,11 @@ defmodule Custyard.Webhooks.Triage do
        forwarding confirmation.
     3. `{:auto_response, reason}` - auto-submitted, bulk or bounce mail.
     4. `{:suspect, reason}` - spam-flagged or DKIM+DMARC failing mail from a
-       sender who is not already a contact in the organization.
+       sender who is not a known contact in the organization. A contact
+       whose only conversations are themselves suspect does not count:
+       suspect mail creates its own contact, and that must not whitelist
+       the sender's next message. An operator clearing the suspect flag on
+       any of those conversations is what makes the sender known.
     5. `{:customer, nil}` - everything else.
 
   Operator-sent capture and manual-forward unwrap (Phase 2) are not
@@ -48,7 +52,10 @@ defmodule Custyard.Webhooks.Triage do
   @trailing_punctuation ~r/[.,;:]+\z/
 
   @bulk_precedence ~w(bulk junk auto_reply list)
-  @auto_reply_headers ["X-Autoreply", "X-Autorespond", "X-Auto-Response-Suppress"]
+  # `X-Auto-Response-Suppress` is deliberately absent: it asks the recipient
+  # not to auto-reply and is set on plenty of human mail (Exchange, bulk
+  # senders); it does not mark the message itself as automatic.
+  @auto_reply_headers ["X-Autoreply", "X-Autorespond"]
 
   @doc """
   Classify `normalized` delivered on `route` to `channel` (nil for a legacy
@@ -113,7 +120,7 @@ defmodule Custyard.Webhooks.Triage do
          %{
            provider: provider,
            code: verification_code(provider, normalized[:subject]),
-           link: verification_link(provider, normalized[:body])
+           link: verification_link(provider, normalized)
          }}
     end
   end
@@ -149,17 +156,32 @@ defmodule Custyard.Webhooks.Triage do
 
   defp verification_code(_provider, _subject), do: nil
 
-  # First https link in the body whose host belongs to the provider.
-  defp verification_link(provider, body) when is_binary(body) do
+  # First https link whose host belongs to the provider, searching the text
+  # body and then the anchor hrefs the adapter lifted from an HTML body
+  # (`metadata.links`): stripping HTML drops `href` attributes, so an
+  # HTML-only confirmation would otherwise lose its link.
+  defp verification_link(provider, normalized) do
     hosts = Map.fetch!(@verification_link_hosts, provider)
 
-    @https_url
-    |> Regex.scan(body)
-    |> Enum.map(fn [url] -> Regex.replace(@trailing_punctuation, url, "") end)
-    |> Enum.find(&provider_link?(&1, hosts))
-  end
+    body_links =
+      case normalized[:body] do
+        body when is_binary(body) ->
+          @https_url
+          |> Regex.scan(body)
+          |> Enum.map(fn [url] -> Regex.replace(@trailing_punctuation, url, "") end)
 
-  defp verification_link(_provider, _body), do: nil
+        _other ->
+          []
+      end
+
+    html_links =
+      case get_in(normalized, [:metadata, :links]) do
+        links when is_list(links) -> Enum.filter(links, &is_binary/1)
+        _other -> []
+      end
+
+    Enum.find(body_links ++ html_links, &provider_link?(&1, hosts))
+  end
 
   defp provider_link?(url, hosts) do
     case URI.parse(url) do
@@ -249,10 +271,26 @@ defmodule Custyard.Webhooks.Triage do
 
   defp known_contact?(nil, _organization_id), do: false
 
+  # A contact counts as known unless every conversation it has is suspect.
+  # Sender matching creates a contact for the first suspect delivery; without
+  # this rule that contact would exempt the sender's second message. A
+  # contact with no conversations at all (operator-created or imported) is
+  # known, as is one with at least one conversation an operator accepted or
+  # cleared.
   defp known_contact?(email, organization_id) do
+    suspect_only =
+      from v in Conversation,
+        where: v.contact_id == parent_as(:contact).id and v.suspect == true
+
+    accepted =
+      from v in Conversation,
+        where: v.contact_id == parent_as(:contact).id and v.suspect == false
+
     Repo.exists?(
       from c in Contact,
-        where: c.email == ^email and c.organization_id == ^organization_id
+        as: :contact,
+        where: c.email == ^email and c.organization_id == ^organization_id,
+        where: not exists(suspect_only) or exists(accepted)
     )
   end
 end

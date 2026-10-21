@@ -261,9 +261,11 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
                lettermint_message_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
                recipient: "support@acme.com",
                subaddress: nil,
+               to: ["support@acme.com"],
                mail_from: "customer@example.com",
                reply_to: "customer@example.com",
                cc: ["boss@example.com"],
+               links: [],
                authentication: %{
                  dkim: "pass",
                  dkim_domain: "example.com",
@@ -297,6 +299,40 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
       assert metadata.authentication == %{dkim: nil, dkim_domain: nil, spf: nil, dmarc: nil}
       assert metadata.is_spam == nil
       assert metadata.spam_score == nil
+    end
+
+    test "keeps header To apart from the envelope recipient" do
+      envelope =
+        inbound_envelope(%{
+          "recipient" => "support+abcd1234abcd1234abcd@r1.lettermint.app",
+          "to" => [
+            %{"email" => "support@acme.com", "name" => nil},
+            %{"email" => "sales@acme.com", "name" => "Sales"},
+            %{"name" => "no address"}
+          ]
+        })
+
+      assert {:ok, normalized} = Lettermint.normalize(envelope)
+      assert normalized.to == "support+abcd1234abcd1234abcd@r1.lettermint.app"
+      assert normalized.metadata.recipient == "support+abcd1234abcd1234abcd@r1.lettermint.app"
+      assert normalized.metadata.to == ["support@acme.com", "sales@acme.com"]
+    end
+
+    test "lifts https anchor hrefs from an HTML-only body into metadata.links" do
+      html =
+        ~s|<p>Confirm: <a href="https://account.proton.me/forward/confirm?t=1&amp;u=2">here</a></p>| <>
+          ~s|<a href='https://account.proton.me/forward/confirm?t=1&amp;u=2'>again</a>| <>
+          ~s|<a href="http://insecure.example/x">plain</a><a href=https://bare.example/y>bare</a>|
+
+      envelope = inbound_envelope(%{"body" => %{"text" => "", "html" => html}})
+
+      assert {:ok, normalized} = Lettermint.normalize(envelope)
+      refute normalized.body =~ "https://"
+
+      assert normalized.metadata.links == [
+               "https://account.proton.me/forward/confirm?t=1&u=2",
+               "https://bare.example/y"
+             ]
     end
 
     test "an empty envelope sender is preserved as the DSN marker" do

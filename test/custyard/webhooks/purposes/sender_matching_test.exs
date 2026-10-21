@@ -222,6 +222,49 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert conversation.urgency == :elevated
     end
 
+    test "a suspect delivery stays at normal urgency despite a mapped priority header" do
+      _settings = Custyard.Settings.get()
+
+      {:ok, _} =
+        Custyard.Settings.update_sieve_header_mappings(%{
+          "X-Priority" => %{
+            "property" => "urgency",
+            "mapping" => %{"high" => "urgent"}
+          }
+        })
+
+      org = insert_organization(domain: "acme.example.com")
+
+      normalized = %{
+        from: "mallory@spam.example.net",
+        subject: "URGENT: act now",
+        body: "Critical emergency",
+        message_id: "suspect-prio-1@spam.example.net",
+        in_reply_to: nil,
+        references: nil,
+        headers: %{"X-Priority" => "high"},
+        source: :email
+      }
+
+      route_context = %{organization_id: org.id, project_id: nil, triage_class: :suspect}
+
+      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
+      assert conversation.suspect == true
+      assert conversation.urgency == :normal
+
+      # The same header on customer mail still applies.
+      customer = %{
+        normalized
+        | from: "alice@acme.example.com",
+          message_id: "prio-2@acme.example.com"
+      }
+
+      assert {:ok, trusted} =
+               SenderMatching.process(customer, %{route_context | triage_class: :customer})
+
+      assert trusted.urgency == :urgent
+    end
+
     test "reactivates dormant conversation on new message" do
       org = insert_organization(domain: "acme.example.com")
 

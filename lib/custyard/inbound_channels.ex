@@ -288,7 +288,7 @@ defmodule Custyard.InboundChannels do
   end
 
   defp transition(changeset, channel, opts) do
-    case Repo.update(changeset) do
+    case update_in_state(changeset, channel) do
       {:ok, updated} ->
         audit(updated, :channel_state_changed, opts, %{from: channel.state, to: updated.state})
         broadcast(updated)
@@ -297,6 +297,46 @@ defmodule Custyard.InboundChannels do
       {:error, _changeset} = error ->
         error
     end
+  end
+
+  # Every lifecycle write is conditional on the state the caller read. A
+  # delivery resolves its channel before triage and sender matching run; if
+  # an operator revokes (or pauses) the channel in that window, the stale
+  # struct must not write `active` over `revoked`. The same guard stops an
+  # operator action from regressing a channel a delivery just activated.
+  # One conditional UPDATE is the whole check: SQLite serialises writers.
+  defp update_in_state(%Ecto.Changeset{valid?: false} = changeset, _channel),
+    do: {:error, changeset}
+
+  defp update_in_state(%Ecto.Changeset{changes: changes}, %InboundChannel{} = channel) do
+    sets = changes |> Map.put(:updated_at, now()) |> Map.to_list()
+
+    query =
+      from(c in InboundChannel,
+        where: c.id == ^channel.id and c.state == ^channel.state,
+        select: c
+      )
+
+    case Repo.update_all(query, set: sets) do
+      {1, [updated]} ->
+        {:ok, keep_preloads(updated, channel)}
+
+      {0, _} ->
+        {:error,
+         channel
+         |> Ecto.Changeset.change()
+         |> Ecto.Changeset.add_error(:state, "changed since it was loaded; reload and retry")}
+    end
+  end
+
+  # update_all returns a bare row; callers hold a struct with associations.
+  defp keep_preloads(updated, channel) do
+    Enum.reduce([:inbound_route, :organization, :project], updated, fn assoc, acc ->
+      case Map.fetch!(channel, assoc) do
+        %Ecto.Association.NotLoaded{} -> acc
+        loaded -> Map.put(acc, assoc, loaded)
+      end
+    end)
   end
 
   defp invalid_state(channel, action) do
@@ -447,6 +487,10 @@ defmodule Custyard.InboundChannels do
   Record an accepted delivery on the channel: stamps `last_received_at`,
   clears a pending quiet notice, and moves `pending_verification` or
   `awaiting_first_message` to `active`.
+
+  The write applies only while the channel is still in the state `channel`
+  was loaded in; a channel revoked or paused since then is left alone and
+  `{:error, changeset}` is returned.
   """
   def mark_received(%InboundChannel{} = channel, at \\ nil) do
     at = at || now()
@@ -466,7 +510,7 @@ defmodule Custyard.InboundChannels do
         changeset
       end
 
-    case Repo.update(changeset) do
+    case update_in_state(changeset, channel) do
       {:ok, updated} ->
         if updated.state != channel.state do
           audit(updated, :channel_state_changed, [], %{from: channel.state, to: updated.state})
@@ -537,7 +581,21 @@ defmodule Custyard.InboundChannels do
     )
 
     broadcast(channel)
-    NotificationEmail.deliver_channel_quiet(channel)
+
+    # The notice is the audit event and the in-app broadcast above; the email
+    # is one carrier of it. A failed email is logged, not retried on the next
+    # tick: retrying would duplicate the audit event and the broadcast every
+    # minute for as long as the mailer is down.
+    case NotificationEmail.deliver_channel_quiet(channel) do
+      {:error, reason} ->
+        Logger.warning(
+          "Quiet notice email for channel #{channel.id} failed (#{inspect(reason)}); " <>
+            "the audit event and in-app notice were recorded"
+        )
+
+      _ok ->
+        :ok
+    end
 
     case mark_quiet_notified(channel, now) do
       {:ok, _updated} ->
