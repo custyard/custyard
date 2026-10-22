@@ -172,6 +172,11 @@ defmodule CustyardWeb.Router do
   scope "/", CustyardWeb.Portal do
     pipe_through [:browser, :portal_auth]
 
+    # Inbound email attachments (spec-inbound-channels D10). On a custom
+    # domain the CustomDomain plug rewrites /attachments/:id onto this route,
+    # so no root alias is needed for a plain HTTP request.
+    get "/p/:org_token/attachments/:id", AttachmentController, :show
+
     live_session :portal,
       on_mount: [{CustyardWeb.Live.PortalAuth, :default}],
       layout: {CustyardWeb.Layouts, :portal} do

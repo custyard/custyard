@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Portal.ConversationLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Conversations, Scoring}
+  alias Custyard.{Attachments, Conversations, Scoring}
 
   @impl true
   def mount(params, _session, socket) do
@@ -33,7 +33,12 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
   defp load_messages(socket) do
     conv = socket.assigns.conversation
-    messages = Conversations.list_public_messages(conv.id)
+
+    messages =
+      conv.id
+      |> Conversations.list_public_messages()
+      |> Attachments.preload_for_portal(conv)
+
     assign(socket, :messages, messages)
   end
 
@@ -224,6 +229,25 @@ defmodule CustyardWeb.Portal.ConversationLive do
           >
             {msg.body}
           </div>
+          <ul
+            :if={msg.attachments != []}
+            class="mt-3 space-y-1 text-sm"
+            data-testid="portal-message-attachments"
+          >
+            <li :for={att <- msg.attachments} class="flex flex-wrap items-center gap-x-1.5">
+              <.icon name="hero-paper-clip" class="h-4 w-4 text-gray-400 dark:text-zinc-500" />
+              <a
+                href={"#{@portal_path}/attachments/#{att.id}"}
+                class="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+                data-testid={"portal-attachment-#{att.id}"}
+              >
+                {att.filename || "attachment"}
+              </a>
+              <span class="text-xs text-gray-500 dark:text-zinc-400">
+                {Attachments.format_bytes(att.size)}
+              </span>
+            </li>
+          </ul>
         </div>
       </div>
 
