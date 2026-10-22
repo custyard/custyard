@@ -17,15 +17,31 @@ defmodule Custyard.Scoring.Recalculator do
   Returns the total number of conversations recalculated.
   """
   def recalculate_all do
-    recalculate_batch(0, 0)
+    recalculate_batch(scored_conversations(), 0, 0)
   end
 
-  defp recalculate_batch(offset, total_count) do
+  @doc """
+  Recalculate the active conversations of one inbound channel, after its
+  attention bonus changed, so the queue does not wait for the next sweep.
+  Returns the number recalculated.
+  """
+  def recalculate_channel(channel_id) do
+    scored_conversations()
+    |> where([c], c.inbound_channel_id == ^channel_id)
+    |> recalculate_batch(0, 0)
+  end
+
+  defp scored_conversations do
+    from(c in Conversation,
+      where: c.state in [:new, :active, :waiting, :dormant],
+      where: is_nil(c.snoozed_until) or c.snoozed_until < ^DateTime.utc_now()
+    )
+  end
+
+  defp recalculate_batch(query, offset, total_count) do
     # Fetch a batch of conversation IDs (short read transaction)
     ids =
-      from(c in Conversation,
-        where: c.state in [:new, :active, :waiting, :dormant],
-        where: is_nil(c.snoozed_until) or c.snoozed_until < ^DateTime.utc_now(),
+      from(c in query,
         select: c.id,
         order_by: [asc: c.id],
         offset: ^offset,
@@ -43,7 +59,7 @@ defmodule Custyard.Scoring.Recalculator do
         Scoring.calculate_and_cache_batch(batch)
 
         # Continue with next batch
-        recalculate_batch(offset + @batch_size, total_count + length(batch))
+        recalculate_batch(query, offset + @batch_size, total_count + length(batch))
     end
   end
 end

@@ -250,6 +250,14 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     end)
   end
 
+  def handle_event("set_attention_bonus", %{"attention_bonus" => value}, socket) do
+    with_channel(socket, fn channel ->
+      InboundChannels.update_channel(channel, %{attention_bonus: value},
+        operator: socket.assigns.current_operator
+      )
+    end)
+  end
+
   def handle_event("goto_step", %{"step" => step}, socket) do
     case {Integer.parse(step), socket.assigns.channel} do
       {{n, ""}, %InboundChannel{}} when n in 2..4 ->
@@ -304,7 +312,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
 
   defp changeset_message(changeset) do
     changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, _opts} -> msg end)
+    |> Ecto.Changeset.traverse_errors(&translate_error/1)
     |> Enum.map_join(", ", fn {field, msgs} -> "#{field} #{Enum.join(msgs, ", ")}" end)
   end
 
@@ -1292,6 +1300,30 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           />
           <span>MB per message</span>
           <span class="text-xs text-gray-500 dark:text-zinc-400">(0 lists attachments without fetching)</span>
+        </form>
+        <%!-- Attention score points for this channel's conversations. --%>
+        <form
+          id={"attention-bonus-form-#{@channel.id}"}
+          phx-change="set_attention_bonus"
+          phx-target={@myself}
+          class="flex flex-wrap items-center gap-2 text-sm text-gray-700 dark:text-zinc-300"
+        >
+          <label for={"attention-bonus-#{@channel.id}"}>Raise in the attention queue by</label>
+          <input
+            id={"attention-bonus-#{@channel.id}"}
+            type="number"
+            name="attention_bonus"
+            min="0"
+            max={InboundChannel.max_attention_bonus()}
+            value={@channel.attention_bonus}
+            phx-debounce="400"
+            class="w-20 border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 text-sm dark:bg-zinc-700 dark:text-zinc-100"
+            data-testid="channel-attention-bonus"
+          />
+          <span>points</span>
+          <span class="text-xs text-gray-500 dark:text-zinc-400">
+            (0 to {InboundChannel.max_attention_bonus()}; a new conversation scores 30 for its state)
+          </span>
         </form>
       </section>
 

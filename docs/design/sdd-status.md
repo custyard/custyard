@@ -67,7 +67,7 @@ Security:
 | Component                    | Implementation                                                                                            | Status  |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ------- |
 | Email Ingestion Pipeline     | LMTP server, per-channel IMAP, Lettermint webhook (forwarding and direct-MX channels). All paths converge on the webhook dispatcher | Done    |
-| Attention Scoring Engine     | Scoring module with idle/state/tier/urgency/velocity/neglect components. Scheduler runs every 5 min.      | Done    |
+| Attention Scoring Engine     | Scoring module with idle/state/tier/urgency/velocity/neglect components plus a per-channel bonus. Scheduler runs every 5 min. | Done    |
 | Authentication (Operator)    | **Corrected 2026-07-25:** magic-link only — `POST /login` emails a 15-minute single-use token, `GET /login/verify/:token` establishes the session. Rate-limited, timing-attack safe. `password_hash` (Argon2) survives on the schema and is still written by `mix dev.reset_operator_password`, but no route consumes it; there is no password login path. | Done    |
 | Authentication (Portal)      | Token-based URL + custom domain. No Rodauth/SSO yet — SDD specifies Rodauth email/password + optional SSO | Partial |
 | Background Processing        | Scoring scheduler, dormancy checker, neglect checker all running as GenServers                            | Done    |

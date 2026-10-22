@@ -952,4 +952,60 @@ defmodule Custyard.ScoringTest do
       0 -> count
     end
   end
+
+  describe "channel bonus" do
+    setup do
+      org = insert_organization(tier: :standard)
+      route = insert_inbound_route(organization_id: org.id)
+      channel = insert_inbound_channel(inbound_route_id: route.id, state: :active)
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          inbound_channel_id: channel.id,
+          state: :active,
+          last_operator_action_at: DateTime.utc_now()
+        )
+
+      %{channel: channel, conversation: conversation}
+    end
+
+    test "a channel without a bonus leaves the score as it was", %{conversation: conversation} do
+      breakdown = Scoring.breakdown(conversation)
+
+      assert breakdown.channel == 0
+
+      assert breakdown.total ==
+               breakdown.idle + breakdown.state + breakdown.tier + breakdown.urgency +
+                 breakdown.velocity + breakdown.neglect_bonus
+    end
+
+    test "adds the channel's bonus to the score", %{channel: channel, conversation: conversation} do
+      before = Scoring.calculate(conversation)
+      channel |> Ecto.Changeset.change(attention_bonus: 12) |> Repo.update!()
+
+      conversation = Repo.reload!(conversation)
+      assert Scoring.breakdown(conversation).channel == 12
+      assert Scoring.calculate(conversation) == before + 12
+    end
+
+    test "conversations without a channel get no bonus" do
+      conversation = insert_conversation(organization_id: insert_organization().id)
+      assert Scoring.breakdown(conversation).channel == 0
+    end
+
+    test "changing the bonus rescores the channel's open conversations at once", %{
+      channel: channel,
+      conversation: conversation
+    } do
+      {:ok, _} = Scoring.calculate_and_cache(conversation.id)
+      resolved = insert_conversation(inbound_channel_id: channel.id, state: :resolved)
+      cached = Repo.reload!(conversation).cached_score
+
+      {:ok, _} = Custyard.InboundChannels.update_channel(channel, %{attention_bonus: 20})
+
+      assert Repo.reload!(conversation).cached_score == cached + 20
+      assert Repo.reload!(resolved).cached_score == resolved.cached_score
+    end
+  end
 end

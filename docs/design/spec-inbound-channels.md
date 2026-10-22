@@ -294,6 +294,7 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 
 - **Reply recipient in the composer.** The composer shows the To of the next reply from `Outbound.reply_recipient/1`, the resolver delivery uses, and says when it is the customer's Reply-To.
 - **Portal attachment download.** `GET /p/:org_token/attachments/:id`, which the custom-domain rewrite also serves as `/attachments/:id`. `Attachments.get_for_portal/2` serves only a fetched file on a message that is neither an internal note nor deleted, in a conversation of the portal's organization that is not suspect; anything else is the same 404. The portal thread lists the same attachments under each message. Downloads use the operator endpoint's headers through `CustyardWeb.AttachmentDownload`: always `Content-Disposition: attachment`, the sniffed type from the allowlist, `nosniff` and a sandbox CSP.
+- **Channel weight in the attention score.** `inbound_channels.attention_bonus`, 0 to 30 points (0 by default), is added to the score of the channel's conversations as a `channel` component of the breakdown; it is plain points rather than a global weight, so `security@` can outrank `sales@` on the same instance. The channel card sets it. A change rescores the channel's active conversations at once instead of waiting for the five-minute sweep.
 
 ## Rejected alternatives
 

@@ -368,7 +368,8 @@ defmodule CustyardWeb.OperatorComponents do
         {"tier", assigns.breakdown.tier},
         {"urgency", assigns.breakdown.urgency},
         {"velocity", assigns.breakdown.velocity},
-        {"neglect", assigns.breakdown.neglect_bonus}
+        {"neglect", assigns.breakdown.neglect_bonus},
+        {"channel", Map.get(assigns.breakdown, :channel, 0)}
       ]
       |> Enum.filter(fn {_, v} -> v > 0 end)
 
