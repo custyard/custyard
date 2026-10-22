@@ -21,7 +21,11 @@ defmodule Custyard.InboundChannelRejection do
     # provider forwarding notification outside a pending verification
     :provider_notice,
     # Custyard's own outbound reply forwarded back (D4 echo)
-    :own_echo
+    :own_echo,
+    # IMAP channel (D8): a message over the import size cap, or one the
+    # MIME parser could not read; the poller moves past both
+    :too_large,
+    :unreadable
   ]
 
   schema "inbound_channel_rejections" do

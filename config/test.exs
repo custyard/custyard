@@ -59,3 +59,15 @@ config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Test
 # even if SENTRY_DSN leaks into the environment (CI, a developer's shell).
 # Sentry.Test.setup_sentry/1 overrides this per-test with a local Bypass DSN.
 config :sentry, dsn: nil
+
+# Test key for stored IMAP channel passwords (Custyard.Credentials).
+config :custyard, :credential_keys,
+  current: :crypto.hash(:sha256, "custyard test credential key"),
+  previous: []
+
+# IMAP channels poll through a stub client keyed by host name, passed
+# through unresolved; no pollers start with the app.
+config :custyard,
+  start_imap_pollers: false,
+  imap_client: Custyard.Email.ImapClient.Stub,
+  imap_allow_private_hosts: true

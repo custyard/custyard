@@ -45,3 +45,12 @@ config :phoenix, :plug_init_mode, :runtime
 config :phoenix_live_view,
   debug_heex_annotations: true,
   enable_expensive_runtime_checks: true
+
+# Development-only key for stored IMAP channel passwords
+# (Custyard.Credentials). Production reads CREDENTIAL_ENCRYPTION_KEY.
+config :custyard, :credential_keys,
+  current: :crypto.hash(:sha256, "custyard development credential key"),
+  previous: []
+
+# A local IMAP test server (localhost, an IP) may back a development channel.
+config :custyard, :imap_allow_private_hosts, true

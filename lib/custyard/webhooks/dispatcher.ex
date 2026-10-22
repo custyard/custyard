@@ -11,7 +11,9 @@ defmodule Custyard.Webhooks.Dispatcher do
      channels is `:legacy` and behaves exactly as before channels existed. A
      recipient that matches no channel, or a paused or revoked channel, is
      written to the route's rejection log and the delivery is acknowledged
-     as `{:ignored, reason}` so the provider does not retry.
+     as `{:ignored, reason}` so the provider does not retry. An IMAP channel
+     poller passes its channel as `channel:` instead; only the channel state
+     is checked then (D8).
   2. **Triage.** `Custyard.Webhooks.Triage.classify/3` sorts the delivery:
      - own outbound echo: audited, ignored; nothing is inserted
      - provider verification: captured on a `pending_verification` channel,
@@ -57,6 +59,7 @@ defmodule Custyard.Webhooks.Dispatcher do
     AuditEvent,
     Conversation,
     InboundChannel,
+    InboundChannel,
     InboundChannels,
     InboundRoute,
     Message,
@@ -84,22 +87,24 @@ defmodule Custyard.Webhooks.Dispatcher do
   ## Parameters
   - `route` - the InboundRoute (with webhooks preloaded)
   - `normalized` - the normalized payload from the adapter
+  - `opts[:channel]` - a channel on `route` that fetched the message itself
+    (IMAP); skips recipient resolution
 
   Returns `{:ok, conversation}` when a message was stored (a new or existing
   conversation, including an appended auto-response), `{:ignored, reason}`
   when the delivery was deliberately not stored (see `t:ignored_reason/0`;
   the caller acknowledges it with 2xx), or `{:error, reason}`.
   """
-  @spec dispatch(struct(), map()) ::
+  @spec dispatch(struct(), map(), keyword()) ::
           {:ok, struct()} | {:ignored, ignored_reason()} | {:error, term()}
-  def dispatch(%InboundRoute{} = route, normalized) do
+  def dispatch(%InboundRoute{} = route, normalized, opts \\ []) do
     start_time = System.monotonic_time()
     adapter = normalized[:source] || :unknown
 
     route = Repo.preload(route, :webhooks)
 
     result =
-      case resolve_channel(route, normalized) do
+      case resolve_channel(route, normalized, Keyword.get(opts, :channel)) do
         {:ok, channel} ->
           case triage_and_process(route, normalized, channel) do
             {{:ok, conversation} = stored, class} when class != :auto_response ->
@@ -116,6 +121,9 @@ defmodule Custyard.Webhooks.Dispatcher do
 
         {:ignored, _reason} = ignored ->
           ignored
+
+        {:error, _reason} = error ->
+          error
       end
 
     # Emit telemetry for webhook dispatch
@@ -136,10 +144,30 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   # --- Stage 1: channel resolution (D2) ---
 
-  defp resolve_channel(route, normalized) do
+  defp resolve_channel(route, normalized, nil) do
     recipient = recipient(normalized)
 
-    case InboundChannels.resolve_for_delivery(route, recipient) do
+    route
+    |> InboundChannels.resolve_for_delivery(recipient)
+    |> resolved(route, normalized)
+  end
+
+  defp resolve_channel(
+         %InboundRoute{id: route_id} = route,
+         normalized,
+         %InboundChannel{} = channel
+       ) do
+    case channel do
+      %InboundChannel{inbound_route_id: ^route_id} ->
+        channel |> InboundChannels.classify_channel() |> resolved(route, normalized)
+
+      _other_route ->
+        {:error, :channel_route_mismatch}
+    end
+  end
+
+  defp resolved(resolution, route, normalized) do
+    case resolution do
       :legacy ->
         {:ok, nil}
 

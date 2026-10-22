@@ -17,6 +17,17 @@ defmodule Custyard.InboundChannel do
 
   `Custyard.InboundChannels` owns every transition; this module only
   validates them.
+
+  ## Ingress kinds (D8)
+
+    * `forward`: the operator's mail service forwards to the ingress
+      address; routed by token
+    * `mx`: mail arrives at the public address on the route's custom domain
+    * `imap`: Custyard reads one folder of a mailbox read-only
+      (`imap_host`, `imap_port`, `imap_username`, `imap_folder`). The
+      password is accepted through the virtual `imap_password` field and
+      stored only as `Custyard.Credentials` ciphertext. `imap_uid_validity`
+      and `imap_last_uid` mark how far the folder has been read.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -54,6 +65,12 @@ defmodule Custyard.InboundChannel do
   @local_max_length 64 - 1 - @token_length
   @local_regex ~r/\A[a-z0-9](?:[a-z0-9._-]{0,42})\z/
   @email_regex ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  @hostname_regex ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
+  @imap_password_context "inbound_channel.imap_password"
+  @imap_fields [:imap_host, :imap_port, :imap_username, :imap_folder, :imap_password]
+  # Changing any of these points the channel at a different mailbox or
+  # folder: the UID position no longer applies and a login lockout is over.
+  @imap_mailbox_fields [:imap_host, :imap_port, :imap_username, :imap_folder]
 
   schema "inbound_channels" do
     field :public_address, :string
@@ -84,6 +101,19 @@ defmodule Custyard.InboundChannel do
     field :verification_captured_at, :utc_datetime
     field :verification_expires_at, :utc_datetime
 
+    field :imap_host, :string
+    field :imap_port, :integer
+    field :imap_username, :string
+    field :imap_password, :string, virtual: true, redact: true
+    field :imap_password_ciphertext, :string, redact: true
+    field :imap_folder, :string
+    field :imap_uid_validity, :integer
+    field :imap_last_uid, :integer
+    field :imap_last_polled_at, :utc_datetime
+    field :imap_last_error, :string
+    field :imap_consecutive_failures, :integer, default: 0
+    field :imap_auth_failed_at, :utc_datetime
+
     field :verified_at, :utc_datetime
     field :last_received_at, :utc_datetime
     field :quiet_after_hours, :integer, default: 72
@@ -105,6 +135,7 @@ defmodule Custyard.InboundChannel do
   def sending_domain_statuses, do: @sending_domain_statuses
   def token_length, do: @token_length
   def transitions, do: @transitions
+  def imap_password_context, do: @imap_password_context
 
   @doc """
   Changeset for operator-editable attributes at creation and update.
@@ -126,6 +157,7 @@ defmodule Custyard.InboundChannel do
       :inbound_route_id,
       :organization_id,
       :project_id
+      | @imap_fields
     ])
     |> update_change(:public_address, &normalize_address/1)
     |> update_change(:display_name, &normalize_display_name/1)
@@ -225,6 +257,29 @@ defmodule Custyard.InboundChannel do
     change(channel, previous_ingress_token: nil, previous_token_expires_at: nil)
   end
 
+  @doc """
+  Changeset for the poller's own bookkeeping: UID position, last poll,
+  failure counters, and re-encryption of the password under a new key.
+  """
+  def imap_state_changeset(channel, attrs) do
+    cast(channel, attrs, [
+      :imap_uid_validity,
+      :imap_last_uid,
+      :imap_last_polled_at,
+      :imap_last_error,
+      :imap_consecutive_failures,
+      :imap_auth_failed_at,
+      :imap_password_ciphertext
+    ])
+    |> validate_length(:imap_last_error, max: 64)
+  end
+
+  @doc "Decrypt the stored IMAP password. `{:ok, password}` or `{:error, :invalid}`."
+  def imap_password(%__MODULE__{imap_password_ciphertext: ciphertext}) when is_binary(ciphertext),
+    do: Custyard.Credentials.decrypt(ciphertext, @imap_password_context)
+
+  def imap_password(%__MODULE__{}), do: {:error, :invalid}
+
   @doc "Changeset for system-managed health fields."
   def health_changeset(channel, attrs) do
     cast(channel, attrs, [:last_received_at, :quiet_notified_at])
@@ -315,7 +370,7 @@ defmodule Custyard.InboundChannel do
   defp validate_kind_rules(changeset) do
     case get_field(changeset, :ingress_kind) do
       :forward ->
-        changeset
+        drop_imap_changes(changeset)
 
       kind ->
         changeset
@@ -324,6 +379,95 @@ defmodule Custyard.InboundChannel do
           message: "must be the public address for #{kind} channels"
         )
         |> validate_no_archive_copy(kind)
+        |> validate_imap(kind)
+    end
+  end
+
+  defp drop_imap_changes(changeset),
+    do: Enum.reduce(@imap_fields, changeset, &delete_change(&2, &1))
+
+  defp validate_imap(changeset, :imap) do
+    changeset
+    |> update_change(:imap_host, &normalize_address/1)
+    |> update_change(:imap_username, &trim_or_nil/1)
+    |> update_change(:imap_folder, &trim_or_nil/1)
+    |> put_default(:imap_port, 993)
+    |> put_default(:imap_folder, "INBOX")
+    |> validate_required([:imap_host, :imap_port, :imap_username, :imap_folder])
+    |> validate_length(:imap_host, max: 255)
+    |> validate_imap_host()
+    |> validate_number(:imap_port, greater_than: 0, less_than: 65_536)
+    |> validate_length(:imap_username, max: 320)
+    |> validate_length(:imap_folder, max: 255)
+    |> validate_format(:imap_folder, ~r/\A[^\x00-\x1f\x7f]+\z/, message: "has invalid characters")
+    |> validate_length(:imap_password, max: 1024)
+    |> reset_mailbox_position()
+    |> encrypt_imap_password()
+  end
+
+  defp validate_imap(changeset, _kind), do: drop_imap_changes(changeset)
+
+  defp put_default(changeset, field, value) do
+    if is_nil(get_field(changeset, field)),
+      do: put_change(changeset, field, value),
+      else: changeset
+  end
+
+  # Only names: an IP literal or a single-label host would let a channel
+  # point the poller at the instance's own network. Development can allow
+  # them (`config :custyard, :imap_allow_private_hosts, true`) for a local
+  # test server; the poller checks resolved addresses again at connect time.
+  defp validate_imap_host(changeset) do
+    if Application.get_env(:custyard, :imap_allow_private_hosts, false),
+      do: changeset,
+      else:
+        validate_format(changeset, :imap_host, @hostname_regex, message: "must be a host name")
+  end
+
+  defp reset_mailbox_position(changeset) do
+    if Enum.any?(@imap_mailbox_fields ++ [:imap_password], &Map.has_key?(changeset.changes, &1)) do
+      changeset
+      |> put_change(:imap_auth_failed_at, nil)
+      |> put_change(:imap_last_error, nil)
+      |> put_change(:imap_consecutive_failures, 0)
+      |> reset_uid_position()
+    else
+      changeset
+    end
+  end
+
+  defp reset_uid_position(changeset) do
+    if Enum.any?(@imap_mailbox_fields, &Map.has_key?(changeset.changes, &1)),
+      do: changeset |> put_change(:imap_uid_validity, nil) |> put_change(:imap_last_uid, nil),
+      else: changeset
+  end
+
+  # The plaintext never stays in the changeset: it is replaced by the
+  # ciphertext, and a missing key is a form error rather than a plaintext
+  # fallback.
+  defp encrypt_imap_password(changeset) do
+    case fetch_change(changeset, :imap_password) do
+      {:ok, password} when is_binary(password) and password != "" ->
+        changeset = delete_change(changeset, :imap_password)
+
+        case Custyard.Credentials.encrypt(password, @imap_password_context) do
+          {:ok, ciphertext} ->
+            put_change(changeset, :imap_password_ciphertext, ciphertext)
+
+          {:error, :not_configured} ->
+            add_error(
+              changeset,
+              :imap_password,
+              "cannot be stored: CREDENTIAL_ENCRYPTION_KEY is not set"
+            )
+        end
+
+      _ ->
+        changeset = delete_change(changeset, :imap_password)
+
+        if is_nil(get_field(changeset, :imap_password_ciphertext)),
+          do: add_error(changeset, :imap_password, "can't be blank", validation: :required),
+          else: changeset
     end
   end
 
@@ -362,6 +506,15 @@ defmodule Custyard.InboundChannel do
       _ -> changeset
     end
   end
+
+  defp trim_or_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp trim_or_nil(value), do: value
 
   defp normalize_display_name(value) when is_binary(value) do
     case String.trim(value) do

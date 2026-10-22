@@ -12,7 +12,8 @@ defmodule Custyard.InboundChannels do
     * Routing: `resolve_for_delivery/2` maps a delivery's envelope recipient
       to a channel on the route by token (D2), or to a direct-MX channel by
       public address on the route's custom domain (D8); `check_mx/2` checks
-      that domain's MX record
+      that domain's MX record. IMAP channels are read by
+      `Custyard.Email.ImapPollers`; `connect_imap/2` sets one up
     * Health: `mark_received/2` on every accepted delivery,
       `check_quiet_channels/1` run by `Custyard.Scoring.Scheduler`, and the
       rejection log; `sweep_expired/1` is run by
@@ -21,7 +22,8 @@ defmodule Custyard.InboundChannels do
       token or message content.
 
   PubSub: channel changes broadcast `{:channel_updated, channel_id}` on
-  `"channel:<id>"` and on `"organization:<org_id>:channels"`. A quiet
+  `"channel:<id>"`, on `"organization:<org_id>:channels"` and on
+  `"inbound_channels"`. A quiet
   notice also broadcasts `{:channel_quiet, channel_id}` on
   `"operator:notifications"`.
   """
@@ -39,6 +41,7 @@ defmodule Custyard.InboundChannels do
     Repo
   }
 
+  alias Custyard.Email.ImapPoll
   alias Custyard.Lettermint.Client
   alias Custyard.Notifications.Email, as: NotificationEmail
 
@@ -322,6 +325,29 @@ defmodule Custyard.InboundChannels do
 
   def check_mx(%InboundChannel{} = channel, _opts),
     do: {:error, invalid_state(channel, :check_mx)}
+
+  @doc """
+  IMAP (D8): log in, open the folder and record the starting position (the
+  highest UID already there, so existing mail is not imported). On success
+  a channel in `pending_verification` moves to `awaiting_first_message` and
+  its poller starts. `{:ok, channel}` or `{:error, code}` with a code from
+  `Custyard.Email.ImapPoll.error_code/1`, also stored on the channel.
+
+  `opts[:client]` overrides the IMAP client (tests).
+  """
+  def connect_imap(channel, opts \\ [])
+
+  def connect_imap(%InboundChannel{ingress_kind: :imap, state: state} = channel, opts)
+      when state in [:pending_verification, :awaiting_first_message, :active] do
+    with {:ok, established} <- ImapPoll.establish(channel, opts) do
+      if established.state == :pending_verification,
+        do: confirm_verification(established, opts),
+        else: {:ok, established}
+    end
+  end
+
+  def connect_imap(%InboundChannel{} = channel, _opts),
+    do: {:error, invalid_state(channel, :connect_imap)}
 
   defp confirm_if_verified(
          %InboundChannel{state: :pending_verification} = channel,
@@ -636,6 +662,16 @@ defmodule Custyard.InboundChannels do
 
   defp base_address(_recipient), do: nil
 
+  @doc """
+  The routing outcome for a channel already known to the caller (an IMAP
+  poller): `{:ok, channel}`, `{:paused, channel}`, `{:revoked, channel}` or
+  `{:error, :no_channel}` for a draft. Reloads the state, which an operator
+  may have changed while the message was being fetched.
+  """
+  def classify_channel(%InboundChannel{id: id}) do
+    id |> get_channel() |> classify_match()
+  end
+
   defp classify_match(nil), do: {:error, :no_channel}
   defp classify_match(%InboundChannel{state: :paused} = channel), do: {:paused, channel}
   defp classify_match(%InboundChannel{state: :revoked} = channel), do: {:revoked, channel}
@@ -901,6 +937,9 @@ defmodule Custyard.InboundChannels do
       "organization:#{channel.organization_id}:channels",
       {:channel_updated, channel.id}
     )
+
+    # Custyard.Email.ImapPollers starts and stops IMAP pollers from this.
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "inbound_channels", {:channel_updated, channel.id})
 
     :ok
   end
