@@ -35,7 +35,11 @@ defmodule Custyard.AuditEvent do
     :channel_verification_captured,
     :channel_sending_domain_checked,
     :channel_quiet,
-    :inbound_triaged
+    :inbound_triaged,
+    # Data subject request (spec-inbound-channels, Privacy): a participant
+    # address was removed from message recipients. The payload never carries
+    # the address itself.
+    :data_subject_erasure
   ]
 
   schema "audit_events" do

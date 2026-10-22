@@ -443,5 +443,8 @@ if config_env() == :prod do
 
   # Persistent upload directory (survives deployments, unlike priv/static)
   config :custyard,
-    upload_dir: System.get_env("UPLOAD_DIR") || "/data/uploads"
+    upload_dir: System.get_env("UPLOAD_DIR") || "/data/uploads",
+    # Inbound email attachments, served only through the authenticated
+    # operator endpoint (never a static path).
+    attachment_dir: System.get_env("ATTACHMENT_DIR") || "/data/attachments"
 end

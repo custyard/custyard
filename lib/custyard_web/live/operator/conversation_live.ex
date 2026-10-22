@@ -15,7 +15,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
   import CustyardWeb.OperatorComponents
   import CustyardWeb.FormHelpers
 
+  alias Custyard.Attachments.Recovery
+
   alias Custyard.{
+    Attachments,
     Authorization,
     Conversation,
     Conversations,
@@ -122,6 +125,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:conversation, conversation)
       |> assign_reply_delivery(conversation)
       |> assign_reply_identity(conversation)
+      |> assign(:reply_cc_edited?, false)
+      |> assign_reply_cc(conversation)
       |> assign(:breakdown, breakdown)
       |> assign(:neglect_status, neglect_status)
       |> assign(:other_conversations, other_conversations)
@@ -148,48 +153,29 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   @impl true
-  def handle_event("send_reply", %{"body" => body}, socket) when byte_size(body) > 0 do
+  def handle_event("send_reply", %{"body" => body} = params, socket) when byte_size(body) > 0 do
     conversation = socket.assigns.conversation
     operator = socket.assigns.current_operator
 
     case Conversations.send_reply(conversation, body,
            operator: operator,
-           operator_email: operator.email
+           operator_email: operator.email,
+           cc: Map.get(params, "cc", socket.assigns.reply_cc)
          ) do
       {:ok, message} ->
-        socket = socket |> assign(:reply_text, "") |> reload_conversation()
-
         socket =
-          cond do
-            # Ground truth for this message: :withheld is only ever set by the
-            # public-intake consent gate at send time, so this can't be fooled
-            # by a consent flip that happens before the reload below runs.
-            message.delivery_status == :withheld ->
-              socket
+          socket
+          |> assign(:reply_text, "")
+          |> assign(:reply_cc_edited?, false)
+          |> reload_conversation()
 
-            socket.assigns.reply_will_email? ->
-              socket
-
-            # The reply-box advisory already explains the withheld delivery
-            # for public-intake conversations; no flash needed.
-            socket.assigns.conversation.source == :public_intake ->
-              socket
-
-            true ->
-              put_flash(
-                socket,
-                :error,
-                "Reply saved, but the contact has no email address so it cannot be delivered"
-              )
-          end
-
-        {:noreply, socket}
+        {:noreply, flash_undeliverable_reply(socket, message)}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
 
-      {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to send reply")}
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reply_error_message(reason))}
     end
   end
 
@@ -249,6 +235,13 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
+  def handle_event("retry_attachments", _params, socket) do
+    case conversation_mutation(socket, fn current, _operator -> {:ok, current} end) do
+      {:ok, _conversation} -> {:noreply, begin_attachment_recovery(socket)}
+      _ -> {:noreply, access_revoked(socket)}
+    end
+  end
+
   # Triage flagged the conversation as suspect (spec-inbound-channels D6).
   # The flag is a notification suppressor, never a filter; clearing it is an
   # operator judgement and goes through the same locked access check as
@@ -258,7 +251,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
            Conversations.set_suspect(current, false)
          end) do
       {:ok, _conversation} ->
-        {:noreply, reload_conversation(socket)}
+        {:noreply, begin_attachment_recovery(reload_conversation(socket))}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
@@ -268,8 +261,22 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
-  def handle_event("update_reply", %{"body" => body}, socket) do
-    {:noreply, assign(socket, :reply_text, body)}
+  def handle_event("update_reply", %{"body" => body} = params, socket) do
+    socket = assign(socket, :reply_text, body)
+
+    case Map.fetch(params, "cc") do
+      {:ok, cc} when is_binary(cc) ->
+        {:noreply,
+         socket
+         |> assign(:reply_cc, cc)
+         |> assign(
+           :reply_cc_edited?,
+           socket.assigns.reply_cc_edited? or cc != socket.assigns.reply_cc
+         )}
+
+      _no_cc ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("update_note", %{"body" => body}, socket) do
@@ -683,6 +690,26 @@ defmodule CustyardWeb.Operator.ConversationLive do
     |> push_navigate(to: ~p"/operator")
   end
 
+  defp begin_attachment_recovery(socket) do
+    id = socket.assigns.conversation.id
+    start_async(socket, :recover_attachments, fn -> Recovery.recover(id) end)
+  end
+
+  @impl true
+  def handle_async(:recover_attachments, {:ok, :ok}, socket) do
+    {:noreply, reload_conversation(socket)}
+  end
+
+  def handle_async(:recover_attachments, _result, socket) do
+    {:noreply,
+     socket
+     |> reload_conversation()
+     |> put_flash(
+       :error,
+       "Some attachments could not be recovered. Retry while the provider still retains the original delivery (28 days)."
+     )}
+  end
+
   defp reload_conversation(socket) do
     case load_conversation(socket.assigns.conversation.id) do
       nil ->
@@ -701,6 +728,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           |> assign(:conversation, conversation)
           |> assign_reply_delivery(conversation)
           |> assign_reply_identity(conversation)
+          |> assign_reply_cc(conversation)
           |> assign(:breakdown, breakdown)
           |> assign(:neglect_status, neglect_status)
           |> assign(:other_conversations, other_conversations)
@@ -722,7 +750,52 @@ defmodule CustyardWeb.Operator.ConversationLive do
     |> assign(:reply_will_email?, reply_delivery in [:contact, :prospect_opted_in])
   end
 
-  # Unlinked (nil-org) conversations have no sibling org conversations to list.
+  # Ground truth for this message: :withheld is only ever set by the
+  # public-intake consent gate at send time, so this can't be fooled by a
+  # consent flip that happens before the reload runs. The reply-box advisory
+  # already explains the withheld delivery for public-intake conversations.
+  defp flash_undeliverable_reply(socket, message) do
+    cond do
+      message.delivery_status == :withheld ->
+        socket
+
+      socket.assigns.reply_will_email? ->
+        socket
+
+      socket.assigns.conversation.source == :public_intake ->
+        socket
+
+      true ->
+        put_flash(
+          socket,
+          :error,
+          "Reply saved, but the contact has no email address so it cannot be delivered"
+        )
+    end
+  end
+
+  defp reply_error_message({:invalid_cc, :too_many}), do: "At most 20 CC addresses"
+
+  defp reply_error_message({:invalid_cc, invalid}),
+    do: "Invalid CC address: #{Enum.join(invalid, ", ")}"
+
+  defp reply_error_message(_reason), do: "Failed to send reply"
+
+  # Reply-all CC the composer starts from (spec-inbound-channels D5). A list
+  # the operator has edited survives a reload triggered by an incoming
+  # message; an untouched one follows the latest customer message.
+  defp assign_reply_cc(%{assigns: %{reply_cc_edited?: true}} = socket, _conversation),
+    do: socket
+
+  defp assign_reply_cc(socket, conversation) do
+    cc =
+      Conversations.default_reply_cc(conversation,
+        operator_email: socket.assigns.current_operator.email
+      )
+
+    assign(socket, :reply_cc, Enum.join(cc, ", "))
+  end
+
   # The From identity the next reply will carry (spec-inbound-channels D3).
   # The platform fallback has no address of its own on the conversation, so
   # the configured instance sender is shown instead.
@@ -745,8 +818,18 @@ defmodule CustyardWeb.Operator.ConversationLive do
           id
       end
 
-    assign(socket, :reply_identity, identity)
+    socket
+    |> assign(:reply_identity, identity)
+    |> assign(:archive_copy_address, archive_copy_address(conversation))
   end
+
+  # D4: the mailbox that receives a BCC of every reply, when the channel asks.
+  defp archive_copy_address(%Conversation{
+         inbound_channel: %Custyard.InboundChannel{archive_copy: true, public_address: address}
+       }),
+       do: address
+
+  defp archive_copy_address(_conversation), do: nil
 
   defp fetch_other_org_conversations(%{organization_id: nil}), do: []
 
@@ -828,6 +911,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             {@conversation.inbound_channel.public_address}
           </span>
+          <button
+            :if={not @conversation.suspect and recoverable_attachments?(@conversation)}
+            type="button"
+            phx-click="retry_attachments"
+            phx-disable-with="Recovering…"
+            class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+            data-testid="retry-attachments"
+          >
+            Retry attachment recovery
+          </button>
           <span
             :if={@conversation.suspect}
             class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
@@ -843,6 +936,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
             >
               Not suspect
             </button>
+          </span>
+          <span
+            :if={@conversation.language}
+            class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300 uppercase"
+            title={"Detected language: #{Custyard.Email.LanguageDetector.name(@conversation.language)}"}
+            data-testid="conversation-language"
+          >
+            {@conversation.language}
           </span>
           <.source_badge source={@conversation.source} />
           <.state_badge state={@conversation.state} />
@@ -915,32 +1016,54 @@ defmodule CustyardWeb.Operator.ConversationLive do
               {@reply_identity.name}
             </span>
             <code class="text-gray-700 dark:text-zinc-300">&lt;{@reply_identity.address}&gt;</code>
+            <span :if={@archive_copy_address} data-testid="composer-archive-copy">
+              · a copy is kept in {@archive_copy_address}
+            </span>
           </p>
           <form
             id="operator-reply-form"
             phx-submit="send_reply"
-            class="flex gap-2"
+            phx-change="update_reply"
+            class="space-y-1.5"
             data-testid="operator-reply-form"
           >
-            <textarea
-              name="body"
-              rows="2"
-              phx-change="update_reply"
-              phx-hook="CtrlEnterSubmit"
-              id="operator-reply-textarea"
-              placeholder="Reply to customer... (Ctrl+Enter to send)"
-              aria-label="Reply to customer"
-              data-testid="operator-reply-input"
-              class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y dark:bg-zinc-700 dark:text-zinc-100"
-            >{@reply_text}</textarea>
-            <button
-              type="submit"
-              phx-disable-with="Sending..."
-              class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
-              data-testid="operator-reply-submit"
+            <%!-- Reply-all CC (spec-inbound-channels D5): visible and editable;
+            hidden for prospect conversations, which never carry a CC. --%>
+            <label
+              :if={@conversation.source != :public_intake}
+              class="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400"
             >
-              Send
-            </button>
+              <span class="w-6">CC</span>
+              <input
+                type="text"
+                name="cc"
+                value={@reply_cc}
+                placeholder="Nobody else"
+                aria-label="CC addresses, comma separated"
+                data-testid="operator-reply-cc"
+                class="flex-1 border border-gray-200 dark:border-zinc-600 rounded px-2 py-1 text-xs dark:bg-zinc-700 dark:text-zinc-100"
+              />
+            </label>
+            <div class="flex gap-2">
+              <textarea
+                name="body"
+                rows="2"
+                phx-hook="CtrlEnterSubmit"
+                id="operator-reply-textarea"
+                placeholder="Reply to customer... (Ctrl+Enter to send)"
+                aria-label="Reply to customer"
+                data-testid="operator-reply-input"
+                class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y dark:bg-zinc-700 dark:text-zinc-100"
+              >{@reply_text}</textarea>
+              <button
+                type="submit"
+                phx-disable-with="Sending..."
+                class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
+                data-testid="operator-reply-submit"
+              >
+                Send
+              </button>
+            </div>
           </form>
 
           <form
@@ -1391,6 +1514,22 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             suspect
           </span>
+          <span
+            :if={@message.triage_class == :operator_sent}
+            class="text-xs bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 px-1.5 py-0.5 rounded"
+            title="Sent from the operator's mailbox, outside Custyard, and captured from the forwarded copy"
+            data-testid="message-operator-sent-tag"
+          >
+            sent from mailbox
+          </span>
+          <span
+            :if={@message.triage_class == :operator_forward}
+            class="text-xs bg-gray-200 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300 px-1.5 py-0.5 rounded"
+            title={"Forwarded into Custyard by #{@message.forwarded_by_email}"}
+            data-testid="message-forwarded-tag"
+          >
+            forwarded by {@message.forwarded_by_email}
+          </span>
           <span class="text-xs text-gray-400 dark:text-zinc-500">
             {unless @is_internal, do: via_label(@message.source, @prospect_email)}
           </span>
@@ -1424,8 +1563,24 @@ defmodule CustyardWeb.Operator.ConversationLive do
         >
           This message was deleted
         </div>
+        <%= if not @is_deleted and @message.html_body do %>
+          <%!-- Sanitised at ingest by Custyard.Email.HtmlSanitizer (D9); the
+          stored markup is the allowlisted output, never provider HTML. --%>
+          <div
+            class="email-html text-sm break-words text-gray-800 dark:text-zinc-200"
+            data-testid="operator-message-html"
+          >
+            {Phoenix.HTML.raw(@message.html_body)}
+          </div>
+          <details class="mt-1 text-xs text-gray-500 dark:text-zinc-400">
+            <summary class="cursor-pointer select-none">Plain text</summary>
+            <div class="mt-1 whitespace-pre-wrap break-words" data-testid="operator-message-body">
+              {@message.body}
+            </div>
+          </details>
+        <% end %>
         <div
-          :if={not @is_deleted}
+          :if={not @is_deleted and is_nil(@message.html_body)}
           class={[
             "text-sm whitespace-pre-wrap break-words",
             if(@is_system,
@@ -1437,11 +1592,96 @@ defmodule CustyardWeb.Operator.ConversationLive do
         >
           {@message.body}
         </div>
+        <.attachment_list :if={not @is_deleted} attachments={message_attachments(@message)} />
+        <p
+          :if={
+            @is_operator and not @is_internal and not @is_deleted and
+              @message.cc_addresses not in [nil, []]
+          }
+          class="mt-1 text-xs text-gray-400 dark:text-zinc-500 break-all"
+          data-testid="operator-message-cc"
+        >
+          CC {Enum.join(@message.cc_addresses, ", ")}
+        </p>
         <.message_details :if={@show_details} message={@message} />
       </div>
     </div>
     """
   end
+
+  defp recoverable_attachments?(conversation) do
+    Enum.any?(conversation.messages, fn message ->
+      Enum.any?(
+        message_attachments(message),
+        &(&1.skip_reason == "suspect" or &1.state in [:failed, :pending])
+      )
+    end)
+  end
+
+  # Attachments are preloaded by Conversations.get_with_messages/1; a message
+  # reached through another loader renders without them rather than raising.
+  defp message_attachments(%Message{attachments: attachments}) when is_list(attachments),
+    do: attachments
+
+  defp message_attachments(_message), do: []
+
+  # Fetched attachments link to the authenticated download (spec D9); the
+  # rest are listed so the operator knows they existed and why they were
+  # not fetched.
+  attr :attachments, :list, required: true
+
+  defp attachment_list(%{attachments: []} = assigns), do: ~H""
+
+  defp attachment_list(assigns) do
+    ~H"""
+    <ul class="mt-2 space-y-0.5 text-xs" data-testid="message-attachments">
+      <li :for={att <- @attachments} class="flex flex-wrap items-center gap-x-1.5">
+        <.icon name="hero-paper-clip" class="h-3 w-3 text-gray-400 dark:text-zinc-500" />
+        <%= if att.state == :fetched do %>
+          <a
+            href={~p"/operator/attachments/#{att.id}"}
+            class="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+            data-testid={"attachment-#{att.id}"}
+          >
+            {att.filename || "attachment"}
+          </a>
+          <span class="text-gray-400 dark:text-zinc-500">
+            {Attachments.format_bytes(att.size)}
+          </span>
+        <% else %>
+          <span
+            class="text-gray-500 dark:text-zinc-400 break-all"
+            data-testid={"attachment-#{att.id}"}
+          >
+            {att.filename || "attachment"}
+          </span>
+          <span
+            class="text-gray-400 dark:text-zinc-500"
+            title={attachment_skip_title(att.skip_reason)}
+            data-testid={"attachment-skipped-#{att.id}"}
+          >
+            not fetched · {attachment_skip_label(att.skip_reason)}
+          </span>
+        <% end %>
+      </li>
+    </ul>
+    """
+  end
+
+  defp attachment_skip_label("over_limit"), do: "over the channel size limit"
+  defp attachment_skip_label("too_large"), do: "larger than declared"
+  defp attachment_skip_label("suspect"), do: "suspect message"
+  defp attachment_skip_label("disabled"), do: "fetching disabled on this channel"
+  defp attachment_skip_label("no_url"), do: "provider sent no download link"
+  defp attachment_skip_label("fetch_failed"), do: "download failed"
+  defp attachment_skip_label(_reason), do: "not fetched"
+
+  defp attachment_skip_title("suspect"),
+    do:
+      "Clearing the suspect flag requests recovery from the retained provider delivery; expired or unavailable files stay listed"
+
+  defp attachment_skip_title(_reason),
+    do: "The provider keeps the original for 28 days; fetch it there if you need it"
 
   # Envelope data for email messages (spec-inbound-channels D5): collapsed by
   # default so the thread stays readable; the authentication badge is the
@@ -1696,6 +1936,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   defp sender_name(message) do
     cond do
+      message.triage_class == :operator_sent -> message.sender_email || "Operator"
       message.source == :operator -> "You"
       message.sender_email -> message.sender_email
       true -> "Customer"

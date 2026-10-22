@@ -12,6 +12,8 @@ defmodule Custyard.StorageTest do
                fly_app_name: "custyard",
                repo_config: [database: "/data/custyard.db"],
                upload_dir: "/data/uploads",
+               attachment_dir: "/data/attachments",
+               attachment_dir: "/data/attachments",
                mountinfo: @mounted
              )
   end
@@ -22,6 +24,7 @@ defmodule Custyard.StorageTest do
         fly_app_name: "custyard",
         repo_config: [database: "/data/custyard.db"],
         upload_dir: "/data/uploads",
+        attachment_dir: "/data/attachments",
         mountinfo: @unmounted
       )
     end
@@ -33,6 +36,17 @@ defmodule Custyard.StorageTest do
         fly_app_name: "custyard",
         repo_config: [database: "/tmp/custyard.db"],
         upload_dir: "/data/uploads",
+        attachment_dir: "/data/attachments",
+        mountinfo: @mounted
+      )
+    end
+
+    assert_raise RuntimeError, ~r/ATTACHMENT_DIR must point inside/, fn ->
+      Storage.validate_fly_storage!(
+        fly_app_name: "custyard",
+        repo_config: [database: "/data/custyard.db"],
+        upload_dir: "/data/uploads",
+        attachment_dir: "/app/priv/attachments",
         mountinfo: @mounted
       )
     end

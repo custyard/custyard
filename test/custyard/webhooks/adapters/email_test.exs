@@ -88,7 +88,8 @@ defmodule Custyard.Webhooks.Adapters.EmailTest do
       assert normalized.in_reply_to == "<prev-001@example.com>"
       assert normalized.references == "<ref-001@example.com> <ref-002@example.com>"
       assert normalized.source == :email
-      assert normalized.metadata == %{}
+      # The HTML part is sanitised at ingest (spec-inbound-channels D9).
+      assert normalized.metadata == %{html_body: "<p>Hello, I need assistance.</p>"}
       assert is_map(normalized.headers)
     end
 

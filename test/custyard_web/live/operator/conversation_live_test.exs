@@ -4,8 +4,9 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
+  alias Custyard.Attachments.StubClient
   alias Custyard.Email.Outbound
-  alias Custyard.{Conversations, OperatorAccount, Repo, Scoring}
+  alias Custyard.{Attachments, Conversations, OperatorAccount, Repo, Scoring}
 
   setup %{conn: conn} do
     # Create and authenticate an operator
@@ -22,6 +23,29 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
     {:ok, conn: conn, operator: operator}
   end
 
+  test "clearing suspect starts recovery and retains an explicit retry when unavailable", %{
+    conn: conn
+  } do
+    org = insert_organization()
+    conv = insert_conversation(organization_id: org.id, suspect: true)
+    message = insert_message(conversation_id: conv.id)
+
+    {:ok, [_]} =
+      Attachments.fetch_for_message(
+        message,
+        [%{filename: "withheld.txt", url: StubClient.unique_url()}],
+        skip: "suspect"
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+    view |> element(~s([data-testid="dismiss-suspect"])) |> render_click()
+    html = render_async(view)
+    assert html =~ "Some attachments could not be recovered"
+    assert has_element?(view, ~s([data-testid="retry-attachments"]))
+    view |> element(~s([data-testid="retry-attachments"])) |> render_click()
+    assert render_async(view) =~ "Some attachments could not be recovered"
+  end
+
   describe "mount/3" do
     test "renders conversation view", %{conn: conn} do
       org = insert_organization()
@@ -32,6 +56,80 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
 
       assert html =~ conv.subject
       assert html =~ "Hello from customer"
+    end
+
+    test "renders a stored HTML body as markup with the plain text behind a toggle",
+         %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+
+      insert_message(
+        conversation_id: conv.id,
+        body: "Hello bold",
+        html_body: "<p>Hello <b>bold</b></p>"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(view, ~s([data-testid="operator-message-html"] b), "bold")
+      assert has_element?(view, ~s([data-testid="operator-message-body"]), "Hello bold")
+    end
+
+    test "lists attachments with a download link or the reason they were not fetched",
+         %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id, body: "See attached")
+
+      url = StubClient.unique_url()
+      StubClient.put(url, "hello")
+
+      {:ok, [fetched]} =
+        Attachments.fetch_for_message(message, [
+          %{filename: "notes.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
+        ])
+
+      another_message = insert_message(conversation_id: conv.id)
+
+      {:ok, [skipped]} =
+        Attachments.fetch_for_message(
+          another_message,
+          [
+            %{
+              filename: "big.zip",
+              content_type: "application/zip",
+              size: 99,
+              content_id: nil,
+              url: nil
+            }
+          ],
+          limit_bytes: 0
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(
+               view,
+               ~s(a[data-testid="attachment-#{fetched.id}"][href="/operator/attachments/#{fetched.id}"]),
+               "notes.txt"
+             )
+
+      assert has_element?(view, ~s([data-testid="attachment-#{skipped.id}"]), "big.zip")
+
+      assert has_element?(
+               view,
+               ~s([data-testid="attachment-skipped-#{skipped.id}"]),
+               "not fetched"
+             )
+    end
+
+    test "shows the detected language in the header", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id)
+      {:ok, _} = conv |> Custyard.Conversation.changeset(%{language: "de"}) |> Repo.update()
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      assert has_element?(view, ~s([data-testid="conversation-language"]), "de")
     end
 
     test "transitions new conversation to active on view", %{conn: conn} do
@@ -66,6 +164,132 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "Acme Corp"
       assert html =~ "Alice"
       assert html =~ "alice@acme.com"
+    end
+  end
+
+  describe "reply-all CC in the composer (D5)" do
+    setup do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example")
+      route = insert_inbound_route(organization_id: org.id, source: :lettermint)
+
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "help@acme.example",
+          state: :active
+        )
+
+      conv =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          inbound_channel_id: channel.id
+        )
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "Alice <alice@customer.example>",
+        to_addresses: ["help@acme.example", "ops@customer.example"],
+        cc_addresses: ["boss@customer.example", "Help@Acme.example"],
+        triage_class: :customer,
+        body: "Looping in my team"
+      )
+
+      %{conv: conv}
+    end
+
+    test "starts from the customer's To and CC minus our own addresses", %{
+      conn: conn,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(
+               view,
+               ~s(input[data-testid="operator-reply-cc"][value="boss@customer.example, ops@customer.example"])
+             )
+    end
+
+    test "typing the body does not freeze untouched CC defaults", %{conn: conn, conv: conv} do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]",
+        body: "Draft",
+        cc: "boss@customer.example, ops@customer.example"
+      )
+      |> render_change()
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "alice@customer.example",
+        cc_addresses: ["new@customer.example"],
+        triage_class: :customer,
+        body: "New participants"
+      )
+
+      send(view.pid, {:message_added, conv.id})
+
+      assert has_element?(
+               view,
+               ~s(input[data-testid="operator-reply-cc"][value="new@customer.example"])
+             )
+    end
+
+    test "an edited CC list is what the reply carries", %{conn: conn, conv: conv} do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      view
+      |> form("form[phx-submit=send_reply]", body: "Reply to all", cc: "boss@customer.example")
+      |> render_submit()
+
+      [reply] =
+        Conversations.list_public_messages(conv.id) |> Enum.filter(&(&1.source == :operator))
+
+      assert reply.cc_addresses == ["boss@customer.example"]
+      assert has_element?(view, ~s([data-testid="operator-message-cc"]), "boss@customer.example")
+    end
+
+    test "an invalid CC address blocks the send with a flash", %{conn: conn, conv: conv} do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      html =
+        view
+        |> form("form[phx-submit=send_reply]", body: "Oops", cc: "not an address")
+        |> render_submit()
+
+      assert html =~ "Invalid CC address: not an address"
+      assert Enum.all?(Conversations.list_public_messages(conv.id), &(&1.source != :operator))
+    end
+
+    test "the composer says when a copy of replies is kept in the mailbox (D4)", %{
+      conn: conn,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      refute has_element?(view, ~s([data-testid="composer-archive-copy"]))
+
+      channel = Custyard.InboundChannels.get_channel!(conv.inbound_channel_id)
+      {:ok, _} = Custyard.InboundChannels.update_channel(channel, %{archive_copy: true})
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(
+               view,
+               ~s([data-testid="composer-archive-copy"]),
+               "a copy is kept in help@acme.example"
+             )
+    end
+
+    test "prospect conversations have no CC field", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_conversation(organization_id: org.id, source: :public_intake)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+      refute has_element?(view, ~s([data-testid="operator-reply-cc"]))
     end
   end
 

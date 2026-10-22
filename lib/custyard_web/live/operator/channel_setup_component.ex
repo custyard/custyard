@@ -163,6 +163,24 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     end)
   end
 
+  def handle_event("set_archive_copy", params, socket) do
+    enabled? = Map.get(params, "archive_copy") in ["true", "on"]
+
+    with_channel(socket, fn channel ->
+      InboundChannels.update_channel(channel, %{archive_copy: enabled?},
+        operator: socket.assigns.current_operator
+      )
+    end)
+  end
+
+  def handle_event("set_attachment_limit", %{"attachment_limit_mb" => value}, socket) do
+    with_channel(socket, fn channel ->
+      InboundChannels.update_channel(channel, %{attachment_limit_mb: value},
+        operator: socket.assigns.current_operator
+      )
+    end)
+  end
+
   def handle_event("goto_step", %{"step" => step}, socket) do
     case {Integer.parse(step), socket.assigns.channel} do
       {{n, ""}, %InboundChannel{}} when n in 2..4 ->
@@ -780,6 +798,51 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         </label>
       </section>
 
+      <section class="rounded border border-gray-200 dark:border-zinc-700 p-3 space-y-3">
+        <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">Mailbox and attachments</h4>
+        <%!-- D4: archive copy, admin-only, audited through update_channel. --%>
+        <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-zinc-300">
+          <input
+            type="checkbox"
+            name="archive_copy"
+            phx-click="set_archive_copy"
+            phx-target={@myself}
+            phx-value-archive_copy={if @channel.archive_copy, do: "false", else: "true"}
+            checked={@channel.archive_copy}
+            class="mt-0.5 rounded border-gray-300 dark:border-zinc-600 dark:bg-zinc-700"
+            data-testid="channel-archive-copy-toggle"
+          />
+          <span>
+            Keep a copy of replies in {@channel.public_address}.
+            <span class="text-xs text-gray-500 dark:text-zinc-400">
+              Each reply is BCC'd to the public address so your mailbox holds both sides. The copy
+              is forwarded back here and recognised as your own message.
+            </span>
+          </span>
+        </label>
+        <%!-- D9: per-message attachment cap. --%>
+        <form
+          phx-change="set_attachment_limit"
+          phx-target={@myself}
+          class="flex items-center gap-2 text-sm text-gray-700 dark:text-zinc-300"
+        >
+          <label for={"attachment-limit-#{@channel.id}"}>Fetch attachments up to</label>
+          <input
+            id={"attachment-limit-#{@channel.id}"}
+            type="number"
+            name="attachment_limit_mb"
+            min="0"
+            max="100"
+            value={@channel.attachment_limit_mb}
+            phx-debounce="400"
+            class="w-20 border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 text-sm dark:bg-zinc-700 dark:text-zinc-100"
+            data-testid="channel-attachment-limit"
+          />
+          <span>MB per message</span>
+          <span class="text-xs text-gray-500 dark:text-zinc-400">(0 lists attachments without fetching)</span>
+        </form>
+      </section>
+
       <section class="rounded border border-gray-200 dark:border-zinc-700 p-3 space-y-2">
         <div class="flex items-center justify-between gap-2">
           <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">
@@ -814,10 +877,15 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     Inbound mail for #{channel.public_address}
     1. Customer -> #{domain} (#{provider}): the public mailbox receives the message.
     2. #{provider} -> Lettermint B.V., Zwolle, Netherlands (EU; GDPR Art. 28 processor, public DPA): the forwarding rule delivers a copy to the ingress address. Lettermint keeps the raw message for 28 days.
-    3. Lettermint -> this Custyard instance: parsed text body, addresses needed to reply, authentication summary and spam score are stored. Raw messages, signed URLs and full headers are not.
-    Replies: this Custyard instance -> Lettermint -> customer.
+    3. Lettermint -> this Custyard instance: parsed text body, sanitised HTML, attachments up to #{channel.attachment_limit_mb} MB per message, addresses needed to reply, authentication summary and spam score are stored. Raw messages, signed URLs and full headers are not.
+    Replies: this Custyard instance -> Lettermint -> customer.#{archive_copy_line(channel)}
     """
   end
+
+  defp archive_copy_line(%{archive_copy: true, public_address: address}),
+    do: " A copy of each reply is BCC'd to #{address} and forwarded back here."
+
+  defp archive_copy_line(_channel), do: ""
 
   defp provider_name(:google), do: "Google Workspace / Gmail"
   defp provider_name(:proton), do: "Proton Mail"

@@ -8,6 +8,28 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
   import Custyard.Factory
 
   describe "process/2" do
+    test "stores the sanitised HTML body the adapter put in metadata (D9)" do
+      org = insert_organization(domain: "acme.example.com")
+
+      normalized = %{
+        from: "alice@acme.example.com",
+        subject: "Rich mail",
+        body: "Hello bold",
+        message_id: "html-#{System.unique_integer([:positive])}@example.com",
+        in_reply_to: nil,
+        references: nil,
+        headers: %{},
+        source: :email,
+        metadata: %{html_body: "<p>Hello <b>bold</b></p>"}
+      }
+
+      assert {:ok, _conversation} =
+               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+
+      assert [%Message{html_body: "<p>Hello <b>bold</b></p>", body: "Hello bold"}] =
+               Repo.all(Message)
+    end
+
     test "direct email preserves a legitimate plus tag in the To header" do
       org = insert_organization()
 

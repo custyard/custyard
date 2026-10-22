@@ -121,6 +121,7 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
 | `IMAP_ENABLED` | `false` | IMAP polling (disabled — ports blocked on Fly.io) |
 | `UPLOAD_DIR` | `/data/uploads` | Persistent upload directory (must be on the mounted volume) |
+| `ATTACHMENT_DIR` | `/data/attachments` | Inbound email attachments, served only through the authenticated operator endpoint (must be on the mounted volume) |
 
 ## Colonel acknowledgments
 

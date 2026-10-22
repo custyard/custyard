@@ -344,7 +344,15 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     |> put_present(:reply_to, SenderMatcher.extract_email(metadata[:reply_to]))
     |> put_present(:authentication, authentication(metadata[:authentication]))
     |> put_present(:spam_score, spam_score(metadata[:spam_score]))
+    |> put_present(:html_body, html_body(metadata[:html_body]))
+    # Manual-forward provenance (D6): who brought this message in.
+    |> put_present(:forwarded_by_operator_id, route_context[:forwarded_by_operator_id])
+    |> put_present(:forwarded_by_email, route_context[:forwarded_by_email])
   end
+
+  # Already sanitised by the adapter (D9); anything else is not trusted.
+  defp html_body(html) when is_binary(html) and html != "", do: html
+  defp html_body(_html), do: nil
 
   defp triage_class(:email, route_context), do: route_context[:triage_class] || :customer
   defp triage_class(_source, _route_context), do: nil

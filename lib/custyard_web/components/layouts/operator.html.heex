@@ -238,9 +238,11 @@ inactive_class =
       <.link
         navigate={~p"/operator/acknowledgments"}
         class={
-          if nav_active?.("/operator/acknowledgments", [CustyardWeb.Operator.AcknowledgmentsLive]),
-            do: active_class,
-            else: inactive_class
+          if nav_active?.("/operator/acknowledgments", [CustyardWeb.Operator.AcknowledgmentsLive]) do
+            active_class
+          else
+            inactive_class
+          end
         }
         data-testid="operator-nav-mobile-acknowledgments"
       >

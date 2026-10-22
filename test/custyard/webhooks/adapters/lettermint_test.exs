@@ -266,6 +266,16 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
                reply_to: "customer@example.com",
                cc: ["boss@example.com"],
                links: [],
+               html_body: "<p>Hi, where is my order?</p>",
+               attachments: [
+                 %{
+                   filename: "receipt.pdf",
+                   content_type: "application/pdf",
+                   size: 45_678,
+                   content_id: nil,
+                   url: nil
+                 }
+               ],
                authentication: %{
                  dkim: "pass",
                  dkim_domain: "example.com",
@@ -276,13 +286,61 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
                spam_score: 1.2
              }
 
-      for key <- [:raw, :attachments, :spam_symbols, :envelope, :remote_ip, :headers] do
+      for key <- [:raw, :spam_symbols, :envelope, :remote_ip, :headers] do
         refute Map.has_key?(metadata, key)
       end
 
       refute inspect(metadata) =~ "203.0.113.42"
       refute inspect(metadata) =~ "storage.lettermint.co"
       refute inspect(metadata) =~ "JVBERi0"
+    end
+
+    test "the HTML body is sanitised into metadata and the raw markup is dropped" do
+      html =
+        ~S|<p onclick="x()">Hi <b>there</b><script>alert(1)</script><img src="https://t.example/p"></p>|
+
+      envelope = inbound_envelope(%{"body" => %{"text" => "Hi there", "html" => html}})
+
+      assert {:ok, %{metadata: metadata} = normalized} = Lettermint.normalize(envelope)
+      assert metadata.html_body == "<p>Hi <b>there</b> </p>"
+      assert normalized.body == "Hi there"
+      refute inspect(normalized) =~ "alert"
+      refute inspect(normalized) =~ "t.example"
+    end
+
+    test "signed-URL attachments become descriptors the fetcher consumes in memory" do
+      envelope =
+        inbound_envelope(%{
+          "attachments" => [
+            %{
+              "filename" => "a.png",
+              "content_type" => "image/png",
+              "size" => 10,
+              "content_id" => "<img1>",
+              "url" => "https://storage.lettermint.co/att/1?sig=abc",
+              "expires_at" => "later"
+            },
+            "garbage",
+            %{"filename" => nil, "content_type" => "", "size" => "10", "url" => nil}
+          ]
+        })
+
+      assert {:ok, %{metadata: %{attachments: [first, second]}}} = Lettermint.normalize(envelope)
+
+      assert first == %{
+               filename: "a.png",
+               content_type: "image/png",
+               size: 10,
+               content_id: "<img1>",
+               url: "https://storage.lettermint.co/att/1?sig=abc"
+             }
+
+      assert second == %{filename: nil, content_type: nil, size: nil, content_id: nil, url: nil}
+    end
+
+    test "a text-only message stores no HTML body" do
+      envelope = inbound_envelope(%{"body" => %{"text" => "plain", "html" => nil}})
+      assert {:ok, %{metadata: %{html_body: nil}}} = Lettermint.normalize(envelope)
     end
 
     test "metadata tolerates missing optional sections" do
@@ -373,7 +431,7 @@ defmodule Custyard.Webhooks.Adapters.LettermintTest do
       assert {:ok, normalized} = Lettermint.normalize(params)
       assert normalized.from == "alice@example.com"
       assert normalized.message_id == "flat@example.com"
-      assert normalized.metadata == %{}
+      assert normalized.metadata == %{html_body: nil}
     end
   end
 end

@@ -100,8 +100,22 @@ defmodule Custyard.Webhooks.Dispatcher do
 
     result =
       case resolve_channel(route, normalized) do
-        {:ok, channel} -> triage_and_process(route, normalized, channel)
-        {:ignored, _reason} = ignored -> ignored
+        {:ok, channel} ->
+          case triage_and_process(route, normalized, channel) do
+            {{:ok, conversation} = stored, class} when class != :auto_response ->
+              context = route_context(route, channel, class)
+
+              case Purposes.Attachments.process(conversation, normalized, context) do
+                :ok -> stored
+                {:error, _reason} = error -> error
+              end
+
+            {other, _class} ->
+              other
+          end
+
+        {:ignored, _reason} = ignored ->
+          ignored
       end
 
     # Emit telemetry for webhook dispatch
@@ -156,22 +170,33 @@ defmodule Custyard.Webhooks.Dispatcher do
   # --- Stage 2: triage (D6) ---
 
   defp triage_and_process(route, normalized, channel) do
-    case Triage.classify(normalized, route, channel) do
-      {:own_echo, message} ->
-        handle_own_echo(route, normalized, channel, message)
+    classification = Triage.classify(normalized, route, channel)
 
-      {:verification, capture} ->
-        handle_verification(route, normalized, channel, capture)
+    result =
+      case classification do
+        {:own_echo, message} ->
+          handle_own_echo(route, normalized, channel, message)
 
-      {:auto_response, reason} ->
-        handle_auto_response(route, normalized, channel, reason)
+        {:operator_sent, info} ->
+          handle_operator_sent(route, normalized, channel, info)
 
-      {:suspect, _reason} ->
-        process_customer(route, normalized, channel, :suspect)
+        {:operator_forward, info} ->
+          handle_operator_forward(route, normalized, channel, info)
 
-      {:customer, nil} ->
-        process_customer(route, normalized, channel, :customer)
-    end
+        {:verification, capture} ->
+          handle_verification(route, normalized, channel, capture)
+
+        {:auto_response, reason} ->
+          handle_auto_response(route, normalized, channel, reason)
+
+        {:suspect, _reason} ->
+          process_customer(route, normalized, channel, :suspect)
+
+        {:customer, nil} ->
+          process_customer(route, normalized, channel, :customer)
+      end
+
+    {result, elem(classification, 0)}
   end
 
   # Custyard's own reply forwarded back by the operator's mailbox (D4): the
@@ -180,6 +205,84 @@ defmodule Custyard.Webhooks.Dispatcher do
   defp handle_own_echo(route, normalized, channel, %Message{} = message) do
     audit_triaged(route, normalized, channel, "own_echo", message.conversation_id)
     {:ignored, :own_echo}
+  end
+
+  # A reply the operator sent from their own mailbox (D6 "operator-sent
+  # capture"): appended as an operator message so the thread is complete,
+  # with the operator's action stamped on the conversation. No reactivation,
+  # no contact resolution, no notification; the operator already knows.
+  defp handle_operator_sent(route, normalized, channel, %{conversation: conversation} = info) do
+    route_context =
+      route
+      |> route_context(channel, :operator_sent)
+      |> Map.merge(forwarder_context(info))
+
+    attrs =
+      conversation
+      |> Purposes.SenderMatching.inbound_message_attrs(normalized, route_context)
+      |> Map.put(:source, :operator)
+      |> Map.put(:sender_email, info.email)
+      |> Map.put(:triage_class, :operator_sent)
+
+    case Message.insert_idempotent(attrs) do
+      {:ok, message} ->
+        conversation = stamp_operator_action(Repo.get!(Conversation, message.conversation_id))
+
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "conversation:#{conversation.id}",
+          {:message_added, conversation.id}
+        )
+
+        mark_received(channel)
+        audit_triaged(route, normalized, channel, "operator_sent", conversation.id)
+        {:ok, conversation}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  # Customer mail forwarded in by an operator (D6 "operator manual forward",
+  # the backlog-import path): the unwrapped original runs through the
+  # customer pipeline with the original sender as the contact, stamped with
+  # who forwarded it. The forward's own authentication, spam score and HTML
+  # describe the operator's copy, not the customer's mail, and are dropped.
+  defp handle_operator_forward(route, normalized, channel, %{original: original} = info) do
+    unwrapped =
+      normalized
+      |> Map.put(:from, original.from)
+      |> Map.put(:subject, original.subject || normalized[:subject])
+      |> Map.put(:body, original.body)
+      |> Map.update(:metadata, %{}, fn metadata ->
+        metadata
+        |> Map.merge(%{
+          to: [],
+          cc: [],
+          reply_to: nil,
+          authentication: nil,
+          spam_score: nil,
+          is_spam: false,
+          html_body: nil
+        })
+      end)
+
+    process_customer(route, unwrapped, channel, :operator_forward, forwarder_context(info))
+  end
+
+  defp forwarder_context(%{operator: operator, email: email}) do
+    %{
+      forwarded_by_operator_id: operator && operator.id,
+      forwarded_by_email: email
+    }
+  end
+
+  defp stamp_operator_action(%Conversation{} = conversation) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    conversation
+    |> Ecto.Changeset.change(last_operator_action_at: now)
+    |> Repo.update!()
   end
 
   defp handle_verification(
@@ -249,8 +352,8 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   # --- Customer and suspect mail: the existing purpose pipeline ---
 
-  defp process_customer(route, normalized, channel, triage_class) do
-    route_context = route_context(route, channel, triage_class)
+  defp process_customer(route, normalized, channel, triage_class, extra_context \\ %{}) do
+    route_context = route |> route_context(channel, triage_class) |> Map.merge(extra_context)
     enabled_purposes = enabled_purposes(route)
 
     # Step 1: Sender matching (synchronous, blocking)
@@ -333,8 +436,10 @@ defmodule Custyard.Webhooks.Dispatcher do
   # delivery on its own classified as customer mail.
   defp notify?(%Conversation{suspect: true}, _route_context), do: false
 
-  defp notify?(_conversation, %{triage_class: class}) when class in [:suspect, :auto_response],
-    do: false
+  # A manual forward is the operator importing mail they have already read.
+  defp notify?(_conversation, %{triage_class: class})
+       when class in [:suspect, :auto_response, :operator_forward],
+       do: false
 
   defp notify?(_conversation, _route_context), do: true
 

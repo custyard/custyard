@@ -8,6 +8,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
   import Custyard.Factory
 
   alias Custyard.{AuditEvent, Conversation, InboundChannelRejection, InboundChannels, Message}
+  alias Custyard.{Attachments, MessageAttachment}
+  alias Custyard.Attachments.StubClient
   alias Custyard.Webhooks.Dispatcher
 
   @notifications "operator:notifications"
@@ -78,6 +80,340 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
     do: Map.update!(normalized, :metadata, &Map.merge(&1, overrides))
 
   defp rejections(route), do: InboundChannels.list_rejections_for_route(route.id)
+
+  # Attachment processing completes before dispatch returns; this helper also
+  # supports older asynchronous fixture setup.
+  defp wait_for_attachments(message_id, attempts \\ 100) do
+    case Attachments.list_for_message(message_id) do
+      [] when attempts > 0 ->
+        Process.sleep(10)
+        wait_for_attachments(message_id, attempts - 1)
+
+      rows ->
+        rows
+    end
+  end
+
+  describe "operator-sent capture and manual forward (D6)" do
+    @forward_body """
+    ---------- Forwarded message ---------
+    From: Alice <alice@customer.example.com>
+    Date: Mon, 6 Oct 2025
+    Subject: Login broken
+    To: support@acme.example.com
+
+    I cannot log in since this morning.
+    """
+
+    defp operator_delivery(recipient, overrides) do
+      delivery(recipient, overrides)
+      |> Map.put(:from, "Me <me@acme.example.com>")
+      |> put_metadata(%{
+        mail_from: "me@acme.example.com",
+        authentication: %{
+          dkim: "pass",
+          dkim_domain: "acme.example.com",
+          spf: "pass",
+          dmarc: "pass"
+        }
+      })
+    end
+
+    test "an operator's mailbox reply is appended as an operator message, quietly", %{
+      org: org,
+      route: route
+    } do
+      channel = channel!(route)
+
+      operator =
+        insert_operator_account(
+          role: "admin",
+          organization_id: org.id,
+          email: "me@acme.example.com"
+        )
+
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
+
+      conv =
+        insert_conversation(organization_id: org.id, contact_id: contact.id, state: :resolved)
+
+      insert_message(conversation_id: conv.id, message_id: "<orig@customer.example.com>")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
+
+      payload =
+        operator_delivery(InboundChannels.ingress_address(channel), %{
+          in_reply_to: "<orig@customer.example.com>",
+          body: "Fixed it for you.",
+          subject: "Re: Login broken"
+        })
+
+      assert {:ok, %Conversation{id: conv_id}} = Dispatcher.dispatch(route, payload)
+      assert conv_id == conv.id
+
+      message = Repo.get_by!(Message, conversation_id: conv.id, triage_class: :operator_sent)
+      assert message.source == :operator
+      assert message.sender_email == "me@acme.example.com"
+      assert message.forwarded_by_operator_id == operator.id
+      assert message.forwarded_by_email == "me@acme.example.com"
+      assert message.delivery_status == nil
+      assert message.body == "Fixed it for you."
+
+      reloaded = Repo.get!(Conversation, conv.id)
+      assert reloaded.state == :resolved
+      assert reloaded.last_operator_action_at
+      refute_receive {:new_message, _id}, 100
+      assert Repo.aggregate(Custyard.Contact, :count) == 1
+    end
+
+    test "an operator mailbox retry resumes failed attachments instead of becoming an own echo",
+         %{
+           org: org,
+           route: route
+         } do
+      channel = channel!(route)
+
+      insert_operator_account(
+        role: "admin",
+        organization_id: org.id,
+        email: "me@acme.example.com"
+      )
+
+      conversation = insert_conversation(organization_id: org.id, state: :resolved)
+
+      insert_message(
+        conversation_id: conversation.id,
+        message_id: "<mailbox-original@example.com>"
+      )
+
+      url = StubClient.unique_url()
+      StubClient.fail(url, :timeout)
+
+      payload =
+        operator_delivery(InboundChannels.ingress_address(channel), %{
+          in_reply_to: "<mailbox-original@example.com>"
+        })
+        |> put_metadata(%{
+          attachments: [
+            %{
+              filename: "reply.txt",
+              content_type: "text/plain",
+              size: 5,
+              content_id: nil,
+              url: url
+            }
+          ]
+        })
+
+      assert {:error, :attachment_fetch_failed} = Dispatcher.dispatch(route, payload)
+
+      message =
+        Repo.get_by!(Message, conversation_id: conversation.id, triage_class: :operator_sent)
+
+      assert [%{state: :failed} = attachment] = Attachments.list_for_message(message.id)
+
+      StubClient.put(url, "hello")
+      assert {:ok, returned} = Dispatcher.dispatch(route, payload)
+      assert returned.id == conversation.id
+      assert [%{state: :fetched, id: id}] = Attachments.list_for_message(message.id)
+      assert id == attachment.id
+
+      assert Repo.aggregate(from(m in Message, where: m.triage_class == :operator_sent), :count) ==
+               1
+    end
+
+    test "a manual forward creates the conversation for the original sender", %{
+      org: org,
+      route: route
+    } do
+      channel = channel!(route)
+
+      operator =
+        insert_operator_account(
+          role: "admin",
+          organization_id: org.id,
+          email: "me@acme.example.com"
+        )
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
+
+      payload =
+        operator_delivery(InboundChannels.ingress_address(channel), %{
+          subject: "Fwd: Login broken",
+          body: @forward_body
+        })
+        |> put_metadata(%{is_spam: true, spam_score: 9.0, cc: ["colleague@acme.example.com"]})
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      assert conversation.subject == "Login broken"
+      assert conversation.suspect == false
+      assert conversation.inbound_channel_id == channel.id
+
+      contact = Repo.get!(Custyard.Contact, conversation.contact_id)
+      assert contact.email == "alice@customer.example.com"
+
+      [message] =
+        Repo.all(Ecto.Query.from(m in Message, where: m.conversation_id == ^conversation.id))
+
+      assert message.source == :email
+      assert message.triage_class == :operator_forward
+      assert message.sender_email == "Alice <alice@customer.example.com>"
+      assert message.body == "I cannot log in since this morning."
+      assert message.forwarded_by_operator_id == operator.id
+      assert message.forwarded_by_email == "me@acme.example.com"
+      assert message.cc_addresses == []
+      assert message.authentication == nil
+      assert message.spam_score == nil
+
+      refute_receive {:new_message, _id}, 100
+    end
+
+    test "an unauthenticated 'operator' address is ordinary customer mail", %{
+      org: org,
+      route: route
+    } do
+      channel = channel!(route)
+
+      insert_operator_account(
+        role: "admin",
+        organization_id: org.id,
+        email: "me@acme.example.com"
+      )
+
+      payload =
+        operator_delivery(InboundChannels.ingress_address(channel), %{
+          subject: "Fwd: Login broken",
+          body: @forward_body
+        })
+        |> put_metadata(%{
+          authentication: %{dkim: "fail", dkim_domain: "acme.example.com", dmarc: "fail"}
+        })
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      assert Repo.get!(Custyard.Contact, conversation.contact_id).email == "me@acme.example.com"
+      assert conversation.suspect
+    end
+  end
+
+  describe "attachments (D9)" do
+    test "are fetched within the channel cap and the signed URL is never stored", %{
+      route: route
+    } do
+      channel = channel!(route, attachment_limit_mb: 1)
+      url = StubClient.unique_url()
+      StubClient.put(url, "%PDF-1.4 receipt")
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{
+          attachments: [
+            %{
+              filename: "receipt.pdf",
+              content_type: "application/pdf",
+              size: 16,
+              content_id: nil,
+              url: url
+            },
+            %{
+              filename: "huge.mov",
+              content_type: "video/quicktime",
+              size: 5_000_000,
+              content_id: nil,
+              url: StubClient.unique_url()
+            }
+          ]
+        })
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+
+      assert [receipt, huge] = wait_for_attachments(message.id)
+      assert %MessageAttachment{state: :fetched, sniffed_type: "application/pdf"} = receipt
+      assert %MessageAttachment{state: :skipped, skip_reason: "over_limit"} = huge
+      refute inspect(Repo.all(MessageAttachment)) =~ "storage.lettermint.test"
+      refute inspect(Repo.all(Message)) =~ "storage.lettermint.test"
+    end
+
+    test "a failed attachment withholds success and delivery replay resumes the same slot", %{
+      route: route
+    } do
+      channel = channel!(route)
+      url = StubClient.unique_url()
+      StubClient.fail(url, :timeout)
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{
+          attachments: [
+            %{filename: "a.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
+          ]
+        })
+
+      assert {:error, :attachment_fetch_failed} = Dispatcher.dispatch(route, payload)
+      [message] = Repo.all(Message)
+      assert [%{state: :failed} = row] = Attachments.list_for_message(message.id)
+      StubClient.put(url, "hello")
+      assert {:ok, _conversation} = Dispatcher.dispatch(route, payload)
+      assert [%{state: :fetched, id: id}] = Attachments.list_for_message(message.id)
+      assert id == row.id
+      assert Repo.aggregate(Message, :count) == 1
+    end
+
+    test "a replayed delivery does not fetch twice", %{route: route} do
+      channel = channel!(route)
+      url = StubClient.unique_url()
+      StubClient.put(url, "hello")
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{
+          attachments: [
+            %{filename: "a.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
+          ]
+        })
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert [_row] = wait_for_attachments(message.id)
+
+      assert {:ok, _same} = Dispatcher.dispatch(route, payload)
+      Process.sleep(50)
+      assert [_row] = Attachments.list_for_message(message.id)
+    end
+
+    test "suspect mail lists its attachments without fetching them", %{route: route} do
+      channel = channel!(route)
+      url = StubClient.unique_url()
+      StubClient.put(url, "MZ payload")
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel))
+        |> put_metadata(%{
+          is_spam: true,
+          attachments: [
+            %{
+              filename: "invoice.exe",
+              content_type: "application/octet-stream",
+              size: 10,
+              content_id: nil,
+              url: url
+            }
+          ]
+        })
+
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      assert conversation.suspect
+      message = Repo.get_by!(Message, conversation_id: conversation.id)
+
+      assert [
+               %MessageAttachment{
+                 state: :skipped,
+                 skip_reason: "suspect",
+                 filename: "invoice.exe"
+               }
+             ] =
+               wait_for_attachments(message.id)
+    end
+  end
 
   defp triage_audits(org) do
     Repo.all(
@@ -253,7 +589,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
   end
 
   describe "auto-response" do
-    test "is appended to its thread without reactivation or notification", %{
+    test "is appended without reactivation, notification, or attachment downloads", %{
       org: org,
       route: route
     } do
@@ -286,8 +622,31 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           headers: %{"Auto-Submitted" => "auto-replied"}
         })
 
+      url = StubClient.unique_url()
+      test_process = self()
+
+      StubClient.on_fetch(url, fn _limit ->
+        send(test_process, :auto_response_attachment_fetched)
+        {:error, :timeout}
+      end)
+
+      payload =
+        put_metadata(payload, %{
+          attachments: [
+            %{
+              filename: "bounce.txt",
+              content_type: "text/plain",
+              size: 5,
+              content_id: nil,
+              url: url
+            }
+          ]
+        })
+
       assert {:ok, returned} = Dispatcher.dispatch(route, payload)
       assert returned.id == conversation.id
+      refute_received :auto_response_attachment_fetched
+      assert Repo.all(MessageAttachment) == []
 
       reloaded = Repo.reload!(conversation)
       assert reloaded.state == :waiting

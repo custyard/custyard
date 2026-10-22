@@ -70,8 +70,32 @@ defmodule Custyard.Email.OutboundTest do
       # Verify persisted in DB
       reloaded = Repo.get!(Message, msg.id)
       assert reloaded.delivery_status == :sent
+      assert reloaded.to_addresses == ["alice@customer.com"]
       # Swoosh.Adapters.Test returns no provider id
       assert reloaded.lettermint_message_id == nil
+    end
+
+    test "stale queued message cannot restore a DSAR-erased CC", %{operator_msg: msg, org: org} do
+      stale =
+        msg |> Message.changeset(%{cc_addresses: ["bystander@example.com"]}) |> Repo.update!()
+
+      assert {:ok, %{erased: 1}} =
+               Custyard.DataSubjects.erase_participation("bystander@example.com", org.id)
+
+      assert {:ok, sent} = Outbound.deliver(stale)
+      assert sent.cc_addresses == []
+      assert Repo.get!(Message, msg.id).cc_addresses == []
+      assert_email_sent(fn email -> assert email.cc == [] end)
+    end
+
+    test "stores the actual Reply-To target for later redaction", %{
+      operator_msg: msg,
+      customer_msg: incoming
+    } do
+      incoming |> Message.changeset(%{reply_to: "delegate@example.com"}) |> Repo.update!()
+      assert {:ok, sent} = Outbound.deliver(msg)
+      assert sent.to_addresses == ["delegate@example.com"]
+      assert Repo.get!(Message, msg.id).to_addresses == ["delegate@example.com"]
     end
 
     test "captures the provider message id from the delivery response", %{operator_msg: msg} do
@@ -199,6 +223,67 @@ defmodule Custyard.Email.OutboundTest do
   end
 
   describe "compose/4" do
+    test "public intake ignores CC even on legacy pending messages", %{
+      conversation: conv,
+      operator_msg: msg
+    } do
+      email =
+        Outbound.compose(
+          %{msg | cc_addresses: ["other@example.com"]},
+          %{conv | source: :public_intake},
+          "alice@customer.com",
+          {"Support", "help@example.com"}
+        )
+
+      assert email.cc == []
+    end
+
+    test "carries the reply's CC list, never the recipient twice", %{conversation: conv} do
+      msg =
+        insert_message(
+          conversation_id: conv.id,
+          source: :operator,
+          body: "Reply all",
+          delivery_status: :pending,
+          cc_addresses: ["boss@customer.com", "Alice@customer.com"]
+        )
+
+      email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
+      assert email.cc == [{"", "boss@customer.com"}]
+    end
+
+    test "BCCs the channel's public address when the archive copy is on (D4)", %{
+      org: org,
+      operator_msg: msg,
+      conversation: conv
+    } do
+      route = insert_inbound_route(organization_id: org.id, source: :lettermint)
+
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "support@acme.com",
+          state: :active
+        )
+
+      {:ok, channel} = Custyard.InboundChannels.update_channel(channel, %{archive_copy: true})
+      conv = %{conv | inbound_channel: channel, inbound_channel_id: channel.id}
+
+      email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
+      assert email.bcc == [{"", "support@acme.com"}]
+
+      {:ok, channel} = Custyard.InboundChannels.update_channel(channel, %{archive_copy: false})
+      conv = %{conv | inbound_channel: channel}
+
+      assert Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"}).bcc ==
+               []
+    end
+
+    test "has no CC header when the reply carries none", %{operator_msg: msg, conversation: conv} do
+      email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
+      assert email.cc == []
+    end
+
     test "builds email struct without delivering", %{operator_msg: msg, conversation: conv} do
       email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
 

@@ -20,12 +20,19 @@ defmodule Custyard.Storage do
       Keyword.get(opts, :repo_config, Application.get_env(:custyard, Custyard.Repo, []))
 
     upload_dir = Keyword.get(opts, :upload_dir, Application.get_env(:custyard, :upload_dir))
+
+    attachment_dir =
+      Keyword.get(opts, :attachment_dir, Application.get_env(:custyard, :attachment_dir))
+
     database_path = Keyword.get(repo_config, :database)
     local_database? = is_binary(database_path) and not Keyword.has_key?(repo_config, :url)
 
     if local_database?, do: require_data_path!(database_path, "DATABASE_PATH")
     if is_binary(upload_dir), do: require_data_path!(upload_dir, "UPLOAD_DIR")
-    if local_database? or is_binary(upload_dir), do: require_data_mount!(opts)
+    if is_binary(attachment_dir), do: require_data_path!(attachment_dir, "ATTACHMENT_DIR")
+
+    if local_database? or is_binary(upload_dir) or is_binary(attachment_dir),
+      do: require_data_mount!(opts)
   end
 
   defp require_data_mount!(opts) do

@@ -40,9 +40,9 @@ defmodule Custyard.Email.Outbound do
   @doc """
   Deliver an outbound email for a message.
 
-  The message's conversation, contact, organization, and prospect are
-  force-preloaded, so the consent re-check always reads current DB state even
-  when a caller passes a message with stale associations already loaded.
+  The message is reloaded and its conversation, contact, organization, and
+  prospect are preloaded inside the delivery claim transaction, so recipient
+  and consent checks read current DB state even for a stale queue snapshot.
   Recipient resolution falls back contact.email -> prospect.email -> no
   recipient; the prospect channel additionally requires the prospect's
   reply-notification opt-in (consent gate, secondary layer —
@@ -70,65 +70,80 @@ defmodule Custyard.Email.Outbound do
   """
   def deliver(%Message{} = message) do
     case claim_for_delivery(message) do
-      {:ok, message} -> deliver_claimed(message)
-      :error -> {:error, :not_pending, Repo.reload!(message)}
+      {:ok, {:ok, current, email}} -> deliver_claimed(current, email)
+      {:ok, {:error, reason, current}} -> delivery_error(current, reason)
+      {:ok, :not_pending} -> {:error, :not_pending, Repo.reload!(message)}
+      {:error, reason} -> {:error, reason, Repo.reload!(message)}
     end
   end
 
-  # Atomic :pending -> :sending. Without this claim the row stayed :pending
-  # while the provider was accepting the email, and a crash (deploy, OOM, a
-  # locked database on the status update) before :sent was recorded left it
-  # :pending for the queue's recovery scan to deliver a second time.
-  defp claim_for_delivery(%Message{id: id} = message) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+  # Claim, reload current recipients and save the envelope under one write
+  # transaction. A stale queue snapshot must not restore recipients erased
+  # by a DSAR. The provider call happens only after this transaction commits.
+  defp claim_for_delivery(%Message{id: id}) do
+    Repo.transaction(fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    {claimed, _} =
-      Ecto.Query.from(m in Message, where: m.id == ^id and m.delivery_status == :pending)
-      |> Repo.update_all(set: [delivery_status: :sending, updated_at: now])
+      {claimed, _} =
+        Ecto.Query.from(m in Message, where: m.id == ^id and m.delivery_status == :pending)
+        |> Repo.update_all(set: [delivery_status: :sending, updated_at: now])
 
-    if claimed == 1, do: {:ok, %{message | delivery_status: :sending}}, else: :error
+      if claimed == 1 do
+        Message |> Repo.get!(id) |> prepare_delivery()
+      else
+        :not_pending
+      end
+    end)
   end
 
-  defp deliver_claimed(message) do
-    # force: true — the consent re-check must read committed consent state;
-    # without it a caller passing a preloaded conversation would silently
-    # turn this defense-in-depth layer into a stale-read no-op.
+  defp prepare_delivery(message) do
     message =
-      Repo.preload(
-        message,
-        [conversation: [:contact, :organization, :prospect, :inbound_channel]],
-        force: true
-      )
+      Repo.preload(message, conversation: [:contact, :organization, :prospect, :inbound_channel])
 
     conversation = message.conversation
 
     with {:ok, recipient} <- resolve_recipient(conversation),
          {:ok, from_addr} <- resolve_from_address(message, conversation),
          email <- compose(message, conversation, recipient, from_addr),
-         {:ok, metadata} <- Custyard.Mailer.deliver(email) do
-      updated =
-        message
-        |> mark_status(:sent, provider_attrs(metadata))
-        |> broadcast_delivery_update()
-
-      {:ok, updated}
+         {:ok, message} <- persist_recipients(message, email) do
+      {:ok, message, email}
     else
-      # Consent withheld is an expected state, not a delivery failure — the
-      # reply stays visible to the prospect via the conversation link.
-      {:error, :no_consent} ->
-        Logger.info(
-          "Outbound email withheld for message #{message.id}: prospect has not opted in"
-        )
+      {:error, reason} -> {:error, reason, message}
+    end
+  end
 
-        {:error, :no_consent, message |> mark_status(:withheld) |> broadcast_delivery_update()}
+  defp deliver_claimed(message, email) do
+    case Custyard.Mailer.deliver(email) do
+      {:ok, metadata} ->
+        updated =
+          message |> mark_status(:sent, provider_attrs(metadata)) |> broadcast_delivery_update()
+
+        {:ok, updated}
 
       {:error, reason} ->
-        Logger.error(
-          "Outbound email delivery failed for message #{message.id}: #{inspect(reason)}"
-        )
-
-        {:error, reason, message |> mark_status(:failed) |> broadcast_delivery_update()}
+        delivery_error(message, reason)
     end
+  end
+
+  defp delivery_error(message, :no_consent) do
+    Logger.info("Outbound email withheld for message #{message.id}: prospect has not opted in")
+    {:error, :no_consent, message |> mark_status(:withheld) |> broadcast_delivery_update()}
+  end
+
+  defp delivery_error(message, reason) do
+    Logger.error("Outbound email delivery failed for message #{message.id}: #{inspect(reason)}")
+    {:error, reason, message |> mark_status(:failed) |> broadcast_delivery_update()}
+  end
+
+  # Store actual participants before contacting the provider. The message was
+  # read under the claim's write lock, so this cannot restore stale CC data.
+  defp persist_recipients(message, email) do
+    message
+    |> Message.changeset(%{
+      to_addresses: Enum.map(email.to, &elem(&1, 1)),
+      cc_addresses: Enum.map(email.cc, &elem(&1, 1))
+    })
+    |> Repo.update()
   end
 
   @doc """
@@ -136,8 +151,16 @@ defmodule Custyard.Email.Outbound do
   Useful for previewing or testing email composition.
   """
   def compose(%Message{} = message, conversation, recipient, from_address) do
+    message =
+      if conversation.source == :public_intake, do: %{message | cc_addresses: []}, else: message
+
     new()
     |> to(recipient)
+    |> put_cc(
+      if(conversation.source == :public_intake, do: %{message | cc_addresses: []}, else: message),
+      recipient
+    )
+    |> put_archive_bcc(conversation)
     |> from(from_address)
     |> subject(compose_subject(conversation))
     |> text_body(message.body)
@@ -147,6 +170,28 @@ defmodule Custyard.Email.Outbound do
   end
 
   # --- Private ---
+
+  # Reply-all CC (spec-inbound-channels D5): the operator-approved list, never
+  # the recipient twice. Prospect conversations carry no CC by construction
+  # (Conversations.default_reply_cc/2 returns [] and the composer hides it).
+  defp put_cc(email, %Message{cc_addresses: cc}, recipient) when is_list(cc) and cc != [] do
+    recipient = String.downcase(recipient)
+
+    case Enum.reject(cc, &(String.downcase(&1) == recipient)) do
+      [] -> email
+      list -> cc(email, list)
+    end
+  end
+
+  defp put_cc(email, _message, _recipient), do: email
+
+  # Archive copy (spec-inbound-channels D4): BCC the channel's public address
+  # so the operator's mailbox keeps the reply. The copy is forwarded straight
+  # back and recognised by triage as an own echo, never a new conversation.
+  defp put_archive_bcc(email, %{inbound_channel: %InboundChannel{archive_copy: true} = channel}),
+    do: bcc(email, channel.public_address)
+
+  defp put_archive_bcc(email, _conversation), do: email
 
   # Recipient fallback: contact.email -> prospect.email -> no recipient.
   # The contact channel delivers unconditionally (established-customer path).

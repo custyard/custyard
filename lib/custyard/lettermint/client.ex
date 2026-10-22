@@ -63,6 +63,10 @@ defmodule Custyard.Lettermint.Client do
   """
   @callback list_domains() :: {:ok, [map()]} | {:error, term()}
 
+  @doc "Retrieve a retained webhook delivery; its payload is secret and must remain in memory."
+  @callback get_webhook_delivery(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  @optional_callbacks get_webhook_delivery: 2
+
   @doc """
   Returns the configured Lettermint client module.
 

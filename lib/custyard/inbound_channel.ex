@@ -67,6 +67,12 @@ defmodule Custyard.InboundChannel do
     field :state, Ecto.Enum, values: @states, default: :draft
 
     field :reply_from, Ecto.Enum, values: @reply_from_options, default: :public_address
+    # D4: BCC every outbound reply to the public address so the operator's
+    # mailbox keeps a copy. Off by default; the copy is forwarded back and
+    # recognised by triage as an own echo.
+    field :archive_copy, :boolean, default: false
+    # D9: per-message attachment cap in megabytes; 0 disables fetching.
+    field :attachment_limit_mb, :integer, default: 10
     field :sending_domain_status, :string
     field :sending_domain_checked_at, :utc_datetime
 
@@ -112,6 +118,8 @@ defmodule Custyard.InboundChannel do
       :provider,
       :reply_from,
       :quiet_after_hours,
+      :archive_copy,
+      :attachment_limit_mb,
       :inbound_route_id,
       :organization_id,
       :project_id
@@ -125,6 +133,10 @@ defmodule Custyard.InboundChannel do
     |> validate_number(:quiet_after_hours,
       greater_than_or_equal_to: 1,
       less_than_or_equal_to: 720
+    )
+    |> validate_number(:attachment_limit_mb,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 100
     )
     |> put_ingress_local()
     |> maybe_generate_token()

@@ -12,28 +12,52 @@ defmodule Custyard.Webhooks.Triage do
 
     1. `{:own_echo, %Message{}}` - the Message-ID belongs to an operator
        reply Custyard sent from this organization (D4 archive copy).
-    2. `{:verification, %{provider:, code:, link:}}` - a Gmail or Proton
+    2. `{:operator_sent, %{conversation:, operator:, email:}}` - a reply the
+       operator sent from their own mailbox, outside Custyard, that threads
+       to a known conversation.
+    3. `{:operator_forward, %{original:, operator:, email:}}` - customer
+       mail an operator forwarded in by hand (the backlog-import path):
+       the original sender, subject and body are unwrapped from the
+       forwarded block.
+    4. `{:verification, %{provider:, code:, link:}}` - a Gmail or Proton
        forwarding confirmation.
-    3. `{:auto_response, reason}` - auto-submitted, bulk or bounce mail.
-    4. `{:suspect, reason}` - spam-flagged or DKIM+DMARC failing mail from a
+    5. `{:auto_response, reason}` - auto-submitted, bulk or bounce mail.
+    6. `{:suspect, reason}` - spam-flagged or DKIM+DMARC failing mail from a
        sender who is not a known contact in the organization. A contact
        whose only conversations are themselves suspect does not count:
        suspect mail creates its own contact, and that must not whitelist
        the sender's next message. An operator clearing the suspect flag on
        any of those conversations is what makes the sender known.
-    5. `{:customer, nil}` - everything else.
+    7. `{:customer, nil}` - everything else.
 
-  Operator-sent capture and manual-forward unwrap (Phase 2) are not
-  implemented; such mail is customer mail here.
+  Classes 2 and 3 need an authenticated operator identity: `From` is
+  forgeable, so the sender must be an operator account of the organization
+  (or the channel's own public address) *and* the forwarded copy must carry
+  a DKIM pass whose signing domain is aligned with the sender's domain.
+  Without that, the mail is customer mail from an unknown sender.
   """
 
   import Ecto.Query
 
-  alias Custyard.{Contact, Conversation, InboundRoute, Message, Repo}
-  alias Custyard.Email.{Normalizer, SenderMatcher, ThreadHeaders}
+  alias Custyard.{
+    Contact,
+    Conversation,
+    InboundChannel,
+    InboundRoute,
+    Message,
+    OperatorAccount,
+    Repo
+  }
+
+  alias Custyard.Email.{ForwardUnwrapper, Normalizer, SenderMatcher, ThreadHeaders, ThreadMatcher}
+
+  @type operator_identity :: %{operator: struct() | nil, email: String.t()}
 
   @type classification ::
           {:own_echo, struct()}
+          | {:operator_sent,
+             %{conversation: struct(), operator: struct() | nil, email: String.t()}}
+          | {:operator_forward, %{original: map(), operator: struct() | nil, email: String.t()}}
           | {:verification,
              %{provider: :google | :proton, code: String.t() | nil, link: String.t() | nil}}
           | {:auto_response, atom()}
@@ -62,10 +86,11 @@ defmodule Custyard.Webhooks.Triage do
   route without channels).
   """
   @spec classify(map(), struct(), struct() | nil) :: classification()
-  def classify(normalized, %InboundRoute{} = route, _channel) do
+  def classify(normalized, %InboundRoute{} = route, channel) do
     sender = SenderMatcher.extract_email(normalized[:from])
 
     with nil <- own_echo(normalized, route.organization_id),
+         nil <- operator_mail(normalized, sender, route, channel),
          nil <- verification(normalized, sender),
          nil <- auto_response(normalized),
          nil <- suspect(normalized, sender, route.organization_id) do
@@ -86,6 +111,7 @@ defmodule Custyard.Webhooks.Triage do
             join: c in Conversation,
             on: c.id == m.conversation_id,
             where: m.source == :operator,
+            where: is_nil(m.triage_class) or m.triage_class != :operator_sent,
             where: m.message_id in ^candidates,
             where: c.organization_id == ^organization_id,
             order_by: [asc: m.id],
@@ -105,6 +131,91 @@ defmodule Custyard.Webhooks.Triage do
   end
 
   defp echo_candidates(_message_id), do: []
+
+  # --- operator-sent capture and manual forward (D6) ---
+
+  defp operator_mail(_normalized, nil, _route, _channel), do: nil
+
+  defp operator_mail(normalized, sender, route, channel) do
+    case operator_identity(normalized, sender, route.organization_id, channel) do
+      nil ->
+        nil
+
+      identity ->
+        case ThreadMatcher.find_thread(normalized, route.organization_id) do
+          {:ok, conversation} ->
+            {:operator_sent, Map.put(identity, :conversation, conversation)}
+
+          :not_found ->
+            operator_forward(normalized, identity)
+        end
+    end
+  end
+
+  defp operator_forward(normalized, identity) do
+    subject = normalized[:subject]
+    body = normalized[:body]
+
+    if ForwardUnwrapper.forward_subject?(subject) or ForwardUnwrapper.forwarded_block?(body) do
+      case ForwardUnwrapper.unwrap(body, subject) do
+        {:ok, original} -> {:operator_forward, Map.put(identity, :original, original)}
+        :error -> nil
+      end
+    end
+  end
+
+  # The sender is operator-owned (an operator account of this organization,
+  # or the channel's public address) and the DKIM signature on the forwarded
+  # copy is from the sender's own domain.
+  defp operator_identity(normalized, sender, organization_id, channel) do
+    sender = String.downcase(sender)
+
+    with true <- dkim_aligned?(normalized, sender),
+         {:ok, operator} <- operator_owned(sender, organization_id, channel) do
+      %{operator: operator, email: sender}
+    else
+      _not_operator -> nil
+    end
+  end
+
+  defp operator_owned(sender, organization_id, channel) do
+    case Repo.get_by(OperatorAccount, email: OperatorAccount.normalize_email(sender)) do
+      %OperatorAccount{role: "super_admin"} = operator ->
+        {:ok, operator}
+
+      %OperatorAccount{organization_id: ^organization_id} = operator ->
+        {:ok, operator}
+
+      _other ->
+        case channel do
+          %InboundChannel{public_address: address} when is_binary(address) ->
+            if String.downcase(address) == sender, do: {:ok, nil}, else: :error
+
+          _no_channel ->
+            :error
+        end
+    end
+  end
+
+  # DMARC-style relaxed alignment: the signing domain equals the sender's
+  # domain or one is a parent of the other.
+  defp dkim_aligned?(normalized, sender) do
+    auth = get_in(normalized, [:metadata, :authentication]) || %{}
+    dkim = auth[:dkim] || auth["dkim"]
+    signing = auth[:dkim_domain] || auth["dkim_domain"]
+
+    with true <- is_binary(dkim) and String.downcase(dkim) == "pass",
+         true <- is_binary(signing),
+         [_local, sender_domain] <- String.split(sender, "@", parts: 2) do
+      signing = String.downcase(signing)
+      sender_domain = String.downcase(sender_domain)
+
+      signing == sender_domain or String.ends_with?(sender_domain, "." <> signing) or
+        String.ends_with?(signing, "." <> sender_domain)
+    else
+      _not_aligned -> false
+    end
+  end
 
   # --- provider verification (D6) ---
 

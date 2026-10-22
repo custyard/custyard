@@ -305,7 +305,10 @@ defmodule Custyard.Release do
           Integer.to_string(operator.id),
           printable(operator.email),
           operator.role,
-          if(operator.organization_id, do: Integer.to_string(operator.organization_id), else: "-"),
+          if(operator.organization_id,
+            do: Integer.to_string(operator.organization_id),
+            else: "-"
+          ),
           DateTime.to_iso8601(operator.inserted_at),
           operator |> operator_notes() |> Enum.join("; ")
         ]

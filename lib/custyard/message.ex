@@ -37,7 +37,10 @@ defmodule Custyard.Message do
   # Ranking (spec-conversation-loop, Delivery Tracking): pending < sending <
   # sent < delivered; bounced, suppressed and failed are terminal. A status
   # event only advances a message when its rank is higher or it is terminal.
-  @triage_classes [:customer, :auto_response, :suspect]
+  # :operator_sent — a reply the operator sent from their own mailbox, outside
+  # Custyard, captured by triage (D6). :operator_forward — customer mail an
+  # operator manually forwarded in; the message carries the original sender.
+  @triage_classes [:customer, :auto_response, :suspect, :operator_sent, :operator_forward]
 
   @delivery_statuses [
     :pending,
@@ -84,6 +87,15 @@ defmodule Custyard.Message do
     field :triage_class, Ecto.Enum, values: @triage_classes
     belongs_to :inbound_channel, Custyard.InboundChannel
 
+    # Allowlist-sanitised HTML body (D9), stored alongside the text body.
+    # nil when the mail was text-only or the HTML was too large to keep.
+    field :html_body, :string
+    # Manual-forward provenance (D6): the operator who forwarded a customer
+    # thread in, and the operator-owned address it came from.
+    belongs_to :forwarded_by_operator, Custyard.OperatorAccount
+    field :forwarded_by_email, :string
+    has_many :attachments, Custyard.MessageAttachment
+
     # Soft delete (GitHub-style tombstone): the body stays in the database and
     # rendering surfaces show "This message was deleted" instead. There is no
     # hard-delete path. Set only via soft_delete_changeset/2.
@@ -122,10 +134,15 @@ defmodule Custyard.Message do
       :spam_score,
       :triage_class,
       :inbound_channel_id,
+      :html_body,
+      :forwarded_by_operator_id,
+      :forwarded_by_email,
       :conversation_id
     ])
     |> validate_required([:source, :body, :conversation_id])
     |> validate_length(:body, max: 100_000)
+    |> validate_length(:html_body, max: 500_000)
+    |> validate_length(:forwarded_by_email, max: 255)
     |> validate_length(:provider_delivery_id, max: 255)
     |> validate_length(:reply_to, max: 255)
     |> validate_length(:to_addresses, max: 50)
@@ -133,6 +150,7 @@ defmodule Custyard.Message do
     # Note: :source and :origin use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:inbound_channel_id)
+    |> foreign_key_constraint(:forwarded_by_operator_id)
     |> unique_constraint([:dedup_scope, :message_id],
       name: :messages_dedup_scope_message_id_index
     )

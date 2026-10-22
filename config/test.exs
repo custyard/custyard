@@ -45,6 +45,13 @@ config :phoenix, :plug_init_mode, :runtime
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
 
+# Attachments land in a throwaway directory and are fetched from an in-memory
+# stub instead of the network (Custyard.Attachments.StubClient, test/support).
+config :custyard,
+  attachment_dir:
+    Path.expand("../tmp/test_attachments#{System.get_env("MIX_TEST_PARTITION")}", __DIR__),
+  attachment_client: Custyard.Attachments.StubClient
+
 # Use test adapter for Swoosh to capture emails in tests
 config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Test
 
