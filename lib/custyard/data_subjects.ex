@@ -15,17 +15,30 @@ defmodule Custyard.DataSubjects do
       the body is somebody else's correspondence.
     * `erase_participation/2` removes the address from recipient lists and
       `Reply-To` on messages the person did not send. Messages they sent are
-      the contact-level erasure's job and are left alone; the counts tell
-      the operator how many those are.
+      left alone; the counts tell the operator how many those are.
+    * `erase_subject/2` is the contact-level erasure: the participation
+      erasure, plus the person's own messages, their attachments, their
+      contact record, the subjects of their conversations and their
+      rejection-log entries. Operator replies keep their text, without the
+      person's address.
 
-  `mix custyard.dsar` wraps both for operators until a UI exists.
+  `mix custyard.dsar` wraps them for operators until a UI exists.
   Addresses are matched case-insensitively; the audit event written on
   erasure records counts only, never the address.
   """
 
   import Ecto.Query
 
-  alias Custyard.{AuditEvent, Conversation, EmailAddress, Message, Repo}
+  alias Custyard.{
+    AuditEvent,
+    Contact,
+    Conversation,
+    EmailAddress,
+    InboundChannelRejection,
+    Message,
+    MessageAttachment,
+    Repo
+  }
 
   # The recipient arrays are JSON text on SQLite and native arrays on
   # Postgres, so the containment test is adapter-specific. The adapter is
@@ -89,28 +102,130 @@ defmodule Custyard.DataSubjects do
   def erase_participation(email, organization_id) when is_binary(email) do
     email = normalize(email)
 
-    # Acquire SQLite's write reservation before reading, or lock matching
-    # PostgreSQL rows. Concurrent erasures must never overwrite one another's
-    # recipient changes from a stale message snapshot.
-    Repo.transaction(
-      fn ->
-        query = participation_query(email, organization_id)
-        query = if @postgres?, do: lock(query, "FOR UPDATE"), else: query
+    in_write_transaction(fn ->
+      {sent, received} = locked_participations(email, organization_id)
+      count = Enum.count(received, &scrub!(&1, email))
+      payload = %{"erased" => count, "sent_by_subject" => length(sent)}
+      audit!(organization_id, payload)
+      %{erased: count, sent_by_subject: length(sent)}
+    end)
+  end
 
-        {sent, received} =
-          query
-          |> Repo.all()
-          |> Enum.reject(fn {message, _conversation} -> roles(message, email) == [] end)
-          |> Enum.split_with(fn {message, _conversation} ->
-            sender_matches?(message.sender_email, email)
-          end)
+  @doc """
+  Contact-level erasure of the address in `organization_id`:
 
-        count = Enum.count(received, fn {message, _conversation} -> scrub!(message, email) end)
-        audit!(organization_id, count, length(sent))
-        %{erased: count, sent_by_subject: length(sent)}
-      end,
-      if(@postgres?, do: [], else: [mode: :immediate])
-    )
+    * on messages the person did not send, the address leaves the recipient
+      lists and `Reply-To`, as in `erase_participation/2`;
+    * messages the person sent are tombstoned (`deleted_at`, so every view
+      shows "This message was deleted") and emptied: body, HTML, sender,
+      recipients, `Reply-To` and authentication. The rows stay so threading
+      by Message-ID keeps working;
+    * those messages' attachment rows are deleted; the attachment sweep
+      removes the files once nothing references them;
+    * the person's contact record is deleted, and the conversations it
+      owned lose the contact and their subject;
+    * rejection-log entries from the address are deleted.
+
+  Operator replies keep their text. Returns `{:ok, counts}` and writes a
+  `data_subject_erasure` audit event with the same counts and no address.
+  """
+  def erase_subject(email, organization_id) when is_binary(email) do
+    email = normalize(email)
+
+    in_write_transaction(fn ->
+      {sent, received} = locked_participations(email, organization_id)
+      erased = Enum.count(received, &scrub!(&1, email))
+      sent_ids = Enum.map(sent, & &1.id)
+      Enum.each(sent, &erase_sent!/1)
+
+      {attachments, _} =
+        Repo.delete_all(from(a in MessageAttachment, where: a.message_id in ^sent_ids))
+
+      {conversations, contacts} = erase_contact!(email, organization_id)
+      rejections = erase_rejections!(email, organization_id)
+
+      counts = %{
+        erased: erased,
+        messages_erased: length(sent),
+        attachments_removed: attachments,
+        conversations_retitled: conversations,
+        contacts_removed: contacts,
+        rejections_removed: rejections
+      }
+
+      audit!(organization_id, Map.new(counts, fn {key, value} -> {to_string(key), value} end))
+      counts
+    end)
+  end
+
+  @erased_subject "(erased)"
+
+  # Acquire SQLite's write reservation before reading, or lock matching
+  # PostgreSQL rows. Concurrent erasures must never overwrite one another's
+  # changes from a stale message snapshot.
+  defp in_write_transaction(fun),
+    do: Repo.transaction(fun, if(@postgres?, do: [], else: [mode: :immediate]))
+
+  # Messages the address appears on, split into those the person sent and
+  # the rest.
+  defp locked_participations(email, organization_id) do
+    query = participation_query(email, organization_id)
+    query = if @postgres?, do: lock(query, "FOR UPDATE"), else: query
+
+    query
+    |> Repo.all()
+    |> Enum.map(fn {message, _conversation} -> message end)
+    |> Enum.reject(&(roles(&1, email) == []))
+    |> Enum.split_with(&sender_matches?(&1.sender_email, email))
+  end
+
+  defp erase_sent!(%Message{} = message) do
+    message
+    |> Ecto.Changeset.change(%{
+      body: "",
+      html_body: nil,
+      sender_email: nil,
+      to_addresses: [],
+      cc_addresses: [],
+      reply_to: nil,
+      authentication: nil,
+      deleted_at: message.deleted_at || DateTime.utc_now(:second)
+    })
+    |> Repo.update!()
+  end
+
+  defp erase_contact!(email, organization_id) do
+    contact_ids =
+      from(c in Contact,
+        where:
+          c.organization_id == ^organization_id and fragment("lower(trim(?))", c.email) == ^email,
+        select: c.id
+      )
+      |> Repo.all()
+
+    {conversations, _} =
+      from(c in Conversation, where: c.contact_id in ^contact_ids)
+      |> Repo.update_all(
+        set: [subject: @erased_subject, contact_id: nil, updated_at: DateTime.utc_now(:second)]
+      )
+
+    {contacts, _} = Repo.delete_all(from(c in Contact, where: c.id in ^contact_ids))
+    {conversations, contacts}
+  end
+
+  defp erase_rejections!(email, organization_id) do
+    pattern = "%<#{escape_like(email)}>"
+
+    {count, _} =
+      from(r in InboundChannelRejection,
+        where:
+          r.organization_id == ^organization_id and
+            (fragment("lower(trim(?))", r.sender_email) == ^email or
+               fragment("lower(trim(?)) LIKE ? ESCAPE '!'", r.sender_email, ^pattern))
+      )
+      |> Repo.delete_all()
+
+    count
   end
 
   defp scrub!(%Message{} = message, email) do
@@ -215,12 +330,12 @@ defmodule Custyard.DataSubjects do
     |> String.replace("_", "!_")
   end
 
-  defp audit!(organization_id, erased, sent_by_subject) do
+  defp audit!(organization_id, payload) do
     attrs = %{
       event_type: :data_subject_erasure,
       source: "dsar",
       organization_id: organization_id,
-      payload: %{"erased" => erased, "sent_by_subject" => sent_by_subject}
+      payload: payload
     }
 
     case AuditEvent.create(attrs) do
