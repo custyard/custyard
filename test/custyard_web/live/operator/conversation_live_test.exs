@@ -179,6 +179,31 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
     end
   end
 
+  test "shows an email's cid: image from its own attachment", %{conn: conn} do
+    org = insert_organization()
+    conv = insert_conversation(organization_id: org.id)
+
+    message =
+      insert_message(
+        conversation_id: conv.id,
+        html_body: ~S|<p>Our logo <img src="cid:logo@acme" alt="Logo" /></p>|
+      )
+
+    url = StubClient.unique_url()
+    StubClient.put(url, <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "rest">>)
+
+    {:ok, [image]} =
+      Attachments.fetch_for_message(message, [
+        %{filename: "logo.png", content_type: "image/png", content_id: "<logo@acme>", url: url}
+      ])
+
+    {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+    html = view |> element(~s([data-testid="operator-message-html"])) |> render()
+    assert html =~ ~s(src="/operator/attachments/#{image.id}/inline")
+    refute html =~ "cid:"
+  end
+
   describe "reply recipient in the composer (D5)" do
     setup do
       org = insert_organization()

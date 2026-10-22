@@ -81,4 +81,54 @@ defmodule CustyardWeb.Operator.AttachmentControllerTest do
     conn = get(conn, ~p"/operator/attachments/#{attachment.id}")
     assert redirected_to(conn) == "/operator/login"
   end
+
+  describe "inline/2" do
+    setup %{conn: conn, org: org} do
+      conv = insert_conversation(organization_id: org.id)
+      message = insert_message(conversation_id: conv.id)
+      url = StubClient.unique_url()
+      StubClient.put(url, <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "rest">>)
+
+      {:ok, [image]} =
+        Attachments.fetch_for_message(message, [
+          %{filename: "logo.png", content_type: "image/png", content_id: "logo@acme", url: url}
+        ])
+
+      agent = insert_operator_account(role: "agent", organization_id: org.id)
+
+      conn =
+        conn
+        |> Phoenix.ConnTest.init_test_session(%{})
+        |> put_operator_session(agent)
+
+      %{conn: conn, image: image}
+    end
+
+    test "serves a raster image inline", %{conn: conn, image: image} do
+      conn = get(conn, ~p"/operator/attachments/#{image.id}/inline")
+
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-type") == ["image/png"]
+      assert [disposition] = get_resp_header(conn, "content-disposition")
+      assert disposition =~ "inline"
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(conn, "content-security-policy") == ["default-src 'none'; sandbox"]
+    end
+
+    test "refuses anything that is not a raster image", %{conn: conn, attachment: attachment} do
+      assert get(conn, ~p"/operator/attachments/#{attachment.id}/inline").status == 404
+    end
+
+    test "refuses another organization's image", %{image: image} do
+      stranger = insert_operator_account(role: "agent", organization_id: insert_organization().id)
+
+      conn =
+        build_conn()
+        |> Phoenix.ConnTest.init_test_session(%{})
+        |> put_operator_session(stranger)
+        |> get(~p"/operator/attachments/#{image.id}/inline")
+
+      assert conn.status == 404
+    end
+  end
 end

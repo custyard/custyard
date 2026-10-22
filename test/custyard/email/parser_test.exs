@@ -789,6 +789,27 @@ defmodule Custyard.Email.ParserTest do
                parsed.attachments
     end
 
+    test "records the Content-ID of inline images, with or without a filename" do
+      raw =
+        @hdr <>
+          "Subject: S\r\nContent-Type: multipart/related; boundary=\"b1\"\r\n\r\n" <>
+          "--b1\r\nContent-Type: text/html\r\n\r\n<p>Hi <img src=\"cid:logo@acme\"></p>\r\n" <>
+          "--b1\r\nContent-Type: image/png; name=\"logo.png\"\r\nContent-ID: <logo@acme>\r\n" <>
+          "Content-Disposition: inline; filename=\"logo.png\"\r\nContent-Transfer-Encoding: base64\r\n\r\n" <>
+          Base.encode64("png-bytes") <>
+          "\r\n--b1\r\nContent-Type: image/gif\r\nContent-ID: <spacer@acme>\r\n" <>
+          "Content-Transfer-Encoding: base64\r\n\r\n" <>
+          Base.encode64("gif-bytes") <>
+          "\r\n--b1\r\nContent-Type: application/octet-stream\r\nContent-ID: <blob@acme>\r\n\r\nx\r\n--b1--\r\n"
+
+      assert {:ok, parsed} = Parser.parse(raw)
+
+      assert [
+               %{filename: "logo.png", content_id: "logo@acme", content: "png-bytes"},
+               %{filename: nil, content_id: "spacer@acme", content: "gif-bytes"}
+             ] = parsed.attachments
+    end
+
     test "keeps tildes in attachment filenames as sent" do
       # "~~" and "~.-" have the shape of header-marker escapes; part headers
       # are never escaped with that marker, so neither may be rewritten.

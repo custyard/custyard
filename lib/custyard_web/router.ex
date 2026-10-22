@@ -126,6 +126,7 @@ defmodule CustyardWeb.Router do
     # Inbound email attachments: authenticated download, organization-scoped
     # in the controller (spec-inbound-channels D9).
     get "/attachments/:id", AttachmentController, :show
+    get "/attachments/:id/inline", AttachmentController, :inline
 
     # All authenticated operators
     live_session :operator,

@@ -281,6 +281,7 @@ defmodule Custyard.Email.Parser do
         |> Map.put("filename", att.filename)
         |> Map.put("content_type", att.content_type)
         |> Map.put("content", att.content)
+        |> Map.put("content_id", att.content_id)
       end)
 
     map
@@ -461,14 +462,18 @@ defmodule Custyard.Email.Parser do
     if is_non_text or is_text_attachment do
       filename = get_filename(headers, props)
       content_type = "#{type}/#{subtype}"
+      content_id = content_id(headers)
 
-      if filename do
+      # An inline image often has no filename; its Content-ID is what the
+      # HTML part refers to.
+      if filename || (type == "image" and content_id) do
         decoded_content = decode_attachment_body(body, headers, props)
 
         [
           %{
             filename: filename,
             content_type: content_type,
+            content_id: content_id,
             content: decoded_content
           }
         ]
@@ -481,6 +486,20 @@ defmodule Custyard.Email.Parser do
   end
 
   defp extract_attachment_from_part(_, _depth), do: []
+
+  # Content-ID without its angle brackets, as `cid:` URLs write it (RFC 2392).
+  defp content_id(headers) do
+    case get_header(headers, "Content-ID") do
+      value when is_binary(value) ->
+        case value |> String.trim() |> String.trim_leading("<") |> String.trim_trailing(">") do
+          "" -> nil
+          id -> String.slice(id, 0, 255)
+        end
+
+      _none ->
+        nil
+    end
+  end
 
   defp attachment?(props) do
     disposition = Map.get(props, :disposition, "inline")

@@ -46,10 +46,21 @@ defmodule Custyard.Email.HtmlSanitizerTest do
       assert HtmlSanitizer.sanitize("<p>a</p><script>alert(1)") == "<p>a</p>"
     end
 
-    test "removes images, remote or otherwise" do
-      out = HtmlSanitizer.sanitize(~S|<p>x <img src="https://t.example/p.gif" alt="a"></p>|)
-      refute out =~ "img"
-      refute out =~ "t.example"
+    test "removes remote, data and script images entirely" do
+      for src <- ["https://t.example/p.gif", "data:image/png;base64,AAA", "javascript:x"] do
+        out = HtmlSanitizer.sanitize(~s|<p>x <img src="#{src}" alt="a"></p>|)
+        refute out =~ "img"
+        refute out =~ src
+      end
+    end
+
+    test "keeps an inline cid: image with its alt text and nothing else" do
+      out =
+        HtmlSanitizer.sanitize(
+          ~S|<p>x <img src="cid:logo@acme" alt="Logo" width="9" onerror="steal()"></p>|
+        )
+
+      assert out == ~S|<p>x <img src="cid:logo@acme" alt="Logo" /></p>|
     end
 
     test "links open in a new tab without a referrer" do

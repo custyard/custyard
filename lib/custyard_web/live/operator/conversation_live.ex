@@ -17,6 +17,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   alias Custyard.Attachments.Recovery
   alias Custyard.Email.Outbound
+  alias CustyardWeb.InlineImages
 
   alias Custyard.{
     Attachments,
@@ -1602,7 +1603,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
             class="email-html text-sm break-words text-gray-800 dark:text-zinc-200"
             data-testid="operator-message-html"
           >
-            {Phoenix.HTML.raw(@message.html_body)}
+            {Phoenix.HTML.raw(InlineImages.render(@message.html_body, message_attachments(@message)))}
           </div>
           <details class="mt-1 text-xs text-gray-500 dark:text-zinc-400">
             <summary class="cursor-pointer select-none">Plain text</summary>
