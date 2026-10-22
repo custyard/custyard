@@ -221,6 +221,29 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
     end
   end
 
+  describe "Google Workspace admin routing" do
+    test "shows the Admin console rule and does not wait for a confirmation email", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      view = open_wizard(conn, org)
+      channel = create_channel(view, route, %{"provider" => "google_workspace"})
+
+      assert channel.provider == :google_workspace
+      help = view |> element("[data-testid=channel-provider-help]") |> render()
+      assert help =~ "Default routing"
+      assert help =~ "Add more recipients"
+      assert help =~ "Do not use Change envelope recipient"
+
+      assert has_element?(view, "[data-testid=channel-verification-none]")
+      refute has_element?(view, "[data-testid=channel-verification-panel]")
+
+      view |> element("[data-testid=channel-confirm-forwarding]") |> render_click()
+      assert InboundChannels.get_channel!(channel.id).state == :awaiting_first_message
+    end
+  end
+
   describe "step 3: test" do
     test "the first delivery completes the setup", %{conn: conn, org: org, route: route} do
       view = open_wizard(conn, org)

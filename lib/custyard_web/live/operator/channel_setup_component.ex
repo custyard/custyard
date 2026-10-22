@@ -30,7 +30,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   ]
 
   @providers [
-    {"google", "Google Workspace / Gmail"},
+    {"google", "Gmail / Google Workspace (per-user forwarding)"},
+    {"google_workspace", "Google Workspace (admin routing)"},
     {"proton", "Proton Mail"},
     {"other", "Other provider"}
   ]
@@ -642,6 +643,16 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
       <.provider_instructions provider={@channel.provider} />
 
       <section
+        :if={@channel.provider == :google_workspace}
+        class="rounded border border-gray-200 dark:border-zinc-700 p-3 text-sm text-gray-600 dark:text-zinc-400"
+        data-testid="channel-verification-none"
+      >
+        Admin routing sends no confirmation email. Confirm below once the rule is saved; the first
+        message to {@channel.public_address} also completes this step.
+      </section>
+
+      <section
+        :if={@channel.provider != :google_workspace}
         class="rounded border border-gray-200 dark:border-zinc-700 p-3"
         data-testid="channel-verification-panel"
       >
@@ -789,7 +800,44 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         </li>
       </ol>
       <p class="text-xs text-gray-500 dark:text-zinc-400">
-        Workspace admins can block per-user forwarding; admin routing in the Admin console is the alternative.
+        Workspace admins can block per-user forwarding. If the forwarding option is missing, create the
+        channel with "Google Workspace (admin routing)" instead.
+      </p>
+    </section>
+    """
+  end
+
+  defp provider_instructions(%{provider: :google_workspace} = assigns) do
+    ~H"""
+    <section
+      class="text-sm text-gray-700 dark:text-zinc-300 space-y-2"
+      data-testid="channel-provider-help"
+    >
+      <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">
+        In the Google Admin console (Gmail settings administrator)
+      </h4>
+      <ol class="list-decimal list-inside space-y-0.5">
+        <li>
+          Apps &rsaquo; Google Workspace &rsaquo; Gmail &rsaquo; Default routing &rsaquo; Configure.
+        </li>
+        <li>
+          Under "Specify envelope recipients to match", choose Single recipient and enter the public
+          address.
+        </li>
+        <li>
+          Choose Modify message, then Add more recipients &rsaquo; Add, and enter the full ingress
+          address above, including the part after the +. Do not use Change envelope recipient: that
+          takes the message out of the mailbox.
+        </li>
+        <li>
+          Choose "Perform this action on non-recognized and recognized addresses" and save. Google says
+          changes can take up to 24 hours.
+        </li>
+      </ol>
+      <p class="text-xs text-gray-500 dark:text-zinc-400">
+        The mailbox keeps its copy and Custyard receives a second one. If a test message does not
+        arrive, check the organization's rejection log: a copy delivered without the + part of the
+        ingress address is logged there as "no matching channel".
       </p>
     </section>
     """
@@ -1066,6 +1114,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   defp archive_copy_line(_channel), do: ""
 
   defp provider_name(:google), do: "Google Workspace / Gmail"
+  defp provider_name(:google_workspace), do: "Google Workspace"
   defp provider_name(:proton), do: "Proton Mail"
   defp provider_name(_other), do: "operator's mail provider"
 

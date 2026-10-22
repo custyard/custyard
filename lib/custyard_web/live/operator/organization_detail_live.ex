@@ -1388,7 +1388,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   defp quiet_hint(%InboundChannel{ingress_kind: :mx}), do: "check the MX record"
   defp quiet_hint(_channel), do: "check the forwarding rule"
 
-  defp provider_label(:google), do: "Google Workspace"
+  defp provider_label(:google), do: "Gmail forwarding"
+  defp provider_label(:google_workspace), do: "Google Workspace admin routing"
   defp provider_label(:proton), do: "Proton Mail"
   defp provider_label(:other), do: "Other provider"
   defp provider_label(_provider), do: "Provider not set"

@@ -23,7 +23,10 @@ defmodule Custyard.InboundChannel do
 
   @states [:draft, :pending_verification, :awaiting_first_message, :active, :paused, :revoked]
   @ingress_kinds [:forward, :mx, :imap]
-  @providers [:proton, :google, :other]
+  # Forwarding source hint (D8): drives setup copy. `google` is per-user
+  # Gmail forwarding with a confirmation email; `google_workspace` is admin
+  # routing in the Admin console, which sends none.
+  @providers [:proton, :google, :google_workspace, :other]
   @reply_from_options [:public_address, :ingress_address]
   @sending_domain_statuses ~w(verified partially_verified pending_verification failed_verification not_found)
 
