@@ -203,7 +203,11 @@ defmodule Custyard.InboundChannels do
     end
   end
 
+  # The route as stored: a caller's copy can predate the channel that set
+  # its custom domain.
   defp prepare_mx(changeset, route) do
+    route = Repo.reload!(route)
+
     domain = changeset |> Ecto.Changeset.get_field(:public_address) |> address_domain()
 
     with :ok <- check_not_forwarding_domain(route.organization_id, domain),

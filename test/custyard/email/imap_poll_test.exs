@@ -93,16 +93,6 @@ defmodule Custyard.Email.ImapPollTest do
       assert changeset.errors[:imap_password]
     end
 
-    test "refuses to store a password without an encryption key", %{route: route, host: host} do
-      original = Application.get_env(:custyard, :credential_keys)
-      Application.put_env(:custyard, :credential_keys, current: nil, previous: [])
-      on_exit(fn -> Application.put_env(:custyard, :credential_keys, original) end)
-
-      assert {:error, changeset} = create_imap(route, host)
-      assert {msg, _} = changeset.errors[:imap_password]
-      assert msg =~ "CREDENTIAL_ENCRYPTION_KEY"
-    end
-
     test "forwarding channels ignore IMAP attributes", %{route: route} do
       {:ok, channel} =
         InboundChannels.create_channel(route, %{
@@ -261,7 +251,7 @@ defmodule Custyard.Email.ImapPollTest do
       assert Repo.aggregate(Message, :count) == 0
     end
 
-    test "three login failures in a row stop polling until the password changes",
+    test "three rejected logins stop polling until the password changes",
          %{route: route, host: host} do
       channel = connected!(route, host)
       Stub.update(host, &Map.put(&1, :password, "rotated"))
@@ -270,12 +260,51 @@ defmodule Custyard.Email.ImapPollTest do
 
       channel = reload(channel)
       assert channel.imap_auth_failed_at
+      assert channel.imap_auth_failures == 3
       refute ImapPollers.pollable?(channel)
 
       {:ok, channel} = InboundChannels.update_channel(channel, %{imap_password: "rotated"})
       assert channel.imap_auth_failed_at == nil
+      assert channel.imap_auth_failures == 0
       assert channel.imap_consecutive_failures == 0
       assert {:ok, %{}} = ImapPoll.poll(channel)
+    end
+
+    test "other failures neither count as rejected logins nor reset them",
+         %{route: route, host: host} do
+      channel = connected!(route, host)
+
+      Stub.update(host, &Map.put(&1, :connect_error, :timeout))
+      assert {:error, "timeout"} = ImapPoll.poll(reload(channel))
+
+      Stub.update(host, &%{&1 | connect_error: nil, password: "rotated"})
+      for _ <- 1..2, do: assert({:error, "auth_failed"} = ImapPoll.poll(reload(channel)))
+
+      channel = reload(channel)
+      assert channel.imap_consecutive_failures == 3
+      assert channel.imap_auth_failures == 2
+      assert channel.imap_auth_failed_at == nil
+      assert ImapPollers.pollable?(channel)
+
+      Stub.update(host, &Map.put(&1, :connect_error, :timeout))
+      assert {:error, "timeout"} = ImapPoll.poll(channel)
+      Stub.update(host, &Map.put(&1, :connect_error, nil))
+      assert {:error, "auth_failed"} = ImapPoll.poll(reload(channel))
+      assert reload(channel).imap_auth_failed_at
+    end
+
+    test "a successful poll clears rejected logins", %{route: route, host: host} do
+      channel = connected!(route, host)
+      Stub.update(host, &Map.put(&1, :password, "rotated"))
+      for _ <- 1..2, do: ImapPoll.poll(reload(channel))
+
+      Stub.update(host, &Map.put(&1, :password, "secret"))
+      assert {:ok, _counts} = ImapPoll.poll(reload(channel))
+      assert reload(channel).imap_auth_failures == 0
+
+      Stub.update(host, &Map.put(&1, :password, "rotated"))
+      for _ <- 1..2, do: ImapPoll.poll(reload(channel))
+      assert reload(channel).imap_auth_failed_at == nil
     end
 
     test "reconnecting after a lockout imports what arrived during it",

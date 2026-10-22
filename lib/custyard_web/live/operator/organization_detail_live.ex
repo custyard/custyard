@@ -163,8 +163,14 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   def handle_info({:channel_updated, _id}, socket), do: {:noreply, refresh_channels(socket)}
   def handle_info({:channel_quiet, _id}, socket), do: {:noreply, refresh_channels(socket)}
 
+  # Creating a direct-MX channel can set its route's custom domain, so the
+  # routes are reloaded too.
   def handle_info({:channel_setup_created, id}, socket) do
-    {:noreply, socket |> assign(:setup_channel_id, id) |> refresh_channels()}
+    {:noreply,
+     socket
+     |> assign(:setup_channel_id, id)
+     |> assign(:routes, InboundRoutes.list_for_organization(socket.assigns.organization.id))
+     |> refresh_channels()}
   end
 
   def handle_info(:channel_setup_closed, socket) do

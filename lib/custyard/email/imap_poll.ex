@@ -17,17 +17,22 @@ defmodule Custyard.Email.ImapPoll do
       (over the size cap, unreadable) and ones the pipeline refused, so one
       bad message never blocks the folder. It stops without advancing when
       the connection or the database fails, and the next poll retries.
-      Message-ID deduplication makes a retried message harmless.
+      A message whose attachments could not be stored stops the session
+      the same way, for up to 5 sessions; after that it is passed over,
+      stored with its attachments marked failed. Every message
+      carries a delivery id made of the channel, UIDVALIDITY and UID, so a
+      retried message is never stored twice.
     * A changed UIDVALIDITY means the server renumbered the folder: the
       position is reset to the current highest UID and a warning logged.
 
   Every session runs in a task with a 120-second deadline: Plover's TLS
   connect has no timeout of its own. Results land on the channel
   (`imap_last_polled_at`, `imap_last_error`, `imap_consecutive_failures`).
-  Three login failures in a row set `imap_auth_failed_at`, which stops
-  polling until the credentials are changed: providers lock accounts that
-  keep failing to log in. Errors are recorded as short codes and never
-  carry server responses.
+  Three rejected logins without a successful session in between set
+  `imap_auth_failed_at`, which stops polling until the credentials are
+  changed: providers lock accounts that keep failing to log in. Other
+  failures neither count towards that nor reset it. Errors are recorded
+  as short codes and never carry server responses.
   """
 
   require Logger
@@ -43,6 +48,8 @@ defmodule Custyard.Email.ImapPoll do
   @max_message_bytes 25 * 1024 * 1024
   @session_timeout_ms 120_000
   @auth_failures_before_suspend 3
+  @max_message_attempts 5
+  @retryable_dispatch_errors [:attachment_fetch_failed, :attachment_processing_failed]
 
   @error_codes %{
     auth_failed: "auth_failed",
@@ -54,6 +61,7 @@ defmodule Custyard.Email.ImapPoll do
     timeout: "timeout",
     session_crashed: "session_crashed",
     database_unavailable: "database_unavailable",
+    attachments_failed: "attachments_failed",
     channel_deleted: "channel_deleted"
   }
 
@@ -80,6 +88,7 @@ defmodule Custyard.Email.ImapPoll do
             imap_last_polled_at: now(),
             imap_last_error: nil,
             imap_consecutive_failures: 0,
+            imap_auth_failures: 0,
             imap_auth_failed_at: nil
           })
         )
@@ -120,7 +129,9 @@ defmodule Custyard.Email.ImapPoll do
         record(channel, %{
           imap_last_polled_at: now(),
           imap_last_error: nil,
-          imap_consecutive_failures: 0
+          imap_consecutive_failures: 0,
+          imap_auth_failures: 0,
+          imap_message_attempts: 0
         })
 
         {:ok, counts}
@@ -184,12 +195,16 @@ defmodule Custyard.Email.ImapPoll do
   end
 
   # A password sealed with a previous key is moved to the current one once
-  # it has been used successfully.
-  defp maybe_reencrypt(channel, password) do
-    if Credentials.stale?(channel.imap_password_ciphertext) do
+  # it has been used successfully, unless the operator saved a new password
+  # while this session was logging in.
+  defp maybe_reencrypt(%InboundChannel{imap_password_ciphertext: read} = channel, password) do
+    if Credentials.stale?(read) do
       with {:ok, ciphertext} <-
              Credentials.encrypt(password, InboundChannel.imap_password_context()) do
-        record(channel, %{imap_password_ciphertext: ciphertext})
+        from(c in InboundChannel,
+          where: c.id == ^channel.id and c.imap_password_ciphertext == ^read
+        )
+        |> Repo.update_all(set: [imap_password_ciphertext: ciphertext, updated_at: now()])
       end
     end
   end
@@ -207,7 +222,8 @@ defmodule Custyard.Email.ImapPoll do
 
   defp position(client, conn, _channel, mailbox) do
     with {:ok, uid} <- starting_uid(client, conn, mailbox) do
-      {:ok, %{imap_uid_validity: mailbox.uid_validity, imap_last_uid: uid}}
+      {:ok,
+       %{imap_uid_validity: mailbox.uid_validity, imap_last_uid: uid, imap_message_attempts: 0}}
     end
   end
 
@@ -235,25 +251,47 @@ defmodule Custyard.Email.ImapPoll do
 
   # --- Import ---
 
+  # `attempts` counts the sessions that already stopped on the message at
+  # the current position; once one message advances, the next starts at 0.
   defp import_new(client, conn, channel, route) do
     with {:ok, listed} <- client.list_after(conn, channel.imap_last_uid || 0) do
       listed
       |> Enum.take(@max_messages_per_poll)
       |> Enum.reduce_while(
-        {:ok, %{imported: 0, ignored: 0, skipped: 0, failed: 0}},
-        fn item, {:ok, counts} ->
-          case import_one(client, conn, channel, route, item) do
+        {:ok, %{imported: 0, ignored: 0, skipped: 0, failed: 0}, channel.imap_message_attempts},
+        fn item, {:ok, counts, attempts} ->
+          case settle(import_one(client, conn, channel, route, item), channel, item, attempts) do
             {:advance, outcome} ->
               advance(channel, item.uid)
-              {:cont, {:ok, Map.update!(counts, outcome, &(&1 + 1))}}
+              {:cont, {:ok, Map.update!(counts, outcome, &(&1 + 1)), 0}}
 
             {:stop, reason} ->
               {:halt, {:error, reason}}
           end
         end
       )
+      |> case do
+        {:ok, counts, _attempts} -> {:ok, counts}
+        error -> error
+      end
     end
   end
+
+  # A retry stops the session until the message has had its attempts; then
+  # it is passed over like a message the pipeline refused.
+  defp settle({:retry, reason}, channel, item, attempts) do
+    if attempts + 1 >= @max_message_attempts do
+      Logger.warning(
+        "IMAP channel #{channel.id}: UID #{item.uid} passed over after #{@max_message_attempts} attempts: #{inspect(reason)}"
+      )
+
+      {:advance, :failed}
+    else
+      {:stop, :attachments_failed}
+    end
+  end
+
+  defp settle(result, _channel, _item, _attempts), do: result
 
   defp import_one(_client, _conn, channel, route, %{size: size})
        when is_integer(size) and size > @max_message_bytes do
@@ -275,12 +313,19 @@ defmodule Custyard.Email.ImapPoll do
   defp dispatch(raw, channel, route, uid) do
     with {:ok, parsed} <- Parser.parse(raw),
          {:ok, normalized} <- EmailAdapter.normalize(parsed) do
+      normalized = put_delivery_id(normalized, channel, uid)
+
       case Dispatcher.dispatch(route, normalized, channel: channel) do
         {:ok, _conversation} ->
           {:advance, :imported}
 
         {:ignored, _reason} ->
           {:advance, :ignored}
+
+        # The message is stored; its attachments are not yet. Retrying
+        # resumes them (Purposes.Attachments) without a second copy.
+        {:error, reason} when reason in @retryable_dispatch_errors ->
+          {:retry, reason}
 
         {:error, reason} ->
           Logger.warning(
@@ -312,6 +357,18 @@ defmodule Custyard.Email.ImapPoll do
       {:advance, :failed}
   end
 
+  # Identifies the message across retries, with or without a Message-ID.
+  defp put_delivery_id(normalized, channel, uid) do
+    id = "imap:#{channel.id}:#{channel.imap_uid_validity}:#{uid}"
+
+    Map.update(
+      normalized,
+      :metadata,
+      %{provider_delivery_id: id},
+      &Map.put(&1, :provider_delivery_id, id)
+    )
+  end
+
   defp error_class(%Ecto.Changeset{errors: errors}), do: {:invalid, Keyword.keys(errors)}
   defp error_class(reason) when is_atom(reason), do: reason
   defp error_class({reason, _detail}) when is_atom(reason), do: reason
@@ -324,11 +381,11 @@ defmodule Custyard.Email.ImapPoll do
     from(c in InboundChannel,
       where: c.id == ^channel.id and (is_nil(c.imap_last_uid) or c.imap_last_uid < ^uid)
     )
-    |> Repo.update_all(set: [imap_last_uid: uid, updated_at: now()])
+    |> Repo.update_all(set: [imap_last_uid: uid, imap_message_attempts: 0, updated_at: now()])
   end
 
   defp save_baseline(channel, validity, uid) do
-    record(channel, %{imap_uid_validity: validity, imap_last_uid: uid})
+    record(channel, %{imap_uid_validity: validity, imap_last_uid: uid, imap_message_attempts: 0})
   end
 
   defp record(channel, attrs) do
@@ -351,22 +408,33 @@ defmodule Custyard.Email.ImapPoll do
         :ok
 
       current ->
-        code = error_code(reason)
-        failures = current.imap_consecutive_failures + 1
-
-        suspend? =
-          code == "auth_failed" and current.imap_last_error == "auth_failed" and
-            failures >= @auth_failures_before_suspend
-
-        record(current, %{
-          imap_last_error: code,
-          imap_consecutive_failures: failures,
-          imap_auth_failed_at: if(suspend?, do: now(), else: current.imap_auth_failed_at)
-        })
-
+        record(current, failure_attrs(current, error_code(reason)))
         :ok
     end
   end
+
+  # Every failure counts towards backoff. Only a rejected login counts
+  # towards suspension, and only an attachment failure towards passing the
+  # message over.
+  defp failure_attrs(current, code) do
+    auth_failures = count_if(current.imap_auth_failures, code == "auth_failed")
+
+    %{
+      imap_last_error: code,
+      imap_consecutive_failures: current.imap_consecutive_failures + 1,
+      imap_auth_failures: auth_failures,
+      imap_message_attempts:
+        count_if(current.imap_message_attempts, code == "attachments_failed"),
+      imap_auth_failed_at:
+        if(auth_failures >= @auth_failures_before_suspend,
+          do: current.imap_auth_failed_at || now(),
+          else: current.imap_auth_failed_at
+        )
+    }
+  end
+
+  defp count_if(count, true), do: count + 1
+  defp count_if(count, false), do: count
 
   @doc """
   Short code for a session failure, stored as `imap_last_error` and shown

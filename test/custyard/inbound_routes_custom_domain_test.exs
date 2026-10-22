@@ -133,6 +133,42 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
       assert {:error, :domain_in_use} = InboundRoutes.set_custom_domain(route, "other.acme.com")
     end
 
+    test "compares with the stored route, not the caller's copy", %{org: org, route: route} do
+      {:ok, _} = InboundRoutes.set_custom_domain(route, "help.acme.com")
+
+      %InboundChannel{}
+      |> InboundChannel.changeset(%{
+        public_address: "support@help.acme.com",
+        ingress_kind: :mx,
+        inbound_route_id: route.id,
+        organization_id: org.id
+      })
+      |> Repo.insert!()
+
+      assert route.lettermint_custom_domain == nil
+      assert {:error, :domain_in_use} = InboundRoutes.set_custom_domain(route, "other.acme.com")
+
+      assert {:ok, %{lettermint_custom_domain: "help.acme.com"}} =
+               InboundRoutes.set_custom_domain(route, "help.acme.com")
+    end
+
+    test "refuses to replace a domain a sync cleared while channels depend on it",
+         %{org: org, route: route} do
+      {:ok, route} = InboundRoutes.set_custom_domain(route, "help.acme.com")
+
+      %InboundChannel{}
+      |> InboundChannel.changeset(%{
+        public_address: "support@help.acme.com",
+        ingress_kind: :mx,
+        inbound_route_id: route.id,
+        organization_id: org.id
+      })
+      |> Repo.insert!()
+
+      route = route |> Ecto.Changeset.change(lettermint_custom_domain: nil) |> Repo.update!()
+      assert {:error, :domain_in_use} = InboundRoutes.set_custom_domain(route, "other.acme.com")
+    end
+
     test "rejects non-Lettermint routes", %{org: org} do
       {:ok, route} =
         InboundRoutes.create_route(%{

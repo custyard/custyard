@@ -67,7 +67,7 @@ organization's forwarding channels already uses.
 
 1. Create the channel with the public address, for example
    `support@help.companyname.com`. Custyard sets that domain as the route's
-   custom domain in Lettermint.
+   custom domain in Lettermint. The address cannot contain a `+`.
 2. Publish the record the wizard shows: `MX 10 lettermint.mx` for the
    subdomain, and no other MX records for it. Some DNS providers want only the
    host part.
@@ -103,12 +103,15 @@ error in plain words. Change the settings and choose Save and connect; an empty
 password field keeps the stored password. Changing the server, username or
 folder starts again from the newest message.
 
-After three login failures in a row, polling stops until the password is
-entered again; the mail that arrived in the meantime is then imported. Providers lock accounts that keep failing to log in. Messages
-over 25 MB, and messages that cannot be read, appear in the rejection log, and
-polling moves past them. A connection or database failure retries on the next
-poll with backoff, up to 15 minutes. The channel card shows when the mailbox
-was last checked and any error.
+After three rejected logins without a successful check in between, polling
+stops until the password is entered again; the mail that arrived in the
+meantime is then imported. Providers lock accounts that keep failing to log
+in. Messages over 25 MB, and messages that cannot be read, appear in the
+rejection log, and polling moves past them. A connection or database failure
+retries on the next poll with backoff, up to 15 minutes. So does a message
+whose attachments could not be saved, for five attempts; after that the
+message is imported with its attachments marked failed. The channel card shows
+when the mailbox was last checked and any error.
 
 IMAP mail carries no authentication results that Custyard trusts. The suspect
 badge and the operator-sent and forwarded-by-operator detection therefore never

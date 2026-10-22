@@ -22,12 +22,16 @@ defmodule Custyard.InboundChannel do
 
     * `forward`: the operator's mail service forwards to the ingress
       address; routed by token
-    * `mx`: mail arrives at the public address on the route's custom domain
+    * `mx`: mail arrives at the public address on the route's custom
+      domain. The local part has no `+`: `support+tag@` reaches `support@`
     * `imap`: Custyard reads one folder of a mailbox read-only
       (`imap_host`, `imap_port`, `imap_username`, `imap_folder`). The
       password is accepted through the virtual `imap_password` field and
       stored only as `Custyard.Credentials` ciphertext. `imap_uid_validity`
       and `imap_last_uid` mark how far the folder has been read.
+      `imap_auth_failures` counts rejected logins since the last successful
+      poll; `imap_message_attempts` counts sessions that stopped on the
+      message at the current position.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -112,6 +116,8 @@ defmodule Custyard.InboundChannel do
     field :imap_last_polled_at, :utc_datetime
     field :imap_last_error, :string
     field :imap_consecutive_failures, :integer, default: 0
+    field :imap_auth_failures, :integer, default: 0
+    field :imap_message_attempts, :integer, default: 0
     field :imap_auth_failed_at, :utc_datetime
 
     field :verified_at, :utc_datetime
@@ -268,6 +274,8 @@ defmodule Custyard.InboundChannel do
       :imap_last_polled_at,
       :imap_last_error,
       :imap_consecutive_failures,
+      :imap_auth_failures,
+      :imap_message_attempts,
       :imap_auth_failed_at,
       :imap_password_ciphertext
     ])
@@ -379,6 +387,7 @@ defmodule Custyard.InboundChannel do
           message: "must be the public address for #{kind} channels"
         )
         |> validate_no_archive_copy(kind)
+        |> validate_no_subaddress(kind)
         |> validate_imap(kind)
     end
   end
@@ -430,6 +439,7 @@ defmodule Custyard.InboundChannel do
       |> put_change(:imap_auth_failed_at, nil)
       |> put_change(:imap_last_error, nil)
       |> put_change(:imap_consecutive_failures, 0)
+      |> put_change(:imap_auth_failures, 0)
       |> reset_uid_position()
     else
       changeset
@@ -438,7 +448,11 @@ defmodule Custyard.InboundChannel do
 
   defp reset_uid_position(changeset) do
     if Enum.any?(@imap_mailbox_fields, &Map.has_key?(changeset.changes, &1)),
-      do: changeset |> put_change(:imap_uid_validity, nil) |> put_change(:imap_last_uid, nil),
+      do:
+        changeset
+        |> put_change(:imap_uid_validity, nil)
+        |> put_change(:imap_last_uid, nil)
+        |> put_change(:imap_message_attempts, 0),
       else: changeset
   end
 
@@ -478,6 +492,16 @@ defmodule Custyard.InboundChannel do
   end
 
   defp validate_no_archive_copy(changeset, _kind), do: changeset
+
+  # Direct mail is matched on the address without its `+tag`, so a public
+  # address with a tag could never receive its own mail.
+  defp validate_no_subaddress(changeset, :mx) do
+    validate_format(changeset, :public_address, ~r/\A[^+@]+@/,
+      message: "can't contain +; mail to support+anything@ already reaches support@"
+    )
+  end
+
+  defp validate_no_subaddress(changeset, _kind), do: changeset
 
   # The ingress local part mirrors the public address local part. Characters
   # outside the conservative set are replaced so the derived value always

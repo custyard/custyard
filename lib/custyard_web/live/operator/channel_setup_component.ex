@@ -953,6 +953,12 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   def imap_error_text("fetch_failed"),
     do: "Reading a message failed. The next poll tries again."
 
+  def imap_error_text("attachments_failed"),
+    do: "A message's attachments could not be saved. The next poll tries again."
+
+  def imap_error_text("database_unavailable"),
+    do: "The database was unavailable. The next poll tries again."
+
   def imap_error_text(_code), do: "Could not connect to the server."
 
   # --- Step 2 (direct MX): DNS ---

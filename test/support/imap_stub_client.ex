@@ -8,7 +8,8 @@ defmodule Custyard.Email.ImapClient.Stub do
 
   State per host: `password`, `uid_validity`, `folders`, `messages`
   (`%{uid => raw}`), `sizes` (`%{uid => bytes}`, overriding the listed
-  size), `connect_error`, `fetch_error` (`%{uid => reason}`),
+  size), `connect_error`, `fetch_error` (`%{uid => reason}`), `on_login`
+  (a zero-arity function run during login, to change state mid-session),
   and `calls`, the operations in order, for asserting that polling never
   changes the mailbox.
   """
@@ -31,6 +32,7 @@ defmodule Custyard.Email.ImapClient.Stub do
           sizes: %{},
           connect_error: nil,
           fetch_error: %{},
+          on_login: nil,
           calls: []
         },
         Map.new(overrides)
@@ -69,7 +71,9 @@ defmodule Custyard.Email.ImapClient.Stub do
   @impl true
   def login(host, _username, password) do
     record(host, :login)
-    if get(host).password == password, do: :ok, else: {:error, :auth_failed}
+    state = get(host)
+    if state.on_login, do: state.on_login.()
+    if state.password == password, do: :ok, else: {:error, :auth_failed}
   end
 
   @impl true

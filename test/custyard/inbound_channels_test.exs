@@ -982,6 +982,25 @@ defmodule Custyard.InboundChannelsTest do
       assert msg =~ "must be on help.acme.com"
     end
 
+    test "a stale copy of the route cannot move the domain away from a channel",
+         %{route: route} do
+      {:ok, _} = create_mx(route, "support@help.acme.com")
+
+      assert {:error, changeset} = create_mx(route, "billing@other.acme.com")
+      assert {msg, _} = changeset.errors[:public_address]
+      assert msg =~ "must be on help.acme.com"
+      assert Repo.reload(route).lettermint_custom_domain == "help.acme.com"
+
+      assert {:ok, _} = create_mx(route, "sales@help.acme.com")
+    end
+
+    test "a public address with a +tag is refused", %{route: route} do
+      assert {:error, changeset} = create_mx(route, "support+sales@help.acme.com")
+      assert {msg, _} = changeset.errors[:public_address]
+      assert msg =~ "can't contain +"
+      assert Repo.reload(route).lettermint_custom_domain == nil
+    end
+
     test "a domain a forwarding channel uses is refused", %{route: route} do
       {:ok, _} = InboundChannels.create_channel(route, %{public_address: "support@acme.com"})
 

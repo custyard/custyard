@@ -205,16 +205,18 @@ defmodule Custyard.InboundRoutes do
   Set the route's custom inbound domain in Lettermint and record it locally
   with verification reset (spec-inbound-channels, D8 direct MX).
 
-  The domain is validated locally before the API call. Setting the domain
+  The domain is validated locally before the API call, and compared with
+  the route as stored, not as the caller last loaded it. Setting the domain
   the route already has is a no-op. Changing it while a direct-MX channel
-  that is not revoked still depends on the current domain returns
-  `{:error, :domain_in_use}`: that channel's public address would stop
-  receiving mail.
+  that is not revoked is on the route returns `{:error, :domain_in_use}`:
+  that channel's public address would stop receiving mail.
   """
   def set_custom_domain(%InboundRoute{lettermint_route_id: nil}, _domain),
     do: {:error, :not_a_lettermint_route}
 
-  def set_custom_domain(%InboundRoute{lettermint_route_id: remote_id} = route, domain) do
+  def set_custom_domain(%InboundRoute{} = route, domain) do
+    route = Repo.reload!(route)
+
     changeset =
       InboundRoute.changeset(route, %{
         lettermint_custom_domain: domain,
@@ -234,7 +236,8 @@ defmodule Custyard.InboundRoutes do
         {:error, :domain_in_use}
 
       true ->
-        with {:ok, remote} <- Client.client().set_inbound_domain(remote_id, new_domain) do
+        with {:ok, remote} <-
+               Client.client().set_inbound_domain(route.lettermint_route_id, new_domain) do
           route
           |> InboundRoute.changeset(%{
             lettermint_custom_domain: presence(remote["inbound_domain"]) || new_domain,
@@ -245,8 +248,8 @@ defmodule Custyard.InboundRoutes do
     end
   end
 
-  defp mx_channels_on_domain?(%InboundRoute{lettermint_custom_domain: nil}), do: false
-
+  # Not keyed on the stored domain: a Lettermint sync can clear it while
+  # channels still depend on it.
   defp mx_channels_on_domain?(%InboundRoute{id: route_id}) do
     Repo.exists?(
       from c in Custyard.InboundChannel,
