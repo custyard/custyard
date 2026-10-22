@@ -333,6 +333,7 @@ defmodule Custyard.InboundChannels do
   its poller starts. `{:ok, channel}` or `{:error, code}` with a code from
   `Custyard.Email.ImapPoll.error_code/1`, also stored on the channel.
 
+  `opts[:timeout]` bounds the session in milliseconds (default 120 000);
   `opts[:client]` overrides the IMAP client (tests).
   """
   def connect_imap(channel, opts \\ [])

@@ -287,6 +287,22 @@ defmodule Custyard.SentryTest do
       assert scrubbed.extra.note == "fine"
     end
 
+    test "redacts IMAP channel passwords nested in event params" do
+      event =
+        event(
+          extra: %{
+            params: %{"channel" => %{"imap_password" => "plainpw", "imap_host" => "imap.x"}},
+            channel: %{imap_password_ciphertext: "v1:sealed"}
+          }
+        )
+
+      scrubbed = Custyard.Sentry.before_send(event)
+
+      assert scrubbed.extra.params["channel"]["imap_password"] == @redacted
+      assert scrubbed.extra.params["channel"]["imap_host"] == "imap.x"
+      assert scrubbed.extra.channel.imap_password_ciphertext == @redacted
+    end
+
     test "deep-scrubs sensitive values nested inside extra (maps, lists, tuples)" do
       event =
         event(

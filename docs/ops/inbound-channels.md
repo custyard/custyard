@@ -87,8 +87,9 @@ archive copy.
 
 Custyard reads one folder over implicit TLS (port 993 by default). It opens the
 folder read-only and never marks, moves or deletes a message. When the channel
-connects, it records the newest message, so only mail that arrives after that
-is imported. It checks for new mail every minute.
+first connects, it records the newest message, so only mail that arrives after
+that is imported. Reconnecting later keeps its place, so nothing that arrived
+during an outage is skipped. It checks for new mail every minute.
 
 - **Works with an app password**: Fastmail, iCloud Mail, Zoho Mail, most hosted
   and self-hosted servers. Gmail and Google Workspace also work if the account
@@ -103,7 +104,7 @@ password field keeps the stored password. Changing the server, username or
 folder starts again from the newest message.
 
 After three login failures in a row, polling stops until the password is
-entered again. Providers lock accounts that keep failing to log in. Messages
+entered again; the mail that arrived in the meantime is then imported. Providers lock accounts that keep failing to log in. Messages
 over 25 MB, and messages that cannot be read, appear in the rejection log, and
 polling moves past them. A connection or database failure retries on the next
 poll with backoff, up to 15 minutes. The channel card shows when the mailbox

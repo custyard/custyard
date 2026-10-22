@@ -7,9 +7,10 @@ defmodule Custyard.Email.ImapPoll do
   marked, moved or deleted, so the operator's own mail client sees the
   mailbox exactly as before.
 
-    * `establish/2` checks the credentials and records the starting
-      position: the highest UID already in the folder, so connecting a
-      mailbox never imports its history.
+    * `establish/2` checks the credentials and, for a mailbox without a
+      position, records the starting one: the highest UID already in the
+      folder, so connecting a mailbox never imports its history. A channel
+      that already has a position on the same folder keeps it.
     * `poll/2` imports messages above the position, at most
       50 per session, in UID order. The position advances past every
       message that was handled, including ones logged to the rejection log
@@ -60,28 +61,28 @@ defmodule Custyard.Email.ImapPoll do
   def max_message_bytes, do: @max_message_bytes
 
   @doc """
-  Log in, open the folder and record the starting position. Clears any
-  earlier error. `{:ok, channel}` or `{:error, code}` (see `error_code/1`),
+  Log in, open the folder and, unless the channel already has a position
+  under the folder's current UIDVALIDITY, record the starting position.
+  Clears any earlier error and a login lockout. `{:ok, channel}` or `{:error, code}` (see `error_code/1`),
   with the error also recorded on the channel.
   """
   def establish(%InboundChannel{ingress_kind: :imap} = channel, opts \\ []) do
     result =
       run(channel, opts, fn client, conn, mailbox ->
-        with {:ok, uid} <- starting_uid(client, conn, mailbox) do
-          {:ok, %{uid_validity: mailbox.uid_validity, last_uid: uid}}
-        end
+        position(client, conn, channel, mailbox)
       end)
 
     case result do
-      {:ok, %{uid_validity: validity, last_uid: uid}} ->
-        record(channel, %{
-          imap_uid_validity: validity,
-          imap_last_uid: uid,
-          imap_last_polled_at: now(),
-          imap_last_error: nil,
-          imap_consecutive_failures: 0,
-          imap_auth_failed_at: nil
-        })
+      {:ok, position} ->
+        record(
+          channel,
+          Map.merge(position, %{
+            imap_last_polled_at: now(),
+            imap_last_error: nil,
+            imap_consecutive_failures: 0,
+            imap_auth_failed_at: nil
+          })
+        )
 
       {:error, reason} ->
         record_failure(channel, reason)
@@ -190,6 +191,23 @@ defmodule Custyard.Email.ImapPoll do
              Credentials.encrypt(password, InboundChannel.imap_password_context()) do
         record(channel, %{imap_password_ciphertext: ciphertext})
       end
+    end
+  end
+
+  # A channel that already has a position on this folder keeps it: a
+  # reconnect after a login lockout, or a connection test, must still import
+  # what arrived in the meantime. Only a new mailbox or a renumbered folder
+  # starts from the newest message. Changing host, username or folder clears
+  # the position first (InboundChannel.changeset/2).
+  defp position(_client, _conn, %InboundChannel{imap_uid_validity: validity}, %{
+         uid_validity: validity
+       })
+       when is_integer(validity),
+       do: {:ok, %{}}
+
+  defp position(client, conn, _channel, mailbox) do
+    with {:ok, uid} <- starting_uid(client, conn, mailbox) do
+      {:ok, %{imap_uid_validity: mailbox.uid_validity, imap_last_uid: uid}}
     end
   end
 

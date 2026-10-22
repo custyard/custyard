@@ -42,11 +42,10 @@ defmodule Custyard.Email.ImapHost do
     end
   end
 
-  # IPv4 first: Plover connects with the default inet family.
-  defp lookup(charlist) do
-    v4 = ok_list(:inet.getaddrs(charlist, :inet))
-    if v4 == [], do: ok_list(:inet.getaddrs(charlist, :inet6)), else: v4
-  end
+  # IPv4 only: Plover's TLS connect uses the default inet family, so an
+  # IPv6 address would need options Plover cannot pass through. A server
+  # without an A record is reported as unresolvable.
+  defp lookup(charlist), do: ok_list(:inet.getaddrs(charlist, :inet))
 
   defp ok_list({:ok, addresses}), do: addresses
   defp ok_list(_error), do: []

@@ -33,6 +33,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   ]
 
   @imap_fields ~w(imap_host imap_port imap_username imap_password imap_folder)
+  @interactive_imap_timeout_ms 20_000
 
   @providers [
     {"google", "Gmail / Google Workspace (per-user forwarding)"},
@@ -178,9 +179,15 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     end)
   end
 
+  # The connection test runs in the LiveView process: a short deadline keeps
+  # an unreachable server from freezing the wizard for the poller's two
+  # minutes.
   def handle_event("connect_imap", _params, socket) do
     with_channel(socket, fn channel ->
-      case InboundChannels.connect_imap(channel, operator: socket.assigns.current_operator) do
+      case InboundChannels.connect_imap(channel,
+             operator: socket.assigns.current_operator,
+             timeout: @interactive_imap_timeout_ms
+           ) do
         {:ok, _channel} = ok -> ok
         {:error, code} when is_binary(code) -> {:error, imap_error_text(code)}
         {:error, %Ecto.Changeset{}} = error -> error

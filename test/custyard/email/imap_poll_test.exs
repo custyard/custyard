@@ -278,6 +278,35 @@ defmodule Custyard.Email.ImapPollTest do
       assert {:ok, %{}} = ImapPoll.poll(channel)
     end
 
+    test "reconnecting after a lockout imports what arrived during it",
+         %{route: route, host: host} do
+      channel = connected!(route, host)
+      Stub.update(host, &Map.put(&1, :password, "rotated"))
+      for _ <- 1..3, do: ImapPoll.poll(reload(channel))
+      assert reload(channel).imap_auth_failed_at
+
+      Stub.put_message(host, 1, email(1))
+
+      {:ok, channel} =
+        InboundChannels.update_channel(reload(channel), %{imap_password: "rotated"})
+
+      assert {:ok, channel} = InboundChannels.connect_imap(channel)
+      assert channel.imap_last_uid == 0
+      assert ImapPollers.pollable?(channel)
+
+      assert {:ok, %{imported: 1}} = ImapPoll.poll(channel)
+    end
+
+    test "a connection test on an active channel keeps its position",
+         %{route: route, host: host} do
+      channel = connected!(route, host)
+      Stub.put_message(host, 1, email(1))
+
+      assert {:ok, channel} = InboundChannels.connect_imap(reload(channel))
+      assert channel.imap_last_uid == 0
+      assert {:ok, %{imported: 1}} = ImapPoll.poll(channel)
+    end
+
     test "changing the mailbox resets the position", %{route: route, host: host} do
       channel = connected!(route, host)
       other = Stub.mailbox()

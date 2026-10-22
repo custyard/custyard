@@ -38,7 +38,9 @@ defmodule Custyard.Sentry do
   # impersonation param.
   # `attachments` holds the provider's signed download URLs while a delivery is
   # in flight (spec-inbound-channels D9: never logged, never stored).
-  @sensitive_keys ~w(access_token org_token callback_token token key credential secret passphrase password email as verification_code verification_link attachments)
+  # `imap_password` is an IMAP channel's password in the wizard's event params;
+  # `imap_password_ciphertext` is its stored form (D8).
+  @sensitive_keys ~w(access_token org_token callback_token token key credential secret passphrase password email as verification_code verification_link attachments imap_password imap_password_ciphertext)
 
   # Path patterns. Each redacts the single credential segment that follows a
   # known prefix, leaving the prefix (and any trailing segments) intact for

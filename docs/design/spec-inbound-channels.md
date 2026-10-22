@@ -268,11 +268,11 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 
   Each session (`Custyard.Email.ImapPoll`) does the following:
   - It runs in a task with a 120-second deadline, because Plover's TLS connect has no timeout.
-  - It resolves the host and refuses names with any private, loopback, link-local or reserved address, and it refuses IP literals.
+  - It resolves the host to IPv4 and refuses names with any private, loopback, link-local or reserved address, and it refuses IP literals. It connects to the resolved address and checks the certificate against the name through SNI; this was confirmed against Gmail and Fastmail, where a wrong name fails the handshake. A server without an A record is reported as unresolvable.
   - It opens the folder with EXAMINE and fetches with `BODY.PEEK[]`, so no flag in the mailbox changes.
   - It lists new mail with `UID FETCH n:* (UID RFC822.SIZE)`, because Plover parses only ESEARCH replies and most IMAP4rev1 servers answer SEARCH in the older format.
 
-  The channel stores `imap_uid_validity` and `imap_last_uid`. Connecting records the newest UID, so history is not imported, and a changed UIDVALIDITY resets the position to the newest UID.
+  The channel stores `imap_uid_validity` and `imap_last_uid`. The first connection records the newest UID, so history is not imported. Reconnecting, such as after a login lockout or with the wizard's connection test, keeps the position, so mail that arrived in between is still imported. A changed UIDVALIDITY, or a changed server, username or folder, starts again from the newest UID.
 
   At most 50 messages are imported per session. Messages over 25 MB are not fetched and are logged as `too_large`, and messages the parser cannot read are logged as `unreadable`; the position moves past both. A pipeline refusal also moves the position on. A connection or database failure stops the session without advancing, and Message-ID deduplication makes the retry harmless. Three login failures in a row set `imap_auth_failed_at`, which stops polling until the credentials change. Errors are stored as short codes, never server text.
 
