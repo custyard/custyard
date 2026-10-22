@@ -2,10 +2,17 @@ defmodule Custyard.Contact do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @email_statuses [:valid, :bounced, :suppressed]
+
   schema "contacts" do
     field :email, :string
     field :name, :string
     field :is_admin, :boolean, default: false
+    # Set from provider delivery events (Custyard.Email.DeliveryStatus):
+    # a bounced or suppressed reply flags the address, a later delivery
+    # clears it. Informational only; sends are never blocked.
+    field :email_status, Ecto.Enum, values: @email_statuses, default: :valid
+    field :email_status_at, :utc_datetime
 
     belongs_to :organization, Custyard.Organization
     has_many :conversations, Custyard.Conversation
@@ -36,7 +43,22 @@ defmodule Custyard.Contact do
     |> cast(attrs, [:email, :name, :is_admin])
     |> validate_length(:email, max: 320, message: "must be at most 320 characters")
     |> validate_email()
+    |> reset_email_status_on_change()
     |> unique_constraint([:email, :organization_id])
+  end
+
+  @doc "The email statuses a contact can carry."
+  def email_statuses, do: @email_statuses
+
+  # A bounce describes the old address, not the new one.
+  defp reset_email_status_on_change(changeset) do
+    if get_change(changeset, :email) do
+      changeset
+      |> put_change(:email_status, :valid)
+      |> put_change(:email_status_at, nil)
+    else
+      changeset
+    end
   end
 
   # Prevent changing organization_id on existing contacts

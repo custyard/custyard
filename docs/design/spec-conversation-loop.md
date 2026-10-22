@@ -64,6 +64,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - A contact with a bounced or suppressed email-validity status is visibly flagged in the operator interface.
 - A bounce or suppression on an outbound reply raises operator attention through notification, the attention queue, or both.
 - An email-validity flag does not automatically block future sends to the contact; dispatch remains at operator discretion.
+- *Implemented:* `contacts.email_status` is set from the event's `data.recipient`, so a bounced CC address flags that contact and never the conversation's. A later `message.delivered` to the address clears the flag, and events apply in their own timestamp order. Changing the contact's address also clears it. The conversation sidebar and the organization's contacts list show the flag. A reply whose status becomes bounced or suppressed sends the operator a notice naming the conversation and recipient.
 
 ### Portal
 
@@ -95,7 +96,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 
 - Per-project routes and the disambiguation DM flow (designed in the Design Decisions document; not required for this loop).
 - Per-contact portal authentication accounts (portal access via organization token suffices for this loop).
-- Automatic contact-validity management from bounce events (see Resolved Decisions).
+- Contact-validity management beyond the flag, such as blocking sends or removing addresses (see Resolved Decisions).
 - Attachment handling on outbound replies.
 - Conversation merging.
 

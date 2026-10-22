@@ -164,6 +164,18 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "Acme Corp"
       assert html =~ "Alice"
       assert html =~ "alice@acme.com"
+      refute html =~ "contact-email-status"
+    end
+
+    test "flags a contact whose address bounced", %{conn: conn} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.com")
+      contact |> Ecto.Changeset.change(email_status: :bounced) |> Repo.update!()
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(view, ~s([data-testid="contact-email-status-bounced"]))
     end
   end
 

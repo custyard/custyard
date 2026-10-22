@@ -238,4 +238,48 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
   end
+
+  describe "deliver_delivery_failure/3" do
+    test "logs instead of sending when email is disabled", %{conversation: conv} do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Email.deliver_delivery_failure(conv, :bounced, "alice@acme.com") == :ok
+        end)
+
+      refute log =~ "alice@acme.com"
+      refute log =~ "Urgent support needed"
+      assert_no_email_sent()
+    end
+
+    test "names the conversation, organization and recipient", %{conversation: conv} do
+      Application.put_env(:custyard, :email_enabled, true)
+      on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
+
+      assert Email.deliver_delivery_failure(conv, :bounced, "alice@acme.com") == :ok
+
+      assert_email_sent(fn email ->
+        assert email.subject == "Reply bounced: Urgent support needed"
+
+        for body <- [email.html_body, email.text_body] do
+          assert body =~ "Acme Corp"
+          assert body =~ "alice@acme.com"
+          assert body =~ "does not stop sending"
+        end
+      end)
+    end
+
+    test "explains a suppression and escapes the recipient", %{conversation: conv} do
+      Application.put_env(:custyard, :email_enabled, true)
+      on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
+
+      assert Email.deliver_delivery_failure(conv, :suppressed, "a<b@acme.com") == :ok
+
+      assert_email_sent(fn email ->
+        assert email.subject == "Reply suppressed: Urgent support needed"
+        assert email.text_body =~ "suppression list"
+        refute email.html_body =~ "a<b@"
+        assert email.html_body =~ "a&lt;b@acme.com"
+      end)
+    end
+  end
 end

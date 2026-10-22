@@ -1244,6 +1244,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
               >
                 {@conversation.contact.email}
               </div>
+              <div :if={@conversation.contact.email_status != :valid} class="mt-1">
+                <.email_status_badge status={@conversation.contact.email_status} />
+              </div>
             <% end %>
           </div>
 
