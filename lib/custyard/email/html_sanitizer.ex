@@ -14,9 +14,11 @@ defmodule Custyard.Email.HtmlSanitizer do
     * No attributes survive except `href` and `title` on links (`http`,
       `https`, `mailto` only), `colspan`/`rowspan` on cells and `start` on
       ordered lists. No `style`, `class`, `id` or event handlers.
-    * Images are removed: remote images are tracking pixels as often as
-      content, and the text body carries the words. Inline (`cid:`) images
-      can be revisited once attachments render.
+    * Images survive only with a `cid:` source, which names a part of the
+      same message, plus `alt`. Remote and `data:` images are removed:
+      remote images are tracking pixels as often as content. The thread maps
+      each `cid:` to that message's stored attachment at render time
+      (`CustyardWeb.InlineImages`); a stored `cid:` never loads anything.
     * Links open in a new tab with `rel="noopener noreferrer"`.
 
   Returns `nil` for blank input, for HTML over the raw size cap and for
@@ -37,6 +39,9 @@ defmodule Custyard.Email.HtmlSanitizer do
 
   @anchor_regex ~r/<a\s/i
 
+  # An image the scrubber left without a source: its src was not `cid:`.
+  @sourceless_img_regex ~r/<img(?![^>]*\ssrc=")[^>]*>/i
+
   defmodule Scrubber do
     @moduledoc false
     # `use HtmlSanitizeEx` installs the compiler hook that strips every tag and
@@ -50,6 +55,11 @@ defmodule Custyard.Email.HtmlSanitizer do
                   ul li h1 h2 h3 h4 h5 h6 hr sup sub small table thead tbody tfoot tr) do
       allow_tag_with_these_attributes(tag, [])
     end
+
+    # Inline images only: a `cid:` source names a part of the same message
+    # and loads nothing until render time maps it to that attachment.
+    allow_tag_with_uri_attributes("img", ["src"], ["cid"])
+    allow_tag_with_these_attributes("img", ["alt"])
 
     allow_tag_with_these_attributes("ol", ["start"])
     allow_tag_with_these_attributes("td", ["colspan", "rowspan"])
@@ -73,7 +83,7 @@ defmodule Custyard.Email.HtmlSanitizer do
     cond do
       cleaned == "" -> nil
       text_content(cleaned) == "" -> nil
-      true -> harden_links(cleaned)
+      true -> cleaned |> drop_sourceless_images() |> harden_links()
     end
   end
 
@@ -85,6 +95,8 @@ defmodule Custyard.Email.HtmlSanitizer do
 
     Regex.replace(@loose_tag_regex, html, " ")
   end
+
+  defp drop_sourceless_images(html), do: Regex.replace(@sourceless_img_regex, html, "")
 
   # Sanitised output is well-formed, so a textual rewrite of the anchor open
   # tag is safe; `target`/`rel` can never have survived the scrubber.

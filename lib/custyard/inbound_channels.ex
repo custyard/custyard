@@ -42,6 +42,7 @@ defmodule Custyard.InboundChannels do
   }
 
   alias Custyard.Email.ImapPoll
+  alias Custyard.Scoring.Recalculator
   alias Custyard.Lettermint.Client
   alias Custyard.Notifications.Email, as: NotificationEmail
 
@@ -277,18 +278,30 @@ defmodule Custyard.InboundChannels do
 
   defp address_domain(_address), do: nil
 
-  @doc "Update operator-editable attributes (display name, provider, reply_from, quiet window)."
+  @doc """
+  Update operator-editable attributes (display name, provider, reply_from,
+  quiet window, attention bonus). A changed attention bonus rescores the
+  channel's active conversations at once.
+  """
   def update_channel(%InboundChannel{} = channel, attrs, opts \\ []) when is_map(attrs) do
     attrs =
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
       |> Map.drop(~w(public_address ingress_kind))
 
-    with {:ok, updated} <- channel |> InboundChannel.changeset(attrs) |> Repo.update() do
+    changeset = InboundChannel.changeset(channel, attrs)
+
+    with {:ok, updated} <- Repo.update(changeset) do
       audit(updated, :channel_updated, opts, %{changed: Map.keys(attrs)})
+      if Map.has_key?(changeset.changes, :attention_bonus), do: rescore(updated)
       broadcast(updated)
       {:ok, updated}
     end
+  end
+
+  defp rescore(%InboundChannel{id: id}) do
+    Recalculator.recalculate_channel(id)
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, nil})
   end
 
   @doc """

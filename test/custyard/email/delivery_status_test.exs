@@ -3,7 +3,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
 
   import Custyard.Factory
 
-  alias Custyard.{AuditEvent, Message, Repo}
+  alias Custyard.{AuditEvent, Contact, Message, Repo}
   alias Custyard.Email.DeliveryStatus
 
   @provider_id "lm-msg-0a1b2c3d"
@@ -360,11 +360,159 @@ defmodule Custyard.Email.DeliveryStatusTest do
     end
   end
 
-  defp envelope(event, delivery_id, data) do
+  describe "contact email status" do
+    setup do
+      org = insert_organization()
+      alice = insert_contact(organization_id: org.id, email: "Alice@Customer.com")
+      bob = insert_contact(organization_id: org.id, email: "bob@customer.com")
+      conversation = insert_conversation(organization_id: org.id, contact_id: alice.id)
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :operator,
+        sender_email: "support@acme.com",
+        message_id: "<reply-002@custyard.local>",
+        body: "We can help with that.",
+        delivery_status: :sent,
+        lettermint_message_id: @provider_id,
+        to_addresses: ["alice@customer.com"],
+        cc_addresses: ["bob@customer.com"]
+      )
+
+      {:ok, org: org, alice: alice, bob: bob, conversation: conversation}
+    end
+
+    test "a hard bounce flags the recipient at the event time", %{alice: alice, bob: bob} do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
+      )
+
+      alice = Repo.reload!(alice)
+      assert alice.email_status == :bounced
+      assert alice.email_status_at == ~U[2026-10-20 12:00:00Z]
+      assert Repo.reload!(bob).email_status == :valid
+    end
+
+    test "a bounced CC address flags that contact, not the conversation's", %{
+      alice: alice,
+      bob: bob
+    } do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-b", recipient_data(" BOB@customer.com "))
+      )
+
+      assert Repo.reload!(bob).email_status == :bounced
+      assert Repo.reload!(alice).email_status == :valid
+    end
+
+    test "a suppression flags the recipient as suppressed", %{alice: alice} do
+      DeliveryStatus.apply_event(
+        envelope("message.suppressed", "evt-s", recipient_data("alice@customer.com"))
+      )
+
+      assert Repo.reload!(alice).email_status == :suppressed
+    end
+
+    test "the same address in another organization is not flagged" do
+      other = insert_contact(email: "alice@customer.com")
+
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
+      )
+
+      assert Repo.reload!(other).email_status == :valid
+    end
+
+    test "a second recipient's bounce applies after the message is already bounced", %{
+      alice: alice,
+      bob: bob
+    } do
+      assert {:ok, :updated, _} =
+               DeliveryStatus.apply_event(
+                 envelope("message.hard_bounced", "evt-1", recipient_data("bob@customer.com"))
+               )
+
+      assert {:ok, :ignored, :not_advanced} =
+               DeliveryStatus.apply_event(
+                 envelope("message.hard_bounced", "evt-2", recipient_data("alice@customer.com"))
+               )
+
+      assert Repo.reload!(alice).email_status == :bounced
+      assert Repo.reload!(bob).email_status == :bounced
+    end
+
+    test "a later delivery clears the flag", %{alice: alice} do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
+      )
+
+      DeliveryStatus.apply_event(
+        envelope(
+          "message.delivered",
+          "evt-d",
+          recipient_data("alice@customer.com"),
+          "2026-10-21T09:00:00Z"
+        )
+      )
+
+      alice = Repo.reload!(alice)
+      assert alice.email_status == :valid
+      assert alice.email_status_at == ~U[2026-10-21 09:00:00Z]
+    end
+
+    test "a delivery event older than the bounce does not clear it", %{alice: alice} do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
+      )
+
+      DeliveryStatus.apply_event(
+        envelope(
+          "message.delivered",
+          "evt-d",
+          recipient_data("alice@customer.com"),
+          "2026-10-19T09:00:00Z"
+        )
+      )
+
+      assert Repo.reload!(alice).email_status == :bounced
+    end
+
+    test "sent and failed events leave the address alone", %{alice: alice} do
+      for event <- ["message.sent", "message.failed"] do
+        DeliveryStatus.apply_event(envelope(event, event, recipient_data("alice@customer.com")))
+      end
+
+      assert Repo.reload!(alice).email_status == :valid
+    end
+
+    test "an unknown provider message flags nothing", %{alice: alice} do
+      data = %{recipient_data("alice@customer.com") | "message_id" => "lm-unknown"}
+      DeliveryStatus.apply_event(envelope("message.hard_bounced", "evt-b", data))
+
+      assert Repo.reload!(alice).email_status == :valid
+    end
+
+    test "changing the contact's address clears the flag", %{alice: alice} do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
+      )
+
+      {:ok, updated} =
+        alice
+        |> Repo.reload!()
+        |> Contact.update_changeset(%{email: "alice@new.example.com"})
+        |> Repo.update()
+
+      assert updated.email_status == :valid
+      assert updated.email_status_at == nil
+    end
+  end
+
+  defp envelope(event, delivery_id, data, timestamp \\ "2026-10-20T12:00:00Z") do
     %{
       "id" => delivery_id,
       "event" => event,
-      "timestamp" => "2026-10-20T12:00:00Z",
+      "timestamp" => timestamp,
       "sandbox" => false,
       "sandbox_result" => nil,
       "context" => %{
@@ -389,5 +537,9 @@ defmodule Custyard.Email.DeliveryStatusTest do
         "content" => "250 2.0.0 OK queued as 12345"
       }
     }
+  end
+
+  defp recipient_data(recipient) do
+    %{"message_id" => @provider_id, "recipient" => recipient}
   end
 end

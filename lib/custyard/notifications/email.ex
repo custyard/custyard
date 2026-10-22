@@ -44,6 +44,22 @@ defmodule Custyard.Notifications.Email do
     end
   end
 
+  @doc """
+  Tell the operator that a reply did not reach a recipient
+  (spec-conversation-loop, "Bounce and Suppression Handling"). `status` is
+  `:bounced` or `:suppressed`; `recipient` is the address the provider
+  named. Expects `organization` and `contact` preloaded on the conversation.
+  The log stub carries neither the address nor the subject.
+  """
+  def deliver_delivery_failure(conversation, status, recipient)
+      when status in [:bounced, :suppressed] do
+    if email_enabled?() do
+      send_delivery_failure(conversation, status, recipient)
+    else
+      log_delivery_failure(conversation, status)
+    end
+  end
+
   defp email_enabled? do
     Application.get_env(:custyard, :email_enabled, false)
   end
@@ -125,6 +141,94 @@ defmodule Custyard.Notifications.Email do
     Quiet window: #{channel.quiet_after_hours} hours
 
     #{@channel_quiet_explanation}
+    """
+  end
+
+  defp log_delivery_failure(conversation, status) do
+    Logger.info(
+      "[Email stub] Delivery failure notice would be sent: conversation #{conversation.id} " <>
+        "reply #{status}"
+    )
+
+    :ok
+  end
+
+  defp send_delivery_failure(conversation, status, recipient) do
+    import Swoosh.Email
+
+    operator_email = Application.get_env(:custyard, :operator_email, "operator@example.com")
+    from_name = Application.get_env(:custyard, :email_from_name, "Custyard Alerts")
+    from_email = Application.get_env(:custyard, :email_from_address, "alerts@custyard.local")
+
+    email =
+      new()
+      |> to(operator_email)
+      |> from({from_name, from_email})
+      |> subject("Reply #{status}: #{conversation.subject}")
+      |> html_body(delivery_failure_html(conversation, status, recipient))
+      |> text_body(delivery_failure_text(conversation, status, recipient))
+
+    case Custyard.Mailer.deliver(email) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "Failed to send delivery failure notice for conversation #{conversation.id}: " <>
+            inspect(reason)
+        )
+
+        {:error, reason}
+    end
+  end
+
+  @contact_flag_note "If the address belongs to a contact, the contact is flagged until a " <>
+                       "reply to it is delivered."
+
+  defp delivery_failure_explanation(:bounced),
+    do:
+      "The recipient's mail server refused the reply. Check the address with the customer. " <>
+        "Custyard does not stop sending to it. " <> @contact_flag_note
+
+  defp delivery_failure_explanation(:suppressed),
+    do:
+      "The email provider did not send the reply because the address is on its suppression " <>
+        "list, usually after earlier bounces or a spam complaint. " <> @contact_flag_note
+
+  defp delivery_failure_html(conversation, status, recipient) do
+    safe_subject = html_escape(conversation.subject)
+    safe_org_name = html_escape(organization_display(conversation.organization))
+    safe_recipient = html_escape(recipient)
+
+    """
+    <html>
+    <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background: #ef4444; color: white; padding: 16px; border-radius: 8px 8px 0 0;">
+        <h2 style="margin: 0;">Reply #{status}</h2>
+      </div>
+      <div style="padding: 16px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+        <p><strong>Conversation:</strong> #{safe_subject}</p>
+        <p><strong>Organization:</strong> #{safe_org_name}</p>
+        <p><strong>Recipient:</strong> #{safe_recipient}</p>
+        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
+        <p style="color: #6b7280; font-size: 14px;">
+          #{delivery_failure_explanation(status)}
+        </p>
+      </div>
+    </body>
+    </html>
+    """
+  end
+
+  defp delivery_failure_text(conversation, status, recipient) do
+    """
+    REPLY #{String.upcase(to_string(status))}
+
+    Conversation: #{conversation.subject}
+    Organization: #{organization_display(conversation.organization)}
+    Recipient: #{recipient}
+
+    #{delivery_failure_explanation(status)}
     """
   end
 

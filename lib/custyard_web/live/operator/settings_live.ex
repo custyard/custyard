@@ -980,7 +980,8 @@ defmodule CustyardWeb.Operator.SettingsLive do
         (tier_weight * tier_score) +
         (urgency_weight * urgency_score) +
         (velocity_weight * velocity_score) +
-        (neglect_weight * neglect_bonus)</pre>
+        (neglect_weight * neglect_bonus) +
+        channel_bonus</pre>
 
           <div class="mt-4 space-y-2 text-xs text-gray-500 dark:text-zinc-400">
             <div>
@@ -1006,6 +1007,10 @@ defmodule CustyardWeb.Operator.SettingsLive do
             <div>
               <strong class="text-gray-700 dark:text-zinc-300">neglect_bonus:</strong>
               critical=15, warning=7, ok=0
+            </div>
+            <div>
+              <strong class="text-gray-700 dark:text-zinc-300">channel_bonus:</strong>
+              the channel's attention bonus, 0 to 30, set on the channel card
             </div>
           </div>
         </div>

@@ -19,15 +19,27 @@ defmodule Custyard.Email.DeliveryStatus do
 
   Every applied transition writes an append-only `:delivery_status_updated`
   audit event. The audit payload deliberately omits recipient addresses,
-  subjects, metadata, spam symbols and raw SMTP response text.
+  subjects, metadata, spam symbols and raw SMTP response text. A transition
+  to bounced or suppressed also sends the operator a notice.
+
+  Lettermint sends one event per recipient and names it in `data.recipient`.
+  A bounced or suppressed recipient that is a contact of the conversation's
+  organization is flagged (`contacts.email_status`), and a later delivery to
+  it clears the flag (spec-conversation-loop, "Bounce and Suppression
+  Handling"). The flag follows the recipient, not the message, so a bounced
+  CC address never flags the conversation's contact. It applies even when the
+  message status does not advance, because an earlier recipient's event may
+  already have set it. Events are ordered by their own timestamp, so a late
+  delivery event cannot clear a newer bounce.
   """
 
   import Ecto.Query
 
   require Logger
 
-  alias Custyard.{AuditEvent, Message, Repo}
+  alias Custyard.{AuditEvent, Contact, Conversation, Message, Repo}
   alias Custyard.Email.Outbound
+  alias Custyard.Notifications.Email, as: NotificationEmail
 
   @ranks %{pending: 0, sending: 1, sent: 2, delivered: 3}
   @terminal [:bounced, :suppressed, :failed]
@@ -43,6 +55,12 @@ defmodule Custyard.Email.DeliveryStatus do
     "message.policy_rejected" => :failed,
     "message.suppressed" => :suppressed
   }
+
+  # What each status means for the recipient's address. Sent and failed say
+  # nothing about the address itself.
+  @contact_statuses %{bounced: :bounced, suppressed: :suppressed, delivered: :valid}
+
+  @notified_statuses [:bounced, :suppressed]
 
   @source "lettermint"
 
@@ -96,6 +114,7 @@ defmodule Custyard.Email.DeliveryStatus do
     result =
       with {:ok, status} <- resolve_status(event),
            {:ok, provider_id} <- provider_message_id(data) do
+        record_recipient_status(provider_id, status, envelope["timestamp"], data)
         apply_status(provider_id, status, event, envelope["id"], data, @max_attempts)
       else
         {:ignored, reason} -> {:ok, :ignored, reason}
@@ -172,7 +191,7 @@ defmodule Custyard.Email.DeliveryStatus do
       message
       |> transition_transaction(to_status, event, delivery_id, data)
       |> case do
-        {:ok, updated} -> {:ok, Outbound.broadcast_delivery_update(updated)}
+        {:ok, updated} -> {:ok, after_commit(updated, data)}
         {:error, {:ignored, reason}} -> {:ignored, reason}
         {:error, reason} -> {:error, reason}
       end
@@ -196,15 +215,13 @@ defmodule Custyard.Email.DeliveryStatus do
   end
 
   defp conditional_update(%Message{id: id}, from_status, to_status) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-
     query =
       from(m in Message,
         where: m.id == ^id and m.delivery_status == ^from_status,
         select: m
       )
 
-    case Repo.update_all(query, set: [delivery_status: to_status, updated_at: now]) do
+    case Repo.update_all(query, set: [delivery_status: to_status, updated_at: now()]) do
       {1, [updated]} -> {:ok, updated}
       {0, _} -> {:ignored, :concurrent_update}
     end
@@ -245,6 +262,87 @@ defmodule Custyard.Email.DeliveryStatus do
         {:error, changeset}
     end
   end
+
+  # The contact update is one conditional write, so a retried or reordered
+  # event is a no-op: it changes nothing when the status already matches or
+  # a newer event set it.
+  defp record_recipient_status(provider_id, status, timestamp, data) do
+    with contact_status when not is_nil(contact_status) <- Map.get(@contact_statuses, status),
+         recipient when is_binary(recipient) <- normalize_address(data["recipient"]),
+         organization_id when not is_nil(organization_id) <- message_organization(provider_id) do
+      at = event_time(timestamp)
+
+      from(c in Contact,
+        where:
+          c.organization_id == ^organization_id and
+            fragment("lower(trim(?))", c.email) == ^recipient and
+            c.email_status != ^contact_status and
+            (is_nil(c.email_status_at) or c.email_status_at <= ^at)
+      )
+      |> Repo.update_all(
+        set: [email_status: contact_status, email_status_at: at, updated_at: now()]
+      )
+    end
+
+    :ok
+  end
+
+  defp message_organization(provider_id) do
+    from(m in Message,
+      join: c in Conversation,
+      on: c.id == m.conversation_id,
+      where: m.lettermint_message_id == ^provider_id and not is_nil(m.delivery_status),
+      select: c.organization_id,
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  defp normalize_address(address) when is_binary(address) do
+    case address |> String.trim() |> String.downcase() do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_address(_address), do: nil
+
+  defp event_time(timestamp) when is_binary(timestamp) do
+    case DateTime.from_iso8601(timestamp) do
+      {:ok, at, _offset} -> DateTime.truncate(at, :second)
+      {:error, _reason} -> now()
+    end
+  end
+
+  defp event_time(_timestamp), do: now()
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
+
+  defp after_commit(%Message{} = message, data) do
+    notify_operator(message, data)
+    Outbound.broadcast_delivery_update(message)
+  end
+
+  # A notice failure never fails the webhook: the transition is committed,
+  # and a retried event would not advance. The notifier logs an error
+  # result; a raise is logged here by type only, since its message may name
+  # the recipient.
+  defp notify_operator(%Message{delivery_status: status} = message, data)
+       when status in @notified_statuses do
+    %Message{conversation: conversation} =
+      Repo.preload(message, conversation: [:organization, :contact])
+
+    NotificationEmail.deliver_delivery_failure(conversation, status, data["recipient"])
+  rescue
+    exception ->
+      Logger.error(
+        "Delivery failure notice for message #{message.id} raised #{inspect(exception.__struct__)}"
+      )
+
+      :error
+  end
+
+  defp notify_operator(_message, _data), do: :ok
 
   defp emit_telemetry(event, result) do
     outcome =

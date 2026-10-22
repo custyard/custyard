@@ -67,7 +67,7 @@ Security:
 | Component                    | Implementation                                                                                            | Status  |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ------- |
 | Email Ingestion Pipeline     | LMTP server, per-channel IMAP, Lettermint webhook (forwarding and direct-MX channels). All paths converge on the webhook dispatcher | Done    |
-| Attention Scoring Engine     | Scoring module with idle/state/tier/urgency/velocity/neglect components. Scheduler runs every 5 min.      | Done    |
+| Attention Scoring Engine     | Scoring module with idle/state/tier/urgency/velocity/neglect components plus a per-channel bonus. Scheduler runs every 5 min. | Done    |
 | Authentication (Operator)    | **Corrected 2026-07-25:** magic-link only — `POST /login` emails a 15-minute single-use token, `GET /login/verify/:token` establishes the session. Rate-limited, timing-attack safe. `password_hash` (Argon2) survives on the schema and is still written by `mix dev.reset_operator_password`, but no route consumes it; there is no password login path. | Done    |
 | Authentication (Portal)      | Token-based URL + custom domain. No Rodauth/SSO yet — SDD specifies Rodauth email/password + optional SSO | Partial |
 | Background Processing        | Scoring scheduler, dormancy checker, neglect checker all running as GenServers                            | Done    |
@@ -83,10 +83,10 @@ Security:
 | Entity            | Implementation Notes                                                                           | Status  |
 | ----------------- | ---------------------------------------------------------------------------------------------- | ------- |
 | Organization      | name, domain, tier, token, branding fields, custom_domain. Unique indices on token/domain.     | Done    |
-| Contact           | email, name, is_admin. Composite unique (email, org_id). No portal account yet.                | Done    |
+| Contact           | email, name, is_admin, email_status (valid/bounced/suppressed, from delivery events). Composite unique (email, org_id). No portal account yet. | Done    |
 | Conversation      | Full state model, urgency, cached_score, snoozed_until, last_neglect_notification. No tags substrate (SDD §4.1 freeform labels). | Partial |
 | Message           | source, sender_email, body, is_internal_note, message_id, in_reply_to. No updated_at.          | Done    |
-| Attachment        | `message_attachments` (inbound-channels Phase 2): content-addressed files under `ATTACHMENT_DIR`, sniffed type, per-channel cap, authenticated operator download. Outbound and portal attachments not yet. | Partial |
+| Attachment        | `message_attachments` (inbound-channels Phase 2): content-addressed files under `ATTACHMENT_DIR`, sniffed type, per-channel cap, authenticated operator and portal download. Outbound attachments not yet. | Partial |
 | Task              | title, state, portal_visible, due_at. FK to conversation and project.                          | Done    |
 | Project           | title, description, dates, portal_visible, project_type, tags, is_template.                    | Done    |
 | Project Template  | is_template flag on Project. Template instantiation with date calculation.                     | Done    |
@@ -243,8 +243,8 @@ Security measures in place:
 
 - **Portal Account entity** (SDD §4.1) - Per-contact authentication with Rodauth. Currently using org-level token auth instead of individual contact accounts.
 - **Activity Log entity** (SDD §4.1) - Append-only log for organization timeline and audit trail. Organization timeline view exists but without dedicated log table.
-- **Attachment entity** (SDD §4.1) - Inbound side done in inbound-channels Phase 2 (`Custyard.MessageAttachment`, `Custyard.Attachments`). Outbound reply attachments and portal download remain.
-- ~~**Outbound delivery-status webhook** (SDD §5.2)~~ - Done in inbound-channels Phase 0: `Custyard.Email.DeliveryStatus` applies Lettermint lifecycle events to `messages.delivery_status` (rank rule, terminal states, `:withheld` and inbound rows never touched), writes a `:delivery_status_updated` audit event, and the conversation view shows delivered/suppressed indicators. Secret: `WEBHOOK_SECRET_LETTERMINT_STATUS`. Contact email-validity flagging from bounces remains deferred (spec-conversation-loop, Resolved Decisions).
+- **Attachment entity** (SDD §4.1) - Inbound side done in inbound-channels Phase 2 (`Custyard.MessageAttachment`, `Custyard.Attachments`). Portal download followed. Outbound reply attachments remain.
+- ~~**Outbound delivery-status webhook** (SDD §5.2)~~ - Done in inbound-channels Phase 0: `Custyard.Email.DeliveryStatus` applies Lettermint lifecycle events to `messages.delivery_status` (rank rule, terminal states, `:withheld` and inbound rows never touched), writes a `:delivery_status_updated` audit event, and the conversation view shows delivered/suppressed indicators. Secret: `WEBHOOK_SECRET_LETTERMINT_STATUS`. Bounced and suppressed replies flag the recipient contact (`contacts.email_status`) and send the operator a notice; a later delivery clears the flag.
 - **Task effort estimate / description fields** (SDD §4.1) - Task schema has title, state, due_at, portal_visible but not effort_estimate or description.
 - **Organization notes and custom fields** (SDD §4.1) - Not on Organization schema.
 - **Organization-scoped search** (SDD US-9) - No search implementation.

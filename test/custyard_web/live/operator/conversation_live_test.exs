@@ -164,6 +164,117 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "Acme Corp"
       assert html =~ "Alice"
       assert html =~ "alice@acme.com"
+      refute html =~ "contact-email-status"
+    end
+
+    test "flags a contact whose address bounced", %{conn: conn} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "alice@acme.com")
+      contact |> Ecto.Changeset.change(email_status: :bounced) |> Repo.update!()
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert has_element?(view, ~s([data-testid="contact-email-status-bounced"]))
+    end
+  end
+
+  test "shows an email's cid: image from its own attachment", %{conn: conn} do
+    org = insert_organization()
+    conv = insert_conversation(organization_id: org.id)
+
+    message =
+      insert_message(
+        conversation_id: conv.id,
+        html_body: ~S|<p>Our logo <img src="cid:logo@acme" alt="Logo" /></p>|
+      )
+
+    url = StubClient.unique_url()
+    StubClient.put(url, <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "rest">>)
+
+    {:ok, [image]} =
+      Attachments.fetch_for_message(message, [
+        %{filename: "logo.png", content_type: "image/png", content_id: "<logo@acme>", url: url}
+      ])
+
+    {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+    html = view |> element(~s([data-testid="operator-message-html"])) |> render()
+    assert html =~ ~s(src="/operator/attachments/#{image.id}/inline")
+    refute html =~ "cid:"
+  end
+
+  describe "reply recipient in the composer (D5)" do
+    setup do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      %{conv: conv}
+    end
+
+    test "shows the contact's address", %{conn: conn, conv: conv} do
+      insert_message(conversation_id: conv.id, source: :email, triage_class: :customer)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "alice@customer.example"
+
+      refute has_element?(view, ~s([data-testid="operator-reply-to-override"]))
+    end
+
+    test "shows the customer's Reply-To when it overrides the contact", %{
+      conn: conn,
+      conv: conv
+    } do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        triage_class: :customer,
+        reply_to: "Billing@Customer.example"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "billing@customer.example"
+
+      assert has_element?(view, ~s([data-testid="operator-reply-to-override"]))
+    end
+
+    test "ignores a Reply-To on an auto-response", %{conn: conn, conv: conv} do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        triage_class: :auto_response,
+        reply_to: "robot@customer.example"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "alice@customer.example"
+    end
+
+    test "shows an opted-in prospect's address, not as a Reply-To", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id, email: "p@example.com", notify_on_reply: true)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "p@example.com"
+
+      refute has_element?(view, ~s([data-testid="operator-reply-to-override"]))
+    end
+
+    test "shows no To for a prospect who has not opted in", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id, email: "p@example.com", notify_on_reply: false)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute has_element?(view, ~s([data-testid="operator-reply-to"]))
     end
   end
 

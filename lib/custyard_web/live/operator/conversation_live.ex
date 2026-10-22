@@ -16,6 +16,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
   import CustyardWeb.FormHelpers
 
   alias Custyard.Attachments.Recovery
+  alias Custyard.Email.Outbound
+  alias CustyardWeb.InlineImages
 
   alias Custyard.{
     Attachments,
@@ -748,6 +750,25 @@ defmodule CustyardWeb.Operator.ConversationLive do
     socket
     |> assign(:reply_delivery, reply_delivery)
     |> assign(:reply_will_email?, reply_delivery in [:contact, :prospect_opted_in])
+    |> assign(:reply_recipient, reply_recipient(conversation))
+  end
+
+  # The To of the next reply, from the resolver delivery uses, so the
+  # composer never shows an address the reply will not go to.
+  defp reply_recipient(conversation) do
+    case Outbound.reply_recipient(conversation) do
+      {:ok, address} -> %{address: address, reply_to?: reply_to_override?(conversation, address)}
+      {:error, _reason} -> nil
+    end
+  end
+
+  # Only a contact's address can be overridden by a Reply-To; a prospect's
+  # recipient is always the captured address.
+  defp reply_to_override?(conversation, address) do
+    case Conversations.reply_channel(conversation) do
+      {:contact, email} -> String.downcase(address) != String.downcase(email)
+      _other -> false
+    end
   end
 
   # Ground truth for this message: :withheld is only ever set by the
@@ -1027,6 +1048,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
             class="space-y-1.5"
             data-testid="operator-reply-form"
           >
+            <p
+              :if={@reply_recipient}
+              class="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400"
+              data-testid="operator-reply-to"
+            >
+              <span class="w-6">To</span>
+              <code class="text-gray-700 dark:text-zinc-300 truncate">{@reply_recipient.address}</code>
+              <span :if={@reply_recipient.reply_to?} data-testid="operator-reply-to-override">
+                · the customer's Reply-To
+              </span>
+            </p>
             <%!-- Reply-all CC (spec-inbound-channels D5): visible and editable;
             hidden for prospect conversations, which never carry a CC. --%>
             <label
@@ -1243,6 +1275,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
                 data-testid="operator-sidebar-contact-email"
               >
                 {@conversation.contact.email}
+              </div>
+              <div :if={@conversation.contact.email_status != :valid} class="mt-1">
+                <.email_status_badge status={@conversation.contact.email_status} />
               </div>
             <% end %>
           </div>
@@ -1570,7 +1605,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
             class="email-html text-sm break-words text-gray-800 dark:text-zinc-200"
             data-testid="operator-message-html"
           >
-            {Phoenix.HTML.raw(@message.html_body)}
+            {Phoenix.HTML.raw(InlineImages.render(@message.html_body, message_attachments(@message)))}
           </div>
           <details class="mt-1 text-xs text-gray-500 dark:text-zinc-400">
             <summary class="cursor-pointer select-none">Plain text</summary>

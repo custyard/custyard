@@ -4,7 +4,13 @@ defmodule Custyard.Scoring do
 
   Score = (idle_weight * idle_score) + (state_weight * state_score) +
           (tier_weight * tier_score) + (urgency_weight * urgency_score) +
-          (velocity_weight * velocity_score) + (neglect_weight * neglect_bonus)
+          (velocity_weight * velocity_score) + (neglect_weight * neglect_bonus) +
+          channel_bonus
+
+  `channel_bonus` is the `attention_bonus` of the inbound channel the
+  conversation arrived on (spec-inbound-channels, "Functional impacts by
+  surface"): plain points, 0 by default, so a channel such as `security@` can
+  outrank `sales@`. Conversations without a channel get 0.
 
   Conversations without an organization (unlinked prospects) score with all
   components: the tier component comes from the configurable
@@ -59,7 +65,7 @@ defmodule Custyard.Scoring do
         {:error, :not_found}
 
       conversation ->
-        conversation = Repo.preload(conversation, :organization)
+        conversation = Repo.preload(conversation, [:organization, :inbound_channel])
         score = calculate(conversation)
 
         case conversation
@@ -89,7 +95,7 @@ defmodule Custyard.Scoring do
     conversations =
       from(c in Conversation,
         where: c.id in ^conversation_ids,
-        preload: [:organization]
+        preload: [:organization, :inbound_channel]
       )
       |> Repo.all()
 
@@ -204,15 +210,21 @@ defmodule Custyard.Scoring do
       urgency: round(components.urgency),
       velocity: round(components.velocity),
       neglect_bonus: round(components.neglect),
+      channel: round(components.channel),
       total: components_total(components)
     }
   end
 
-  # Single source of truth for the six weighted score components.
+  # Single source of truth for the six weighted score components and the
+  # unweighted channel bonus.
   # `message_count` overrides the 24h message-count query for the batch path;
   # pass nil to compute velocity from the database.
   defp components(conversation, message_count, settings) do
-    conversation = ensure_preloaded(conversation, :organization)
+    conversation =
+      conversation
+      |> ensure_preloaded(:organization)
+      |> ensure_preloaded(:inbound_channel)
+
     weights = settings.weights
 
     velocity =
@@ -227,9 +239,15 @@ defmodule Custyard.Scoring do
       tier: tier_score(conversation, settings) * weights.tier,
       urgency: urgency_score(conversation) * weights.urgency,
       velocity: velocity * weights.velocity,
-      neglect: neglect_bonus(conversation, settings) * weights.neglect
+      neglect: neglect_bonus(conversation, settings) * weights.neglect,
+      channel: channel_bonus(conversation)
     }
   end
+
+  defp channel_bonus(%{inbound_channel: %{attention_bonus: bonus}}) when is_integer(bonus),
+    do: bonus
+
+  defp channel_bonus(_conversation), do: 0
 
   defp components_total(components) do
     components

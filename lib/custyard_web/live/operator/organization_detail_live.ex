@@ -910,8 +910,9 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             <div class="font-medium text-gray-900 dark:text-zinc-100">
               {contact.name || "Unnamed contact"}
             </div>
-            <div class="text-sm text-gray-600 dark:text-zinc-400">
+            <div class="text-sm text-gray-600 dark:text-zinc-400 flex items-center gap-2 flex-wrap">
               {contact.email}
+              <.email_status_badge status={contact.email_status} />
             </div>
           </div>
           <div class="text-xs text-gray-500 dark:text-zinc-500">

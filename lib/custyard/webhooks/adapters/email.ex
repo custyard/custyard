@@ -74,7 +74,7 @@ defmodule Custyard.Webhooks.Adapters.Email do
         filename: Normalizer.presence(attachment[:filename]),
         content_type: Normalizer.presence(attachment[:content_type]),
         size: byte_size(attachment[:content]),
-        content_id: nil,
+        content_id: Normalizer.presence(attachment[:content_id]),
         content: attachment[:content]
       }
     end)

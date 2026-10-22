@@ -136,6 +136,40 @@ defmodule CustyardWeb.OperatorComponents do
   end
 
   @doc """
+  Renders a contact's email-validity flag (spec-conversation-loop, "Bounce
+  and Suppression Handling"). Renders nothing for a valid address.
+
+  ## Examples
+
+      <.email_status_badge status={:bounced} />
+  """
+  attr :status, :atom, required: true
+
+  def email_status_badge(assigns) do
+    ~H"""
+    <%= case @status do %>
+      <% :bounced -> %>
+        <span
+          class="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300"
+          title="A reply to this address bounced. Sending is not blocked."
+          data-testid="contact-email-status-bounced"
+        >
+          email bounced
+        </span>
+      <% :suppressed -> %>
+        <span
+          class="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300"
+          title="The email provider suppressed a reply to this address. Sending is not blocked."
+          data-testid="contact-email-status-suppressed"
+        >
+          email suppressed
+        </span>
+      <% _ -> %>
+    <% end %>
+    """
+  end
+
+  @doc """
   Renders a route type badge (general/project/disambiguation).
 
   ## Examples
@@ -334,7 +368,8 @@ defmodule CustyardWeb.OperatorComponents do
         {"tier", assigns.breakdown.tier},
         {"urgency", assigns.breakdown.urgency},
         {"velocity", assigns.breakdown.velocity},
-        {"neglect", assigns.breakdown.neglect_bonus}
+        {"neglect", assigns.breakdown.neglect_bonus},
+        {"channel", Map.get(assigns.breakdown, :channel, 0)}
       ]
       |> Enum.filter(fn {_, v} -> v > 0 end)
 

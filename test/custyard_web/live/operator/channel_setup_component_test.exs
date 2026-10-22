@@ -366,6 +366,28 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
              )
     end
 
+    test "the attention bonus is set from the identity step", %{
+      conn: conn,
+      org: org,
+      channel: channel
+    } do
+      view = open_reply_step(conn, org, channel)
+
+      view
+      |> element("form[phx-change=set_attention_bonus]")
+      |> render_change(%{"attention_bonus" => "12"})
+
+      assert InboundChannels.get_channel(channel.id).attention_bonus == 12
+      assert has_element?(view, ~s([data-testid=channel-attention-bonus][value="12"]))
+
+      view
+      |> element("form[phx-change=set_attention_bonus]")
+      |> render_change(%{"attention_bonus" => "31"})
+
+      assert InboundChannels.get_channel(channel.id).attention_bonus == 12
+      assert render(view) =~ "less than or equal to 30"
+    end
+
     test "the data path panel names the processing hops", %{
       conn: conn,
       org: org,

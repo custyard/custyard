@@ -48,3 +48,4 @@
 .email-html pre { overflow-x: auto; font-size: 0.85em; }
 .email-html table { display: block; overflow-x: auto; border-collapse: collapse; }
 .email-html td, .email-html th { padding: 0.125rem 0.375rem; vertical-align: top; }
+.email-html img { display: inline-block; max-width: 100%; height: auto; }

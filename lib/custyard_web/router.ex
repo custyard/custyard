@@ -126,6 +126,7 @@ defmodule CustyardWeb.Router do
     # Inbound email attachments: authenticated download, organization-scoped
     # in the controller (spec-inbound-channels D9).
     get "/attachments/:id", AttachmentController, :show
+    get "/attachments/:id/inline", AttachmentController, :inline
 
     # All authenticated operators
     live_session :operator,
@@ -171,6 +172,11 @@ defmodule CustyardWeb.Router do
   # custom domain), so they expose nothing new.
   scope "/", CustyardWeb.Portal do
     pipe_through [:browser, :portal_auth]
+
+    # Inbound email attachments (spec-inbound-channels D10). On a custom
+    # domain the CustomDomain plug rewrites /attachments/:id onto this route,
+    # so no root alias is needed for a plain HTTP request.
+    get "/p/:org_token/attachments/:id", AttachmentController, :show
 
     live_session :portal,
       on_mount: [{CustyardWeb.Live.PortalAuth, :default}],

@@ -38,6 +38,9 @@ defmodule Custyard.InboundChannel do
 
   @states [:draft, :pending_verification, :awaiting_first_message, :active, :paused, :revoked]
   @ingress_kinds [:forward, :mx, :imap]
+  # The largest state score (new) is 30; a bonus above it would let the
+  # channel outweigh everything else.
+  @max_attention_bonus 30
   # Forwarding source hint (D8): drives setup copy. `google` is per-user
   # Gmail forwarding with a confirmation email; `google_workspace` is admin
   # routing in the Admin console, which sends none.
@@ -97,6 +100,9 @@ defmodule Custyard.InboundChannel do
     field :archive_copy, :boolean, default: false
     # D9: per-message attachment cap in megabytes; 0 disables fetching.
     field :attachment_limit_mb, :integer, default: 10
+    # Points added to the attention score of the channel's conversations
+    # (Custyard.Scoring), so security@ can outrank sales@. 0 is neutral.
+    field :attention_bonus, :integer, default: 0
     field :sending_domain_status, :string
     field :sending_domain_checked_at, :utc_datetime
 
@@ -136,6 +142,9 @@ defmodule Custyard.InboundChannel do
 
   def states, do: @states
   def ingress_kinds, do: @ingress_kinds
+
+  @doc "The largest attention bonus a channel can carry."
+  def max_attention_bonus, do: @max_attention_bonus
   def providers, do: @providers
   def reply_from_options, do: @reply_from_options
   def sending_domain_statuses, do: @sending_domain_statuses
@@ -160,6 +169,7 @@ defmodule Custyard.InboundChannel do
       :quiet_after_hours,
       :archive_copy,
       :attachment_limit_mb,
+      :attention_bonus,
       :inbound_route_id,
       :organization_id,
       :project_id
@@ -178,6 +188,10 @@ defmodule Custyard.InboundChannel do
     |> validate_number(:attachment_limit_mb,
       greater_than_or_equal_to: 0,
       less_than_or_equal_to: 100
+    )
+    |> validate_number(:attention_bonus,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: @max_attention_bonus
     )
     |> validate_kind_rules()
     |> put_ingress_local()

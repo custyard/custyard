@@ -436,6 +436,45 @@ defmodule Custyard.Attachments do
   end
 
   @doc """
+  An attachment the portal of `organization_id` may download: fetched, on a
+  message that is neither an internal note nor deleted, in a conversation of
+  that organization that is not suspect. `nil` otherwise, so the caller
+  answers 404 for missing and foreign attachments alike.
+  """
+  def get_for_portal(id, organization_id) when is_integer(id) and is_integer(organization_id) do
+    from(a in MessageAttachment,
+      join: m in Message,
+      on: m.id == a.message_id,
+      join: c in Conversation,
+      on: c.id == m.conversation_id,
+      where:
+        a.id == ^id and a.state == :fetched and is_nil(m.deleted_at) and
+          m.is_internal_note == false and c.suspect == false and
+          c.organization_id == ^organization_id
+    )
+    |> Repo.one()
+  end
+
+  @doc """
+  Set `:attachments` on portal messages to the downloadable ones, in
+  position order: fetched files on messages that are not deleted, and none
+  at all while the conversation is suspect. Mirrors `get_for_portal/2`.
+  """
+  def preload_for_portal(messages, %Conversation{suspect: true}),
+    do: Enum.map(messages, &%{&1 | attachments: []})
+
+  def preload_for_portal(messages, %Conversation{}) do
+    query = from(a in MessageAttachment, where: a.state == :fetched, order_by: a.position)
+
+    messages
+    |> Repo.preload(attachments: query)
+    |> Enum.map(fn
+      %Message{deleted_at: nil} = message -> message
+      message -> %{message | attachments: []}
+    end)
+  end
+
+  @doc """
   Delete files in the attachment directory that no row references any more
   (their messages were swept or hard-deleted). Returns the count removed.
   """

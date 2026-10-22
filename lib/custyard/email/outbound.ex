@@ -102,7 +102,7 @@ defmodule Custyard.Email.Outbound do
 
     conversation = message.conversation
 
-    with {:ok, recipient} <- resolve_recipient(conversation),
+    with {:ok, recipient} <- reply_recipient(conversation),
          {:ok, from_addr} <- resolve_from_address(message, conversation),
          email <- compose(message, conversation, recipient, from_addr),
          {:ok, message} <- persist_recipients(message, email) do
@@ -193,11 +193,19 @@ defmodule Custyard.Email.Outbound do
 
   defp put_archive_bcc(email, _conversation), do: email
 
-  # Recipient fallback: contact.email -> prospect.email -> no recipient.
-  # The contact channel delivers unconditionally (established-customer path).
-  # reply_channel/1 already excludes revoked prospects and empty emails, so
-  # the prospect channel only needs the consent check here.
-  defp resolve_recipient(conversation) do
+  @doc """
+  The address the next reply on `conversation` is sent to: the customer's
+  Reply-To when it overrides the contact address (D5), else the contact's
+  email, else an opted-in prospect's. The composer shows this so the
+  operator sees the address delivery will use.
+
+  The contact channel delivers unconditionally (established-customer path).
+  `Conversations.reply_channel/1` already excludes revoked prospects and
+  empty emails, so the prospect channel only needs the consent check here.
+  """
+  def reply_recipient(conversation) do
+    conversation = Repo.preload(conversation, [:contact, :prospect])
+
     case Conversations.reply_channel(conversation) do
       {:contact, email} -> {:ok, reply_to_override(conversation, email) || email}
       {:prospect, email} -> prospect_recipient(conversation.prospect, email)

@@ -4,7 +4,8 @@ defmodule Custyard.DataSubjectsTest do
 
   import Custyard.Factory
 
-  alias Custyard.{AuditEvent, DataSubjects, Message, Repo}
+  alias Custyard.{AuditEvent, Contact, Conversation, DataSubjects, Message, Repo}
+  alias Custyard.{InboundChannelRejection, MessageAttachment}
 
   setup do
     org = insert_organization()
@@ -156,6 +157,116 @@ defmodule Custyard.DataSubjectsTest do
       assert Repo.get!(Message, ctx.reply_to.id).reply_to == "pat@example.com"
     after
       Repo.query!("DROP TRIGGER reject_dsar_audit")
+    end
+  end
+
+  describe "erase_subject/2" do
+    setup ctx do
+      pat = insert_contact(organization_id: ctx.org.id, email: "Pat@Example.com", name: "Pat")
+
+      own =
+        insert_conversation(organization_id: ctx.org.id, contact_id: pat.id, subject: "My order")
+
+      own_message =
+        insert_message(
+          conversation_id: own.id,
+          sender_email: "pat@example.com",
+          to_addresses: ["help@acme.example"],
+          body: "Order 42 for Pat",
+          message_id: "<pat-1@example.com>"
+        )
+
+      reply =
+        insert_message(
+          conversation_id: own.id,
+          source: :operator,
+          sender_email: "help@acme.example",
+          to_addresses: ["pat@example.com"],
+          body: "Thanks Pat"
+        )
+
+      own_message
+      |> Ecto.Changeset.change(html_body: "<p>Order 42</p>", authentication: %{"dkim" => "pass"})
+      |> Repo.update!()
+
+      Repo.insert!(%MessageAttachment{
+        message_id: own_message.id,
+        position: 0,
+        descriptor_hash: String.duplicate("a", 64),
+        state: :pending
+      })
+
+      route = insert_inbound_route(organization_id: ctx.org.id)
+
+      Repo.insert!(%InboundChannelRejection{
+        organization_id: ctx.org.id,
+        inbound_route_id: route.id,
+        classification: :no_channel,
+        sender_email: "Pat <pat@example.com>",
+        subject: "Lost mail"
+      })
+
+      %{pat: pat, own: own, own_message: own_message, reply: reply}
+    end
+
+    test "erases the person's messages, contact, subjects and rejections", ctx do
+      assert {:ok, counts} = DataSubjects.erase_subject("pat@example.com", ctx.org.id)
+
+      assert counts == %{
+               erased: 3,
+               messages_erased: 2,
+               attachments_removed: 1,
+               conversations_retitled: 1,
+               contacts_removed: 1,
+               rejections_removed: 1
+             }
+
+      for id <- [ctx.sent.id, ctx.own_message.id] do
+        message = Repo.get!(Message, id)
+        assert message.body == ""
+        assert message.deleted_at
+        assert message.sender_email == nil
+        assert message.html_body == nil
+        assert message.to_addresses == []
+        assert message.authentication == nil
+      end
+
+      assert Repo.get!(Message, ctx.own_message.id).message_id == "<pat-1@example.com>"
+      assert Repo.aggregate(MessageAttachment, :count) == 0
+      refute Repo.get(Contact, ctx.pat.id)
+
+      own = Repo.get!(Conversation, ctx.own.id)
+      assert own.subject == "(erased)"
+      assert own.contact_id == nil
+      assert Repo.aggregate(InboundChannelRejection, :count) == 0
+    end
+
+    test "keeps operator replies, without the person's address", ctx do
+      DataSubjects.erase_subject("pat@example.com", ctx.org.id)
+
+      reply = Repo.get!(Message, ctx.reply.id)
+      assert reply.body == "Thanks Pat"
+      assert reply.to_addresses == []
+      assert reply.deleted_at == nil
+    end
+
+    test "leaves other people and other organizations alone", ctx do
+      DataSubjects.erase_subject("pat@example.com", ctx.org.id)
+
+      assert Repo.get!(Message, ctx.cc.id).body == "Alice wrote this"
+      assert Repo.get!(Message, ctx.cc.id).cc_addresses == ["boss@customer.example"]
+      assert Repo.get!(Message, ctx.unrelated.id).deleted_at == nil
+      assert Repo.get!(Message, ctx.foreign.id).cc_addresses == ["pat@example.com"]
+      assert Repo.get!(Conversation, ctx.sent.conversation_id).subject == "Invoice"
+    end
+
+    test "writes one audit event with counts and no address", ctx do
+      DataSubjects.erase_subject("pat@example.com", ctx.org.id)
+
+      [event] = Repo.all(AuditEvent)
+      assert event.event_type == :data_subject_erasure
+      assert event.payload["messages_erased"] == 2
+      refute Jason.encode!(event.payload) =~ "pat"
     end
   end
 end

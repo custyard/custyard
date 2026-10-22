@@ -2,7 +2,8 @@ defmodule Custyard.Release do
   @moduledoc """
   Release tasks run with `bin/custyard eval`: migrations, the operator
   bootstrap the container entrypoint runs before the server, and the
-  `bin/operator` command line (`rel/overlays/bin/operator`).
+  `bin/operator` and `bin/dsar` command lines (`rel/overlays/bin/operator`,
+  `rel/overlays/bin/dsar`; the latter's commands are `Custyard.Release.Dsar`).
 
   None of these start the application. They load its configuration and start
   only the Repo (`Ecto.Migrator.with_repo/2`), so they are safe to run on a
@@ -11,6 +12,7 @@ defmodule Custyard.Release do
   """
 
   alias Custyard.{OperatorAccount, OperatorAccounts, Repo}
+  alias Custyard.Release.Dsar
 
   require Logger
 
@@ -175,6 +177,16 @@ defmodule Custyard.Release do
   """
   def operator_cli(argv) do
     argv |> run_operator_cli() |> System.halt()
+  end
+
+  @doc """
+  Entry point for `rel/overlays/bin/dsar`: data subject export and erasure
+  (`Custyard.Release.Dsar`). `argv` arrives from `System.argv()`, never
+  interpolated into code. Halts with the exit status (0 on success, 1 on a
+  usage error, a refused erasure or a failure). Run `bin/dsar help`.
+  """
+  def dsar_cli(argv) do
+    argv |> Dsar.run() |> System.halt()
   end
 
   @doc false
@@ -359,8 +371,12 @@ defmodule Custyard.Release do
   defp blank_to_nil(value) when is_binary(value),
     do: if(String.trim(value) == "", do: nil, else: value)
 
+  @doc false
   # Loads config and starts only the Repo for `fun`. Never starts the app.
-  defp with_repo(fun) do
+  # The storage check runs before the Repo starts, as migrate/0 does: opening
+  # SQLite first would create an empty database on the container's root
+  # filesystem when the Fly volume is missing. Shared with Custyard.Release.Dsar.
+  def with_repo(fun) when is_function(fun, 0) do
     load_app()
     Custyard.Storage.validate_fly_storage!()
 

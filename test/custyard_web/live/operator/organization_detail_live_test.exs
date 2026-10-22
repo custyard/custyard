@@ -242,6 +242,35 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
     end
   end
 
+  describe "Contacts tab" do
+    test "flags contacts whose address bounced or was suppressed", %{conn: conn} do
+      org = insert_organization()
+      conn = authenticate_conn(conn, create_super_admin())
+      ok = insert_contact(organization_id: org.id, email: "ok@acme.com")
+      bounced = insert_contact(organization_id: org.id, email: "gone@acme.com")
+      suppressed = insert_contact(organization_id: org.id, email: "blocked@acme.com")
+      bounced |> Ecto.Changeset.change(email_status: :bounced) |> Repo.update!()
+      suppressed |> Ecto.Changeset.change(email_status: :suppressed) |> Repo.update!()
+
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}?tab=contacts")
+
+      assert has_element?(
+               view,
+               ~s([data-testid="org-contact-#{bounced.id}"] [data-testid="contact-email-status-bounced"])
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-testid="org-contact-#{suppressed.id}"] [data-testid="contact-email-status-suppressed"])
+             )
+
+      refute has_element?(
+               view,
+               ~s([data-testid="org-contact-#{ok.id}"] [data-testid^="contact-email-status"])
+             )
+    end
+  end
+
   describe "Routes tab rendering" do
     setup %{conn: conn} do
       org = insert_organization(name: "Routes Test Org")
