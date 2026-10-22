@@ -22,7 +22,8 @@ defmodule Custyard.DataSubjects do
       rejection-log entries. Operator replies keep their text, without the
       person's address.
 
-  `mix custyard.dsar` wraps them for operators until a UI exists.
+  `bin/dsar` (`Custyard.Release.Dsar`; `mix custyard.dsar` in development)
+  wraps them for operators until a UI exists.
   Addresses are matched case-insensitively; the audit event written on
   erasure records counts only, never the address.
   """

@@ -209,9 +209,10 @@ See [fly deploy docs](https://fly.io/docs/launch/deploy/).
 
 Erlang distribution is off (`RELEASE_DISTRIBUTION=none` in `rel/env.sh.eex`), so
 `bin/custyard remote` and `bin/custyard rpc` do not work. Use `bin/operator` for
-accounts, or `bin/custyard eval` for one-off code: it runs in a separate VM with
-the app's configuration and does not start the app. Anything that writes the
-database must run as `custyard` (`bin/operator` switches user itself).
+accounts, `bin/dsar` for data subject requests, or `bin/custyard eval` for
+one-off code: it runs in a separate VM with the app's configuration and does not
+start the app. Anything that writes the database must run as `custyard`
+(`bin/operator` and `bin/dsar` switch user themselves).
 
 ## Operator accounts
 
@@ -259,6 +260,38 @@ that address, so it can never log in. Boot logs a warning while it exists and
 ```bash
 fly ssh console -a custyard -C "/app/bin/operator remove admin@custyard.local"
 ```
+
+## Data subject requests
+
+`bin/dsar` exports or erases what one email address appears on in one
+organization: as sender, To, CC or Reply-To. Like `bin/operator`, it starts only
+the database (never the app), so it is safe while the server runs. `ID` is the
+organization's number, the one in `/operator/organizations/ID`.
+
+```bash
+# Every message the address appears on, as JSON on stdout; the body only for
+# messages the person sent
+fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar export pat@example.com --org 3"
+
+# Remove the address from recipient lists and Reply-To on messages the person
+# did not send; reports how many messages they sent
+fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar erase pat@example.com --org 3 --yes"
+
+# The same, plus the messages the person sent (tombstoned and emptied), their
+# attachments, contact record, conversation subjects and rejection-log entries
+fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar erase-contact pat@example.com --org 3 --yes"
+
+fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar help"
+```
+
+- Erasures are irreversible and refuse to run without `--yes`. An invalid
+  address, a missing, repeated or unknown `--org`, or any other usage error
+  exits 1 before the database is opened.
+- Every erasure writes a `data_subject_erasure` audit event with counts only.
+  Neither the audit event nor an error message contains the address.
+- Erasure is scoped to one organization: unlinked public-intake conversations
+  and prospect records are not covered (spec-inbound-channels, Follow-ups).
+- In development the same actions are `mix custyard.dsar ...`.
 
 ## Custom domain
 
