@@ -487,4 +487,82 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       refute has_element?(view, "[data-testid=rotate-channel-#{channel.id}]")
     end
   end
+
+  describe "IMAP" do
+    alias Custyard.Email.ImapClient.Stub
+
+    @imap_password "Kq9-imap-app-password"
+
+    defp create_imap_channel(conn, org, route, password) do
+      host = Stub.mailbox(password: @imap_password)
+      view = open_wizard(conn, org)
+
+      view
+      |> form("#channel-create-form", channel: %{"ingress_kind" => "imap"})
+      |> render_change()
+
+      assert has_element?(view, "[data-testid=channel-imap-fields]")
+      refute has_element?(view, "[data-testid=channel-provider-select]")
+
+      channel =
+        create_channel(view, route, %{
+          "ingress_kind" => "imap",
+          "provider" => nil,
+          "imap_host" => host,
+          "imap_port" => "993",
+          "imap_username" => "support@acme.example.com",
+          "imap_password" => password,
+          "imap_folder" => "INBOX"
+        })
+
+      {view, InboundChannels.get_channel!(channel.id)}
+    end
+
+    test "creating connects and moves to the test step", %{conn: conn, org: org, route: route} do
+      {view, channel} = create_imap_channel(conn, org, route, @imap_password)
+
+      assert channel.ingress_kind == :imap
+      assert channel.state == :awaiting_first_message
+      assert has_element?(view, "[data-testid=channel-setup-step-3][aria-current=step]")
+      refute render(view) =~ @imap_password
+    end
+
+    test "a rejected login stays on the connect step until the password is fixed", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {view, channel} = create_imap_channel(conn, org, route, "wrong")
+
+      assert channel.state == :pending_verification
+      assert has_element?(view, "[data-testid=channel-imap-step]")
+
+      assert view |> element("[data-testid=channel-setup-flash]") |> render() =~
+               "rejected the username or password"
+
+      view
+      |> form("#channel-imap-form-#{channel.id}", channel: %{"imap_password" => @imap_password})
+      |> render_submit()
+
+      assert InboundChannels.get_channel!(channel.id).state == :awaiting_first_message
+      assert has_element?(view, "[data-testid=channel-setup-step-3][aria-current=step]")
+    end
+
+    test "the card shows the mailbox and offers no token actions", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {view, channel} = create_imap_channel(conn, org, route, @imap_password)
+
+      assert view |> element("[data-testid=channel-provider-#{channel.id}]") |> render() =~
+               "IMAP mailbox"
+
+      assert view |> element("[data-testid=channel-imap-#{channel.id}]") |> render() =~
+               "Reads INBOX of support@acme.example.com"
+
+      refute has_element?(view, "[data-testid=reveal-channel-#{channel.id}]")
+      refute has_element?(view, "[data-testid=rotate-channel-#{channel.id}]")
+    end
+  end
 end

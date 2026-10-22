@@ -1119,6 +1119,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   end
 
   defp rejection_label(:no_channel), do: "no matching channel"
+  defp rejection_label(:too_large), do: "too large to import"
+  defp rejection_label(:unreadable), do: "could not be read"
   defp rejection_label(:channel_paused), do: "channel paused"
   defp rejection_label(:channel_revoked), do: "channel revoked"
   defp rejection_label(:auto_response), do: "auto-reply, no thread"
@@ -1288,6 +1290,27 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         </div>
       </div>
 
+      <%!-- IMAP: which mailbox is read and whether polling works --%>
+      <div
+        :if={@channel.ingress_kind == :imap}
+        class="text-xs text-gray-500 dark:text-zinc-400 flex flex-wrap items-center gap-x-2"
+        data-testid={"channel-imap-#{@channel.id}"}
+      >
+        <span>Reads {@channel.imap_folder} of {@channel.imap_username} on {@channel.imap_host}</span>
+        <span :if={@channel.imap_last_polled_at}>
+          · last checked {relative_time(@channel.imap_last_polled_at)}
+        </span>
+        <span
+          :if={@channel.imap_last_error}
+          class="px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300"
+          data-testid={"channel-imap-error-#{@channel.id}"}
+        >
+          {if @channel.imap_auth_failed_at,
+            do: "login failing: polling stopped",
+            else: CustyardWeb.Operator.ChannelSetupComponent.imap_error_text(@channel.imap_last_error)}
+        </span>
+      </div>
+
       <%!-- Direct MX: where the domain's mail goes; nothing secret to reveal --%>
       <div
         :if={@channel.ingress_kind == :mx}
@@ -1383,9 +1406,11 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   defp confirming(_confirm_action, _id), do: nil
 
   defp source_label(%InboundChannel{ingress_kind: :mx}), do: "Direct MX"
+  defp source_label(%InboundChannel{ingress_kind: :imap}), do: "IMAP mailbox"
   defp source_label(%InboundChannel{provider: provider}), do: provider_label(provider)
 
   defp quiet_hint(%InboundChannel{ingress_kind: :mx}), do: "check the MX record"
+  defp quiet_hint(%InboundChannel{ingress_kind: :imap}), do: "check the mailbox connection"
   defp quiet_hint(_channel), do: "check the forwarding rule"
 
   defp provider_label(:google), do: "Gmail forwarding"
