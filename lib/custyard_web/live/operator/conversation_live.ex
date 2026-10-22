@@ -757,17 +757,19 @@ defmodule CustyardWeb.Operator.ConversationLive do
   # composer never shows an address the reply will not go to.
   defp reply_recipient(conversation) do
     case Outbound.reply_recipient(conversation) do
-      {:ok, address} ->
-        contact_email = conversation.contact && conversation.contact.email
-        %{address: address, reply_to?: not same_address?(address, contact_email)}
-
-      {:error, _reason} ->
-        nil
+      {:ok, address} -> %{address: address, reply_to?: reply_to_override?(conversation, address)}
+      {:error, _reason} -> nil
     end
   end
 
-  defp same_address?(_address, nil), do: false
-  defp same_address?(address, other), do: String.downcase(address) == String.downcase(other)
+  # Only a contact's address can be overridden by a Reply-To; a prospect's
+  # recipient is always the captured address.
+  defp reply_to_override?(conversation, address) do
+    case Conversations.reply_channel(conversation) do
+      {:contact, email} -> String.downcase(address) != String.downcase(email)
+      _other -> false
+    end
+  end
 
   # Ground truth for this message: :withheld is only ever set by the
   # public-intake consent gate at send time, so this can't be fooled by a

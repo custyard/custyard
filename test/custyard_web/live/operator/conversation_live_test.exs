@@ -256,6 +256,18 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
                "alice@customer.example"
     end
 
+    test "shows an opted-in prospect's address, not as a Reply-To", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id, email: "p@example.com", notify_on_reply: true)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "p@example.com"
+
+      refute has_element?(view, ~s([data-testid="operator-reply-to-override"]))
+    end
+
     test "shows no To for a prospect who has not opted in", %{conn: conn} do
       conv = insert_conversation(source: :public_intake)
       insert_prospect(conversation_id: conv.id, email: "p@example.com", notify_on_reply: false)

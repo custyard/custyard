@@ -204,6 +204,8 @@ defmodule Custyard.Email.Outbound do
   empty emails, so the prospect channel only needs the consent check here.
   """
   def reply_recipient(conversation) do
+    conversation = Repo.preload(conversation, [:contact, :prospect])
+
     case Conversations.reply_channel(conversation) do
       {:contact, email} -> {:ok, reply_to_override(conversation, email) || email}
       {:prospect, email} -> prospect_recipient(conversation.prospect, email)

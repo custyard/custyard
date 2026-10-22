@@ -323,14 +323,23 @@ defmodule Custyard.Email.DeliveryStatus do
     Outbound.broadcast_delivery_update(message)
   end
 
-  # A notice failure is logged by the notifier and never fails the webhook:
-  # the transition is committed, and a retried event would not advance.
+  # A notice failure never fails the webhook: the transition is committed,
+  # and a retried event would not advance. The notifier logs an error
+  # result; a raise is logged here by type only, since its message may name
+  # the recipient.
   defp notify_operator(%Message{delivery_status: status} = message, data)
        when status in @notified_statuses do
     %Message{conversation: conversation} =
       Repo.preload(message, conversation: [:organization, :contact])
 
     NotificationEmail.deliver_delivery_failure(conversation, status, data["recipient"])
+  rescue
+    exception ->
+      Logger.error(
+        "Delivery failure notice for message #{message.id} raised #{inspect(exception.__struct__)}"
+      )
+
+      :error
   end
 
   defp notify_operator(_message, _data), do: :ok
