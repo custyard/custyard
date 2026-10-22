@@ -3,11 +3,15 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   Guided setup for one inbound channel (spec-inbound-channels, "Operator
   onboarding"). Four steps, each resumable from the channel state:
 
-  1. create: public address, route, provider
-  2. forward: ingress address plus provider instructions; waits for the
-     provider confirmation captured by triage and shows the code or link
+  1. create: public address, route, how mail arrives, provider
+  2. connect, by ingress kind (D8):
+     - forward: ingress address plus provider instructions; waits for the
+       provider confirmation captured by triage and shows the code or link
+     - mx: the MX record to publish for the custom domain and a check that
+       asks Lettermint whether it is in place
   3. test: send a test email; completes when the first delivery arrives
-  4. reply identity: sending-domain check and the ingress-address fallback
+  4. reply identity: sending-domain check and, for forwarding channels, the
+     ingress-address fallback and the archive copy
 
   The parent LiveView owns the data. It passes the current `channel` (nil
   for a new one) and reloads it on `{:channel_updated, id}`; this component
@@ -20,11 +24,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
 
   alias Custyard.{InboundChannel, InboundChannels, InboundRoute}
 
-  @steps [
-    {1, :create, "Address"},
-    {2, :forward, "Forward"},
-    {3, :test, "Test"},
-    {4, :reply, "Replies"}
+  @ingress_kinds [
+    {"forward", "Forward from an existing mailbox"},
+    {"mx", "Direct MX on a dedicated subdomain"}
   ]
 
   @providers [
@@ -75,12 +77,14 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     end
   end
 
-  # The full ingress address is shown on step 2; D7 asks for an audit event
-  # each time it is revealed. Once per channel per wizard session.
+  # The full ingress address is shown on step 2 of a forwarding channel; D7
+  # asks for an audit event each time it is revealed. Once per channel per
+  # wizard session.
   defp maybe_record_reveal(socket) do
     %{channel: channel, step: step, revealed_for: revealed_for} = socket.assigns
 
-    if (step == 2 and channel) && channel.id != revealed_for do
+    if (step == 2 and channel) && InboundChannel.forwarding?(channel) &&
+         channel.id != revealed_for do
       InboundChannels.record_reveal(channel, operator: socket.assigns.current_operator)
       assign(socket, :revealed_for, channel.id)
     else
@@ -104,7 +108,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   end
 
   def handle_event("create", %{"channel" => params}, socket) do
-    attrs = Map.take(params, ~w(public_address display_name provider))
+    attrs = Map.take(params, ~w(public_address display_name ingress_kind provider))
 
     case selectable_route(socket.assigns.routes, Map.get(params, "inbound_route_id")) do
       nil ->
@@ -140,6 +144,24 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   def handle_event("confirm_forwarding", _params, socket) do
     with_channel(socket, fn channel ->
       InboundChannels.confirm_verification(channel, operator: socket.assigns.current_operator)
+    end)
+  end
+
+  def handle_event("check_mx", _params, socket) do
+    with_channel(socket, fn channel ->
+      case InboundChannels.check_mx(channel, operator: socket.assigns.current_operator) do
+        {:ok, %InboundChannel{state: :pending_verification}, result} ->
+          {:error, mx_failure_message(result)}
+
+        {:ok, channel, _result} ->
+          {:ok, channel}
+
+        {:error, %Ecto.Changeset{}} = error ->
+          error
+
+        {:error, reason} ->
+          {:error, "MX check failed: #{inspect(reason)}"}
+      end
     end)
   end
 
@@ -196,6 +218,16 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     {:noreply, socket}
   end
 
+  defp mx_failure_message(result) do
+    found =
+      case result["found_mx_records"] do
+        [_ | _] = records -> "Lettermint found #{Enum.join(records, ", ")}."
+        _ -> "Lettermint found no MX record."
+      end
+
+    "Not verified yet. #{found} DNS changes can take a while to propagate; check again later."
+  end
+
   defp with_channel(%{assigns: %{channel: nil}} = socket, _fun), do: {:noreply, socket}
 
   defp with_channel(socket, fun) do
@@ -247,8 +279,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   def render(assigns) do
     assigns =
       assigns
-      |> assign(:steps, @steps)
+      |> assign(:steps, steps(assigns.channel))
       |> assign(:providers, @providers)
+      |> assign(:ingress_kinds, @ingress_kinds)
 
     ~H"""
     <div
@@ -261,7 +294,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             {if @channel, do: "Channel setup: #{@channel.public_address}", else: "New channel"}
           </h3>
           <p class="text-xs text-gray-500 dark:text-zinc-400 mt-0.5">
-            Forward a support mailbox into Custyard. Each step picks up where the channel left off.
+            Connect a support address to Custyard. Each step picks up where the channel left off.
           </p>
         </div>
         <button
@@ -294,9 +327,19 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
 
       <%= case @step do %>
         <% 1 -> %>
-          <.create_step form={@form} routes={@routes} providers={@providers} myself={@myself} />
+          <.create_step
+            form={@form}
+            routes={@routes}
+            providers={@providers}
+            ingress_kinds={@ingress_kinds}
+            myself={@myself}
+          />
         <% 2 -> %>
-          <.forward_step channel={@channel} myself={@myself} />
+          <%= if @channel.ingress_kind == :mx do %>
+            <.dns_step channel={@channel} myself={@myself} />
+          <% else %>
+            <.forward_step channel={@channel} myself={@myself} />
+          <% end %>
         <% 3 -> %>
           <.test_step channel={@channel} />
         <% 4 -> %>
@@ -348,6 +391,17 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     """
   end
 
+  defp steps(%InboundChannel{ingress_kind: :mx}),
+    do: [{1, :create, "Address"}, {2, :dns, "DNS"}, {3, :test, "Test"}, {4, :reply, "Replies"}]
+
+  defp steps(_channel),
+    do: [
+      {1, :create, "Address"},
+      {2, :forward, "Forward"},
+      {3, :test, "Test"},
+      {4, :reply, "Replies"}
+    ]
+
   defp step_done?(nil, _number), do: false
   defp step_done?(_channel, 1), do: true
 
@@ -364,9 +418,12 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   attr :form, :any, required: true
   attr :routes, :list, required: true
   attr :providers, :list, required: true
+  attr :ingress_kinds, :list, required: true
   attr :myself, :any, required: true
 
   defp create_step(assigns) do
+    assigns = assign(assigns, :kind, to_string(assigns.form[:ingress_kind].value || "forward"))
+
     ~H"""
     <.form
       for={@form}
@@ -444,6 +501,33 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           </p>
         </div>
         <div>
+          <label
+            for={@form[:ingress_kind].id}
+            class="block text-xs font-medium text-gray-700 dark:text-zinc-300 mb-1"
+          >
+            How mail arrives
+          </label>
+          <select
+            id={@form[:ingress_kind].id}
+            name={@form[:ingress_kind].name}
+            class="w-full text-sm rounded-md border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
+            data-testid="channel-ingress-kind-select"
+          >
+            <option :for={{value, label} <- @ingress_kinds} value={value} selected={@kind == value}>
+              {label}
+            </option>
+          </select>
+          <p
+            :if={@kind == "mx"}
+            class="mt-1 text-xs text-gray-500 dark:text-zinc-400"
+            data-testid="channel-mx-hint"
+          >
+            Customers write straight to an address on a subdomain whose MX record points at
+            Lettermint, such as support@help.companyname.com. Use a subdomain no mailbox uses.
+          </p>
+          <.field_errors field={@form[:ingress_kind]} />
+        </div>
+        <div :if={@kind == "forward"}>
           <label
             for={@form[:provider].id}
             class="block text-xs font-medium text-gray-700 dark:text-zinc-300 mb-1"
@@ -624,6 +708,67 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     """
   end
 
+  # --- Step 2 (direct MX): DNS ---
+
+  attr :channel, :any, required: true
+  attr :myself, :any, required: true
+
+  defp dns_step(assigns) do
+    assigns = assign(assigns, :domain, InboundChannel.public_domain(assigns.channel))
+
+    ~H"""
+    <div class="space-y-4" data-testid="channel-dns-step">
+      <section class="space-y-2">
+        <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">
+          1. Publish this record at your DNS provider
+        </h4>
+        <div class="overflow-x-auto">
+          <table class="text-sm" data-testid="channel-mx-record">
+            <thead>
+              <tr class="text-left text-xs text-gray-500 dark:text-zinc-400">
+                <th class="pr-4 font-medium">Type</th>
+                <th class="pr-4 font-medium">Host</th>
+                <th class="pr-4 font-medium">Priority</th>
+                <th class="font-medium">Value</th>
+              </tr>
+            </thead>
+            <tbody class="font-mono text-gray-900 dark:text-zinc-100">
+              <tr>
+                <td class="pr-4">MX</td>
+                <td class="pr-4 break-all">{@domain}</td>
+                <td class="pr-4">10</td>
+                <td>lettermint.mx</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-zinc-400">
+          Some DNS providers want only the host part. Add no other MX records for {@domain}: every
+          message to that domain then arrives in Custyard, so it must not be a domain a mailbox uses.
+        </p>
+      </section>
+
+      <section class="rounded border border-gray-200 dark:border-zinc-700 p-3 space-y-2">
+        <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">2. Check the record</h4>
+        <p class="text-sm text-gray-600 dark:text-zinc-400">
+          Lettermint looks the record up when you check. The first message to {@channel.public_address} also completes this step on its own.
+        </p>
+        <div class="flex justify-end">
+          <button
+            type="button"
+            phx-click="check_mx"
+            phx-target={@myself}
+            class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
+            data-testid="channel-check-mx"
+          >
+            Check MX record
+          </button>
+        </div>
+      </section>
+    </div>
+    """
+  end
+
   attr :provider, :atom, required: true
 
   defp provider_instructions(%{provider: :google} = assigns) do
@@ -708,7 +853,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           class="rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950 px-3 py-2 text-sm text-green-800 dark:text-green-200"
           data-testid="channel-setup-complete"
         >
-          First message received. Forwarding works and the channel is active.
+          First message received. {arrival_text(@channel)} and the channel is active.
         </div>
       <% else %>
         <p class="text-sm text-gray-700 dark:text-zinc-300" data-testid="channel-test-prompt">
@@ -724,6 +869,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     </div>
     """
   end
+
+  defp arrival_text(%InboundChannel{ingress_kind: :mx}), do: "The MX record works"
+  defp arrival_text(_channel), do: "Forwarding works"
 
   # --- Step 4: reply identity ---
 
@@ -767,13 +915,21 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             <% :unchecked -> %>
               Not checked yet. Replies are sent as {@channel.public_address} once the domain is verified in Lettermint.
             <% _ -> %>
-              {@domain} is not a verified sending domain in Lettermint. Add the DKIM CNAME records and the
-              SPF include for the root domain in Lettermint, then check again. Until then, replies from
-              the public address will fail authentication; the fallback below replies from the ingress
-              address instead.
+              <%= if InboundChannel.forwarding?(@channel) do %>
+                {@domain} is not a verified sending domain in Lettermint. Add the DKIM CNAME records and the
+                SPF include for the root domain in Lettermint, then check again. Until then, replies from
+                the public address will fail authentication; the fallback below replies from the ingress
+                address instead.
+              <% else %>
+                {@domain} is not a verified sending domain in Lettermint. Add it in Lettermint with its
+                DKIM CNAME records and SPF include, then check again. Until then, replies from {@channel.public_address} will fail authentication.
+              <% end %>
           <% end %>
         </p>
-        <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-zinc-300">
+        <label
+          :if={InboundChannel.forwarding?(@channel)}
+          class="flex items-start gap-2 text-sm text-gray-700 dark:text-zinc-300"
+        >
           <input
             type="checkbox"
             name="reply_from"
@@ -800,8 +956,12 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
 
       <section class="rounded border border-gray-200 dark:border-zinc-700 p-3 space-y-3">
         <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">Mailbox and attachments</h4>
-        <%!-- D4: archive copy, admin-only, audited through update_channel. --%>
-        <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-zinc-300">
+        <%!-- D4: archive copy, admin-only, audited through update_channel. A
+             direct-MX channel has no mailbox to keep the copy in. --%>
+        <label
+          :if={@channel.ingress_kind != :mx}
+          class="flex items-start gap-2 text-sm text-gray-700 dark:text-zinc-300"
+        >
           <input
             type="checkbox"
             name="archive_copy"
@@ -822,6 +982,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         </label>
         <%!-- D9: per-message attachment cap. --%>
         <form
+          id={"attachment-limit-form-#{@channel.id}"}
           phx-change="set_attachment_limit"
           phx-target={@myself}
           class="flex items-center gap-2 text-sm text-gray-700 dark:text-zinc-300"
@@ -869,6 +1030,17 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   end
 
   @doc false
+  def data_path_text(%InboundChannel{ingress_kind: :mx} = channel) do
+    domain = InboundChannel.public_domain(channel)
+
+    """
+    Inbound mail for #{channel.public_address}
+    1. Customer -> Lettermint B.V., Zwolle, Netherlands (EU; GDPR Art. 28 processor, public DPA): the MX record for #{domain} delivers the message directly. Lettermint keeps the raw message for 28 days.
+    2. Lettermint -> this Custyard instance: #{stored_text(channel)}
+    Replies: this Custyard instance -> Lettermint -> customer. No other mailbox holds a copy.
+    """
+  end
+
   def data_path_text(channel) do
     provider = provider_name(channel.provider)
     domain = InboundChannel.public_domain(channel)
@@ -877,9 +1049,15 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     Inbound mail for #{channel.public_address}
     1. Customer -> #{domain} (#{provider}): the public mailbox receives the message.
     2. #{provider} -> Lettermint B.V., Zwolle, Netherlands (EU; GDPR Art. 28 processor, public DPA): the forwarding rule delivers a copy to the ingress address. Lettermint keeps the raw message for 28 days.
-    3. Lettermint -> this Custyard instance: parsed text body, sanitised HTML, attachments up to #{channel.attachment_limit_mb} MB per message, addresses needed to reply, authentication summary and spam score are stored. Raw messages, signed URLs and full headers are not.
+    3. Lettermint -> this Custyard instance: #{stored_text(channel)}
     Replies: this Custyard instance -> Lettermint -> customer.#{archive_copy_line(channel)}
     """
+  end
+
+  defp stored_text(channel) do
+    "parsed text body, sanitised HTML, attachments up to #{channel.attachment_limit_mb} MB per " <>
+      "message, addresses needed to reply, authentication summary and spam score are stored. " <>
+      "Raw messages, signed URLs and full headers are not."
   end
 
   defp archive_copy_line(%{archive_copy: true, public_address: address}),

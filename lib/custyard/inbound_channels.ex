@@ -10,7 +10,9 @@ defmodule Custyard.InboundChannels do
     * Reply identity (D3): `check_sending_domain/2` records whether the
       public address domain is a verified Lettermint sending domain
     * Routing: `resolve_for_delivery/2` maps a delivery's envelope recipient
-      to a channel on the route by token (D2)
+      to a channel on the route by token (D2), or to a direct-MX channel by
+      public address on the route's custom domain (D8); `check_mx/2` checks
+      that domain's MX record
     * Health: `mark_received/2` on every accepted delivery,
       `check_quiet_channels/1` run by `Custyard.Scoring.Scheduler`, and the
       rejection log; `sweep_expired/1` is run by
@@ -28,7 +30,15 @@ defmodule Custyard.InboundChannels do
 
   require Logger
 
-  alias Custyard.{AuditEvent, InboundChannel, InboundChannelRejection, InboundRoute, Repo}
+  alias Custyard.{
+    AuditEvent,
+    InboundChannel,
+    InboundChannelRejection,
+    InboundRoute,
+    InboundRoutes,
+    Repo
+  }
+
   alias Custyard.Lettermint.Client
   alias Custyard.Notifications.Email, as: NotificationEmail
 
@@ -89,16 +99,21 @@ defmodule Custyard.InboundChannels do
   @doc """
   The ingress address customers' mail is forwarded to, or nil when the
   route's ingress domain is not known yet. Accepts a channel with the route
-  preloaded, or loads it.
+  preloaded, or loads it. Only forwarding channels have one: direct-MX
+  mail arrives at the public address and IMAP mail is fetched.
   """
-  def ingress_address(%InboundChannel{} = channel) do
+  def ingress_address(%InboundChannel{ingress_kind: :forward} = channel) do
     InboundChannel.ingress_address(channel, ingress_domain(channel))
   end
 
-  @doc "Masked ingress address for lists."
-  def masked_ingress_address(%InboundChannel{} = channel) do
+  def ingress_address(%InboundChannel{}), do: nil
+
+  @doc "Masked ingress address for lists (nil for channels without one)."
+  def masked_ingress_address(%InboundChannel{ingress_kind: :forward} = channel) do
     InboundChannel.masked_ingress_address(channel, ingress_domain(channel))
   end
+
+  def masked_ingress_address(%InboundChannel{}), do: nil
 
   @doc """
   The From address for operator replies on this channel (D3): the public
@@ -136,8 +151,17 @@ defmodule Custyard.InboundChannels do
   Create a channel on a route. The channel starts in `pending_verification`:
   the setup screen shows the ingress address immediately, which is the D7
   trigger for that state. `attrs` carries `public_address`, optional
-  `display_name`, `provider`, `reply_from`; route, organization and project
-  come from the route.
+  `display_name`, `ingress_kind` (default `forward`), `provider`,
+  `reply_from`; route, organization and project come from the route.
+
+  A direct-MX channel (`ingress_kind: :mx`) receives mail at its public
+  address on the route's custom domain. Creating the first one sets that
+  domain in Lettermint; later ones must be on it. The channel waits in
+  `pending_verification` until `check_mx/2` sees the MX record, and starts
+  in `awaiting_first_message` when the domain is already verified. The
+  public address must not be on a domain a forwarding channel of the
+  organization already uses: pointing that domain's MX at Lettermint would
+  take mail away from the operator's mailbox.
 
   `opts[:operator]` is recorded on the audit event.
   """
@@ -149,12 +173,10 @@ defmodule Custyard.InboundChannels do
       |> Map.put("organization_id", route.organization_id)
       |> Map.put("project_id", route.project_id)
 
-    changeset =
-      %InboundChannel{}
-      |> InboundChannel.changeset(attrs)
-      |> Ecto.Changeset.put_change(:state, :pending_verification)
+    changeset = InboundChannel.changeset(%InboundChannel{}, attrs)
 
-    with {:ok, channel} <- Repo.insert(changeset) do
+    with {:ok, changeset} <- prepare_ingress(changeset, route),
+         {:ok, channel} <- Repo.insert(changeset) do
       audit(channel, :channel_created, opts, %{
         public_address: channel.public_address,
         provider: channel.provider,
@@ -166,9 +188,94 @@ defmodule Custyard.InboundChannels do
     end
   end
 
+  # Initial state and, for direct MX, the route's custom domain. Validation
+  # runs first so an invalid form never touches Lettermint.
+  defp prepare_ingress(%Ecto.Changeset{valid?: false} = changeset, _route),
+    do: {:error, changeset}
+
+  defp prepare_ingress(changeset, route) do
+    case Ecto.Changeset.get_field(changeset, :ingress_kind) do
+      :mx -> prepare_mx(changeset, route)
+      _kind -> {:ok, Ecto.Changeset.put_change(changeset, :state, :pending_verification)}
+    end
+  end
+
+  defp prepare_mx(changeset, route) do
+    domain = changeset |> Ecto.Changeset.get_field(:public_address) |> address_domain()
+
+    with :ok <- check_not_forwarding_domain(route.organization_id, domain),
+         {:ok, route} <- ensure_custom_domain(route, domain) do
+      {:ok, put_mx_state(changeset, route)}
+    else
+      {:error, message} when is_binary(message) ->
+        {:error, Ecto.Changeset.add_error(changeset, :public_address, message)}
+    end
+  end
+
+  defp put_mx_state(changeset, route) do
+    if InboundRoute.custom_domain_verified?(route) do
+      changeset
+      |> Ecto.Changeset.put_change(:state, :awaiting_first_message)
+      |> Ecto.Changeset.put_change(:verified_at, now())
+    else
+      Ecto.Changeset.put_change(changeset, :state, :pending_verification)
+    end
+  end
+
+  defp check_not_forwarding_domain(organization_id, domain) do
+    forwarding_domain? =
+      from(c in InboundChannel,
+        where:
+          c.organization_id == ^organization_id and c.ingress_kind == :forward and
+            c.state != :revoked,
+        select: c.public_address
+      )
+      |> Repo.all()
+      |> Enum.any?(&(address_domain(&1) == domain))
+
+    if forwarding_domain?,
+      do:
+        {:error,
+         "is on #{domain}, whose mail your provider hosts; use a dedicated subdomain such as help.#{domain}"},
+      else: :ok
+  end
+
+  defp ensure_custom_domain(route, domain) do
+    if InboundRoute.custom_domain_covers?(route, domain) do
+      {:ok, route}
+    else
+      case InboundRoutes.set_custom_domain(route, domain) do
+        {:ok, route} ->
+          {:ok, route}
+
+        {:error, :domain_in_use} ->
+          {:error,
+           "must be on #{route.lettermint_custom_domain}, the domain this route already receives mail for"}
+
+        {:error, :not_a_lettermint_route} ->
+          {:error, "needs a Lettermint route"}
+
+        {:error, %Ecto.Changeset{}} ->
+          {:error, "is not on a domain Lettermint can receive mail for"}
+
+        {:error, _reason} ->
+          {:error, "could not be set up in Lettermint; try again"}
+      end
+    end
+  end
+
+  defp address_domain(address) when is_binary(address) do
+    address |> String.split("@", parts: 2) |> List.last() |> String.downcase()
+  end
+
+  defp address_domain(_address), do: nil
+
   @doc "Update operator-editable attributes (display name, provider, reply_from, quiet window)."
   def update_channel(%InboundChannel{} = channel, attrs, opts \\ []) when is_map(attrs) do
-    attrs = Map.drop(Map.new(attrs, fn {k, v} -> {to_string(k), v} end), ~w(public_address))
+    attrs =
+      attrs
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.drop(~w(public_address ingress_kind))
 
     with {:ok, updated} <- channel |> InboundChannel.changeset(attrs) |> Repo.update() do
       audit(updated, :channel_updated, opts, %{changed: Map.keys(attrs)})
@@ -192,6 +299,38 @@ defmodule Custyard.InboundChannels do
 
   def confirm_verification(%InboundChannel{} = channel, _opts),
     do: {:error, invalid_state(channel, :confirm_verification)}
+
+  @doc """
+  Direct MX (D8): ask Lettermint whether the route's custom domain MX record
+  is in place. On success a channel still in `pending_verification` moves
+  to `awaiting_first_message`.
+
+  Returns `{:ok, channel, result}` with Lettermint's verification map
+  (`"verified"`, `"message"`, `"expected_mx_records"`, `"found_mx_records"`),
+  or `{:error, reason}`.
+  """
+  def check_mx(channel, opts \\ [])
+
+  def check_mx(%InboundChannel{ingress_kind: :mx} = channel, opts) do
+    route = Repo.get!(InboundRoute, channel.inbound_route_id)
+
+    with {:ok, _route, result} <- InboundRoutes.verify_custom_domain(route),
+         {:ok, channel} <- confirm_if_verified(channel, result, opts) do
+      {:ok, channel, result}
+    end
+  end
+
+  def check_mx(%InboundChannel{} = channel, _opts),
+    do: {:error, invalid_state(channel, :check_mx)}
+
+  defp confirm_if_verified(
+         %InboundChannel{state: :pending_verification} = channel,
+         %{"verified" => true},
+         opts
+       ),
+       do: confirm_verification(channel, opts)
+
+  defp confirm_if_verified(channel, _result, _opts), do: {:ok, channel}
 
   @doc "Store a provider forwarding confirmation captured by triage (D6)."
   def capture_verification(%InboundChannel{} = channel, %{} = capture, opts \\ []) do
@@ -254,6 +393,10 @@ defmodule Custyard.InboundChannels do
   def rotate_token(channel, opts \\ [])
 
   def rotate_token(%InboundChannel{state: :revoked} = channel, _opts),
+    do: {:error, invalid_state(channel, :rotate_token)}
+
+  # Only forwarding channels route by token; there is nothing to rotate.
+  def rotate_token(%InboundChannel{ingress_kind: kind} = channel, _opts) when kind != :forward,
     do: {:error, invalid_state(channel, :rotate_token)}
 
   def rotate_token(%InboundChannel{} = channel, opts) do
@@ -423,10 +566,15 @@ defmodule Custyard.InboundChannels do
   @doc """
   Map a delivery to a channel on `route` from its envelope recipient.
 
+  A forwarding channel matches by token: the recipient's subaddress equals
+  its current or in-grace previous token. When no token matches, a
+  direct-MX channel matches when the recipient, without any `+tag`, is its
+  public address on a domain the route's custom domain covers. IMAP
+  channels never match here: their mail does not arrive through Lettermint.
+
   Returns:
 
-    * `{:ok, channel}` for a receiving channel whose current or in-grace
-      previous token matches the recipient's subaddress
+    * `{:ok, channel}` for a receiving channel that matched
     * `{:paused, channel}` / `{:revoked, channel}` when the token matched a
       channel that must not create conversations
     * `:legacy` when the route has no channels at all (routes created before
@@ -436,37 +584,63 @@ defmodule Custyard.InboundChannels do
   Only the recipient (`data.recipient`, falling back to `normalized.to`) is
   consulted, never To/Cc. Local part and token are compared lowercased.
   """
-  def resolve_for_delivery(%InboundRoute{id: route_id}, recipient) do
+  def resolve_for_delivery(%InboundRoute{id: route_id} = route, recipient) do
     case list_for_route(route_id) do
       [] ->
         :legacy
 
       channels ->
-        case parse_recipient(recipient) do
-          {:ok, _local, token} -> match_token(channels, token)
-          :error -> {:error, :no_channel}
-        end
+        classify_match(
+          match_token(channels, recipient) || match_direct(route, channels, recipient)
+        )
     end
   end
 
-  defp match_token(channels, token) do
+  defp match_token(channels, recipient) do
     now = now()
 
-    matched =
-      Enum.find(channels, fn channel ->
-        channel.ingress_token == token or
-          (channel.previous_ingress_token == token and
-             InboundChannel.previous_token_valid?(channel, now))
-      end)
+    case parse_recipient(recipient) do
+      {:ok, _local, token} ->
+        Enum.find(channels, fn channel ->
+          InboundChannel.forwarding?(channel) and
+            (channel.ingress_token == token or
+               (channel.previous_ingress_token == token and
+                  InboundChannel.previous_token_valid?(channel, now)))
+        end)
 
-    case matched do
-      nil -> {:error, :no_channel}
-      %InboundChannel{state: :paused} = channel -> {:paused, channel}
-      %InboundChannel{state: :revoked} = channel -> {:revoked, channel}
-      %InboundChannel{state: :draft} -> {:error, :no_channel}
-      channel -> {:ok, channel}
+      :error ->
+        nil
     end
   end
+
+  defp match_direct(route, channels, recipient) do
+    with address when is_binary(address) <- base_address(recipient),
+         true <- InboundRoute.custom_domain_covers?(route, address_domain(address)) do
+      Enum.find(channels, &(&1.ingress_kind == :mx and &1.public_address == address))
+    else
+      _ -> nil
+    end
+  end
+
+  # `support+order-42@help.acme.com` -> `support@help.acme.com`.
+  defp base_address(recipient) when is_binary(recipient) do
+    case recipient |> String.trim() |> String.downcase() |> String.split("@") do
+      [local, domain] when local != "" and domain != "" ->
+        base = local |> String.split("+", parts: 2) |> List.first()
+        if base == "", do: nil, else: base <> "@" <> domain
+
+      _ ->
+        nil
+    end
+  end
+
+  defp base_address(_recipient), do: nil
+
+  defp classify_match(nil), do: {:error, :no_channel}
+  defp classify_match(%InboundChannel{state: :paused} = channel), do: {:paused, channel}
+  defp classify_match(%InboundChannel{state: :revoked} = channel), do: {:revoked, channel}
+  defp classify_match(%InboundChannel{state: :draft}), do: {:error, :no_channel}
+  defp classify_match(%InboundChannel{} = channel), do: {:ok, channel}
 
   @doc false
   def parse_recipient(recipient) when is_binary(recipient) do

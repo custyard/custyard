@@ -1188,7 +1188,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             <span :if={@channel.display_name} data-testid={"channel-display-name-#{@channel.id}"}>
               {@channel.display_name}
             </span>
-            <span data-testid={"channel-provider-#{@channel.id}"}>{provider_label(@channel.provider)}</span>
+            <span data-testid={"channel-provider-#{@channel.id}"}>{source_label(@channel)}</span>
             <span aria-hidden="true">·</span>
             <span data-testid={"channel-scope-#{@channel.id}"}>
               {if @channel.project, do: @channel.project.title, else: "Organization-wide"}
@@ -1265,7 +1265,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
                 Pause
               </button>
               <button
-                :if={@channel.state != :revoked}
+                :if={@channel.state != :revoked and InboundChannel.forwarding?(@channel)}
                 phx-click="confirm_channel_action"
                 phx-value-id={@channel.id}
                 phx-value-action="rotate"
@@ -1288,8 +1288,20 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         </div>
       </div>
 
+      <%!-- Direct MX: where the domain's mail goes; nothing secret to reveal --%>
+      <div
+        :if={@channel.ingress_kind == :mx}
+        class="text-xs text-gray-500 dark:text-zinc-400"
+        data-testid={"channel-mx-#{@channel.id}"}
+      >
+        Receives mail directly: MX 10 lettermint.mx for {InboundChannel.public_domain(@channel)}
+      </div>
+
       <%!-- Ingress address: masked unless explicitly revealed; admins only --%>
-      <div :if={@can_manage} class="flex flex-wrap items-center gap-2">
+      <div
+        :if={@can_manage and InboundChannel.forwarding?(@channel)}
+        class="flex flex-wrap items-center gap-2"
+      >
         <span class="text-xs text-gray-500 dark:text-zinc-400">Forwarding to</span>
         <%= if @revealed do %>
           <code
@@ -1348,7 +1360,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           class="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
           data-testid={"channel-quiet-#{@channel.id}"}
         >
-          quiet for over {@channel.quiet_after_hours}h: check the forwarding rule
+          quiet for over {@channel.quiet_after_hours}h: {quiet_hint(@channel)}
         </span>
         <span class="ml-auto flex items-center gap-2">
           <.sending_domain_pill summary={@summary} id={@channel.id} />
@@ -1369,6 +1381,12 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   defp confirming({action, id}, id), do: action
   defp confirming(_confirm_action, _id), do: nil
+
+  defp source_label(%InboundChannel{ingress_kind: :mx}), do: "Direct MX"
+  defp source_label(%InboundChannel{provider: provider}), do: provider_label(provider)
+
+  defp quiet_hint(%InboundChannel{ingress_kind: :mx}), do: "check the MX record"
+  defp quiet_hint(_channel), do: "check the forwarding rule"
 
   defp provider_label(:google), do: "Google Workspace"
   defp provider_label(:proton), do: "Proton Mail"

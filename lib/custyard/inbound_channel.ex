@@ -138,6 +138,7 @@ defmodule Custyard.InboundChannel do
       greater_than_or_equal_to: 0,
       less_than_or_equal_to: 100
     )
+    |> validate_kind_rules()
     |> put_ingress_local()
     |> maybe_generate_token()
     |> validate_format(:ingress_local, @local_regex,
@@ -276,6 +277,10 @@ defmodule Custyard.InboundChannel do
   def verification_valid?(%__MODULE__{verification_expires_at: expires}, now),
     do: DateTime.compare(expires, now) == :gt
 
+  @doc "True for channels that route by ingress token (forwarding channels)."
+  def forwarding?(%__MODULE__{ingress_kind: :forward}), do: true
+  def forwarding?(%__MODULE__{}), do: false
+
   @doc "States in which deliveries become conversations."
   def receiving?(%__MODULE__{state: state}),
     do: state in [:pending_verification, :awaiting_first_message, :active]
@@ -298,6 +303,34 @@ defmodule Custyard.InboundChannel do
   end
 
   def normalize_address(value), do: value
+
+  # D8: only forwarding channels have a forwarding source to hint at or an
+  # ingress address to reply from. A direct-MX channel has no mailbox, so an
+  # archive copy BCC'd to the public address would only come straight back.
+  # Every kind keeps an ingress token (the column is non-null), but only
+  # forwarding channels route by it.
+  defp validate_kind_rules(changeset) do
+    case get_field(changeset, :ingress_kind) do
+      :forward ->
+        changeset
+
+      kind ->
+        changeset
+        |> put_change(:provider, nil)
+        |> validate_inclusion(:reply_from, [:public_address],
+          message: "must be the public address for #{kind} channels"
+        )
+        |> validate_no_archive_copy(kind)
+    end
+  end
+
+  defp validate_no_archive_copy(changeset, :mx) do
+    if get_field(changeset, :archive_copy) == true,
+      do: add_error(changeset, :archive_copy, "is not available for direct-MX channels"),
+      else: changeset
+  end
+
+  defp validate_no_archive_copy(changeset, _kind), do: changeset
 
   # The ingress local part mirrors the public address local part. Characters
   # outside the conservative set are replaced so the derived value always

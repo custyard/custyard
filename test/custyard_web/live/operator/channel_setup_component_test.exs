@@ -59,6 +59,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
           },
           attrs
         )
+        |> Map.reject(fn {_key, value} -> is_nil(value) end)
     )
     |> render_submit()
 
@@ -355,6 +356,112 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       assert text =~ "this Custyard instance"
       assert text =~ "support@acme.example.com"
       assert has_element?(view, "[data-testid=channel-copy-data-path][data-clipboard-text]")
+    end
+  end
+
+  describe "direct MX" do
+    setup do
+      on_exit(fn -> Application.delete_env(:custyard, :lettermint_mock_inbound_verification) end)
+      :ok
+    end
+
+    defp create_mx_channel(conn, org, route) do
+      view = open_wizard(conn, org)
+
+      view
+      |> form("#channel-create-form", channel: %{"ingress_kind" => "mx"})
+      |> render_change()
+
+      assert has_element?(view, "[data-testid=channel-mx-hint]")
+      refute has_element?(view, "[data-testid=channel-provider-select]")
+
+      channel =
+        create_channel(view, route, %{
+          "public_address" => "support@help.acme.example.com",
+          "ingress_kind" => "mx",
+          "provider" => nil
+        })
+
+      {view, channel}
+    end
+
+    test "creating shows the MX record to publish, not an ingress address", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {view, channel} = create_mx_channel(conn, org, route)
+
+      assert channel.ingress_kind == :mx
+      assert channel.provider == nil
+      assert has_element?(view, "[data-testid=channel-setup-step-2][aria-current=step]")
+      assert view |> element("[data-testid=channel-setup-step-2]") |> render() =~ "DNS"
+
+      record = view |> element("[data-testid=channel-mx-record]") |> render()
+      assert record =~ "help.acme.example.com"
+      assert record =~ "lettermint.mx"
+      refute has_element?(view, "[data-testid=channel-setup-ingress-address]")
+      assert Repo.all(from(a in AuditEvent, where: a.event_type == :channel_token_revealed)) == []
+    end
+
+    test "an unverified check reports what Lettermint found", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {view, channel} = create_mx_channel(conn, org, route)
+
+      Application.put_env(
+        :custyard,
+        :lettermint_mock_inbound_verification,
+        {:ok, %{"verified" => false, "found_mx_records" => ["10 mx.other.net"]}}
+      )
+
+      view |> element("[data-testid=channel-check-mx]") |> render_click()
+
+      assert view |> element("[data-testid=channel-setup-flash]") |> render() =~
+               "Lettermint found 10 mx.other.net"
+
+      assert InboundChannels.get_channel!(channel.id).state == :pending_verification
+    end
+
+    test "a verified check moves to the test step", %{conn: conn, org: org, route: route} do
+      {view, channel} = create_mx_channel(conn, org, route)
+
+      view |> element("[data-testid=channel-check-mx]") |> render_click()
+
+      assert has_element?(view, "[data-testid=channel-setup-step-3][aria-current=step]")
+      assert InboundChannels.get_channel!(channel.id).state == :awaiting_first_message
+    end
+
+    test "the replies step has no ingress fallback or archive copy", %{conn: conn, org: org} do
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          ingress_kind: :mx,
+          public_address: "support@help.acme.example.com",
+          state: :active,
+          last_received_at: DateTime.truncate(DateTime.utc_now(), :second)
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}?tab=channels")
+      render_click(view, "open_channel_setup", %{"id" => to_string(channel.id)})
+
+      assert has_element?(view, "[data-testid=channel-reply-step]")
+      refute has_element?(view, "[data-testid=channel-reply-from-toggle]")
+      refute has_element?(view, "[data-testid=channel-archive-copy-toggle]")
+      assert has_element?(view, "[data-testid=channel-attachment-limit]")
+
+      assert view |> element("[data-testid=channel-data-path]") |> render() =~
+               "the MX record for help.acme.example.com delivers the message directly"
+
+      # The card offers neither a token reveal nor a rotation.
+      assert view |> element("[data-testid=channel-provider-#{channel.id}]") |> render() =~
+               "Direct MX"
+
+      assert has_element?(view, "[data-testid=channel-mx-#{channel.id}]")
+      refute has_element?(view, "[data-testid=reveal-channel-#{channel.id}]")
+      refute has_element?(view, "[data-testid=rotate-channel-#{channel.id}]")
     end
   end
 end
