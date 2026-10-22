@@ -95,6 +95,8 @@ defmodule Custyard.Message do
     belongs_to :forwarded_by_operator, Custyard.OperatorAccount
     field :forwarded_by_email, :string
     has_many :attachments, Custyard.MessageAttachment
+    # Per-recipient delivery outcome (spec-conversation-loop, "Delivery Tracking")
+    has_many :recipient_statuses, Custyard.MessageRecipientStatus
 
     # Soft delete (GitHub-style tombstone): the body stays in the database and
     # rendering surfaces show "This message was deleted" instead. There is no

@@ -5,7 +5,7 @@ defmodule Custyard.DataSubjectsTest do
   import Custyard.Factory
 
   alias Custyard.{AuditEvent, Contact, Conversation, DataSubjects, Message, Repo}
-  alias Custyard.{InboundChannelRejection, MessageAttachment}
+  alias Custyard.{InboundChannelRejection, MessageAttachment, MessageRecipientStatus}
 
   setup do
     org = insert_organization()
@@ -160,6 +160,24 @@ defmodule Custyard.DataSubjectsTest do
     end
   end
 
+  test "erase_participation removes the address's delivery outcomes in the organization", ctx do
+    kept =
+      insert_recipient_status(
+        message_id: ctx.cc.id,
+        address: "boss@customer.example",
+        role: :cc,
+        status: :delivered
+      )
+
+    insert_recipient_status(message_id: ctx.cc.id, address: "pat@example.com", role: :cc)
+    foreign = insert_recipient_status(message_id: ctx.foreign.id, address: "pat@example.com")
+
+    assert {:ok, _} = DataSubjects.erase_participation("Pat@Example.com", ctx.org.id)
+
+    remaining = Repo.all(MessageRecipientStatus) |> Enum.map(& &1.id) |> Enum.sort()
+    assert remaining == Enum.sort([kept.id, foreign.id])
+  end
+
   describe "erase_subject/2" do
     setup ctx do
       pat = insert_contact(organization_id: ctx.org.id, email: "Pat@Example.com", name: "Pat")
@@ -207,6 +225,29 @@ defmodule Custyard.DataSubjectsTest do
       })
 
       %{pat: pat, own: own, own_message: own_message, reply: reply}
+    end
+
+    test "removes the delivery outcomes of the person's messages and address", ctx do
+      insert_recipient_status(
+        message_id: ctx.own_message.id,
+        address: "help@acme.example",
+        role: :to,
+        status: :delivered
+      )
+
+      insert_recipient_status(message_id: ctx.reply.id, address: "pat@example.com", role: :to)
+
+      kept =
+        insert_recipient_status(
+          message_id: ctx.reply.id,
+          address: "boss@customer.example",
+          role: :cc,
+          status: :delivered
+        )
+
+      assert {:ok, _} = DataSubjects.erase_subject("pat@example.com", ctx.org.id)
+
+      assert Repo.all(MessageRecipientStatus) |> Enum.map(& &1.id) == [kept.id]
     end
 
     test "erases the person's messages, contact, subjects and rejections", ctx do

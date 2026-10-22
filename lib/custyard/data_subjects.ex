@@ -37,6 +37,7 @@ defmodule Custyard.DataSubjects do
     InboundChannelRejection,
     Message,
     MessageAttachment,
+    MessageRecipientStatus,
     Repo
   }
 
@@ -105,6 +106,7 @@ defmodule Custyard.DataSubjects do
     in_write_transaction(fn ->
       {sent, received} = locked_participations(email, organization_id)
       count = Enum.count(received, &scrub!(&1, email))
+      erase_recipient_statuses!(email, organization_id)
       payload = %{"erased" => count, "sent_by_subject" => length(sent)}
       audit!(organization_id, payload)
       %{erased: count, sent_by_subject: length(sent)}
@@ -135,8 +137,10 @@ defmodule Custyard.DataSubjects do
     in_write_transaction(fn ->
       {sent, received} = locked_participations(email, organization_id)
       erased = Enum.count(received, &scrub!(&1, email))
+      erase_recipient_statuses!(email, organization_id)
       sent_ids = Enum.map(sent, & &1.id)
       Enum.each(sent, &erase_sent!/1)
+      Repo.delete_all(from(r in MessageRecipientStatus, where: r.message_id in ^sent_ids))
 
       {attachments, _} =
         Repo.delete_all(from(a in MessageAttachment, where: a.message_id in ^sent_ids))
@@ -192,6 +196,26 @@ defmodule Custyard.DataSubjects do
       deleted_at: message.deleted_at || DateTime.utc_now(:second)
     })
     |> Repo.update!()
+  end
+
+  # The address's own delivery outcomes, on every message in the organization
+  # (spec-conversation-loop, "Delivery Tracking"). Addresses are stored
+  # normalised, so an exact match is enough.
+  defp erase_recipient_statuses!(email, organization_id) do
+    # SQLite allows no JOIN in DELETE, so the organization's messages come
+    # from a subquery.
+    message_ids =
+      from(m in Message,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where: c.organization_id == ^organization_id,
+        select: m.id
+      )
+
+    from(r in MessageRecipientStatus,
+      where: r.message_id in subquery(message_ids) and r.address == ^email
+    )
+    |> Repo.delete_all()
   end
 
   defp erase_contact!(email, organization_id) do

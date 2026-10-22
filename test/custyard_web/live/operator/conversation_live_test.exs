@@ -5,7 +5,7 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
   import Custyard.Factory
 
   alias Custyard.Attachments.StubClient
-  alias Custyard.Email.Outbound
+  alias Custyard.Email.{DeliveryStatus, Outbound}
   alias Custyard.{Attachments, Conversations, OperatorAccount, Repo, Scoring}
 
   setup %{conn: conn} do
@@ -607,6 +607,52 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       assert html =~ "delivery-status-delivered"
       assert html =~ "Delivered to recipient"
       refute html =~ "delivery-status-sent"
+    end
+
+    test "delivery indicator follows the customer and lists a failed CC separately", %{
+      conn: conn
+    } do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "live@customer.com")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+
+      message =
+        insert_message(
+          conversation_id: conv.id,
+          source: :operator,
+          body: "Reached the customer, not the CC",
+          delivery_status: :delivered,
+          lettermint_message_id: "lm-live-cc",
+          to_addresses: ["live@customer.com"],
+          cc_addresses: ["boss@customer.com"]
+        )
+
+      insert_recipient_status(
+        message_id: message.id,
+        address: "live@customer.com",
+        role: :to,
+        status: :delivered
+      )
+
+      {:ok, view, html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert html =~ "delivery-status-delivered"
+      refute html =~ "delivery-recipient-failure"
+
+      # The CC bounce arrives by webhook; the broadcast refreshes the thread.
+      assert {:ok, :updated, _} =
+               DeliveryStatus.apply_event(%{
+                 "id" => "evt-cc",
+                 "event" => "message.hard_bounced",
+                 "timestamp" => "2026-10-20T12:00:00Z",
+                 "data" => %{"message_id" => "lm-live-cc", "recipient" => "boss@customer.com"}
+               })
+
+      html = render(view)
+      assert html =~ "delivery-status-delivered"
+      refute html =~ "delivery-status-bounced"
+      assert html =~ "delivery-recipient-failure"
+      assert html =~ "Not delivered to CC boss@customer.com: bounced"
     end
 
     test "delivery indicator shows suppressed distinctly from bounced", %{conn: conn} do

@@ -265,6 +265,23 @@ defmodule Custyard.Factory do
   end
 
   @doc """
+  Insert a recipient delivery status for an outbound message.
+  Requires message_id.
+  """
+  def insert_recipient_status(overrides) do
+    defaults = %{
+      address: "recipient-#{unique_id()}@example.com",
+      role: :cc,
+      status: :bounced,
+      status_at: ~U[2026-10-20 12:00:00Z]
+    }
+
+    %Custyard.MessageRecipientStatus{}
+    |> Custyard.MessageRecipientStatus.changeset(Map.merge(defaults, Map.new(overrides)))
+    |> Custyard.Repo.insert!()
+  end
+
+  @doc """
   Insert a project into the database.
   Requires organization_id or will create one.
   """
