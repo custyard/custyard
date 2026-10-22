@@ -163,8 +163,14 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   def handle_info({:channel_updated, _id}, socket), do: {:noreply, refresh_channels(socket)}
   def handle_info({:channel_quiet, _id}, socket), do: {:noreply, refresh_channels(socket)}
 
+  # Creating a direct-MX channel can set its route's custom domain, so the
+  # routes are reloaded too.
   def handle_info({:channel_setup_created, id}, socket) do
-    {:noreply, socket |> assign(:setup_channel_id, id) |> refresh_channels()}
+    {:noreply,
+     socket
+     |> assign(:setup_channel_id, id)
+     |> assign(:routes, InboundRoutes.list_for_organization(socket.assigns.organization.id))
+     |> refresh_channels()}
   end
 
   def handle_info(:channel_setup_closed, socket) do
@@ -1119,6 +1125,8 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   end
 
   defp rejection_label(:no_channel), do: "no matching channel"
+  defp rejection_label(:too_large), do: "too large to import"
+  defp rejection_label(:unreadable), do: "could not be read"
   defp rejection_label(:channel_paused), do: "channel paused"
   defp rejection_label(:channel_revoked), do: "channel revoked"
   defp rejection_label(:auto_response), do: "auto-reply, no thread"
@@ -1188,7 +1196,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             <span :if={@channel.display_name} data-testid={"channel-display-name-#{@channel.id}"}>
               {@channel.display_name}
             </span>
-            <span data-testid={"channel-provider-#{@channel.id}"}>{provider_label(@channel.provider)}</span>
+            <span data-testid={"channel-provider-#{@channel.id}"}>{source_label(@channel)}</span>
             <span aria-hidden="true">·</span>
             <span data-testid={"channel-scope-#{@channel.id}"}>
               {if @channel.project, do: @channel.project.title, else: "Organization-wide"}
@@ -1265,7 +1273,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
                 Pause
               </button>
               <button
-                :if={@channel.state != :revoked}
+                :if={@channel.state != :revoked and InboundChannel.forwarding?(@channel)}
                 phx-click="confirm_channel_action"
                 phx-value-id={@channel.id}
                 phx-value-action="rotate"
@@ -1288,8 +1296,41 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         </div>
       </div>
 
+      <%!-- IMAP: which mailbox is read and whether polling works --%>
+      <div
+        :if={@channel.ingress_kind == :imap}
+        class="text-xs text-gray-500 dark:text-zinc-400 flex flex-wrap items-center gap-x-2"
+        data-testid={"channel-imap-#{@channel.id}"}
+      >
+        <span>Reads {@channel.imap_folder} of {@channel.imap_username} on {@channel.imap_host}</span>
+        <span :if={@channel.imap_last_polled_at}>
+          · last checked {relative_time(@channel.imap_last_polled_at)}
+        </span>
+        <span
+          :if={@channel.imap_last_error}
+          class="px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300"
+          data-testid={"channel-imap-error-#{@channel.id}"}
+        >
+          {if @channel.imap_auth_failed_at,
+            do: "login failing: polling stopped",
+            else: CustyardWeb.Operator.ChannelSetupComponent.imap_error_text(@channel.imap_last_error)}
+        </span>
+      </div>
+
+      <%!-- Direct MX: where the domain's mail goes; nothing secret to reveal --%>
+      <div
+        :if={@channel.ingress_kind == :mx}
+        class="text-xs text-gray-500 dark:text-zinc-400"
+        data-testid={"channel-mx-#{@channel.id}"}
+      >
+        Receives mail directly: MX 10 lettermint.mx for {InboundChannel.public_domain(@channel)}
+      </div>
+
       <%!-- Ingress address: masked unless explicitly revealed; admins only --%>
-      <div :if={@can_manage} class="flex flex-wrap items-center gap-2">
+      <div
+        :if={@can_manage and InboundChannel.forwarding?(@channel)}
+        class="flex flex-wrap items-center gap-2"
+      >
         <span class="text-xs text-gray-500 dark:text-zinc-400">Forwarding to</span>
         <%= if @revealed do %>
           <code
@@ -1348,7 +1389,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           class="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
           data-testid={"channel-quiet-#{@channel.id}"}
         >
-          quiet for over {@channel.quiet_after_hours}h: check the forwarding rule
+          quiet for over {@channel.quiet_after_hours}h: {quiet_hint(@channel)}
         </span>
         <span class="ml-auto flex items-center gap-2">
           <.sending_domain_pill summary={@summary} id={@channel.id} />
@@ -1370,7 +1411,16 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   defp confirming({action, id}, id), do: action
   defp confirming(_confirm_action, _id), do: nil
 
-  defp provider_label(:google), do: "Google Workspace"
+  defp source_label(%InboundChannel{ingress_kind: :mx}), do: "Direct MX"
+  defp source_label(%InboundChannel{ingress_kind: :imap}), do: "IMAP mailbox"
+  defp source_label(%InboundChannel{provider: provider}), do: provider_label(provider)
+
+  defp quiet_hint(%InboundChannel{ingress_kind: :mx}), do: "check the MX record"
+  defp quiet_hint(%InboundChannel{ingress_kind: :imap}), do: "check the mailbox connection"
+  defp quiet_hint(_channel), do: "check the forwarding rule"
+
+  defp provider_label(:google), do: "Gmail forwarding"
+  defp provider_label(:google_workspace), do: "Google Workspace admin routing"
   defp provider_label(:proton), do: "Proton Mail"
   defp provider_label(:other), do: "Other provider"
   defp provider_label(_provider), do: "Provider not set"

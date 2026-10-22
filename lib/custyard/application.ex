@@ -50,7 +50,7 @@ defmodule Custyard.Application do
       |> maybe_add_acknowledgment_consumer()
       |> maybe_add_intake_sweeps()
       |> maybe_add_lmtp_server()
-      |> maybe_add_imap_poller()
+      |> maybe_add_imap_pollers()
 
     opts = [strategy: :one_for_one, name: Custyard.Supervisor]
     result = Supervisor.start_link(children, opts)
@@ -151,46 +151,22 @@ defmodule Custyard.Application do
     end
   end
 
-  defp maybe_add_imap_poller(children) do
-    imap_config = Application.get_env(:custyard, :imap, [])
-    organization_id = Keyword.get(imap_config, :organization_id)
-
-    cond do
-      not Keyword.get(imap_config, :enabled, false) ->
-        children
-
-      # ImapPoller.init/1 fetches :organization_id with Keyword.fetch!/2; a
-      # poller started without it would crash until the supervisor gives up
-      # and takes the whole application down with it.
-      is_nil(organization_id) ->
-        require Logger
-
-        Logger.error(
-          "IMAP poller not started: config :custyard, :imap is missing :organization_id " <>
-            "(set IMAP_ORGANIZATION_ID)"
-        )
-
-        children
-
-      true ->
-        # Build credential_fetcher from env var name to avoid storing credentials
-        # in Application config (visible in crash dumps and :sys.get_state).
-        cred_env_var = Keyword.get(imap_config, :credential_env_var, "IMAP_PASSWORD")
-        credential_fetcher = fn -> System.get_env(cred_env_var) || "" end
-
-        opts = [
-          host: Keyword.get(imap_config, :host, "localhost"),
-          port: Keyword.get(imap_config, :port, 993),
-          username: Keyword.get(imap_config, :username, ""),
-          credential_fetcher: credential_fetcher,
-          organization_id: organization_id,
-          folder: Keyword.get(imap_config, :folder, "INBOX"),
-          poll_interval: Keyword.get(imap_config, :poll_interval, 60_000),
-          ssl: Keyword.get(imap_config, :ssl, true)
-        ]
-
-        children ++ [{Custyard.Email.ImapPoller, opts}]
+  # IMAP channels replaced the global poller (spec-inbound-channels D8). A
+  # deployment that still sets IMAP_ENABLED expects mail that would silently
+  # stop arriving, so it refuses to start until the variable is removed.
+  defp maybe_add_imap_pollers(children) do
+    if Application.get_env(:custyard, :legacy_imap_enabled, false) do
+      raise """
+      IMAP_ENABLED is no longer supported. Connect the mailbox as an IMAP channel
+      instead (organization page > Channels > New channel > "Read a mailbox over
+      IMAP"), then unset IMAP_ENABLED, IMAP_ORGANIZATION_ID, IMAP_HOST, IMAP_PORT,
+      IMAP_USERNAME, IMAP_PASSWORD, IMAP_FOLDER, IMAP_POLL_INTERVAL and IMAP_SSL.
+      """
     end
+
+    if Application.get_env(:custyard, :start_imap_pollers, true),
+      do: children ++ [Custyard.Email.ImapPollers],
+      else: children
   end
 
   @impl true

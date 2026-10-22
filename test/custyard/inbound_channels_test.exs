@@ -940,4 +940,183 @@ defmodule Custyard.InboundChannelsTest do
       end
     end
   end
+
+  describe "direct-MX channels" do
+    setup do
+      on_exit(fn -> Application.delete_env(:custyard, :lettermint_mock_inbound_verification) end)
+      %{route: insert_route()}
+    end
+
+    defp create_mx(route, address, extra \\ %{}) do
+      InboundChannels.create_channel(
+        route,
+        Map.merge(%{public_address: address, ingress_kind: :mx}, extra)
+      )
+    end
+
+    defp verify_route!(route) do
+      route = Repo.reload(route)
+      {:ok, route, _} = Custyard.InboundRoutes.verify_custom_domain(route)
+      route
+    end
+
+    test "the first channel sets the route's custom domain and waits for the MX record",
+         %{route: route} do
+      assert {:ok, channel} = create_mx(route, "support@help.acme.com", %{provider: "google"})
+
+      assert channel.ingress_kind == :mx
+      assert channel.state == :pending_verification
+      assert channel.provider == nil
+      assert InboundChannels.ingress_address(channel) == nil
+      assert InboundChannels.masked_ingress_address(channel) == nil
+      assert Repo.reload(route).lettermint_custom_domain == "help.acme.com"
+    end
+
+    test "later channels must be on the route's domain", %{route: route} do
+      {:ok, _} = create_mx(route, "support@help.acme.com")
+
+      assert {:ok, _} = create_mx(Repo.reload(route), "sales@help.acme.com")
+
+      assert {:error, changeset} = create_mx(Repo.reload(route), "billing@other.acme.com")
+      assert {msg, _} = changeset.errors[:public_address]
+      assert msg =~ "must be on help.acme.com"
+    end
+
+    test "a stale copy of the route cannot move the domain away from a channel",
+         %{route: route} do
+      {:ok, _} = create_mx(route, "support@help.acme.com")
+
+      assert {:error, changeset} = create_mx(route, "billing@other.acme.com")
+      assert {msg, _} = changeset.errors[:public_address]
+      assert msg =~ "must be on help.acme.com"
+      assert Repo.reload(route).lettermint_custom_domain == "help.acme.com"
+
+      assert {:ok, _} = create_mx(route, "sales@help.acme.com")
+    end
+
+    test "a public address with a +tag is refused", %{route: route} do
+      assert {:error, changeset} = create_mx(route, "support+sales@help.acme.com")
+      assert {msg, _} = changeset.errors[:public_address]
+      assert msg =~ "can't contain +"
+      assert Repo.reload(route).lettermint_custom_domain == nil
+    end
+
+    test "a domain a forwarding channel uses is refused", %{route: route} do
+      {:ok, _} = InboundChannels.create_channel(route, %{public_address: "support@acme.com"})
+
+      assert {:error, changeset} = create_mx(route, "help@acme.com")
+      assert {msg, _} = changeset.errors[:public_address]
+      assert msg =~ "dedicated subdomain"
+      assert Repo.reload(route).lettermint_custom_domain == nil
+    end
+
+    test "archive copy and the ingress-address reply fallback are refused", %{route: route} do
+      assert {:error, changeset} =
+               create_mx(route, "support@help.acme.com", %{archive_copy: true})
+
+      assert changeset.errors[:archive_copy]
+
+      assert {:error, changeset} =
+               create_mx(route, "support@help.acme.com", %{reply_from: "ingress_address"})
+
+      assert changeset.errors[:reply_from]
+      assert Repo.reload(route).lettermint_custom_domain == nil
+    end
+
+    test "check_mx/2 confirms the channel once Lettermint sees the record", %{route: route} do
+      {:ok, channel} = create_mx(route, "support@help.acme.com")
+
+      Application.put_env(
+        :custyard,
+        :lettermint_mock_inbound_verification,
+        {:ok, %{"verified" => false, "found_mx_records" => ["10 mx.other.net"]}}
+      )
+
+      assert {:ok, channel, %{"verified" => false, "found_mx_records" => ["10 mx.other.net"]}} =
+               InboundChannels.check_mx(channel)
+
+      assert channel.state == :pending_verification
+
+      Application.delete_env(:custyard, :lettermint_mock_inbound_verification)
+
+      assert {:ok, channel, %{"verified" => true}} = InboundChannels.check_mx(channel)
+      assert channel.state == :awaiting_first_message
+      assert channel.verified_at
+    end
+
+    test "check_mx/2 only applies to direct-MX channels", %{route: route} do
+      {:ok, channel} = InboundChannels.create_channel(route, %{public_address: "a@acme.com"})
+      assert {:error, %Ecto.Changeset{}} = InboundChannels.check_mx(channel)
+    end
+
+    test "a channel on an already verified domain skips the MX wait", %{route: route} do
+      {:ok, _} = create_mx(route, "support@help.acme.com")
+      route = verify_route!(route)
+
+      assert {:ok, channel} = create_mx(route, "sales@help.acme.com")
+      assert channel.state == :awaiting_first_message
+    end
+
+    test "routes by public address on the custom domain, ignoring a +tag", %{route: route} do
+      {:ok, channel} = create_mx(route, "support@help.acme.com")
+      route = Repo.reload(route)
+
+      assert {:ok, %{id: id}} =
+               InboundChannels.resolve_for_delivery(route, "Support@Help.Acme.com")
+
+      assert id == channel.id
+
+      assert {:ok, %{id: ^id}} =
+               InboundChannels.resolve_for_delivery(route, "support+order-42@help.acme.com")
+
+      assert {:error, :no_channel} =
+               InboundChannels.resolve_for_delivery(route, "other@help.acme.com")
+
+      assert {:error, :no_channel} =
+               InboundChannels.resolve_for_delivery(
+                 route,
+                 "support@#{route.lettermint_route_domain}"
+               )
+
+      {:ok, _paused} = InboundChannels.pause(channel)
+
+      assert {:paused, %{id: ^id}} =
+               InboundChannels.resolve_for_delivery(route, "support@help.acme.com")
+    end
+
+    test "a direct-MX channel's token does not route", %{route: route} do
+      {:ok, channel} = create_mx(route, "support@help.acme.com")
+      route = Repo.reload(route)
+
+      assert {:error, :no_channel} =
+               InboundChannels.resolve_for_delivery(
+                 route,
+                 "support+#{channel.ingress_token}@#{route.lettermint_route_domain}"
+               )
+    end
+
+    test "forwarding channels keep the catch-all domain and their token after a custom domain lands",
+         %{route: route} do
+      {:ok, forward} =
+        InboundChannels.create_channel(route, %{public_address: "support@acme.com"})
+
+      address_before = InboundChannels.ingress_address(forward)
+
+      {:ok, _} = create_mx(route, "help@help.acme.com")
+      route = verify_route!(route)
+
+      assert InboundChannels.ingress_address(reload(forward)) == address_before
+      assert address_before =~ "@#{route.lettermint_route_domain}"
+
+      assert {:ok, %{id: id}} = InboundChannels.resolve_for_delivery(route, address_before)
+      assert id == forward.id
+    end
+
+    test "update_channel/3 cannot change the ingress kind", %{route: route} do
+      {:ok, channel} = InboundChannels.create_channel(route, %{public_address: "a@acme.com"})
+
+      assert {:ok, channel} = InboundChannels.update_channel(channel, %{ingress_kind: :mx})
+      assert channel.ingress_kind == :forward
+    end
+  end
 end

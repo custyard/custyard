@@ -119,9 +119,10 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 | `MAIL_ADAPTER` | — | **Required.** One of `lettermint`, `postmark`, `sendgrid`, `mailgun`, `smtp`, `local`. Set as a secret alongside its credential; the app raises on boot if unset or unrecognized |
 | `POOL_SIZE` | `10` | Ecto connection pool size |
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
-| `IMAP_ENABLED` | `false` | IMAP polling (disabled — ports blocked on Fly.io) |
 | `UPLOAD_DIR` | `/data/uploads` | Persistent upload directory (must be on the mounted volume) |
 | `ATTACHMENT_DIR` | `/data/attachments` | Inbound email attachments, served only through the authenticated operator endpoint (must be on the mounted volume) |
+
+`CREDENTIAL_ENCRYPTION_KEY` is a secret (`fly secrets set CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"`). IMAP channels need it to store their passwords; see [inbound channels](ops/inbound-channels.md#credential-encryption-key). The global `IMAP_*` settings were removed, and a deployment that still sets `IMAP_ENABLED` refuses to start.
 
 ## Colonel acknowledgments
 

@@ -26,7 +26,13 @@ defmodule Custyard.InboundRoute do
   - `lettermint_custom_domain` / `lettermint_custom_domain_verified_at` —
     operator-configured domain and when Lettermint verified it
 
-  `ingress_domain/1` picks the domain operators should hand out.
+  `ingress_domain/1` picks the domain operators should hand out for a legacy
+  route. Forwarding channels always use `forward_domain/1`, the catch-all
+  domain, so a custom domain added later for direct-MX channels never
+  changes an ingress address an operator has already configured. A custom
+  domain is exact (`help.example.com`) or a left-hand wildcard
+  (`*.m.example.com`, which does not cover `m.example.com` itself);
+  `custom_domain_covers?/2` applies that rule.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -80,6 +86,42 @@ defmodule Custyard.InboundRoute do
 
   def ingress_domain(%__MODULE__{}), do: nil
 
+  @doc """
+  The Lettermint catch-all domain (`<id>.lettermint.app`), never the custom
+  domain. Forwarding channel ingress addresses are built on it.
+  """
+  def forward_domain(%__MODULE__{lettermint_route_domain: domain})
+      when is_binary(domain) and domain != "",
+      do: domain
+
+  def forward_domain(%__MODULE__{}), do: nil
+
+  @doc "True once Lettermint has verified the route's custom domain MX record."
+  def custom_domain_verified?(%__MODULE__{
+        lettermint_custom_domain: custom,
+        lettermint_custom_domain_verified_at: %DateTime{}
+      })
+      when is_binary(custom) and custom != "",
+      do: true
+
+  def custom_domain_verified?(%__MODULE__{}), do: false
+
+  @doc """
+  True when mail for `domain` reaches this route through its custom domain:
+  an exact match, or a strict subdomain of a `*.` wildcard.
+  """
+  def custom_domain_covers?(%__MODULE__{lettermint_custom_domain: custom}, domain)
+      when is_binary(custom) and custom != "" and is_binary(domain) do
+    domain = String.downcase(domain)
+
+    case custom do
+      "*." <> parent -> String.ends_with?(domain, "." <> parent)
+      exact -> domain == exact
+    end
+  end
+
+  def custom_domain_covers?(%__MODULE__{}, _domain), do: false
+
   @doc false
   def changeset(route, attrs) do
     route
@@ -105,7 +147,7 @@ defmodule Custyard.InboundRoute do
     )
     |> validate_length(:lettermint_inbound_address, max: 255)
     |> validate_hostname(:lettermint_route_domain)
-    |> validate_hostname(:lettermint_custom_domain)
+    |> validate_custom_domain()
     |> unique_constraint(:callback_token)
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:project_id)
@@ -122,6 +164,29 @@ defmodule Custyard.InboundRoute do
     |> update_change(field, &normalize_hostname/1)
     |> validate_length(field, max: 255)
     |> validate_format(field, @hostname_regex, message: "must be a valid domain name")
+  end
+
+  # Lettermint refuses its own domains as custom inbound domains.
+  @reserved_domains ["lettermint.app", "lettermint.mx", "inbound.lettermint.co"]
+
+  defp validate_custom_domain(changeset) do
+    changeset
+    |> update_change(:lettermint_custom_domain, &normalize_hostname/1)
+    |> validate_length(:lettermint_custom_domain, max: 255)
+    |> validate_change(:lettermint_custom_domain, fn :lettermint_custom_domain, value ->
+      host = String.replace_prefix(value, "*.", "")
+
+      cond do
+        not Regex.match?(@hostname_regex, host) ->
+          [lettermint_custom_domain: "must be a domain name or a *. wildcard"]
+
+        Enum.any?(@reserved_domains, &(host == &1 or String.ends_with?(host, "." <> &1))) ->
+          [lettermint_custom_domain: "cannot be a Lettermint domain"]
+
+        true ->
+          []
+      end
+    end)
   end
 
   defp normalize_hostname(value) when is_binary(value) do

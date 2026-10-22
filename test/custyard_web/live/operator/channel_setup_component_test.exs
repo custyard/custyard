@@ -59,6 +59,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
           },
           attrs
         )
+        |> Map.reject(fn {_key, value} -> is_nil(value) end)
     )
     |> render_submit()
 
@@ -220,6 +221,29 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
     end
   end
 
+  describe "Google Workspace admin routing" do
+    test "shows the Admin console rule and does not wait for a confirmation email", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      view = open_wizard(conn, org)
+      channel = create_channel(view, route, %{"provider" => "google_workspace"})
+
+      assert channel.provider == :google_workspace
+      help = view |> element("[data-testid=channel-provider-help]") |> render()
+      assert help =~ "Default routing"
+      assert help =~ "Add more recipients"
+      assert help =~ "Do not use Change envelope recipient"
+
+      assert has_element?(view, "[data-testid=channel-verification-none]")
+      refute has_element?(view, "[data-testid=channel-verification-panel]")
+
+      view |> element("[data-testid=channel-confirm-forwarding]") |> render_click()
+      assert InboundChannels.get_channel!(channel.id).state == :awaiting_first_message
+    end
+  end
+
   describe "step 3: test" do
     test "the first delivery completes the setup", %{conn: conn, org: org, route: route} do
       view = open_wizard(conn, org)
@@ -355,6 +379,190 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       assert text =~ "this Custyard instance"
       assert text =~ "support@acme.example.com"
       assert has_element?(view, "[data-testid=channel-copy-data-path][data-clipboard-text]")
+    end
+  end
+
+  describe "direct MX" do
+    setup do
+      on_exit(fn -> Application.delete_env(:custyard, :lettermint_mock_inbound_verification) end)
+      :ok
+    end
+
+    defp create_mx_channel(conn, org, route) do
+      view = open_wizard(conn, org)
+
+      view
+      |> form("#channel-create-form", channel: %{"ingress_kind" => "mx"})
+      |> render_change()
+
+      assert has_element?(view, "[data-testid=channel-mx-hint]")
+      refute has_element?(view, "[data-testid=channel-provider-select]")
+
+      channel =
+        create_channel(view, route, %{
+          "public_address" => "support@help.acme.example.com",
+          "ingress_kind" => "mx",
+          "provider" => nil
+        })
+
+      {view, channel}
+    end
+
+    test "creating shows the MX record to publish, not an ingress address", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {view, channel} = create_mx_channel(conn, org, route)
+
+      assert channel.ingress_kind == :mx
+      assert channel.provider == nil
+      assert has_element?(view, "[data-testid=channel-setup-step-2][aria-current=step]")
+      assert view |> element("[data-testid=channel-setup-step-2]") |> render() =~ "DNS"
+
+      record = view |> element("[data-testid=channel-mx-record]") |> render()
+      assert record =~ "help.acme.example.com"
+      assert record =~ "lettermint.mx"
+      refute has_element?(view, "[data-testid=channel-setup-ingress-address]")
+      assert Repo.all(from(a in AuditEvent, where: a.event_type == :channel_token_revealed)) == []
+    end
+
+    test "an unverified check reports what Lettermint found", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {view, channel} = create_mx_channel(conn, org, route)
+
+      Application.put_env(
+        :custyard,
+        :lettermint_mock_inbound_verification,
+        {:ok, %{"verified" => false, "found_mx_records" => ["10 mx.other.net"]}}
+      )
+
+      view |> element("[data-testid=channel-check-mx]") |> render_click()
+
+      assert view |> element("[data-testid=channel-setup-flash]") |> render() =~
+               "Lettermint found 10 mx.other.net"
+
+      assert InboundChannels.get_channel!(channel.id).state == :pending_verification
+    end
+
+    test "a verified check moves to the test step", %{conn: conn, org: org, route: route} do
+      {view, channel} = create_mx_channel(conn, org, route)
+
+      view |> element("[data-testid=channel-check-mx]") |> render_click()
+
+      assert has_element?(view, "[data-testid=channel-setup-step-3][aria-current=step]")
+      assert InboundChannels.get_channel!(channel.id).state == :awaiting_first_message
+    end
+
+    test "the replies step has no ingress fallback or archive copy", %{conn: conn, org: org} do
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          ingress_kind: :mx,
+          public_address: "support@help.acme.example.com",
+          state: :active,
+          last_received_at: DateTime.truncate(DateTime.utc_now(), :second)
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}?tab=channels")
+      render_click(view, "open_channel_setup", %{"id" => to_string(channel.id)})
+
+      assert has_element?(view, "[data-testid=channel-reply-step]")
+      refute has_element?(view, "[data-testid=channel-reply-from-toggle]")
+      refute has_element?(view, "[data-testid=channel-archive-copy-toggle]")
+      assert has_element?(view, "[data-testid=channel-attachment-limit]")
+
+      assert view |> element("[data-testid=channel-data-path]") |> render() =~
+               "the MX record for help.acme.example.com delivers the message directly"
+
+      # The card offers neither a token reveal nor a rotation.
+      assert view |> element("[data-testid=channel-provider-#{channel.id}]") |> render() =~
+               "Direct MX"
+
+      assert has_element?(view, "[data-testid=channel-mx-#{channel.id}]")
+      refute has_element?(view, "[data-testid=reveal-channel-#{channel.id}]")
+      refute has_element?(view, "[data-testid=rotate-channel-#{channel.id}]")
+    end
+  end
+
+  describe "IMAP" do
+    alias Custyard.Email.ImapClient.Stub
+
+    @imap_password "Kq9-imap-app-password"
+
+    defp create_imap_channel(conn, org, route, password) do
+      host = Stub.mailbox(password: @imap_password)
+      view = open_wizard(conn, org)
+
+      view
+      |> form("#channel-create-form", channel: %{"ingress_kind" => "imap"})
+      |> render_change()
+
+      assert has_element?(view, "[data-testid=channel-imap-fields]")
+      refute has_element?(view, "[data-testid=channel-provider-select]")
+
+      channel =
+        create_channel(view, route, %{
+          "ingress_kind" => "imap",
+          "provider" => nil,
+          "imap_host" => host,
+          "imap_port" => "993",
+          "imap_username" => "support@acme.example.com",
+          "imap_password" => password,
+          "imap_folder" => "INBOX"
+        })
+
+      {view, InboundChannels.get_channel!(channel.id)}
+    end
+
+    test "creating connects and moves to the test step", %{conn: conn, org: org, route: route} do
+      {view, channel} = create_imap_channel(conn, org, route, @imap_password)
+
+      assert channel.ingress_kind == :imap
+      assert channel.state == :awaiting_first_message
+      assert has_element?(view, "[data-testid=channel-setup-step-3][aria-current=step]")
+      refute render(view) =~ @imap_password
+    end
+
+    test "a rejected login stays on the connect step until the password is fixed", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {view, channel} = create_imap_channel(conn, org, route, "wrong")
+
+      assert channel.state == :pending_verification
+      assert has_element?(view, "[data-testid=channel-imap-step]")
+
+      assert view |> element("[data-testid=channel-setup-flash]") |> render() =~
+               "rejected the username or password"
+
+      view
+      |> form("#channel-imap-form-#{channel.id}", channel: %{"imap_password" => @imap_password})
+      |> render_submit()
+
+      assert InboundChannels.get_channel!(channel.id).state == :awaiting_first_message
+      assert has_element?(view, "[data-testid=channel-setup-step-3][aria-current=step]")
+    end
+
+    test "the card shows the mailbox and offers no token actions", %{
+      conn: conn,
+      org: org,
+      route: route
+    } do
+      {view, channel} = create_imap_channel(conn, org, route, @imap_password)
+
+      assert view |> element("[data-testid=channel-provider-#{channel.id}]") |> render() =~
+               "IMAP mailbox"
+
+      assert view |> element("[data-testid=channel-imap-#{channel.id}]") |> render() =~
+               "Reads INBOX of support@acme.example.com"
+
+      refute has_element?(view, "[data-testid=reveal-channel-#{channel.id}]")
+      refute has_element?(view, "[data-testid=rotate-channel-#{channel.id}]")
     end
   end
 end

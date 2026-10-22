@@ -1061,7 +1061,8 @@ defmodule Custyard.InboundRoutesTest do
       assert Ecto.Changeset.get_change(changeset, :lettermint_route_domain) ==
                "ab12cd34ef.lettermint.app"
 
-      assert {"must be a valid domain name", _} = changeset.errors[:lettermint_custom_domain]
+      assert {"must be a domain name or a *. wildcard", _} =
+               changeset.errors[:lettermint_custom_domain]
     end
 
     test "sync_remote_route/1 backfills a route created without a domain" do

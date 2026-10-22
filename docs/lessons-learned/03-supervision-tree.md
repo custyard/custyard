@@ -18,13 +18,13 @@ The supervision tree uses the `:one_for_one` strategy under `Custyard.Supervisor
 
 *   `Custyard.Scoring.Scheduler` - if `:start_scheduler` config is true (default)
 *   `Custyard.Email.LMTPServer` - if `lmtp.enabled` is true
-*   `Custyard.Email.ImapPoller` - if `imap.enabled` is true
+*   `Custyard.Email.ImapPollers` - one poller per IMAP channel, unless `:start_imap_pollers` is false (tests)
 
 ## Dev-only post-startup
 
 A non-supervised `Task` creates/resets the dev operator account (`admin@custyard.local`) with a random password, logged to the console.
 
-Conditional processes are controlled via `config/config.exs` or `config/dev.exs`. LMTP and IMAP are disabled by default.
+Conditional processes are controlled via `config/config.exs` or `config/dev.exs`. LMTP is disabled by default; IMAP pollers run only for channels that have been connected.
 
 ## Elixir or Phoenix?
 

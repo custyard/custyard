@@ -3,14 +3,15 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
   Integration tests for the IMAP -> Dispatcher pipeline.
 
   Verifies that emails parsed by Parser and normalized by Adapters.Email
-  dispatch correctly through the Webhooks.Dispatcher when the IMAP poller
-  provides an org_id from its configuration.
+  dispatch correctly through the Webhooks.Dispatcher on a route without
+  channels.
 
-  These tests exercise the pipeline that process_single_message delegates to:
+  These tests exercise the pipeline an IMAP channel import runs
+  (`Custyard.Email.ImapPoll`):
     Parser.parse -> Adapters.Email.normalize -> Dispatcher.dispatch(route, normalized)
 
-  They do NOT start an actual IMAP server or poller GenServer; they test
-  the processing pipeline that the poller would invoke.
+  They do NOT start an IMAP server or poller; `ImapPollTest` covers the
+  channel path.
   """
   use Custyard.DataCase, async: true
 

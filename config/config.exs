@@ -137,15 +137,11 @@ config :custyard, :lmtp,
   hostname: "localhost",
   tls: []
 
-# IMAP poller configuration (for fetching emails from IMAP mailbox)
-config :custyard, :imap,
-  enabled: false,
-  host: "localhost",
-  port: 993,
-  username: "",
-  password: "",
-  folder: "INBOX",
-  poll_interval: 60_000,
-  ssl: true
+# IMAP channels (spec-inbound-channels D8): one poller per channel, set up in
+# the channel wizard. The interval is per channel; failures back off up to
+# 15 minutes.
+config :custyard,
+  imap_client: Custyard.Email.ImapClient.Plover,
+  imap_poll_interval_ms: 60_000
 
 import_config "#{config_env()}.exs"

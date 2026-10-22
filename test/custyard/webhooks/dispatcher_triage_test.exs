@@ -487,6 +487,51 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
     end
   end
 
+  describe "direct-MX channels (D8)" do
+    setup %{route: route} do
+      {:ok, route} =
+        route
+        |> Ecto.Changeset.change(
+          lettermint_custom_domain: "help.acme.example.com",
+          lettermint_custom_domain_verified_at: ~U[2026-10-20 12:00:00Z]
+        )
+        |> Repo.update()
+
+      channel =
+        channel!(route,
+          ingress_kind: :mx,
+          public_address: "support@help.acme.example.com",
+          state: :awaiting_first_message
+        )
+
+      %{route: route, channel: channel}
+    end
+
+    test "mail to the public address becomes a conversation on the channel",
+         %{route: route, channel: channel} do
+      assert {:ok, conversation} =
+               Dispatcher.dispatch(route, delivery("support@help.acme.example.com"))
+
+      assert conversation.inbound_channel_id == channel.id
+      assert Repo.reload!(channel).state == :active
+    end
+
+    test "a +tag on the public address still reaches the channel",
+         %{route: route, channel: channel} do
+      assert {:ok, conversation} =
+               Dispatcher.dispatch(route, delivery("support+order-42@help.acme.example.com"))
+
+      assert conversation.inbound_channel_id == channel.id
+    end
+
+    test "another local part on the custom domain is rejected", %{route: route} do
+      assert {:ignored, :no_channel} =
+               Dispatcher.dispatch(route, delivery("sales@help.acme.example.com"))
+
+      assert [%{classification: :no_channel}] = rejections(route)
+    end
+  end
+
   describe "own outbound echo" do
     test "is audited and ignored without inserting anything", %{org: org, route: route} do
       channel = channel!(route)

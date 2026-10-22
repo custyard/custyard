@@ -2,7 +2,7 @@
 
 **Version:** 0.1 — Supplements SDD v0.4 and the Prospect Conversation Loop; extends the Design Decisions: Data Model + Lettermint Integration document
 **Date:** 2026-10-20
-**Status:** Phases 0, 1 and 2 implemented (see Implementation status). Phase 3 is design only.
+**Status:** Phases 0 to 3 implemented (see Implementation status). The Onetime Secret pilot is still open.
 
 Visual companion: the "Inbound Mail Channels" artifact published alongside this document (topology, identity options, data model, onboarding sequence, roadmap).
 
@@ -23,7 +23,7 @@ The repository is further along than the request assumes. The design below is a 
 | Sender resolution within route scope, thread matching by In-Reply-To / References scoped to org, idempotent message insert | `Purposes.SenderMatching`, `Email.ThreadMatcher`, `Message.insert_idempotent/1` | Done |
 | Operator reply from the conversation view, threaded headers, async delivery queue, send-side status | `Conversations.send_reply/3`, `Email.Outbound`, `Email.OutboundQueue` | Done |
 | Reply From resolution: channel → route `from_address` → operator email → instance fallback | `Conversations.reply_identity/2` | Done, channel step added in Phase 1 |
-| LMTP server and IMAP poller feeding the same dispatcher | `Email.LMTPServer`, `Email.ImapPoller` | Done, IMAP is one global mailbox |
+| LMTP server and IMAP poller feeding the same dispatcher | `Email.LMTPServer`, `Email.ImapPoller` | Done, IMAP is one global mailbox (replaced by per-channel IMAP in Phase 3) |
 | Provider delivery-status webhook (delivered, bounced, suppressed) | `Custyard.Email.DeliveryStatus` | Done in Phase 0 |
 | Auto-reply, bounce and loop detection | `Custyard.Webhooks.Triage` | Done in Phase 1 |
 | HTML body rendering, attachments, CC/Reply-To handling | — | Absent (text body only, single recipient) |
@@ -100,6 +100,8 @@ Why not one Lettermint route per channel: the route domain is already unguessabl
 
 `<local>+<token>@<ingress-domain>` where `local` mirrors the public address local part for operator readability, `token` is 20 characters from the Crockford base32 alphabet (100 bits, generated with `:crypto.strong_rand_bytes/1`, lowercase so case-insensitive matching cannot weaken it), and `ingress-domain` is the route's Lettermint domain by default or the route's verified custom domain when present.
 
+Phase 3 narrowed the domain rule: forwarding channels always use the route's Lettermint catch-all domain, never the custom domain. The custom domain carries direct-MX channels (D8), and an ingress address that changed when it was verified would break forwarding rules operators had already saved.
+
 The 10-character Lettermint route id already prevents guessing on the default domain. The token matters on a custom domain, where the domain is guessable, and it gives the operator a per-channel secret to rotate without touching the route. Rotation issues a new token, keeps the old one valid for a configurable grace period (default 7 days) so a forwarding rule can be updated without loss, then retires it.
 
 Routing rule: `data.recipient` is the only routing input. Local part and subaddress are matched against active channel tokens on the route; `To`/`Cc` are never used for routing. A delivery on a route with no matching channel is logged to the route's rejection log and acknowledged with 2xx so Lettermint does not retry. Routes created before channels exist keep working through an implicit legacy channel until migrated.
@@ -164,7 +166,7 @@ Channel management, token reveal and rotation are admin-only and produce audit e
 
 ### D8. Channel sources beyond forwarding
 
-The channel row carries `ingress_kind`: `forward` (this document), `mx` (operator points MX for a subdomain at Lettermint; From identity may be that subdomain; no forwarding hop, so SPF is meaningful again), and `imap` (per-channel credentials encrypted at rest, polled; replaces today's single global `ImapPoller` config). All three produce the same normalised delivery and enter the same triage stage. The forwarding provider hint (`proton`, `google`, `other`) is recorded on `forward` channels to drive setup copy and provider-specific triage rules.
+The channel row carries `ingress_kind`: `forward` (this document), `mx` (operator points MX for a subdomain at Lettermint; From identity may be that subdomain; no forwarding hop, so SPF is meaningful again), and `imap` (per-channel credentials encrypted at rest, polled; replaces today's single global `ImapPoller` config). All three produce the same normalised delivery and enter the same triage stage. The forwarding provider hint (`proton`, `google`, `google_workspace`, `other`) is recorded on `forward` channels to drive setup copy and provider-specific triage rules. Implemented in Phase 3; see Implementation status.
 
 ### D9. Attachments and HTML (Phase 2)
 
@@ -213,7 +215,7 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 3. **Proton envelope and header behaviour** on forwarded mail is undocumented. One test forward and a header inspection settle it, and the setup wizard can do that inspection automatically on the first delivery.
 4. **Root-domain sending verification** for D3 depends on the operator's willingness to edit DNS on their primary mail domain. The subdomain fallback is designed in; the setup copy must make the trade-off explicit.
 5. **Webhook secrets** are per source today (`WEBHOOK_SECRET_LETTERMINT`, optionally keyed by callback token). Lettermint issues one signing secret per webhook. Channel creation must not create new webhooks; one webhook per route stays the rule.
-6. **Google Workspace admins** may block per-user forwarding. The admin routing path is the robust alternative and needs its own setup copy.
+6. **Google Workspace admins** may block per-user forwarding. The admin routing path is the robust alternative and needs its own setup copy. *Resolved in Phase 3* by the `google_workspace` provider and `docs/ops/inbound-channels.md`.
 
 ## Roadmap
 
@@ -223,13 +225,13 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 
 **Phase 2, email fidelity** (done). CC and Reply-To handling in the composer; sanitised HTML; attachments via signed URLs; archive copy (D4); operator-sent capture and manual-forward unwrap for backlog import; rejection log UI; DSAR coverage for CC participants; language detection as an enrichment purpose.
 
-**Phase 3, other ingress kinds.** Direct-MX channels on a custom inbound domain with subdomain From identity; per-channel IMAP with encrypted credentials replacing the global poller; Google Workspace admin-routing guide.
+**Phase 3, other ingress kinds** (done). Direct-MX channels on a custom inbound domain with subdomain From identity; per-channel IMAP with encrypted credentials replacing the global poller; Google Workspace admin-routing guide.
 
 ## Implementation status
 
 **Phase 0** (commit 6c90d5b): enveloped Lettermint payload with the delivery `id` as a second dedup key; `inbound_routes.lettermint_route_domain` captured at creation and backfillable; `POST /api/webhook/email-status/lettermint` advancing `messages.delivery_status`.
 
-**Phase 1** (this branch) landed the design above with these notes:
+**Phase 1** (custyard/custyard#32) landed the design above with these notes:
 
 - **Model.** `Custyard.InboundChannel` and `Custyard.InboundChannelRejection`, context `Custyard.InboundChannels`. Conversations carry `inbound_channel_id` and `suspect`; messages carry `inbound_channel_id`, `to_addresses`, `cc_addresses`, `reply_to`, `authentication`, `spam_score` and `triage_class` (`customer | auto_response | suspect`). A channel is created directly in `pending_verification`; `draft` exists in the state machine but nothing writes it. Verification confirmation is accepted only from `pending_verification`.
 - **Routing.** `InboundChannels.resolve_for_delivery/2` matches `data.recipient` (falling back to `To` when the metadata is absent) against the current token and a rotated token inside its grace period. A route with no channels returns `:legacy` and dispatches exactly as before. The dispatcher now returns `{:ignored, reason}` for deliveries that were deliberately dropped; the webhook controller answers 200 with `status: "ignored"`, the LMTP server answers 250, the IMAP poller marks the message seen.
@@ -241,7 +243,7 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 - **UI.** Channels tab on the organization page (the Routes tab survives as an "Advanced" disclosure inside it), setup wizard for Proton, Google and other providers with live verification capture, token reveal and rotation with confirmation, pause, resume and revoke. Conversation thread shows channel and suspect badges, per-message To, CC, Reply-To, authentication and spam score, and the composer states which identity a reply will use. Attention queue rows show the same badges.
 - **Open.** Onetime Secret pilot on one `support@` channel; the Proton envelope and header check (Risks item 3) happens on that first forward.
 
-**Phase 2** (branch `agent/custyard-inbound-phase2`) landed email fidelity with these notes:
+**Phase 2** (custyard/custyard#35) landed email fidelity with these notes:
 
 - **HTML.** `Custyard.Email.HtmlSanitizer` (on `html_sanitize_ex`) runs inside both adapters, so raw provider HTML never leaves normalisation. Allowlist: text markup, lists, headings, blockquotes, code, tables and `http`/`https`/`mailto` links; `script`, `style`, `head`, `iframe`, `object`, `embed`, `svg` and `math` blocks are removed with their contents before parsing; no `style`, `class`, `id` or handler attributes survive; images are removed outright rather than blocked (inline `cid:` images can return once attachments render). Links open in a new tab with `rel="noopener noreferrer"`. Raw HTML over 300 KB, or markup with no text, stores nothing. The result lives in `messages.html_body`; the operator thread renders it with the plain text behind a toggle.
 - **Attachments.** The adapter keeps the signed-URL descriptors in the in-memory metadata only; `Custyard.Webhooks.Purposes.Attachments` runs after the message is stored (for customer, suspect, operator-forward and operator-sent deliveries, never auto-responses) and `Custyard.Attachments.fetch_for_message/3` fetches each within the channel's `attachment_limit_mb` (default 10, 0 disables) into `ATTACHMENT_DIR/<ab>/<sha256>`, sniffs the type from the bytes and records a `message_attachments` row (`pending | fetched | skipped | failed`, with `over_limit`, `too_large`, `suspect`, `disabled`, `no_url`, `fetch_failed` as skip reasons). Attachment slots are reserved transactionally with a unique message/position and an immutable descriptor fingerprint before network I/O. A conditional database lease claims each slot, and a fencing token prevents an expired worker from overwriting a new attempt. Processing completes in the delivery request rather than a disposable task; unfinished or failed downloads return a retryable response. Replays resume the same slots and reject changed manifests. Signed URLs remain in memory only. Suspect mail is listed without downloading; clearing the flag starts recovery through Lettermint's retained webhook-delivery API. Missing permissions, expired URLs or unavailable deliveries leave the files listed with an explicit recovery retry. Recovery selects each message’s recorded inbound channel and its route’s webhook, and applies that channel’s current attachment limit, even when later messages joined the conversation through another route. Download is `GET /operator/attachments/:id`, organization-scoped, blocked while the conversation is suspect, always `Content-Disposition: attachment`, served under the sniffed type when it is on a small allowlist and `application/octet-stream` otherwise. The retention sweep excludes temporary files, allows a 24-hour grace period, and rechecks references under the same file lock as publication before deleting an orphan. Only `https` URLs with a hostname are fetched. Portal download is not implemented.
@@ -252,6 +254,41 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 - **DSAR.** `Custyard.DataSubjects` finds every message an address appears on as sender, To, CC or Reply-To; `export/2` includes the body only for messages the person sent, `erase_participation/2` scrubs recipient lists and Reply-To on messages they did not send and writes a `data_subject_erasure` audit event with counts only. `mix custyard.dsar export|erase EMAIL --org ID [--yes]`. Contact-level erasure of a sender's own messages remains the contact tooling's job.
 - **Language.** `Custyard.Email.LanguageDetector` (function-word scoring, no dependency; en, de, fr, es, nl, pt, it) runs in the enrichment purpose and sets `conversations.language` from the first detectable message; the thread header and attention queue show it.
 - **Open.** Portal attachment download; inline `cid:` images; contact-level erasure; Reply-To display in the composer (the thread already shows it).
+
+**Phase 3** (branch `agent/custyard-inbound-phase3`) landed the other ingress kinds with these notes:
+
+- **Route custom domain.** `InboundRoutes.set_custom_domain/2` sets `inbound_settings.inbound_domain` with `PUT /routes/{id}`, and `verify_custom_domain/1` calls `POST /routes/{id}/verify-inbound-domain`. The field names and endpoints come from Lettermint's published SDK types, because the API reference page for them was unavailable. A custom domain is exact or a left-hand wildcard (`*.m.example.com` does not cover `m.example.com`), and Lettermint's own domains are refused. A failed re-check keeps an earlier verification, because mail that already arrives proves the record better than one lookup. A domain that a direct-MX channel still uses cannot be moved; the check reads the route as stored, because a page can hold a copy from before the first channel set the domain. Forwarding channels stay on the catch-all domain (see D2).
+- **Direct MX.** `ingress_kind: :mx`. Creating the first channel sets the route's custom domain to the public address domain, and later channels must be on it. One Lettermint route has one custom domain, so one route serves one MX domain. Routing tries forwarding tokens first. If none match, the recipient without its `+tag` is matched against MX public addresses on a domain the custom domain covers, so `support+order-42@help.example.com` still reaches `support@help.example.com`. A direct-MX public address therefore cannot contain a `+`. Tokens now route forwarding channels only. The channel waits in `pending_verification` until `InboundChannels.check_mx/2` sees the record or the first message arrives, and it starts in `awaiting_first_message` on a domain that is already verified. Some forwarding options do not apply to direct-MX channels, and the setup refuses them: an ingress address, a provider, the ingress-address reply fallback, the archive copy (there is no mailbox to keep it) and token rotation. A domain that one of the organization's forwarding channels uses is refused, because moving its MX record would take mail away from the operator's mailbox. Replies go out from the public address, which must be a verified Lettermint sending domain. SPF is a real signal here, but triage still scores on DKIM and DMARC as for forwarded mail.
+- **Google Workspace admin routing.** Provider `google_workspace`. The setup copy describes a Default routing rule that adds the full ingress address, `+token` included, as an extra recipient, so the mailbox keeps its copy. It says not to use Change envelope recipient. No confirmation email exists, so the wizard does not wait for one. Whether Google sets the added address as the envelope recipient of the extra copy is not documented. The test step and the rejection log ("no matching channel") show it on the first message.
+- **IMAP.** `ingress_kind: :imap` stores the following:
+  - `imap_host`, `imap_port` (default 993, implicit TLS only), `imap_username` and `imap_folder` (default `INBOX`).
+  - The password, as `Custyard.Credentials` ciphertext only. This is AES-256-GCM under a dedicated `CREDENTIAL_ENCRYPTION_KEY`, bound to its column. `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` still decrypts, and a password sealed with it is re-encrypted after its next successful use. Without a key, the password cannot be saved.
+
+  `Custyard.Email.ImapPollers` supervises one poller per channel that is `awaiting_first_message` or `active`, has a position and is not suspended. The pollers start and stop from channel broadcasts, with a five-minute sweep as a safety net.
+
+  Each session (`Custyard.Email.ImapPoll`) does the following:
+  - It runs in a task with a 120-second deadline, because Plover's TLS connect has no timeout.
+  - It resolves the host to IPv4 and refuses names with any private, loopback, link-local or reserved address, and it refuses IP literals. It connects to the resolved address and checks the certificate against the name through SNI; this was confirmed against Gmail and Fastmail, where a wrong name fails the handshake. A server without an A record is reported as unresolvable.
+  - It opens the folder with EXAMINE and fetches with `BODY.PEEK[]`, so no flag in the mailbox changes.
+  - It lists new mail with `UID FETCH n:* (UID RFC822.SIZE)`, because Plover parses only ESEARCH replies and most IMAP4rev1 servers answer SEARCH in the older format.
+
+  The channel stores `imap_uid_validity` and `imap_last_uid`. The first connection records the newest UID, so history is not imported. Reconnecting, such as after a login lockout or with the wizard's connection test, keeps the position, so mail that arrived in between is still imported. A changed UIDVALIDITY, or a changed server, username or folder, starts again from the newest UID.
+
+  At most 50 messages are imported per session. Messages over 25 MB are not fetched and are logged as `too_large`, and messages the parser cannot read are logged as `unreadable`; the position moves past both. A pipeline refusal also moves the position on. A connection or database failure stops the session without advancing. So does a message whose attachments could not be stored, for up to five sessions (`imap_message_attempts`); after that the message is passed over with its attachments marked failed. Each message carries the delivery id `imap:<channel>:<uidvalidity>:<uid>`, so a retry finds the stored message, with or without a Message-ID, and resumes its attachments. Three rejected logins without a successful session in between (`imap_auth_failures`) set `imap_auth_failed_at`, which stops polling until the credentials change. Other failures count towards backoff only. A password re-encrypted under a new key is written only if the stored ciphertext is still the one the session read. Errors are stored as short codes, never server text.
+
+  The dispatcher takes the channel (`dispatch/3`, `channel:`) instead of resolving a recipient, and it still rejects paused and revoked channels. Attachments carried in the MIME message are stored under the channel cap. This also applies to LMTP mail.
+
+  IMAP channels have no authentication results, so suspect, operator-sent and manual-forward classification do not apply to them. `Authentication-Results` headers written by the mailbox provider are not trusted.
+
+  `IMAP_ENABLED` and the other `IMAP_*` variables are gone. A deployment that still sets `IMAP_ENABLED` refuses to start and prints the migration steps.
+- **Fix.** `Lettermint.HttpClient.list_domains/0` sent `per_page` and `cursor`, but the Team API takes `page[size]` and `page[cursor]`. Every request therefore returned the first page, and later sending domains were reported as not found.
+- **Open.**
+  - The Onetime Secret pilot, now covering one forward channel. Direct MX and Workspace admin routing still need a first real message each.
+  - OAuth (XOAUTH2) for Gmail, Workspace and Microsoft 365 IMAP. Only app passwords are supported.
+  - Writing operator replies to the IMAP Sent folder (the archive copy BCC works instead).
+  - IDLE instead of one-minute polling.
+  - A poll lease for multi-node Postgres deployments. Two nodes would poll the same mailbox; the position only moves forward and imports are deduplicated, but the work is doubled.
+  - Wildcard custom domains are honoured but not offered in the wizard.
 
 ## Rejected alternatives
 

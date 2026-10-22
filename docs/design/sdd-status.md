@@ -26,7 +26,7 @@ Core Implementation:
 - lib/custyard/email/parser.ex - RFC 5322 parsing, MIME multipart, charset handling
 - lib/custyard/email/processor.ex - Email workflow orchestration (webhook payloads, sender matching, threading)
 - lib/custyard/email/lmtp_server.ex - LMTP server with STARTTLS, rate limiting
-- lib/custyard/email/imap_poller.ex - IMAP polling GenServer
+- lib/custyard/email/imap_pollers.ex, imap_poll.ex - per-channel IMAP polling (inbound-channels Phase 3)
 - lib/custyard/email/sender_matcher.ex - Contact/org matching, on-demand creation, unmatched handling
 - lib/custyard/email/thread_matcher.ex - In-Reply-To/References header threading
 - lib/custyard/email/sieve_header_mapper.ex - Sieve-injected header → conversation property mapping
@@ -66,16 +66,16 @@ Security:
 
 | Component                    | Implementation                                                                                            | Status  |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ------- |
-| Email Ingestion Pipeline     | LMTP server, IMAP poller, HTTP webhook. Three ingestion paths converge on Processor for unified handling  | Done    |
+| Email Ingestion Pipeline     | LMTP server, per-channel IMAP, Lettermint webhook (forwarding and direct-MX channels). All paths converge on the webhook dispatcher | Done    |
 | Attention Scoring Engine     | Scoring module with idle/state/tier/urgency/velocity/neglect components. Scheduler runs every 5 min.      | Done    |
 | Authentication (Operator)    | **Corrected 2026-07-25:** magic-link only — `POST /login` emails a 15-minute single-use token, `GET /login/verify/:token` establishes the session. Rate-limited, timing-attack safe. `password_hash` (Argon2) survives on the schema and is still written by `mix dev.reset_operator_password`, but no route consumes it; there is no password login path. | Done    |
 | Authentication (Portal)      | Token-based URL + custom domain. No Rodauth/SSO yet — SDD specifies Rodauth email/password + optional SSO | Partial |
 | Background Processing        | Scoring scheduler, dormancy checker, neglect checker all running as GenServers                            | Done    |
 | Operator/Customer Isolation  | Separate route scopes, plugs, LiveView on_mount hooks. No shared auth.                                    | Done    |
 | Cross-Organization Isolation | All portal queries filter by org_id from authenticated session                                            | Done    |
-| Email as Untrusted Input     | HTML stripped to plain text, Phoenix template escaping prevents XSS                                       | Done    |
-| Data at Rest Encryption      | Not implemented — using SQLite for MVP                                                                    | Not Yet |
-| Inbound Channels             | Inbound-channels Phase 1: operator-visible `InboundChannel` per public support address under a route, `local+token@<route domain>` ingress, lifecycle pending_verification → awaiting_first_message → active (+ paused/revoked), triage stage (own echo, provider verification capture, auto-response, suspect) ahead of sender matching, per-channel reply identity with Lettermint sending-domain check, quiet-channel alert, 14-day rejection log, channels tab and setup wizard for Proton/Google forwarding. Spec: `docs/design/spec-inbound-channels.md`. | Done |
+| Email as Untrusted Input     | Plain-text bodies, plus HTML sanitised at ingest with an allowlist and images removed (`Custyard.Email.HtmlSanitizer`). Phoenix template escaping prevents XSS | Done    |
+| Data at Rest Encryption      | Not implemented — using SQLite for MVP. Only IMAP channel passwords are encrypted (`Custyard.Credentials`, AES-256-GCM) | Not Yet |
+| Inbound Channels             | Inbound-channels Phases 0–3. An operator-visible `InboundChannel` per public support address under a route, with lifecycle pending_verification → awaiting_first_message → active (+ paused/revoked), a triage stage (own echo, provider verification capture, auto-response, suspect, operator-sent, manual-forward unwrap) ahead of sender matching, per-channel reply identity with a Lettermint sending-domain check, a quiet-channel alert, a 14-day rejection log, and a channels tab with a setup wizard. Three ingress kinds: forwarding to `local+token@<route-id>.lettermint.app` (Proton, Gmail, Google Workspace admin routing, other), direct MX on the route's custom domain, and per-channel IMAP with the password encrypted under `CREDENTIAL_ENCRYPTION_KEY`. Phase 2 added CC and Reply-To, sanitised HTML, attachments, the archive copy, CC-participant DSAR and language detection. Open items: spec-inbound-channels, Implementation status. Spec: `docs/design/spec-inbound-channels.md`. | Done |
 | Outbound Email               | Platform-native outbound implemented (#26 merged): operator replies compose in-platform, send threaded via Lettermint, tracked send-side (pending/sent/failed). Provider status webhook landed (inbound-channels Phase 0): `POST /api/webhook/email-status/lettermint` advances delivered/bounced/suppressed/failed with rank-ordered transitions and an audit event per transition. | Done |
 
 ### Data Model (SDD §4)

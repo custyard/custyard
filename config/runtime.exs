@@ -249,33 +249,36 @@ if lmtp_enabled do
     num_acceptors: parse_int.("LMTP_NUM_ACCEPTORS", 5)
 end
 
-# IMAP poller configuration (all environments)
-imap_enabled = System.get_env("IMAP_ENABLED") == "true"
+# IMAP channels (spec-inbound-channels D8) replaced the single global IMAP
+# poller. A leftover IMAP_ENABLED is reported at application start
+# (Custyard.Application), not raised here, so release commands still run.
+config :custyard,
+  legacy_imap_enabled: blank_to_nil.(System.get_env("IMAP_ENABLED")) not in [nil, "false"]
 
-if imap_enabled do
-  # The poller dispatches every polled message through this organization's
-  # inbound route; Custyard.Email.ImapPoller.init/1 requires it, so a missing
-  # value is a configuration error, not a crash loop at boot.
-  imap_organization_id =
-    parse_int.("IMAP_ORGANIZATION_ID", nil) ||
-      raise """
-      IMAP_ENABLED=true requires IMAP_ORGANIZATION_ID (the integer id of the
-      organization whose inbound route receives the polled mailbox).
-      """
+# Encryption key for stored third-party credentials such as IMAP channel
+# passwords (Custyard.Credentials). Base64 of 32 bytes. A malformed key fails
+# here; a missing one only blocks storing a credential.
+parse_credential_key = fn encoded, name ->
+  case Base.decode64(String.trim(encoded)) do
+    {:ok, <<_::binary-size(32)>> = key} -> key
+    _ -> raise "#{name} must be Base64 of exactly 32 bytes (openssl rand -base64 32)"
+  end
+end
 
-  config :custyard, :imap,
-    enabled: true,
-    organization_id: imap_organization_id,
-    host: System.get_env("IMAP_HOST") || "localhost",
-    port: parse_int.("IMAP_PORT", 993),
-    username: System.get_env("IMAP_USERNAME") || "",
-    # Store env var name instead of actual credential to prevent exposure
-    # in Application config, crash dumps, and :sys.get_state calls.
-    # The ImapPoller reads this at connection time via credential_fetcher.
-    credential_env_var: "IMAP_PASSWORD",
-    folder: System.get_env("IMAP_FOLDER") || "INBOX",
-    poll_interval: parse_int.("IMAP_POLL_INTERVAL", 60000),
-    ssl: System.get_env("IMAP_SSL") != "false"
+case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY")) do
+  nil ->
+    if config_env() == :prod, do: config(:custyard, :credential_keys, current: nil, previous: [])
+
+  encoded ->
+    previous =
+      case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY_PREVIOUS")) do
+        nil -> []
+        old -> [parse_credential_key.(old, "CREDENTIAL_ENCRYPTION_KEY_PREVIOUS")]
+      end
+
+    config :custyard, :credential_keys,
+      current: parse_credential_key.(encoded, "CREDENTIAL_ENCRYPTION_KEY"),
+      previous: previous
 end
 
 # Lettermint API configuration (route management).

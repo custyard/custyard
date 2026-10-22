@@ -7,7 +7,8 @@ defmodule Custyard.Lettermint.HttpClient do
 
   Routes and sending domains are both read from the Team API at the
   configured base URL with the same bearer token; `list_domains/0` pages
-  through `GET /domains` (`per_page=100`, `cursor=`) for at most five pages.
+  through `GET /domains` (`page[size]=100`, `page[cursor]=`) for at most five
+  pages.
   """
 
   @behaviour Custyard.Lettermint.Client
@@ -75,6 +76,58 @@ defmodule Custyard.Lettermint.HttpClient do
   end
 
   @impl true
+  def set_inbound_domain(lettermint_route_id, domain) do
+    url = api_url("/routes/#{URI.encode_www_form(lettermint_route_id)}")
+    body = Jason.encode!(%{inbound_settings: %{inbound_domain: domain}})
+
+    case request(:put, url, body) do
+      {:ok, %Finch.Response{status: 200, body: response_body}} ->
+        decode_route(response_body)
+
+      {:ok, %Finch.Response{status: status, body: response_body}} ->
+        {:error, {:api_error, status, response_body}}
+
+      {:error, reason} ->
+        {:error, {:request_failed, reason}}
+    end
+  end
+
+  @impl true
+  def verify_inbound_domain(lettermint_route_id) do
+    url = api_url("/routes/#{URI.encode_www_form(lettermint_route_id)}/verify-inbound-domain")
+
+    case request(:post, url, nil) do
+      {:ok, %Finch.Response{status: status, body: response_body}} when status in 200..299 ->
+        decode_verification(response_body)
+
+      {:ok, %Finch.Response{status: status, body: response_body}} ->
+        {:error, {:api_error, status, response_body}}
+
+      {:error, reason} ->
+        {:error, {:request_failed, reason}}
+    end
+  end
+
+  @doc false
+  # `{"data": {"verified": bool, "message": ..., "expected_mx_records": [...],
+  # "found_mx_records": [...]}}`; accepts the bare object as well.
+  def decode_verification(response_body) when is_binary(response_body) do
+    case Jason.decode(response_body) do
+      {:ok, %{"data" => %{"verified" => verified} = result}} when is_boolean(verified) ->
+        {:ok, result}
+
+      {:ok, %{"verified" => verified} = result} when is_boolean(verified) ->
+        {:ok, result}
+
+      {:ok, other} ->
+        {:error, {:unexpected_response, other}}
+
+      {:error, decode_error} ->
+        {:error, {:decode_failed, decode_error, response_body}}
+    end
+  end
+
+  @impl true
   def get_webhook_delivery(webhook_id, delivery_id) do
     # Provider IDs are opaque path segments, never URLs supplied by a message.
     path =
@@ -135,8 +188,12 @@ defmodule Custyard.Lettermint.HttpClient do
     end
   end
 
-  defp domains_query(nil), do: [per_page: @domains_per_page]
-  defp domains_query(cursor), do: [per_page: @domains_per_page, cursor: cursor]
+  # The Team API takes JSON:API-style page parameters; `per_page` and
+  # `cursor` are ignored, which would return the first page every time.
+  defp domains_query(nil), do: [{"page[size]", @domains_per_page}]
+
+  defp domains_query(cursor),
+    do: [{"page[size]", @domains_per_page}, {"page[cursor]", cursor}]
 
   @doc false
   # One page of GET /domains: `{"data": [domain, ...], "next_cursor": ...}`.

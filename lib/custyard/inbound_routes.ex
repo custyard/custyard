@@ -201,6 +201,102 @@ defmodule Custyard.InboundRoutes do
     end)
   end
 
+  @doc """
+  Set the route's custom inbound domain in Lettermint and record it locally
+  with verification reset (spec-inbound-channels, D8 direct MX).
+
+  The domain is validated locally before the API call, and compared with
+  the route as stored, not as the caller last loaded it. Setting the domain
+  the route already has is a no-op. Changing it while a direct-MX channel
+  that is not revoked is on the route returns `{:error, :domain_in_use}`:
+  that channel's public address would stop receiving mail.
+  """
+  def set_custom_domain(%InboundRoute{lettermint_route_id: nil}, _domain),
+    do: {:error, :not_a_lettermint_route}
+
+  def set_custom_domain(%InboundRoute{} = route, domain) do
+    route = Repo.reload!(route)
+
+    changeset =
+      InboundRoute.changeset(route, %{
+        lettermint_custom_domain: domain,
+        lettermint_custom_domain_verified_at: nil
+      })
+
+    new_domain = Changeset.get_field(changeset, :lettermint_custom_domain)
+
+    cond do
+      not changeset.valid? ->
+        {:error, changeset}
+
+      new_domain == route.lettermint_custom_domain ->
+        {:ok, route}
+
+      mx_channels_on_domain?(route) ->
+        {:error, :domain_in_use}
+
+      true ->
+        with {:ok, remote} <-
+               Client.client().set_inbound_domain(route.lettermint_route_id, new_domain) do
+          route
+          |> InboundRoute.changeset(%{
+            lettermint_custom_domain: presence(remote["inbound_domain"]) || new_domain,
+            lettermint_custom_domain_verified_at: nil
+          })
+          |> Repo.update()
+        end
+    end
+  end
+
+  # Not keyed on the stored domain: a Lettermint sync can clear it while
+  # channels still depend on it.
+  defp mx_channels_on_domain?(%InboundRoute{id: route_id}) do
+    Repo.exists?(
+      from c in Custyard.InboundChannel,
+        where: c.inbound_route_id == ^route_id and c.ingress_kind == :mx and c.state != :revoked
+    )
+  end
+
+  @doc """
+  Ask Lettermint to verify the route's custom domain MX record.
+
+  Returns `{:ok, route, result}` where `result` is Lettermint's verification
+  map (`"verified"`, `"message"`, `"expected_mx_records"`,
+  `"found_mx_records"`). A successful check stamps
+  `lettermint_custom_domain_verified_at` (kept if already set); a failed
+  check leaves it unchanged, because mail that already arrives proves the MX
+  record better than one DNS lookup. Returns `{:error, :no_custom_domain}`
+  when the route has none.
+  """
+  def verify_custom_domain(%InboundRoute{lettermint_route_id: nil}),
+    do: {:error, :not_a_lettermint_route}
+
+  def verify_custom_domain(%InboundRoute{lettermint_custom_domain: nil}),
+    do: {:error, :no_custom_domain}
+
+  def verify_custom_domain(%InboundRoute{lettermint_route_id: remote_id} = route) do
+    with {:ok, result} <- Client.client().verify_inbound_domain(remote_id),
+         {:ok, route} <- stamp_custom_domain_verified(route, result) do
+      {:ok, route, result}
+    end
+  end
+
+  defp stamp_custom_domain_verified(
+         %InboundRoute{lettermint_custom_domain_verified_at: nil} = route,
+         %{"verified" => true}
+       ) do
+    route
+    |> InboundRoute.changeset(%{
+      lettermint_custom_domain_verified_at: DateTime.utc_now() |> DateTime.truncate(:second)
+    })
+    |> Repo.update()
+  end
+
+  defp stamp_custom_domain_verified(route, _result), do: {:ok, route}
+
+  defp presence(value) when is_binary(value) and value != "", do: value
+  defp presence(_value), do: nil
+
   # Keep response bodies (which may echo the request or route details) out
   # of the logs; the status and error class are enough to act on.
   defp error_summary({:api_error, status, _body}), do: {:api_error, status}
