@@ -25,6 +25,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     Conversation,
     Conversations,
     Message,
+    MessageRecipientStatus,
     Organizations,
     Repo,
     Scoring,
@@ -1508,6 +1509,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:is_system, is_system)
       |> assign(:show_details, message.source == :email and not is_deleted)
       |> assign(:bg_class, bg_class)
+      |> assign(:recipient_failures, secondary_recipient_failures(message))
 
     ~H"""
     <div
@@ -1590,6 +1592,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             <.icon name="hero-trash" class="h-3 w-3" />
           </button>
+        </div>
+        <%!-- The indicator above follows the customer's copy; a CC or archive
+        copy that failed is listed here so it never hides that delivery. --%>
+        <div
+          :for={failure <- @recipient_failures}
+          :if={@is_operator and not @is_internal and not @is_deleted}
+          class="mb-1 text-xs text-amber-700 dark:text-amber-400"
+          data-testid="delivery-recipient-failure"
+        >
+          {recipient_failure_text(failure)}
         </div>
         <div
           :if={@is_deleted}
@@ -1963,6 +1975,27 @@ defmodule CustyardWeb.Operator.ConversationLive do
     </span>
     """
   end
+
+  # Failed CC and other secondary recipients of an outbound message, shown
+  # apart from the indicator (spec-conversation-loop, "Delivery Tracking").
+  defp secondary_recipient_failures(%Message{recipient_statuses: statuses})
+       when is_list(statuses) do
+    statuses
+    |> Enum.filter(&(&1.role != :to and MessageRecipientStatus.failed?(&1)))
+    |> Enum.sort_by(& &1.address)
+  end
+
+  defp secondary_recipient_failures(_message), do: []
+
+  defp recipient_failure_text(%MessageRecipientStatus{role: :cc} = failure),
+    do: "Not delivered to CC #{failure.address}: #{recipient_failure_word(failure.status)}"
+
+  defp recipient_failure_text(%MessageRecipientStatus{} = failure),
+    do: "Copy not delivered to #{failure.address}: #{recipient_failure_word(failure.status)}"
+
+  defp recipient_failure_word(:bounced), do: "bounced"
+  defp recipient_failure_word(:suppressed), do: "suppressed by the email provider"
+  defp recipient_failure_word(:failed), do: "delivery failed"
 
   defp next_task_state(:open), do: "in progress"
   defp next_task_state(:in_progress), do: "done"

@@ -268,6 +268,21 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
+    test "marks a CC recipient and says the customer's copy is unaffected", %{
+      conversation: conv
+    } do
+      Application.put_env(:custyard, :email_enabled, true)
+      on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
+
+      assert Email.deliver_delivery_failure(conv, :bounced, "boss@acme.com", :cc) == :ok
+
+      assert_email_sent(fn email ->
+        assert email.text_body =~ "Recipient: boss@acme.com (CC)"
+        assert email.text_body =~ "customer's own copy is tracked separately"
+        assert email.html_body =~ "boss@acme.com (CC)"
+      end)
+    end
+
     test "explains a suppression and escapes the recipient", %{conversation: conv} do
       Application.put_env(:custyard, :email_enabled, true)
       on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)

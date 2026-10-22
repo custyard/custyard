@@ -55,8 +55,12 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Delivery status values: pending, sent, delivered, bounced, suppressed, failed.
 - A dedicated status webhook endpoint — separate from the inbound-message pipeline — receives delivery lifecycle events and updates the corresponding message, correlated by external message identifier.
 - Status events are authenticated with the same signature scheme as inbound webhooks.
-- Delivery statuses are ranked: pending precedes sent precedes delivered; bounced, suppressed, and failed are terminal. An incoming status event updates a message only if its rank exceeds the current status or it is a terminal state. Lower-ranked, equal, or duplicate events are ignored, so out-of-order event delivery does not regress a message's status.
-- Each outbound message in the conversation thread displays a delivery indicator; bounce and suppression states are visually distinct.
+- Delivery statuses are ranked: pending precedes sent precedes delivered; bounced, suppressed, and failed are terminal. An incoming status event updates a status only if its rank exceeds the current status or it is a terminal state different from the current one. Lower-ranked, equal, or duplicate events are ignored, so out-of-order event delivery does not regress a status.
+- The email service reports delivery per recipient. Each outbound message records the latest status of every address it was sent to (To, CC, archive copy), applying the rank rule to each recipient on its own and in the order of the events' own timestamps, so a late event never undoes a recipient's newer status.
+- The message's delivery status, and so its indicator, follows its primary recipient: the To address the reply was sent to. An event for a CC or other secondary recipient records that recipient's status and never changes the message's. A bounced CC address therefore leaves a reply the customer received marked delivered. An event that names no recipient, or one for a message that recorded no recipient lists, applies to the message as a whole.
+- Each outbound message in the conversation thread displays a delivery indicator; bounce and suppression states are visually distinct. Failed CC and other secondary recipients are listed next to the message, apart from the indicator.
+- Delivery audit events record the message's and the recipient's status before and after and the recipient's role (To, CC, other); never an address.
+- *Implemented:* `Custyard.Email.DeliveryStatus` keeps `message_recipient_statuses` (one row per message and address; `role` fixed from the To and CC lists captured at send time; `status_at` the provider's event time) and derives `messages.delivery_status` from the To recipient. The operator thread lists failed secondary recipients under the message. Erasing a data subject removes the rows that name the address.
 
 ### Bounce and Suppression Handling
 
@@ -64,7 +68,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - A contact with a bounced or suppressed email-validity status is visibly flagged in the operator interface.
 - A bounce or suppression on an outbound reply raises operator attention through notification, the attention queue, or both.
 - An email-validity flag does not automatically block future sends to the contact; dispatch remains at operator discretion.
-- *Implemented:* `contacts.email_status` is set from the event's `data.recipient`, so a bounced CC address flags that contact and never the conversation's. A later `message.delivered` to the address clears the flag, and events apply in their own timestamp order. Changing the contact's address also clears it. The conversation sidebar and the organization's contacts list show the flag. A reply whose status becomes bounced or suppressed sends the operator a notice naming the conversation and recipient.
+- *Implemented:* `contacts.email_status` is set from the event's `data.recipient`, so a bounced CC address flags that contact and never the conversation's. A later `message.delivered` to the address clears the flag, and events apply in their own timestamp order. Changing the contact's address also clears it. The conversation sidebar and the organization's contacts list show the flag. Each recipient whose status becomes bounced or suppressed sends the operator one notice naming the conversation, the recipient and whether it was a CC, so a CC failure is reported even when the customer's copy was delivered.
 
 ### Portal
 

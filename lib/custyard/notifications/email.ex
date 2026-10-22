@@ -48,13 +48,16 @@ defmodule Custyard.Notifications.Email do
   Tell the operator that a reply did not reach a recipient
   (spec-conversation-loop, "Bounce and Suppression Handling"). `status` is
   `:bounced` or `:suppressed`; `recipient` is the address the provider
-  named. Expects `organization` and `contact` preloaded on the conversation.
-  The log stub carries neither the address nor the subject.
+  named and `role` which list it was on (`:to`, the customer's copy, or
+  `:cc` / `:other`, a copy whose failure leaves the customer's delivery
+  as it is). One notice goes out per recipient that fails. Expects
+  `organization` and `contact` preloaded on the conversation. The log stub
+  carries neither the address nor the subject.
   """
-  def deliver_delivery_failure(conversation, status, recipient)
+  def deliver_delivery_failure(conversation, status, recipient, role \\ :to)
       when status in [:bounced, :suppressed] do
     if email_enabled?() do
-      send_delivery_failure(conversation, status, recipient)
+      send_delivery_failure(conversation, status, recipient, role)
     else
       log_delivery_failure(conversation, status)
     end
@@ -153,7 +156,7 @@ defmodule Custyard.Notifications.Email do
     :ok
   end
 
-  defp send_delivery_failure(conversation, status, recipient) do
+  defp send_delivery_failure(conversation, status, recipient, role) do
     import Swoosh.Email
 
     operator_email = Application.get_env(:custyard, :operator_email, "operator@example.com")
@@ -165,8 +168,8 @@ defmodule Custyard.Notifications.Email do
       |> to(operator_email)
       |> from({from_name, from_email})
       |> subject("Reply #{status}: #{conversation.subject}")
-      |> html_body(delivery_failure_html(conversation, status, recipient))
-      |> text_body(delivery_failure_text(conversation, status, recipient))
+      |> html_body(delivery_failure_html(conversation, status, recipient, role))
+      |> text_body(delivery_failure_text(conversation, status, recipient, role))
 
     case Custyard.Mailer.deliver(email) do
       {:ok, _} ->
@@ -195,10 +198,23 @@ defmodule Custyard.Notifications.Email do
       "The email provider did not send the reply because the address is on its suppression " <>
         "list, usually after earlier bounces or a spam complaint. " <> @contact_flag_note
 
-  defp delivery_failure_html(conversation, status, recipient) do
+  # A secondary recipient's failure says nothing about the customer's copy,
+  # whose status the thread shows on its own.
+  defp role_note(:to), do: ""
+
+  defp role_note(_role),
+    do:
+      " This address was copied on the reply; the customer's own copy is tracked " <>
+        "separately and is not affected."
+
+  defp recipient_label(recipient, :to), do: recipient
+  defp recipient_label(recipient, :cc), do: "#{recipient} (CC)"
+  defp recipient_label(recipient, _role), do: "#{recipient} (copy)"
+
+  defp delivery_failure_html(conversation, status, recipient, role) do
     safe_subject = html_escape(conversation.subject)
     safe_org_name = html_escape(organization_display(conversation.organization))
-    safe_recipient = html_escape(recipient)
+    safe_recipient = html_escape(recipient_label(recipient, role))
 
     """
     <html>
@@ -212,7 +228,7 @@ defmodule Custyard.Notifications.Email do
         <p><strong>Recipient:</strong> #{safe_recipient}</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
         <p style="color: #6b7280; font-size: 14px;">
-          #{delivery_failure_explanation(status)}
+          #{delivery_failure_explanation(status)}#{role_note(role)}
         </p>
       </div>
     </body>
@@ -220,15 +236,15 @@ defmodule Custyard.Notifications.Email do
     """
   end
 
-  defp delivery_failure_text(conversation, status, recipient) do
+  defp delivery_failure_text(conversation, status, recipient, role) do
     """
     REPLY #{String.upcase(to_string(status))}
 
     Conversation: #{conversation.subject}
     Organization: #{organization_display(conversation.organization)}
-    Recipient: #{recipient}
+    Recipient: #{recipient_label(recipient, role)}
 
-    #{delivery_failure_explanation(status)}
+    #{delivery_failure_explanation(status)}#{role_note(role)}
     """
   end
 

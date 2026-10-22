@@ -77,6 +77,80 @@ defmodule Custyard.Email.DeliveryStatusNoticeTest do
     end
   end
 
+  describe "operator notice per recipient" do
+    setup do
+      org = insert_organization(name: "Acme Corp")
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.com")
+
+      conversation =
+        insert_conversation(
+          organization_id: org.id,
+          contact_id: contact.id,
+          subject: "Billing question"
+        )
+
+      insert_message(
+        conversation_id: conversation.id,
+        source: :operator,
+        sender_email: "support@acme.com",
+        body: "We can help with that.",
+        delivery_status: :sent,
+        lettermint_message_id: @provider_id,
+        to_addresses: ["alice@customer.com"],
+        cc_addresses: ["bob@customer.com"]
+      )
+
+      :ok
+    end
+
+    test "a CC bounce sends a notice that names the CC and spares the customer's copy" do
+      assert {:ok, :updated, %{delivery_status: :sent}} =
+               DeliveryStatus.apply_event(
+                 envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
+               )
+
+      assert_email_sent(fn email ->
+        assert email.subject == "Reply bounced: Billing question"
+        refute email.text_body =~ "alice@customer.com"
+        assert email.text_body =~ "Recipient: bob@customer.com (CC)"
+        assert email.text_body =~ "customer's own copy is tracked separately"
+      end)
+    end
+
+    test "each failed recipient gets one notice, however often its event is retried" do
+      cc_bounce = envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
+
+      to_bounce =
+        envelope("message.hard_bounced", "evt-to", recipient_data("alice@customer.com"))
+
+      assert {:ok, :updated, _} = DeliveryStatus.apply_event(cc_bounce)
+      assert {:ok, :updated, _} = DeliveryStatus.apply_event(to_bounce)
+      assert {:ok, :ignored, :not_advanced} = DeliveryStatus.apply_event(cc_bounce)
+      assert {:ok, :ignored, :not_advanced} = DeliveryStatus.apply_event(to_bounce)
+
+      assert_email_sent(fn email -> assert email.text_body =~ "bob@customer.com (CC)" end)
+
+      assert_email_sent(fn email ->
+        assert email.text_body =~ "Recipient: alice@customer.com\n"
+      end)
+
+      assert_no_email_sent()
+    end
+
+    test "a CC bounce after the customer's own bounce is still reported" do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-to", recipient_data("alice@customer.com"))
+      )
+
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
+      )
+
+      assert_email_sent(fn email -> assert email.text_body =~ "Recipient: alice@customer.com" end)
+      assert_email_sent(fn email -> assert email.text_body =~ "bob@customer.com (CC)" end)
+    end
+  end
+
   defp envelope(event, delivery_id, data) do
     %{
       "id" => delivery_id,

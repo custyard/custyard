@@ -3,7 +3,9 @@ defmodule Custyard.Email.DeliveryStatusTest do
 
   import Custyard.Factory
 
-  alias Custyard.{AuditEvent, Contact, Message, Repo}
+  import Ecto.Query, only: [from: 2]
+
+  alias Custyard.{AuditEvent, Contact, Message, MessageRecipientStatus, Repo}
   alias Custyard.Email.DeliveryStatus
 
   @provider_id "lm-msg-0a1b2c3d"
@@ -138,6 +140,9 @@ defmodule Custyard.Email.DeliveryStatusTest do
                "delivery_id" => "evt-1",
                "from" => "sent",
                "to" => "delivered",
+               "recipient_role" => "to",
+               "recipient_from" => nil,
+               "recipient_to" => "delivered",
                "reason" => nil,
                "reason_code" => nil,
                "status_code" => 250,
@@ -423,18 +428,23 @@ defmodule Custyard.Email.DeliveryStatusTest do
       assert Repo.reload!(other).email_status == :valid
     end
 
-    test "a second recipient's bounce applies after the message is already bounced", %{
+    test "each recipient's bounce flags its contact, whatever the message status", %{
       alice: alice,
       bob: bob
     } do
-      assert {:ok, :updated, _} =
+      assert {:ok, :updated, %Message{delivery_status: :sent}} =
                DeliveryStatus.apply_event(
                  envelope("message.hard_bounced", "evt-1", recipient_data("bob@customer.com"))
                )
 
-      assert {:ok, :ignored, :not_advanced} =
+      assert {:ok, :updated, %Message{delivery_status: :bounced}} =
                DeliveryStatus.apply_event(
                  envelope("message.hard_bounced", "evt-2", recipient_data("alice@customer.com"))
+               )
+
+      assert {:ok, :ignored, :not_advanced} =
+               DeliveryStatus.apply_event(
+                 envelope("message.hard_bounced", "evt-3", recipient_data("bob@customer.com"))
                )
 
       assert Repo.reload!(alice).email_status == :bounced
@@ -506,6 +516,261 @@ defmodule Custyard.Email.DeliveryStatusTest do
       assert updated.email_status == :valid
       assert updated.email_status_at == nil
     end
+  end
+
+  describe "per-recipient status" do
+    setup do
+      org = insert_organization()
+      alice = insert_contact(organization_id: org.id, email: "alice@customer.com")
+      conversation = insert_conversation(organization_id: org.id, contact_id: alice.id)
+
+      outbound =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :operator,
+          sender_email: "support@acme.com",
+          message_id: "<reply-003@custyard.local>",
+          body: "We can help with that.",
+          delivery_status: :sent,
+          lettermint_message_id: @provider_id,
+          to_addresses: ["Alice@Customer.com"],
+          cc_addresses: ["bob@customer.com"]
+        )
+
+      {:ok, conversation: conversation, outbound: outbound}
+    end
+
+    test "a CC bounce records the recipient and leaves the message's status alone", %{
+      outbound: outbound
+    } do
+      data = %{
+        "message_id" => @provider_id,
+        "recipient" => "Bob@customer.com",
+        "response" => %{"status_code" => 550, "content" => "550 5.1.1 user unknown"}
+      }
+
+      assert {:ok, :updated, %Message{delivery_status: :sent}} =
+               DeliveryStatus.apply_event(envelope("message.hard_bounced", "evt-cc", data))
+
+      assert Repo.get!(Message, outbound.id).delivery_status == :sent
+
+      assert [%MessageRecipientStatus{} = bob] = recipient_statuses(outbound)
+      assert bob.address == "bob@customer.com"
+      assert bob.role == :cc
+      assert bob.status == :bounced
+      assert bob.status_at == ~U[2026-10-20 12:00:00Z]
+
+      [audit] = Repo.all(AuditEvent)
+      assert audit.payload["from"] == "sent"
+      assert audit.payload["to"] == "sent"
+      assert audit.payload["recipient_role"] == "cc"
+      assert audit.payload["recipient_from"] == nil
+      assert audit.payload["recipient_to"] == "bounced"
+      assert audit.payload["status_code"] == 550
+      refute Jason.encode!(audit.payload) =~ "bob@customer.com"
+    end
+
+    test "the customer's delivery after a CC bounce marks the message delivered", %{
+      outbound: outbound
+    } do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
+      )
+
+      assert {:ok, :updated, %Message{delivery_status: :delivered}} =
+               DeliveryStatus.apply_event(
+                 envelope(
+                   "message.delivered",
+                   "evt-to",
+                   recipient_data("alice@customer.com"),
+                   "2026-10-20T12:00:05Z"
+                 )
+               )
+
+      assert Repo.get!(Message, outbound.id).delivery_status == :delivered
+
+      assert %{
+               {"alice@customer.com", :to} => :delivered,
+               {"bob@customer.com", :cc} => :bounced
+             } == statuses_by_recipient(outbound)
+    end
+
+    test "the customer's bounce marks the message bounced as before", %{outbound: outbound} do
+      assert {:ok, :updated, %Message{delivery_status: :bounced}} =
+               DeliveryStatus.apply_event(
+                 envelope("message.hard_bounced", "evt-to", recipient_data("alice@customer.com"))
+               )
+
+      assert Repo.get!(Message, outbound.id).delivery_status == :bounced
+      assert %{{"alice@customer.com", :to} => :bounced} == statuses_by_recipient(outbound)
+
+      [audit] = Repo.all(AuditEvent)
+      assert audit.payload["from"] == "sent"
+      assert audit.payload["to"] == "bounced"
+      assert audit.payload["recipient_role"] == "to"
+      assert audit.payload["recipient_to"] == "bounced"
+    end
+
+    test "a retried CC bounce is ignored and writes no second audit event", %{
+      outbound: outbound
+    } do
+      event = envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
+
+      assert {:ok, :updated, _} = DeliveryStatus.apply_event(event)
+      assert {:ok, :ignored, :not_advanced} = DeliveryStatus.apply_event(event)
+
+      assert Repo.aggregate(AuditEvent, :count) == 1
+      assert %{{"bob@customer.com", :cc} => :bounced} == statuses_by_recipient(outbound)
+    end
+
+    test "a later terminal event replaces a recipient's earlier terminal status", %{
+      outbound: outbound
+    } do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
+      )
+
+      assert {:ok, :updated, %Message{delivery_status: :sent}} =
+               DeliveryStatus.apply_event(
+                 envelope(
+                   "message.failed",
+                   "evt-cc2",
+                   recipient_data("bob@customer.com"),
+                   "2026-10-20T12:00:05Z"
+                 )
+               )
+
+      assert %{{"bob@customer.com", :cc} => :failed} == statuses_by_recipient(outbound)
+
+      [_bounced, failed] = Repo.all(from(a in AuditEvent, order_by: a.id))
+      assert failed.payload["recipient_from"] == "bounced"
+      assert failed.payload["recipient_to"] == "failed"
+    end
+
+    test "an event older than the recipient's recorded status is ignored", %{
+      outbound: outbound
+    } do
+      DeliveryStatus.apply_event(
+        envelope(
+          "message.delivered",
+          "evt-to",
+          recipient_data("alice@customer.com"),
+          "2026-10-21T09:00:00Z"
+        )
+      )
+
+      assert {:ok, :ignored, :not_advanced} =
+               DeliveryStatus.apply_event(
+                 envelope(
+                   "message.hard_bounced",
+                   "evt-late",
+                   recipient_data("alice@customer.com"),
+                   "2026-10-20T12:00:00Z"
+                 )
+               )
+
+      assert Repo.get!(Message, outbound.id).delivery_status == :delivered
+      assert %{{"alice@customer.com", :to} => :delivered} == statuses_by_recipient(outbound)
+    end
+
+    test "an out-of-order sent event for a recipient is ignored", %{outbound: outbound} do
+      DeliveryStatus.apply_event(
+        envelope("message.delivered", "evt-to", recipient_data("alice@customer.com"))
+      )
+
+      assert {:ok, :ignored, :not_advanced} =
+               DeliveryStatus.apply_event(
+                 envelope(
+                   "message.sent",
+                   "evt-sent",
+                   recipient_data("alice@customer.com"),
+                   "2026-10-20T12:00:05Z"
+                 )
+               )
+
+      assert %{{"alice@customer.com", :to} => :delivered} == statuses_by_recipient(outbound)
+    end
+
+    test "an address on neither list is an archive copy and never moves the message", %{
+      outbound: outbound
+    } do
+      assert {:ok, :updated, %Message{delivery_status: :sent}} =
+               DeliveryStatus.apply_event(
+                 envelope("message.hard_bounced", "evt-bcc", recipient_data("archive@acme.com"))
+               )
+
+      assert %{{"archive@acme.com", :other} => :bounced} == statuses_by_recipient(outbound)
+      assert Repo.get!(Message, outbound.id).delivery_status == :sent
+    end
+
+    test "an event naming no recipient still applies to the message as a whole", %{
+      outbound: outbound
+    } do
+      assert {:ok, :updated, %Message{delivery_status: :delivered}} =
+               DeliveryStatus.apply_event(
+                 envelope("message.delivered", "evt-x", %{"message_id" => @provider_id})
+               )
+
+      assert statuses_by_recipient(outbound) == %{}
+
+      [audit] = Repo.all(AuditEvent)
+      assert audit.payload["recipient_role"] == nil
+      assert audit.payload["recipient_to"] == nil
+    end
+
+    test "a message that recorded no recipients treats every address as primary", %{
+      conversation: conversation
+    } do
+      legacy =
+        insert_message(
+          conversation_id: conversation.id,
+          source: :operator,
+          body: "Sent before recipient lists existed",
+          delivery_status: :sent,
+          lettermint_message_id: "lm-legacy"
+        )
+
+      data = %{"message_id" => "lm-legacy", "recipient" => "bob@customer.com"}
+
+      assert {:ok, :updated, %Message{delivery_status: :bounced}} =
+               DeliveryStatus.apply_event(envelope("message.hard_bounced", "evt-l", data))
+
+      assert %{{"bob@customer.com", :to} => :bounced} == statuses_by_recipient(legacy)
+    end
+
+    test "recipient rows go with their message", %{outbound: outbound} do
+      DeliveryStatus.apply_event(
+        envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
+      )
+
+      Repo.delete!(outbound)
+      assert Repo.aggregate(MessageRecipientStatus, :count) == 0
+    end
+  end
+
+  describe "recipient_role/2" do
+    test "classifies by the lists captured at send time, case-insensitively" do
+      message = %Message{to_addresses: ["Alice@Customer.com"], cc_addresses: ["bob@customer.com"]}
+
+      assert DeliveryStatus.recipient_role(message, "alice@customer.com") == :to
+      assert DeliveryStatus.recipient_role(message, " BOB@customer.com ") == :cc
+      assert DeliveryStatus.recipient_role(message, "archive@acme.com") == :other
+    end
+
+    test "every address is primary when no recipients were recorded" do
+      assert DeliveryStatus.recipient_role(%Message{to_addresses: []}, "x@y.z") == :to
+      assert DeliveryStatus.recipient_role(%Message{to_addresses: nil}, "x@y.z") == :to
+    end
+  end
+
+  defp recipient_statuses(%Message{id: id}) do
+    Repo.all(from(r in MessageRecipientStatus, where: r.message_id == ^id, order_by: r.address))
+  end
+
+  defp statuses_by_recipient(message) do
+    message
+    |> recipient_statuses()
+    |> Map.new(&{{&1.address, &1.role}, &1.status})
   end
 
   defp envelope(event, delivery_id, data, timestamp \\ "2026-10-20T12:00:00Z") do
