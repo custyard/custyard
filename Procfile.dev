@@ -9,6 +9,6 @@ tailwind: mix tailwind custyard --watch
 esbuild: mix esbuild custyard --watch
 
 # Note: LMTP server starts automatically via supervision tree when LMTP_ENABLED=true
-# Note: IMAP poller starts automatically via supervision tree when IMAP_ENABLED=true
+# Note: IMAP channel pollers start with the app; connect mailboxes in the operator UI
 #
 # @see docs/lessons-learned/

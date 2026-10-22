@@ -41,7 +41,7 @@ iex -S mix phx.server
 
 ### Email Ingestion (Optional)
 
-The LMTP server and IMAP poller are disabled by default. Enable them with environment variables:
+The LMTP server is disabled by default. Enable it with environment variables. IMAP mailboxes are connected per channel in the operator UI (see below).
 
 #### LMTP Server
 
@@ -68,21 +68,14 @@ swaks --to support@custyard.test \
 
 See [docs/lmtp-troubleshooting.md](lmtp-troubleshooting.md) for debugging.
 
-#### IMAP Poller
+#### IMAP channels
 
-Polls an IMAP mailbox for new messages.
-
-```bash
-IMAP_ENABLED=true           # Enable IMAP poller
-IMAP_ORGANIZATION_ID=1      # Organization whose inbound route receives the mailbox (required)
-IMAP_HOST=imap.example.com  # IMAP server
-IMAP_PORT=993               # Port (default: 993)
-IMAP_USERNAME=user@example.com
-IMAP_PASSWORD=secret
-IMAP_FOLDER=INBOX           # Folder to poll (default: INBOX)
-IMAP_POLL_INTERVAL=60000    # Interval in ms (default: 60000)
-IMAP_SSL=true               # Use SSL (default: true)
-```
+An IMAP mailbox is a channel: create it on the organization page (Channels,
+New channel, "Read a mailbox over IMAP"). Development encrypts the stored
+password with a fixed key from `config/dev.exs` and allows a local test server
+(`localhost` or an IP) through `:imap_allow_private_hosts`. Production needs
+`CREDENTIAL_ENCRYPTION_KEY`. See [docs/ops/inbound-channels.md](ops/inbound-channels.md).
+The old `IMAP_*` variables are gone, and `IMAP_ENABLED=true` stops the app at boot.
 
 ### Outbound Email (Production)
 

@@ -26,7 +26,7 @@ Core Implementation:
 - lib/custyard/email/parser.ex - RFC 5322 parsing, MIME multipart, charset handling
 - lib/custyard/email/processor.ex - Email workflow orchestration (webhook payloads, sender matching, threading)
 - lib/custyard/email/lmtp_server.ex - LMTP server with STARTTLS, rate limiting
-- lib/custyard/email/imap_poller.ex - IMAP polling GenServer
+- lib/custyard/email/imap_pollers.ex, imap_poll.ex - per-channel IMAP polling (inbound-channels Phase 3)
 - lib/custyard/email/sender_matcher.ex - Contact/org matching, on-demand creation, unmatched handling
 - lib/custyard/email/thread_matcher.ex - In-Reply-To/References header threading
 - lib/custyard/email/sieve_header_mapper.ex - Sieve-injected header → conversation property mapping
@@ -66,7 +66,7 @@ Security:
 
 | Component                    | Implementation                                                                                            | Status  |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ------- |
-| Email Ingestion Pipeline     | LMTP server, IMAP poller, HTTP webhook. Three ingestion paths converge on Processor for unified handling  | Done    |
+| Email Ingestion Pipeline     | LMTP server, per-channel IMAP, Lettermint webhook (forwarding and direct-MX channels). All paths converge on the webhook dispatcher | Done    |
 | Attention Scoring Engine     | Scoring module with idle/state/tier/urgency/velocity/neglect components. Scheduler runs every 5 min.      | Done    |
 | Authentication (Operator)    | **Corrected 2026-07-25:** magic-link only — `POST /login` emails a 15-minute single-use token, `GET /login/verify/:token` establishes the session. Rate-limited, timing-attack safe. `password_hash` (Argon2) survives on the schema and is still written by `mix dev.reset_operator_password`, but no route consumes it; there is no password login path. | Done    |
 | Authentication (Portal)      | Token-based URL + custom domain. No Rodauth/SSO yet — SDD specifies Rodauth email/password + optional SSO | Partial |
