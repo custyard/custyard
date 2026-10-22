@@ -59,6 +59,29 @@ defmodule Custyard.Lettermint.Client do
   @callback delete_route(lettermint_route_id :: String.t()) :: :ok | {:error, term()}
 
   @doc """
+  Set (or clear, with nil) the route's custom inbound domain, an exact
+  domain such as `help.example.com` or a left-hand wildcard such as
+  `*.m.example.com` (`PUT /routes/{id}` with
+  `inbound_settings.inbound_domain`). Lettermint resets verification when
+  the domain changes.
+
+  Returns `{:ok, route}` with the unwrapped route map (see module doc).
+  """
+  @callback set_inbound_domain(lettermint_route_id :: String.t(), domain :: String.t() | nil) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc """
+  Ask Lettermint to check the route's custom domain MX record
+  (`POST /routes/{id}/verify-inbound-domain`).
+
+  Returns `{:ok, result}` where `result` has string keys `"verified"`
+  (boolean), `"message"`, `"expected_mx_records"` and `"found_mx_records"`
+  (lists of strings, possibly absent).
+  """
+  @callback verify_inbound_domain(lettermint_route_id :: String.t()) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc """
   List the team's sending domains (see module doc, Domain shape).
   """
   @callback list_domains() :: {:ok, [map()]} | {:error, term()}

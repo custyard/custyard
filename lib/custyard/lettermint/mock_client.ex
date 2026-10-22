@@ -13,6 +13,11 @@ defmodule Custyard.Lettermint.MockClient do
       ])
 
   and remove them again in `on_exit`.
+
+  `verify_inbound_domain/1` returns
+  `Application.get_env(:custyard, :lettermint_mock_inbound_verification)`
+  when set, otherwise a successful verification, so the direct-MX setup
+  completes in development.
   """
 
   @behaviour Custyard.Lettermint.Client
@@ -30,6 +35,28 @@ defmodule Custyard.Lettermint.MockClient do
   @impl true
   def delete_route(_lettermint_route_id) do
     :ok
+  end
+
+  @impl true
+  def set_inbound_domain(lettermint_route_id, domain) do
+    {:ok, Map.put(route(lettermint_route_id), "inbound_domain", domain)}
+  end
+
+  @impl true
+  def verify_inbound_domain(_lettermint_route_id) do
+    case Application.get_env(:custyard, :lettermint_mock_inbound_verification) do
+      nil ->
+        {:ok,
+         %{
+           "verified" => true,
+           "message" => "Inbound domain verified",
+           "expected_mx_records" => ["10 lettermint.mx"],
+           "found_mx_records" => ["10 lettermint.mx"]
+         }}
+
+      result ->
+        result
+    end
   end
 
   @impl true

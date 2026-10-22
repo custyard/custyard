@@ -119,12 +119,12 @@ defmodule Custyard.InboundChannels do
   def from_name(_channel), do: nil
 
   defp ingress_domain(%InboundChannel{inbound_route: %InboundRoute{} = route}),
-    do: InboundRoute.ingress_domain(route)
+    do: InboundRoute.forward_domain(route)
 
   defp ingress_domain(%InboundChannel{inbound_route_id: route_id}) when is_integer(route_id) do
     case Repo.get(InboundRoute, route_id) do
       nil -> nil
-      route -> InboundRoute.ingress_domain(route)
+      route -> InboundRoute.forward_domain(route)
     end
   end
 
