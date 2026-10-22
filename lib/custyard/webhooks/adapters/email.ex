@@ -53,9 +53,34 @@ defmodule Custyard.Webhooks.Adapters.Email do
        headers: headers,
        source: :email,
        # Sanitised at ingest (spec-inbound-channels D9); the raw HTML is dropped.
-       metadata: %{html_body: HtmlSanitizer.sanitize(field(parsed, :html))}
+       # Attachment descriptors carry the decoded bytes for the attachments
+       # purpose, which stores them under the channel's cap; they are never
+       # persisted on the message itself.
+       metadata: %{
+         html_body: HtmlSanitizer.sanitize(field(parsed, :html)),
+         attachments: attachment_descriptors(field(parsed, :attachments))
+       }
      }}
   end
+
+  @max_attachments 50
+
+  defp attachment_descriptors(list) when is_list(list) do
+    list
+    |> Enum.filter(&(is_map(&1) and is_binary(&1[:content])))
+    |> Enum.take(@max_attachments)
+    |> Enum.map(fn attachment ->
+      %{
+        filename: Normalizer.presence(attachment[:filename]),
+        content_type: Normalizer.presence(attachment[:content_type]),
+        size: byte_size(attachment[:content]),
+        content_id: nil,
+        content: attachment[:content]
+      }
+    end)
+  end
+
+  defp attachment_descriptors(_other), do: []
 
   # Parser output carries both atom and string keys; prefer the atom form.
   defp field(parsed, key), do: parsed[key] || parsed[Atom.to_string(key)]

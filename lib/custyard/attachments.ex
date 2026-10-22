@@ -315,6 +315,14 @@ defmodule Custyard.Attachments do
     {skipped("invalid_descriptor"), used}
   end
 
+  # Mail read from a mailbox (IMAP, LMTP) carries the decoded bytes itself;
+  # the same cumulative cap applies, with no network fetch.
+  defp process_descriptor(%{content: bytes}, used, limit, _skip) when is_binary(bytes) do
+    if byte_size(bytes) + used > limit,
+      do: {skipped("over_limit"), used},
+      else: {%{downloaded: bytes}, used + byte_size(bytes)}
+  end
+
   defp process_descriptor(descriptor, used, limit, skip) when not is_map_key(descriptor, :url),
     do: process_descriptor(Map.put(descriptor, :url, nil), used, limit, skip)
 
