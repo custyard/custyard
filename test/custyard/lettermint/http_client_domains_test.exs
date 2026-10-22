@@ -15,7 +15,10 @@ defmodule Custyard.Lettermint.HttpClientDomainsTest do
       test_pid = :persistent_term.get({__MODULE__, :test_pid})
       send(test_pid, {:request, conn.request_path, conn.query_params, conn.req_headers})
 
-      {status, body} = :persistent_term.get({__MODULE__, :respond}).(conn.query_params["cursor"])
+      {status, body} =
+        :persistent_term.get({__MODULE__, :respond}).(
+          get_in(conn.query_params, ["page", "cursor"])
+        )
 
       conn
       |> put_resp_content_type("application/json")
@@ -57,8 +60,8 @@ defmodule Custyard.Lettermint.HttpClientDomainsTest do
 
       assert {:ok, [%{"id" => "d1", "status" => "verified"}]} = HttpClient.list_domains()
 
-      assert_receive {:request, "/domains", %{"per_page" => "100"} = params, headers}
-      refute Map.has_key?(params, "cursor")
+      assert_receive {:request, "/domains", %{"page" => %{"size" => "100"} = page}, headers}
+      refute Map.has_key?(page, "cursor")
       assert {"authorization", "Bearer test-api-key"} in headers
     end
 
@@ -77,9 +80,10 @@ defmodule Custyard.Lettermint.HttpClientDomainsTest do
       assert {:ok, domains} = HttpClient.list_domains()
       assert Enum.map(domains, & &1["id"]) == ["d1", "d2", "d3"]
 
-      assert_receive {:request, "/domains", %{"per_page" => "100"}, _}
-      assert_receive {:request, "/domains", %{"cursor" => "c2", "per_page" => "100"}, _}
-      assert_receive {:request, "/domains", %{"cursor" => "c3", "per_page" => "100"}, _}
+      assert_receive {:request, "/domains", %{"page" => %{"size" => "100"} = first}, _}
+      refute Map.has_key?(first, "cursor")
+      assert_receive {:request, "/domains", %{"page" => %{"cursor" => "c2", "size" => "100"}}, _}
+      assert_receive {:request, "/domains", %{"page" => %{"cursor" => "c3", "size" => "100"}}, _}
       refute_receive {:request, _, _, _}
     end
 

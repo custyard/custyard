@@ -7,7 +7,8 @@ defmodule Custyard.Lettermint.HttpClient do
 
   Routes and sending domains are both read from the Team API at the
   configured base URL with the same bearer token; `list_domains/0` pages
-  through `GET /domains` (`per_page=100`, `cursor=`) for at most five pages.
+  through `GET /domains` (`page[size]=100`, `page[cursor]=`) for at most five
+  pages.
   """
 
   @behaviour Custyard.Lettermint.Client
@@ -135,8 +136,12 @@ defmodule Custyard.Lettermint.HttpClient do
     end
   end
 
-  defp domains_query(nil), do: [per_page: @domains_per_page]
-  defp domains_query(cursor), do: [per_page: @domains_per_page, cursor: cursor]
+  # The Team API takes JSON:API-style page parameters; `per_page` and
+  # `cursor` are ignored, which would return the first page every time.
+  defp domains_query(nil), do: [{"page[size]", @domains_per_page}]
+
+  defp domains_query(cursor),
+    do: [{"page[size]", @domains_per_page}, {"page[cursor]", cursor}]
 
   @doc false
   # One page of GET /domains: `{"data": [domain, ...], "next_cursor": ...}`.
