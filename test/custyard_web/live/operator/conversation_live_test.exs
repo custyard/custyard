@@ -179,6 +179,68 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
     end
   end
 
+  describe "reply recipient in the composer (D5)" do
+    setup do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example")
+      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      %{conv: conv}
+    end
+
+    test "shows the contact's address", %{conn: conn, conv: conv} do
+      insert_message(conversation_id: conv.id, source: :email, triage_class: :customer)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "alice@customer.example"
+
+      refute has_element?(view, ~s([data-testid="operator-reply-to-override"]))
+    end
+
+    test "shows the customer's Reply-To when it overrides the contact", %{
+      conn: conn,
+      conv: conv
+    } do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        triage_class: :customer,
+        reply_to: "Billing@Customer.example"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "billing@customer.example"
+
+      assert has_element?(view, ~s([data-testid="operator-reply-to-override"]))
+    end
+
+    test "ignores a Reply-To on an auto-response", %{conn: conn, conv: conv} do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        triage_class: :auto_response,
+        reply_to: "robot@customer.example"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "alice@customer.example"
+    end
+
+    test "shows no To for a prospect who has not opted in", %{conn: conn} do
+      conv = insert_conversation(source: :public_intake)
+      insert_prospect(conversation_id: conv.id, email: "p@example.com", notify_on_reply: false)
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      refute has_element?(view, ~s([data-testid="operator-reply-to"]))
+    end
+  end
+
   describe "reply-all CC in the composer (D5)" do
     setup do
       org = insert_organization()

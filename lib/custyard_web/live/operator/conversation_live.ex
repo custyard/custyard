@@ -16,6 +16,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   import CustyardWeb.FormHelpers
 
   alias Custyard.Attachments.Recovery
+  alias Custyard.Email.Outbound
 
   alias Custyard.{
     Attachments,
@@ -748,7 +749,24 @@ defmodule CustyardWeb.Operator.ConversationLive do
     socket
     |> assign(:reply_delivery, reply_delivery)
     |> assign(:reply_will_email?, reply_delivery in [:contact, :prospect_opted_in])
+    |> assign(:reply_recipient, reply_recipient(conversation))
   end
+
+  # The To of the next reply, from the resolver delivery uses, so the
+  # composer never shows an address the reply will not go to.
+  defp reply_recipient(conversation) do
+    case Outbound.reply_recipient(conversation) do
+      {:ok, address} ->
+        contact_email = conversation.contact && conversation.contact.email
+        %{address: address, reply_to?: not same_address?(address, contact_email)}
+
+      {:error, _reason} ->
+        nil
+    end
+  end
+
+  defp same_address?(_address, nil), do: false
+  defp same_address?(address, other), do: String.downcase(address) == String.downcase(other)
 
   # Ground truth for this message: :withheld is only ever set by the
   # public-intake consent gate at send time, so this can't be fooled by a
@@ -1027,6 +1045,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
             class="space-y-1.5"
             data-testid="operator-reply-form"
           >
+            <p
+              :if={@reply_recipient}
+              class="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400"
+              data-testid="operator-reply-to"
+            >
+              <span class="w-6">To</span>
+              <code class="text-gray-700 dark:text-zinc-300 truncate">{@reply_recipient.address}</code>
+              <span :if={@reply_recipient.reply_to?} data-testid="operator-reply-to-override">
+                · the customer's Reply-To
+              </span>
+            </p>
             <%!-- Reply-all CC (spec-inbound-channels D5): visible and editable;
             hidden for prospect conversations, which never carry a CC. --%>
             <label

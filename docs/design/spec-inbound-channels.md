@@ -253,7 +253,7 @@ Email-sourced conversations follow the existing portal rules: a contact with por
 - **Rejection log UI.** The channels tab lists the organization's rejections from the last 14 days with reason, sender, subject and the channel or masked route address.
 - **DSAR.** `Custyard.DataSubjects` finds every message an address appears on as sender, To, CC or Reply-To; `export/2` includes the body only for messages the person sent, `erase_participation/2` scrubs recipient lists and Reply-To on messages they did not send and writes a `data_subject_erasure` audit event with counts only. `mix custyard.dsar export|erase EMAIL --org ID [--yes]`. Contact-level erasure of a sender's own messages remains the contact tooling's job.
 - **Language.** `Custyard.Email.LanguageDetector` (function-word scoring, no dependency; en, de, fr, es, nl, pt, it) runs in the enrichment purpose and sets `conversations.language` from the first detectable message; the thread header and attention queue show it.
-- **Open.** Portal attachment download; inline `cid:` images; contact-level erasure; Reply-To display in the composer (the thread already shows it).
+- **Open.** Portal attachment download; inline `cid:` images; contact-level erasure. Reply-To display in the composer is done (see Follow-ups).
 
 **Phase 3** (branch `agent/custyard-inbound-phase3`) landed the other ingress kinds with these notes:
 
@@ -289,6 +289,10 @@ Email-sourced conversations follow the existing portal rules: a contact with por
   - IDLE instead of one-minute polling.
   - A poll lease for multi-node Postgres deployments. Two nodes would poll the same mailbox; the position only moves forward and imports are deduplicated, but the work is doubled.
   - Wildcard custom domains are honoured but not offered in the wizard.
+
+**Follow-ups** (branch `agent/custyard-inbound-followups`) close open items from Phases 2 and 3:
+
+- **Reply recipient in the composer.** The composer shows the To of the next reply from `Outbound.reply_recipient/1`, the resolver delivery uses, and says when it is the customer's Reply-To.
 
 ## Rejected alternatives
 
