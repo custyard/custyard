@@ -54,15 +54,32 @@ HTTPS round trip, and inside one, each statement is a round trip.
 
 ### Moving an existing SQLite database
 
-1. Export a snapshot on the running machine. It is a consistent copy taken with
-   `VACUUM INTO`; writes after it are not in it, so pick a quiet moment.
+Nothing may write the file between the export and the switch to Turso: such a
+write would stay in the file and never reach Turso. `MAINTENANCE_MODE=true`
+pauses writes. The entrypoint then runs neither migrations nor the app, and
+the machine keeps running, so `fly ssh` still works. The app is down from
+step 1 to step 4.
+
+1. Stop the app:
 
    ```sh
-   fly ssh console -C "/app/bin/custyard eval Custyard.Release.export_sqlite()"
+   fly secrets set MAINTENANCE_MODE=true
+   ```
+
+   `fly logs` shows `MAINTENANCE_MODE is true` once the machine has restarted.
+   Health checks fail until step 4, so `fly secrets` may report that the
+   machine did not become healthy. That is expected here.
+
+2. Export a snapshot and copy it off the machine. `VACUUM INTO` writes a
+   consistent copy:
+
+   ```sh
+   fly ssh console -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.export_sqlite()'"
    fly ssh sftp get /data/turso-import.db ./turso-import.db
    ```
 
-2. Create the Turso database from it, then set the secrets:
+3. Create the Turso database from it, then set the secrets. The machine
+   restarts and stays in maintenance mode:
 
    ```sh
    turso db create custyard --from-file ./turso-import.db
@@ -71,7 +88,13 @@ HTTPS round trip, and inside one, each statement is a round trip.
    fly secrets set DATABASE_URL="libsql://..." TURSO_AUTH_TOKEN="..."
    ```
 
-3. Log in and check that recent conversations are there. Then remove the
+4. Start the app on Turso:
+
+   ```sh
+   fly secrets unset MAINTENANCE_MODE
+   ```
+
+5. Log in and check that recent conversations are there. Then remove the
    export with `fly ssh console -C "rm /data/turso-import.db"`.
 
 Every boot logs a warning while `/data/custyard.db` is still on the volume.

@@ -181,6 +181,39 @@ defmodule Custyard.Turso.ConnectionTest do
     assert count_elsewhere.() == 1
   end
 
+  # OR ROLLBACK ends the transaction inside SQLite. Without the disconnect,
+  # "after" would commit on its own stream and stay written.
+  test "a transaction SQLite rolled back on its own fails what follows" do
+    Repo.insert!(%Item{name: "taken"})
+
+    capture_log(fn ->
+      Repo.transaction(fn ->
+        Repo.insert!(%Item{name: "before"})
+
+        assert {:error, %DBConnection.ConnectionError{message: message}} =
+                 Repo.query("INSERT OR ROLLBACK INTO items (name) VALUES ('taken')")
+
+        assert message =~ "SQLite ended the transaction: UNIQUE constraint failed: items.name"
+        assert_raise DBConnection.ConnectionError, fn -> Repo.insert!(%Item{name: "after"}) end
+      end)
+    end)
+
+    assert Repo.all(from i in Item, select: i.name) == ["taken"]
+  end
+
+  # The server moves the stream to its base_url and refuses the baton
+  # anywhere else, so every statement and the COMMIT must follow it.
+  @tag server: [route_streams: true]
+  test "a transaction follows its stream to the server's base_url" do
+    assert {:ok, _} =
+             Repo.transaction(fn ->
+               Repo.insert!(%Item{name: "first"})
+               Repo.insert!(%Item{name: "second"})
+             end)
+
+    assert Repo.all(from i in Item, select: i.name, order_by: i.id) == ["first", "second"]
+  end
+
   test "Repo.stream reads every row" do
     Repo.insert_all(Item, [%{name: "a"}, %{name: "b"}, %{name: "c"}])
 
@@ -210,11 +243,18 @@ defmodule Custyard.Turso.ConnectionTest do
 
   @tag server: [idle_timeout: 100]
   test "replaces an HTTP connection the server closed while idle", %{url: url} do
+    query = Exqlite.Query.build(statement: "SELECT 41 + 1")
     {:ok, state} = Connection.connect(turso_url: url, turso_auth_token: @token)
+
+    # Before a request, without a ping.
+    Process.sleep(300)
+
+    assert {:ok, _query, %Exqlite.Result{rows: [[42]]}, state} =
+             Connection.handle_execute(query, [], [], state)
+
+    # On a ping.
     Process.sleep(300)
     {:ok, state} = Connection.ping(state)
-
-    query = Exqlite.Query.build(statement: "SELECT 41 + 1")
 
     assert {:ok, _query, %Exqlite.Result{rows: [[42]]}, _state} =
              Connection.handle_execute(query, [], [], state)

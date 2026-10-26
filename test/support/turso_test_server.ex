@@ -10,6 +10,10 @@ defmodule Custyard.TursoTestServer do
   errors keep sqld's "SQLite error: " prefix. It implements the requests
   the driver sends: `execute`, `get_autocommit` and `close`.
 
+  With `route_streams: true` it also does what a server behind a load
+  balancer does: a stream that stays open is answered with a `base_url` on
+  a second listener, and only that listener takes its baton.
+
   CI runs the suite against the real server image as well (see the `turso`
   job in `.github/workflows/ci.yml`). To run it over this server locally:
 
@@ -23,17 +27,20 @@ defmodule Custyard.TursoTestServer do
   Options: `:database` (required), `:port` (default 0, any free port),
   `:auth_token` (default none: no auth), `:stream_expiry` (ms, default
   10_000), `:idle_timeout` (ms an idle HTTP connection stays open, default
-  60_000).
+  60_000), `:route_streams` (default false).
   """
   def start_link(opts), do: Supervisor.start_link(__MODULE__, opts)
 
   @doc "The `libsql://` URL of a running server."
-  def url(server) do
+  def url(server), do: "libsql://127.0.0.1:#{port(server, :bandit)}?tls=0"
+
+  @doc false
+  def port(server, listener) do
     {_, bandit, _, _} =
-      server |> Supervisor.which_children() |> List.keyfind(:bandit, 0)
+      server |> Supervisor.which_children() |> List.keyfind(listener, 0)
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(bandit)
-    "libsql://127.0.0.1:#{port}?tls=0"
+    port
   end
 
   @doc """
@@ -63,28 +70,35 @@ defmodule Custyard.TursoTestServer do
       database: database,
       auth_token: Keyword.get(opts, :auth_token),
       stream_expiry: Keyword.get(opts, :stream_expiry, 10_000),
+      route_streams: Keyword.get(opts, :route_streams, false),
       streams: :ets.new(:turso_test_streams, [:public, :set]),
       server: self()
     }
 
-    children = [
-      %{
-        id: :bandit,
-        start:
-          {Bandit, :start_link,
-           [
+    listeners =
+      if config.route_streams,
+        do: [{:bandit, Keyword.get(opts, :port, 0)}, {:stream_bandit, 0}],
+        else: [{:bandit, Keyword.get(opts, :port, 0)}]
+
+    children =
+      for {id, port} <- listeners do
+        %{
+          id: id,
+          start:
+            {Bandit, :start_link,
              [
-               plug: {__MODULE__.Router, config},
-               ip: {127, 0, 0, 1},
-               port: Keyword.get(opts, :port, 0),
-               thousand_island_options: [
-                 read_timeout: Keyword.get(opts, :idle_timeout, 60_000)
+               [
+                 plug: {__MODULE__.Router, Map.put(config, :listener, id)},
+                 ip: {127, 0, 0, 1},
+                 port: port,
+                 thousand_island_options: [
+                   read_timeout: Keyword.get(opts, :idle_timeout, 60_000)
+                 ]
                ]
-             ]
-           ]},
-        type: :supervisor
-      }
-    ]
+             ]},
+          type: :supervisor
+        }
+      end
 
     Supervisor.init(children, strategy: :one_for_one)
   end
@@ -110,7 +124,8 @@ defmodule Custyard.TursoTestServer.Router do
          {:ok, stream} <- stream(pipeline["baton"], config) do
       {results, open?} = Stream.run(stream, requests)
       baton = if open?, do: new_baton(stream, config)
-      json(conn, 200, %{"baton" => baton, "base_url" => nil, "results" => results})
+      base_url = if open?, do: base_url(config)
+      json(conn, 200, %{"baton" => baton, "base_url" => base_url, "results" => results})
     else
       :unauthorized ->
         json(conn, 401, %{
@@ -144,6 +159,9 @@ defmodule Custyard.TursoTestServer.Router do
 
   defp stream(nil, config), do: Stream.start(config)
 
+  # A routed stream is not known to the listener that opened it.
+  defp stream(_baton, %{route_streams: true, listener: :bandit}), do: :unknown_stream
+
   defp stream(baton, %{streams: streams}) do
     # A baton is good for one request.
     case :ets.take(streams, baton) do
@@ -151,6 +169,11 @@ defmodule Custyard.TursoTestServer.Router do
       [] -> :unknown_stream
     end
   end
+
+  defp base_url(%{route_streams: false}), do: nil
+
+  defp base_url(config),
+    do: "http://127.0.0.1:#{Custyard.TursoTestServer.port(config.server, :stream_bandit)}"
 
   defp new_baton(stream, %{streams: streams}) do
     baton = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)

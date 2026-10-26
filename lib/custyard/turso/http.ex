@@ -26,29 +26,18 @@ defmodule Custyard.Turso.HTTP do
   POSTs `body` to `path` on `endpoint` and reads the whole response.
 
   Reconnects first when the server closed the previous connection or the
-  request is for another endpoint. A request that fails while being written
-  never reached the server complete, so it is sent once more on a fresh
-  connection. Once it has been written, a failure is returned as is: the
-  server may have run it.
+  request is for another endpoint. A request that then fails is never sent
+  again, not even one that failed while being written: the server may have
+  received all of it and run it.
   """
   @spec post(t, Custyard.Turso.Protocol.endpoint(), String.t(), list, iodata, timeout) ::
           {:ok, t, non_neg_integer, binary} | {:error, t, Exception.t()}
   def post(http, endpoint, path, headers, body, timeout) do
     deadline = deadline(timeout)
 
-    with {:ok, http} <- ensure_open(http, endpoint) do
-      case Mint.HTTP1.request(http.conn, "POST", path, headers, body) do
-        {:ok, conn, ref} ->
-          receive_response(%{http | conn: conn}, ref, deadline)
-
-        {:error, conn, _error} ->
-          http = %{http | conn: conn}
-
-          with {:ok, http} <- reopen(http, endpoint),
-               {:ok, conn, ref} <- request(http, path, headers, body) do
-            receive_response(%{http | conn: conn}, ref, deadline)
-          end
-      end
+    with {:ok, http} <- ensure_open(notice_close(http), endpoint),
+         {:ok, conn, ref} <- request(http, path, headers, body) do
+      receive_response(%{http | conn: conn}, ref, deadline)
     end
   end
 
@@ -57,19 +46,7 @@ defmodule Custyard.Turso.HTTP do
   trip, and replaces it.
   """
   @spec check(t) :: {:ok, t} | {:error, t, Exception.t()}
-  def check(%__MODULE__{conn: nil} = http), do: reopen(http, http.endpoint)
-
-  def check(%__MODULE__{conn: conn} = http) do
-    # A zero timeout returns at once: nothing to read means the connection
-    # is still open, and a close the server sent marks it closed.
-    conn =
-      case Mint.HTTP1.recv(conn, 0, 0) do
-        {:ok, conn, _responses} -> conn
-        {:error, conn, _error, _responses} -> conn
-      end
-
-    ensure_open(%{http | conn: conn}, http.endpoint)
-  end
+  def check(http), do: ensure_open(notice_close(http), http.endpoint)
 
   @spec close(t) :: :ok
   def close(%__MODULE__{conn: nil}), do: :ok
@@ -79,10 +56,27 @@ defmodule Custyard.Turso.HTTP do
     :ok
   end
 
+  # A zero timeout returns at once: nothing to read means the connection is
+  # still open, and a close the server sent marks it closed.
+  defp notice_close(%__MODULE__{conn: nil} = http), do: http
+
+  defp notice_close(%__MODULE__{conn: conn} = http) do
+    case Mint.HTTP1.recv(conn, 0, 0) do
+      {:ok, conn, _responses} -> %{http | conn: conn}
+      {:error, conn, _error, _responses} -> %{http | conn: conn}
+    end
+  end
+
   defp request(http, path, headers, body) do
     case Mint.HTTP1.request(http.conn, "POST", path, headers, body) do
-      {:ok, conn, ref} -> {:ok, conn, ref}
-      {:error, conn, error} -> {:error, %{http | conn: conn}, error}
+      {:ok, conn, ref} ->
+        {:ok, conn, ref}
+
+      {:error, conn, error} ->
+        # Part of the request may be on the wire, so the connection cannot
+        # take another.
+        {:ok, conn} = Mint.HTTP1.close(conn)
+        {:error, %{http | conn: conn}, error}
     end
   end
 

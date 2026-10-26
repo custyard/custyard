@@ -175,6 +175,10 @@ On every deploy, the container entrypoint (`entrypoint.sh`) runs:
    run in one `bin/custyard eval` that does not start the app.
 4. Starts the Phoenix server
 
+With `MAINTENANCE_MODE=true` it does none of this and keeps the machine running
+for `fly ssh`, so nothing writes the database. Moving SQLite to Turso uses it
+(`docs/ops/database.md`).
+
 > **Important:** `SECRET_KEY_BASE` must be set via `fly secrets set` before deploying. The entrypoint will refuse to start without it. This prevents session/LiveView invalidation when machines restart (which happens regularly with `auto_stop_machines`).
 
 ### Deploy commands

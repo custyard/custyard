@@ -307,12 +307,17 @@ defmodule Custyard.Turso.Connection do
       {setup_results, rest} = Enum.split(response.results, length(setup))
       {statement_results, [trailer_result]} = Enum.split(rest, length(statements))
 
+      failed =
+        Enum.find_value(statement_results, fn
+          {:error, error} -> error
+          {:ok, _response} -> nil
+        end)
+
       with :ok <- check_setup(setup_results, state),
-           {:ok, state} <- after_trailer(trailer, trailer_result, response, state) do
-        case Enum.find(statement_results, &match?({:error, _}, &1)) do
-          nil -> {:ok, Enum.map(statement_results, fn {:ok, response} -> response end), state}
-          {:error, error} -> {:error, error, state}
-        end
+           {:ok, state} <- after_trailer(trailer, trailer_result, response, failed, state) do
+        if failed,
+          do: {:error, failed, state},
+          else: {:ok, Enum.map(statement_results, fn {:ok, response} -> response end), state}
       end
     end
   end
@@ -331,31 +336,36 @@ defmodule Custyard.Turso.Connection do
     end
   end
 
-  defp after_trailer(:close, {:ok, _close}, _response, state), do: {:ok, end_stream(state)}
+  defp after_trailer(:close, {:ok, _close}, _response, _failed, state),
+    do: {:ok, end_stream(state)}
 
-  defp after_trailer(
-         :keep,
-         {:ok, %{"is_autocommit" => autocommit?}},
-         %{baton: baton} = response,
-         state
-       )
-       when is_binary(baton) do
-    if autocommit? do
-      # SQLite already left the transaction; the stream is abandoned and
-      # expires on the server.
-      {:ok, end_stream(state)}
+  defp after_trailer(:keep, {:ok, %{"is_autocommit" => false}}, response, _failed, state)
+       when is_binary(response.baton) do
+    {:ok,
+     %{
+       state
+       | baton: response.baton,
+         stream_endpoint: stream_endpoint(response.base_url, state),
+         transaction_status: :transaction
+     }}
+  end
+
+  # SQLite is out of the transaction. After a failed BEGIN there was none to
+  # leave. Inside one, SQLite rolled it back on its own (an OR ROLLBACK
+  # conflict, a full disk) or a statement ended it, and the statements still
+  # to come would each commit on their own, whatever the caller's transaction
+  # does next. Disconnecting fails them instead. Either way the stream is
+  # abandoned and expires on the server.
+  defp after_trailer(:keep, {:ok, %{"is_autocommit" => true}}, _response, failed, state) do
+    if state.transaction_status == :transaction do
+      reason = if failed, do: ": " <> Protocol.error_message(failed), else: ""
+      {:disconnect, connection_error("SQLite ended the transaction" <> reason), end_stream(state)}
     else
-      {:ok,
-       %{
-         state
-         | baton: baton,
-           stream_endpoint: stream_endpoint(response.base_url, state),
-           transaction_status: :transaction
-       }}
+      {:ok, end_stream(state)}
     end
   end
 
-  defp after_trailer(_trailer, result, _response, state) do
+  defp after_trailer(_trailer, result, _response, _failed, state) do
     message = "stream lost: #{inspect(result)}"
     {:disconnect, connection_error(message), end_stream(state)}
   end
