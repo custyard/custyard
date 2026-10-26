@@ -7,6 +7,11 @@ defmodule CustyardWeb.EndpointRequestLogTest do
     assert Endpoint.request_log_level(%Plug.Conn{request_path: "/c/resume-token"}) == false
     assert Endpoint.request_log_level(%Plug.Conn{request_path: "/claim/tok/confirm"}) == false
     assert Endpoint.request_log_level(%Plug.Conn{request_path: "/p/org-token"}) == false
+
+    assert Endpoint.request_log_level(%Plug.Conn{
+             request_path: "/operator/login/verify/login-token"
+           }) ==
+             false
   end
 
   test "other requests are logged at :info" do

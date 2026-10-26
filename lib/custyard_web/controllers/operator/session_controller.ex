@@ -6,13 +6,14 @@ defmodule CustyardWeb.Operator.SessionController do
   alias Custyard.{OperatorAccount, RateLimit, Repo}
   alias Custyard.Auth.LoginEmail
   alias CustyardWeb.Live.OperatorAuth
+  alias CustyardWeb.Plugs.PublicRateLimit
 
   require Logger
 
   # Base64url character class for validating token format
   @token_pattern ~r/^[A-Za-z0-9_-]+$/
 
-  plug CustyardWeb.Plugs.PublicRateLimit,
+  plug :rate_limit_login,
        [bucket: :operator_login_ip] when action == :create
 
   # Shows the flash set by whatever sent the operator here: the
@@ -33,6 +34,8 @@ defmodule CustyardWeb.Operator.SessionController do
 
     case RateLimit.check_rate(:operator_login_email, email) do
       {:deny, retry_after_ms} ->
+        Logger.info("operator_login_skipped", reason: :email_rate_limited)
+
         retry_after_s = max(div(retry_after_ms + 999, 1000), 1)
 
         conn
@@ -47,6 +50,8 @@ defmodule CustyardWeb.Operator.SessionController do
   end
 
   def create(conn, _params) do
+    Logger.info("operator_login_skipped", reason: :missing_email)
+
     render(conn, :new,
       error: "Email is required.",
       email: nil,
@@ -55,17 +60,34 @@ defmodule CustyardWeb.Operator.SessionController do
     )
   end
 
+  defp rate_limit_login(conn, opts) do
+    # Log before the IP limiter can halt, without recording submitted params.
+    # Plug.RequestId metadata follows this synchronous request through delivery.
+    Logger.info("operator_login_requested")
+
+    conn = PublicRateLimit.call(conn, PublicRateLimit.init(opts))
+
+    if conn.halted do
+      Logger.info("operator_login_skipped", reason: :ip_rate_limited)
+    end
+
+    conn
+  end
+
   defp deliver_login_link(conn, email) do
     case Repo.get_by(OperatorAccount, email: email) do
       nil ->
         # Don't reveal whether the email exists — always show success page
-        Logger.debug("Login attempt for non-existent email: #{email}")
+        Logger.info("operator_login_skipped", reason: :unknown_account)
 
       %OperatorAccount{} = operator ->
         if OperatorAccount.orphaned?(operator) do
           # An admin or agent whose organization was deleted gets no link;
           # the response below stays identical so this reveals nothing.
-          Logger.info("Login link withheld for operator #{operator.id}: no organization")
+          Logger.info("operator_login_skipped",
+            reason: :no_organization,
+            operator_id: operator.id
+          )
         else
           send_login_link(operator)
         end

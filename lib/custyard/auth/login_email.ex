@@ -16,16 +16,36 @@ defmodule Custyard.Auth.LoginEmail do
       |> html_body(login_html(login_url))
       |> text_body(login_text(login_url))
 
+    Logger.info("operator_login_delivery_started", operator_id: operator.id)
+
     case Custyard.Mailer.deliver(email) do
       {:ok, _} = result ->
-        Logger.info("Login link email sent to #{operator.email}")
+        # Provider acceptance does not establish inbox delivery.
+        Logger.info("operator_login_provider_accepted", operator_id: operator.id)
         result
 
       {:error, reason} = error ->
-        Logger.error("Failed to send login email to #{operator.email}: #{inspect(reason)}")
+        Logger.info(
+          "operator_login_provider_rejected",
+          [operator_id: operator.id] ++ failure_metadata(reason)
+        )
+
         error
     end
   end
+
+  # Provider errors can echo the email body, including the magic link. Only
+  # emit a numeric HTTP status or a fixed, known reason; never inspect them.
+  defp failure_metadata({status, _response}) when is_integer(status) and status in 100..599 do
+    [reason: :provider_response, provider_status: status]
+  end
+
+  defp failure_metadata(reason)
+       when reason in [:timeout, :closed, :econnrefused, :nxdomain, :from_not_set] do
+    [reason: reason]
+  end
+
+  defp failure_metadata(_reason), do: [reason: :delivery_error]
 
   defp from_address do
     Application.get_env(:custyard, :email_from_address, "noreply@custyard.local")
