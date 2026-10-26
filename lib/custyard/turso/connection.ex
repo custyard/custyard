@@ -32,6 +32,9 @@ defmodule Custyard.Turso.Connection do
       `:exclusive`, as for `Ecto.Adapters.SQLite3`.
     * `:connect_timeout` - milliseconds to open the HTTP connection
       (default 5000).
+    * `:transport_opts` - socket options for Mint, such as `cacertfile:` for
+      a server whose certificate the system CAs do not sign. TLS stays
+      verified unless they say otherwise.
   """
 
   use DBConnection

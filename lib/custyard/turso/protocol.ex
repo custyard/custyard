@@ -135,7 +135,10 @@ defmodule Custyard.Turso.Protocol do
 
   # JSON strings must be valid UTF-8. A local SQLite file stores any bytes
   # bound as text; over HTTP they travel as a blob, so reading the row back
-  # still returns the same binary.
+  # still returns the same binary. The row holds a BLOB, though, and a BLOB
+  # never equals the same bytes stored as TEXT: a lookup by such a value
+  # finds only rows written over HTTP, and a unique index does not count
+  # them as duplicates of rows written to the local file.
   defp text(data) do
     if String.valid?(data),
       do: {:ok, %{"type" => "text", "value" => data}},

@@ -7,19 +7,31 @@ defmodule Custyard.Turso.HTTP do
   passive mode and the caller reads its own response.
   """
 
-  defstruct [:conn, :endpoint, :connect_timeout]
+  defstruct [:conn, :endpoint, :transport_opts, :used_at]
 
   @type t :: %__MODULE__{}
 
   @default_connect_timeout 5_000
 
+  # A server closes a keep-alive connection left idle, and only a read
+  # notices: over TLS a read must wait for it, as one with a zero timeout
+  # returns before the close is processed. The wait costs every request it
+  # precedes, so it is spent on a connection idle long enough to be closed.
+  @close_wait 1
+  @idle_check_after 50
+
   @spec connect(Custyard.Turso.Protocol.endpoint(), keyword) ::
           {:ok, t} | {:error, Exception.t()}
   def connect(endpoint, opts \\ []) do
-    timeout = Keyword.get(opts, :connect_timeout, @default_connect_timeout)
-    http = %__MODULE__{endpoint: endpoint, connect_timeout: timeout}
+    transport_opts =
+      Keyword.merge(
+        [timeout: Keyword.get(opts, :connect_timeout, @default_connect_timeout)],
+        Keyword.get(opts, :transport_opts, [])
+      )
 
-    with {:ok, conn} <- open(endpoint, timeout), do: {:ok, %{http | conn: conn}}
+    http = %__MODULE__{endpoint: endpoint, transport_opts: transport_opts}
+
+    with {:ok, conn} <- open(endpoint, transport_opts), do: {:ok, used(%{http | conn: conn})}
   end
 
   @doc """
@@ -35,7 +47,9 @@ defmodule Custyard.Turso.HTTP do
   def post(http, endpoint, path, headers, body, timeout) do
     deadline = deadline(timeout)
 
-    with {:ok, http} <- ensure_open(notice_close(http), endpoint),
+    http = if idle_for(http) >= @idle_check_after, do: notice_close(http), else: http
+
+    with {:ok, http} <- ensure_open(http, endpoint),
          {:ok, conn, ref} <- request(http, path, headers, body) do
       receive_response(%{http | conn: conn}, ref, deadline)
     end
@@ -56,12 +70,12 @@ defmodule Custyard.Turso.HTTP do
     :ok
   end
 
-  # A zero timeout returns at once: nothing to read means the connection is
-  # still open, and a close the server sent marks it closed.
+  # Nothing to read means the connection is still open; a close the server
+  # sent marks it closed.
   defp notice_close(%__MODULE__{conn: nil} = http), do: http
 
   defp notice_close(%__MODULE__{conn: conn} = http) do
-    case Mint.HTTP1.recv(conn, 0, 0) do
+    case Mint.HTTP1.recv(conn, 0, @close_wait) do
       {:ok, conn, _responses} -> %{http | conn: conn}
       {:error, conn, _error, _responses} -> %{http | conn: conn}
     end
@@ -90,18 +104,23 @@ defmodule Custyard.Turso.HTTP do
   defp reopen(http, endpoint) do
     close(http)
 
-    case open(endpoint, http.connect_timeout) do
-      {:ok, conn} -> {:ok, %{http | conn: conn, endpoint: endpoint}}
+    case open(endpoint, http.transport_opts) do
+      {:ok, conn} -> {:ok, used(%{http | conn: conn, endpoint: endpoint})}
       {:error, error} -> {:error, %{http | conn: nil}, error}
     end
   end
 
-  defp open(endpoint, timeout) do
+  defp open(endpoint, transport_opts) do
     Mint.HTTP1.connect(endpoint.scheme, endpoint.host, endpoint.port,
       mode: :passive,
-      transport_opts: [timeout: timeout]
+      transport_opts: transport_opts
     )
   end
+
+  defp used(http), do: %{http | used_at: System.monotonic_time(:millisecond)}
+
+  defp idle_for(%__MODULE__{used_at: nil}), do: :infinity
+  defp idle_for(http), do: System.monotonic_time(:millisecond) - http.used_at
 
   defp deadline(:infinity), do: :infinity
   defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
@@ -118,7 +137,7 @@ defmodule Custyard.Turso.HTTP do
 
         case collect(responses, ref, acc) do
           {:done, %{status: status, data: data}} ->
-            {:ok, http, status, data |> Enum.reverse() |> IO.iodata_to_binary()}
+            {:ok, used(http), status, data |> Enum.reverse() |> IO.iodata_to_binary()}
 
           {:more, acc} ->
             receive_response(http, ref, deadline, acc)

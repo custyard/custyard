@@ -35,17 +35,22 @@ defmodule Custyard.Turso.ConnectionTest do
   end
 
   setup context do
+    {server_tls, client_opts} = tls(context[:tls])
+
     server_opts =
       Keyword.merge(
-        [database: Path.join(context.tmp_dir, "turso.db"), auth_token: @token],
+        [database: Path.join(context.tmp_dir, "turso.db"), auth_token: @token, tls: server_tls],
         context[:server] || []
       )
 
-    url = TursoTestServer.url(start_supervised!({TursoTestServer, server_opts}))
+    server = start_supervised!({TursoTestServer, server_opts})
+    url = TursoTestServer.url(server, tls: context[:tls])
 
     repo =
       start_supervised!(
-        {Repo, name: nil, turso_url: url, turso_auth_token: @token, pool_size: 2, log: false}
+        {Repo,
+         [name: nil, turso_url: url, turso_auth_token: @token, pool_size: 2, log: false] ++
+           client_opts}
       )
 
     Repo.put_dynamic_repo(repo)
@@ -66,7 +71,28 @@ defmodule Custyard.Turso.ConnectionTest do
       Repo.query!(sql)
     end
 
-    %{url: url, repo: repo}
+    %{url: url, repo: repo, client_opts: client_opts}
+  end
+
+  # A CA, and a certificate for localhost that it signs, made for the test.
+  defp tls(nil), do: {nil, []}
+
+  defp tls(true) do
+    key = {:rsa, 2048, 65_537}
+    localhost = {:Extension, {2, 5, 29, 17}, false, [dNSName: ~c"localhost"]}
+
+    data =
+      :public_key.pkix_test_data(%{
+        server_chain: %{
+          root: [key: key],
+          intermediates: [],
+          peer: [key: key, extensions: [localhost]]
+        },
+        client_chain: %{root: [key: key], intermediates: [], peer: [key: key]}
+      })
+
+    {Keyword.take(data[:server_config], [:cert, :key, :cacerts]),
+     [transport_opts: [cacerts: data[:client_config][:cacerts]]]}
   end
 
   test "values round-trip through Ecto's SQLite types" do
@@ -258,6 +284,30 @@ defmodule Custyard.Turso.ConnectionTest do
 
     assert {:ok, _query, %Exqlite.Result{rows: [[42]]}, _state} =
              Connection.handle_execute(query, [], [], state)
+  end
+
+  # Turso is HTTPS: the certificate is verified, and an idle connection the
+  # server closed is replaced, as over plain HTTP.
+  @tag tls: true, server: [idle_timeout: 100]
+  test "works over TLS", %{url: url, client_opts: client_opts} do
+    Repo.insert!(%Item{name: "over tls"})
+    Process.sleep(300)
+    assert Repo.all(from i in Item, select: i.name) == ["over tls"]
+
+    {:ok, state} = Connection.connect([turso_url: url, turso_auth_token: @token] ++ client_opts)
+    Process.sleep(300)
+    {:ok, state} = Connection.ping(state)
+    query = Exqlite.Query.build(statement: "SELECT count(*) FROM items")
+
+    assert {:ok, _query, %Exqlite.Result{rows: [[1]]}, _state} =
+             Connection.handle_execute(query, [], [], state)
+
+    # The system CAs do not sign the test certificate.
+    assert {:error, %DBConnection.ConnectionError{message: message}} =
+             Connection.connect(turso_url: url, turso_auth_token: @token)
+
+    assert message =~ "cannot connect to localhost"
+    assert message =~ "Unknown CA"
   end
 
   test "a wrong token or an unreachable server fails at connect", %{url: url} do

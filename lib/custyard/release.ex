@@ -58,12 +58,13 @@ defmodule Custyard.Release do
   `turso db create --from-file`, next to the database unless `path` says
   otherwise, and returns its path.
 
-  The copy is a consistent snapshot (`VACUUM INTO`) taken while the server
-  keeps running; writes after it are not in it. The database is opened
-  read-only, so running this as root cannot leave root-owned files the app
-  then fails to write. See docs/ops/database.md.
+  The copy is a consistent snapshot (`VACUUM INTO`); writes after it are not
+  in it, so stop the app first (`MAINTENANCE_MODE`, docs/ops/database.md).
+  Run it as `custyard`: even read-only, SQLite creates the database's `-wal`
+  and `-shm` files when they are missing, and root-owned ones would leave
+  the app unable to write the file if you go back to it.
 
-      fly ssh console -C "/app/bin/custyard eval Custyard.Release.export_sqlite()"
+      fly ssh console -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.export_sqlite()'"
   """
   def export_sqlite(path \\ nil) do
     load_app()

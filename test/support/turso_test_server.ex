@@ -12,7 +12,8 @@ defmodule Custyard.TursoTestServer do
 
   With `route_streams: true` it also does what a server behind a load
   balancer does: a stream that stays open is answered with a `base_url` on
-  a second listener, and only that listener takes its baton.
+  a second listener, and only that listener takes its baton. With `:tls`
+  it serves HTTPS, as Turso does.
 
   CI runs the suite against the real server image as well (see the `turso`
   job in `.github/workflows/ci.yml`). To run it over this server locally:
@@ -27,12 +28,20 @@ defmodule Custyard.TursoTestServer do
   Options: `:database` (required), `:port` (default 0, any free port),
   `:auth_token` (default none: no auth), `:stream_expiry` (ms, default
   10_000), `:idle_timeout` (ms an idle HTTP connection stays open, default
-  60_000), `:route_streams` (default false).
+  60_000), `:route_streams` (default false), `:tls` (`:ssl` options with
+  the certificate and key for `localhost`; default none: plain HTTP).
   """
   def start_link(opts), do: Supervisor.start_link(__MODULE__, opts)
 
-  @doc "The `libsql://` URL of a running server."
-  def url(server), do: "libsql://127.0.0.1:#{port(server, :bandit)}?tls=0"
+  @doc """
+  The `libsql://` URL of a running server. Pass `tls: true` for a server
+  started with `:tls`.
+  """
+  def url(server, opts \\ []) do
+    if opts[:tls],
+      do: "libsql://localhost:#{port(server, :bandit)}",
+      else: "libsql://127.0.0.1:#{port(server, :bandit)}?tls=0"
+  end
 
   @doc false
   def port(server, listener) do
@@ -71,6 +80,7 @@ defmodule Custyard.TursoTestServer do
       auth_token: Keyword.get(opts, :auth_token),
       stream_expiry: Keyword.get(opts, :stream_expiry, 10_000),
       route_streams: Keyword.get(opts, :route_streams, false),
+      tls: Keyword.get(opts, :tls),
       streams: :ets.new(:turso_test_streams, [:public, :set]),
       server: self()
     }
@@ -89,10 +99,12 @@ defmodule Custyard.TursoTestServer do
              [
                [
                  plug: {__MODULE__.Router, Map.put(config, :listener, id)},
+                 scheme: if(config.tls, do: :https, else: :http),
                  ip: {127, 0, 0, 1},
                  port: port,
                  thousand_island_options: [
-                   read_timeout: Keyword.get(opts, :idle_timeout, 60_000)
+                   read_timeout: Keyword.get(opts, :idle_timeout, 60_000),
+                   transport_options: config.tls || []
                  ]
                ]
              ]},
@@ -172,8 +184,10 @@ defmodule Custyard.TursoTestServer.Router do
 
   defp base_url(%{route_streams: false}), do: nil
 
-  defp base_url(config),
-    do: "http://127.0.0.1:#{Custyard.TursoTestServer.port(config.server, :stream_bandit)}"
+  defp base_url(config) do
+    port = Custyard.TursoTestServer.port(config.server, :stream_bandit)
+    if config.tls, do: "https://localhost:#{port}", else: "http://127.0.0.1:#{port}"
+  end
 
   defp new_baton(stream, %{streams: streams}) do
     baton = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
