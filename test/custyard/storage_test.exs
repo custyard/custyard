@@ -5,6 +5,7 @@ defmodule Custyard.StorageTest do
 
   @mounted "36 28 0:29 / /data rw,relatime - ext4 /dev/vdb rw\n"
   @unmounted "35 28 0:28 / / rw,relatime - overlay overlay rw\n"
+  @one_machine {:ok, ["080e94edf34038"]}
 
   test "allows SQLite and uploads on a mounted Fly volume" do
     assert :ok ==
@@ -13,8 +14,8 @@ defmodule Custyard.StorageTest do
                repo_config: [database: "/data/custyard.db"],
                upload_dir: "/data/uploads",
                attachment_dir: "/data/attachments",
-               attachment_dir: "/data/attachments",
-               mountinfo: @mounted
+               mountinfo: @mounted,
+               machine_ids: @one_machine
              )
   end
 
@@ -68,6 +69,43 @@ defmodule Custyard.StorageTest do
                repo_config: [database: "/tmp/custyard.db"],
                upload_dir: "/tmp/uploads",
                mountinfo: @unmounted
+             )
+  end
+
+  test "rejects a second machine, which would hold a second SQLite database" do
+    assert_raise RuntimeError, ~r/has 2 machines.*fly scale count 1/s, fn ->
+      Storage.validate_fly_storage!(
+        fly_app_name: "custyard",
+        repo_config: [database: "/data/custyard.db"],
+        upload_dir: "/data/uploads",
+        attachment_dir: "/data/attachments",
+        mountinfo: @mounted,
+        machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
+      )
+    end
+  end
+
+  test "allows several machines when the database is remote" do
+    assert :ok ==
+             Storage.validate_fly_storage!(
+               fly_app_name: "custyard",
+               repo_config: [url: "postgres://localhost/custyard"],
+               upload_dir: "/data/uploads",
+               attachment_dir: "/data/attachments",
+               mountinfo: @mounted,
+               machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
+             )
+  end
+
+  test "boots with a warning when the machine count cannot be determined" do
+    assert :ok ==
+             Storage.validate_fly_storage!(
+               fly_app_name: "custyard",
+               repo_config: [database: "/data/custyard.db"],
+               upload_dir: "/data/uploads",
+               attachment_dir: "/data/attachments",
+               mountinfo: @mounted,
+               machine_ids: :unknown
              )
   end
 end
