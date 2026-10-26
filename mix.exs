@@ -50,6 +50,8 @@ defmodule Custyard.MixProject do
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.0"},
       {:finch, "~> 0.18"},
+      # HTTP client for the Turso driver (Custyard.Turso.HTTP); also under Finch.
+      {:mint, "~> 1.6"},
       {:amqp, "~> 4.1"},
       {:floki, ">= 0.30.0", only: :test},
       {:lazy_html, ">= 0.1.0", only: :test},

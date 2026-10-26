@@ -895,8 +895,8 @@ defmodule Custyard.ScoringTest do
                Scoring.breakdown(conversation, settings: Scoring.preload_settings())
     end
 
-    # The whole point of the bundle: in production the repo is Turso over
-    # the network, so a per-row settings read is a per-row round trip.
+    # The whole point of the bundle: on Turso the repo is across the
+    # network, so a per-row settings read is a per-row round trip.
     test "scoring a conversation with a bundle and a known count issues no queries" do
       org = insert_organization(tier: :standard)
       conversation = insert_conversation(organization_id: org.id) |> Repo.preload(:organization)

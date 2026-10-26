@@ -1,9 +1,10 @@
 defmodule Custyard.Release do
   @moduledoc """
   Release tasks run with `bin/custyard eval`: migrations, the operator
-  bootstrap the container entrypoint runs before the server, and the
+  bootstrap the container entrypoint runs before the server, the
   `bin/operator` and `bin/dsar` command lines (`rel/overlays/bin/operator`,
-  `rel/overlays/bin/dsar`; the latter's commands are `Custyard.Release.Dsar`).
+  `rel/overlays/bin/dsar`; the latter's commands are `Custyard.Release.Dsar`),
+  and the SQLite export for moving the database to Turso.
 
   None of these start the application. They load its configuration and start
   only the Repo (`Ecto.Migrator.with_repo/2`), so they are safe to run on a
@@ -12,6 +13,7 @@ defmodule Custyard.Release do
   """
 
   alias Custyard.{OperatorAccount, OperatorAccounts, Repo}
+  alias Custyard.Repo.Adapter
   alias Custyard.Release.Dsar
 
   require Logger
@@ -49,6 +51,53 @@ defmodule Custyard.Release do
     load_app()
     Custyard.Storage.validate_fly_storage!()
     {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
+  end
+
+  @doc """
+  Copies the local SQLite database into one file for
+  `turso db create --from-file`, next to the database unless `path` says
+  otherwise, and returns its path.
+
+  The copy is a consistent snapshot (`VACUUM INTO`) taken while the server
+  keeps running; writes after it are not in it. The database is opened
+  read-only, so running this as root cannot leave root-owned files the app
+  then fails to write. See docs/ops/database.md.
+
+      fly ssh console -C "/app/bin/custyard eval Custyard.Release.export_sqlite()"
+  """
+  def export_sqlite(path \\ nil) do
+    load_app()
+    {:ok, _} = Application.ensure_all_started(:exqlite)
+
+    config = Application.get_env(@app, Repo, [])
+
+    if Adapter.turso?(config) or !config[:database],
+      do:
+        raise("the database is not a local SQLite file (DATABASE_URL is set); nothing to export")
+
+    source = config[:database]
+
+    path = path || Path.join(Path.dirname(source), "turso-import.db")
+    if File.exists?(path), do: raise("#{path} already exists; move it aside first")
+
+    {:ok, db} = Exqlite.Sqlite3.open(source, mode: :readonly)
+
+    try do
+      {:ok, statement} = Exqlite.Sqlite3.prepare(db, "VACUUM INTO ?1")
+      :ok = Exqlite.Sqlite3.bind(statement, [path])
+      :done = Exqlite.Sqlite3.step(db, statement)
+    after
+      Exqlite.Sqlite3.close(db)
+    end
+
+    # Turso's import takes a database in WAL mode; the mode is stored in the
+    # file.
+    {:ok, copy} = Exqlite.Sqlite3.open(path)
+    :ok = Exqlite.Sqlite3.execute(copy, "PRAGMA journal_mode = WAL")
+    :ok = Exqlite.Sqlite3.close(copy)
+
+    IO.puts("Exported #{source} to #{path}")
+    path
   end
 
   @doc """

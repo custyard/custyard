@@ -1,6 +1,6 @@
 # Fly.io Deployment
 
-Deploy Custyard to [Fly.io](https://fly.io) with SQLite persistent storage.
+Deploy Custyard to [Fly.io](https://fly.io), with its SQLite database on a persistent volume or on [Turso](#turso-libsql).
 
 > **Port restrictions:** Fly.io [blocks mail server ports](https://community.fly.io/t/allow-mailserver-ports/3215) (143, 465, 587, 993). Inbound email uses the webhook endpoint at `/api/webhook/inbound` instead. See [issue #10](https://github.com/onetimesecret/custyard/issues/10) for the full email architecture.
 
@@ -97,6 +97,9 @@ fly secrets set WEBHOOK_SECRET_SLACK="..."
 # Optional — error tracking (prod only; unset means the Sentry SDK stays off)
 fly secrets set SENTRY_DSN="https://<public_key>@catch.onetimesecret.com/11"
 
+# Optional: the database on Turso instead of the volume. See Turso below.
+fly secrets set DATABASE_URL="libsql://custyard-<org>.turso.io" TURSO_AUTH_TOKEN="..."
+
 # List current secrets
 fly secrets list
 ```
@@ -114,8 +117,8 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 |----------|---------|-------------|
 | `PORT` | `4000` | HTTP listen port |
 | `PHX_HOST` | `custyard.fly.dev` | Public hostname |
-| `DATABASE_URL` | — | PostgreSQL URL only when the release was compiled with `Ecto.Adapters.Postgres`. `libsql://` is rejected. |
-| `DATABASE_PATH` | `/data/custyard.db` | SQLite DB path (must be on the mounted volume) |
+| `DATABASE_URL` | — | A Turso `libsql://` URL (with the `TURSO_AUTH_TOKEN` secret), or a PostgreSQL URL when the release was compiled with `Ecto.Adapters.Postgres`. Unset: the SQLite file at `DATABASE_PATH` |
+| `DATABASE_PATH` | `/data/custyard.db` | SQLite DB path (must be on the mounted volume); unused when `DATABASE_URL` is set |
 | `MAIL_ADAPTER` | — | **Required.** One of `lettermint`, `postmark`, `sendgrid`, `mailgun`, `smtp`, `local`. Set as a secret alongside its credential; the app raises on boot if unset or unrecognized |
 | `POOL_SIZE` | `10` | Ecto connection pool size |
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
@@ -339,7 +342,7 @@ fly volumes snapshots restore <snapshot-id> --name custyard_data
 
 ## Alternate data stores
 
-The default adapter is SQLite (`Ecto.Adapters.SQLite3`). To use a different backend, set `repo_adapter` at compile time and provide `DATABASE_URL` at runtime.
+The default adapter, `Custyard.Repo.Adapter`, is SQLite: the file on the volume, or Turso when `DATABASE_URL` is a `libsql://` URL. The same release serves both. PostgreSQL needs `repo_adapter` set at compile time and `DATABASE_URL` at runtime.
 
 ### PostgreSQL
 
@@ -358,9 +361,25 @@ Keep the `[mounts]` section if uploads still use `/data/uploads`. See [Fly Postg
 
 ### Turso (libSQL)
 
-This release does not support Turso. `Ecto.Adapters.SQLite3` and its locked Exqlite driver treat a `libsql://` URL as a local filename, so runtime configuration now rejects that URL at startup. Moving to Turso requires a compatible Ecto adapter and a migration plan for the existing SQLite data.
+Set `DATABASE_URL` to the database's `libsql://` URL and `TURSO_AUTH_TOKEN` to
+a token for it; no rebuild is needed:
 
-If an existing Fly app was configured with `DATABASE_URL=libsql://...`, inspect and back up its current machine **before** removing that secret or deploying this change. The previous driver may have stored data in a local `libsql:/...` path inside the container. That data is not automatically copied to `/data`, and replacing the machine can remove it. Restore any recoverable data onto the mounted volume, then confirm `/data/custyard.db` contains the expected records before switching traffic.
+```bash
+turso db create custyard              # or --from-file, to bring the SQLite data
+turso db show custyard --url
+turso db tokens create custyard
+fly secrets set DATABASE_URL="libsql://custyard-<org>.turso.io" TURSO_AUTH_TOKEN="..."
+```
+
+Keep the volume and `[mounts]`: uploads and inbound attachments are still files
+under `/data`, and the app still runs on one machine. Moving an existing
+database, the limits, and rollback are in
+[Database operations](ops/database.md#turso).
+
+Before this release, a `libsql://` `DATABASE_URL` never reached Turso: the
+SQLite driver treated it as a local file name. If `.env.secrets` still has
+such a line, `mix fly.secrets --apply` now switches the app to that Turso
+database. Check the file first.
 
 ### Neon / Supabase
 
@@ -385,6 +404,7 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 | App won't start | Check `fly logs`; verify `SECRET_KEY_BASE` is set via `fly secrets list` |
 | Health check fails | Ensure port 4000 matches `internal_port` in `fly.toml` |
 | Database errors | Confirm the volume is attached with `fly volumes list` and mounted with `fly ssh console -C "mountpoint /data"` |
+| `Turso: HTTP 401` in `fly logs` | `TURSO_AUTH_TOKEN` is wrong or expired. Create one with `turso db tokens create custyard` and `fly secrets set TURSO_AUTH_TOKEN=...` |
 | LiveView disconnects | Verify `PHX_HOST` matches your actual domain; Fly proxy handles WebSocket upgrade automatically |
 | Migration failures | Run manually as the app user: `fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.migrate()'"` |
 | Nobody can log in | `fly ssh console -a custyard -C "/app/bin/operator list"`; create an account with `/app/bin/operator add you@example.com` or `fly secrets set OPERATOR_EMAIL=you@example.com` and redeploy |

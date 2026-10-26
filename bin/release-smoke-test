@@ -13,7 +13,8 @@
 # `fly ssh console` commands) brings up a second Endpoint, which fails to
 # bind the port the server holds.
 #
-# Uses a throwaway SQLite database and MAIL_ADAPTER=local.
+# Uses a throwaway SQLite database, or the empty database at DATABASE_URL
+# when set (CI runs it again against a libSQL server), and MAIL_ADAPTER=local.
 # Env: PORT (default 4099).
 
 set -euo pipefail
@@ -43,7 +44,9 @@ export SECRET_KEY_BASE
 export MAIL_ADAPTER=local
 export PHX_HOST=localhost
 export PORT=${PORT:-4099}
-export DATABASE_PATH="$work/custyard.db"
+if [ -z "${DATABASE_URL:-}" ]; then
+  export DATABASE_PATH="$work/custyard.db"
+fi
 export UPLOAD_DIR="$work/uploads"
 mkdir -p "$UPLOAD_DIR"
 

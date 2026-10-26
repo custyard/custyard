@@ -404,15 +404,38 @@ if config_env() == :prod do
     end
 
   pool_size = parse_int.("POOL_SIZE", 10)
-  repo_adapter = Application.get_env(:custyard, :repo_adapter, Ecto.Adapters.SQLite3)
+  repo_adapter = Application.get_env(:custyard, :repo_adapter, Custyard.Repo.Adapter)
 
   cond do
-    is_binary(database_url) and String.starts_with?(database_url, "libsql://") ->
-      raise """
-      DATABASE_URL uses libsql://, but the compiled Ecto.Adapters.SQLite3 adapter
-      cannot connect to Turso. Remove DATABASE_URL and use SQLite on a mounted
-      persistent volume, or build with a supported remote database adapter.
-      """
+    is_binary(database_url) and String.starts_with?(database_url, "libsql://") and
+        repo_adapter == Custyard.Repo.Adapter ->
+      # Turso: the same SQLite database, reached over HTTP by
+      # Custyard.Turso.Connection. `turso db show --url` prints this URL.
+      turso_auth_token = blank_to_nil.(System.get_env("TURSO_AUTH_TOKEN"))
+
+      plain_http? =
+        database_url
+        |> URI.parse()
+        |> Map.get(:query)
+        |> to_string()
+        |> URI.decode_query()
+        |> Map.get("tls") == "0"
+
+      # A Turso database always needs a token. Only a libSQL server on plain
+      # HTTP (?tls=0), such as one on a private network, may run without auth.
+      if is_nil(turso_auth_token) and not plain_http? do
+        raise """
+        DATABASE_URL is a libsql:// URL but TURSO_AUTH_TOKEN is not set.
+        Create a token with `turso db tokens create <database>` and set it:
+
+            fly secrets set TURSO_AUTH_TOKEN=...
+        """
+      end
+
+      config :custyard, Custyard.Repo,
+        turso_url: database_url,
+        turso_auth_token: turso_auth_token,
+        pool_size: pool_size
 
     is_binary(database_url) and repo_adapter == Ecto.Adapters.Postgres and
         (String.starts_with?(database_url, "postgres://") or
@@ -427,7 +450,7 @@ if config_env() == :prod do
     repo_adapter == Ecto.Adapters.Postgres ->
       raise "DATABASE_URL is required when the app is compiled with Ecto.Adapters.Postgres"
 
-    repo_adapter == Ecto.Adapters.SQLite3 ->
+    repo_adapter == Custyard.Repo.Adapter ->
       database_path = System.get_env("DATABASE_PATH") || "/data/custyard.db"
 
       if Path.type(database_path) != :absolute do

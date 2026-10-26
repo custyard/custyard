@@ -198,10 +198,14 @@ defmodule Custyard.Release.AcknowledgmentsTest do
     test "runs before the Repo starts and before anything is written" do
       org = Custyard.Factory.insert_organization()
 
+      # DATABASE_PATH on a local database; over Turso (TURSO_TEST_URL) there
+      # is none, and the uploads directory is the first path refused.
       for argv <- [["bind", "ots.test", "org-fly", "#{org.id}"], ["replay"]] do
-        assert_raise RuntimeError, ~r/DATABASE_PATH must point inside the mounted \/data/, fn ->
-          with_io(:stderr, fn -> with_io(fn -> CLI.run(argv, mode: :release) end) end)
-        end
+        assert_raise RuntimeError,
+                     ~r/(DATABASE_PATH|UPLOAD_DIR) must point inside the mounted \/data/,
+                     fn ->
+                       with_io(:stderr, fn -> with_io(fn -> CLI.run(argv, mode: :release) end) end)
+                     end
       end
 
       assert Acknowledgments.list_bindings() == []

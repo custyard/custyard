@@ -65,12 +65,65 @@ jobs:
       - run: mix test
       - run: mix credo --strict
 
+  # The suite again over the Turso driver (Custyard.Turso.Connection, Hrana
+  # over HTTP) against a real libSQL server, the server Turso runs. One test
+  # at a time: each keeps its sandbox transaction open on a stream for its
+  # whole run, and how the server arbitrates SQLite's write lock between
+  # streams is not what this job tests.
+  turso:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+
+    services:
+      libsql:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports:
+          - 8080:8080
+
+    env:
+      TURSO_TEST_URL: libsql://127.0.0.1:8080?tls=0
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache deps
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-
+
+      - run: mix deps.get
+
+      - name: Wait for the libSQL server
+        run: |
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8080/health && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - run: mix test --max-cases 1
+
   # Builds the prod release and runs Custyard.Release tasks through
   # `bin/custyard eval` against a running server, which `mix test` cannot
   # exercise: there the application is already started.
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    services:
+      libsql:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports:
+          - 8080:8080
 
     env:
       MIX_ENV: prod
@@ -95,6 +148,11 @@ jobs:
       - run: mix deps.get --only prod
       - run: mix release --overwrite
       - run: bin/release-smoke-test
+
+      - name: Release smoke test on a libSQL server
+        run: bin/release-smoke-test
+        env:
+          DATABASE_URL: libsql://127.0.0.1:8080?tls=0
 
   security:
     runs-on: ubuntu-latest
