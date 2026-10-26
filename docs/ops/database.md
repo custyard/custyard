@@ -11,15 +11,18 @@ fly volumes create custyard_data --region <your-region> --size 1
 fly volumes list
 ```
 
-Keep one app machine per SQLite database. Before a schema repair or migration,
-take a volume snapshot and verify which machine owns the volume. See
+Run one app machine (`fly scale count 1`). Startup refuses to boot a second
+machine while anything lives under `/data`, and that includes uploads and
+attachments when the database is PostgreSQL. Before a schema repair or
+migration, take a volume snapshot and verify which machine owns the volume. See
 [Fly.io deployment](../flyio-deployment.md#volumes-and-backups).
 
 `DATABASE_URL=libsql://...` is unsupported. The locked SQLite driver does not
 connect to Turso; it interprets the URL as a local filename. Runtime
 configuration rejects it so a deployment cannot silently create an ephemeral
 database. PostgreSQL requires a release built with `Ecto.Adapters.Postgres` and
-a PostgreSQL `DATABASE_URL`.
+a PostgreSQL `DATABASE_URL`. It does not make several machines safe: files stay
+on each machine's volume and every machine starts its own background workers.
 
 ## Legacy schema mismatch
 

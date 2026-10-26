@@ -1,11 +1,12 @@
 defmodule Custyard.Storage do
   @moduledoc """
-  Verifies that Fly's local database and uploads live on a mounted volume
-  attached to the app's only machine.
+  Verifies that Fly's local database, uploads and attachments live on a mounted
+  volume attached to the app's only machine.
 
   The check runs before the Repo and release migrations start, so a missing
   volume cannot silently create a fresh database on the container filesystem,
-  and a second machine cannot silently create a second database.
+  and a second machine cannot silently create a second copy of what the volume
+  stores.
   """
 
   require Logger
@@ -40,20 +41,30 @@ defmodule Custyard.Storage do
     if is_binary(upload_dir), do: require_data_path!(upload_dir, "UPLOAD_DIR")
     if is_binary(attachment_dir), do: require_data_path!(attachment_dir, "ATTACHMENT_DIR")
 
-    if local_database? or is_binary(upload_dir) or is_binary(attachment_dir),
-      do: require_data_mount!(opts)
+    on_volume =
+      [
+        local_database? && "its SQLite database",
+        is_binary(upload_dir) && "uploads",
+        is_binary(attachment_dir) && "inbound attachments"
+      ]
+      |> Enum.filter(& &1)
 
-    if local_database?, do: require_single_machine!(opts)
+    if on_volume != [] do
+      require_data_mount!(opts)
+      require_single_machine!(on_volume, opts)
+    end
   end
 
   # A Fly volume attaches to exactly one machine, so a second machine gets a
-  # second volume holding a second SQLite database. Nothing reports an error
-  # while the two diverge: each machine passes its own health check, and a
-  # write lands on whichever machine the proxy happened to route to.
-  defp require_single_machine!(opts) do
+  # second volume holding a second copy of everything under /data. Nothing
+  # reports an error while the copies diverge: each machine passes its own
+  # health check, and a write lands on whichever machine the proxy happened to
+  # route to. A remote database does not change this, because uploads and
+  # attachments stay on the volume.
+  defp require_single_machine!(on_volume, opts) do
     case Keyword.get_lazy(opts, :machine_ids, &deployed_machine_ids/0) do
       {:ok, [_, _ | _] = ids} ->
-        raise_multiple_machines!(ids)
+        raise_multiple_machines!(ids, on_volume)
 
       {:ok, _one} ->
         :ok
@@ -61,7 +72,7 @@ defmodule Custyard.Storage do
       :unknown ->
         Logger.warning(
           "Cannot determine how many machines this Fly app has, so the " <>
-            "single-machine requirement for local SQLite is unverified. " <>
+            "single-machine requirement for data under #{@data_dir} is unverified. " <>
             "Confirm with `fly scale show`."
         )
     end
@@ -110,21 +121,31 @@ defmodule Custyard.Storage do
     String.length(token) >= 8 and String.match?(token, ~r/^[0-9a-f]+$/)
   end
 
-  defp raise_multiple_machines!(ids) do
+  defp raise_multiple_machines!(ids, on_volume) do
     raise """
     This Fly app has #{length(ids)} machines (#{Enum.join(ids, ", ")}) and keeps
-    its database in a local SQLite file under #{@data_dir}. A Fly volume attaches
-    to one machine, so every machine has its own volume and its own database,
-    and they diverge from the moment they are created.
+    #{join_with_and(on_volume)} under #{@data_dir}. A Fly volume attaches to one
+    machine, so every machine has its own volume and its own copy of that data,
+    and the copies diverge from the moment they are created.
 
     Run a single machine:
 
         fly scale count 1 -a #{System.get_env("FLY_APP_NAME")}
 
     `min_machines_running` does not prevent this. It is a floor on how many
-    machines stay warm, not a cap on how many exist. For more than one machine,
-    build the release with Ecto.Adapters.Postgres and set DATABASE_URL.
+    machines stay warm, not a cap on how many exist.
+
+    A PostgreSQL database does not lift the limit. Uploads and attachments
+    stay on each machine's own volume, and the outbound mail queue, scoring
+    scheduler, retention sweeps and IMAP pollers start on every machine.
     """
+  end
+
+  defp join_with_and([item]), do: item
+
+  defp join_with_and(items) do
+    {init, [last]} = Enum.split(items, -1)
+    Enum.join(init, ", ") <> " and " <> last
   end
 
   defp require_data_mount!(opts) do
