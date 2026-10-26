@@ -335,12 +335,8 @@ fly volumes snapshots restore <snapshot-id> --name custyard_data
 > one machine and keeps anything under `/data` (`Custyard.Storage`), but the
 > refusal is a backstop, not a substitute for the scale check.
 >
-> PostgreSQL does not lift this limit. Uploads and attachments still live on
-> each machine's own volume, and the outbound mail queue, scoring scheduler,
-> retention sweeps and IMAP pollers start on every machine, so two machines
-> would scan the same pending messages. Running more than one machine needs
-> shared object storage and a single owner for those workers, neither of which
-> exists yet.
+> PostgreSQL does not lift this limit. Uploads and attachments are still files
+> under `/data`, so each machine's volume holds its own copy.
 
 ## Alternate data stores
 

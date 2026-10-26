@@ -135,9 +135,8 @@ defmodule Custyard.Storage do
     `min_machines_running` does not prevent this. It is a floor on how many
     machines stay warm, not a cap on how many exist.
 
-    A PostgreSQL database does not lift the limit. Uploads and attachments
-    stay on each machine's own volume, and the outbound mail queue, scoring
-    scheduler, retention sweeps and IMAP pollers start on every machine.
+    A remote database does not lift the limit while uploads and attachments
+    are files under #{@data_dir}, because each volume holds its own copy.
     """
   end
 

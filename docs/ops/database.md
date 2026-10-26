@@ -21,8 +21,8 @@ migration, take a volume snapshot and verify which machine owns the volume. See
 connect to Turso; it interprets the URL as a local filename. Runtime
 configuration rejects it so a deployment cannot silently create an ephemeral
 database. PostgreSQL requires a release built with `Ecto.Adapters.Postgres` and
-a PostgreSQL `DATABASE_URL`. It does not make several machines safe: files stay
-on each machine's volume and every machine starts its own background workers.
+a PostgreSQL `DATABASE_URL`. It does not make several machines safe while
+uploads and attachments are files on each machine's volume.
 
 ## Legacy schema mismatch
 

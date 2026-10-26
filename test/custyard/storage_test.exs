@@ -101,7 +101,7 @@ defmodule Custyard.StorageTest do
     assert error.message =~
              ~r/has 2 machines.*keeps\s+uploads and inbound attachments under \/data/s
 
-    assert error.message =~ ~r/PostgreSQL database does not lift the limit/
+    assert error.message =~ ~r/remote database does not lift the limit/
     refute error.message =~ "SQLite"
   end
 
