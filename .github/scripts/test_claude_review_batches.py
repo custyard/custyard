@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import copy
 import io
@@ -9,7 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from verify_claude_review import (
-    IncompleteReview, batch_command, build_plan, combine_results, validate_plan_context, verify_shard,
+    IncompleteReview, batch_command, build_plan, combine_results, load_missing_markdown_sources,
+    validate_plan_context, verify_shard,
 )
 
 
@@ -204,6 +206,41 @@ class BoundedReviewTest(unittest.TestCase):
             self.assertEqual(view["files"][0]["patch_lines"], ["+Hi — 返信\U000E0102"])
             self.assertEqual(manifest["shards"][0]["files"][0]["patch"], marked)
             self.assertEqual(self.files[0]["patch"], marked)
+
+    def test_missing_markdown_patch_receives_complete_blob_reading_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.local_context(directory)
+            marked = "# R\U000E0101esearch\n\nThe complete document.\n"
+            self.files[0].update(filename="docs/research.md", patch=None, sha="blob-sha")
+            def fetch(endpoint, paginate=False):
+                if "/git/blobs/" in endpoint:
+                    self.assertEqual(endpoint, "repos/custyard/custyard/git/blobs/blob-sha")
+                    return {"encoding": "base64", "content": base64.b64encode(marked.encode()).decode()}
+                return self.fetch(endpoint, paginate)
+            with patch.dict(os.environ, env), patch("verify_claude_review.github_fetch", side_effect=fetch):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    batch_command("plan")
+            root = Path(env["REVIEW_PLAN_DIR"])
+            view = json.loads((root / "shard-0.json").read_text())
+            manifest = json.loads((root / "manifest.json").read_text())
+            self.assertFalse(view["files"][0]["patch_available"])
+            self.assertEqual(view["files"][0]["source_lines"], ["# Research", "", "The complete document."])
+            self.assertEqual(manifest["shards"][0]["files"][0]["source_text"], marked)
+            self.assertNotIn("source_text", self.files[0])
+
+    def test_missing_patch_fallback_does_not_fetch_binary_or_code_files(self):
+        files = [{"filename": "image.png"}, {"filename": "module.ex"}]
+        with patch("verify_claude_review.github_fetch") as fetch:
+            self.assertEqual(load_missing_markdown_sources("custyard/custyard", files, fetch), files)
+            fetch.assert_not_called()
+
+    def test_unreadable_markdown_source_fails_planning(self):
+        for blob in ({"encoding": "none", "content": ""},
+                     {"encoding": "base64", "content": "not valid base64!"},
+                     {"encoding": "base64", "content": "/w=="}):
+            with self.subTest(blob=blob), self.assertRaises(IncompleteReview):
+                load_missing_markdown_sources("custyard/custyard", [{"filename": "README.md", "sha": "sha"}],
+                                             lambda endpoint: blob)
 
     def test_incomplete_review_explanation_is_retained_without_transcript(self):
         with tempfile.TemporaryDirectory() as directory:
