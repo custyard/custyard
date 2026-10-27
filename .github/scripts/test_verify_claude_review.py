@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from verify_claude_review import IncompleteReview, main, validate_execution, validate_publication
+from verify_claude_review import (
+    IncompleteReview, denied_command_family, main, validate_execution, validate_publication,
+)
 
 
 class ReviewCompletionTest(unittest.TestCase):
@@ -50,6 +52,19 @@ class ReviewCompletionTest(unittest.TestCase):
     def test_denial_count_also_fails(self):
         with self.assertRaises(IncompleteReview):
             validate_execution([{**self.result, "permission_denials_count": 1}])
+
+    def test_command_diagnostics_only_publish_known_command_families(self):
+        for command, expected in (
+            ("gh api repos/private/repository/pulls/45 -H 'Authorization: SECRET'", "gh api"),
+            ("gh pr view 45 --json body", "gh pr view"),
+            ("echo SECRET_TOKEN", "echo"),
+            ("SECRET_TOKEN=private gh pr view 45", "unrecognized shell command"),
+            ("/private/SECRET_TOKEN", "unrecognized shell command"),
+            ("gh api 'unterminated SECRET_TOKEN", "unrecognized shell command"),
+        ):
+            with self.subTest(command=command):
+                denial = {"tool_name": "Bash", "tool_input": {"command": command}}
+                self.assertEqual(denied_command_family(denial), expected)
 
     def test_old_head_run_or_attempt_does_not_count(self):
         for replacement in ("def456:100:1", "abc123:99:1", "abc123:100:2"):

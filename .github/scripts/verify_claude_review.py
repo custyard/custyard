@@ -4,12 +4,32 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 
 
 class IncompleteReview(Exception):
     pass
+
+
+def denied_command_family(denial):
+    """Expose only known command names, never arguments, paths or substitutions."""
+    tool_input = denial.get("tool_input")
+    if denial.get("tool_name") != "Bash" or not isinstance(tool_input, dict):
+        return None
+    try:
+        words = shlex.split(tool_input.get("command", ""))
+    except (ValueError, TypeError):
+        return "unrecognized shell command"
+    families = [
+        "gh pr view", "gh pr diff", "gh pr comment", "gh pr list", "gh api",
+        "gh issue view", "gh issue list", "gh search", "git status", "git diff",
+        "git log", "git show", "git ls-files", "git rev-parse", "ls", "pwd",
+        "cat", "find", "rg", "jq", "head", "sed", "echo", "which", "command",
+    ]
+    return next((name for name in families if words[:len(name.split())] == name.split()),
+                "unrecognized shell command")
 
 
 def validate_execution(messages):
@@ -31,6 +51,10 @@ def validate_execution(messages):
             and re.fullmatch(r"[A-Za-z0-9_]{1,100}", str(d.get("tool_name", "")))
         })
         detail = f" Denied tools: {', '.join(names)}." if names else ""
+        commands = sorted({family for d in denials if isinstance(d, dict)
+                           if (family := denied_command_family(d))})
+        if commands:
+            detail += f" Denied command families: {', '.join(commands)}."
         raise IncompleteReview("Claude encountered tool permission denials." + detail)
 
 
