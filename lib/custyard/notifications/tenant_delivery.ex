@@ -26,7 +26,11 @@ defmodule Custyard.Notifications.TenantDelivery do
     end
   end
 
-  def deliver(email, id) when id in [nil, 1], do: Custyard.Mailer.deliver(email)
+  def deliver(email, id) when id in [nil, 1] do
+    with {:ok, delivery} <- EmailBranding.delivery_settings(id) do
+      Custyard.Mailer.deliver(email, delivery.config)
+    end
+  end
 
   def deliver(email, id) do
     case settings(id) do

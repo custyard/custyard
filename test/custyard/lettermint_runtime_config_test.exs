@@ -49,4 +49,12 @@ defmodule Custyard.LettermintRuntimeConfigTest do
     config = Reader.read!(@runtime, env: :prod)[:custyard]
     assert config[Mailer][:api_token] == "new-project-token"
   end
+
+  test "SMTP installations keep the HTTP client available for tenant Lettermint mail" do
+    System.put_env("MAIL_ADAPTER", "smtp")
+    config = Reader.read!(@runtime, env: :prod)
+    assert config[:custyard][Mailer][:adapter] == Swoosh.Adapters.SMTP
+    assert config[:swoosh][:api_client] == Swoosh.ApiClient.Finch
+    assert config[:swoosh][:finch_name] == Custyard.Finch
+  end
 end

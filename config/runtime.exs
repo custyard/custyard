@@ -176,13 +176,9 @@ if config_env() == :prod do
         :ok
     end
 
-    # API-based adapters need a real Swoosh API client. config.exs disables it
-    # globally (:api_client, false) since dev/test use the Local adapter, so we
-    # re-enable it here and point it at the Finch instance from the supervision tree.
-    if mail_adapter in ~w(mailgun sendgrid postmark lettermint) do
-      config :swoosh, :api_client, Swoosh.ApiClient.Finch
-      config :swoosh, :finch_name, Custyard.Finch
-    end
+    # Tenant credentials may select Lettermint independently of the installation
+    # adapter, including SMTP or Local, and can be saved after the app boots.
+    config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: Custyard.Finch
   end
 end
 

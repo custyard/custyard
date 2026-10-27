@@ -10,18 +10,26 @@ defmodule Custyard.Intake.EmailBranding do
     end
   end
 
-  def delivery_settings(id) when id in [nil, 1],
-    do:
+  def delivery_settings(id) when id in [nil, 1] do
+    with {:ok, config} <- Custyard.EmailSetup.sending_config(id || 1) do
       {:ok,
        %{
          address: Application.get_env(:custyard, :email_from_address, "noreply@custyard.local"),
-         config: []
+         config: config
        }}
+    end
+  end
 
   def delivery_settings(id) do
     with {:ok, channel} <- Custyard.EmailSetup.default_reply_channel(id),
-         {:ok, config} <- Custyard.EmailSetup.sending_config(id) do
-      {:ok, %{address: Custyard.InboundChannels.from_address(channel), config: config}}
+         {:ok, config} <- Custyard.EmailSetup.sending_config(id),
+         address when is_binary(address) and address != "" <-
+           Custyard.InboundChannels.from_address(channel) do
+      {:ok, %{address: address, config: config}}
+    else
+      nil -> {:error, :from_not_set}
+      "" -> {:error, :from_not_set}
+      error -> error
     end
   end
 

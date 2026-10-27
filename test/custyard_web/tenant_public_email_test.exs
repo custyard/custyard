@@ -13,7 +13,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   import Custyard.Factory
   import Phoenix.LiveViewTest
   alias Custyard.{EmailSetup, Intake, RateLimit, Repo, Tenants}
-  alias Custyard.Intake.{ArrivalEmail, ReceiptEmail}
+  alias Custyard.Intake.{ArrivalEmail, ClaimEmail, ReceiptEmail}
 
   setup do
     original_keys = Application.get_env(:custyard, :credential_keys)
@@ -173,6 +173,104 @@ defmodule CustyardWeb.TenantPublicEmailTest do
              )
 
     refute_receive {:email, _}
+  end
+
+  test "a tenant's Lettermint token overrides the installation's SMTP adapter", c do
+    put_delivery_env(Custyard.Mailer, adapter: Swoosh.Adapters.SMTP, relay: "unused.example")
+
+    assert {:ok, _} =
+             ReceiptEmail.send_receipt("buyer@example.com", c.source,
+               conversation_url: Tenants.url(c.tenant) <> "/c/test-token"
+             )
+
+    assert_receive {:email, email}
+    assert_branding(email, c.tenant)
+  end
+
+  test "saved default-tenant credentials reach receipts, confirmations and staff alerts" do
+    put_delivery_env(Custyard.Mailer, adapter: Swoosh.Adapters.SMTP, relay: "unused.example")
+    put_delivery_env(:email_from_address, "platform@example.com")
+    put_delivery_env(:operator_email, "instance-operator@example.com")
+
+    admin = insert_operator_account(role: "super_admin", tenant_id: nil, organization_id: nil)
+
+    assert {:ok, _} =
+             EmailSetup.save_credentials(admin, 1, %{
+               "project_id" => "default-project",
+               "project_token" => "saved-default-project-token"
+             })
+
+    source = insert_intake_source(tenant_id: 1)
+    conversation = insert_conversation(source: :public_intake, tenant_id: 1)
+    conversation = Repo.preload(conversation, [:organization, :contact])
+
+    assert {:ok, _} =
+             ReceiptEmail.send_receipt("buyer@example.com", source,
+               conversation_url: "http://localhost/c/default-token"
+             )
+
+    assert_default_delivery("buyer@example.com")
+
+    assert {:ok, slug, _} =
+             Custyard.Slugs.claim("default-claim", "buyer@example.com", conversation)
+
+    assert {:ok, _} =
+             ClaimEmail.send_confirmation(slug,
+               confirm_url: "http://localhost/claim/default-confirmation",
+               conversation_url: "http://localhost/c/default-token"
+             )
+
+    assert_default_delivery("buyer@example.com")
+    assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "A support question")
+    assert_default_delivery("instance-operator@example.com")
+    assert :ok = Custyard.Notifications.Email.deliver_neglect_alert(conversation, :warning)
+    assert_default_delivery("instance-operator@example.com")
+  end
+
+  test "a missing selected ingress identity prevents tenant mail instead of building a nil From",
+       c do
+    c.channel
+    |> Ecto.Changeset.change(reply_from: :ingress_address)
+    |> Repo.update!()
+
+    Custyard.InboundRoute
+    |> Repo.get!(c.channel.inbound_route_id)
+    |> Ecto.Changeset.change(lettermint_route_domain: nil)
+    |> Repo.update!()
+
+    # The public domain has not been verified for sending. An explicitly chosen
+    # ingress identity must not silently switch to that address or the platform.
+    assert is_nil(c.channel.sending_domain_status)
+    conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
+    assert is_nil(Custyard.Conversations.reply_identity(conversation).address)
+    assert {:error, :from_not_set} = Custyard.Intake.EmailBranding.delivery_settings(c.tenant.id)
+
+    assert {:error, :from_not_set} =
+             ReceiptEmail.send_receipt("buyer@example.com", c.source,
+               conversation_url: Tenants.url(c.tenant) <> "/c/test-token"
+             )
+
+    refute_receive {:email, _}
+    refute_receive {:tenant_delivery_headers, _}
+  end
+
+  defp assert_default_delivery(recipient) do
+    assert_receive {:email, email}
+    assert email.to == [{"", recipient}]
+    assert elem(email.from, 1) == "platform@example.com"
+    assert_receive {:tenant_delivery_headers, headers}
+    assert {"x-lettermint-token", "saved-default-project-token"} in headers
+  end
+
+  defp put_delivery_env(key, value) do
+    previous = Application.get_env(:custyard, key)
+    Application.put_env(:custyard, key, value)
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:custyard, key),
+        else: Application.put_env(:custyard, key, previous)
+    end)
   end
 
   test "tenant arrival and operational alerts reach only tenant staff with tenant credentials",
