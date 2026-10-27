@@ -145,6 +145,22 @@ defmodule Custyard.Email.LMTPServerTest do
     end
   end
 
+  test "legacy recipient routing rejects the same customer domain in multiple tenants", c do
+    tenant =
+      Repo.insert!(%Custyard.Tenant{
+        name: "Another LMTP tenant",
+        slug: "lmtp-#{System.unique_integer([:positive])}"
+      })
+
+    insert_organization(tenant_id: tenant.id, domain: c.test_org.domain)
+    state = %{to: [], organization: nil, from: "sender@external.example", max_recipients: 100}
+
+    assert {:error, "550 5.1.1 Unknown recipient domain", ^state} =
+             LMTPServer.handle_RCPT("support@#{c.test_org.domain}", state)
+
+    assert Repo.aggregate(Custyard.Conversation, :count) == 0
+  end
+
   describe "LMTP connection handling" do
     setup do
       {:ok, pid} = LMTPServer.start_link(port: @test_port)
