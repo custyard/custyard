@@ -67,6 +67,9 @@ defmodule Custyard.TenantMigrationTest do
       Ecto.Migrator.run(Repo, context.migrations, :down, to_exclusive: @baseline, log: false)
       assert_original_history(original, sequences)
 
+      %{rows: project_columns} = Repo.query!("PRAGMA table_info(projects)")
+      refute Enum.any?(project_columns, &(Enum.at(&1, 1) == "tenant_id"))
+
       for table <- ~w(inbound_routes inbound_channels inbound_channel_rejections) do
         %{rows: columns} = Repo.query!("PRAGMA table_info(#{table})")
         organization = Enum.find(columns, &(Enum.at(&1, 1) == "organization_id"))

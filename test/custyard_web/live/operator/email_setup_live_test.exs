@@ -94,11 +94,8 @@ defmodule CustyardWeb.Operator.EmailSetupLiveTest do
     assert has_element?(view, "[data-testid=channel-archive-copy-toggle]")
     Repo.update!(Custyard.OperatorAccount.role_changeset(c.operator, %{role: "agent"}))
 
-    try do
-      view |> element("[data-testid=channel-archive-copy-toggle]") |> render_click()
-    catch
-      :exit, _ -> :ok
-    end
+    view |> element("[data-testid=channel-archive-copy-toggle]") |> render_click()
+    assert_redirect(view, "/operator")
 
     refute Repo.reload!(channel).archive_copy
   end

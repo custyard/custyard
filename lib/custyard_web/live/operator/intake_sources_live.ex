@@ -1,11 +1,10 @@
 defmodule CustyardWeb.Operator.IntakeSourcesLive do
   @moduledoc """
-  Super-admin CRUD for public intake sources (CTAs).
+  Tenant-administrator CRUD for public intake sources (CTAs).
 
   Stays thin: all validation lives in `Custyard.IntakeSource.changeset/2`.
-  Mount is gated to super admins by the router live_session, and every
-  mutating event re-checks `Authorization.can_modify_settings?/1`
-  (settings double-gate pattern).
+  Mount and each mutating event require management access to the current
+  tenant. Record lookups and new source ownership use that tenant's scope.
 
   The key is a public URL segment: it is set once at creation and never
   cast on update (`IntakeSource.update_changeset/2` enforces this at the

@@ -2,6 +2,7 @@ defmodule Custyard.EmailSetupTest do
   use Custyard.DataCase, async: false
   import Custyard.Factory
   alias Custyard.{EmailConnection, EmailSetup, InboundRoute, Repo, Tenant}
+  alias Custyard.Webhooks.Dispatcher
 
   setup do
     keys = [
@@ -211,7 +212,7 @@ defmodule Custyard.EmailSetupTest do
       metadata: %{authentication: %{"dkim" => "pass", "dmarc" => "pass"}}
     }
 
-    assert {:ok, conversation} = Custyard.Webhooks.Dispatcher.dispatch(route, normalized)
+    assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
     assert_receive {:new_message, id}, 1_000
     assert id == conversation.id
 

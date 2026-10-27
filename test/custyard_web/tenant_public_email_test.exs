@@ -12,8 +12,8 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   use CustyardWeb.ConnCase, async: false
   import Custyard.Factory
   import Phoenix.LiveViewTest
-  alias Custyard.{EmailSetup, Intake, RateLimit, Repo, Tenants}
-  alias Custyard.Intake.{ArrivalEmail, ClaimEmail, ReceiptEmail}
+  alias Custyard.{Conversations, EmailSetup, Intake, RateLimit, Repo, Tenants}
+  alias Custyard.Intake.{ArrivalEmail, ClaimEmail, EmailBranding, ReceiptEmail}
 
   setup do
     original_keys = Application.get_env(:custyard, :credential_keys)
@@ -242,8 +242,8 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     # ingress identity must not silently switch to that address or the platform.
     assert is_nil(c.channel.sending_domain_status)
     conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
-    assert is_nil(Custyard.Conversations.reply_identity(conversation).address)
-    assert {:error, :from_not_set} = Custyard.Intake.EmailBranding.delivery_settings(c.tenant.id)
+    assert is_nil(Conversations.reply_identity(conversation).address)
+    assert {:error, :from_not_set} = EmailBranding.delivery_settings(c.tenant.id)
 
     assert {:error, :from_not_set} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
