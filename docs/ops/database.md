@@ -26,8 +26,11 @@ fly volumes create custyard_data --region <your-region> --size 1
 fly volumes list
 ```
 
-Keep one app machine per SQLite database. Before a schema repair or migration,
-take a volume snapshot and verify which machine owns the volume. See
+Run one app machine (`fly scale count 1`). Startup refuses to boot a second
+machine while anything lives under `/data`, and that includes uploads and
+attachments when the database is Turso or PostgreSQL. Before a schema repair
+or migration, take a volume snapshot and verify which machine owns the volume.
+See
 [Fly.io deployment](../flyio-deployment.md#volumes-and-backups).
 
 ## Turso
@@ -113,10 +116,8 @@ are files, not rows. Keep the volume and the `[mounts]` section.
 
 ### Limits
 
-- **One machine.** The machine-count check only guards a local database file,
-  but uploads and attachments live on one machine's volume, and the outbound
-  mail queue is written as the only sender in a single-node deployment. Keep
-  `fly scale count 1`.
+- **One machine.** Uploads and attachments live on one machine's volume, so
+  startup refuses a second machine on Turso too. Keep `fly scale count 1`.
 - **Short transactions.** A transaction keeps a server-side stream open,
   which expires when left idle for a few seconds and ends the transaction.
 - **No embedded replica.** Reads go to Turso every time; there is no local
