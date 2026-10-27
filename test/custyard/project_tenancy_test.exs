@@ -68,4 +68,66 @@ defmodule Custyard.ProjectTenancyTest do
 
     assert "cannot be changed for an existing project" in errors_on(changeset).tenant_id
   end
+
+  test "moving a project synchronizes its tasks and keeps them editable" do
+    org = insert_organization()
+    destination = insert_organization(tenant_id: org.tenant_id)
+    admin = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    project = insert_project(organization_id: org.id)
+    {:ok, task} = Projects.create_task(project, %{title: "Follow up", portal_visible: true})
+
+    assert {:ok, moved} =
+             Projects.update_project_for_operator(
+               project,
+               %{organization_id: destination.id},
+               admin
+             )
+
+    assert moved.organization_id == destination.id
+    assert Repo.reload!(task).organization_id == destination.id
+    assert Repo.reload!(task).portal_visible
+
+    assert {:ok, _} =
+             task
+             |> Repo.reload!()
+             |> Custyard.Task.changeset(%{title: "Still editable"})
+             |> Repo.update()
+
+    assert {:ok, _} = Projects.update_project(moved, %{organization_id: org.id})
+    assert Repo.reload!(task).organization_id == org.id
+  end
+
+  test "a project move cannot carry a task away from its conversation's customer" do
+    org = insert_organization()
+    destination = insert_organization(tenant_id: org.tenant_id)
+    admin = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    conversation = insert_conversation(organization_id: org.id)
+    project = insert_project(organization_id: org.id)
+
+    {:ok, task} =
+      Projects.create_task(project, %{
+        title: "Conversation task",
+        conversation_id: conversation.id
+      })
+
+    for update <- [
+          fn -> Projects.update_project(project, %{organization_id: destination.id}) end,
+          fn ->
+            Projects.update_project_for_operator(
+              project,
+              %{organization_id: destination.id},
+              admin
+            )
+          end
+        ] do
+      assert {:error, changeset} = update.()
+
+      assert errors_on(changeset).organization_id == [
+               "cannot move tasks linked to another customer's conversation"
+             ]
+
+      assert Repo.reload!(project).organization_id == org.id
+      assert Repo.reload!(task).organization_id == org.id
+    end
+  end
 end
