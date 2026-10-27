@@ -13,7 +13,7 @@ defmodule Custyard.EmailSetup do
     Tenant
   }
 
-  alias Custyard.Email.ThreadHeaders
+  alias Custyard.Email.{DeliveryStatus, ThreadHeaders}
   alias Custyard.Lettermint.HttpClient
 
   @status_events ~w(message.sent message.delivered message.hard_bounced message.failed message.policy_rejected message.suppressed)
@@ -480,7 +480,7 @@ defmodule Custyard.EmailSetup do
 
       primary? =
         recipient in [nil, ""] or
-          Custyard.Email.DeliveryStatus.recipient_role(message, recipient) == :to
+          DeliveryStatus.recipient_role(message, recipient) == :to
 
       if params["event"] == "message.delivered" and message.delivery_status == :delivered and
            primary?,
