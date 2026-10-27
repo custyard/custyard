@@ -3,27 +3,24 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-    # Dependabot PRs get no repository secrets, so the review could only fail.
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    # Drafts are intentionally skipped; forks and Dependabot cannot use this secret.
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
 
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: read
       id-token: write
 
@@ -33,16 +30,42 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Test review completion guard
+        run: python3 -B -m unittest discover -s .github/scripts -p 'test_*.py'
+
       - name: Run Claude Code Review
         id: claude-review
+        # Claude's app requires this workflow to match main. A workflow change
+        # intentionally fails the completion guard until merged and run on another PR.
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          # Without --comment the plugin prints the review to the (hidden) job log only.
-          prompt: '/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+          prompt: |
+            Review https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+            at head commit ${{ github.event.pull_request.head.sha }} using the installed
+            code-review plugin. Use /code-review:code-review --comment with that full URL.
+
+            This workflow requests a review of every new head, including workflow changes.
+            Earlier Claude comments on a different head do not satisfy this request.
+            Override the plugin's skip-if-already-commented and trivial-change rules.
+            Never treat an inability to inspect the PR or use a required tool as a clean review.
+
+            After the entire review finishes and any findings have been posted, use
+            gh pr comment to post a completion summary containing the reviewed head SHA,
+            a short summary of findings (or an explicit statement that no issues were found),
+            and this exact marker on its own line:
+            <!-- claude-review:${{ github.event.pull_request.head.sha }}:${{ github.run_id }}:${{ github.run_attempt }} -->
+            Only post this marker after completing the review. If blocked, explain the
+            blocker in your final response and do not post the completion marker.
+          claude_args: >-
+            --allowedTools "Agent,Skill,Read,Glob,Grep,TodoWrite,mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git ls-files:*),Bash(git rev-parse:*)"
+
+      - name: Verify review completed and was published
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
+        run: python3 -B .github/scripts/verify_claude_review.py
 
