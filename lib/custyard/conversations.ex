@@ -4,7 +4,6 @@ defmodule Custyard.Conversations do
   """
 
   alias Custyard.{
-    Contact,
     Conversation,
     EmailAddress,
     Message,
@@ -13,8 +12,7 @@ defmodule Custyard.Conversations do
     Repo
   }
 
-  alias Custyard.Email.{OutboundQueue, SenderMatcher}
-  alias Custyard.InboundChannels
+  alias Custyard.Email.{OutboundQueue, ReplyRecipients}
   import Ecto.Query
 
   @doc """
@@ -691,76 +689,8 @@ defmodule Custyard.Conversations do
   Empty for public-intake and non-email conversations: prospects never get
   a CC, and chat or portal sources carry none.
   """
-  def default_reply_cc(conversation, opts \\ [])
-
-  def default_reply_cc(%Conversation{source: source}, _opts)
-      when source in [:public_intake, :portal, :slack, :intercom, :zendesk],
-      do: []
-
-  def default_reply_cc(%Conversation{} = conversation, opts) do
-    case last_customer_email_message(conversation.id) do
-      nil ->
-        []
-
-      message ->
-        excluded = own_side_addresses(conversation, message, opts)
-
-        ((message.cc_addresses || []) ++ (message.to_addresses || []))
-        |> Enum.filter(&is_binary/1)
-        |> Enum.map(&String.downcase(String.trim(&1)))
-        |> Enum.reject(&(&1 == "" or MapSet.member?(excluded, &1)))
-        |> Enum.filter(&EmailAddress.valid?/1)
-        |> Enum.uniq()
-    end
-  end
-
-  defp last_customer_email_message(conversation_id) do
-    from(m in Message,
-      where: m.conversation_id == ^conversation_id,
-      where: m.source == :email,
-      where: m.is_internal_note == false,
-      where: is_nil(m.triage_class) or m.triage_class in [:customer, :operator_forward],
-      order_by: [desc: m.inserted_at, desc: m.id],
-      limit: 1
-    )
-    |> Repo.one()
-  end
-
-  defp own_side_addresses(conversation, message, opts) do
-    channel = reply_channel_record(conversation)
-
-    [
-      reply_identity(conversation, opts).address,
-      Keyword.get(opts, :operator_email),
-      SenderMatcher.extract_email(message.sender_email),
-      message.reply_to,
-      conversation_contact_email(conversation),
-      channel && channel.public_address,
-      channel && InboundChannels.ingress_address(channel),
-      channel && channel.previous_ingress_token &&
-        "#{channel.ingress_local}+#{channel.previous_ingress_token}@#{route_domain(channel)}",
-      lookup_route_from_address(conversation)
-    ]
-    |> Enum.filter(&is_binary/1)
-    |> Enum.map(&String.downcase/1)
-    |> MapSet.new()
-  end
-
-  defp conversation_contact_email(%Conversation{contact: %Contact{email: email}}), do: email
-
-  defp conversation_contact_email(%Conversation{contact_id: id}) when is_integer(id) do
-    case Repo.get(Contact, id) do
-      %Contact{email: email} -> email
-      nil -> nil
-    end
-  end
-
-  defp conversation_contact_email(_conversation), do: nil
-
-  defp route_domain(%Custyard.InboundChannel{inbound_route: %Custyard.InboundRoute{} = route}),
-    do: route.lettermint_route_domain
-
-  defp route_domain(_channel), do: nil
+  def default_reply_cc(conversation, opts \\ []),
+    do: ReplyRecipients.default_cc(conversation, opts)
 
   defp reply_transaction(conversation, body, opts) do
     Repo.transaction(fn ->
@@ -815,6 +745,18 @@ defmodule Custyard.Conversations do
   # Build and insert the operator reply message with email metadata.
   defp insert_reply_message(conversation, body, attempt_delivery?, opts) do
     last_customer_msg = find_last_customer_message(conversation.id)
+    channel = reply_sending_channel(conversation)
+
+    recipient =
+      case ReplyRecipients.recipient(conversation) do
+        {:ok, address} -> address
+        {:error, _reason} -> nil
+      end
+
+    if Keyword.has_key?(opts, :expected_recipient) and
+         Keyword.get(opts, :expected_recipient) != recipient do
+      Repo.rollback(:recipient_changed)
+    end
 
     attrs = %{
       source: :operator,
@@ -829,12 +771,15 @@ defmodule Custyard.Conversations do
       message_id: generate_outbound_message_id(conversation),
       in_reply_to: last_customer_msg && last_customer_msg.message_id,
       sender_email: resolve_sender_email(conversation, opts),
+      inbound_channel_id: channel && channel.id,
+      to_addresses: if(recipient, do: [recipient], else: []),
       # Reply-all CC (D5): accepted or edited by the operator in the composer.
       cc_addresses: Keyword.get(opts, :cc, [])
     }
 
     %Message{}
     |> Message.changeset(attrs)
+    |> Ecto.Changeset.change(delivery_recipients_locked: true)
     |> Repo.insert()
   end
 
@@ -884,7 +829,8 @@ defmodule Custyard.Conversations do
     from(m in Message,
       where: m.conversation_id == ^conversation_id,
       where: m.source != :operator,
-      where: m.is_internal_note == false,
+      where: m.is_internal_note == false and is_nil(m.deleted_at),
+      where: is_nil(m.triage_class) or m.triage_class in [:customer, :operator_forward],
       order_by: [desc: m.inserted_at, desc: m.id],
       limit: 1
     )
@@ -928,21 +874,24 @@ defmodule Custyard.Conversations do
   # replying operator's personal address to prospects. The rule holds even
   # after the conversation links to an organization (source-keyed rule in the
   # public intake spec).
-  def reply_identity(%Conversation{source: :public_intake}, _opts),
+  def reply_identity(%Conversation{source: :public_intake, tenant_id: 1}, _opts),
     do: %{address: nil, name: nil, source: :platform}
 
   # Priority: channel From identity > inbound route from_address >
   # operator_email option > platform fallback
   def reply_identity(%Conversation{} = conversation, opts) do
-    channel = reply_channel_record(conversation)
+    channel = reply_sending_channel(conversation)
 
     cond do
       address = channel && Custyard.InboundChannels.from_address(channel) ->
-        name = Custyard.InboundChannels.from_name(channel) || organization_name(conversation)
+        name = reply_channel_name(channel) || organization_name(conversation)
         %{address: address, name: name, source: :channel}
 
       address = lookup_route_from_address(conversation) ->
         %{address: address, name: organization_name(conversation), source: :route}
+
+      conversation.tenant_id != 1 ->
+        %{address: nil, name: tenant_name(conversation.tenant_id), source: :platform}
 
       address = Keyword.get(opts, :operator_email) ->
         %{address: address, name: organization_name(conversation), source: :operator}
@@ -956,6 +905,26 @@ defmodule Custyard.Conversations do
   # reply_identity/2, nil when the platform fallback applies.
   defp resolve_sender_email(conversation, opts), do: reply_identity(conversation, opts).address
 
+  @doc "The tenant-owned sending channel, snapshotted on an outbound reply at enqueue."
+  def reply_sending_channel(%Conversation{source: :public_intake, tenant_id: 1}), do: nil
+
+  def reply_sending_channel(%Conversation{} = conversation) do
+    reply_channel_record(conversation) ||
+      if conversation.tenant_id != 1 do
+        case Custyard.EmailSetup.default_reply_channel(conversation.tenant_id) do
+          {:ok, channel} -> channel
+          {:error, _reason} -> nil
+        end
+      end
+  end
+
+  defp tenant_name(tenant_id) do
+    case Repo.get(Custyard.Tenant, tenant_id) do
+      %{name: name} -> name
+      _ -> nil
+    end
+  end
+
   # The channel the conversation arrived on, from the preloaded association
   # when present, else loaded by id. nil for legacy and non-email
   # conversations.
@@ -966,6 +935,16 @@ defmodule Custyard.Conversations do
     do: Custyard.InboundChannels.get_channel(id)
 
   defp reply_channel_record(_conversation), do: nil
+
+  defp reply_channel_name(channel) do
+    Custyard.InboundChannels.from_name(channel) ||
+      if is_nil(channel.organization_id) do
+        case Repo.get(Custyard.Tenant, channel.tenant_id) do
+          %{name: name} -> name
+          _ -> nil
+        end
+      end
+  end
 
   defp organization_name(%Conversation{organization: %Custyard.Organization{name: name}})
        when is_binary(name) and name != "",

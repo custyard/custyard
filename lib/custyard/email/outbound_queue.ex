@@ -77,7 +77,14 @@ defmodule Custyard.Email.OutboundQueue do
 
     Enum.each(stale, fn message ->
       from(m in Message, where: m.id == ^message.id and m.delivery_status == :sending)
-      |> Repo.update_all(set: [delivery_status: :failed, updated_at: now])
+      |> Repo.update_all(
+        set: [
+          delivery_status: :failed,
+          delivery_failure_kind: :unknown,
+          delivery_error_code: "interrupted",
+          updated_at: now
+        ]
+      )
 
       Logger.warning(
         "Outbound message #{message.id} was interrupted mid-delivery; marked failed, not re-sent"
@@ -123,7 +130,7 @@ defmodule Custyard.Email.OutboundQueue do
     error ->
       # A fresh installation can start the application before migrations have
       # created messages. Keep the worker alive and retry on the next scan.
-      Logger.error("Outbound queue scan failed: #{Exception.message(error)}")
+      Logger.error("outbound_queue_scan_failed", error_type: error.__struct__)
       0
   end
 end

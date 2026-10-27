@@ -1,18 +1,12 @@
 defmodule Custyard.Notifications.Email do
   @moduledoc """
-  Email notification dispatch for the platform.
-
-  This module provides a stub implementation that logs notifications.
-  To enable actual email delivery, integrate with Swoosh:
-
-  1. Add {:swoosh, "~> 1.5"} to mix.exs deps
-  2. Configure a mailer in config/runtime.exs
-  3. Replace the stub implementations below with Swoosh email composition
-
-  See: https://hexdocs.pm/swoosh/readme.html
+  Operator email alerts for neglect, quiet channels, and delivery failures.
+  Nondefault tenants use their staff recipients and sending credentials.
+  The default instance retains its configured operator notification address.
   """
 
   require Logger
+  alias Custyard.Notifications.TenantDelivery
 
   @doc """
   Deliver a neglect alert notification for a conversation.
@@ -91,14 +85,12 @@ defmodule Custyard.Notifications.Email do
       |> html_body(channel_quiet_html(channel))
       |> text_body(channel_quiet_text(channel))
 
-    case Custyard.Mailer.deliver(email) do
+    case TenantDelivery.deliver(email, channel.tenant_id) do
       {:ok, _} ->
         :ok
 
       {:error, reason} ->
-        Logger.error(
-          "Failed to send quiet channel notice for channel #{channel.id}: #{inspect(reason)}"
-        )
+        Logger.error("Failed to send quiet channel notice for channel #{channel.id}")
 
         {:error, reason}
     end
@@ -171,15 +163,12 @@ defmodule Custyard.Notifications.Email do
       |> html_body(delivery_failure_html(conversation, status, recipient, role))
       |> text_body(delivery_failure_text(conversation, status, recipient, role))
 
-    case Custyard.Mailer.deliver(email) do
+    case TenantDelivery.deliver(email, conversation.tenant_id) do
       {:ok, _} ->
         :ok
 
       {:error, reason} ->
-        Logger.error(
-          "Failed to send delivery failure notice for conversation #{conversation.id}: " <>
-            inspect(reason)
-        )
+        Logger.error("Failed to send delivery failure notice for conversation #{conversation.id}")
 
         {:error, reason}
     end
@@ -278,12 +267,12 @@ defmodule Custyard.Notifications.Email do
       |> html_body(neglect_alert_html(conversation, level))
       |> text_body(neglect_alert_text(conversation, level))
 
-    case Custyard.Mailer.deliver(email) do
+    case TenantDelivery.deliver(email, conversation.tenant_id) do
       {:ok, _} ->
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to send neglect alert email: #{inspect(reason)}")
+        Logger.error("Failed to send neglect alert email")
         {:error, reason}
     end
   end

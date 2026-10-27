@@ -23,7 +23,7 @@ defmodule CustyardWeb.IntakeController do
 
   alias Custyard.Email.Normalizer
   alias Custyard.Intake.ReceiptEmail
-  alias Custyard.{Intake, IntakeSource, Settings}
+  alias Custyard.{Intake, IntakeSource, Settings, Tenants}
   alias CustyardWeb.Plugs.ConversationCookie
 
   plug :put_layout, html: {CustyardWeb.Layouts, :intake}
@@ -117,12 +117,13 @@ defmodule CustyardWeb.IntakeController do
   defp maybe_send_receipt({:ok, _captured}, conversation, source, token) do
     case Intake.get_prospect(conversation) do
       %{email: email} when is_binary(email) ->
-        _result =
-          ReceiptEmail.send_receipt(email, source,
-            conversation_url: CustyardWeb.Endpoint.url() <> ~p"/c/#{token}"
-          )
-
-        :sent
+        case ReceiptEmail.send_receipt(email, source,
+               conversation_url:
+                 Tenants.url(Tenants.get_tenant!(source.tenant_id)) <> ~p"/c/#{token}"
+             ) do
+          {:ok, _} -> :sent
+          {:error, _} -> :skipped
+        end
 
       _no_email ->
         :skipped
@@ -218,7 +219,7 @@ defmodule CustyardWeb.IntakeController do
   # active source, ordered by key) lives in the Intake context — this module
   # only builds the path. Omitted when none exists.
   defp assign_active_path(conn, %IntakeSource{mode: :passive}) do
-    active = Intake.first_enabled_active_source()
+    active = Intake.first_enabled_active_source(conn.assigns.intake_source.tenant_id)
     assign(conn, :active_path, active && ~p"/i/#{active.key}")
   end
 
@@ -234,8 +235,25 @@ defmodule CustyardWeb.IntakeController do
   # request input is never converted to an atom (Intake.get_enabled_source/1).
   defp load_source(conn, _opts) do
     case Intake.get_enabled_source(conn.path_params["source_key"]) do
-      nil -> render_not_found(conn, :unknown_key)
-      %IntakeSource{} = source -> assign(conn, :intake_source, source)
+      nil ->
+        render_not_found(conn, :unknown_key)
+
+      %IntakeSource{} = source ->
+        host_tenant = conn.assigns[:host_tenant]
+
+        if is_nil(host_tenant) or source.tenant_id == host_tenant.id do
+          conn
+          |> assign(:intake_source, source)
+          |> assign(
+            :branding,
+            if(source.tenant_id == 1,
+              do: Settings.get_branding(),
+              else: Tenants.branding(Tenants.get_tenant!(source.tenant_id))
+            )
+          )
+        else
+          render_not_found(conn, :unknown_key)
+        end
     end
   end
 

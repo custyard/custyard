@@ -94,10 +94,15 @@ defmodule CustyardWeb.WebhookController do
   # a payload shape the adapter never anticipated is contained to the same 422
   # instead of escaping as a 500, and still reaches Sentry as the adapter bug
   # it is.
+  defp handle_payload(conn, %InboundRoute{source: :lettermint}, _adapter, %{"sandbox" => true}) do
+    json(conn, %{status: "ignored", reason: "sandbox"})
+  end
+
   defp handle_payload(conn, route, adapter, params) do
     case normalize(route, adapter, params) do
       {:ok, normalized} ->
-        dispatch_normalized(conn, route, normalized)
+        observation = Custyard.EmailSetup.inbound_observation(route, normalized, params)
+        dispatch_normalized(conn, route, normalized, observation)
 
       # Slack URL verification handshake
       {:bypass, %{type: "url_verification", challenge: challenge}} ->
@@ -132,9 +137,10 @@ defmodule CustyardWeb.WebhookController do
       {:error, Exception.message(error)}
   end
 
-  defp dispatch_normalized(conn, route, normalized) do
+  defp dispatch_normalized(conn, route, normalized, observation) do
     case Dispatcher.dispatch(route, normalized) do
       {:ok, conversation} ->
+        Custyard.EmailSetup.record_inbound(route, conversation, normalized, observation)
         json(conn, %{status: "ok", conversation_id: conversation.id})
 
       # Channel resolution or triage decided the delivery must not become a
@@ -199,9 +205,16 @@ defmodule CustyardWeb.WebhookController do
   defp verify_webhook(adapter, conn, route) do
     source = adapter.source_name()
 
-    case get_webhook_secret(source, route) do
-      nil -> verify_without_secret(source)
-      secret -> verify_with_secret(conn, source, secret)
+    if source == :lettermint and is_binary(route.webhook_secret_ciphertext) do
+      case Custyard.EmailSetup.inbound_secret(route) do
+        {:ok, secret} -> verify_with_secret(conn, source, secret)
+        _ -> {:error, "unauthorized"}
+      end
+    else
+      case get_webhook_secret(source, route) do
+        nil -> verify_without_secret(source)
+        secret -> verify_with_secret(conn, source, secret)
+      end
     end
   end
 
@@ -288,9 +301,15 @@ defmodule CustyardWeb.WebhookController do
     case Application.get_env(:custyard, :webhook_secrets, %{}) |> Map.get(source) do
       # Per-webhook secrets are keyed by the callback token, so two provider
       # accounts of the same type can rotate their credentials independently.
-      secrets when is_map(secrets) -> Map.get(secrets, route.callback_token)
-      secret when is_binary(secret) -> secret
-      _ -> nil
+      secrets when is_map(secrets) ->
+        Map.get(secrets, route.callback_token)
+
+      secret when is_binary(secret) ->
+        if source != :lettermint or Custyard.EmailSetup.default_tenant?(route.tenant_id),
+          do: secret
+
+      _ ->
+        nil
     end
   end
 end

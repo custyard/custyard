@@ -80,23 +80,27 @@ defmodule Custyard.Email.ImapPoll do
         position(client, conn, channel, mailbox)
       end)
 
-    case result do
-      {:ok, position} ->
-        record(
-          channel,
-          Map.merge(position, %{
-            imap_last_polled_at: now(),
-            imap_last_error: nil,
-            imap_consecutive_failures: 0,
-            imap_auth_failures: 0,
-            imap_auth_failed_at: nil
-          })
-        )
+    persist = Keyword.get(opts, :persist, fn fun -> fun.() end)
 
-      {:error, reason} ->
-        record_failure(channel, reason)
-        {:error, error_code(reason)}
-    end
+    persist.(fn ->
+      case result do
+        {:ok, position} ->
+          record(
+            channel,
+            Map.merge(position, %{
+              imap_last_polled_at: now(),
+              imap_last_error: nil,
+              imap_consecutive_failures: 0,
+              imap_auth_failures: 0,
+              imap_auth_failed_at: nil
+            })
+          )
+
+        {:error, reason} ->
+          record_failure(channel, reason)
+          {:error, error_code(reason)}
+      end
+    end)
   end
 
   @doc """
