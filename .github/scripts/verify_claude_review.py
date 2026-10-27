@@ -68,10 +68,14 @@ def validate_execution(messages):
         raise IncompleteReview("Claude returned no valid structured review result.")
     if report.get("review_completed") is not True or report["blocking_reason"] != "none":
         raise IncompleteReview("Claude reported an incomplete review: " + report["blocking_reason"] + ".")
+    files = report.get("reviewed_files")
+    if (not isinstance(files, list) or not files or not all(isinstance(f, str) for f in files)
+            or len(files) != len(set(files))):
+        raise IncompleteReview("Claude returned no valid reviewed-file coverage.")
     return report
 
 
-def validate_publication(event, run_id, attempt, fetch):
+def validate_publication(event, run_id, attempt, fetch, reviewed_files):
     repository = event["repository"]["full_name"]
     number = event["pull_request"]["number"]
     expected_head = event["pull_request"]["head"]["sha"]
@@ -80,6 +84,15 @@ def validate_publication(event, run_id, attempt, fetch):
         raise IncompleteReview("The PR head changed during the review; review the new head.")
     if current["state"] != "open" or current["draft"]:
         raise IncompleteReview("The PR is no longer open and ready for review.")
+
+    file_pages = fetch(f"repos/{repository}/pulls/{number}/files?per_page=100", paginate=True)
+    changed = {file["filename"] for page in file_pages for file in page}
+    reviewed = set(reviewed_files)
+    if reviewed != changed:
+        raise IncompleteReview(
+            f"Review coverage is incomplete: {len(changed & reviewed)} of {len(changed)} changed files; "
+            f"{len(changed - reviewed)} missing and {len(reviewed - changed)} unexpected paths."
+        )
 
     marker = f"<!-- claude-review:{expected_head}:{run_id}:{attempt} -->"
     pages = fetch(f"repos/{repository}/issues/{number}/comments?per_page=100", paginate=True)
@@ -115,7 +128,8 @@ def main():
         if report.get("reviewed_head_sha") != event["pull_request"]["head"]["sha"]:
             raise IncompleteReview("Claude's structured result refers to a different PR head.")
         url = validate_publication(
-            event, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"], github_fetch
+            event, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"], github_fetch,
+            report["reviewed_files"],
         )
         message = f"Claude review completed and published: {url}"
         status = 0
