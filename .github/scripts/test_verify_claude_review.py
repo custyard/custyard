@@ -16,7 +16,8 @@ class ReviewCompletionTest(unittest.TestCase):
     def setUp(self):
         self.result = {"type": "result", "subtype": "success", "is_error": False, "permission_denials": []}
         self.result["structured_output"] = {
-            "review_completed": True, "reviewed_head_sha": "abc123", "blocking_reason": "none"
+            "review_completed": True, "reviewed_head_sha": "abc123", "blocking_reason": "none",
+            "reviewed_files": ["lib/example.ex"],
         }
         self.event = {"repository": {"full_name": "custyard/custyard"},
                       "pull_request": {"number": 45, "head": {"sha": "abc123"}}}
@@ -27,13 +28,15 @@ class ReviewCompletionTest(unittest.TestCase):
                         "html_url": "https://github.com/custyard/custyard/pull/45#issuecomment-1"}
 
     def fetch(self, endpoint, paginate=False):
+        if "/files?" in endpoint:
+            return [[], [{"filename": "lib/example.ex"}]]
         if paginate:
             return [[], [self.comment]]
         return self.current
 
     def test_complete_execution_and_published_review(self):
         validate_execution([self.result])
-        self.assertEqual(validate_publication(self.event, "100", "1", self.fetch), self.comment["html_url"])
+        self.assertEqual(validate_publication(self.event, "100", "1", self.fetch, ["lib/example.ex"]), self.comment["html_url"])
 
     def test_missing_final_result_fails(self):
         for messages in (None, [], [{"type": "assistant"}], [self.result, self.result]):
@@ -72,6 +75,25 @@ class ReviewCompletionTest(unittest.TestCase):
         with self.assertRaises(IncompleteReview):
             validate_execution([{**self.result, "structured_output": report}])
 
+    def test_invalid_reviewed_file_reports_fail(self):
+        for files in (None, [], "lib/example.ex", [1], ["lib/example.ex", "lib/example.ex"]):
+            report = {**self.result["structured_output"], "reviewed_files": files}
+            with self.subTest(files=files), self.assertRaises(IncompleteReview):
+                validate_execution([{**self.result, "structured_output": report}])
+
+    def test_partial_review_cannot_pass_with_a_valid_completion_comment(self):
+        def fetch(endpoint, paginate=False):
+            if "/files?" in endpoint:
+                return [[{"filename": "lib/example.ex"}], [{"filename": "priv/repo/migrations/example.exs"}]]
+            return self.fetch(endpoint, paginate)
+
+        with self.assertRaisesRegex(IncompleteReview, "1 of 2 changed files"):
+            validate_publication(self.event, "100", "1", fetch, ["lib/example.ex"])
+
+    def test_unexpected_reviewed_paths_fail(self):
+        with self.assertRaisesRegex(IncompleteReview, "unexpected paths"):
+            validate_publication(self.event, "100", "1", self.fetch, ["lib/example.ex", "other.ex"])
+
     def test_command_diagnostics_only_publish_known_command_families(self):
         for command, expected in (
             ("gh api repos/private/repository/pulls/45 -H 'Authorization: SECRET'", "gh api"),
@@ -89,28 +111,28 @@ class ReviewCompletionTest(unittest.TestCase):
         for replacement in ("def456:100:1", "abc123:99:1", "abc123:100:2"):
             self.comment["body"] = f"A previous review completed with no issues found.\n<!-- claude-review:{replacement} -->"
             with self.subTest(replacement=replacement), self.assertRaises(IncompleteReview):
-                validate_publication(self.event, "100", "1", self.fetch)
+                validate_publication(self.event, "100", "1", self.fetch, ["lib/example.ex"])
 
     def test_other_author_cannot_supply_completion(self):
         self.comment["user"]["login"] = "someone-else"
         with self.assertRaises(IncompleteReview):
-            validate_publication(self.event, "100", "1", self.fetch)
+            validate_publication(self.event, "100", "1", self.fetch, ["lib/example.ex"])
 
     def test_empty_summary_does_not_count(self):
         self.comment["body"] = "<!-- claude-review:abc123:100:1 -->"
         with self.assertRaises(IncompleteReview):
-            validate_publication(self.event, "100", "1", self.fetch)
+            validate_publication(self.event, "100", "1", self.fetch, ["lib/example.ex"])
 
     def test_head_changed_while_reviewing(self):
         self.current["head"]["sha"] = "def456"
         with self.assertRaises(IncompleteReview):
-            validate_publication(self.event, "100", "1", self.fetch)
+            validate_publication(self.event, "100", "1", self.fetch, ["lib/example.ex"])
 
     def test_closed_or_draft_pr_does_not_count(self):
         for changes in ({"state": "closed"}, {"draft": True}):
             self.current = {**self.current, **changes}
             with self.subTest(changes=changes), self.assertRaises(IncompleteReview):
-                validate_publication(self.event, "100", "1", self.fetch)
+                validate_publication(self.event, "100", "1", self.fetch, ["lib/example.ex"])
 
     def test_missing_execution_fails_visibly(self):
         with tempfile.TemporaryDirectory() as directory:
