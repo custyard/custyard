@@ -280,7 +280,7 @@ defmodule Custyard.Tenants do
     suffix = "." <> app_host()
 
     if String.ends_with?(host, suffix) do
-      slug = String.trim_trailing(host, suffix)
+      slug = String.replace_suffix(host, suffix, "")
       if not String.contains?(slug, "."), do: Repo.get_by(Tenant, slug: slug)
     end
   end

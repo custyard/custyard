@@ -47,4 +47,12 @@ defmodule Custyard.TenantHostTest do
                custom_domain: org.custom_domain
              })
   end
+
+  test "tenant subdomain resolution removes only one instance-host suffix" do
+    {:ok, tenant} = Tenants.create_tenant(%{name: "Exact host", slug: "exact-host"})
+    host = Tenants.host(tenant)
+    assert Tenants.resolve_host(host).id == tenant.id
+    refute Tenants.resolve_host(host <> "." <> Tenants.app_host())
+    refute Tenants.resolve_host("nested." <> host)
+  end
 end

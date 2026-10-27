@@ -4,7 +4,8 @@ defmodule CustyardWeb.OriginValidator do
 
   Allows connections from:
   1. The configured PHX_HOST
-  2. Any organization's custom_domain from the database
+  2. A configured tenant subdomain or custom domain
+  3. Any organization's custom_domain from the database
 
   This enables custom domain portals to use LiveView WebSockets.
 
@@ -15,7 +16,7 @@ defmodule CustyardWeb.OriginValidator do
         longpoll: [check_origin: {CustyardWeb.OriginValidator, :check_origin?, []}]
   """
 
-  alias Custyard.{Organization, Repo}
+  alias Custyard.{Organization, Repo, Tenant, Tenants}
   import Ecto.Query
 
   @doc """
@@ -23,6 +24,7 @@ defmodule CustyardWeb.OriginValidator do
 
   Phoenix passes a URI struct and opts. Returns true if the origin matches:
   - The configured PHX_HOST (or localhost in dev/test)
+  - A configured tenant subdomain or custom domain
   - Any organization's custom_domain from the database
   """
   @spec check_origin?(URI.t(), keyword()) :: boolean()
@@ -72,7 +74,7 @@ defmodule CustyardWeb.OriginValidator do
   """
   @spec list_valid_origins() :: [String.t()]
   def list_valid_origins do
-    custom_domains = list_custom_domains()
+    custom_domains = list_custom_domains() ++ list_tenant_hosts()
     primary_host = primary_host()
 
     origins =
@@ -88,6 +90,7 @@ defmodule CustyardWeb.OriginValidator do
     else
       origins
     end
+    |> Enum.uniq()
   end
 
   # Check if the host is valid (either PHX_HOST or a custom domain)
@@ -101,6 +104,9 @@ defmodule CustyardWeb.OriginValidator do
 
       # Check against primary host
       host_lower == primary_host_lower() ->
+        true
+
+      tenant_host_exists?(host_lower) ->
         true
 
       # Check against custom domains in database
@@ -149,6 +155,21 @@ defmodule CustyardWeb.OriginValidator do
     Repo.one(query) == true
   rescue
     # Handle case where repo is not started
+    _ -> false
+  end
+
+  defp list_tenant_hosts do
+    Repo.all(Tenant)
+    |> Enum.flat_map(fn tenant ->
+      [tenant.slug <> "." <> Tenants.app_host(), Tenants.host(tenant)]
+    end)
+  rescue
+    _ -> []
+  end
+
+  defp tenant_host_exists?(host) do
+    match?(%Tenant{}, Tenants.resolve_host(host))
+  rescue
     _ -> false
   end
 end
