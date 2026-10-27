@@ -15,6 +15,9 @@ from verify_claude_review import (
 class ReviewCompletionTest(unittest.TestCase):
     def setUp(self):
         self.result = {"type": "result", "subtype": "success", "is_error": False, "permission_denials": []}
+        self.result["structured_output"] = {
+            "review_completed": True, "reviewed_head_sha": "abc123", "blocking_reason": "none"
+        }
         self.event = {"repository": {"full_name": "custyard/custyard"},
                       "pull_request": {"number": 45, "head": {"sha": "abc123"}}}
         self.current = {"head": {"sha": "abc123"}, "state": "open", "draft": False}
@@ -52,6 +55,22 @@ class ReviewCompletionTest(unittest.TestCase):
     def test_denial_count_also_fails(self):
         with self.assertRaises(IncompleteReview):
             validate_execution([{**self.result, "permission_denials_count": 1}])
+
+    def test_missing_or_invalid_structured_result_fails(self):
+        for report in (None, {}, {"review_completed": True, "blocking_reason": "SECRET_TOKEN"}):
+            with self.subTest(report=report), self.assertRaises(IncompleteReview) as error:
+                validate_execution([{**self.result, "structured_output": report}])
+            self.assertNotIn("SECRET_TOKEN", str(error.exception))
+
+    def test_explicit_incomplete_result_fails(self):
+        report = {"review_completed": False, "reviewed_head_sha": "abc123", "blocking_reason": "publication_failed"}
+        with self.assertRaisesRegex(IncompleteReview, "publication_failed"):
+            validate_execution([{**self.result, "structured_output": report}])
+
+    def test_completed_result_with_a_blocker_still_fails(self):
+        report = {**self.result["structured_output"], "blocking_reason": "review_not_finished"}
+        with self.assertRaises(IncompleteReview):
+            validate_execution([{**self.result, "structured_output": report}])
 
     def test_command_diagnostics_only_publish_known_command_families(self):
         for command, expected in (
@@ -103,6 +122,20 @@ class ReviewCompletionTest(unittest.TestCase):
                     self.assertEqual(main(), 1)
             self.assertIn("::error::Claude review incomplete", output.getvalue())
             self.assertIn("Claude review incomplete", summary.read_text())
+
+    def test_structured_result_must_match_the_event_head(self):
+        with tempfile.TemporaryDirectory() as directory:
+            execution = Path(directory) / "execution.json"
+            event = Path(directory) / "event.json"
+            execution.write_text(json.dumps([self.result]))
+            event.write_text(json.dumps({**self.event, "pull_request": {"head": {"sha": "def456"}}}))
+            with patch.dict(os.environ, {"CLAUDE_EXECUTION_FILE": str(execution),
+                                         "GITHUB_EVENT_PATH": str(event), "GITHUB_STEP_SUMMARY": ""}):
+                with patch("verify_claude_review.github_fetch") as fetch:
+                    with contextlib.redirect_stdout(io.StringIO()) as output:
+                        self.assertEqual(main(), 1)
+                    fetch.assert_not_called()
+            self.assertIn("different PR head", output.getvalue())
 
     def test_failure_summary_never_publishes_transcript_or_tool_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
