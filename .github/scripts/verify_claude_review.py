@@ -13,6 +13,12 @@ class IncompleteReview(Exception):
     pass
 
 
+BLOCKING_REASONS = {
+    "none", "permission_denied", "github_access", "usage_limit",
+    "review_not_finished", "publication_failed",
+}
+
+
 def denied_command_family(denial):
     """Expose only known command names, never arguments, paths or substitutions."""
     tool_input = denial.get("tool_input")
@@ -57,6 +63,13 @@ def validate_execution(messages):
             detail += f" Denied command families: {', '.join(commands)}."
         raise IncompleteReview("Claude encountered tool permission denials." + detail)
 
+    report = result.get("structured_output")
+    if not isinstance(report, dict) or report.get("blocking_reason") not in BLOCKING_REASONS:
+        raise IncompleteReview("Claude returned no valid structured review result.")
+    if report.get("review_completed") is not True or report["blocking_reason"] != "none":
+        raise IncompleteReview("Claude reported an incomplete review: " + report["blocking_reason"] + ".")
+    return report
+
 
 def validate_publication(event, run_id, attempt, fetch):
     repository = event["repository"]["full_name"]
@@ -97,8 +110,10 @@ def main():
         )
         if not Path(execution).is_file():
             raise IncompleteReview("Claude produced no execution output; the action was skipped or failed before starting.")
-        validate_execution(json.loads(Path(execution).read_text()))
+        report = validate_execution(json.loads(Path(execution).read_text()))
         event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+        if report.get("reviewed_head_sha") != event["pull_request"]["head"]["sha"]:
+            raise IncompleteReview("Claude's structured result refers to a different PR head.")
         url = validate_publication(
             event, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"], github_fetch
         )
