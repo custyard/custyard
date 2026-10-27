@@ -190,6 +190,21 @@ class BoundedReviewTest(unittest.TestCase):
             self.assertEqual(json.loads(raw)["files"][0]["patch_lines"], [marked])
             self.assertIn("TextProv", json.loads(raw)["provenance_note"])
 
+    def test_markdown_reading_view_keeps_exact_attribution_in_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.local_context(directory)
+            marked = "+H\U000E0100i\U000E0101 — 返信\U000E0102"
+            self.files[0].update(filename="README.md", patch=marked)
+            with patch.dict(os.environ, env), patch("verify_claude_review.github_fetch", side_effect=self.fetch):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    batch_command("plan")
+            root = Path(env["REVIEW_PLAN_DIR"])
+            view = json.loads((root / "shard-0.json").read_text(encoding="utf-8"))
+            manifest = json.loads((root / "manifest.json").read_text())
+            self.assertEqual(view["files"][0]["patch_lines"], ["+Hi — 返信\U000E0102"])
+            self.assertEqual(manifest["shards"][0]["files"][0]["patch"], marked)
+            self.assertEqual(self.files[0]["patch"], marked)
+
     def test_incomplete_review_explanation_is_retained_without_transcript(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.local_context(directory)
