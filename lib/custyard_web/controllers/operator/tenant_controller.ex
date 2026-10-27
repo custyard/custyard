@@ -10,7 +10,13 @@ defmodule CustyardWeb.Operator.TenantController do
               send_resp(conn, 404, "Not found")
 
             tenant ->
-              conn |> put_session(:selected_tenant_id, tenant.id) |> redirect(to: ~p"/operator")
+              if conn.assigns[:host_tenant] do
+                redirect(conn,
+                  external: CustyardWeb.Endpoint.url() <> "/operator/tenants?switch=required"
+                )
+              else
+                conn |> put_session(:selected_tenant_id, tenant.id) |> redirect(to: ~p"/operator")
+              end
           end
 
         _ ->

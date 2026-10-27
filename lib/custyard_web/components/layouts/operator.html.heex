@@ -286,7 +286,7 @@ inactive_class =
     >Tenant settings</.link>
     <.link
       :if={assigns[:is_super_admin]}
-      navigate={~p"/operator/tenants"}
+      href={CustyardWeb.Endpoint.url() <> ~p"/operator/tenants"}
       class="text-indigo-600 dark:text-indigo-400"
     >Switch tenant</.link>
   </div>
