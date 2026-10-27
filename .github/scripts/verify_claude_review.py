@@ -71,6 +71,8 @@ def main():
         execution = os.environ.get("CLAUDE_EXECUTION_FILE") or str(
             Path(os.environ["RUNNER_TEMP"]) / "claude-execution-output.json"
         )
+        if not Path(execution).is_file():
+            raise IncompleteReview("Claude produced no execution output; the action was skipped or failed before starting.")
         validate_execution(json.loads(Path(execution).read_text()))
         event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
         url = validate_publication(

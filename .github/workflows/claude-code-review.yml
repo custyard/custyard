@@ -35,6 +35,8 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
+        # Claude's app requires this workflow to match main. A workflow change
+        # intentionally fails the completion guard until merged and run on another PR.
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
