@@ -43,6 +43,12 @@ class BoundedReviewTest(unittest.TestCase):
         plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 4}, files)
         self.assertEqual([len(s["files"]) for s in plan["shards"]], [1, 1, 1, 1])
 
+    def test_patch_line_count_bounds_reader_input(self):
+        files = [{"filename": str(i), "patch": "short\n" * count}
+                 for i, count in enumerate([500, 400, 900, 1])]
+        plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 4}, files)
+        self.assertEqual([len(s["files"]) for s in plan["shards"]], [1, 1, 1, 1])
+
     def test_incomplete_api_file_list_cannot_become_a_plan(self):
         with self.assertRaises(IncompleteReview):
             build_plan(self.event, "100", "1", self.current, self.files[:2])
@@ -142,6 +148,21 @@ class BoundedReviewTest(unittest.TestCase):
             assigned = json.loads((Path(env["REVIEW_PLAN_DIR"]) / "shard-0.json").read_text())
             self.assertEqual(len(assigned["files"]), 15)
             self.assertNotIn("shards", assigned)
+            self.assertEqual(assigned["assigned_paths"], [f["filename"] for f in self.files[:15]])
+            self.assertEqual(assigned["files"][0]["patch_lines"], ["small"])
+
+    def test_multiline_patches_remain_readable_without_one_long_escaped_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.local_context(directory)
+            self.files[0]["patch"] = "@@ -1 +1 @@\n-old\n+new\n" * 100
+            with patch.dict(os.environ, env), patch("verify_claude_review.github_fetch", side_effect=self.fetch):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    batch_command("plan")
+            raw = (Path(env["REVIEW_PLAN_DIR"]) / "shard-0.json").read_text()
+            assigned = json.loads(raw)
+            self.assertEqual(assigned["files"][0]["patch_lines"], self.files[0]["patch"].splitlines())
+            self.assertLess(max(map(len, raw.splitlines())), 200)
+            self.assertLess(raw.index('"assigned_paths"'), raw.index('"patch_lines"'))
 
     def test_failed_shard_retains_no_raw_output_or_secrets(self):
         with tempfile.TemporaryDirectory() as directory:

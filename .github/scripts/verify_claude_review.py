@@ -164,14 +164,16 @@ def build_plan(event, run_id, attempt, current, files):
     paths = [f["filename"] for f in files]
     if len(paths) != len(set(paths)):
         raise IncompleteReview("The changed-file list contains duplicates.")
-    batches, batch, size = [], [], 0
+    batches, batch, size, lines = [], [], 0, 0
     for file in files:
         patch_size = len(file.get("patch") or "")
-        if batch and (len(batch) >= 15 or size + patch_size > 100_000):
+        patch_lines = len((file.get("patch") or "").splitlines())
+        if batch and (len(batch) >= 15 or size + patch_size > 50_000 or lines + patch_lines > 800):
             batches.append(batch)
-            batch, size = [], 0
+            batch, size, lines = [], 0, 0
         batch.append(file)
         size += patch_size
+        lines += patch_lines
     if batch:
         batches.append(batch)
     return {
@@ -254,7 +256,17 @@ def batch_command(mode):
         (plan_dir / "manifest.json").write_text(json.dumps(plan))
         for shard in plan["shards"]:
             data = {k: plan[k] for k in ("repository", "number", "head", "title", "description")}
-            (plan_dir / f"shard-{shard['id']}.json").write_text(json.dumps({**data, **shard}))
+            # Read truncates long lines. Keep paths visible before the patches and
+            # serialize each diff line separately so the reviewer can read them.
+            assigned = {
+                **data, "id": shard["id"],
+                "assigned_paths": [f["filename"] for f in shard["files"]],
+                "files": [{"filename": f["filename"], "status": f.get("status"),
+                           "patch_available": bool(f.get("patch")),
+                           "patch_lines": (f.get("patch") or "").splitlines()}
+                          for f in shard["files"]],
+            }
+            (plan_dir / f"shard-{shard['id']}.json").write_text(json.dumps(assigned, indent=2))
         matrix = {"include": [{"shard": s["id"]} for s in plan["shards"]]}
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write("matrix=" + json.dumps(matrix) + "\n")
