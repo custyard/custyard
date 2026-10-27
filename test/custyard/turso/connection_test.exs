@@ -165,6 +165,32 @@ defmodule Custyard.Turso.ConnectionTest do
     assert Repo.all(from i in Item, select: i.name) == ["committed"]
   end
 
+  test "migration rebuild disables foreign keys on the BEGIN stream without deleting children" do
+    Repo.query!("INSERT INTO parents (id) VALUES (1)")
+    Repo.query!("INSERT INTO children (id, parent_id) VALUES (1, 1)")
+
+    assert {:ok, :preserved} =
+             Repo.transaction(
+               fn ->
+                 assert %{rows: [[0]]} = Repo.query!("PRAGMA foreign_keys")
+                 Repo.query!("CREATE TABLE parents_rebuilt (id INTEGER PRIMARY KEY)")
+                 Repo.query!("INSERT INTO parents_rebuilt SELECT * FROM parents")
+                 Repo.query!("DROP TABLE parents")
+                 Repo.query!("ALTER TABLE parents_rebuilt RENAME TO parents")
+                 assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
+                 assert %{rows: [[1, 1]]} = Repo.query!("SELECT id, parent_id FROM children")
+                 :preserved
+               end,
+               migration_foreign_keys: :off
+             )
+
+    assert %{rows: [[1]]} = Repo.query!("PRAGMA foreign_keys")
+
+    assert_raise Exqlite.Error, ~r/^FOREIGN KEY constraint failed/, fn ->
+      Repo.query!("INSERT INTO children (id, parent_id) VALUES (2, 999)")
+    end
+  end
+
   # Ecto aborts the whole transaction when a nested one rolls back; the SQL
   # sandbox is what nests with savepoints, through these callbacks.
   test "savepoints roll back inside a transaction", %{url: url} do
