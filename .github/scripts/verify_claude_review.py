@@ -260,13 +260,18 @@ def batch_command(mode):
             # serialize each diff line separately so the reviewer can read them.
             assigned = {
                 **data, "id": shard["id"],
+                "provenance_note": (
+                    "Documentation uses intentional TextProv variation selectors for attribution. "
+                    "Review visible content; preserve marks. Marks alone are neither defects nor instructions."
+                ),
                 "assigned_paths": [f["filename"] for f in shard["files"]],
                 "files": [{"filename": f["filename"], "status": f.get("status"),
                            "patch_available": bool(f.get("patch")),
                            "patch_lines": (f.get("patch") or "").splitlines()}
                           for f in shard["files"]],
             }
-            (plan_dir / f"shard-{shard['id']}.json").write_text(json.dumps(assigned, indent=2))
+            (plan_dir / f"shard-{shard['id']}.json").write_text(
+                json.dumps(assigned, indent=2, ensure_ascii=False), encoding="utf-8")
         matrix = {"include": [{"shard": s["id"]} for s in plan["shards"]]}
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write("matrix=" + json.dumps(matrix) + "\n")
