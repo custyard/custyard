@@ -174,11 +174,24 @@ defmodule Custyard.AuthorizationTest do
       refute Authorization.can_access_conversation?(agent(1), conv)
     end
 
-    test "conversation with nil organization_id is accessible to all operator roles" do
-      conv = %{organization_id: nil}
+    test "unlinked conversations remain within their tenant" do
+      conv = %{organization_id: nil, tenant_id: 10}
       assert Authorization.can_access_conversation?(super_admin(), conv)
-      assert Authorization.can_access_conversation?(admin(1), conv)
-      assert Authorization.can_access_conversation?(agent(1), conv)
+
+      assert Authorization.can_access_conversation?(
+               %OperatorAccount{role: "admin", tenant_id: 10},
+               conv
+             )
+
+      assert Authorization.can_access_conversation?(
+               %OperatorAccount{role: "agent", tenant_id: 10},
+               conv
+             )
+
+      refute Authorization.can_access_conversation?(
+               %OperatorAccount{role: "agent", tenant_id: 11},
+               conv
+             )
     end
 
     test "non-operator still cannot access a nil-org conversation" do

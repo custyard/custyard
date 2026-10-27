@@ -536,12 +536,21 @@ defmodule Custyard.Conversations do
   defp scope_conversation_to_operator(query, %OperatorAccount{role: "super_admin"}),
     do: query
 
+  defp scope_conversation_to_operator(query, %OperatorAccount{tenant_id: id}) when is_integer(id),
+    do: from(c in query, where: c.tenant_id == ^id)
+
   defp scope_conversation_to_operator(query, %OperatorAccount{organization_id: org_id})
-       when is_integer(org_id),
-       do: from(c in query, where: c.organization_id == ^org_id or is_nil(c.organization_id))
+       when is_integer(org_id) do
+    tenant_query =
+      from o in Custyard.Organization, where: o.id == ^org_id, select: o.tenant_id
+
+    from c in query,
+      where: c.tenant_id in subquery(tenant_query),
+      where: c.organization_id == ^org_id or is_nil(c.organization_id)
+  end
 
   defp scope_conversation_to_operator(query, %OperatorAccount{}),
-    do: from(c in query, where: is_nil(c.organization_id))
+    do: from(c in query, where: false)
 
   @doc """
   Create a message for a conversation, raising on failure.

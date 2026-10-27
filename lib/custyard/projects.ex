@@ -55,6 +55,10 @@ defmodule Custyard.Projects do
 
   defp scope_to_operator(query, %OperatorAccount{role: "super_admin"}), do: query
 
+  defp scope_to_operator(query, %OperatorAccount{tenant_id: tenant_id})
+       when is_integer(tenant_id),
+       do: from(p in query, where: p.tenant_id == ^tenant_id)
+
   defp scope_to_operator(query, %OperatorAccount{organization_id: org_id})
        when is_integer(org_id),
        do: from(p in query, where: p.organization_id == ^org_id)
@@ -180,7 +184,17 @@ defmodule Custyard.Projects do
     result =
       Repo.transaction(fn ->
         current_operator = OperatorAccess.lock_current(operator)
+
+        attrs =
+          if current_operator && current_operator.tenant_id do
+            Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+            |> Map.put("tenant_id", current_operator.tenant_id)
+          else
+            attrs
+          end
+
         changeset = Project.changeset(%Project{}, attrs)
+
         destination_id = Ecto.Changeset.get_field(changeset, :organization_id)
 
         if current_operator && Authorization.can_manage_project?(current_operator, destination_id) do

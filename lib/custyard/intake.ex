@@ -40,6 +40,9 @@ defmodule Custyard.Intake do
     Repo.all(from s in IntakeSource, order_by: [asc: s.key])
   end
 
+  def list_sources(tenant_id),
+    do: Repo.all(from s in IntakeSource, where: s.tenant_id == ^tenant_id, order_by: s.key)
+
   @doc """
   Get an intake source by id, regardless of enabled state. Returns `nil`
   when not found. Operator UI lookup - the public surface must use
@@ -82,10 +85,10 @@ defmodule Custyard.Intake do
   source, ordered by key — the deterministic choice until explicit pairing
   exists in the schema. Returns `nil` when no enabled active source exists.
   """
-  def first_enabled_active_source do
+  def first_enabled_active_source(tenant_id \\ 1) do
     Repo.one(
       from s in IntakeSource,
-        where: s.enabled == true and s.mode == :active,
+        where: s.enabled == true and s.mode == :active and s.tenant_id == ^tenant_id,
         order_by: [asc: s.key],
         limit: 1
     )
@@ -165,6 +168,7 @@ defmodule Custyard.Intake do
         state: :new,
         source: :public_intake,
         intake_source_key: source.key,
+        tenant_id: source.tenant_id,
         last_customer_action_at: now
       })
 
@@ -721,7 +725,10 @@ defmodule Custyard.Intake do
         # (a lost DB-side race returns the conversation untouched), so there
         # is no changeset error to roll back here.
         {:ok, conversation} =
-          link_conversation(conversation, SenderMatcher.resolve(prospect.email))
+          link_conversation(
+            conversation,
+            SenderMatcher.resolve_existing(prospect.email, conversation.tenant_id)
+          )
 
         conversation
 

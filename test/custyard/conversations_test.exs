@@ -4,10 +4,52 @@ defmodule Custyard.ConversationsTest do
 
   alias Custyard.Auth.Token
   alias Custyard.Email.Outbound
-  alias Custyard.{Conversations, Intake, Message, OperatorAccount, Prospect, Repo}
+  alias Custyard.{Conversations, Intake, Message, OperatorAccount, Prospect, Repo, Tenants}
 
   import Custyard.Factory
   import Swoosh.TestAssertions
+
+  test "legacy organization staff can mutate only their tenant's unlinked conversations" do
+    {:ok, foreign_tenant} =
+      Tenants.create_tenant(%{name: "Foreign tenant", slug: "foreign-conversation-scope"})
+
+    organization = insert_organization()
+
+    operator =
+      insert_operator_account(role: "agent", organization_id: organization.id, tenant_id: nil)
+
+    own = insert_conversation(source: :public_intake, organization_id: nil)
+
+    foreign =
+      insert_conversation(
+        source: :public_intake,
+        organization_id: nil,
+        tenant_id: foreign_tenant.id
+      )
+
+    assert {:ok, :allowed} =
+             Conversations.with_operator_access(own.id, operator, fn _, _ -> {:ok, :allowed} end)
+
+    assert {:error, :unauthorized} =
+             Conversations.with_operator_access(foreign.id, operator, fn _, _ ->
+               flunk("a foreign unlinked conversation must not reach the mutation")
+             end)
+  end
+
+  test "an organization removed before a mutation cannot grant access to unlinked intake" do
+    organization = insert_organization()
+
+    operator =
+      insert_operator_account(role: "agent", organization_id: organization.id, tenant_id: nil)
+
+    Repo.delete!(organization)
+    conversation = insert_conversation(source: :public_intake, organization_id: nil)
+
+    assert {:error, :unauthorized} =
+             Conversations.with_operator_access(conversation.id, operator, fn _, _ ->
+               flunk("an orphaned account must not reach the mutation")
+             end)
+  end
 
   test "operator reply and other writes reject a stale conversation after foreign linkage" do
     own = insert_organization()
@@ -696,8 +738,20 @@ defmodule Custyard.ConversationsTest do
 
     test "orders tasks by inserted_at" do
       conv = insert_conversation()
-      {:ok, first} = Conversations.create_task(%{title: "First", conversation_id: conv.id})
-      {:ok, second} = Conversations.create_task(%{title: "Second", conversation_id: conv.id})
+
+      {:ok, first} =
+        Conversations.create_task(%{
+          title: "First",
+          conversation_id: conv.id,
+          portal_visible: true
+        })
+
+      {:ok, second} =
+        Conversations.create_task(%{
+          title: "Second",
+          conversation_id: conv.id,
+          portal_visible: true
+        })
 
       results = Conversations.list_portal_visible_tasks(conv.id)
       ids = Enum.map(results, & &1.id)

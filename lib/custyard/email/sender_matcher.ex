@@ -2,20 +2,113 @@ defmodule Custyard.Email.SenderMatcher do
   @moduledoc """
   Match email sender to Contact/Organization.
 
-  Supports two matching modes:
-  1. `match/1` — domain-based matching (legacy, for unrouted webhooks)
-  2. `match_within_org/2` — route-context matching (preferred, uses org from inbound route)
-
-  Priority order for routing:
-  1. Route context (org/project from inbound route)
-  2. Contact match within route's org scope
-  3. Global contact match (catchall only — handles multi-org disambiguation)
-  4. Domain match (catchall, unknown sender)
+  Tenant-owned shared inboxes use `match_within_tenant/2` after header
+  threading. Explicit customer routes keep `match_within_org/2`; `match/1`
+  remains the legacy fallback for unrouted integrations.
   """
 
   require Logger
   alias Custyard.{Contact, EmailAddress, Organization, Repo}
   import Ecto.Query
+
+  # A mailbox at a shared provider identifies a person, not everyone using that
+  # provider. Deployments can extend this list without changing routing code.
+  @personal_domains ~w(gmail.com googlemail.com outlook.com hotmail.com live.com
+    yahoo.com yahoo.ca yahoo.co.uk aol.com icloud.com me.com mac.com proton.me
+    protonmail.com pm.me fastmail.com hey.com gmx.com gmx.de mail.com)
+
+  @doc "Resolve or create customer identity only inside the receiving tenant."
+  def match_within_tenant(from_address, tenant_id) when is_integer(tenant_id) do
+    case extract_email(from_address) do
+      email when is_binary(email) -> match_tenant_email(email, from_address, tenant_id)
+      _ -> unmatched_tenant_customer(tenant_id)
+    end
+  end
+
+  defp match_tenant_email(email, from_address, tenant_id) do
+    contacts =
+      from(c in Contact,
+        join: o in Organization,
+        on: c.organization_id == o.id,
+        where: o.tenant_id == ^tenant_id and c.email == ^email,
+        limit: 2,
+        preload: [organization: o]
+      )
+      |> Repo.all()
+
+    case contacts do
+      [contact] -> {:ok, contact.organization, contact}
+      [] -> create_tenant_customer(email, from_address, tenant_id)
+      # A participant can belong to several customers after joining their
+      # threads. New unthreaded mail then follows the sender's own business
+      # domain or personal-address identity, never an arbitrary contact.
+      _ambiguous -> create_tenant_customer(email, from_address, tenant_id)
+    end
+  end
+
+  defp unmatched_tenant_customer(tenant_id) do
+    attrs = %{
+      tenant_id: tenant_id,
+      intake_key: "unmatched",
+      domain: nil,
+      name: "Unmatched sender",
+      tier: :standard
+    }
+
+    existing = Repo.get_by(Organization, tenant_id: tenant_id, intake_key: attrs.intake_key)
+
+    with {:ok, organization} <- existing_or_insert_customer(existing, attrs),
+         do: {:ok, organization, nil}
+  end
+
+  defp create_tenant_customer(email, from_address, tenant_id) do
+    domain = extract_domain(email)
+
+    personal? =
+      domain in Application.get_env(:custyard, :personal_email_domains, @personal_domains)
+
+    key = if personal?, do: "email:" <> email, else: "domain:" <> domain
+
+    existing =
+      if personal?,
+        do: Repo.get_by(Organization, tenant_id: tenant_id, intake_key: key),
+        else: Repo.get_by(Organization, tenant_id: tenant_id, domain: domain)
+
+    attrs = %{
+      tenant_id: tenant_id,
+      intake_key: key,
+      domain: if(personal?, do: nil, else: domain),
+      name: if(personal?, do: extract_name(from_address) || email, else: domain),
+      tier: :standard
+    }
+
+    with {:ok, org} <- existing_or_insert_customer(existing, attrs),
+         {:ok, contact} <- create_contact(org, email, from_address) do
+      {:ok, org, contact}
+    end
+  end
+
+  defp existing_or_insert_customer(%Organization{} = org, _attrs), do: {:ok, org}
+
+  defp existing_or_insert_customer(nil, attrs) do
+    case %Organization{} |> Organization.changeset(attrs) |> Repo.insert() do
+      {:ok, org} ->
+        {:ok, org}
+
+      {:error, changeset} ->
+        # Concurrent first mail can create the same business/person. The unique
+        # tenant key selects the winner without creating a second organization.
+        winner =
+          Repo.get_by(Organization, tenant_id: attrs.tenant_id, intake_key: attrs.intake_key) ||
+            (attrs.domain &&
+               Repo.get_by(Organization, tenant_id: attrs.tenant_id, domain: attrs.domain))
+
+        case winner do
+          %Organization{} = org -> {:ok, org}
+          nil -> {:error, changeset}
+        end
+    end
+  end
 
   def match(from_address) do
     case extract_email(from_address) do
@@ -78,6 +171,40 @@ defmodule Custyard.Email.SenderMatcher do
     case extract_email(from_address) do
       nil -> :none
       email -> resolve_email(email)
+    end
+  end
+
+  @doc "Lookup-only contact/domain resolution inside a tenant; ambiguity never chooses arbitrarily."
+  def resolve_existing(from_address, tenant_id) when is_integer(tenant_id) do
+    case extract_email(from_address) do
+      nil ->
+        :none
+
+      email ->
+        contacts =
+          from(c in Contact,
+            join: o in Organization,
+            on: o.id == c.organization_id,
+            where: o.tenant_id == ^tenant_id and c.email == ^email,
+            where: is_nil(o.domain) or o.domain != "_unmatched_",
+            limit: 2
+          )
+          |> Repo.all()
+
+        case contacts do
+          [contact] -> {:contact, contact}
+          [] -> resolve_tenant_domain(email, tenant_id)
+          _ambiguous -> :none
+        end
+    end
+  end
+
+  def resolve_existing(_from_address, _tenant_id), do: :none
+
+  defp resolve_tenant_domain(email, tenant_id) do
+    case Repo.get_by(Organization, domain: extract_domain(email), tenant_id: tenant_id) do
+      nil -> :none
+      organization -> {:organization, organization}
     end
   end
 
@@ -264,8 +391,14 @@ defmodule Custyard.Email.SenderMatcher do
 
   defp extract_name(from) do
     case Regex.run(~r/^([^<]+)</, from) do
-      [_, name] -> String.trim(name)
-      nil -> nil
+      [_, name] ->
+        case String.trim(name) do
+          "" -> nil
+          name -> name
+        end
+
+      nil ->
+        nil
     end
   end
 
