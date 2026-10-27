@@ -49,6 +49,28 @@ defmodule Custyard.InboundChannelsTest do
   end
 
   describe "operator mutation boundaries" do
+    test "confirmation consumes verification captured after the channel was loaded" do
+      channel = insert_inbound_channel(state: :pending_verification)
+      operator = insert_operator_account()
+      {:ok, _} = InboundChannels.capture_verification(channel, %{code: "new-code"})
+
+      assert {:ok, confirmed} =
+               InboundChannels.confirm_verification(channel, operator: operator)
+
+      assert is_nil(confirmed.verification_code)
+      assert is_nil(Repo.reload!(channel).verification_captured_at)
+    end
+
+    test "revocation retires a previous token rotated after the channel was loaded" do
+      channel = insert_inbound_channel(state: :active)
+      operator = insert_operator_account()
+      {:ok, _} = InboundChannels.rotate_token(channel, operator: operator)
+
+      assert {:ok, revoked} = InboundChannels.revoke(channel, operator: operator)
+      assert is_nil(revoked.previous_ingress_token)
+      assert is_nil(Repo.reload!(channel).previous_token_expires_at)
+    end
+
     test "a rotated session cannot create, edit, transition, rotate or delete a channel" do
       route = insert_route()
       operator = insert_operator_account(role: "admin", organization_id: route.organization_id)

@@ -60,7 +60,8 @@ defmodule Custyard.EmailSetup do
           default_channel_id: id,
           last_reply_accepted_at: nil,
           last_reply_delivered_at: nil,
-          last_returning_reply_at: nil
+          last_returning_reply_at: nil,
+          reply_evidence_after_message_id: message_high_water_mark()
         )
         |> Ecto.Changeset.foreign_key_constraint(:default_channel_id)
         |> Repo.update()
@@ -153,7 +154,7 @@ defmodule Custyard.EmailSetup do
         |> Repo.update()
         |> case do
           {:ok, saved} ->
-            if changed, do: invalidate_receiving(tenant_id)
+            if changed, do: invalidate_identity(tenant_id)
             {:ok, Repo.reload!(saved)}
 
           error ->
@@ -384,6 +385,24 @@ defmodule Custyard.EmailSetup do
 
   @doc "Record a newly stored customer email, never triage notices or a repeated webhook."
   def record_inbound(route, conversation, normalized, %{eligible?: true, provider_delivery_id: id}) do
+    Repo.transaction(fn ->
+      Repo.update_all(
+        from(c in EmailConnection,
+          where: c.tenant_id == ^route.tenant_id,
+          update: [set: [updated_at: c.updated_at]]
+        ),
+        []
+      )
+
+      do_record_inbound(route, conversation, normalized, id)
+    end)
+
+    :ok
+  end
+
+  def record_inbound(_route, _conversation, _normalized, _observation), do: :ok
+
+  defp do_record_inbound(route, conversation, normalized, id) do
     with %{webhook_secret_ciphertext: secret} <- Repo.get(InboundRoute, route.id),
          true <- secret == route.webhook_secret_ciphertext,
          %{tenant_id: tenant_id, suspect: false} <-
@@ -426,8 +445,6 @@ defmodule Custyard.EmailSetup do
     :ok
   end
 
-  def record_inbound(_route, _conversation, _normalized, _observation), do: :ok
-
   defp returning_reply?(message, normalized) do
     references =
       [normalized[:in_reply_to], normalized[:references]]
@@ -438,7 +455,11 @@ defmodule Custyard.EmailSetup do
 
     Repo.exists?(
       from(m in Custyard.Message,
+        join: c in assoc(m, :conversation),
+        join: connection in EmailConnection,
+        on: connection.tenant_id == c.tenant_id,
         where: m.conversation_id == ^message.conversation_id and m.id < ^message.id,
+        where: m.id > connection.reply_evidence_after_message_id,
         where: m.message_id in ^references and m.source == :operator,
         where: m.delivery_status in [:sent, :delivered] and not is_nil(m.lettermint_message_id),
         where: is_nil(m.deleted_at) and m.is_internal_note == false,
@@ -464,10 +485,35 @@ defmodule Custyard.EmailSetup do
     :ok
   end
 
+  @doc "Reset roundtrip evidence when the sending identity or credentials change."
+  def invalidate_identity(tenant_id) do
+    Repo.transaction(fn ->
+      case do_ensure_connection(tenant_id) do
+        {:ok, _connection} -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
+
+      Repo.update_all(from(c in EmailConnection, where: c.tenant_id == ^tenant_id),
+        set: [
+          last_reply_accepted_at: nil,
+          last_reply_delivered_at: nil,
+          last_returning_reply_at: nil,
+          reply_evidence_after_message_id: message_high_water_mark()
+        ]
+      )
+
+      invalidate_receiving(tenant_id)
+    end)
+
+    :ok
+  end
+
+  defp message_high_water_mark, do: Repo.aggregate(Custyard.Message, :max, :id) || 0
+
   def record_reply_accepted(%{lettermint_message_id: id} = message)
       when is_binary(id) and id != "" do
     message = Repo.preload(message, :conversation)
-    record(message.conversation.tenant_id, :last_reply_accepted_at)
+    record_reply_evidence(message.conversation.tenant_id, :last_reply_accepted_at, message.id)
   end
 
   def record_reply_accepted(_message), do: :ok
@@ -484,7 +530,7 @@ defmodule Custyard.EmailSetup do
 
       if params["event"] == "message.delivered" and message.delivery_status == :delivered and
            primary?,
-         do: record(connection.tenant_id, :last_reply_delivered_at)
+         do: record_reply_evidence(connection.tenant_id, :last_reply_delivered_at, message.id)
     end
 
     :ok
@@ -516,6 +562,20 @@ defmodule Custyard.EmailSetup do
   end
 
   def legacy_status_allowed?(_), do: true
+
+  defp record_reply_evidence(nil, _field, _message_id), do: :ok
+
+  defp record_reply_evidence(tenant_id, field, message_id) do
+    Repo.update_all(
+      from(c in EmailConnection,
+        where: c.tenant_id == ^tenant_id and c.reply_evidence_after_message_id < ^message_id
+      ),
+      set: [{field, now()}]
+    )
+
+    broadcast(tenant_id)
+    :ok
+  end
 
   defp record(nil, _field), do: :ok
 

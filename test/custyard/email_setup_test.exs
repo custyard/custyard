@@ -242,6 +242,31 @@ defmodule Custyard.EmailSetupTest do
     assert {:ok, %{project_id: "project-1"}} = save(c)
   end
 
+  test "changing a legacy sender records the evidence boundary before the wizard is opened", c do
+    channel = reply_channel(c.tenant.id, "legacy-support@example.com")
+    customer = insert_organization(tenant_id: c.tenant.id)
+    conversation = insert_conversation(organization_id: customer.id)
+
+    old_reply =
+      insert_message(
+        conversation_id: conversation.id,
+        source: :operator,
+        delivery_status: :sent,
+        lettermint_message_id: "old-legacy-reply"
+      )
+
+    assert is_nil(EmailSetup.connection(c.tenant.id))
+
+    assert {:ok, _} =
+             Custyard.InboundChannels.update_channel(channel, %{reply_from: :ingress_address},
+               operator: c.admin
+             )
+
+    assert EmailSetup.connection(c.tenant.id).reply_evidence_after_message_id >= old_reply.id
+    EmailSetup.record_reply_accepted(old_reply)
+    refute EmailSetup.summary(c.tenant.id).sending?
+  end
+
   test "provider checks cannot restore success after credentials change in flight", c do
     save(c)
 

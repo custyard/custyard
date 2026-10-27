@@ -315,7 +315,7 @@ defmodule Custyard.InboundChannels do
       if Map.has_key?(changeset.changes, :attention_bonus), do: rescore(updated)
 
       if Map.has_key?(changeset.changes, :reply_from),
-        do: Custyard.EmailSetup.invalidate_receiving(updated.tenant_id)
+        do: Custyard.EmailSetup.invalidate_identity(updated.tenant_id)
 
       broadcast(updated)
       {:ok, updated}
@@ -334,10 +334,11 @@ defmodule Custyard.InboundChannels do
   def confirm_verification(channel, opts \\ [])
 
   def confirm_verification(%InboundChannel{state: :pending_verification} = channel, opts) do
-    channel
-    |> InboundChannel.state_changeset(:awaiting_first_message, %{verified_at: now()})
-    |> Ecto.Changeset.merge(InboundChannel.clear_verification_changeset(channel))
-    |> transition(channel, opts)
+    transition(channel, opts, fn current ->
+      current
+      |> InboundChannel.state_changeset(:awaiting_first_message, %{verified_at: now()})
+      |> Ecto.Changeset.merge(InboundChannel.clear_verification_changeset(current))
+    end)
   end
 
   def confirm_verification(%InboundChannel{} = channel, _opts),
@@ -436,9 +437,7 @@ defmodule Custyard.InboundChannels do
 
   @doc "Pause: deliveries are logged to the rejection log instead of becoming conversations."
   def pause(%InboundChannel{} = channel, opts \\ []) do
-    channel
-    |> InboundChannel.state_changeset(:paused, %{paused_at: now()})
-    |> transition(channel, opts)
+    transition(channel, opts, &InboundChannel.state_changeset(&1, :paused, %{paused_at: now()}))
   end
 
   @doc """
@@ -449,26 +448,27 @@ defmodule Custyard.InboundChannels do
   def resume(channel, opts \\ [])
 
   def resume(%InboundChannel{state: :paused} = channel, opts) do
-    target =
-      cond do
-        channel.last_received_at -> :active
-        channel.verified_at -> :awaiting_first_message
-        true -> :pending_verification
-      end
+    transition(channel, opts, fn current ->
+      target =
+        cond do
+          current.last_received_at -> :active
+          current.verified_at -> :awaiting_first_message
+          true -> :pending_verification
+        end
 
-    channel
-    |> InboundChannel.state_changeset(target, %{paused_at: nil})
-    |> transition(channel, opts)
+      InboundChannel.state_changeset(current, target, %{paused_at: nil})
+    end)
   end
 
   def resume(%InboundChannel{} = channel, _opts), do: {:error, invalid_state(channel, :resume)}
 
   @doc "Revoke: every token stops matching immediately. Terminal."
   def revoke(%InboundChannel{} = channel, opts \\ []) do
-    channel
-    |> InboundChannel.state_changeset(:revoked, %{revoked_at: now()})
-    |> Ecto.Changeset.merge(InboundChannel.retire_previous_token_changeset(channel))
-    |> transition(channel, opts)
+    transition(channel, opts, fn current ->
+      current
+      |> InboundChannel.state_changeset(:revoked, %{revoked_at: now()})
+      |> Ecto.Changeset.merge(InboundChannel.retire_previous_token_changeset(current))
+    end)
   end
 
   @doc """
@@ -528,8 +528,20 @@ defmodule Custyard.InboundChannels do
     end
   end
 
-  defp transition(changeset, channel, opts) do
-    operator_mutation(channel, opts, fn _ -> do_transition(changeset, channel, opts) end)
+  defp transition(channel, opts, build_changeset) do
+    operator_mutation(channel, opts, fn _current ->
+      current = Repo.get(InboundChannel, channel.id)
+
+      if current && current.state == channel.state do
+        current = keep_preloads(current, channel)
+        do_transition(build_changeset.(current), current, opts)
+      else
+        {:error,
+         channel
+         |> Ecto.Changeset.change()
+         |> Ecto.Changeset.add_error(:state, "changed since it was loaded; reload and retry")}
+      end
+    end)
   end
 
   defp do_transition(changeset, channel, opts) do
@@ -709,7 +721,12 @@ defmodule Custyard.InboundChannels do
   defp operator_mutation(resource, opts, fun) do
     case Keyword.fetch(opts, :operator) do
       :error ->
-        fun.(resource)
+        Repo.transaction(fn ->
+          case fun.(resource) do
+            {:ok, value} -> value
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
 
       {:ok, operator} ->
         Repo.transaction(fn ->

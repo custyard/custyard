@@ -139,6 +139,86 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     assert is_nil(EmailSetup.connection(c.tenant.id).latest_received_conversation_id)
   end
 
+  test "a changed sender requires a new send and ignores delayed evidence for the old identity",
+       c do
+    path = "/api/webhook/route/#{c.route.callback_token}"
+
+    response =
+      signed_post(path, inbound_payload(c, "initial"), "route-secret") |> json_response(200)
+
+    conversation_id = response["conversation_id"]
+
+    old_reply =
+      insert_message(
+        conversation_id: conversation_id,
+        source: :operator,
+        message_id: "<old-identity@service.example>",
+        delivery_status: :delivered,
+        lettermint_message_id: "old-provider-reply"
+      )
+
+    EmailSetup.record_reply_accepted(old_reply)
+    old_connection = EmailSetup.connection(c.tenant.id)
+    delivered_event = %{"event" => "message.delivered", "sandbox" => false}
+    EmailSetup.record_status_event(old_connection, delivered_event, old_reply)
+
+    signed_post(
+      path,
+      inbound_payload(c, "old-return", %{"in-reply-to" => old_reply.message_id}),
+      "route-secret"
+    )
+    |> json_response(200)
+
+    assert EmailSetup.summary(c.tenant.id).complete?
+
+    assert {:ok, _} =
+             c.channel
+             |> Repo.reload!()
+             |> Custyard.InboundChannels.update_channel(%{reply_from: :ingress_address},
+               operator: c.admin
+             )
+
+    refute EmailSetup.summary(c.tenant.id).sending?
+    refute EmailSetup.summary(c.tenant.id).delivered?
+    refute EmailSetup.summary(c.tenant.id).returning?
+
+    EmailSetup.record_reply_accepted(old_reply)
+    EmailSetup.record_status_event(old_connection, delivered_event, old_reply)
+
+    signed_post(
+      path,
+      inbound_payload(c, "late-old-return", %{"in-reply-to" => old_reply.message_id}),
+      "route-secret"
+    )
+    |> json_response(200)
+
+    assert EmailSetup.summary(c.tenant.id).receiving?
+    refute EmailSetup.summary(c.tenant.id).sending?
+    refute EmailSetup.summary(c.tenant.id).delivered?
+    refute EmailSetup.summary(c.tenant.id).returning?
+
+    new_reply =
+      insert_message(
+        conversation_id: conversation_id,
+        source: :operator,
+        message_id: "<new-identity@service.example>",
+        delivery_status: :delivered,
+        lettermint_message_id: "new-provider-reply"
+      )
+
+    EmailSetup.record_reply_accepted(new_reply)
+    EmailSetup.record_status_event(EmailSetup.connection(c.tenant.id), delivered_event, new_reply)
+
+    signed_post(
+      path,
+      inbound_payload(c, "new-return", %{"in-reply-to" => new_reply.message_id}),
+      "route-secret"
+    )
+    |> json_response(200)
+
+    assert EmailSetup.summary(c.tenant.id).complete?
+  end
+
   test "an unthreaded fresh message cannot prove the returning reply", c do
     path = "/api/webhook/route/#{c.route.callback_token}"
     signed_post(path, inbound_payload(c, "new"), "route-secret") |> json_response(200)

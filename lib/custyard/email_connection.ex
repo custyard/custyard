@@ -22,6 +22,7 @@ defmodule Custyard.EmailConnection do
     field :last_reply_accepted_at, :utc_datetime
     field :last_reply_delivered_at, :utc_datetime
     field :last_status_event_at, :utc_datetime
+    field :reply_evidence_after_message_id, :integer, default: 0
     timestamps(type: :utc_datetime)
   end
 
