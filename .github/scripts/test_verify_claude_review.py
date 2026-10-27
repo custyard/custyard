@@ -48,16 +48,16 @@ class ReviewCompletionTest(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(IncompleteReview):
                 validate_execution([{**self.result, **changes}])
 
-    def test_permission_denials_fail_without_exposing_inputs(self):
+    def test_recovered_permission_denials_are_recorded_without_exposing_inputs(self):
         denied = {**self.result, "permission_denials": [{"tool_name": "Bash", "tool_input": "SECRET_TOKEN"}]}
-        with self.assertRaises(IncompleteReview) as error:
-            validate_execution([denied])
-        self.assertIn("Bash", str(error.exception))
-        self.assertNotIn("SECRET_TOKEN", str(error.exception))
+        report, diagnostic = validate_execution([denied])
+        self.assertTrue(report["review_completed"])
+        self.assertIn("Bash", diagnostic)
+        self.assertNotIn("SECRET_TOKEN", diagnostic)
 
-    def test_denial_count_also_fails(self):
-        with self.assertRaises(IncompleteReview):
-            validate_execution([{**self.result, "permission_denials_count": 1}])
+    def test_denial_count_is_also_recorded(self):
+        _, diagnostic = validate_execution([{**self.result, "permission_denials_count": 1}])
+        self.assertIn("permission denials", diagnostic)
 
     def test_missing_or_invalid_structured_result_fails(self):
         for report in (None, {}, {"review_completed": True, "blocking_reason": "SECRET_TOKEN"}):
@@ -165,7 +165,7 @@ class ReviewCompletionTest(unittest.TestCase):
             summary = Path(directory) / "summary.md"
             denied = {**self.result, "permission_denials": [
                 {"tool_name": "Bash", "tool_input": "SECRET_TOKEN"}
-            ]}
+            ], "structured_output": {"review_completed": False, "blocking_reason": "permission_denied"}}
             execution.write_text(json.dumps([
                 {"type": "assistant", "message": "PRIVATE_TRANSCRIPT"}, denied
             ]))
@@ -178,6 +178,31 @@ class ReviewCompletionTest(unittest.TestCase):
             self.assertIn("Denied tools: Bash", public_output)
             self.assertNotIn("SECRET_TOKEN", public_output)
             self.assertNotIn("PRIVATE_TRANSCRIPT", public_output)
+
+    def test_complete_published_review_with_recovered_denials_warns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            execution = Path(directory) / "execution.json"
+            event = Path(directory) / "event.json"
+            summary = Path(directory) / "summary.md"
+            execution.write_text(json.dumps([{**self.result, "permission_denials_count": 1}]))
+            event.write_text(json.dumps(self.event))
+            output = io.StringIO()
+            with patch.dict(os.environ, {"CLAUDE_EXECUTION_FILE": str(execution),
+                                         "GITHUB_EVENT_PATH": str(event), "GITHUB_STEP_SUMMARY": str(summary),
+                                         "GITHUB_RUN_ID": "100", "GITHUB_RUN_ATTEMPT": "1"}):
+                with patch("verify_claude_review.github_fetch", side_effect=self.fetch):
+                    with contextlib.redirect_stdout(output):
+                        self.assertEqual(main(), 0)
+            self.assertIn("::warning::", output.getvalue())
+            self.assertIn("completed and published", output.getvalue())
+            self.assertIn("Tool warnings:", summary.read_text())
+
+    def test_recovered_denials_do_not_excuse_missing_publication(self):
+        self.comment["body"] = "No completion marker was posted."
+        _, diagnostic = validate_execution([{**self.result, "permission_denials_count": 1}])
+        self.assertTrue(diagnostic)
+        with self.assertRaises(IncompleteReview):
+            validate_publication(self.event, "100", "1", self.fetch, ["lib/example.ex"])
 
 
 if __name__ == "__main__":
