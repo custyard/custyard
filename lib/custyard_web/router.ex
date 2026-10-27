@@ -105,6 +105,7 @@ defmodule CustyardWeb.Router do
 
     # Provider delivery-status events for outbound replies (separate from inbound intake)
     post "/webhook/email-status/lettermint", EmailStatusController, :lettermint
+    post "/webhook/email-status/lettermint/:callback_token", EmailStatusController, :lettermint
   end
 
   # Operator routes - public (login/logout)

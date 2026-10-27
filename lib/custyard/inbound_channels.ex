@@ -51,6 +51,15 @@ defmodule Custyard.InboundChannels do
 
   # --- Reads ---
 
+  def list_for_tenant(tenant_id) when is_integer(tenant_id) do
+    Repo.all(
+      from c in InboundChannel,
+        where: c.tenant_id == ^tenant_id,
+        order_by: [asc: c.public_address],
+        preload: [:inbound_route, :project]
+    )
+  end
+
   @doc "Channels for an organization, newest first, with route and project preloaded."
   def list_for_organization(organization_id) when is_integer(organization_id) do
     from(c in InboundChannel,
@@ -175,12 +184,16 @@ defmodule Custyard.InboundChannels do
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
       |> Map.put("inbound_route_id", route.id)
       |> Map.put("organization_id", route.organization_id)
+      |> Map.put("tenant_id", route.tenant_id)
       |> Map.put("project_id", route.project_id)
 
     changeset = InboundChannel.changeset(%InboundChannel{}, attrs)
 
-    with {:ok, changeset} <- prepare_ingress(changeset, route),
-         {:ok, channel} <- Repo.insert(changeset) do
+    with :ok <- authorize_mutation(route, opts),
+         {:ok, changeset} <- prepare_ingress(changeset, route),
+         {:ok, channel} <- operator_mutation(route, opts, fn _ -> Repo.insert(changeset) end) do
+      Custyard.EmailSetup.invalidate_receiving(channel.tenant_id)
+
       audit(channel, :channel_created, opts, %{
         public_address: channel.public_address,
         provider: channel.provider,
@@ -211,7 +224,7 @@ defmodule Custyard.InboundChannels do
 
     domain = changeset |> Ecto.Changeset.get_field(:public_address) |> address_domain()
 
-    with :ok <- check_not_forwarding_domain(route.organization_id, domain),
+    with :ok <- check_not_forwarding_domain(route.tenant_id, domain),
          {:ok, route} <- ensure_custom_domain(route, domain) do
       {:ok, put_mx_state(changeset, route)}
     else
@@ -230,11 +243,11 @@ defmodule Custyard.InboundChannels do
     end
   end
 
-  defp check_not_forwarding_domain(organization_id, domain) do
+  defp check_not_forwarding_domain(tenant_id, domain) do
     forwarding_domain? =
       from(c in InboundChannel,
         where:
-          c.organization_id == ^organization_id and c.ingress_kind == :forward and
+          c.tenant_id == ^tenant_id and c.ingress_kind == :forward and
             c.state != :revoked,
         select: c.public_address
       )
@@ -284,16 +297,26 @@ defmodule Custyard.InboundChannels do
   channel's active conversations at once.
   """
   def update_channel(%InboundChannel{} = channel, attrs, opts \\ []) when is_map(attrs) do
+    operator_mutation(channel, opts, fn channel -> do_update_channel(channel, attrs, opts) end)
+  end
+
+  defp do_update_channel(channel, attrs, opts) do
     attrs =
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
-      |> Map.drop(~w(public_address ingress_kind))
+      |> Map.drop(
+        ~w(public_address ingress_kind inbound_route_id organization_id tenant_id project_id)
+      )
 
     changeset = InboundChannel.changeset(channel, attrs)
 
     with {:ok, updated} <- Repo.update(changeset) do
       audit(updated, :channel_updated, opts, %{changed: Map.keys(attrs)})
       if Map.has_key?(changeset.changes, :attention_bonus), do: rescore(updated)
+
+      if Map.has_key?(changeset.changes, :reply_from),
+        do: Custyard.EmailSetup.invalidate_receiving(updated.tenant_id)
+
       broadcast(updated)
       {:ok, updated}
     end
@@ -334,10 +357,22 @@ defmodule Custyard.InboundChannels do
   def check_mx(%InboundChannel{ingress_kind: :mx} = channel, opts) do
     route = Repo.get!(InboundRoute, channel.inbound_route_id)
 
-    with {:ok, _route, result} <- InboundRoutes.verify_custom_domain(route),
-         {:ok, channel} <- confirm_if_verified(channel, result, opts) do
-      {:ok, channel, result}
-    end
+    InboundRoutes.verify_custom_domain(route,
+      persist: fn persist ->
+        persist_check(channel, opts, fn current ->
+          current_route = Repo.get(InboundRoute, route.id)
+          fields = [:tenant_id, :lettermint_route_id, :lettermint_custom_domain]
+
+          if is_nil(current_route) or Map.take(current_route, fields) != Map.take(route, fields),
+            do: Repo.rollback(:stale_configuration)
+
+          with {:ok, _route, result} <- persist.(),
+               {:ok, updated} <- confirm_if_verified(current, result, opts) do
+            {:ok, updated, result}
+          end
+        end)
+      end
+    )
   end
 
   def check_mx(%InboundChannel{} = channel, _opts),
@@ -357,11 +392,17 @@ defmodule Custyard.InboundChannels do
 
   def connect_imap(%InboundChannel{ingress_kind: :imap, state: state} = channel, opts)
       when state in [:pending_verification, :awaiting_first_message, :active] do
-    with {:ok, established} <- ImapPoll.establish(channel, opts) do
-      if established.state == :pending_verification,
-        do: confirm_verification(established, opts),
-        else: {:ok, established}
+    persist = fn run ->
+      persist_check(channel, opts, fn _current ->
+        with {:ok, established} <- run.() do
+          if established.state == :pending_verification,
+            do: confirm_verification(established, opts),
+            else: {:ok, established}
+        end
+      end)
     end
+
+    ImapPoll.establish(channel, Keyword.put(opts, :persist, persist))
   end
 
   def connect_imap(%InboundChannel{} = channel, _opts),
@@ -444,12 +485,20 @@ defmodule Custyard.InboundChannels do
     do: {:error, invalid_state(channel, :rotate_token)}
 
   def rotate_token(%InboundChannel{} = channel, opts) do
+    operator_mutation(channel, opts, fn current -> do_rotate_token(current, opts) end)
+  end
+
+  defp do_rotate_token(%InboundChannel{state: :revoked} = channel, _opts),
+    do: {:error, invalid_state(channel, :rotate_token)}
+
+  defp do_rotate_token(channel, opts) do
     grace_hours = Keyword.get(opts, :grace_hours, @default_rotation_grace_hours)
     grace_until = DateTime.add(now(), grace_hours * 3600, :second)
 
     with {:ok, updated} <-
            channel |> InboundChannel.rotate_token_changeset(grace_until) |> Repo.update() do
       audit(updated, :channel_token_rotated, opts, %{grace_hours: grace_hours})
+      Custyard.EmailSetup.invalidate_receiving(updated.tenant_id)
       broadcast(updated)
       {:ok, updated}
     end
@@ -467,7 +516,12 @@ defmodule Custyard.InboundChannels do
 
   @doc "Delete a channel outright (admin). Prefer `revoke/2` for offboarding."
   def delete_channel(%InboundChannel{} = channel, opts \\ []) do
+    operator_mutation(channel, opts, fn current -> do_delete_channel(current, opts) end)
+  end
+
+  defp do_delete_channel(channel, opts) do
     with {:ok, deleted} <- Repo.delete(channel) do
+      Custyard.EmailSetup.invalidate_receiving(deleted.tenant_id)
       audit(deleted, :channel_deleted, opts, %{public_address: deleted.public_address})
       broadcast(deleted)
       {:ok, deleted}
@@ -475,9 +529,17 @@ defmodule Custyard.InboundChannels do
   end
 
   defp transition(changeset, channel, opts) do
+    operator_mutation(channel, opts, fn _ -> do_transition(changeset, channel, opts) end)
+  end
+
+  defp do_transition(changeset, channel, opts) do
     case update_in_state(changeset, channel) do
       {:ok, updated} ->
         audit(updated, :channel_state_changed, opts, %{from: channel.state, to: updated.state})
+
+        if updated.state in [:paused, :revoked],
+          do: Custyard.EmailSetup.invalidate_receiving(updated.tenant_id)
+
         broadcast(updated)
         {:ok, updated}
 
@@ -548,13 +610,21 @@ defmodule Custyard.InboundChannels do
   def check_sending_domain(%InboundChannel{} = channel, opts \\ []) do
     domain = InboundChannel.public_domain(channel)
 
-    with {:ok, domains} <- Client.client().list_domains(),
-         {:ok, status} <- domain_status(domains, domain),
-         {:ok, updated} <-
-           channel |> InboundChannel.sending_domain_changeset(status, now()) |> Repo.update() do
-      audit(updated, :channel_sending_domain_checked, opts, %{domain: domain, status: status})
-      broadcast(updated)
-      {:ok, updated}
+    configuration = Custyard.EmailSetup.management_config(channel.tenant_id)
+
+    with {:ok, domains} <- Client.call(:list_domains, [], channel.tenant_id),
+         {:ok, status} <- domain_status(domains, domain) do
+      persist_check(channel, opts, fn current ->
+        if Custyard.EmailSetup.management_config(channel.tenant_id) != configuration,
+          do: Repo.rollback(:stale_configuration)
+
+        with {:ok, updated} <-
+               current |> InboundChannel.sending_domain_changeset(status, now()) |> Repo.update() do
+          audit(updated, :channel_sending_domain_checked, opts, %{domain: domain, status: status})
+          broadcast(updated)
+          {:ok, updated}
+        end
+      end)
     end
   end
 
@@ -604,6 +674,121 @@ defmodule Custyard.InboundChannels do
   end
 
   defp domain_status(domains, _domain), do: {:error, {:unexpected_response, domains}}
+
+  # Network checks never hold a database transaction. Before recording results,
+  # reject revoked sessions and channels whose routing/credentials changed.
+  defp authorize_mutation(resource, opts) do
+    case Keyword.fetch(opts, :operator) do
+      :error ->
+        :ok
+
+      {:ok, operator} ->
+        if authorized_operator?(operator, resource),
+          do: :ok,
+          else: {:error, :unauthorized}
+    end
+  end
+
+  @doc "Check current channel-management scope and session before a component event."
+  def authorized_operator?(%Custyard.OperatorAccount{} = operator, resource) do
+    current = Repo.get(Custyard.OperatorAccount, operator.id)
+
+    current &&
+      if(is_nil(resource),
+        do: current.role in ["admin", "super_admin"],
+        else: check_manager?(current, resource)
+      ) &&
+      Custyard.OperatorAccount.session_claim_matches?(current, operator.session_claim)
+  end
+
+  def authorized_operator?(_, _), do: false
+
+  # Components have their own lifecycle hooks, so their parent LiveView's
+  # authorization hook cannot protect a channel write. Recheck actor and scope
+  # under the same lock used by removal, reassignment and session rotation.
+  defp operator_mutation(resource, opts, fun) do
+    case Keyword.fetch(opts, :operator) do
+      :error ->
+        fun.(resource)
+
+      {:ok, operator} ->
+        Repo.transaction(fn ->
+          current_operator = Custyard.OperatorAccess.lock_current(operator)
+          current = Repo.get(resource.__struct__, resource.id)
+          if is_nil(current), do: Repo.rollback(:stale_configuration)
+          authorize_current!(current_operator, operator, current)
+
+          case fun.(current) do
+            {:ok, value} -> value
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+    end
+  end
+
+  defp persist_check(channel, opts, fun) do
+    Repo.transaction(fn ->
+      authorize_check!(Keyword.get(opts, :operator), channel)
+
+      Repo.update_all(
+        from(c in InboundChannel,
+          where: c.id == ^channel.id,
+          update: [set: [updated_at: c.updated_at]]
+        ),
+        []
+      )
+
+      current = Repo.get(InboundChannel, channel.id)
+
+      fields = [
+        :tenant_id,
+        :organization_id,
+        :inbound_route_id,
+        :state,
+        :public_address,
+        :reply_from,
+        :imap_host,
+        :imap_port,
+        :imap_username,
+        :imap_password_ciphertext,
+        :imap_folder
+      ]
+
+      if is_nil(current) or Map.take(current, fields) != Map.take(channel, fields),
+        do: Repo.rollback(:stale_configuration)
+
+      fun.(current)
+    end)
+    |> case do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp authorize_check!(nil, _channel), do: :ok
+
+  defp authorize_check!(operator, channel) do
+    current = Custyard.OperatorAccess.lock_current(operator)
+    authorize_current!(current, operator, channel)
+  end
+
+  defp authorize_current!(current, operator, channel) do
+    unless current && check_manager?(current, channel) &&
+             Custyard.OperatorAccount.session_claim_matches?(current, operator.session_claim),
+           do: Repo.rollback(:unauthorized)
+  end
+
+  defp check_manager?(%{role: "super_admin"}, _), do: true
+
+  defp check_manager?(%{role: "admin", tenant_id: id}, %{tenant_id: id}) when is_integer(id),
+    do: true
+
+  defp check_manager?(%{role: "admin", tenant_id: nil, organization_id: id}, %{
+         organization_id: id
+       })
+       when is_integer(id), do: true
+
+  defp check_manager?(_, _), do: false
 
   # --- Routing (D2) ---
 
@@ -854,6 +1039,7 @@ defmodule Custyard.InboundChannels do
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
       |> Map.put("classification", classification)
+      |> Map.put("tenant_id", route.tenant_id)
       |> Map.put("inbound_route_id", route.id)
       |> Map.put("organization_id", route.organization_id)
       |> Map.update("subject", nil, &truncate(&1, 500))

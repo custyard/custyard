@@ -87,6 +87,22 @@ defmodule Custyard.Lettermint.HttpClientDomainsTest do
       refute_receive {:request, _, _, _}
     end
 
+    test "uses the tenant Team credential and selected project filter" do
+      respond_with(fn _ -> {200, Jason.encode!(%{"data" => [domain("allowed")]})} end)
+      config = Application.get_env(:custyard, :lettermint)
+
+      assert {:ok, [_]} =
+               HttpClient.list_domains(
+                 api_url: config[:api_url],
+                 team_token: "tenant-team-token",
+                 project_id: "project-1"
+               )
+
+      assert_receive {:request, "/domains", %{"filter" => %{"project" => "project-1"}}, headers}
+      assert {"authorization", "Bearer tenant-team-token"} in headers
+      refute Enum.any?(headers, fn {name, _} -> name == "x-lettermint-token" end)
+    end
+
     test "stops after five pages even when a cursor keeps coming back" do
       respond_with(fn cursor ->
         {200, Jason.encode!(%{"data" => [domain("d-#{cursor}")], "next_cursor" => "again"})}

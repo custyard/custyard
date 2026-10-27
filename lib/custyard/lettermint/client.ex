@@ -1,10 +1,11 @@
 defmodule Custyard.Lettermint.Client do
+  @environment Application.compile_env(:custyard, :env, :prod)
   @moduledoc """
   Behaviour for Lettermint API interactions.
 
-  Custyard owns the Lettermint integration — routes are created and deleted
-  programmatically when organizations and projects are managed. Operators
-  never see callback URLs or manage routes directly.
+  Tenant administrators import provider routes and bind manually created
+  webhooks through Email setup. Older organization provisioning APIs remain
+  available and use the owning tenant's Team credentials.
 
   Implementations:
   - `Custyard.Lettermint.HttpClient` — production HTTP client
@@ -99,5 +100,26 @@ defmodule Custyard.Lettermint.Client do
     :custyard
     |> Application.get_env(:lettermint, [])
     |> Keyword.fetch!(:client)
+  end
+
+  @doc "Call a management operation with the owning tenant's credentials."
+  def call(operation, args, tenant_id \\ nil) do
+    module = client()
+
+    cond do
+      is_nil(tenant_id) ->
+        apply(module, operation, args)
+
+      Application.get_env(:custyard, :env, @environment) in [:dev, :test] and
+          module not in [Custyard.Lettermint.HttpClient, Custyard.Lettermint.DisabledClient] ->
+        apply(module, operation, args)
+
+      true ->
+        with {:ok, config} <- Custyard.EmailSetup.management_config(tenant_id) do
+          if operation == :list_domains and is_nil(config[:project_id]),
+            do: {:error, :project_required},
+            else: apply(Custyard.Lettermint.HttpClient, operation, args ++ [config])
+        end
+    end
   end
 end

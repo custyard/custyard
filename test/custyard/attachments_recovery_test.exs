@@ -90,12 +90,21 @@ defmodule Custyard.Attachments.RecoveryTest do
     assert [%{state: :skipped, skip_reason: "disabled"}] = Repo.all(MessageAttachment)
   end
 
-  test "a message channel from another organization cannot supply recovery credentials", %{
+  test "a message channel from another tenant cannot supply recovery credentials", %{
     conversation: conv,
     message: message
   } do
-    other_org = insert_organization()
+    tenant =
+      %Custyard.Tenant{}
+      |> Custyard.Tenant.changeset(%{
+        name: "Other",
+        slug: "recovery-#{System.unique_integer([:positive])}"
+      })
+      |> Repo.insert!()
+
+    other_org = insert_organization(tenant_id: tenant.id)
     foreign_channel = insert_inbound_channel(organization_id: other_org.id)
+    foreign_channel = Repo.update!(Ecto.Changeset.change(foreign_channel, tenant_id: tenant.id))
 
     insert_inbound_route_webhook(
       inbound_route_id: foreign_channel.inbound_route_id,
@@ -110,6 +119,29 @@ defmodule Custyard.Attachments.RecoveryTest do
     assert {:error, :recovery_incomplete} = Recovery.recover(conv.id, client: Provider)
     refute_received {:requested_delivery, _, _}
     assert [%{skip_reason: "suspect"}] = Repo.all(MessageAttachment)
+  end
+
+  test "shared tenant inbox recovers using the real route webhook binding", %{
+    conversation: conv,
+    channel: channel,
+    payload: payload
+  } do
+    route = Repo.get!(Custyard.InboundRoute, channel.inbound_route_id)
+
+    Repo.update!(
+      Ecto.Changeset.change(route,
+        organization_id: nil,
+        lettermint_webhook_id: "bound-provider-webhook"
+      )
+    )
+
+    Repo.update!(Ecto.Changeset.change(channel, organization_id: nil))
+    Process.put({:delivery, "bound-provider-webhook", "delivery"}, {:ok, %{"payload" => payload}})
+    Conversations.set_suspect(conv, false)
+    assert :ok = Recovery.recover(conv.id, client: Provider)
+    assert_received {:requested_delivery, "bound-provider-webhook", "delivery"}
+    refute_received {:requested_delivery, "webhook", "delivery"}
+    assert [%{state: :fetched}] = Repo.all(MessageAttachment)
   end
 
   test "missing message channel does not fall back to the conversation route", %{
