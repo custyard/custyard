@@ -87,7 +87,27 @@ defmodule Custyard.StorageTest do
     end
   end
 
-  test "allows several machines when the database is remote" do
+  test "rejects a second machine when the database is remote, since files stay on the volume" do
+    error =
+      assert_raise RuntimeError, fn ->
+        Storage.validate_fly_storage!(
+          fly_app_name: "custyard",
+          repo_config: [url: "postgres://localhost/custyard"],
+          upload_dir: "/data/uploads",
+          attachment_dir: "/data/attachments",
+          mountinfo: @mounted,
+          machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
+        )
+      end
+
+    assert error.message =~
+             ~r/has 2 machines.*keeps\s+uploads and inbound attachments under \/data/s
+
+    assert error.message =~ ~r/Turso or PostgreSQL database does not lift the limit/
+    refute error.message =~ "SQLite"
+  end
+
+  test "allows one machine when the database is remote" do
     assert :ok ==
              Storage.validate_fly_storage!(
                fly_app_name: "custyard",
@@ -95,7 +115,7 @@ defmodule Custyard.StorageTest do
                upload_dir: "/data/uploads",
                attachment_dir: "/data/attachments",
                mountinfo: @mounted,
-               machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
+               machine_ids: @one_machine
              )
   end
 
@@ -110,8 +130,23 @@ defmodule Custyard.StorageTest do
                upload_dir: "/data/uploads",
                attachment_dir: "/data/attachments",
                mountinfo: @mounted,
-               machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
+               machine_ids: @one_machine
              )
+
+    error =
+      assert_raise RuntimeError, fn ->
+        Storage.validate_fly_storage!(
+          fly_app_name: "custyard",
+          repo_config: turso,
+          upload_dir: "/data/uploads",
+          attachment_dir: "/data/attachments",
+          mountinfo: @mounted,
+          machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
+        )
+      end
+
+    assert error.message =~ ~r/keeps\s+uploads and inbound attachments under \/data/
+    refute error.message =~ "SQLite"
 
     assert_raise RuntimeError, ~r/no mounted volume at \/data/, fn ->
       Storage.validate_fly_storage!(
@@ -135,6 +170,7 @@ defmodule Custyard.StorageTest do
         upload_dir: "/data/uploads",
         attachment_dir: "/data/attachments",
         mountinfo: @mounted,
+        machine_ids: @one_machine,
         sqlite_path: sqlite
       )
     end
