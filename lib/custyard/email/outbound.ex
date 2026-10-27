@@ -76,15 +76,25 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
-  @doc "A confirmed failure can be retried within the provider's 24-hour deduplication window."
+  @doc "Unattempted configuration failures can retry; provider attempts retain the 24-hour deduplication window."
   def retryable?(%Message{} = message) do
     message.source == :operator and message.delivery_status == :failed and
       message.delivery_failure_kind in [:rejected, :configuration] and
       message.delivery_error_code != "envelope_changed" and
-      match?(%DateTime{}, message.delivery_attempted_at) and
-      DateTime.diff(DateTime.utc_now(), message.delivery_attempted_at) < 86_400 and
+      retry_window_open?(message) and
       is_nil(message.deleted_at)
   end
+
+  defp retry_window_open?(%Message{
+         delivery_failure_kind: :configuration,
+         delivery_attempted_at: nil
+       }),
+       do: true
+
+  defp retry_window_open?(%Message{delivery_attempted_at: %DateTime{} = attempted_at}),
+    do: DateTime.diff(DateTime.utc_now(), attempted_at) < 86_400
+
+  defp retry_window_open?(_message), do: false
 
   @doc "Requeue a confirmed failed reply under current operator authorization. Unknown sends never retry blindly."
   def retry(%Message{} = message, operator) do
@@ -191,7 +201,32 @@ defmodule Custyard.Email.Outbound do
   defp delivery_recipient(_message, conversation), do: reply_recipient(conversation)
 
   defp deliver_claimed(message, email) do
-    case deliver_with_tenant_config(message, email) do
+    with {:ok, config} <- Custyard.EmailSetup.sending_config(message.conversation.tenant_id),
+         :ok <- validate_delivery_config(config),
+         {:ok, attempted} <- record_attempt(message) do
+      deliver_attempted(attempted, email, config)
+    else
+      {:error, reason} -> delivery_error(message, reason)
+    end
+  end
+
+  defp validate_delivery_config(config) do
+    config |> Keyword.fetch!(:adapter) |> then(& &1.validate_config(config))
+  rescue
+    _error -> {:error, :sending_not_configured}
+  end
+
+  defp record_attempt(message) do
+    message
+    |> Ecto.Changeset.change(
+      delivery_attempted_at:
+        message.delivery_attempted_at || DateTime.utc_now() |> DateTime.truncate(:second)
+    )
+    |> Repo.update()
+  end
+
+  defp deliver_attempted(message, email, config) do
+    case deliver_with_config(email, config) do
       {:ok, metadata} ->
         updated =
           message
@@ -213,10 +248,8 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
-  defp deliver_with_tenant_config(message, email) do
-    with {:ok, config} <- Custyard.EmailSetup.sending_config(message.conversation.tenant_id) do
-      Custyard.Mailer.deliver(email, config)
-    end
+  defp deliver_with_config(email, config) do
+    Custyard.Mailer.deliver(email, config)
   rescue
     # Adapter exceptions can contain request bodies and credentials. Treat
     # acceptance as unknown and retain only a bounded diagnostic code.
@@ -239,9 +272,7 @@ defmodule Custyard.Email.Outbound do
 
     attrs = %{
       delivery_failure_kind: kind,
-      delivery_error_code: code,
-      delivery_attempted_at:
-        message.delivery_attempted_at || DateTime.utc_now() |> DateTime.truncate(:second)
+      delivery_error_code: code
     }
 
     {:error, reason, message |> mark_status(:failed, attrs) |> broadcast_delivery_update()}
@@ -289,9 +320,7 @@ defmodule Custyard.Email.Outbound do
         cc_addresses: Enum.map(email.cc, &elem(&1, 1))
       })
       |> Ecto.Changeset.change(%{
-        delivery_payload_hash: fingerprint,
-        delivery_attempted_at:
-          message.delivery_attempted_at || DateTime.utc_now() |> DateTime.truncate(:second)
+        delivery_payload_hash: fingerprint
       })
       |> Repo.update()
     end
@@ -377,8 +406,13 @@ defmodule Custyard.Email.Outbound do
     do: {:error, :from_not_set}
 
   defp fallback_from_address(conversation) do
-    fallback = Application.get_env(:custyard, :email_from_address, "support@custyard.local")
-    {:ok, {from_name(conversation), fallback}}
+    case Application.get_env(:custyard, :email_from_address, "support@custyard.local") do
+      fallback when is_binary(fallback) and fallback != "" ->
+        {:ok, {from_name(conversation), fallback}}
+
+      _ ->
+        {:error, :from_not_set}
+    end
   end
 
   # Threading headers per RFC 5322 section 3.6.4: In-Reply-To points at the

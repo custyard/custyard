@@ -121,6 +121,48 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:error, :reconciliation_required} = Outbound.retry(failed, context.operator)
   end
 
+  test "configuration failures before provider invocation remain retryable after a day",
+       context do
+    Application.put_env(:custyard, Custyard.Mailer,
+      adapter: Swoosh.Adapters.Lettermint,
+      api_token: nil
+    )
+
+    assert {:error, :sending_not_configured, failed} = Outbound.deliver(context.message)
+    assert failed.delivery_failure_kind == :configuration
+    assert is_nil(failed.delivery_attempted_at)
+    refute_receive {:attempted_email, _email}
+
+    old = DateTime.utc_now() |> DateTime.add(-172_800) |> DateTime.truncate(:second)
+    failed = failed |> Ecto.Changeset.change(inserted_at: old, updated_at: old) |> Repo.update!()
+    assert Outbound.retryable?(failed)
+
+    Application.put_env(:custyard, Custyard.Mailer, adapter: __MODULE__.Adapter)
+    Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "configured-later"}})
+    assert {:ok, retried} = Outbound.retry(failed, context.operator)
+    assert {:ok, sent} = Outbound.deliver(retried)
+    assert sent.delivery_status == :sent
+    assert %DateTime{} = sent.delivery_attempted_at
+    assert_receive {:attempted_email, _email}
+  end
+
+  test "a missing platform From fails before recording a provider attempt", context do
+    previous = Application.get_env(:custyard, :email_from_address)
+    Application.put_env(:custyard, :email_from_address, nil)
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:custyard, :email_from_address),
+        else: Application.put_env(:custyard, :email_from_address, previous)
+    end)
+
+    assert is_nil(context.message.sender_email)
+    assert {:error, :from_not_set, failed} = Outbound.deliver(context.message)
+    assert is_nil(failed.delivery_attempted_at)
+    assert Outbound.retryable?(failed)
+    refute_receive {:attempted_email, _email}
+  end
+
   test "a later participant cannot redirect an already queued reply", context do
     insert_message(
       conversation_id: context.conversation.id,
@@ -145,6 +187,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
 
     assert {:error, :no_recipient_email, failed} = Outbound.deliver(context.message)
     assert failed.to_addresses == []
+    assert is_nil(failed.delivery_attempted_at)
     refute_receive {:attempted_email, _email}
   end
 
