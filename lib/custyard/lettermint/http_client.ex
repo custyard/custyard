@@ -14,7 +14,12 @@ defmodule Custyard.Lettermint.HttpClient do
   @behaviour Custyard.Lettermint.Client
 
   @impl true
-  def create_route(params, opts \\ []) do
+  def create_route(params, opts \\ [])
+
+  def create_route(%{lettermint_project_id: project_id}, _opts) when project_id in [nil, ""],
+    do: {:error, :project_required}
+
+  def create_route(params, opts) do
     project_id = Map.fetch!(params, :lettermint_project_id)
     url = api_url("/projects/#{URI.encode_www_form(to_string(project_id))}/routes", opts)
 
