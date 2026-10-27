@@ -53,7 +53,9 @@ defmodule Custyard.Intake.ArrivalEmail do
   are expected to ignore the result — see the moduledoc.
   """
   def send_arrival(%Conversation{tenant_id: id}, %IntakeSource{tenant_id: source_id}, _body)
-      when id != source_id, do: {:error, :tenant_mismatch}
+      when id != source_id do
+    {:error, :tenant_mismatch}
+  end
 
   def send_arrival(%Conversation{} = conversation, %IntakeSource{} = source, body) do
     if email_enabled?() do

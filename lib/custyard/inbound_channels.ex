@@ -786,7 +786,9 @@ defmodule Custyard.InboundChannels do
   defp check_manager?(%{role: "admin", tenant_id: nil, organization_id: id}, %{
          organization_id: id
        })
-       when is_integer(id), do: true
+       when is_integer(id) do
+    true
+  end
 
   defp check_manager?(_, _), do: false
 

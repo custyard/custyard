@@ -28,7 +28,9 @@ defmodule Custyard.Authorization do
   def can_create_organization?(%OperatorAccount{role: "super_admin"}), do: true
 
   def can_create_organization?(%OperatorAccount{role: "admin", tenant_id: id})
-      when is_integer(id), do: true
+      when is_integer(id) do
+    true
+  end
 
   def can_create_organization?(_), do: false
 
@@ -38,7 +40,9 @@ defmodule Custyard.Authorization do
   def can_manage_organization?(%OperatorAccount{role: "super_admin"}, _org_id), do: true
 
   def can_manage_organization?(%OperatorAccount{role: "admin", tenant_id: id} = op, org_id)
-      when is_integer(id), do: OperatorAccount.can_access_organization?(op, org_id)
+      when is_integer(id) do
+    OperatorAccount.can_access_organization?(op, org_id)
+  end
 
   def can_manage_organization?(%OperatorAccount{role: "admin", organization_id: org_id}, org_id)
       when is_integer(org_id),
@@ -58,10 +62,14 @@ defmodule Custyard.Authorization do
   def can_manage_project?(%OperatorAccount{role: "super_admin"}, _org_id), do: true
 
   def can_manage_project?(%OperatorAccount{role: "admin", tenant_id: id}, nil)
-      when is_integer(id), do: true
+      when is_integer(id) do
+    true
+  end
 
   def can_manage_project?(%OperatorAccount{role: "admin", tenant_id: id} = op, org_id)
-      when is_integer(id), do: OperatorAccount.can_access_organization?(op, org_id)
+      when is_integer(id) do
+    OperatorAccount.can_access_organization?(op, org_id)
+  end
 
   def can_manage_project?(%OperatorAccount{role: "admin", organization_id: org_id}, org_id)
       when is_integer(org_id),
@@ -84,7 +92,9 @@ defmodule Custyard.Authorization do
   def can_access_conversation?(%OperatorAccount{role: "super_admin"}, _conversation), do: true
 
   def can_access_conversation?(%OperatorAccount{tenant_id: id}, %{tenant_id: id})
-      when is_integer(id), do: true
+      when is_integer(id) do
+    true
+  end
 
   def can_access_conversation?(%OperatorAccount{tenant_id: id}, _) when is_integer(id), do: false
 
