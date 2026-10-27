@@ -50,6 +50,7 @@ def validate_execution(messages):
         raise IncompleteReview("Claude did not finish successfully.")
 
     denials = result.get("permission_denials", [])
+    diagnostic = ""
     if denials or result.get("permission_denials_count", 0):
         # Tool inputs, transcript text and provider error messages may contain secrets.
         names = sorted({
@@ -61,18 +62,20 @@ def validate_execution(messages):
                            if (family := denied_command_family(d))})
         if commands:
             detail += f" Denied command families: {', '.join(commands)}."
-        raise IncompleteReview("Claude encountered tool permission denials." + detail)
+        diagnostic = "Claude encountered tool permission denials." + detail
 
     report = result.get("structured_output")
     if not isinstance(report, dict) or report.get("blocking_reason") not in BLOCKING_REASONS:
-        raise IncompleteReview("Claude returned no valid structured review result.")
+        raise IncompleteReview("Claude returned no valid structured review result. " + diagnostic)
     if report.get("review_completed") is not True or report["blocking_reason"] != "none":
-        raise IncompleteReview("Claude reported an incomplete review: " + report["blocking_reason"] + ".")
+        raise IncompleteReview("Claude reported an incomplete review: " + report["blocking_reason"] + ". " + diagnostic)
     files = report.get("reviewed_files")
     if (not isinstance(files, list) or not files or not all(isinstance(f, str) for f in files)
             or len(files) != len(set(files))):
-        raise IncompleteReview("Claude returned no valid reviewed-file coverage.")
-    return report
+        raise IncompleteReview("Claude returned no valid reviewed-file coverage. " + diagnostic)
+    # A denied attempt may have a successful fallback. Publication and complete
+    # coverage below decide completion; recovered denials remain visible warnings.
+    return report, diagnostic
 
 
 def validate_publication(event, run_id, attempt, fetch, reviewed_files):
@@ -117,13 +120,14 @@ def github_fetch(endpoint, paginate=False):
 
 
 def main():
+    diagnostic = ""
     try:
         execution = os.environ.get("CLAUDE_EXECUTION_FILE") or str(
             Path(os.environ["RUNNER_TEMP"]) / "claude-execution-output.json"
         )
         if not Path(execution).is_file():
             raise IncompleteReview("Claude produced no execution output; the action was skipped or failed before starting.")
-        report = validate_execution(json.loads(Path(execution).read_text()))
+        report, diagnostic = validate_execution(json.loads(Path(execution).read_text()))
         event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
         if report.get("reviewed_head_sha") != event["pull_request"]["head"]["sha"]:
             raise IncompleteReview("Claude's structured result refers to a different PR head.")
@@ -134,16 +138,20 @@ def main():
         message = f"Claude review completed and published: {url}"
         status = 0
     except IncompleteReview as error:
-        message = f"Claude review incomplete: {error}"
+        message = f"Claude review incomplete: {error}" + (f" {diagnostic}" if diagnostic else "")
         status = 1
     except (OSError, ValueError, KeyError, TypeError):
         message = "Claude review incomplete: required execution or GitHub metadata is missing or invalid."
         status = 1
 
     print(("::error::" if status else "") + message)
+    if status == 0 and diagnostic:
+        print("::warning::Claude completed the review despite denied tool attempts. " + diagnostic)
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary, "a") as report:
             report.write(f"### Claude review {'incomplete' if status else 'completed'}\n\n{message}\n")
+            if status == 0 and diagnostic:
+                report.write(f"\nTool warnings: {diagnostic}\n")
     return status
 
 
