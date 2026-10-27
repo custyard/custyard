@@ -244,7 +244,7 @@ defmodule Custyard.EmailSetup do
         # The actor write lock serializes local imports before checking ownership.
         case Repo.get_by(InboundRoute, lettermint_route_id: remote["id"]) do
           %InboundRoute{tenant_id: ^tenant_id} = existing ->
-            {:ok, existing}
+            InboundRoutes.ensure_default_webhooks(existing)
 
           %InboundRoute{} ->
             {:error, :wrong_tenant}
@@ -260,6 +260,10 @@ defmodule Custyard.EmailSetup do
               lettermint_inbound_address: remote["inbound_address"]
             })
             |> Repo.insert()
+            |> case do
+              {:ok, route} -> InboundRoutes.ensure_default_webhooks(route)
+              error -> error
+            end
         end
       end)
     else

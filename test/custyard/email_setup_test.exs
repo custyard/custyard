@@ -189,6 +189,43 @@ defmodule Custyard.EmailSetupTest do
     assert is_nil(Repo.get!(InboundRoute, route.id).webhook_verified_at)
   end
 
+  test "imported routes initialize notification dispatch and preserve disabled consumers", c do
+    save(c)
+    fixture(:route, {:ok, remote_route("project-1")})
+    {:ok, route} = EmailSetup.import_route(c.admin, c.tenant.id, "route-1")
+
+    assert Enum.sort(Enum.map(route.webhooks, & &1.purpose)) == [:notification, :sender_matching]
+
+    Phoenix.PubSub.subscribe(Custyard.PubSub, "operator:notifications")
+
+    normalized = %{
+      from: "alice@customer.example",
+      to: "support@example.com",
+      subject: "Imported route notification",
+      body: "Please help",
+      message_id: "<imported-route@customer.example>",
+      in_reply_to: nil,
+      references: nil,
+      headers: %{},
+      source: :lettermint,
+      metadata: %{authentication: %{"dkim" => "pass", "dmarc" => "pass"}}
+    }
+
+    assert {:ok, conversation} = Custyard.Webhooks.Dispatcher.dispatch(route, normalized)
+    assert_receive {:new_message, id}, 1_000
+    assert id == conversation.id
+
+    notification = Enum.find(route.webhooks, &(&1.purpose == :notification))
+    {:ok, _} = Custyard.InboundRoutes.disable_webhook(notification)
+    assert {:ok, repeated} = EmailSetup.import_route(c.admin, c.tenant.id, "route-1")
+    refute Enum.find(repeated.webhooks, &(&1.purpose == :notification)).enabled
+
+    Repo.delete!(notification)
+    assert {:ok, repaired} = EmailSetup.import_route(c.admin, c.tenant.id, "route-1")
+    assert Enum.find(repaired.webhooks, &(&1.purpose == :notification)).enabled
+    assert length(repaired.webhooks) == 2
+  end
+
   test "status binding requires selected project, callback URL and every handled event", c do
     {:ok, connection} = save(c)
 

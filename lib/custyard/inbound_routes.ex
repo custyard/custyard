@@ -557,8 +557,7 @@ defmodule Custyard.InboundRoutes do
                  route_type: :general,
                  source: source
                }) do
-          seed_default_webhooks(route)
-          {:ok, Repo.preload(route, :webhooks, force: true)}
+          ensure_default_webhooks(route)
         end
 
       route ->
@@ -566,26 +565,25 @@ defmodule Custyard.InboundRoutes do
     end
   end
 
-  # Seed the minimum webhook purpose records so Dispatcher's async purposes
-  # fire correctly. Without these, Dispatcher.get_enabled_purposes/1 returns
-  # an empty MapSet and skips notification/enrichment.
-  defp seed_default_webhooks(%InboundRoute{} = route) do
-    results =
+  @doc "Initialize missing default consumers without re-enabling an operator-disabled purpose."
+  def ensure_default_webhooks(%InboundRoute{} = route) do
+    Repo.transaction(fn ->
       for purpose <- [:sender_matching, :notification] do
-        # Use enable_webhook/2 which has upsert semantics — safe if records
-        # already exist (e.g., from a concurrent call).
-        enable_webhook(route, purpose)
+        %InboundRouteWebhook{}
+        |> InboundRouteWebhook.changeset(%{
+          inbound_route_id: route.id,
+          purpose: purpose,
+          enabled: true
+        })
+        |> Repo.insert(on_conflict: :nothing, conflict_target: [:inbound_route_id, :purpose])
+        |> case do
+          {:ok, _webhook} -> :ok
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
       end
 
-    failures = Enum.filter(results, &match?({:error, _}, &1))
-
-    if failures != [] do
-      Logger.warning(
-        "Failed to seed #{length(failures)} default webhook(s) for route #{route.id}: #{inspect(failures)}"
-      )
-    end
-
-    results
+      Repo.preload(route, :webhooks, force: true)
+    end)
   end
 
   @doc """
