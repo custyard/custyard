@@ -45,34 +45,21 @@ defmodule CustyardWeb.Operator.TenantSettingsLive do
   def handle_event("invite", %{"staff" => attrs}, socket) do
     tenant = socket.assigns.current_tenant
 
-    if Tenants.can_manage?(socket.assigns.current_operator, tenant) do
-      changeset =
-        OperatorAccount.changeset(%OperatorAccount{}, %{
-          email: attrs["email"],
-          role: attrs["role"],
-          tenant_id: tenant.id
-        })
+    case Tenants.invite_staff(socket.assigns.current_operator, tenant.id, attrs) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> load()
+         |> put_flash(
+           :info,
+           "Staff account added. They can request a login link on the sign-in page."
+         )}
 
-      changeset =
-        if attrs["role"] in ["admin", "agent"],
-          do: changeset,
-          else: Ecto.Changeset.add_error(changeset, :role, "must be administrator or agent")
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :staff_form, to_form(changeset, as: :staff))}
 
-      case Repo.insert(changeset) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> load()
-           |> put_flash(
-             :info,
-             "Staff account added. They can request a login link on the sign-in page."
-           )}
-
-        {:error, changeset} ->
-          {:noreply, assign(socket, :staff_form, to_form(changeset, as: :staff))}
-      end
-    else
-      {:noreply, put_flash(socket, :error, "Tenant administrator required")}
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "Tenant administrator required")}
     end
   end
 
@@ -145,7 +132,11 @@ defmodule CustyardWeb.Operator.TenantSettingsLive do
 
     attrs = Map.put(attrs, "logo_url", logo)
 
-    case Tenants.update_tenant(socket.assigns.current_tenant, attrs) do
+    case Tenants.update_tenant_for_operator(
+           socket.assigns.current_operator,
+           socket.assigns.current_tenant.id,
+           attrs
+         ) do
       {:ok, tenant} ->
         if old_logo && old_logo != logo, do: Uploads.delete_logo(old_logo)
 
@@ -155,9 +146,13 @@ defmodule CustyardWeb.Operator.TenantSettingsLive do
          |> load()
          |> put_flash(:info, "Tenant updated")}
 
-      {:error, changeset} ->
+      {:error, %Ecto.Changeset{} = changeset} ->
         if uploaded_logo, do: Uploads.delete_logo(uploaded_logo)
         {:noreply, assign(socket, :form, to_form(changeset))}
+
+      {:error, :unauthorized} ->
+        if uploaded_logo, do: Uploads.delete_logo(uploaded_logo)
+        {:noreply, put_flash(socket, :error, "Tenant administrator required")}
     end
   end
 

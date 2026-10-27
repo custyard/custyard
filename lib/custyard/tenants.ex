@@ -77,6 +77,54 @@ defmodule Custyard.Tenants do
   def can_manage?(%OperatorAccount{role: "admin", tenant_id: id}, %Tenant{id: id}), do: true
   def can_manage?(_, _), do: false
 
+  def create_tenant_for_operator(%OperatorAccount{} = operator, attrs) do
+    Repo.transaction(fn ->
+      current = Custyard.OperatorAccess.lock_current(operator)
+
+      unless current && current.role == "super_admin" &&
+               OperatorAccount.session_claim_matches?(current, operator.session_claim),
+             do: Repo.rollback(:unauthorized)
+
+      case create_tenant(attrs) do
+        {:ok, tenant} -> tenant
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  def update_tenant_for_operator(%OperatorAccount{} = operator, tenant_id, attrs) do
+    Repo.transaction(fn ->
+      lock_manager!(operator, tenant_id)
+
+      case update_tenant(get_tenant!(tenant_id), attrs) do
+        {:ok, tenant} -> tenant
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  def invite_staff(%OperatorAccount{} = operator, tenant_id, attrs) do
+    Repo.transaction(fn ->
+      lock_manager!(operator, tenant_id)
+
+      changeset =
+        OperatorAccount.changeset(%OperatorAccount{}, %{
+          email: Map.get(attrs, "email", attrs[:email]),
+          role: Map.get(attrs, "role", attrs[:role]),
+          tenant_id: tenant_id
+        })
+        |> Ecto.Changeset.validate_required(:role)
+        |> Ecto.Changeset.validate_inclusion(:role, ["admin", "agent"],
+          message: "must be administrator or agent"
+        )
+
+      case Repo.insert(changeset) do
+        {:ok, staff} -> staff
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
   def remove_staff(%OperatorAccount{} = operator, tenant_id, staff_id) do
     Repo.transaction(fn ->
       current = lock_manager!(operator, tenant_id)
