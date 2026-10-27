@@ -1,5 +1,6 @@
 """Fail closed on incomplete Claude reviews without publishing raw SDK output."""
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -166,8 +167,9 @@ def build_plan(event, run_id, attempt, current, files):
         raise IncompleteReview("The changed-file list contains duplicates.")
     batches, batch, size, lines = [], [], 0, 0
     for file in files:
-        patch_size = len(file.get("patch") or "")
-        patch_lines = len((file.get("patch") or "").splitlines())
+        text = file.get("patch") or file.get("source_text") or ""
+        patch_size = len(text)
+        patch_lines = len(text.splitlines())
         if batch and (len(batch) >= 5 or size + patch_size > 50_000 or lines + patch_lines > 800):
             batches.append(batch)
             batch, size, lines = [], 0, 0
@@ -192,13 +194,28 @@ def validate_plan_context(plan, event, run_id, attempt):
         raise IncompleteReview("The review artifact belongs to a different PR, head or workflow attempt.")
 
 
-def review_patch_view(file):
-    patch = file.get("patch") or ""
+def load_missing_markdown_sources(repository, files, fetch):
+    expanded = []
+    for file in files:
+        if not file.get("patch") and Path(file["filename"]).suffix.lower() in {".md", ".markdown"}:
+            blob = fetch(f"repos/{repository}/git/blobs/{file['sha']}")
+            if blob.get("encoding") != "base64" or not isinstance(blob.get("content"), str):
+                raise IncompleteReview("GitHub returned no readable source for a Markdown file without a patch.")
+            try:
+                source = base64.b64decode("".join(blob["content"].split()), validate=True).decode("utf-8")
+            except ValueError:
+                raise IncompleteReview("A Markdown source without a patch could not be decoded.") from None
+            file = {**file, "source_text": source}
+        expanded.append(file)
+    return expanded
+
+
+def review_text_view(file, text):
     if Path(file["filename"]).suffix.lower() in {".md", ".markdown"}:
         # This is only a reading view. build_plan retains the exact GitHub patch
         # in manifest.json; source files and attribution bytes are never edited.
-        return patch.translate({0xE0100: None, 0xE0101: None})
-    return patch
+        return text.translate({0xE0100: None, 0xE0101: None})
+    return text
 
 
 def verify_shard(messages, plan, shard_id):
@@ -262,7 +279,8 @@ def batch_command(mode):
     if mode == "plan":
         current = github_fetch(f"repos/{repo}/pulls/{number}")
         pages = github_fetch(f"repos/{repo}/pulls/{number}/files?per_page=100", paginate=True)
-        plan = build_plan(event, run_id, attempt, current, [f for page in pages for f in page])
+        files = load_missing_markdown_sources(repo, [f for page in pages for f in page], github_fetch)
+        plan = build_plan(event, run_id, attempt, current, files)
         plan_dir.mkdir(parents=True, exist_ok=True)
         (plan_dir / "manifest.json").write_text(json.dumps(plan))
         for shard in plan["shards"]:
@@ -272,13 +290,16 @@ def batch_command(mode):
             assigned = {
                 **data, "id": shard["id"],
                 "provenance_note": (
-                    "Markdown patch_lines is a visible-text reading view. Exact patches and "
+                    "Markdown patch_lines and source_lines are visible-text views. Exact sources and "
                     "TextProv attribution remain in manifest.json and the checkout. Preserve source marks."
                 ),
                 "assigned_paths": [f["filename"] for f in shard["files"]],
                 "files": [{"filename": f["filename"], "status": f.get("status"),
                            "patch_available": bool(f.get("patch")),
-                           "patch_lines": review_patch_view(f).splitlines()}
+                           "patch_lines": review_text_view(f, f.get("patch") or "").splitlines(),
+                           **({"source_lines": review_text_view(f, f["source_text"]).splitlines(),
+                               "source_note": "GitHub omitted the diff. Review source_lines in full, not only search results."}
+                              if "source_text" in f else {})}
                           for f in shard["files"]],
             }
             (plan_dir / f"shard-{shard['id']}.json").write_text(
