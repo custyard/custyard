@@ -37,6 +37,12 @@ defmodule Custyard.Conversations do
         group_by: m.conversation_id,
         select: %{conversation_id: m.conversation_id, count: count(m.id)}
 
+    due_task_subquery =
+      from t in Custyard.Task,
+        where: t.state != :done and not is_nil(t.due_at) and t.due_at <= ^now,
+        group_by: t.conversation_id,
+        select: %{conversation_id: t.conversation_id, count: count(t.id), due_at: min(t.due_at)}
+
     query =
       from c in Conversation,
         # Left join: disambiguation/public-intake conversations have nil organization_id
@@ -47,16 +53,26 @@ defmodule Custyard.Conversations do
         left_join: ch in assoc(c, :inbound_channel),
         left_join: mc in subquery(message_count_subquery),
         on: mc.conversation_id == c.id,
-        # Exclude resolved conversations (snoozed filter handled separately)
-        where: c.state != :resolved,
-        order_by: [desc: c.cached_score],
+        left_join: dt in subquery(due_task_subquery),
+        as: :due_tasks,
+        on: dt.conversation_id == c.id,
+        # Resolving/snoozing a conversation must not hide an unfinished task
+        # that has reached its own deadline.
+        where: c.state != :resolved or not is_nil(dt.conversation_id),
+        order_by: [desc: coalesce(dt.count, 0), asc: dt.due_at, desc: c.cached_score],
         preload: [organization: o, contact: ct, prospect: p, inbound_channel: ch],
-        select: %{conversation: c, message_count: coalesce(mc.count, 0)}
+        select: %{
+          conversation: c,
+          message_count: coalesce(mc.count, 0),
+          due_task_count: coalesce(dt.count, 0)
+        }
 
     query
     |> apply_organization_filter(organization_id)
+    |> apply_tenant_filter(Keyword.get(opts, :tenant_id))
     |> apply_snooze_filter(filter, now)
     |> apply_state_filter(filter)
+    |> apply_label_filter(Keyword.get(opts, :label_id))
     |> Repo.all()
   end
 
@@ -66,13 +82,30 @@ defmodule Custyard.Conversations do
   end
 
   defp apply_snooze_filter(query, _filter, now) do
-    from c in query, where: is_nil(c.snoozed_until) or c.snoozed_until < ^now
+    from [c, due_tasks: dt] in query,
+      where: is_nil(c.snoozed_until) or c.snoozed_until < ^now or not is_nil(dt.conversation_id)
   end
 
-  defp apply_organization_filter(query, nil), do: query
+  defp apply_label_filter(query, nil), do: query
+
+  defp apply_label_filter(query, label_id) when is_integer(label_id) do
+    from c in query,
+      join: cl in Custyard.ConversationLabel,
+      on: cl.conversation_id == c.id,
+      join: l in Custyard.Label,
+      on: l.id == cl.label_id,
+      where: l.id == ^label_id and l.tenant_id == c.tenant_id
+  end
+
+  defp apply_tenant_filter(query, nil), do: query
+
+  defp apply_tenant_filter(query, id) when is_integer(id),
+    do: from(c in query, where: c.tenant_id == ^id)
 
   # Org-scoped operators also see conversations without an organization
   # (unlinked prospects); see list_for_attention_queue/1.
+  defp apply_organization_filter(query, nil), do: query
+
   defp apply_organization_filter(query, org_id) when is_integer(org_id) do
     from c in query, where: c.organization_id == ^org_id or is_nil(c.organization_id)
   end
@@ -82,6 +115,10 @@ defmodule Custyard.Conversations do
   defp apply_state_filter(query, "active"), do: from(c in query, where: c.state == :active)
   defp apply_state_filter(query, "waiting"), do: from(c in query, where: c.state == :waiting)
   defp apply_state_filter(query, "dormant"), do: from(c in query, where: c.state == :dormant)
+
+  defp apply_state_filter(query, "due_tasks"),
+    do: from([due_tasks: dt] in query, where: not is_nil(dt.conversation_id))
+
   defp apply_state_filter(query, _), do: query
 
   @doc """
@@ -106,6 +143,7 @@ defmodule Custyard.Conversations do
       preload: [organization: o, contact: ct]
     )
     |> apply_organization_filter(organization_id)
+    |> apply_tenant_filter(Keyword.get(opts, :tenant_id))
     |> Repo.all()
   end
 
@@ -1053,7 +1091,9 @@ defmodule Custyard.Conversations do
         conv_org = task.conversation && task.conversation.organization_id
         proj_org = task.project && task.project.organization_id
 
-        if org_id in [task_org, conv_org, proj_org] and not is_nil(org_id) do
+        scopes = Enum.reject([task_org, conv_org, proj_org], &is_nil/1)
+
+        if scopes != [] and Enum.all?(scopes, &(&1 == org_id)) and not is_nil(org_id) do
           {:ok, task}
         else
           {:error, :unauthorized}
@@ -1068,6 +1108,7 @@ defmodule Custyard.Conversations do
     %Task{}
     |> Task.changeset(attrs)
     |> Repo.insert()
+    |> task_changed()
   end
 
   @doc """
@@ -1077,6 +1118,7 @@ defmodule Custyard.Conversations do
     task
     |> Task.state_changeset(new_state)
     |> Repo.update()
+    |> task_changed()
   end
 
   @doc """
@@ -1086,6 +1128,7 @@ defmodule Custyard.Conversations do
     task
     |> Task.changeset(attrs)
     |> Repo.update()
+    |> task_changed()
   end
 
   @doc """
@@ -1093,7 +1136,27 @@ defmodule Custyard.Conversations do
   WARNING: No org scoping - use delete_task_for_organization/2 for user-facing requests.
   """
   def delete_task(task) do
-    Repo.delete(task)
+    task |> Repo.delete() |> task_changed()
+  end
+
+  defp task_changed({:ok, task} = result) do
+    broadcast_task_change(task)
+    result
+  end
+
+  defp task_changed(error), do: error
+
+  @doc false
+  def broadcast_task_change(task) do
+    if task.conversation_id do
+      event = {:conversation_updated, task.conversation_id}
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", event)
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{task.conversation_id}", event)
+      conversation = Repo.get(Conversation, task.conversation_id)
+      if conversation, do: broadcast_to_org(conversation.organization_id, event)
+    end
+
+    :ok
   end
 
   @doc """
@@ -1102,7 +1165,7 @@ defmodule Custyard.Conversations do
   """
   def delete_task_for_organization(id, org_id) do
     case get_task_for_organization(id, org_id) do
-      {:ok, task} -> Repo.delete(task)
+      {:ok, task} -> delete_task(task)
       error -> error
     end
   end

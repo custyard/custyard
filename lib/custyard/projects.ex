@@ -503,6 +503,7 @@ defmodule Custyard.Projects do
 
     case result do
       {:ok, task} ->
+        Custyard.Conversations.broadcast_task_change(task)
         if Keyword.get(opts, :broadcast?, true), do: broadcast_project_update(project.id)
         {:ok, task}
 
@@ -523,6 +524,8 @@ defmodule Custyard.Projects do
 
     case result do
       {:ok, task} ->
+        Custyard.Conversations.broadcast_task_change(task)
+
         if task.project_id && Keyword.get(opts, :broadcast?, true),
           do: broadcast_project_update(task.project_id)
 
@@ -542,6 +545,8 @@ defmodule Custyard.Projects do
 
     case Repo.delete(task) do
       {:ok, _} = result ->
+        Custyard.Conversations.broadcast_task_change(task)
+
         if project_id && Keyword.get(opts, :broadcast?, true),
           do: broadcast_project_update(project_id)
 
