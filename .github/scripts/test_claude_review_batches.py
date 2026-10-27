@@ -176,6 +176,20 @@ class BoundedReviewTest(unittest.TestCase):
             self.assertNotIn("SECRET_TRANSCRIPT", receipt)
             self.assertFalse(json.loads(receipt)["verified"])
 
+    def test_review_input_preserves_readable_unicode_and_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.local_context(directory)
+            marked = "+C\U000E0101a\U000E0101f\U000E0101é — 返信"
+            self.files[0]["patch"] = marked
+            with patch.dict(os.environ, env), patch("verify_claude_review.github_fetch", side_effect=self.fetch):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    batch_command("plan")
+            raw = (Path(env["REVIEW_PLAN_DIR"]) / "shard-0.json").read_text(encoding="utf-8")
+            self.assertIn(marked, raw)
+            self.assertNotIn("\\udb40", raw)
+            self.assertEqual(json.loads(raw)["files"][0]["patch_lines"], [marked])
+            self.assertIn("TextProv", json.loads(raw)["provenance_note"])
+
     def test_complete_workflow_publishes_and_verifies_one_combined_comment(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.local_context(directory)
