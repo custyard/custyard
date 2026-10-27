@@ -1,3 +1,4 @@
+<% portal_brand = assigns[:portal_branding] || assigns[:current_org] %>
 <%!-- Helper to determine if a nav link is active --%>
 <% # Get current view module for LiveView pages
 current_view = assigns[:socket] && assigns.socket.view
@@ -18,10 +19,10 @@ inactive_class =
     class="bg-white dark:bg-zinc-800 border-b border-gray-200 dark:border-zinc-700 px-4 py-2 flex items-center gap-4"
     data-testid="portal-layout-nav"
   >
-    <%= if assigns[:current_org] && @current_org.logo_url do %>
+    <%= if assigns[:current_org] && portal_brand.logo_url do %>
       <img
-        src={@current_org.logo_url}
-        alt={"#{@current_org.name} logo"}
+        src={portal_brand.logo_url}
+        alt={"#{portal_brand.name} logo"}
         class="h-6 w-auto"
         data-testid="portal-nav-logo"
       />
@@ -29,13 +30,13 @@ inactive_class =
     <span
       class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight"
       style={
-        if assigns[:current_org] && @current_org.primary_color,
-          do: "color: #{@current_org.primary_color}",
+        if assigns[:current_org] && portal_brand.primary_color,
+          do: "color: #{portal_brand.primary_color}",
           else: nil
       }
     >
-      <%= if assigns[:current_org] && @current_org.name do %>
-        {@current_org.name}
+      <%= if assigns[:current_org] && portal_brand.name do %>
+        {portal_brand.name}
       <% else %>
         Support Portal
       <% end %>
@@ -72,8 +73,8 @@ inactive_class =
         navigate={"#{@portal_path}/new"}
         class="text-sm font-medium text-white px-4 py-2 rounded-lg shadow-sm hover:opacity-90 transition-opacity"
         style={
-          if assigns[:current_org] && @current_org.primary_color do
-            "background-color: #{@current_org.primary_color}"
+          if assigns[:current_org] && portal_brand.primary_color do
+            "background-color: #{portal_brand.primary_color}"
           else
             "background-color: #4f46e5"
           end

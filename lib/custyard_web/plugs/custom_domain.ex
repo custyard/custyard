@@ -70,6 +70,13 @@ defmodule CustyardWeb.Plugs.CustomDomain do
     # one organization.
     lowered = String.downcase(host)
 
+    case Custyard.Tenants.resolve_host(lowered) do
+      %Custyard.Tenant{} = tenant -> assign(conn, :host_tenant, tenant)
+      nil -> resolve_legacy_domain(conn, lowered)
+    end
+  end
+
+  defp resolve_legacy_domain(conn, lowered) do
     case Repo.get_by(Organization, custom_domain: lowered) do
       nil ->
         # Unknown host - let the request proceed normally

@@ -24,6 +24,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     Authorization,
     Conversation,
     Conversations,
+    Labels,
     Message,
     MessageRecipientStatus,
     Organizations,
@@ -126,6 +127,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       socket
       |> assign(:page_title, truncate_subject(conversation.subject))
       |> assign(:conversation, conversation)
+      |> assign_labels(conversation)
       |> assign_reply_delivery(conversation)
       |> assign_reply_identity(conversation)
       |> assign(:reply_cc_edited?, false)
@@ -137,12 +139,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
       |> assign(:note_text, "")
       |> assign(:new_task_title, "")
       |> assign(:new_task_due_at, "")
-      |> assign(:new_task_portal_visible, true)
+      |> assign(:new_task_portal_visible, false)
       |> assign(:show_task_form, false)
       |> assign(:editing_task_id, nil)
       |> assign(:edit_task_title, "")
       |> assign(:edit_task_due_at, "")
-      |> assign(:edit_task_portal_visible, true)
+      |> assign(:edit_task_portal_visible, false)
       |> assign(:show_sidebar, false)
       |> assign(:show_convert_form, false)
       |> assign(:convert_form_data, %{name: "", domain: ""})
@@ -163,6 +165,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
     case Conversations.send_reply(conversation, body,
            operator: operator,
            operator_email: operator.email,
+           expected_recipient:
+             socket.assigns.reply_recipient && socket.assigns.reply_recipient.address,
            cc: Map.get(params, "cc", socket.assigns.reply_cc)
          ) do
       {:ok, message} ->
@@ -176,6 +180,13 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
+
+      {:error, :recipient_changed} ->
+        {:noreply,
+         socket
+         |> assign(:reply_text, body)
+         |> reload_conversation()
+         |> put_flash(:error, "The recipient changed. Review the updated reply before sending.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, reply_error_message(reason))}
@@ -242,6 +253,30 @@ defmodule CustyardWeb.Operator.ConversationLive do
     case conversation_mutation(socket, fn current, _operator -> {:ok, current} end) do
       {:ok, _conversation} -> {:noreply, begin_attachment_recovery(socket)}
       _ -> {:noreply, access_revoked(socket)}
+    end
+  end
+
+  def handle_event("retry_reply", %{"id" => id}, socket) do
+    case find_conversation_message(socket.assigns.conversation, id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Message not found")}
+
+      message ->
+        case Outbound.retry(message, socket.assigns.current_operator) do
+          {:ok, _} ->
+            {:noreply, reload_conversation(socket)}
+
+          {:error, :unauthorized} ->
+            {:noreply, access_revoked(socket)}
+
+          {:error, _} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "Check the provider's delivery activity before sending another copy"
+             )}
+        end
     end
   end
 
@@ -370,6 +405,24 @@ defmodule CustyardWeb.Operator.ConversationLive do
     {:noreply, assign(socket, :show_task_form, !socket.assigns.show_task_form)}
   end
 
+  def handle_event("create_label", %{"name" => name}, socket) do
+    socket.assigns.current_operator
+    |> Labels.create_and_assign(socket.assigns.conversation, name)
+    |> label_result(socket)
+  end
+
+  def handle_event("assign_label", %{"label_id" => id}, socket) do
+    socket.assigns.current_operator
+    |> Labels.assign(socket.assigns.conversation, id)
+    |> label_result(socket)
+  end
+
+  def handle_event("remove_label", %{"id" => id}, socket) do
+    socket.assigns.current_operator
+    |> Labels.remove(socket.assigns.conversation, id)
+    |> label_result(socket)
+  end
+
   def handle_event("toggle_sidebar", _params, socket) do
     {:noreply, assign(socket, :show_sidebar, !socket.assigns.show_sidebar)}
   end
@@ -388,7 +441,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
     title = params["title"] || ""
 
     if byte_size(title) > 0 do
-      due_at = parse_due_at(params["due_at"])
+      due_at = params["due_at"]
       portal_visible = params["portal_visible"] == "true"
 
       case conversation_mutation(socket, fn current, _operator ->
@@ -404,7 +457,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
            socket
            |> assign(:new_task_title, "")
            |> assign(:new_task_due_at, "")
-           |> assign(:new_task_portal_visible, true)
+           |> assign(:new_task_portal_visible, false)
            |> assign(:show_task_form, false)
            |> put_flash(:info, "Task created")
            |> reload_conversation()}
@@ -412,8 +465,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
         {:error, :unauthorized} ->
           {:noreply, access_revoked(socket)}
 
-        {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "Failed to create task")}
+        {:error, changeset} ->
+          {:noreply, put_flash(socket, :error, task_error(changeset))}
       end
     else
       {:noreply, socket}
@@ -476,7 +529,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
     if byte_size(title) > 0 do
       with_scoped_task(socket, socket.assigns.editing_task_id, fn task ->
-        due_at = parse_due_at(params["due_at"])
+        due_at = params["due_at"]
         portal_visible = params["portal_visible"] == "true"
 
         case conversation_mutation(socket, fn _current, _operator ->
@@ -495,8 +548,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
           {:error, :unauthorized} ->
             {:noreply, access_revoked(socket)}
 
-          {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, "Failed to save task")}
+          {:error, changeset} ->
+            {:noreply, put_flash(socket, :error, task_error(changeset))}
         end
       end)
     else
@@ -729,6 +782,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
           socket
           |> assign(:conversation, conversation)
+          |> assign_labels(conversation)
           |> assign_reply_delivery(conversation)
           |> assign_reply_identity(conversation)
           |> assign_reply_cc(conversation)
@@ -763,8 +817,8 @@ defmodule CustyardWeb.Operator.ConversationLive do
     end
   end
 
-  # Only a contact's address can be overridden by a Reply-To; a prospect's
-  # recipient is always the captured address.
+  # Email threads follow their latest participant or Reply-To. A prospect's
+  # recipient remains the address for which consent was captured.
   defp reply_to_override?(conversation, address) do
     case Conversations.reply_channel(conversation) do
       {:contact, email} -> String.downcase(address) != String.downcase(email)
@@ -869,40 +923,41 @@ defmodule CustyardWeb.Operator.ConversationLive do
     String.slice(subject, 0, 47) <> "..."
   end
 
-  # NOTE: Timezone handling
-  # datetime-local inputs provide local time without timezone info.
-  # We treat them as UTC for storage and display, which is consistent but
-  # means users in non-UTC timezones will see times offset from their local.
-  # TODO: For proper timezone support, send user's timezone from client
-  # and convert local <-> UTC on save/display.
-  defp parse_due_at(nil), do: nil
-  defp parse_due_at(""), do: nil
+  defp assign_labels(socket, conversation) do
+    labels = Labels.for_conversation(socket.assigns.current_operator, conversation)
 
-  defp parse_due_at(date_str) when is_binary(date_str) do
-    # Append "Z" to treat input as UTC
-    case DateTime.from_iso8601(date_str <> ":00Z") do
-      {:ok, datetime, _offset} -> datetime
-      _ -> nil
-    end
+    socket
+    |> assign(:available_labels, labels.available)
+    |> assign(:conversation_labels, labels.assigned)
   end
+
+  defp label_result({:ok, _}, socket), do: {:noreply, reload_conversation(socket)}
+
+  defp label_result({:error, :unauthorized}, socket),
+    do: {:noreply, put_flash(socket, :error, "You do not have permission to change these labels")}
+
+  defp label_result({:error, %Ecto.Changeset{}}, socket),
+    do: {:noreply, put_flash(socket, :error, "Use a unique label name of 1 to 40 characters")}
+
+  defp label_result({:error, _}, socket),
+    do: {:noreply, put_flash(socket, :error, "That label is not available for this organization")}
+
+  defp task_error(%Ecto.Changeset{errors: errors}) do
+    if Keyword.has_key?(errors, :due_at),
+      do: "Enter a valid due date and time in UTC",
+      else: "Enter a task title of 1 to 300 characters"
+  end
+
+  defp task_error(_), do: "Could not save the task"
 
   # Formats datetime for datetime-local input (displays as UTC)
   defp format_datetime_local(datetime) do
     Calendar.strftime(datetime, "%Y-%m-%dT%H:%M")
   end
 
-  # Formats due date for display (relative to UTC now)
+  # Keep the zone visible wherever a saved deadline is displayed.
   defp format_due_at(datetime) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-    diff_days = Date.diff(DateTime.to_date(datetime), DateTime.to_date(now))
-
-    cond do
-      diff_days < 0 -> "overdue by #{abs(diff_days)}d"
-      diff_days == 0 -> "today"
-      diff_days == 1 -> "tomorrow"
-      diff_days < 7 -> Calendar.strftime(datetime, "%A")
-      true -> Calendar.strftime(datetime, "%b %d")
-    end
+    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
   end
 
   @impl true
@@ -1057,7 +1112,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
               <span class="w-6">To</span>
               <code class="text-gray-700 dark:text-zinc-300 truncate">{@reply_recipient.address}</code>
               <span :if={@reply_recipient.reply_to?} data-testid="operator-reply-to-override">
-                · the customer's Reply-To
+                · from the latest customer message
               </span>
             </p>
             <%!-- Reply-all CC (spec-inbound-channels D5): visible and editable;
@@ -1333,6 +1388,65 @@ defmodule CustyardWeb.Operator.ConversationLive do
             </div>
           </div>
 
+          <section
+            :if={@conversation.tenant_id}
+            class="mb-5"
+            data-testid="operator-labels-section"
+          >
+            <h3 class="text-xs font-semibold text-gray-500 dark:text-zinc-400 mb-2">Labels</h3>
+            <div class="flex flex-wrap gap-1 mb-2">
+              <span
+                :for={label <- @conversation_labels}
+                class="inline-flex items-center gap-1 rounded bg-indigo-50 dark:bg-indigo-950 px-2 py-1 text-xs"
+                data-testid={"conversation-label-#{label.id}"}
+              >
+                {label.name}
+                <button
+                  type="button"
+                  phx-click="remove_label"
+                  phx-value-id={label.id}
+                  aria-label={"Remove label #{label.name}"}
+                >×</button>
+              </span>
+              <span :if={@conversation_labels == []} class="text-xs text-gray-500">No labels</span>
+            </div>
+            <form
+              :if={@available_labels != []}
+              id="assign-label-form"
+              phx-submit="assign_label"
+              class="flex gap-1 mb-2"
+            >
+              <select
+                name="label_id"
+                aria-label="Label to add"
+                class="min-w-0 flex-1 rounded text-xs dark:bg-zinc-800"
+              >
+                <option :for={label <- @available_labels} value={label.id}>{label.name}</option>
+              </select>
+              <button type="submit" class="text-xs text-indigo-600">Add</button>
+            </form>
+            <form
+              :if={@current_operator.role in ["admin", "super_admin"]}
+              id="create-label-form"
+              phx-submit="create_label"
+              class="flex gap-1"
+            >
+              <input
+                name="name"
+                type="text"
+                required
+                maxlength="40"
+                placeholder="New label"
+                aria-label="New label name"
+                class="min-w-0 flex-1 rounded text-xs dark:bg-zinc-800"
+              />
+              <button type="submit" class="text-xs text-indigo-600">Create</button>
+            </form>
+            <p class="mt-1 text-xs text-gray-500">
+              Labels are internal and shared across your workspace.
+            </p>
+          </section>
+
           <%!-- Tasks --%>
           <div>
             <div
@@ -1378,12 +1492,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
                   autofocus
                   data-testid="operator-task-title-input"
                 />
+                <label class="block text-xs text-gray-600 dark:text-zinc-400" for="new-task-due-at">Due date and time (UTC)</label>
                 <div class="flex gap-2">
                   <input
+                    id="new-task-due-at"
                     type="datetime-local"
                     name="due_at"
                     value={@new_task_due_at}
-                    aria-label="Due date"
+                    aria-label="Due date and time (UTC)"
                     class="flex-1 text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1"
                     data-testid="operator-task-due-input"
                   />
@@ -1579,6 +1695,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           <.delivery_indicator
             :if={@is_operator and not @is_internal and not @is_deleted and @message.delivery_status}
             status={@message.delivery_status}
+            failure_kind={@message.delivery_failure_kind}
           />
           <button
             :if={not @is_deleted}
@@ -1592,6 +1709,30 @@ defmodule CustyardWeb.Operator.ConversationLive do
           >
             <.icon name="hero-trash" class="h-3 w-3" />
           </button>
+        </div>
+        <div
+          :if={
+            @is_operator and not @is_internal and not @is_deleted and
+              @message.delivery_status == :failed
+          }
+          class="mb-2 text-xs text-amber-800 dark:text-amber-300"
+          data-testid={"reply-recovery-#{@message.id}"}
+        >
+          <%= if @message.delivery_failure_kind == :unknown do %>
+            Delivery outcome unknown. Check the provider's activity before sending another copy.
+          <% else %>
+            <%= if Outbound.retryable?(@message) do %>
+              Reply not sent. Correct the email setup, then <button
+                type="button"
+                phx-click="retry_reply"
+                phx-value-id={@message.id}
+                class="underline font-medium"
+                data-testid={"retry-reply-#{@message.id}"}
+              >Retry reply</button>.
+            <% else %>
+              Reply needs attention. Check the provider's activity before sending another copy.
+            <% end %>
+          <% end %>
         </div>
         <%!-- The indicator above follows the customer's copy; a CC or archive
         copy that failed is listed here so it never hides that delivery. --%>
@@ -1817,6 +1958,14 @@ defmodule CustyardWeb.Operator.ConversationLive do
   attr :status, :atom,
     required: true,
     values: [:pending, :sending, :sent, :delivered, :failed, :bounced, :suppressed, :withheld]
+
+  attr :failure_kind, :atom, default: nil
+
+  defp delivery_indicator(%{status: :failed, failure_kind: :unknown} = assigns) do
+    ~H"""
+    <span class="text-xs text-amber-700 dark:text-amber-300" data-testid="delivery-status-unknown">Delivery unknown</span>
+    """
+  end
 
   defp delivery_indicator(%{status: status} = assigns) when status in [:pending, :sending] do
     ~H"""
@@ -2139,11 +2288,16 @@ defmodule CustyardWeb.Operator.ConversationLive do
         autofocus
         data-testid="operator-task-edit-title"
       />
+      <label
+        for={"edit-task-due-at-#{@task.id}"}
+        class="block text-xs text-gray-600 dark:text-zinc-400"
+      >Due date and time (UTC)</label>
       <input
+        id={"edit-task-due-at-#{@task.id}"}
         type="datetime-local"
         name="due_at"
         value={@due_at}
-        aria-label="Due date"
+        aria-label="Due date and time (UTC)"
         class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1"
         data-testid="operator-task-edit-due"
       />

@@ -22,7 +22,7 @@ defmodule CustyardWeb.Live.OperatorAuth do
   import Phoenix.LiveView
   import Phoenix.Component
 
-  alias Custyard.{Authorization, OperatorAccount, Repo}
+  alias Custyard.{Authorization, OperatorAccount, Repo, Tenants}
 
   @no_organization_message "No organization assigned; ask a super admin."
 
@@ -84,7 +84,8 @@ defmodule CustyardWeb.Live.OperatorAuth do
         {:halt, redirect(socket, to: "/operator/login")}
 
       operator ->
-        if OperatorAccount.orphaned?(operator) do
+        if OperatorAccount.orphaned?(operator) or
+             not Tenants.operator_on_host?(operator, session["host_tenant_id"]) do
           {:halt, deny_no_organization(socket)}
         else
           # The claim captured here is what refresh_operator/1 compares
@@ -93,6 +94,8 @@ defmodule CustyardWeb.Live.OperatorAuth do
            socket
            |> assign(:operator_id, operator.id)
            |> assign(:operator_session_claim, claim)
+           |> assign(:selected_tenant_id, session["selected_tenant_id"])
+           |> assign(:host_tenant_id, session["host_tenant_id"])
            |> assign_operator(operator)
            |> attach_refresh_hooks()}
         end
@@ -106,11 +109,19 @@ defmodule CustyardWeb.Live.OperatorAuth do
   end
 
   defp assign_operator(socket, operator) do
+    tenant_id =
+      socket.assigns[:host_tenant_id] || operator.tenant_id ||
+        (OperatorAccount.super_admin?(operator) && socket.assigns[:selected_tenant_id])
+
+    tenant = (tenant_id && Tenants.get_tenant(tenant_id)) || Tenants.for_operator(operator)
+
     socket
     |> assign(:current_operator, operator)
     |> assign(:scoped_organization_id, OperatorAccount.scoped_organization_id(operator))
     |> assign(:current_role, operator.role)
     |> assign(:is_super_admin, operator.role == "super_admin")
+    |> assign(:current_tenant, tenant)
+    |> assign(:site_name, tenant.name)
   end
 
   defp attach_refresh_hooks(socket) do
@@ -142,7 +153,8 @@ defmodule CustyardWeb.Live.OperatorAuth do
           OperatorAccount.orphaned?(operator) ->
             {:halt, deny_no_organization(socket)}
 
-          operator.role == previous.role and operator.organization_id == previous.organization_id ->
+          operator.role == previous.role and operator.organization_id == previous.organization_id and
+              operator.tenant_id == previous.tenant_id ->
             {:cont, assign_operator(socket, operator)}
 
           true ->

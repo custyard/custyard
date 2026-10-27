@@ -1,0 +1,304 @@
+defmodule CustyardWeb.Operator.TenantSettingsLive do
+  use CustyardWeb, :live_view
+  import Ecto.Query
+  alias Custyard.{OperatorAccount, Repo, Tenants}
+  alias CustyardWeb.Uploads
+
+  def mount(_, _, socket) do
+    if Tenants.can_manage?(socket.assigns.current_operator, socket.assigns.current_tenant) do
+      {:ok,
+       socket
+       |> assign(:page_title, "Tenant settings")
+       |> load()
+       |> allow_upload(:logo,
+         accept: ~w(.png .jpg .jpeg .svg .webp),
+         max_entries: 1,
+         max_file_size: 2_000_000
+       ), layout: {CustyardWeb.Layouts, :operator}}
+    else
+      {:ok, redirect(socket, to: ~p"/operator")}
+    end
+  end
+
+  def handle_event("save", %{"tenant" => attrs}, socket) do
+    if Tenants.can_manage?(socket.assigns.current_operator, socket.assigns.current_tenant) do
+      save_tenant(socket, attrs)
+    else
+      {:noreply, put_flash(socket, :error, "Tenant administrator required")}
+    end
+  end
+
+  def handle_event("validate", %{"tenant" => attrs}, socket) do
+    changeset =
+      Tenants.change_tenant(socket.assigns.current_tenant, Map.delete(attrs, "logo_url"))
+
+    {:noreply,
+     socket
+     |> assign(:form, to_form(%{changeset | action: :validate}))
+     |> assign(:remove_logo, attrs["remove_logo"] == "true")}
+  end
+
+  def handle_event("cancel_logo_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :logo, ref)}
+  end
+
+  def handle_event("invite", %{"staff" => attrs}, socket) do
+    tenant = socket.assigns.current_tenant
+
+    if Tenants.can_manage?(socket.assigns.current_operator, tenant) do
+      changeset =
+        OperatorAccount.changeset(%OperatorAccount{}, %{
+          email: attrs["email"],
+          role: attrs["role"],
+          tenant_id: tenant.id
+        })
+
+      changeset =
+        if attrs["role"] in ["admin", "agent"],
+          do: changeset,
+          else: Ecto.Changeset.add_error(changeset, :role, "must be administrator or agent")
+
+      case Repo.insert(changeset) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> load()
+           |> put_flash(
+             :info,
+             "Staff account added. They can request a login link on the sign-in page."
+           )}
+
+        {:error, changeset} ->
+          {:noreply, assign(socket, :staff_form, to_form(changeset, as: :staff))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Tenant administrator required")}
+    end
+  end
+
+  def handle_event("remove_staff", %{"id" => id}, socket) do
+    with {staff_id, ""} <- Integer.parse(id),
+         {:ok, _} <-
+           Tenants.remove_staff(
+             socket.assigns.current_operator,
+             socket.assigns.current_tenant.id,
+             staff_id
+           ) do
+      {:noreply, socket |> load() |> put_flash(:info, "Staff access removed")}
+    else
+      {:error, :self_removal} ->
+        {:noreply, put_flash(socket, :error, "Ask another administrator to remove your access")}
+
+      {:error, :last_admin} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Add another tenant administrator before removing this account"
+         )}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Could not remove staff access")}
+    end
+  end
+
+  def handle_event("grant_tenant_access", %{"id" => id}, socket) do
+    with {staff_id, ""} <- Integer.parse(id),
+         {:ok, _} <-
+           Tenants.grant_tenant_access(
+             socket.assigns.current_operator,
+             socket.assigns.current_tenant.id,
+             staff_id
+           ) do
+      {:noreply,
+       socket
+       |> load()
+       |> put_flash(
+         :info,
+         "Tenant access granted. The staff member must sign in again."
+       )}
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Could not grant tenant access")}
+    end
+  end
+
+  defp save_tenant(socket, attrs) do
+    if logo_ready?(socket) do
+      save_tenant_logo(socket, attrs)
+    else
+      {:noreply,
+       put_flash(socket, :error, "Choose a logo under 2 MB and wait for the upload to finish")}
+    end
+  end
+
+  defp save_tenant_logo(socket, attrs) do
+    old_logo = socket.assigns.current_tenant.logo_url
+
+    uploaded_logo =
+      socket
+      |> consume_uploaded_entries(:logo, fn %{path: path}, entry ->
+        {:ok, Uploads.save_logo(path, entry.client_name)}
+      end)
+      |> List.first()
+
+    logo = resolved_logo(attrs, uploaded_logo, old_logo)
+
+    attrs = Map.put(attrs, "logo_url", logo)
+
+    case Tenants.update_tenant(socket.assigns.current_tenant, attrs) do
+      {:ok, tenant} ->
+        if old_logo && old_logo != logo, do: Uploads.delete_logo(old_logo)
+
+        {:noreply,
+         socket
+         |> assign(:current_tenant, tenant)
+         |> load()
+         |> put_flash(:info, "Tenant updated")}
+
+      {:error, changeset} ->
+        if uploaded_logo, do: Uploads.delete_logo(uploaded_logo)
+        {:noreply, assign(socket, :form, to_form(changeset))}
+    end
+  end
+
+  defp load(socket) do
+    tenant = socket.assigns.current_tenant
+
+    socket
+    |> assign(:form, to_form(Tenants.change_tenant(tenant)))
+    |> assign(
+      :legacy_staff,
+      if(OperatorAccount.super_admin?(socket.assigns.current_operator),
+        do: Tenants.legacy_staff(tenant.id),
+        else: []
+      )
+    )
+    |> assign(:remove_logo, false)
+    |> assign(:staff_form, to_form(%{"email" => "", "role" => "agent"}, as: :staff))
+    |> assign(
+      :staff,
+      Repo.all(from o in OperatorAccount, where: o.tenant_id == ^tenant.id, order_by: o.email)
+    )
+  end
+
+  defp logo_ready?(socket) do
+    upload_errors(socket.assigns.uploads.logo) == [] and
+      Enum.all?(socket.assigns.uploads.logo.entries, fn entry ->
+        entry.done? and upload_errors(socket.assigns.uploads.logo, entry) == []
+      end)
+  end
+
+  defp resolved_logo(_attrs, uploaded, _old) when is_binary(uploaded), do: uploaded
+  defp resolved_logo(%{"remove_logo" => "true"}, _uploaded, _old), do: nil
+  defp resolved_logo(_attrs, _uploaded, old), do: old
+
+  def render(assigns) do
+    ~H"""
+    <div class="max-w-2xl mx-auto p-6 space-y-8">
+      <.header>
+        Tenant settings<:subtitle>{@current_tenant.name} · {Tenants.host(@current_tenant)}</:subtitle>
+      </.header>
+      <.simple_form for={@form} id="tenant-settings" phx-submit="save" phx-change="validate">
+        <.input field={@form[:name]} label="Name" required />
+        <.input field={@form[:slug]} label="Subdomain" required />
+        <.input field={@form[:custom_domain]} label="Custom domain" />
+        <p class="text-sm">
+          Point the domain at {Tenants.app_host()} and configure TLS with your hosting provider. Customer portal links keep their private token.
+        </p>
+        <div>
+          <label for={@uploads.logo.ref} class="block text-sm font-semibold mb-2">Logo</label>
+          <img
+            :if={@current_tenant.logo_url}
+            src={@current_tenant.logo_url}
+            alt="Current tenant logo"
+            class="h-12 w-auto mb-2"
+            data-testid="tenant-logo-preview"
+          />
+          <.live_file_input upload={@uploads.logo} class="text-sm" />
+          <p class="text-xs text-gray-500 mt-1">PNG, JPEG, SVG or WebP. Maximum 2 MB.</p>
+          <div :for={entry <- @uploads.logo.entries} class="mt-2 text-sm">
+            <span>{entry.client_name} · {entry.progress}%</span>
+            <button
+              type="button"
+              phx-click="cancel_logo_upload"
+              phx-value-ref={entry.ref}
+              class="ml-2 text-indigo-600"
+            >Cancel upload</button>
+            <p :for={error <- upload_errors(@uploads.logo, entry)} role="alert" class="text-red-600">
+              {upload_error(error)}
+            </p>
+          </div>
+          <p :for={error <- upload_errors(@uploads.logo)} role="alert" class="text-red-600">
+            {upload_error(error)}
+          </p>
+          <label :if={@current_tenant.logo_url} class="flex gap-2 items-center mt-2 text-sm">
+            <input type="hidden" name="tenant[remove_logo]" value="false" />
+            <input type="checkbox" name="tenant[remove_logo]" value="true" checked={@remove_logo} />
+            Remove logo
+          </label>
+        </div>
+        <.input field={@form[:primary_color]} label="Brand color (#RRGGBB)" />
+        <:actions><.button>Save tenant</.button></:actions>
+      </.simple_form>
+      <.link navigate={~p"/operator/email-setup"} class="text-indigo-600">Set up support email</.link>
+      <section :if={@legacy_staff != []} id="legacy-staff" class="space-y-3">
+        <h2 class="font-semibold">Review existing organization access</h2>
+        <p class="text-sm">These accounts still have access to one customer organization.
+          Granting tenant access lets them work with every customer in {@current_tenant.name} using their current role. Administrator accounts also gain tenant and email setup controls.
+          Existing sessions will be signed out.</p>
+        <div
+          :for={staff <- @legacy_staff}
+          data-testid={"legacy-staff-#{staff.id}"}
+          class="flex items-center justify-between gap-4 py-2"
+        >
+          <p>{staff.email} · {staff.role} · {staff.organization.name}</p>
+          <button
+            type="button"
+            phx-click="grant_tenant_access"
+            phx-value-id={staff.id}
+            data-confirm={"Grant #{staff.email} access to every customer in #{@current_tenant.name} as #{staff.role}? They must sign in again."}
+            phx-disable-with="Granting..."
+            class="text-sm text-indigo-600"
+          >Grant tenant access</button>
+        </div>
+      </section>
+      <section>
+        <h2 class="font-semibold">Staff</h2>
+        <p class="text-sm">Staff can work with every customer organization in this tenant.</p>
+        <div
+          :for={staff <- @staff}
+          class="flex items-center justify-between gap-4 py-2"
+          data-testid={"staff-#{staff.id}"}
+        >
+          <p>{staff.email} · {staff.role}</p>
+          <button
+            :if={staff.id != @current_operator.id}
+            type="button"
+            phx-click="remove_staff"
+            phx-value-id={staff.id}
+            data-confirm={"Remove access for #{staff.email}? Their staff account will be deleted. Conversation history stays available."}
+            phx-disable-with="Removing..."
+            class="text-sm text-red-700 dark:text-red-400"
+            aria-label={"Remove staff account #{staff.email}"}
+          >Remove</button>
+        </div>
+        <.simple_form for={@staff_form} id="tenant-staff" phx-submit="invite">
+          <.input field={@staff_form[:email]} label="Staff email" type="email" required />
+          <.input
+            field={@staff_form[:role]}
+            label="Role"
+            type="select"
+            options={[{"Agent", "agent"}, {"Administrator", "admin"}]}
+          />
+          <:actions><.button>Add staff account</.button></:actions>
+        </.simple_form>
+      </section>
+    </div>
+    """
+  end
+
+  defp upload_error(:too_large), do: "Logo must be under 2 MB"
+  defp upload_error(:not_accepted), do: "Use PNG, JPEG, SVG or WebP"
+  defp upload_error(:too_many_files), do: "Choose one logo"
+  defp upload_error(_), do: "Logo upload failed; choose the file again"
+end

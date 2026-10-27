@@ -153,9 +153,9 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
       conn = login(conn, agent)
 
-      # Organizations is an admin-only route
+      # Email setup remains an admin-only route
       assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/organizations")
+               live(conn, ~p"/operator/email-setup")
     end
 
     test "allows admin to access admin-only routes", %{conn: conn} do

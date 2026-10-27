@@ -63,12 +63,23 @@ defmodule CustyardWeb.Plugs.PortalAuth do
         |> halt()
 
       org ->
-        is_custom_domain = custom_domain?(conn)
+        if conn.assigns[:host_tenant] && conn.assigns.host_tenant.id != org.tenant_id do
+          conn |> send_resp(404, "Not found") |> halt()
+        else
+          is_custom_domain = custom_domain?(conn)
 
-        conn
-        |> assign(:current_org, org)
-        |> put_session(:portal_org_id, org.id)
-        |> put_session(:portal_custom_domain, is_custom_domain)
+          conn
+          |> assign(:current_org, org)
+          |> assign(
+            :portal_branding,
+            if(org.tenant_id == 1,
+              do: org,
+              else: Custyard.Tenants.branding(Custyard.Tenants.get_tenant!(org.tenant_id))
+            )
+          )
+          |> put_session(:portal_org_id, org.id)
+          |> put_session(:portal_custom_domain, is_custom_domain)
+        end
     end
   end
 

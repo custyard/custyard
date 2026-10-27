@@ -13,6 +13,7 @@ defmodule CustyardWeb.Router do
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
+    plug CustyardWeb.Plugs.TenantSession
     plug :fetch_live_flash
     plug :put_root_layout, html: {CustyardWeb.Layouts, :root}
     plug :protect_from_forgery
@@ -33,6 +34,7 @@ defmodule CustyardWeb.Router do
   end
 
   pipeline :portal_auth do
+    plug CustyardWeb.Plugs.NoReferrer
     plug CustyardWeb.Plugs.PortalAuth
     plug :put_root_layout, html: {CustyardWeb.Layouts, :portal_root}
   end
@@ -128,6 +130,7 @@ defmodule CustyardWeb.Router do
     # in the controller (spec-inbound-channels D9).
     get "/attachments/:id", AttachmentController, :show
     get "/attachments/:id/inline", AttachmentController, :inline
+    post "/tenants/:id/select", TenantController, :select
 
     # All authenticated operators
     live_session :operator,
@@ -137,20 +140,23 @@ defmodule CustyardWeb.Router do
       live "/projects", ProjectsLive, :index
       live "/projects/:id", ProjectDetailLive, :show
       live "/neglect", NeglectReportLive, :index
+      live "/organizations", OrganizationsLive, :index
+      live "/organizations/:id", OrganizationDetailLive, :show
     end
 
     # Admin+ only
     live_session :operator_admin,
       on_mount: [{CustyardWeb.Live.OperatorAuth, :require_admin}] do
-      live "/organizations", OrganizationsLive, :index
-      live "/organizations/:id", OrganizationDetailLive, :show
+      live "/email-setup", EmailSetupLive, :index
+      live "/tenant", TenantSettingsLive, :index
+      live "/intake-sources", IntakeSourcesLive, :index
     end
 
     # Super admin only
     live_session :operator_super_admin,
       on_mount: [{CustyardWeb.Live.OperatorAuth, :require_super_admin}] do
       live "/settings", SettingsLive, :index
-      live "/intake-sources", IntakeSourcesLive, :index
+      live "/tenants", TenantsLive, :index
       live "/slugs", SlugsLive, :index
       live "/acknowledgments", AcknowledgmentsLive, :index
     end

@@ -13,43 +13,46 @@ defmodule CustyardWeb.Live.PortalAuth do
   alias Custyard.{Organization, Repo}
 
   def on_mount(:default, params, session, socket) do
-    org_id = session["portal_org_id"]
-    is_custom_domain = session["portal_custom_domain"] || false
-    url_token = params["org_token"]
+    with id when not is_nil(id) <- session["portal_org_id"],
+         %Organization{} = org <- Repo.get(Organization, id) do
+      mount_organization(org, params, session, socket)
+    else
+      _ -> {:halt, Phoenix.LiveView.redirect(socket, to: "/")}
+    end
+  end
 
-    case org_id do
-      nil ->
+  defp mount_organization(org, params, session, socket) do
+    custom_domain? = session["portal_custom_domain"] || false
+
+    host_allowed? =
+      is_nil(session["host_tenant_id"]) or session["host_tenant_id"] == org.tenant_id
+
+    token_allowed? = is_nil(params["org_token"]) or org.token == params["org_token"]
+
+    cond do
+      not host_allowed? ->
         {:halt, Phoenix.LiveView.redirect(socket, to: "/")}
 
-      _ ->
-        case Repo.get(Organization, org_id) do
-          nil ->
-            {:halt, Phoenix.LiveView.redirect(socket, to: "/")}
+      not token_allowed? ->
+        {:halt, Phoenix.LiveView.redirect(socket, to: "/p/#{org.token}")}
 
-          org ->
-            # Validate URL token matches session org. On a custom domain the
-            # LiveView connects on the un-prefixed URL and carries no token,
-            # so the check simply does not apply there; a session flag alone
-            # must never waive it, or a socket could join /p/<anything>/...
-            # on the strength of a cookie.
-            if is_nil(url_token) or org.token == url_token do
-              {:cont,
-               socket
-               |> assign(:current_org, org)
-               |> assign(:is_custom_domain, is_custom_domain)
-               # White-label: use org name in page titles and browser chrome
-               |> assign(:site_name, org.name)
-               |> assign_portal_paths(org, is_custom_domain)}
-            else
-              # URL token doesn't match session - redirect to session org's portal
-              # (not the URL token, which would create a loop or wrong-org confusion)
-              {:halt, Phoenix.LiveView.redirect(socket, to: "/p/#{org.token}")}
-            end
-        end
+      true ->
+        {:cont,
+         socket
+         |> assign(:current_org, org)
+         |> assign(:is_custom_domain, custom_domain?)
+         |> assign(:site_name, org.name)
+         |> assign(:portal_branding, portal_branding(org))
+         |> assign_portal_paths(org, custom_domain?)}
     end
   end
 
   # Generate portal navigation paths based on domain type.
+  defp portal_branding(%{tenant_id: 1} = org), do: org
+
+  defp portal_branding(org),
+    do: Custyard.Tenants.branding(Custyard.Tenants.get_tenant!(org.tenant_id))
+
   # Custom domains get an empty prefix, so appending /new yields /new rather
   # than the protocol-relative URL //new.
   # Standard access gets token-prefixed paths (/p/:token).

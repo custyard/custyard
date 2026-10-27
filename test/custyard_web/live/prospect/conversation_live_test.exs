@@ -65,6 +65,72 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
   end
 
   describe "mount and thread rendering" do
+    test "only explicitly shared tasks appear and live changes refresh their state" do
+      %{conversation: conversation, access_token: token} = create_intake!()
+      other = insert_conversation(source: :public_intake)
+
+      insert_task(
+        conversation_id: other.id,
+        title: "Other conversation task",
+        portal_visible: true
+      )
+
+      insert_task(
+        conversation_id: conversation.id,
+        title: "Private investigation",
+        portal_visible: false
+      )
+
+      shared =
+        insert_task(
+          conversation_id: conversation.id,
+          title: "Send corrected invoice",
+          portal_visible: true,
+          due_at: ~U[2026-11-20 16:45:00Z]
+        )
+
+      operator = insert_operator_account()
+      {:ok, _label} = Custyard.Labels.create_and_assign(operator, conversation, "Private label")
+
+      {:ok, view, html} = live(build_conn(), ~p"/c/#{token}")
+
+      assert has_element?(
+               view,
+               "[data-testid=resume-task-#{shared.id}]",
+               "Send corrected invoice"
+             )
+
+      assert html =~ "2026-11-20 16:45 UTC"
+      refute html =~ "Private investigation"
+      refute html =~ "Other conversation task"
+      refute html =~ "Private label"
+      refute has_element?(view, "[data-testid=resume-tasks] button")
+
+      {:ok, shared} = Conversations.update_task_state(shared, :done)
+      assert has_element?(view, "[data-testid=resume-task-#{shared.id}]", "Done")
+      {:ok, _} = Conversations.update_task(shared, %{portal_visible: false})
+      refute has_element?(view, "[data-testid=resume-tasks]")
+    end
+
+    test "task refresh does not reveal new content after the token is revoked" do
+      %{conversation: conversation, access_token: token} = create_intake!()
+      {:ok, view, _} = live(build_conn(), ~p"/c/#{token}")
+      prospect = Intake.get_prospect(conversation)
+
+      prospect
+      |> Ecto.Changeset.change(revoked_at: DateTime.utc_now() |> DateTime.truncate(:second))
+      |> Repo.update!()
+
+      {:ok, _} =
+        Conversations.create_task(%{
+          conversation_id: conversation.id,
+          title: "Must remain private",
+          portal_visible: true
+        })
+
+      assert_redirect(view, @unavailable)
+    end
+
     test "a fresh session shows the thread including operator replies" do
       %{conversation: conversation, access_token: token} = create_intake!()
 

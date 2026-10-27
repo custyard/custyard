@@ -33,13 +33,17 @@ defmodule CustyardWeb.Live.ProspectAuth do
   import Phoenix.LiveView
 
   alias Custyard.Auth.Token
-  alias Custyard.{Intake, RateLimit, Settings}
+  alias Custyard.{Intake, RateLimit, Settings, Tenants}
   alias CustyardWeb.ClientIP
 
   @unavailable_path "/c/unavailable"
 
-  def on_mount(:default, params, _session, socket) do
-    socket = assign(socket, :branding, Settings.get_branding())
+  def on_mount(:default, params, session, socket) do
+    socket =
+      socket
+      |> assign(:branding, Settings.get_branding())
+      |> assign(:host_tenant_id, session["host_tenant_id"])
+
     client_ip = ClientIP.from_socket(socket)
 
     case RateLimit.check_rate(:conversation_mount, client_ip || "unknown") do
@@ -57,11 +61,26 @@ defmodule CustyardWeb.Live.ProspectAuth do
   defp authenticate(token, client_ip, socket) when is_binary(token) do
     case Intake.get_conversation_by_access_token(token) do
       {:ok, conversation} ->
-        {:cont,
-         socket
-         |> assign(:conversation, conversation)
-         |> assign(:access_token_hash, Token.hash(token))
-         |> assign(:client_ip, client_ip)}
+        tenant_allowed? =
+          is_nil(socket.assigns.host_tenant_id) or
+            socket.assigns.host_tenant_id == conversation.tenant_id
+
+        if tenant_allowed? do
+          {:cont,
+           socket
+           |> assign(:conversation, conversation)
+           |> assign(
+             :branding,
+             if(conversation.tenant_id == 1,
+               do: Settings.get_branding(),
+               else: Tenants.branding(Tenants.get_tenant!(conversation.tenant_id))
+             )
+           )
+           |> assign(:access_token_hash, Token.hash(token))
+           |> assign(:client_ip, client_ip)}
+        else
+          {:halt, redirect(socket, to: @unavailable_path)}
+        end
 
       {:error, :not_found} ->
         {:halt, redirect(socket, to: @unavailable_path)}

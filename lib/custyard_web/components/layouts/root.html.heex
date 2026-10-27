@@ -1,45 +1,69 @@
-<!DOCTYPE html>
+<% branding = root_branding(assigns) %> <!DOCTYPE html>
 <html lang="en" class="[scrollbar-gutter:stable]">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <meta name="description" content="Customer service and support platform" />
+    <meta name="description" content={branding.description} />
     <%!-- Theme & browser chrome --%>
-    <meta name="theme-color" content="#FD4F00" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content={branding.color} media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#18181B" media="(prefers-color-scheme: dark)" />
     <meta name="color-scheme" content="light dark" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content={assigns[:site_name] || "Custyard"} />
-    <meta name="application-name" content={assigns[:site_name] || "Custyard"} />
+    <meta name="apple-mobile-web-app-title" content={branding.name} />
+    <meta name="application-name" content={branding.name} />
     <%!-- Open Graph --%>
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content={assigns[:site_name] || "Custyard"} />
-    <meta property="og:title" content={assigns[:page_title] || assigns[:site_name] || "Custyard"} />
-    <meta property="og:description" content="Customer service and support platform" />
-    <meta property="og:image" content={~p"/images/og-image.png"} />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Custyard — Customer service and support platform" />
+    <meta property="og:site_name" content={branding.name} />
+    <meta property="og:title" content={assigns[:page_title] || branding.name} />
+    <meta property="og:description" content={branding.description} />
+    <meta
+      :if={not branding.tenant? or branding.logo}
+      property="og:image"
+      content={branding.logo || ~p"/images/og-image.png"}
+    />
+    <meta :if={not branding.tenant?} property="og:image:width" content="1200" />
+    <meta :if={not branding.tenant?} property="og:image:height" content="630" />
+    <meta
+      :if={not branding.tenant? or branding.logo}
+      property="og:image:alt"
+      content={branding.name <> " — " <> branding.description}
+    />
     <%!-- Twitter Card --%>
-    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:card"
+      content={if branding.tenant?, do: "summary", else: "summary_large_image"}
+    />
     <meta
       name="twitter:title"
-      content={assigns[:page_title] || assigns[:site_name] || "Custyard"}
+      content={assigns[:page_title] || branding.name}
     />
-    <meta name="twitter:description" content="Customer service and support platform" />
-    <meta name="twitter:image" content={~p"/images/og-image.png"} />
-    <meta name="twitter:image:alt" content="Custyard — Customer service and support platform" />
-    <.live_title suffix={" · " <> (assigns[:site_name] || "Custyard")}>
-      {assigns[:page_title] || assigns[:site_name] || "Custyard"}
+    <meta name="twitter:description" content={branding.description} />
+    <meta
+      :if={not branding.tenant? or branding.logo}
+      name="twitter:image"
+      content={branding.logo || ~p"/images/og-image.png"}
+    />
+    <meta
+      :if={not branding.tenant? or branding.logo}
+      name="twitter:image:alt"
+      content={branding.name <> " — " <> branding.description}
+    />
+    <.live_title suffix={" · " <> branding.name}>
+      {assigns[:page_title] || branding.name}
     </.live_title>
     <%!-- Favicon & icons --%>
-    <link rel="icon" href={~p"/favicon.svg"} type="image/svg+xml" />
-    <link rel="icon" href={~p"/favicon.ico"} sizes="32x32" />
-    <link rel="apple-touch-icon" href={~p"/images/apple-touch-icon.png"} />
-    <link rel="manifest" href="/site.webmanifest" />
+    <%= if branding.tenant? do %>
+      <link rel="icon" href={branding.logo || "data:,"} />
+      <link :if={branding.logo} rel="apple-touch-icon" href={branding.logo} />
+    <% else %>
+      <link rel="icon" href={~p"/favicon.svg"} type="image/svg+xml" />
+      <link rel="icon" href={~p"/favicon.ico"} sizes="32x32" />
+      <link rel="apple-touch-icon" href={~p"/images/apple-touch-icon.png"} />
+      <link rel="manifest" href="/site.webmanifest" />
+    <% end %>
     <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
     </script>

@@ -16,7 +16,7 @@ defmodule CustyardWeb.ClaimConfirmationController do
 
   use CustyardWeb, :controller
 
-  alias Custyard.{Settings, Slugs}
+  alias Custyard.{Conversation, Repo, Settings, Slugs, Tenants}
 
   plug :put_layout, html: {CustyardWeb.Layouts, :intake}
   # Shape check BEFORE the rate limit: a path segment that cannot possibly
@@ -31,26 +31,38 @@ defmodule CustyardWeb.ClaimConfirmationController do
   plug :assign_branding
 
   def show(conn, %{"token" => token}) do
-    case Slugs.peek(token) do
-      {:ok, slug} ->
-        conn
-        |> assign(:page_title, "Confirm your claim")
-        |> render(:show, slug: slug, token: token)
-
-      {:error, :invalid} ->
-        render_unavailable(conn)
+    with {:ok, slug} <- Slugs.peek(token),
+         true <- claim_on_host?(conn, slug) do
+      conn
+      |> assign(:page_title, "Confirm your claim")
+      |> render(:show, slug: slug, token: token)
+    else
+      _ -> render_unavailable(conn)
     end
   end
 
   def confirm(conn, %{"token" => token}) do
-    case Slugs.confirm(token) do
-      {:ok, slug} ->
-        conn
-        |> assign(:page_title, "Claim confirmed")
-        |> render(:confirmed, slug: slug)
+    with {:ok, slug} <- Slugs.peek(token),
+         true <- claim_on_host?(conn, slug),
+         {:ok, confirmed} <- Slugs.confirm(token) do
+      conn
+      |> assign(:page_title, "Claim confirmed")
+      |> render(:confirmed, slug: confirmed)
+    else
+      _ -> render_unavailable(conn)
+    end
+  end
 
-      {:error, :invalid} ->
-        render_unavailable(conn)
+  defp claim_on_host?(conn, slug) do
+    case conn.assigns[:host_tenant] do
+      nil ->
+        true
+
+      %{id: tenant_id} ->
+        case Repo.get(Conversation, slug.conversation_id) do
+          %{tenant_id: ^tenant_id} -> true
+          _ -> false
+        end
     end
   end
 
@@ -82,6 +94,12 @@ defmodule CustyardWeb.ClaimConfirmationController do
   end
 
   defp assign_branding(conn, _opts) do
-    assign(conn, :branding, Settings.get_branding())
+    branding =
+      case conn.assigns[:host_tenant] do
+        %{id: id} = tenant when id != 1 -> Tenants.branding(tenant)
+        _ -> Settings.get_branding()
+      end
+
+    assign(conn, :branding, branding)
   end
 end

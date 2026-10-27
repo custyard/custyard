@@ -164,6 +164,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
           flash: %{},
           current_operator: operator,
           editing_source: source,
+          current_tenant: Custyard.Tenants.default_tenant(),
           form_params: %{},
           questions: [],
           sources: []
@@ -447,7 +448,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
         )
 
       assert after_save.assigns.flash["error"] ==
-               "Only super admins can modify intake sources"
+               "Only tenant administrators can modify intake sources"
 
       refute Repo.get_by(IntakeSource, key: "sneaky")
 
@@ -455,7 +456,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
         IntakeSourcesLive.handle_event("delete", %{"id" => to_string(source.id)}, socket)
 
       assert after_delete.assigns.flash["error"] ==
-               "Only super admins can modify intake sources"
+               "Only tenant administrators can modify intake sources"
 
       assert Repo.get(IntakeSource, source.id)
 
@@ -463,7 +464,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
         IntakeSourcesLive.handle_event("toggle_enabled", %{"id" => to_string(source.id)}, socket)
 
       assert after_toggle.assigns.flash["error"] ==
-               "Only super admins can modify intake sources"
+               "Only tenant administrators can modify intake sources"
 
       assert Repo.get!(IntakeSource, source.id).enabled == true
     end

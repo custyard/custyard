@@ -50,6 +50,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           |> assign(:organization, org)
           |> assign(:tab, "conversations")
           |> assign(:can_manage_routes, false)
+          |> assign(:checking_domain_id, nil)
           |> assign(:setup_channel_id, nil)
           |> load_tab_data(org, "conversations")
 
@@ -229,18 +230,17 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
 
   def handle_event("check_channel_domain", %{"id" => id}, socket) do
     with_managed_channel(socket, id, fn channel ->
-      case InboundChannels.check_sending_domain(channel,
-             operator: socket.assigns.current_operator
-           ) do
-        {:ok, _channel} ->
-          {:noreply, refresh_channels(socket)}
+      operator = socket.assigns.current_operator
 
-        {:error, reason} ->
-          Logger.error(
-            "Sending-domain check failed for channel #{channel.id}: #{inspect(reason)}"
-          )
-
-          {:noreply, put_flash(socket, :error, "Could not check the sending domain")}
+      if socket.assigns.checking_domain_id do
+        {:noreply, socket}
+      else
+        {:noreply,
+         socket
+         |> assign(:checking_domain_id, channel.id)
+         |> start_async(:channel_domain, fn ->
+           InboundChannels.check_sending_domain(channel, operator: operator)
+         end)}
       end
     end)
   end
@@ -345,7 +345,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             {:noreply, put_flash(socket, :error, "Failed to create route: #{message}")}
 
           {:error, reason} ->
-            Logger.error("Failed to create route: #{inspect(reason)}")
+            Logger.error("Failed to create route: #{Custyard.EmailSetup.error_message(reason)}")
             {:noreply, put_flash(socket, :error, "Failed to create route")}
         end
       else
@@ -494,10 +494,33 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         {:noreply, load_tab_data(socket, socket.assigns.organization, "routes")}
 
       {:error, reason} ->
-        Logger.error("Failed to toggle webhook: #{inspect(reason)}")
+        Logger.error("Failed to toggle webhook: #{Custyard.EmailSetup.error_message(reason)}")
         {:noreply, put_flash(socket, :error, "Failed to toggle webhook")}
     end
   end
+
+  @impl true
+  def handle_async(:channel_domain, {:ok, {:ok, _}}, socket),
+    do:
+      {:noreply,
+       socket
+       |> assign(:checking_domain_id, nil)
+       |> refresh_channels()
+       |> put_flash(:info, "Sending domain checked")}
+
+  def handle_async(:channel_domain, {:ok, {:error, reason}}, socket),
+    do:
+      {:noreply,
+       socket
+       |> assign(:checking_domain_id, nil)
+       |> put_flash(:error, Custyard.EmailSetup.error_message(reason))}
+
+  def handle_async(:channel_domain, {:exit, _}, socket),
+    do:
+      {:noreply,
+       socket
+       |> assign(:checking_domain_id, nil)
+       |> put_flash(:error, "The sending-domain check could not finish. Try again.")}
 
   defp delete_org_route(socket, route) do
     if InboundRoutes.is_last_general_route?(route) do
@@ -515,7 +538,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           {:noreply, socket}
 
         {:error, reason} ->
-          Logger.error("Failed to delete route: #{inspect(reason)}")
+          Logger.error("Failed to delete route: #{Custyard.EmailSetup.error_message(reason)}")
           {:noreply, put_flash(socket, :error, "Failed to delete route")}
       end
     end
@@ -535,6 +558,14 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   def render(assigns) do
     ~H"""
     <div class="h-full flex flex-col" data-testid="operator-org-detail">
+      <p
+        :if={@checking_domain_id}
+        role="status"
+        data-testid="channel-domain-progress"
+        class="text-sm p-3"
+      >
+        Checking the sending domain…
+      </p>
       <%!-- Header --%>
       <div class="bg-white dark:bg-zinc-800 border-b border-gray-200 dark:border-zinc-700 px-4 py-4">
         <div class="flex items-center gap-4">
@@ -655,6 +686,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
               current_operator={@current_operator}
             />
             <details
+              :if={@can_manage_routes}
               class="mt-6 rounded-lg border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-900 p-3"
               data-testid="org-routes-advanced"
             >
@@ -1677,8 +1709,14 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         <%!-- Webhook purpose toggles --%>
         <div>
           <div class="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-1">
-            Webhook Purposes
+            Advanced processing
           </div>
+          <p class="text-xs text-gray-500 mb-2">
+            These controls run after mail reaches this inbox. Configure the actual Lettermint webhook in <.link
+              navigate={~p"/operator/email-setup"}
+              class="underline"
+            >Email setup</.link>.
+          </p>
           <div class="space-y-0.5">
             <%= for purpose <- Custyard.InboundRouteWebhook.purposes() do %>
               <% webhook = Enum.find(route.webhooks, fn w -> w.purpose == purpose end) %>
