@@ -168,7 +168,7 @@ def build_plan(event, run_id, attempt, current, files):
     for file in files:
         patch_size = len(file.get("patch") or "")
         patch_lines = len((file.get("patch") or "").splitlines())
-        if batch and (len(batch) >= 15 or size + patch_size > 50_000 or lines + patch_lines > 800):
+        if batch and (len(batch) >= 5 or size + patch_size > 50_000 or lines + patch_lines > 800):
             batches.append(batch)
             batch, size, lines = [], 0, 0
         batch.append(file)
@@ -222,6 +222,8 @@ def combine_results(plan, receipts):
         if receipt.get("verified") is not True or set(receipt.get("files", [])) != expected:
             detail = receipt.get("error", "incomplete or invalid coverage")
             errors.append(f"Review {shard['id'] + 1}: {detail}")
+            if explanation := receipt.get("blocker_summary"):
+                errors.append(f"Review {shard['id'] + 1} explanation: {explanation[:800]}")
             continue
         reviewed.update(expected)
         summaries.append((shard["id"] + 1, receipt["summary"], receipt.get("warning", "")))
@@ -285,10 +287,12 @@ def batch_command(mode):
         shard_id = int(os.environ["REVIEW_SHARD"])
         if shard_id < 0 or shard_id >= len(plan["shards"]):
             raise IncompleteReview("Unknown review shard.")
+        messages = None
         try:
             execution = os.environ.get("CLAUDE_EXECUTION_FILE") or str(
                 Path(os.environ["RUNNER_TEMP"]) / "claude-execution-output.json")
-            receipt = verify_shard(json.loads(Path(execution).read_text()), plan, shard_id)
+            messages = json.loads(Path(execution).read_text())
+            receipt = verify_shard(messages, plan, shard_id)
             if receipt["warning"]:
                 print("::warning::" + receipt["warning"])
         except (IncompleteReview, OSError, ValueError, KeyError, TypeError) as error:
@@ -297,6 +301,16 @@ def batch_command(mode):
                        "attempt": str(attempt), "verified": False, "files": [],
                        "error": str(error) if isinstance(error, IncompleteReview)
                        else "Required execution output is missing or invalid."}
+            # Retain only the model's bounded, structured summary, as we do on
+            # success. Never retain transcript messages or raw provider errors.
+            results = ([m for m in messages if isinstance(m, dict) and m.get("type") == "result"]
+                       if isinstance(messages, list) else [])
+            if (len(results) == 1 and results[0].get("subtype") == "success"
+                    and results[0].get("is_error") is False
+                    and isinstance(report := results[0].get("structured_output"), dict)
+                    and isinstance(explanation := report.get("summary"), str)
+                    and 0 < len(explanation.strip()) <= 3000):
+                receipt["blocker_summary"] = explanation
         result_dir.mkdir(parents=True, exist_ok=True)
         (result_dir / f"result-{shard_id}.json").write_text(json.dumps(receipt))
         if not receipt["verified"]:
