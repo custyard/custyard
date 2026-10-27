@@ -11,9 +11,26 @@ defmodule Custyard.Labels do
   }
 
   def list_for_operator(operator, tenant_id \\ nil) do
-    tenant_id = tenant_id || operator.tenant_id || Custyard.Tenants.default_tenant().id
+    operator_tenant_id =
+      cond do
+        is_integer(operator.tenant_id) ->
+          operator.tenant_id
 
-    if operator.role == "super_admin" or operator.tenant_id == tenant_id do
+        is_integer(operator.organization_id) ->
+          Repo.one(
+            from o in Custyard.Organization,
+              where: o.id == ^operator.organization_id,
+              select: o.tenant_id
+          )
+
+        true ->
+          nil
+      end
+
+    tenant_id = tenant_id || operator_tenant_id || Custyard.Tenants.default_tenant().id
+
+    if operator.role == "super_admin" or
+         (operator.role in ["admin", "agent"] and operator_tenant_id == tenant_id) do
       Repo.all(from l in Label, where: l.tenant_id == ^tenant_id, order_by: l.name)
     else
       []

@@ -87,4 +87,20 @@ defmodule Custyard.LabelsTest do
     assert [%{conversation: %{id: ^id}}] =
              Conversations.list_for_attention_queue(tenant_id: c.tenant.id, label_id: label.id)
   end
+
+  test "legacy customer staff can filter with their workspace labels only", c do
+    {:ok, label} = Labels.create_and_assign(c.operator, c.conversation, "Customer request")
+
+    for role <- ["admin", "agent"] do
+      legacy = insert_operator_account(role: role, organization_id: c.org.id, tenant_id: nil)
+      assert Labels.list_for_operator(legacy) == [label]
+      assert Labels.list_for_operator(legacy, c.tenant.id) == [label]
+      assert Labels.list_for_operator(legacy, c.other_org.tenant_id) == []
+      assert %{available: [^label]} = Labels.for_conversation(legacy, c.conversation)
+    end
+
+    orphan = %Custyard.OperatorAccount{role: "admin", tenant_id: nil, organization_id: nil}
+    assert Labels.list_for_operator(orphan) == []
+    assert Labels.list_for_operator(orphan, c.tenant.id) == []
+  end
 end
