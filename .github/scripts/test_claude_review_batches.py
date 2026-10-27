@@ -35,7 +35,7 @@ class BoundedReviewTest(unittest.TestCase):
         assigned = [f["filename"] for s in self.plan["shards"] for f in s["files"]]
         self.assertEqual(assigned, self.plan["files"])
         self.assertEqual(len(assigned), len(set(assigned)))
-        self.assertTrue(all(len(s["files"]) <= 15 for s in self.plan["shards"]))
+        self.assertTrue(all(len(s["files"]) <= 5 for s in self.plan["shards"]))
 
     def test_patch_size_also_bounds_batches_and_keeps_large_single_files(self):
         files = [{"filename": str(i), "patch": "x" * size}
@@ -85,7 +85,7 @@ class BoundedReviewTest(unittest.TestCase):
     def test_complete_receipts_cover_the_entire_pr(self):
         reviewed, summaries, errors = combine_results(self.plan, self.receipts())
         self.assertEqual(reviewed, set(self.plan["files"]))
-        self.assertEqual(len(summaries), 3)
+        self.assertEqual(len(summaries), 7)
         self.assertEqual(errors, [])
 
     def test_missing_failed_and_partial_receipts_stay_incomplete(self):
@@ -144,11 +144,11 @@ class BoundedReviewTest(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(batch_command("plan"), 0)
             matrix = json.loads(Path(env["GITHUB_OUTPUT"]).read_text().split("=", 1)[1])
-            self.assertEqual(len(matrix["include"]), 3)
+            self.assertEqual(len(matrix["include"]), 7)
             assigned = json.loads((Path(env["REVIEW_PLAN_DIR"]) / "shard-0.json").read_text())
-            self.assertEqual(len(assigned["files"]), 15)
+            self.assertEqual(len(assigned["files"]), 5)
             self.assertNotIn("shards", assigned)
-            self.assertEqual(assigned["assigned_paths"], [f["filename"] for f in self.files[:15]])
+            self.assertEqual(assigned["assigned_paths"], [f["filename"] for f in self.files[:5]])
             self.assertEqual(assigned["files"][0]["patch_lines"], ["small"])
 
     def test_multiline_patches_remain_readable_without_one_long_escaped_line(self):
@@ -190,6 +190,42 @@ class BoundedReviewTest(unittest.TestCase):
             self.assertEqual(json.loads(raw)["files"][0]["patch_lines"], [marked])
             self.assertIn("TextProv", json.loads(raw)["provenance_note"])
 
+    def test_incomplete_review_explanation_is_retained_without_transcript(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.local_context(directory)
+            messages = self.execution(self.plan["shards"][0])
+            messages[0]["structured_output"].update(
+                review_completed=False, blocking_reason="review_not_finished",
+                summary="The assigned README patch could not be read completely.")
+            messages.insert(0, {"type": "assistant", "message": "SECRET_TRANSCRIPT"})
+            execution = Path(directory) / "sdk.json"
+            execution.write_text(json.dumps(messages))
+            env.update(REVIEW_SHARD="0", CLAUDE_EXECUTION_FILE=str(execution))
+            with patch.dict(os.environ, env), self.assertRaises(IncompleteReview):
+                batch_command("shard")
+            raw = (Path(env["REVIEW_RESULT_DIR"]) / "result-0.json").read_text()
+            self.assertNotIn("SECRET_TRANSCRIPT", raw)
+            receipt = json.loads(raw)
+            receipts = self.receipts()
+            receipts[0] = receipt
+            _, _, errors = combine_results(self.plan, receipts)
+            self.assertTrue(any("README patch could not be read completely" in e for e in errors))
+
+    def test_sdk_error_cannot_publish_a_provider_error_as_a_blocker_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.local_context(directory)
+            messages = self.execution(self.plan["shards"][0])
+            messages[0].update(is_error=True, subtype="error_during_execution")
+            messages[0]["structured_output"]["summary"] = "SECRET_PROVIDER_ERROR"
+            execution = Path(directory) / "sdk.json"
+            execution.write_text(json.dumps(messages))
+            env.update(REVIEW_SHARD="0", CLAUDE_EXECUTION_FILE=str(execution))
+            with patch.dict(os.environ, env), self.assertRaises(IncompleteReview):
+                batch_command("shard")
+            raw = (Path(env["REVIEW_RESULT_DIR"]) / "result-0.json").read_text()
+            self.assertNotIn("SECRET_PROVIDER_ERROR", raw)
+            self.assertNotIn("blocker_summary", json.loads(raw))
+
     def test_complete_workflow_publishes_and_verifies_one_combined_comment(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.local_context(directory)
@@ -204,7 +240,7 @@ class BoundedReviewTest(unittest.TestCase):
     def test_missing_receipt_posts_incomplete_and_fails_without_a_success_marker(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.local_context(directory)
-            (Path(env["REVIEW_RESULT_DIR"]) / "result-2.json").unlink()
+            (Path(env["REVIEW_RESULT_DIR"]) / "result-6.json").unlink()
             with patch.dict(os.environ, env), patch("verify_claude_review.github_fetch", side_effect=self.fetch):
                 with patch("verify_claude_review.github_post", return_value={"html_url": "https://example.test/comment"}) as post:
                     with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(IncompleteReview):
