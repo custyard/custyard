@@ -9,90 +9,134 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  claude-review:
-    # Drafts are intentionally skipped; forks and Dependabot cannot use this secret.
+  plan:
     if: >-
       !github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]'
-
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test review guards
+        run: python3 -B -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: Partition every changed file into bounded reviews
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_PLAN_DIR: ${{ runner.temp }}/claude-review-plan
+        run: python3 -B .github/scripts/verify_claude_review.py plan
+      - uses: actions/upload-artifact@v7
+        with:
+          name: claude-review-plan
+          path: ${{ runner.temp }}/claude-review-plan
+          retention-days: 3
+          if-no-files-found: error
+
+  review:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     permissions:
       contents: read
       pull-requests: write
       issues: read
       id-token: write
-
+    env:
+      REVIEW_SHARD: ${{ matrix.shard }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-
-      - name: Test review completion guard
-        run: python3 -B -m unittest discover -s .github/scripts -p 'test_*.py'
-
-      - name: Run Claude Code Review
-        id: claude-review
-        # Claude's app requires this workflow to match main. A workflow change
-        # intentionally fails the completion guard until merged and run on another PR.
+      - uses: actions/download-artifact@v8
+        with:
+          name: claude-review-plan
+          path: ${{ runner.temp }}/claude-review-plan
+      - name: Review assigned files with Claude
+        id: claude
+        # Anthropic requires this workflow to match main before it can run.
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            Perform a code review of https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-            at head commit ${{ github.event.pull_request.head.sha }}.
+            Perform a static code review of ONLY the files assigned in
+            ${{ runner.temp }}/claude-review-plan/shard-${{ matrix.shard }}.json.
+            Read that file first. It contains the repository, PR, head SHA, description,
+            assigned paths and their patches. Do not fetch or attempt the entire PR diff.
+            The checkout contains the PR merge commit. Inspect assigned source files,
+            relevant callers and tests using Read, Glob and Grep. Read missing/truncated
+            patches through a targeted GitHub API GET or git show, never the whole diff.
 
-            This workflow requests a review of every new head, including workflow changes.
-            Do the review directly. Do not invoke a review skill or skip because the PR
-            looks trivial or already has comments. Earlier reviews are context only.
-            Never treat an inability to inspect the PR or use a required tool as a clean review.
+            Review every assigned file. Focus on confirmed bugs, security boundaries,
+            regressions and missing tests for changed behavior. Exclude pre-existing
+            defects, style preferences and speculative findings. Earlier PR feedback is
+            context: consolidate duplicates and do not post an issue already reported.
+            Do not skip because files look trivial or already have comments. Do not
+            execute application code, tests or scripts, modify files or PR metadata,
+            invoke review skills, or use shell probes, pipelines or substitutions.
 
-            First fetch the complete changed-file list with pagination. Review every
-            changed file, including migrations, provider code, authorization, LiveViews,
-            tests and documentation. Inspect relevant implementations and callers.
-            For more than 30 changed files, partition the entire file list into at least
-            three disjoint groups and delegate independent reviews. Give each agent its
-            assigned file list; each must return the files actually reviewed and validated
-            findings. Read manageable file patches and source files rather than trying
-            to consume one huge diff. Consolidate findings and file coverage. Focus on bugs,
-            security boundaries, regressions and missing tests for changed behavior.
-            Exclude style preferences, speculative findings and pre-existing defects.
-
-            Use gh pr view/diff and read-only gh api GET requests to inspect GitHub.
-            The checkout contains the PR merge commit. Do not execute application code,
-            tests or scripts from the PR; this is a static review.
-            Do not modify repository files or PR metadata. Use Read, Glob and Grep for
-            local file inspection, and use literal commands without shell probes,
-            pipelines or environment-variable substitutions. Tell delegated agents the same.
-
-            Post validated findings as inline comments using
-            mcp__github_inline_comment__create_inline_comment with confirmed: true,
-            linking to the full head SHA and explaining the trigger and impact.
-            Consolidate duplicates, including issues already reported by other reviewers.
-
-            After the entire review finishes, always use gh pr comment to post a
-            "Claude code review" completion summary containing the reviewed head SHA,
-            a short summary of findings (or an explicit statement that no issues were found).
-            Include this exact marker on its own line:
-            <!-- claude-review:${{ github.event.pull_request.head.sha }}:${{ github.run_id }}:${{ github.run_attempt }} -->
-            Only post this marker after completing the review. If blocked, explain the
-            blocker in your final response and do not post the completion marker.
-            Return the required structured result: review_completed is true only after
-            EVERY changed file has been reviewed and the summary publication succeeds.
-            reviewed_files must list exactly the repository-relative paths actually
-            reviewed. GitHub's full changed-file list is independently checked against it.
-            If any files remain unreviewed, report review_completed: false with
-            blocking_reason: review_not_finished. A limited pass is not a completed review.
+            Post validated new findings with mcp__github_inline_comment__create_inline_comment
+            using confirmed: true, the full head SHA and a clear trigger and impact.
+            Do not post a top-level summary; the workflow publishes one combined report.
+            Return the structured result. reviewed_files must list exactly the assigned
+            paths you actually reviewed. Set review_completed true and blocking_reason
+            none only after all assigned files are reviewed. Otherwise report an explicit
+            blocker and incomplete coverage. Include a concise summary of findings or
+            state that no additional issues were found. A partial pass is not complete.
           claude_args: >-
-            --allowedTools "Agent,Read,Glob,Grep,TodoWrite,mcp__github_inline_comment__create_inline_comment,Bash(gh api *),Bash(gh issue view *),Bash(gh search *),Bash(gh issue list *),Bash(gh pr comment *),Bash(gh pr diff *),Bash(gh pr view *),Bash(gh pr list *),Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git ls-files *),Bash(git rev-parse *)"
-            --json-schema '{"type":"object","properties":{"review_completed":{"type":"boolean"},"reviewed_head_sha":{"const":"${{ github.event.pull_request.head.sha }}"},"reviewed_files":{"type":"array","items":{"type":"string"},"uniqueItems":true,"minItems":1},"blocking_reason":{"enum":["none","permission_denied","github_access","usage_limit","review_not_finished","publication_failed"]}},"required":["review_completed","reviewed_head_sha","reviewed_files","blocking_reason"],"additionalProperties":false}'
-
-      - name: Verify review completed and was published
+            --allowedTools "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh api *),Bash(gh pr view *),Bash(git diff *),Bash(git show *),Bash(git log *),Bash(git rev-parse *)"
+            --json-schema '{"type":"object","properties":{"review_completed":{"type":"boolean"},"reviewed_head_sha":{"const":"${{ github.event.pull_request.head.sha }}"},"reviewed_files":{"type":"array","items":{"type":"string"},"uniqueItems":true,"minItems":1},"summary":{"type":"string","minLength":1,"maxLength":3000},"blocking_reason":{"enum":["none","permission_denied","github_access","usage_limit","review_not_finished","publication_failed"]}},"required":["review_completed","reviewed_head_sha","reviewed_files","summary","blocking_reason"],"additionalProperties":false}'
+      - name: Verify assigned-file coverage and retain safe result
         if: always()
         env:
-          GH_TOKEN: ${{ github.token }}
-          CLAUDE_EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
-        run: python3 -B .github/scripts/verify_claude_review.py
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          REVIEW_PLAN_DIR: ${{ runner.temp }}/claude-review-plan
+          REVIEW_RESULT_DIR: ${{ runner.temp }}/claude-review-results
+        run: python3 -B .github/scripts/verify_claude_review.py shard
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: claude-review-result-${{ matrix.shard }}
+          path: ${{ runner.temp }}/claude-review-results
+          retention-days: 3
+          if-no-files-found: error
 
+  claude-review:
+    needs: [plan, review]
+    if: always() && needs.plan.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Fail visibly when review planning did not complete
+        if: needs.plan.result != 'success'
+        run: |
+          echo '::error::Claude review incomplete: planning did not finish successfully.'
+          exit 1
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: claude-review-plan
+          path: ${{ runner.temp }}/claude-review-plan
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: claude-review-result-*
+          path: ${{ runner.temp }}/claude-review-results
+          merge-multiple: true
+      - name: Verify complete coverage and publish combined Claude review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_PLAN_DIR: ${{ runner.temp }}/claude-review-plan
+          REVIEW_RESULT_DIR: ${{ runner.temp }}/claude-review-results
+          REVIEW_JOBS_RESULT: ${{ needs.review.result }}
+        run: python3 -B .github/scripts/verify_claude_review.py publish

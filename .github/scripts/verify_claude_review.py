@@ -78,7 +78,7 @@ def validate_execution(messages):
     return report, diagnostic
 
 
-def validate_publication(event, run_id, attempt, fetch, reviewed_files):
+def validate_publication(event, run_id, attempt, fetch, reviewed_files, author="claude[bot]"):
     repository = event["repository"]["full_name"]
     number = event["pull_request"]["number"]
     expected_head = event["pull_request"]["head"]["sha"]
@@ -102,7 +102,7 @@ def validate_publication(event, run_id, attempt, fetch, reviewed_files):
     for page in pages:
         for comment in page:
             body = comment.get("body") or ""
-            if (comment.get("user", {}).get("login") == "claude[bot]"
+            if (comment.get("user", {}).get("login") == author
                     and marker in body and len(body.replace(marker, "").strip()) >= 40):
                 return comment["html_url"]
     raise IncompleteReview("Claude posted no completion summary for this head and workflow attempt.")
@@ -155,5 +155,187 @@ def main():
     return status
 
 
+def build_plan(event, run_id, attempt, current, files):
+    head = event["pull_request"]["head"]["sha"]
+    if current["head"]["sha"] != head or current["state"] != "open" or current["draft"]:
+        raise IncompleteReview("The PR head is stale, closed or still a draft.")
+    if len(files) != current["changed_files"] or not files:
+        raise IncompleteReview("GitHub did not return the complete changed-file list.")
+    paths = [f["filename"] for f in files]
+    if len(paths) != len(set(paths)):
+        raise IncompleteReview("The changed-file list contains duplicates.")
+    batches, batch, size = [], [], 0
+    for file in files:
+        patch_size = len(file.get("patch") or "")
+        if batch and (len(batch) >= 15 or size + patch_size > 100_000):
+            batches.append(batch)
+            batch, size = [], 0
+        batch.append(file)
+        size += patch_size
+    if batch:
+        batches.append(batch)
+    return {
+        "repository": event["repository"]["full_name"], "number": event["pull_request"]["number"],
+        "head": head, "run_id": str(run_id), "attempt": str(attempt), "files": paths,
+        "title": current.get("title", ""), "description": current.get("body") or "",
+        "shards": [{"id": i, "files": batch} for i, batch in enumerate(batches)],
+    }
+
+
+def validate_plan_context(plan, event, run_id, attempt):
+    expected = (event["repository"]["full_name"], event["pull_request"]["number"],
+                event["pull_request"]["head"]["sha"], str(run_id), str(attempt))
+    actual = tuple(plan[k] for k in ("repository", "number", "head", "run_id", "attempt"))
+    if actual != expected:
+        raise IncompleteReview("The review artifact belongs to a different PR, head or workflow attempt.")
+
+
+def verify_shard(messages, plan, shard_id):
+    report, diagnostic = validate_execution(messages)
+    expected = {f["filename"] for f in plan["shards"][shard_id]["files"]}
+    if (report["reviewed_head_sha"] != plan["head"] or set(report["reviewed_files"]) != expected
+            or not isinstance(report.get("summary"), str) or not report["summary"].strip()
+            or len(report["summary"]) > 3000):
+        raise IncompleteReview("The shard report is incomplete, has the wrong head or has invalid summary data.")
+    return {"shard": shard_id, "head": plan["head"], "run_id": plan["run_id"],
+            "attempt": plan["attempt"], "verified": True, "files": sorted(expected),
+            "summary": report["summary"], "warning": diagnostic}
+
+
+def combine_results(plan, receipts):
+    by_id, errors, reviewed, summaries = {}, [], set(), []
+    for receipt in receipts:
+        i = receipt["shard"]
+        if not isinstance(i, int) or i < 0 or i >= len(plan["shards"]) or i in by_id:
+            raise IncompleteReview("Duplicate or unknown review shard artifacts.")
+        by_id[i] = receipt
+    for shard in plan["shards"]:
+        receipt = by_id.get(shard["id"])
+        if not receipt:
+            errors.append(f"Review {shard['id'] + 1}: result missing.")
+            continue
+        if any(receipt[k] != plan[k] for k in ("head", "run_id", "attempt")):
+            raise IncompleteReview("A review result belongs to a different head or workflow attempt.")
+        expected = {f["filename"] for f in shard["files"]}
+        if receipt.get("verified") is not True or set(receipt.get("files", [])) != expected:
+            detail = receipt.get("error", "incomplete or invalid coverage")
+            errors.append(f"Review {shard['id'] + 1}: {detail}")
+            continue
+        reviewed.update(expected)
+        summaries.append((shard["id"] + 1, receipt["summary"], receipt.get("warning", "")))
+    if reviewed != set(plan["files"]) and not errors:
+        errors.append("The combined review does not cover every changed file.")
+    return reviewed, summaries, errors
+
+
+def github_post(endpoint, body):
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as payload:
+        json.dump({"body": body}, payload)
+        payload.flush()
+        try:
+            response = subprocess.run(["gh", "api", "--method", "POST", endpoint, "--input", payload.name],
+                                      capture_output=True, text=True, check=True, timeout=60)
+            return json.loads(response.stdout)
+        except (subprocess.SubprocessError, ValueError, OSError):
+            raise IncompleteReview("Could not publish the combined review through GitHub.") from None
+
+
+def batch_command(mode):
+    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+    run_id, attempt = os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"]
+    plan_dir = Path(os.environ["REVIEW_PLAN_DIR"])
+    repo, number = event["repository"]["full_name"], event["pull_request"]["number"]
+    if mode == "plan":
+        current = github_fetch(f"repos/{repo}/pulls/{number}")
+        pages = github_fetch(f"repos/{repo}/pulls/{number}/files?per_page=100", paginate=True)
+        plan = build_plan(event, run_id, attempt, current, [f for page in pages for f in page])
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        (plan_dir / "manifest.json").write_text(json.dumps(plan))
+        for shard in plan["shards"]:
+            data = {k: plan[k] for k in ("repository", "number", "head", "title", "description")}
+            (plan_dir / f"shard-{shard['id']}.json").write_text(json.dumps({**data, **shard}))
+        matrix = {"include": [{"shard": s["id"]} for s in plan["shards"]]}
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write("matrix=" + json.dumps(matrix) + "\n")
+        print(f"Planned {len(plan['files'])} files across {len(plan['shards'])} bounded reviews.")
+        return 0
+
+    plan = json.loads((plan_dir / "manifest.json").read_text())
+    validate_plan_context(plan, event, run_id, attempt)
+    result_dir = Path(os.environ["REVIEW_RESULT_DIR"])
+    if mode == "shard":
+        shard_id = int(os.environ["REVIEW_SHARD"])
+        if shard_id < 0 or shard_id >= len(plan["shards"]):
+            raise IncompleteReview("Unknown review shard.")
+        try:
+            execution = os.environ.get("CLAUDE_EXECUTION_FILE") or str(
+                Path(os.environ["RUNNER_TEMP"]) / "claude-execution-output.json")
+            receipt = verify_shard(json.loads(Path(execution).read_text()), plan, shard_id)
+            if receipt["warning"]:
+                print("::warning::" + receipt["warning"])
+        except (IncompleteReview, OSError, ValueError, KeyError, TypeError) as error:
+            # Never put raw SDK content or exception input into retained artifacts.
+            receipt = {"shard": shard_id, "head": plan["head"], "run_id": str(run_id),
+                       "attempt": str(attempt), "verified": False, "files": [],
+                       "error": str(error) if isinstance(error, IncompleteReview)
+                       else "Required execution output is missing or invalid."}
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / f"result-{shard_id}.json").write_text(json.dumps(receipt))
+        if not receipt["verified"]:
+            raise IncompleteReview(f"Review {shard_id + 1} did not complete its assigned files.")
+        print(f"Verified review {shard_id + 1}: {len(receipt['files'])} assigned files.")
+        return 0
+
+    receipts = [json.loads(p.read_text()) for p in result_dir.glob("result-*.json")]
+    reviewed, summaries, errors = combine_results(plan, receipts)
+    if os.environ.get("REVIEW_JOBS_RESULT") != "success":
+        errors.append("The review jobs did not all finish successfully.")
+    current = github_fetch(f"repos/{repo}/pulls/{number}")
+    pages = github_fetch(f"repos/{repo}/pulls/{number}/files?per_page=100", paginate=True)
+    if (current["head"]["sha"] != plan["head"] or current["state"] != "open" or current["draft"]
+            or {f["filename"] for p in pages for f in p} != set(plan["files"])):
+        raise IncompleteReview("The PR changed during review; refusing to publish a stale result.")
+    state = "Incomplete" if errors else "Completed"
+    body = (f"## Claude code review — {state.lower()}\n\nReviewed head: `{plan['head']}`\n\n"
+            f"{state}: {len(reviewed)}/{len(plan['files'])} changed files across "
+            f"{len(plan['shards'])} bounded reviews. Findings are static analysis, not runtime validation.\n\n")
+    if errors:
+        body += "\n".join(f"- {error}" for error in errors) + "\n\n"
+    for i, summary, warning in summaries[:40]:
+        body += f"### Review {i}\n\n{summary[:800]}\n\n"
+        if warning:
+            body += f"Tool warning: {warning}\n\n"
+    body += f"[Workflow and review artifacts](https://github.com/{repo}/actions/runs/{run_id})\n\n"
+    marker = f"<!-- claude-review:{plan['head']}:{run_id}:{attempt} -->"
+    if not errors:
+        body += marker
+    else:
+        body += f"<!-- claude-review-incomplete:{plan['head']}:{run_id}:{attempt} -->"
+    posted = github_post(f"repos/{repo}/issues/{number}/comments", body)
+    print("Published combined Claude review: " + posted["html_url"])
+    if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary_path, "a") as output:
+            output.write(body + "\n")
+    if errors:
+        raise IncompleteReview("The combined review is incomplete; see the published report.")
+    validate_publication(event, run_id, attempt, github_fetch, list(reviewed), author="github-actions[bot]")
+    return 0
+
+
+def entrypoint():
+    if len(sys.argv) == 1:
+        return main()
+    try:
+        if sys.argv[1] not in {"plan", "shard", "publish"}:
+            raise IncompleteReview("Unknown review workflow command.")
+        return batch_command(sys.argv[1])
+    except IncompleteReview as error:
+        print(f"::error::Claude review incomplete: {error}")
+    except (OSError, ValueError, KeyError, TypeError):
+        print("::error::Claude review incomplete: required review artifacts or metadata are missing or invalid.")
+    return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(entrypoint())
