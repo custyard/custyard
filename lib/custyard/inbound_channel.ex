@@ -80,6 +80,8 @@ defmodule Custyard.InboundChannel do
   @imap_mailbox_fields [:imap_host, :imap_port, :imap_username, :imap_folder]
 
   schema "inbound_channels" do
+    field :tenant_id, :id, default: 1
+    belongs_to :tenant, Custyard.Tenant, define_field: false
     field :public_address, :string
     field :display_name, :string
 
@@ -172,12 +174,14 @@ defmodule Custyard.InboundChannel do
       :attention_bonus,
       :inbound_route_id,
       :organization_id,
+      :tenant_id,
       :project_id
       | @imap_fields
     ])
     |> update_change(:public_address, &normalize_address/1)
     |> update_change(:display_name, &normalize_display_name/1)
-    |> validate_required([:public_address, :ingress_kind, :inbound_route_id, :organization_id])
+    |> validate_required([:public_address, :ingress_kind, :inbound_route_id, :tenant_id])
+    |> foreign_key_constraint(:tenant_id)
     |> validate_length(:public_address, max: 255)
     |> validate_format(:public_address, @email_regex, message: "must be a valid email address")
     |> validate_length(:display_name, max: 100)

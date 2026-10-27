@@ -3,6 +3,9 @@ defmodule Custyard.Organization do
   import Ecto.Changeset
 
   schema "organizations" do
+    field :tenant_id, :id, default: 1
+    belongs_to :tenant, Custyard.Tenant, define_field: false
+    field :intake_key, :string
     field :name, :string
     field :domain, :string
     field :tier, Ecto.Enum, values: [:enterprise, :standard, :basic], default: :standard
@@ -33,6 +36,8 @@ defmodule Custyard.Organization do
   def changeset(organization, attrs) do
     organization
     |> cast(attrs, [
+      :tenant_id,
+      :intake_key,
       :name,
       :domain,
       :tier,
@@ -44,7 +49,7 @@ defmodule Custyard.Organization do
       :lettermint_project_id
     ])
     |> maybe_generate_token()
-    |> validate_required([:name, :token])
+    |> validate_required([:name, :token, :tenant_id])
     |> validate_token_strength()
     # Note: :tier uses Ecto.Enum which validates values automatically
     |> validate_format(:primary_color, ~r/^#[0-9A-Fa-f]{6}$/,
@@ -54,7 +59,9 @@ defmodule Custyard.Organization do
       message: "must be a valid hex color (e.g., #1a2b3c)"
     )
     |> unique_constraint(:token)
-    |> unique_constraint(:domain, name: :organizations_domain_unique_index)
+    |> unique_constraint(:domain, name: :organizations_tenant_id_domain_index)
+    |> unique_constraint([:tenant_id, :intake_key])
+    |> foreign_key_constraint(:tenant_id)
     |> unique_constraint(:custom_domain)
     |> validate_domain()
     |> update_change(:custom_domain, &normalize_custom_domain/1)
@@ -65,6 +72,8 @@ defmodule Custyard.Organization do
   # Validate and normalize the domain field
   # Empty strings are converted to nil to work with partial unique index
   defp validate_domain(changeset) do
+    changeset = update_change(changeset, :domain, &normalize_custom_domain/1)
+
     case get_change(changeset, :domain) do
       nil ->
         changeset
@@ -104,11 +113,16 @@ defmodule Custyard.Organization do
         changeset
 
       domain when is_binary(domain) ->
+        reserved? =
+          domain == Custyard.Tenants.app_host() or
+            not is_nil(Custyard.Tenants.resolve_host(domain))
+
         # Basic domain validation - must look like a hostname
-        if Regex.match?(
-             ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i,
-             domain
-           ) do
+        if not reserved? and
+             Regex.match?(
+               ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i,
+               domain
+             ) do
           changeset
         else
           add_error(changeset, :custom_domain, "must be a valid domain name")

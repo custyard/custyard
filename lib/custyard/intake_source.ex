@@ -30,6 +30,8 @@ defmodule Custyard.IntakeSource do
   @max_link_url_length 2000
 
   schema "intake_sources" do
+    field :tenant_id, :id, default: 1
+    belongs_to :tenant, Custyard.Tenant, define_field: false
     field :key, :string
     field :name, :string
     field :mode, Ecto.Enum, values: @modes, default: :active
@@ -78,7 +80,8 @@ defmodule Custyard.IntakeSource do
   @doc false
   def changeset(intake_source, attrs) do
     intake_source
-    |> cast(attrs, [:key | @update_fields])
+    |> cast(attrs, [:key, :tenant_id | @update_fields])
+    |> foreign_key_constraint(:tenant_id)
     |> validate_required([:key, :name])
     |> validate_format(:key, @key_format)
     |> unique_constraint(:key)

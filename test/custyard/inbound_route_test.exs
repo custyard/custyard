@@ -31,10 +31,10 @@ defmodule Custyard.InboundRouteTest do
       assert String.length(route.callback_token) > 0
     end
 
-    test "requires organization_id" do
+    test "requires a tenant or legacy organization owner" do
       changeset = InboundRoute.changeset(%InboundRoute{}, %{route_type: :general})
       refute changeset.valid?
-      assert errors_on(changeset)[:organization_id]
+      assert errors_on(changeset)[:tenant_id]
     end
 
     test "project route requires project_id" do

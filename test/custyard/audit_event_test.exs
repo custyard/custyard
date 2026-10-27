@@ -15,6 +15,7 @@ defmodule Custyard.AuditEventTest do
                :prospect_converted,
                :operator_created,
                :operator_removed,
+               :operator_tenant_access_granted,
                :acknowledgment_replayed,
                :acknowledgment_binding_created,
                :delivery_status_updated,

@@ -48,9 +48,11 @@ defmodule Custyard.InboundChannelTest do
       assert %{public_address: ["can't be blank"]} = errors_on(changeset(%{public_address: "  "}))
     end
 
-    test "requires a route and an organization" do
-      errors = errors_on(changeset(%{inbound_route_id: nil, organization_id: nil}))
-      assert %{inbound_route_id: ["can't be blank"], organization_id: ["can't be blank"]} = errors
+    test "requires a route and tenant while allowing a shared tenant channel" do
+      errors =
+        errors_on(changeset(%{inbound_route_id: nil, organization_id: nil, tenant_id: nil}))
+
+      assert %{inbound_route_id: ["can't be blank"], tenant_id: ["can't be blank"]} = errors
     end
 
     test "rejects a malformed public address" do

@@ -47,6 +47,9 @@ defmodule Custyard.InboundRoute do
     field :lettermint_inbound_address, :string
     field :lettermint_custom_domain, :string
     field :lettermint_custom_domain_verified_at, :utc_datetime
+    field :lettermint_webhook_id, :string
+    field :webhook_secret_ciphertext, :string, redact: true
+    field :webhook_verified_at, :utc_datetime
     field :callback_token, :string
     field :route_type, Ecto.Enum, values: @route_types, default: :general
     # Source determines which webhook adapter processes requests to this route.
@@ -57,6 +60,7 @@ defmodule Custyard.InboundRoute do
     field :from_address, :string
 
     belongs_to :organization, Custyard.Organization
+    belongs_to :tenant, Custyard.Tenant
     belongs_to :project, Custyard.Project
     has_many :webhooks, Custyard.InboundRouteWebhook
     has_many :channels, Custyard.InboundChannel
@@ -136,10 +140,12 @@ defmodule Custyard.InboundRoute do
       :source,
       :from_address,
       :organization_id,
+      :tenant_id,
       :project_id
     ])
     |> maybe_generate_callback_token()
-    |> validate_required([:callback_token, :route_type, :organization_id])
+    |> validate_required([:callback_token, :route_type])
+    |> validate_owner()
     |> validate_inclusion(:route_type, @route_types)
     |> validate_token_strength()
     |> validate_format(:from_address, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
@@ -150,8 +156,29 @@ defmodule Custyard.InboundRoute do
     |> validate_custom_domain()
     |> unique_constraint(:callback_token)
     |> foreign_key_constraint(:organization_id)
+    |> foreign_key_constraint(:tenant_id)
     |> foreign_key_constraint(:project_id)
     |> validate_project_route()
+  end
+
+  defp validate_owner(changeset) do
+    organization_id = get_field(changeset, :organization_id)
+    tenant_id = get_field(changeset, :tenant_id)
+    organization = organization_id && Custyard.Repo.get(Custyard.Organization, organization_id)
+
+    cond do
+      organization && tenant_id && tenant_id != organization.tenant_id ->
+        add_error(changeset, :organization_id, "must belong to the same tenant")
+
+      organization ->
+        put_change(changeset, :tenant_id, organization.tenant_id)
+
+      tenant_id || organization_id ->
+        changeset
+
+      true ->
+        add_error(changeset, :tenant_id, "must be selected")
+    end
   end
 
   # Same hostname rule as Custyard.Organization domains. Hostnames are
