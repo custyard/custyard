@@ -440,4 +440,34 @@ defmodule Custyard.ReleaseTest do
       assert operator_count() == 0
     end
   end
+
+  describe "export_sqlite/1" do
+    @describetag :tmp_dir
+    @describetag skip: System.get_env("TURSO_TEST_URL") not in [nil, ""]
+
+    defp sqlite_all(path, sql) do
+      {:ok, db} = Exqlite.Sqlite3.open(path, mode: :readonly)
+
+      try do
+        {:ok, statement} = Exqlite.Sqlite3.prepare(db, sql)
+        {:ok, rows} = Exqlite.Sqlite3.fetch_all(db, statement)
+        rows
+      after
+        Exqlite.Sqlite3.close(db)
+      end
+    end
+
+    test "writes one file in WAL mode with the schema, and never overwrites", %{tmp_dir: dir} do
+      path = Path.join(dir, "turso-import.db")
+
+      assert capture_io(fn -> assert Release.export_sqlite(path) == path end) =~
+               "to #{path}"
+
+      assert sqlite_all(path, "PRAGMA journal_mode") == [["wal"]]
+      assert [[migrations]] = sqlite_all(path, "SELECT count(*) FROM schema_migrations")
+      assert migrations > 0
+
+      assert_raise RuntimeError, ~r/already exists/, fn -> Release.export_sqlite(path) end
+    end
+  end
 end

@@ -3,16 +3,31 @@ import Config
 config :custyard, env: :test
 
 config :custyard, Custyard.Repo,
-  database:
-    Path.expand("../priv/repo/custyard_test#{System.get_env("MIX_TEST_PARTITION")}.db", __DIR__),
   pool_size: 5,
   pool: Ecto.Adapters.SQL.Sandbox,
-  journal_mode: :wal,
-  # High busy_timeout needed because SQLite only allows one writer at a time
-  # and async tests cause write contention
-  busy_timeout: 30_000,
   queue_target: 500,
   queue_interval: 1000
+
+# TURSO_TEST_URL (a libsql:// URL) runs the suite over the Turso driver
+# against that server; CI's turso job points it at a libSQL server.
+case System.get_env("TURSO_TEST_URL") do
+  url when url in [nil, ""] ->
+    config :custyard, Custyard.Repo,
+      database:
+        Path.expand(
+          "../priv/repo/custyard_test#{System.get_env("MIX_TEST_PARTITION")}.db",
+          __DIR__
+        ),
+      journal_mode: :wal,
+      # High busy_timeout needed because SQLite only allows one writer at a time
+      # and async tests cause write contention
+      busy_timeout: 30_000
+
+  url ->
+    config :custyard, Custyard.Repo,
+      turso_url: url,
+      turso_auth_token: System.get_env("TURSO_TEST_AUTH_TOKEN")
+end
 
 config :custyard, CustyardWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],

@@ -3,11 +3,17 @@ defmodule Custyard.Storage do
   Verifies that Fly's local database, uploads and attachments live on a mounted
   volume attached to the app's only machine.
 
+  A remote database (Turso over `libsql://`, or PostgreSQL) is not on the
+  volume, so its path is not checked. Uploads and attachments still are, so
+  the app still runs on one machine.
+
   The check runs before the Repo and release migrations start, so a missing
   volume cannot silently create a fresh database on the container filesystem,
   and a second machine cannot silently create a second copy of what the volume
   stores.
   """
+
+  alias Custyard.Repo.Adapter
 
   require Logger
 
@@ -19,23 +25,25 @@ defmodule Custyard.Storage do
   @machine_dns_timeout 2_000
 
   def validate_fly_storage!(opts \\ []) do
-    if Keyword.get(opts, :fly_app_name, System.get_env("FLY_APP_NAME")),
-      do: validate_fly_paths!(opts)
+    if Keyword.get(opts, :fly_app_name, System.get_env("FLY_APP_NAME")) do
+      repo_config =
+        Keyword.get(opts, :repo_config, Application.get_env(:custyard, Custyard.Repo, []))
+
+      validate_fly_paths!(repo_config, opts)
+      if Adapter.turso?(repo_config), do: warn_about_left_behind_sqlite(opts)
+    end
 
     :ok
   end
 
-  defp validate_fly_paths!(opts) do
-    repo_config =
-      Keyword.get(opts, :repo_config, Application.get_env(:custyard, Custyard.Repo, []))
-
+  defp validate_fly_paths!(repo_config, opts) do
     upload_dir = Keyword.get(opts, :upload_dir, Application.get_env(:custyard, :upload_dir))
 
     attachment_dir =
       Keyword.get(opts, :attachment_dir, Application.get_env(:custyard, :attachment_dir))
 
     database_path = Keyword.get(repo_config, :database)
-    local_database? = is_binary(database_path) and not Keyword.has_key?(repo_config, :url)
+    local_database? = local_database?(repo_config)
 
     if local_database?, do: require_data_path!(database_path, "DATABASE_PATH")
     if is_binary(upload_dir), do: require_data_path!(upload_dir, "UPLOAD_DIR")
@@ -52,6 +60,31 @@ defmodule Custyard.Storage do
     if on_volume != [] do
       require_data_mount!(opts)
       require_single_machine!(on_volume, opts)
+    end
+  end
+
+  # A remote database is not local even if a :database path is left over.
+  defp local_database?(repo_config) do
+    is_binary(Keyword.get(repo_config, :database)) and
+      not Keyword.has_key?(repo_config, :url) and not Adapter.turso?(repo_config)
+  end
+
+  # Moving to Turso leaves the SQLite file on the volume, and nothing reads
+  # it again. Say so on every boot until it is gone, so a switch nobody meant
+  # (a stale DATABASE_URL synced from .env.secrets) does not go unnoticed.
+  defp warn_about_left_behind_sqlite(opts) do
+    path =
+      Keyword.get_lazy(opts, :sqlite_path, fn ->
+        System.get_env("DATABASE_PATH") || Path.join(@data_dir, "custyard.db")
+      end)
+
+    if File.exists?(path) do
+      Logger.warning(
+        "The database is Turso (DATABASE_URL), but #{path} still has a SQLite " <>
+          "database this app no longer reads. Delete it once Turso has its data " <>
+          "(docs/ops/database.md); if DATABASE_URL was set by mistake, unset it " <>
+          "to serve #{path} again."
+      )
     end
   end
 
@@ -135,8 +168,9 @@ defmodule Custyard.Storage do
     `min_machines_running` does not prevent this. It is a floor on how many
     machines stay warm, not a cap on how many exist.
 
-    A remote database does not lift the limit while uploads and attachments
-    are files under #{@data_dir}, because each volume holds its own copy.
+    A Turso or PostgreSQL database does not lift the limit while uploads and
+    attachments are files under #{@data_dir}, because each volume holds its own
+    copy.
     """
   end
 

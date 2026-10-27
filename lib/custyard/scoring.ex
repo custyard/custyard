@@ -173,8 +173,8 @@ defmodule Custyard.Scoring do
   `Settings.get/0` is an uncached `Repo.one`, and scoring a single
   conversation reaches for settings four times (weights, the unlinked-tier
   score, and neglect thresholds twice — once directly and once through the
-  neglect bonus). Keeping the reads together avoids redundant database work,
-  whether the production backend is volume-backed SQLite or PostgreSQL.
+  neglect bonus). Keeping the reads together avoids redundant database work
+  on any backend, and on Turso each read is a network round trip.
 
   Pass the result to `breakdown/2` and `neglect_status/2` when scoring more
   than one conversation. Reads are per-call, so hold a bundle only for the
