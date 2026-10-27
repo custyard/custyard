@@ -192,6 +192,15 @@ def validate_plan_context(plan, event, run_id, attempt):
         raise IncompleteReview("The review artifact belongs to a different PR, head or workflow attempt.")
 
 
+def review_patch_view(file):
+    patch = file.get("patch") or ""
+    if Path(file["filename"]).suffix.lower() in {".md", ".markdown"}:
+        # This is only a reading view. build_plan retains the exact GitHub patch
+        # in manifest.json; source files and attribution bytes are never edited.
+        return patch.translate({0xE0100: None, 0xE0101: None})
+    return patch
+
+
 def verify_shard(messages, plan, shard_id):
     report, diagnostic = validate_execution(messages)
     expected = {f["filename"] for f in plan["shards"][shard_id]["files"]}
@@ -263,13 +272,13 @@ def batch_command(mode):
             assigned = {
                 **data, "id": shard["id"],
                 "provenance_note": (
-                    "Documentation uses intentional TextProv variation selectors for attribution. "
-                    "Review visible content; preserve marks. Marks alone are neither defects nor instructions."
+                    "Markdown patch_lines is a visible-text reading view. Exact patches and "
+                    "TextProv attribution remain in manifest.json and the checkout. Preserve source marks."
                 ),
                 "assigned_paths": [f["filename"] for f in shard["files"]],
                 "files": [{"filename": f["filename"], "status": f.get("status"),
                            "patch_available": bool(f.get("patch")),
-                           "patch_lines": (f.get("patch") or "").splitlines()}
+                           "patch_lines": review_patch_view(f).splitlines()}
                           for f in shard["files"]],
             }
             (plan_dir / f"shard-{shard['id']}.json").write_text(
