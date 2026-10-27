@@ -2,7 +2,7 @@ import Config
 
 config :custyard,
   ecto_repos: [Custyard.Repo],
-  repo_adapter: Ecto.Adapters.SQLite3,
+  repo_adapter: Custyard.Repo.Adapter,
   generators: [timestamp_type: :utc_datetime],
   upload_dir: Path.expand("../priv/static/uploads", __DIR__),
   # Inbound email attachments (spec-inbound-channels D9). Deliberately not

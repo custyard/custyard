@@ -2,15 +2,8 @@ import Config
 
 config :custyard, env: :prod
 
-config :custyard, Custyard.Repo,
-  database: "/data/custyard.db",
-  # SQLite uses a single writer lock, so high pool sizes cause contention.
-  # 5 is sufficient for most workloads; override via POOL_SIZE env var.
-  pool_size: 5,
-  journal_mode: :wal,
-  # busy_timeout in ms - SQLite will wait this long for a write lock
-  # Important for the Scoring.Recalculator which runs bulk updates
-  busy_timeout: 5000
+# The Repo is configured in config/runtime.exs, which picks the SQLite file
+# or Turso at boot. A database path here would survive into the Turso config.
 
 # Health check path accessible over plain HTTP for Fly.io machine-level probes.
 # These probes bypass the proxy (no x-forwarded-proto), so Plug.SSL must skip them.

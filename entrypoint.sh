@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+# MAINTENANCE_MODE=true keeps the machine running for `fly ssh` but starts
+# neither migrations nor the app, so nothing writes the database (moving it
+# to Turso, docs/ops/database.md).
+if [ "${MAINTENANCE_MODE:-}" = "true" ]; then
+    echo "MAINTENANCE_MODE is true: Custyard is not started. Unset it to start."
+    exec sleep infinity
+fi
+
 # Require SECRET_KEY_BASE in production
 # Auto-generating causes session/LiveView invalidation on every restart (Fly.io auto_stop_machines)
 if [ -z "$SECRET_KEY_BASE" ]; then

@@ -45,7 +45,7 @@ defmodule Custyard.DataSubjects do
   # The recipient arrays are JSON text on SQLite and native arrays on
   # Postgres, so the containment test is adapter-specific. The adapter is
   # compile-time configuration (see Custyard.Repo).
-  @postgres? Application.compile_env(:custyard, :repo_adapter, Ecto.Adapters.SQLite3) ==
+  @postgres? Application.compile_env(:custyard, :repo_adapter, Custyard.Repo.Adapter) ==
                Ecto.Adapters.Postgres
 
   @type role :: :sender | :to | :cc | :reply_to
