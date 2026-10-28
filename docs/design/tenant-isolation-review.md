@@ -110,7 +110,12 @@ Final checks on 2026-10-28:
 - `bin/release-smoke-test`: passed against a temporary local SQLite database and local mail capture. Verified migration, explicit instance-admin bootstrap, CLI add/list/remove beside the running server, and health before/after provisioning.
 - `git diff --check`: passed.
 
-No application or pilot database reset has been executed. The reset target is
-pending selection; no remote deployment or Git push was performed by this task.
-The live provider round trip after deployment remains separate from these local
-checks and from the earlier release-82 pilot handoff.
+The user selected the live pilot database as the reset target. Its SQLite file
+was reset on 2026-10-28 after the full checks and independent review passed,
+a consistent backup passed integrity checks, and a volume snapshot completed.
+The fresh baseline has one explicitly provisioned installation administrator
+and one OneTimeSecret tenant; customer, thread and message tables are empty.
+See [the cutover record](../ops/tenant-baseline-cutover.md) for deployment evidence.
+No Git push was performed by this task. The provider round trip after fresh
+tenant email configuration remains separate from local checks and the earlier
+release-82 pilot handoff.

@@ -1,6 +1,6 @@
 # Tenant architecture cleanup
 
-Status: implemented and independently reviewed. Final CI passes 2󠄁,󠄁6󠄁3󠄁0󠄁 tests with zero failures, including local broker integrations. The application database has not been reset; its target is pending selection. This plan replaces legacy organization ownership and compatibility requirements.
+Status: implemented and independently reviewed. Full CI passes 2,630 tests with zero failures or skips, including local broker integrations. The user-selected live pilot database was reset to the tenant baseline on 2026-10-28 after validation and v󠄁e󠄁r󠄁i󠄁f󠄁i󠄁e󠄁d󠄁 backup. Tenant staff and support email configuration are provisioned explicitly. This plan replaces legacy organization ownership and compatibility requirements.
 
 ## Ownership and language
 
