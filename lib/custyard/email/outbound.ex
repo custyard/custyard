@@ -304,9 +304,14 @@ defmodule Custyard.Email.Outbound do
   # Store actual participants before contacting the provider. The message was
   # read under the claim's write lock, so this cannot restore stale CC data.
   defp persist_delivery_facts(message, email) do
-    fingerprint =
+    envelope =
       {email.from, email.to, email.cc, email.bcc, email.subject, email.text_body, email.html_body,
        email.headers}
+
+    # Reply-To is a separate Swoosh field, serialized outside email.headers.
+    # Keep legacy nil-Reply-To envelopes byte-identical for existing retries.
+    fingerprint =
+      if(is_nil(email.reply_to), do: envelope, else: {envelope, {:reply_to, email.reply_to}})
       |> :erlang.term_to_binary()
       |> then(&:crypto.hash(:sha256, &1))
       |> Base.encode16(case: :lower)
@@ -342,6 +347,7 @@ defmodule Custyard.Email.Outbound do
     )
     |> put_archive_bcc(conversation)
     |> from(from_address)
+    |> put_channel_reply_to(conversation)
     |> subject(compose_subject(conversation))
     |> text_body(message.body)
     |> html_body(wrap_html(message.body))
@@ -371,6 +377,17 @@ defmodule Custyard.Email.Outbound do
   end
 
   defp put_cc(email, _message, _recipient), do: email
+
+  # A sending-only domain may have no receiving mailbox. Customer answers
+  # return through the public support address and its existing inbound channel.
+  defp put_channel_reply_to(email, %{
+         inbound_channel:
+           %InboundChannel{reply_from: :public_address, sending_domain: domain} = channel
+       })
+       when is_binary(domain),
+       do: reply_to(email, channel.public_address)
+
+  defp put_channel_reply_to(email, _conversation), do: email
 
   # Archive copy (spec-inbound-channels D4): BCC the channel's public address
   # so the operator's mailbox keeps the reply. The copy is forwarded straight

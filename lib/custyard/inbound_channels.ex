@@ -130,12 +130,12 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   The From address for operator replies on this channel (D3): the public
-  address, or the full ingress address when the channel falls back to the
-  ingress identity. nil when the fallback is selected but the route has no
-  domain yet (callers then use their own fallback).
+  local part at the selected sending domain, or the full ingress address
+  when the channel falls back to the ingress identity. nil when the fallback
+  is selected but the route has no domain yet (callers then use their own fallback).
   """
-  def from_address(%InboundChannel{reply_from: :public_address, public_address: address}),
-    do: address
+  def from_address(%InboundChannel{reply_from: :public_address} = channel),
+    do: InboundChannel.sending_address(channel)
 
   def from_address(%InboundChannel{reply_from: :ingress_address} = channel),
     do: ingress_address(channel)
@@ -293,7 +293,7 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   Update operator-editable attributes (display name, provider, reply_from,
-  quiet window, attention bonus). A changed attention bonus rescores the
+  sending_domain, quiet window, attention bonus). A changed attention bonus rescores the
   channel's active conversations at once.
   """
   def update_channel(%InboundChannel{} = channel, attrs, opts \\ []) when is_map(attrs) do
@@ -314,7 +314,7 @@ defmodule Custyard.InboundChannels do
       audit(updated, :channel_updated, opts, %{changed: Map.keys(attrs)})
       if Map.has_key?(changeset.changes, :attention_bonus), do: rescore(updated)
 
-      if Map.has_key?(changeset.changes, :reply_from),
+      if Enum.any?([:reply_from, :sending_domain], &Map.has_key?(changeset.changes, &1)),
         do: Custyard.EmailSetup.invalidate_identity(updated.tenant_id)
 
       broadcast(updated)
@@ -329,7 +329,8 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   Operator confirmed the forwarding rule: `pending_verification` ->
-  `awaiting_first_message`. Consumes any captured verification.
+  `awaiting_first_message`. Consumes any captured verification, including a
+  confirmation received after the operator advanced to the first-message step.
   """
   def confirm_verification(channel, opts \\ [])
 
@@ -338,6 +339,14 @@ defmodule Custyard.InboundChannels do
       current
       |> InboundChannel.state_changeset(:awaiting_first_message, %{verified_at: now()})
       |> Ecto.Changeset.merge(InboundChannel.clear_verification_changeset(current))
+    end)
+  end
+
+  def confirm_verification(%InboundChannel{state: :awaiting_first_message} = channel, opts) do
+    transition(channel, opts, fn current ->
+      if current.verification_captured_at,
+        do: InboundChannel.clear_verification_changeset(current),
+        else: invalid_state(current, :confirm_verification)
     end)
   end
 
@@ -609,7 +618,7 @@ defmodule Custyard.InboundChannels do
   # --- Sending domain (D3) ---
 
   @doc """
-  Check whether the channel's public address domain is a Lettermint sending
+  Check whether the channel's selected sending domain is a Lettermint sending
   domain and record the result (`sending_domain_status`, one of
   `InboundChannel.sending_domain_statuses/0`; `"not_found"` when the team
   has no such domain). Matching is case-insensitive.
@@ -620,12 +629,12 @@ defmodule Custyard.InboundChannels do
   recorded on the audit event.
   """
   def check_sending_domain(%InboundChannel{} = channel, opts \\ []) do
-    domain = InboundChannel.public_domain(channel)
+    domain = InboundChannel.sending_domain(channel)
 
     configuration = Custyard.EmailSetup.management_config(channel.tenant_id)
 
-    with {:ok, domains} <- Client.call(:list_domains, [], channel.tenant_id),
-         {:ok, status} <- domain_status(domains, domain) do
+    with {:ok, found} <- Client.call(:get_sending_domain, [domain], channel.tenant_id),
+         {:ok, status} <- domain_status(found) do
       persist_check(channel, opts, fn current ->
         if Custyard.EmailSetup.management_config(channel.tenant_id) != configuration,
           do: Repo.rollback(:stale_configuration)
@@ -660,32 +669,15 @@ defmodule Custyard.InboundChannels do
     end
   end
 
-  defp domain_status(_domains, nil), do: {:ok, "not_found"}
+  defp domain_status(nil), do: {:ok, "not_found"}
 
-  defp domain_status(domains, domain) when is_list(domains) do
-    wanted = String.downcase(domain)
-
-    found =
-      Enum.find(domains, fn
-        %{"domain" => candidate} when is_binary(candidate) -> String.downcase(candidate) == wanted
-        _ -> false
-      end)
-
-    case found do
-      nil ->
-        {:ok, "not_found"}
-
-      %{"status" => status} when is_binary(status) ->
-        if status in InboundChannel.sending_domain_statuses(),
-          do: {:ok, status},
-          else: {:error, {:unknown_domain_status, status}}
-
-      _ ->
-        {:error, {:unexpected_response, found}}
-    end
+  defp domain_status(%{"status" => status}) when is_binary(status) do
+    if status in InboundChannel.sending_domain_statuses(),
+      do: {:ok, status},
+      else: {:error, {:unknown_domain_status, status}}
   end
 
-  defp domain_status(domains, _domain), do: {:error, {:unexpected_response, domains}}
+  defp domain_status(other), do: {:error, {:unexpected_response, other}}
 
   # Network checks never hold a database transaction. Before recording results,
   # reject revoked sessions and channels whose routing/credentials changed.
@@ -764,6 +756,7 @@ defmodule Custyard.InboundChannels do
         :state,
         :public_address,
         :reply_from,
+        :sending_domain,
         :imap_host,
         :imap_port,
         :imap_username,

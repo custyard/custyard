@@ -96,6 +96,7 @@ defmodule Custyard.InboundChannel do
     field :state, Ecto.Enum, values: @states, default: :draft
 
     field :reply_from, Ecto.Enum, values: @reply_from_options, default: :public_address
+    field :sending_domain, :string
     # D4: BCC every outbound reply to the public address so the operator's
     # mailbox keeps a copy. Off by default; the copy is forwarded back and
     # recognised by triage as an own echo.
@@ -168,6 +169,7 @@ defmodule Custyard.InboundChannel do
       :ingress_kind,
       :provider,
       :reply_from,
+      :sending_domain,
       :quiet_after_hours,
       :archive_copy,
       :attachment_limit_mb,
@@ -179,12 +181,24 @@ defmodule Custyard.InboundChannel do
       | @imap_fields
     ])
     |> update_change(:public_address, &normalize_address/1)
+    |> update_change(:sending_domain, &normalize_address/1)
     |> update_change(:display_name, &normalize_display_name/1)
     |> validate_required([:public_address, :ingress_kind, :inbound_route_id, :tenant_id])
     |> foreign_key_constraint(:tenant_id)
     |> validate_length(:public_address, max: 255)
     |> validate_format(:public_address, @email_regex, message: "must be a valid email address")
     |> validate_length(:display_name, max: 100)
+    |> validate_length(:sending_domain, max: 253)
+    |> validate_format(:sending_domain, @hostname_regex,
+      message: "must be a domain such as mail.example.com"
+    )
+    |> validate_change(:sending_domain, fn :sending_domain, domain ->
+      if Enum.any?(String.split(domain, "."), &(byte_size(&1) > 63)),
+        do: [sending_domain: "domain labels must be at most 63 characters"],
+        else: []
+    end)
+    |> validate_sending_address_length()
+    |> reset_sending_domain_check()
     |> validate_number(:quiet_after_hours,
       greater_than_or_equal_to: 1,
       less_than_or_equal_to: 720
@@ -346,6 +360,35 @@ defmodule Custyard.InboundChannel do
   end
 
   def public_domain(_channel), do: nil
+
+  @doc "The selected sending domain, defaulting to the public mailbox's domain."
+  def sending_domain(%__MODULE__{sending_domain: domain}) when is_binary(domain), do: domain
+  def sending_domain(%__MODULE__{} = channel), do: public_domain(channel)
+
+  @doc "The public mailbox local part at the selected sending domain."
+  def sending_address(%__MODULE__{public_address: address} = channel) when is_binary(address) do
+    case String.split(address, "@", parts: 2) do
+      [local, _domain] -> local <> "@" <> sending_domain(channel)
+      _ -> nil
+    end
+  end
+
+  def sending_address(_channel), do: nil
+
+  defp reset_sending_domain_check(changeset) do
+    if changed?(changeset, :sending_domain),
+      do: change(changeset, sending_domain_status: nil, sending_domain_checked_at: nil),
+      else: changeset
+  end
+
+  defp validate_sending_address_length(changeset) do
+    address = changeset |> apply_changes() |> sending_address()
+
+    if is_binary(address) and byte_size(address) > 255,
+      do:
+        add_error(changeset, :sending_domain, "makes the sending address longer than 255 bytes"),
+      else: changeset
+  end
 
   @doc "True while a previous (rotated) token is still inside its grace period."
   def previous_token_valid?(%__MODULE__{previous_ingress_token: nil}, _now), do: false

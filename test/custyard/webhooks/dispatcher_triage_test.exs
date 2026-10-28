@@ -602,6 +602,31 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert rejections(route) == []
     end
 
+    test "a Proton confirmation arriving after the operator advances is still captured", %{
+      route: route
+    } do
+      channel = channel!(route, state: :awaiting_first_message, provider: :proton)
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel), %{
+          from: "Proton <no-reply@mail.proton.me>",
+          subject: "Confirm forwarding request",
+          body: "https://account.proton.me/email-forwarding/accept#confirmation-token",
+          headers: %{"Precedence" => "bulk"}
+        })
+
+      assert {:ignored, :verification_captured} = Dispatcher.dispatch(route, payload)
+      channel = Repo.reload!(channel)
+
+      assert channel.verification_link ==
+               "https://account.proton.me/email-forwarding/accept#confirmation-token"
+
+      assert channel.state == :awaiting_first_message
+      assert is_nil(channel.last_received_at)
+      assert Repo.aggregate(Conversation, :count) == 0
+      assert rejections(route) == []
+    end
+
     test "on a channel that is not pending it is logged as a provider notice", %{route: route} do
       channel = channel!(route, state: :active)
 

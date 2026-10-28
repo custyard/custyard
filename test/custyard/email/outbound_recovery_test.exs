@@ -13,7 +13,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
   import Custyard.Factory
   import ExUnit.CaptureLog
 
-  alias Custyard.{Conversations, Message, Repo}
+  alias Custyard.{Conversations, InboundChannels, Message, Repo}
   alias Custyard.Email.{Outbound, OutboundQueue}
 
   setup do
@@ -62,6 +62,18 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     refute log =~ "private-message-body"
     assert_receive {:attempted_email, original_email}
     failed = Repo.get!(Message, context.message.id)
+
+    # Keep envelopes persisted before Reply-To support compatible with retries.
+    legacy_hash =
+      {original_email.from, original_email.to, original_email.cc, original_email.bcc,
+       original_email.subject, original_email.text_body, original_email.html_body,
+       original_email.headers}
+      |> :erlang.term_to_binary()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+
+    assert is_nil(original_email.reply_to)
+    assert failed.delivery_payload_hash == legacy_hash
 
     insert_message(
       conversation_id: context.conversation.id,
@@ -119,6 +131,71 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     failed = failed |> Ecto.Changeset.change(delivery_attempted_at: old) |> Repo.update!()
     refute Outbound.retryable?(failed)
     assert {:error, :reconciliation_required} = Outbound.retry(failed, context.operator)
+  end
+
+  test "a retry cannot drop Reply-To after clearing the domain or selecting ingress", context do
+    for attrs <- [%{sending_domain: ""}, %{reply_from: :ingress_address}] do
+      {channel, message} = custom_domain_reply(context)
+      assert {:error, {422, _}, failed} = Outbound.deliver(message)
+      assert_receive {:attempted_email, original_email}
+      assert original_email.reply_to == {"", channel.public_address}
+
+      assert {:ok, _} = InboundChannels.update_channel(channel, attrs, operator: context.operator)
+      Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "retry-must-not-send"}})
+      assert {:ok, retried} = Outbound.retry(failed, context.operator)
+      assert retried.sender_email == message.sender_email
+      assert {:error, :envelope_changed, blocked} = Outbound.deliver(retried)
+      refute Outbound.retryable?(blocked)
+      refute_receive {:attempted_email, _}
+
+      Application.put_env(:custyard, :recovery_test_result, {:error, {422, %{body: "rejected"}}})
+    end
+  end
+
+  test "an unattempted configuration retry cannot drop the saved return path", context do
+    {channel, message} = custom_domain_reply(context)
+
+    Application.put_env(:custyard, Custyard.Mailer,
+      adapter: Swoosh.Adapters.Lettermint,
+      api_token: nil
+    )
+
+    assert {:error, :sending_not_configured, failed} = Outbound.deliver(message)
+    assert is_nil(failed.delivery_attempted_at)
+    refute_receive {:attempted_email, _}
+
+    assert {:ok, _} =
+             InboundChannels.update_channel(channel, %{sending_domain: ""},
+               operator: context.operator
+             )
+
+    Application.put_env(:custyard, Custyard.Mailer, adapter: __MODULE__.Adapter)
+    Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "retry-must-not-send"}})
+    assert {:ok, retried} = Outbound.retry(failed, context.operator)
+    assert {:error, :envelope_changed, blocked} = Outbound.deliver(retried)
+    assert is_nil(blocked.delivery_attempted_at)
+    refute_receive {:attempted_email, _}
+  end
+
+  defp custom_domain_reply(context) do
+    channel =
+      insert_inbound_channel(
+        organization_id: context.conversation.organization_id,
+        public_address: "support@acme.example",
+        sending_domain: "mail.acme.example",
+        state: :active
+      )
+
+    conversation =
+      insert_conversation(
+        organization_id: context.conversation.organization_id,
+        contact_id: context.contact.id,
+        inbound_channel_id: channel.id
+      )
+
+    {:ok, message} = Conversations.send_reply(conversation, "A reply using the custom sender")
+    assert message.sender_email == "support@mail.acme.example"
+    {channel, message}
   end
 
   test "configuration failures before provider invocation remain retryable after a day",

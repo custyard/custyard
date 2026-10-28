@@ -315,9 +315,10 @@ defmodule Custyard.Webhooks.Dispatcher do
   defp handle_verification(
          route,
          normalized,
-         %InboundChannel{state: :pending_verification} = channel,
+         %InboundChannel{state: state} = channel,
          capture
-       ) do
+       )
+       when state in [:pending_verification, :awaiting_first_message] do
     case InboundChannels.capture_verification(channel, capture) do
       {:ok, _channel} ->
         audit_triaged(route, normalized, channel, "verification_captured", nil)
@@ -333,7 +334,7 @@ defmodule Custyard.Webhooks.Dispatcher do
     end
   end
 
-  # A legacy route, or a channel that is not waiting for confirmation: the
+  # A legacy route, or a channel that is no longer being set up: the
   # notice is kept in the rejection log so the operator can find it.
   defp handle_verification(route, normalized, channel, _capture) do
     log_rejection(route, channel, :provider_notice, normalized)
