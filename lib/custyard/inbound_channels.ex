@@ -329,7 +329,8 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   Operator confirmed the forwarding rule: `pending_verification` ->
-  `awaiting_first_message`. Consumes any captured verification.
+  `awaiting_first_message`. Consumes any captured verification, including a
+  confirmation received after the operator advanced to the first-message step.
   """
   def confirm_verification(channel, opts \\ [])
 
@@ -338,6 +339,14 @@ defmodule Custyard.InboundChannels do
       current
       |> InboundChannel.state_changeset(:awaiting_first_message, %{verified_at: now()})
       |> Ecto.Changeset.merge(InboundChannel.clear_verification_changeset(current))
+    end)
+  end
+
+  def confirm_verification(%InboundChannel{state: :awaiting_first_message} = channel, opts) do
+    transition(channel, opts, fn current ->
+      if current.verification_captured_at,
+        do: InboundChannel.clear_verification_changeset(current),
+        else: invalid_state(current, :confirm_verification)
     end)
   end
 

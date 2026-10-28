@@ -177,10 +177,17 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     end
   end
 
+  def handle_event("confirm_forwarding", _params, %{assigns: %{channel: nil}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("confirm_forwarding", _params, socket) do
-    with_channel(socket, fn channel ->
-      InboundChannels.confirm_verification(channel, operator: socket.assigns.current_operator)
-    end)
+    result =
+      InboundChannels.confirm_verification(socket.assigns.channel,
+        operator: socket.assigns.current_operator
+      )
+
+    {:noreply, socket} = apply_channel_result(socket, result)
+    {:noreply, if(match?({:ok, _}, result), do: assign(socket, :step, 3), else: socket)}
   end
 
   def handle_event("check_mx", _params, socket) do
@@ -1245,6 +1252,13 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           First message received. {arrival_text(@channel)} and the channel is active.
         </div>
       <% else %>
+        <p
+          :if={InboundChannel.verification_valid?(@channel, DateTime.utc_now())}
+          class="text-sm text-indigo-700 dark:text-indigo-300"
+          data-testid="channel-confirmation-pending"
+        >
+          A forwarding confirmation is waiting. Open the Forward step to accept it before sending your test email.
+        </p>
         <p class="text-sm text-gray-700 dark:text-zinc-300" data-testid="channel-test-prompt">
           Send a test email to
           <code class="text-gray-900 dark:text-zinc-100">{@channel.public_address}</code>

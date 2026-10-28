@@ -353,6 +353,59 @@ defmodule Custyard.Webhooks.TriageTest do
       assert capture.link == "https://account.proton.me/forward/confirm?token=abc"
     end
 
+    test "current Proton forwarding mail selects the acceptance action over branding links", %{
+      route: route
+    } do
+      payload =
+        normalized(%{
+          from: "Proton <no-reply@mail.proton.me>",
+          subject: "Confirm forwarding request",
+          body: "Proton https://proton.me/mail",
+          headers: %{"Precedence" => "bulk"}
+        })
+        |> put_metadata(%{
+          links: [
+            "https://proton.me/mail",
+            "https://account.proton.me/email-forwarding/reject#decline-token",
+            "https://account.proton.me/email-forwarding/accept#confirmation-token",
+            "https://proton.me/"
+          ]
+        })
+
+      assert {:verification, %{provider: :proton, code: nil, link: link}} =
+               Triage.classify(payload, route, nil)
+
+      assert link == "https://account.proton.me/email-forwarding/accept#confirmation-token"
+    end
+
+    test "ordinary Proton notification mail is not a forwarding confirmation", %{route: route} do
+      payload =
+        normalized(%{
+          from: "Proton <no-reply@mail.proton.me>",
+          subject: "You have new messages",
+          headers: %{"Precedence" => "bulk"}
+        })
+
+      assert {:auto_response, :precedence} = Triage.classify(payload, route, nil)
+    end
+
+    test "Proton branding and lookalike acceptance links are not confirmation actions", %{
+      route: route
+    } do
+      payload =
+        normalized(%{
+          from: "Proton <no-reply@mail.proton.me>",
+          subject: "Confirm forwarding request",
+          body: """
+          https://proton.me/mail
+          https://account.proton.me.evil.example/email-forwarding/accept#token
+          https://account.proton.me/email-forwarding/reject#token
+          """
+        })
+
+      assert {:verification, %{link: nil}} = Triage.classify(payload, route, nil)
+    end
+
     test "a link on a lookalike host is ignored", %{route: route} do
       payload =
         normalized(%{

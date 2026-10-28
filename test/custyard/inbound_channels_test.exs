@@ -381,7 +381,23 @@ defmodule Custyard.InboundChannelsTest do
       assert Repo.reload!(stale).state == :active
     end
 
-    test "confirm_verification/2 only applies to pending_verification" do
+    test "confirm_verification/2 consumes a late capture without regressing the channel" do
+      channel = insert_inbound_channel(state: :awaiting_first_message)
+
+      {:ok, channel} =
+        InboundChannels.capture_verification(channel, %{
+          code: nil,
+          link: "https://account.proton.me/email-forwarding/accept#confirmation-token"
+        })
+
+      assert {:ok, confirmed} = InboundChannels.confirm_verification(channel)
+      assert confirmed.state == :awaiting_first_message
+      assert confirmed.verified_at == channel.verified_at
+      assert is_nil(confirmed.verification_link)
+      assert is_nil(Repo.reload!(channel).verification_captured_at)
+    end
+
+    test "confirm_verification/2 rejects states without a pending or late capture" do
       for state <- [:awaiting_first_message, :active, :paused, :revoked, :draft] do
         channel = insert_inbound_channel(state: state)
 

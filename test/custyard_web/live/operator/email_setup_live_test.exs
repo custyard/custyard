@@ -56,6 +56,36 @@ defmodule CustyardWeb.Operator.EmailSetupLiveTest do
     assert is_nil(EmailSetup.connection(c.tenant.id))
   end
 
+  test "a late forwarding confirmation can be opened and acknowledged after advancing", c do
+    route = insert_inbound_route(tenant_id: c.tenant.id, organization_id: nil)
+
+    channel =
+      insert_inbound_channel(
+        tenant_id: c.tenant.id,
+        organization_id: nil,
+        inbound_route_id: route.id,
+        state: :awaiting_first_message,
+        provider: :proton
+      )
+
+    {:ok, channel} =
+      Custyard.InboundChannels.capture_verification(channel, %{
+        code: nil,
+        link: "https://account.proton.me/email-forwarding/accept#confirmation-token"
+      })
+
+    {:ok, view, _} = live(c.conn, ~p"/operator/email-setup")
+    render_click(view, "resume_channel", %{"id" => to_string(channel.id)})
+    assert has_element?(view, "[data-testid=channel-confirmation-pending]")
+    view |> element("[data-testid=channel-setup-step-2]") |> render_click()
+    assert has_element?(view, "[data-testid=channel-verification-link]")
+    view |> element("[data-testid=channel-confirm-forwarding]") |> render_click()
+    assert has_element?(view, "[data-testid=channel-test-step]")
+    refute has_element?(view, "[data-testid=channel-confirmation-pending]")
+    assert is_nil(Repo.reload!(channel).verification_link)
+    assert Repo.reload!(channel).state == :awaiting_first_message
+  end
+
   test "resuming a channel and adding another address show the correct wizard", c do
     route = insert_inbound_route(tenant_id: c.tenant.id, organization_id: nil)
 
