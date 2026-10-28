@@ -16,7 +16,7 @@ defmodule CustyardWeb.Layouts do
     conn_assigns = if assigns[:conn], do: assigns.conn.assigns, else: %{}
 
     tenant =
-      assigns[:current_tenant] || conn_assigns[:current_tenant] || conn_assigns[:host_tenant]
+      assigns[:host_tenant] || conn_assigns[:host_tenant]
 
     if tenant do
       %{
@@ -29,7 +29,7 @@ defmodule CustyardWeb.Layouts do
     else
       %{
         tenant?: false,
-        name: assigns[:site_name] || "Custyard",
+        name: "Custyard",
         logo: nil,
         color: "#FD4F00",
         description: "Customer service and support platform"
