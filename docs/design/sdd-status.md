@@ -3,10 +3,13 @@
 Planning & Implementation State
 
 > **Partially historical.** Sections below marked with a dated correction were
-> verified against the code on 2026-07-25; the rest of this document has not
-> been re-verified since it was written and its test counts and status tables
-> may lag the implementation. `docs/design/spec-public-intake.md` and its
-> design-decisions companion are current and authoritative for the intake path.
+> verified against the code on 2󠄁0󠄁2󠄁6󠄁-󠄁0󠄁7󠄁-󠄁2󠄁5󠄁.󠄁 K󠄁e󠄁y󠄁 F󠄁i󠄁l󠄁e󠄁s󠄁,󠄁 t󠄁h󠄁e󠄁 T󠄁e󠄁c󠄁h󠄁n󠄁i󠄁c󠄁a󠄁l󠄁
+> A󠄁r󠄁c󠄁h󠄁i󠄁t󠄁e󠄁c󠄁t󠄁u󠄁r󠄁e󠄁 a󠄁n󠄁d󠄁 D󠄁a󠄁t󠄁a󠄁 M󠄁o󠄁d󠄁e󠄁l󠄁 t󠄁a󠄁b󠄁l󠄁e󠄁s󠄁,󠄁 t󠄁h󠄁e󠄁 s󠄁c󠄁o󠄁r󠄁i󠄁n󠄁g󠄁 l󠄁i󠄁s󠄁t󠄁,󠄁 U󠄁S󠄁-󠄁6󠄁,󠄁 U󠄁S󠄁-󠄁1󠄁0󠄁,󠄁 t󠄁h󠄁e󠄁
+> s󠄁e󠄁c󠄁u󠄁r󠄁i󠄁t󠄁y󠄁 l󠄁i󠄁s󠄁t󠄁 a󠄁n󠄁d󠄁 W󠄁h󠄁a󠄁t󠄁'󠄁s󠄁 N󠄁e󠄁x󠄁t󠄁 w󠄁e󠄁r󠄁e󠄁 r󠄁e󠄁-󠄁c󠄁h󠄁e󠄁c󠄁k󠄁e󠄁d󠄁 a󠄁g󠄁a󠄁i󠄁n󠄁s󠄁t󠄁 `main` o󠄁n󠄁 2󠄁0󠄁2󠄁6󠄁-󠄁1󠄁0󠄁-󠄁2󠄁6󠄁.󠄁
+> T󠄁h󠄁e󠄁 u󠄁s󠄁e󠄁r󠄁-󠄁s󠄁t󠄁o󠄁r󠄁y󠄁 t󠄁a󠄁b󠄁l󠄁e󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁 r󠄁e󠄁m󠄁a󠄁i󠄁n󠄁i󠄁n󠄁g󠄁 a󠄁c󠄁c󠄁e󠄁p󠄁t󠄁a󠄁n󠄁c󠄁e󠄁 c󠄁r󠄁i󠄁t󠄁e󠄁r󠄁i󠄁a󠄁 h󠄁a󠄁v󠄁e󠄁 n󠄁o󠄁t󠄁 b󠄁e󠄁e󠄁n󠄁
+> r󠄁e󠄁-󠄁v󠄁e󠄁r󠄁i󠄁f󠄁i󠄁e󠄁d󠄁.󠄁 `docs/design/spec-public-intake.md` a󠄁n󠄁d󠄁 i󠄁t󠄁s󠄁 d󠄁e󠄁s󠄁i󠄁g󠄁n󠄁-󠄁d󠄁e󠄁c󠄁i󠄁s󠄁i󠄁o󠄁n󠄁s󠄁
+> c󠄁o󠄁m󠄁p󠄁a󠄁n󠄁i󠄁o󠄁n󠄁 a󠄁r󠄁e󠄁 c󠄁u󠄁r󠄁r󠄁e󠄁n󠄁t󠄁 a󠄁n󠄁d󠄁 a󠄁u󠄁t󠄁h󠄁o󠄁r󠄁i󠄁t󠄁a󠄁t󠄁i󠄁v󠄁e󠄁 f󠄁o󠄁r󠄁 t󠄁h󠄁e󠄁 i󠄁n󠄁t󠄁a󠄁k󠄁e󠄁 p󠄁a󠄁t󠄁h󠄁;󠄁
+> `docs/design/spec-inbound-channels.md` i󠄁s󠄁 f󠄁o󠄁r󠄁 i󠄁n󠄁b󠄁o󠄁u󠄁n󠄁d󠄁 e󠄁m󠄁a󠄁i󠄁l󠄁.󠄁
 
 ## Key Files
 
@@ -41,7 +44,7 @@ Security:
 - lib/custyard_web/plugs/require_operator.ex - Operator session validation
 - lib/custyard_web/plugs/portal_auth.ex - Org token/custom domain validation
 - lib/custyard/webhooks/signature.ex - Per-source HMAC signature verification for inbound webhooks (`WEBHOOK_SECRET_LETTERMINT`, `_ZENDESK`, `_INTERCOM`, `_SLACK`), with per-adapter digests under lib/custyard/webhooks/adapters/
-- lib/custyard_web/plugs/login_rate_limit.ex - ETS-based rate limiting (5/60s per IP)
+- l󠄁i󠄁b󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁/󠄁r󠄁a󠄁t󠄁e󠄁_l󠄁i󠄁m󠄁i󠄁t󠄁.󠄁e󠄁x󠄁,󠄁 l󠄁i󠄁b󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁_w󠄁e󠄁b󠄁/󠄁p󠄁l󠄁u󠄁g󠄁s󠄁/󠄁p󠄁u󠄁b󠄁l󠄁i󠄁c󠄁_r󠄁a󠄁t󠄁e󠄁_l󠄁i󠄁m󠄁i󠄁t󠄁.󠄁e󠄁x󠄁 -󠄁 E󠄁T󠄁S󠄁 s󠄁l󠄁i󠄁d󠄁i󠄁n󠄁g󠄁-󠄁w󠄁i󠄁n󠄁d󠄁o󠄁w󠄁 r󠄁a󠄁t󠄁e󠄁 l󠄁i󠄁m󠄁i󠄁t󠄁e󠄁r󠄁 w󠄁i󠄁t󠄁h󠄁 n󠄁a󠄁m󠄁e󠄁d󠄁 b󠄁u󠄁c󠄁k󠄁e󠄁t󠄁s󠄁 i󠄁n󠄁 `config/config.exs` (󠄁o󠄁p󠄁e󠄁r󠄁a󠄁t󠄁o󠄁r󠄁 l󠄁o󠄁g󠄁i󠄁n󠄁:󠄁 5󠄁/󠄁6󠄁0󠄁s󠄁 p󠄁e󠄁r󠄁 I󠄁P󠄁,󠄁 5󠄁/󠄁h󠄁o󠄁u󠄁r󠄁 p󠄁e󠄁r󠄁 e󠄁m󠄁a󠄁i󠄁l󠄁)󠄁
 - lib/custyard_web/plugs/custom_domain.ex - Custom domain → org resolution with path rewriting
 
 ## Implementation Status
@@ -70,10 +73,10 @@ Security:
 | Attention Scoring Engine     | Scoring module with idle/state/tier/urgency/velocity/neglect components plus a per-channel bonus. Scheduler runs every 5 min. | Done    |
 | Authentication (Operator)    | **Corrected 2026-07-25:** magic-link only — `POST /login` emails a 15-minute single-use token, `GET /login/verify/:token` establishes the session. Rate-limited, timing-attack safe. `password_hash` (Argon2) survives on the schema and is still written by `mix dev.reset_operator_password`, but no route consumes it; there is no password login path. | Done    |
 | Authentication (Portal)      | Token-based URL + custom domain. No Rodauth/SSO yet — SDD specifies Rodauth email/password + optional SSO | Partial |
-| Background Processing        | Scoring scheduler, dormancy checker, neglect checker all running as GenServers                            | Done    |
+| Background Processing        | S󠄁u󠄁p󠄁e󠄁r󠄁v󠄁i󠄁s󠄁e󠄁d󠄁 G󠄁e󠄁n󠄁S󠄁e󠄁r󠄁v󠄁e󠄁r󠄁s󠄁,󠄁 e󠄁a󠄁c󠄁h󠄁 s󠄁w󠄁i󠄁t󠄁c󠄁h󠄁a󠄁b󠄁l󠄁e󠄁 b󠄁y󠄁 c󠄁o󠄁n󠄁f󠄁i󠄁g󠄁:󠄁 s󠄁c󠄁o󠄁r󠄁i󠄁n󠄁g󠄁 s󠄁c󠄁h󠄁e󠄁d󠄁u󠄁l󠄁e󠄁r󠄁 (󠄁s󠄁c󠄁o󠄁r󠄁e󠄁s󠄁,󠄁 d󠄁o󠄁r󠄁m󠄁a󠄁n󠄁c󠄁y󠄁,󠄁 n󠄁e󠄁g󠄁l󠄁e󠄁c󠄁t󠄁)󠄁,󠄁 o󠄁u󠄁t󠄁b󠄁o󠄁u󠄁n󠄁d󠄁 m󠄁a󠄁i󠄁l󠄁 q󠄁u󠄁e󠄁u󠄁e󠄁,󠄁 i󠄁n󠄁t󠄁a󠄁k󠄁e󠄁 s󠄁w󠄁e󠄁e󠄁p󠄁s󠄁 (󠄁s󠄁l󠄁u󠄁g󠄁 c󠄁l󠄁a󠄁i󠄁m󠄁 e󠄁x󠄁p󠄁i󠄁r󠄁y󠄁,󠄁 r󠄁e󠄁t󠄁e󠄁n󠄁t󠄁i󠄁o󠄁n󠄁 s󠄁w󠄁e󠄁e󠄁p󠄁)󠄁,󠄁 p󠄁e󠄁r󠄁-󠄁c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁 I󠄁M󠄁A󠄁P󠄁 p󠄁o󠄁l󠄁l󠄁e󠄁r󠄁s󠄁,󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁 o󠄁p󠄁t󠄁i󠄁o󠄁n󠄁a󠄁l󠄁 L󠄁M󠄁T󠄁P󠄁 s󠄁e󠄁r󠄁v󠄁e󠄁r󠄁 a󠄁n󠄁d󠄁 a󠄁c󠄁k󠄁n󠄁o󠄁w󠄁l󠄁e󠄁d󠄁g󠄁m󠄁e󠄁n󠄁t󠄁 c󠄁o󠄁n󠄁s󠄁u󠄁m󠄁e󠄁r󠄁 | Done    |
 | Operator/Customer Isolation  | Separate route scopes, plugs, LiveView on_mount hooks. No shared auth.                                    | Done    |
 | Cross-Organization Isolation | All portal queries filter by org_id from authenticated session                                            | Done    |
-| Email as Untrusted Input     | Plain-text bodies, plus HTML sanitised at ingest with an allowlist and images removed (`Custyard.Email.HtmlSanitizer`). Phoenix template escaping prevents XSS | Done    |
+| Email as Untrusted Input     | Plain-text bodies, plus HTML sanitised at ingest with an allowlist (󠄁`Custyard.Email.HtmlSanitizer`)󠄁.󠄁 R󠄁e󠄁m󠄁o󠄁t󠄁e󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁s󠄁 a󠄁r󠄁e󠄁 r󠄁e󠄁m󠄁o󠄁v󠄁e󠄁d󠄁;󠄁 `cid:` i󠄁m󠄁a󠄁g󠄁e󠄁s󠄁 a󠄁r󠄁e󠄁 k󠄁e󠄁p󠄁t󠄁 a󠄁n󠄁d󠄁 r󠄁e󠄁s󠄁o󠄁l󠄁v󠄁e󠄁d󠄁 a󠄁t󠄁 r󠄁e󠄁n󠄁d󠄁e󠄁r󠄁 t󠄁i󠄁m󠄁e󠄁 t󠄁o󠄁 t󠄁h󠄁e󠄁 s󠄁a󠄁m󠄁e󠄁 m󠄁e󠄁s󠄁s󠄁a󠄁g󠄁e󠄁'󠄁s󠄁 s󠄁t󠄁o󠄁r󠄁e󠄁d󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁s󠄁 (󠄁`CustyardWeb.InlineImages`)󠄁.󠄁 Phoenix template escaping prevents XSS | Done    |
 | Data at Rest Encryption      | Not implemented — using SQLite for MVP. Only IMAP channel passwords are encrypted (`Custyard.Credentials`, AES-256-GCM) | Not Yet |
 | Inbound Channels             | Inbound-channels Phases 0–3. An operator-visible `InboundChannel` per public support address under a route, with lifecycle pending_verification → awaiting_first_message → active (+ paused/revoked), a triage stage (own echo, provider verification capture, auto-response, suspect, operator-sent, manual-forward unwrap) ahead of sender matching, per-channel reply identity with a Lettermint sending-domain check, a quiet-channel alert, a 14-day rejection log, and a channels tab with a setup wizard. Three ingress kinds: forwarding to `local+token@<route-id>.lettermint.app` (Proton, Gmail, Google Workspace admin routing, other), direct MX on the route's custom domain, and per-channel IMAP with the password encrypted under `CREDENTIAL_ENCRYPTION_KEY`. Phase 2 added CC and Reply-To, sanitised HTML, attachments, the archive copy, CC-participant DSAR and language detection. Open items: spec-inbound-channels, Implementation status. Spec: `docs/design/spec-inbound-channels.md`. | Done |
 | Outbound Email               | Platform-native outbound implemented (#26 merged): operator replies compose in-platform, send threaded via Lettermint, tracked send-side (pending/sent/failed). Provider status webhook landed (inbound-channels Phase 0): `POST /api/webhook/email-status/lettermint` advances delivered/bounced/suppressed/failed with rank-ordered transitions and an audit event per transition. | Done |
@@ -85,16 +88,16 @@ Security:
 | Organization      | name, domain, tier, token, branding fields, custom_domain. Unique indices on token/domain.     | Done    |
 | Contact           | email, name, is_admin, email_status (valid/bounced/suppressed, from delivery events). Composite unique (email, org_id). No portal account yet. | Done    |
 | Conversation      | Full state model, urgency, cached_score, snoozed_until, last_neglect_notification. No tags substrate (SDD §4.1 freeform labels). | Partial |
-| Message           | source, sender_email, body, is_internal_note, message_id, in_reply_to. No updated_at.          | Done    |
+| Message           | source, o󠄁r󠄁i󠄁g󠄁i󠄁n󠄁,󠄁 s󠄁e󠄁n󠄁d󠄁e󠄁r󠄁_e󠄁m󠄁a󠄁i󠄁l󠄁,󠄁 b󠄁o󠄁d󠄁y󠄁,󠄁 h󠄁t󠄁m󠄁l󠄁_b󠄁o󠄁d󠄁y󠄁,󠄁 t󠄁o󠄁/󠄁c󠄁c󠄁 a󠄁d󠄁d󠄁r󠄁e󠄁s󠄁s󠄁e󠄁s󠄁,󠄁 r󠄁e󠄁p󠄁l󠄁y󠄁_t󠄁o󠄁,󠄁 m󠄁e󠄁s󠄁s󠄁a󠄁g󠄁e󠄁_i󠄁d󠄁,󠄁 i󠄁n󠄁_r󠄁e󠄁p󠄁l󠄁y󠄁_t󠄁o󠄁,󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁_s󠄁t󠄁a󠄁t󠄁u󠄁s󠄁,󠄁 t󠄁r󠄁i󠄁a󠄁g󠄁e󠄁_c󠄁l󠄁a󠄁s󠄁s󠄁,󠄁 a󠄁u󠄁t󠄁h󠄁e󠄁n󠄁t󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁,󠄁 i󠄁s󠄁_i󠄁n󠄁t󠄁e󠄁r󠄁n󠄁a󠄁l󠄁_n󠄁o󠄁t󠄁e󠄁,󠄁 d󠄁e󠄁l󠄁e󠄁t󠄁e󠄁d󠄁_a󠄁t󠄁;󠄁 i󠄁n󠄁s󠄁e󠄁r󠄁t󠄁e󠄁d󠄁_a󠄁t󠄁 a󠄁n󠄁d󠄁 u󠄁p󠄁d󠄁a󠄁t󠄁e󠄁d󠄁_a󠄁t󠄁.󠄁 P󠄁e󠄁r󠄁-󠄁r󠄁e󠄁c󠄁i󠄁p󠄁i󠄁e󠄁n󠄁t󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁 i󠄁n󠄁 `message_recipient_statuses`.󠄁 | Done    |
 | Attachment        | `message_attachments` (inbound-channels Phase 2): content-addressed files under `ATTACHMENT_DIR`, sniffed type, per-channel cap, authenticated operator and portal download. Outbound attachments not yet. | Partial |
 | Task              | title, state, portal_visible, due_at. FK to conversation and project.                          | Done    |
 | Project           | title, description, dates, portal_visible, project_type, tags, is_template.                    | Done    |
 | Project Template  | is_template flag on Project. Template instantiation with date calculation.                     | Done    |
-| Activity Log      | Not implemented — SDD specifies append-only log for organization timeline and audit.           | Not Yet |
+| Activity Log      | `audit_events` (󠄁`Custyard.AuditEvent`)󠄁 i󠄁s󠄁 a󠄁n󠄁 a󠄁p󠄁p󠄁e󠄁n󠄁d󠄁-󠄁o󠄁n󠄁l󠄁y󠄁 l󠄁o󠄁g󠄁 o󠄁f󠄁 w󠄁e󠄁b󠄁h󠄁o󠄁o󠄁k󠄁 p󠄁r󠄁o󠄁c󠄁e󠄁s󠄁s󠄁i󠄁n󠄁g󠄁,󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁-󠄁s󠄁t󠄁a󠄁t󠄁u󠄁s󠄁 c󠄁h󠄁a󠄁n󠄁g󠄁e󠄁s󠄁,󠄁 p󠄁r󠄁o󠄁s󠄁p󠄁e󠄁c󠄁t󠄁 c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁i󠄁o󠄁n󠄁,󠄁 s󠄁l󠄁u󠄁g󠄁 r󠄁e󠄁l󠄁e󠄁a󠄁s󠄁e󠄁,󠄁 o󠄁p󠄁e󠄁r󠄁a󠄁t󠄁o󠄁r󠄁 a󠄁c󠄁c󠄁o󠄁u󠄁n󠄁t󠄁s󠄁 a󠄁n󠄁d󠄁 a󠄁c󠄁k󠄁n󠄁o󠄁w󠄁l󠄁e󠄁d󠄁g󠄁m󠄁e󠄁n󠄁t󠄁s󠄁.󠄁 I󠄁t󠄁 d󠄁o󠄁e󠄁s󠄁 n󠄁o󠄁t󠄁 f󠄁e󠄁e󠄁d󠄁 t󠄁h󠄁e󠄁 o󠄁r󠄁g󠄁a󠄁n󠄁i󠄁z󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 t󠄁i󠄁m󠄁e󠄁l󠄁i󠄁n󠄁e󠄁 t󠄁h󠄁e󠄁 S󠄁D󠄁D󠄁 d󠄁e󠄁s󠄁c󠄁r󠄁i󠄁b󠄁e󠄁s󠄁.󠄁 | P󠄁a󠄁r󠄁t󠄁i󠄁a󠄁l󠄁 |
 | Neglect Threshold | Stored in Settings schema (JSON column), per-tier warning/critical hours.                      | Done    |
 | Operator Account  | email, role, organization_id, login_token + login_token_expires_at (magic link). password_hash (Argon2) present but unused by any login route — see the Authentication (Operator) row. | Done    |
 | Portal Account    | Not implemented as separate entity — portal access uses org token, not per-contact accounts.   | Not Yet |
-| Settings          | Single-row schema with score_weights, neglect_thresholds, sieve_header_mappings.               | Done    |
+| Settings          | Single-row schema with score_weights, neglect_thresholds, s󠄁i󠄁e󠄁v󠄁e󠄁_h󠄁e󠄁a󠄁d󠄁e󠄁r󠄁_m󠄁a󠄁p󠄁p󠄁i󠄁n󠄁g󠄁s󠄁,󠄁 i󠄁n󠄁t󠄁a󠄁k󠄁e󠄁_c󠄁o󠄁n󠄁f󠄁i󠄁g󠄁,󠄁 b󠄁r󠄁a󠄁n󠄁d󠄁i󠄁n󠄁g󠄁.󠄁 | Done    |
 
 ### Scoring Algorithm (SDD §4.3)
 
@@ -106,6 +109,7 @@ All scoring components implemented per spec:
 - Urgency bonuses: urgent=15, elevated=7, normal=0
 - Velocity: log(24h_message_count+1)×3, capped at 10
 - Neglect bonus: critical=15, warning=7, ok=0
+- C󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁 b󠄁o󠄁n󠄁u󠄁s󠄁:󠄁 0󠄁–󠄁3󠄁0󠄁 p󠄁e󠄁r󠄁 i󠄁n󠄁b󠄁o󠄁u󠄁n󠄁d󠄁 c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁,󠄁 s󠄁e󠄁t󠄁 o󠄁n󠄁 t󠄁h󠄁e󠄁 c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁 c󠄁a󠄁r󠄁d󠄁,󠄁 n󠄁o󠄁t󠄁 w󠄁e󠄁i󠄁g󠄁h󠄁t󠄁e󠄁d󠄁
 - Snooze: excluded from queue entirely
 - Transparency: `Scoring.breakdown/1` shows component-level score explanation
 - All weights configurable via Settings without code changes
@@ -158,7 +162,7 @@ US-5 (Attention Queue):
 US-6 (Neglect Alerts):
 
 - [x] Configurable thresholds per tier
-- [x] Email notifications (Swoosh stub)
+- [x] Email notifications v󠄁i󠄁a󠄁 S󠄁w󠄁o󠄁o󠄁s󠄁h󠄁 w󠄁h󠄁e󠄁n󠄁 `EMAIL_NOTIFICATIONS_ENABLED=true`;󠄁 l󠄁o󠄁g󠄁g󠄁e󠄁d󠄁 o󠄁t󠄁h󠄁e󠄁r󠄁w󠄁i󠄁s󠄁e󠄁
 - [x] Visual indicator in attention queue
 - [x] Neglect report view grouped by organization
 - [x] Transition-based notification (no duplicates)
@@ -197,7 +201,7 @@ US-10 (Projects with Templates):
 - [x] Portal visibility (per-project and per-task)
 - [x] Project linked to conversation (optional)
 - [x] No "project completion" lifecycle state
-- [ ] Template instantiation with relative → absolute date conversion (partially — is_template exists but instantiation logic unclear)
+- [x] T󠄁e󠄁m󠄁p󠄁l󠄁a󠄁t󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁n󠄁t󠄁i󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 w󠄁i󠄁t󠄁h󠄁 r󠄁e󠄁l󠄁a󠄁t󠄁i󠄁v󠄁e󠄁 →󠄁 a󠄁b󠄁s󠄁o󠄁l󠄁u󠄁t󠄁e󠄁 d󠄁a󠄁t󠄁e󠄁 c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁i󠄁o󠄁n󠄁 (󠄁`Projects.create_from_template/3` k󠄁e󠄁e󠄁p󠄁s󠄁 e󠄁a󠄁c󠄁h󠄁 t󠄁a󠄁s󠄁k󠄁'󠄁s󠄁 o󠄁f󠄁f󠄁s󠄁e󠄁t󠄁 f󠄁r󠄁o󠄁m󠄁 t󠄁h󠄁e󠄁 t󠄁e󠄁m󠄁p󠄁l󠄁a󠄁t󠄁e󠄁'󠄁s󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁 d󠄁a󠄁t󠄁e󠄁)󠄁
 
 US-11 (Internal Projects):
 
@@ -209,35 +213,30 @@ US-11 (Internal Projects):
 
 ### QA & Security Hardening
 
-496 tests across 25 test files, 0 failures.
-
-Recent QA work (qa/batch1-security-and-validation-fixes):
-
-- CSRF protection: removed GET /logout route (Sobelow finding)
-- Credo strict: reduced complexity and nesting depth
-- Format compliance: mix format --check-formatted passing
-- Input validation tightened across codebase
-- Portal path generation fixed to always use token-based routes
+C󠄁I󠄁 (󠄁`.github/workflows/ci.yml`)󠄁 r󠄁u󠄁n󠄁s󠄁 o󠄁n󠄁 e󠄁v󠄁e󠄁r󠄁y󠄁 P󠄁R󠄁:󠄁 `mix compile --warnings-as-errors`,󠄁 `mix format --check-formatted`,󠄁 `mix test`,󠄁 `mix credo --strict`,󠄁 `mix sobelow --exit`,󠄁 `mix hex.audit` a󠄁n󠄁d󠄁 `mix deps.audit`.󠄁 T󠄁e󠄁s󠄁t󠄁 c󠄁o󠄁u󠄁n󠄁t󠄁s󠄁 a󠄁r󠄁e󠄁 n󠄁o󠄁t󠄁 t󠄁r󠄁a󠄁c󠄁k󠄁e󠄁d󠄁 h󠄁e󠄁r󠄁e󠄁.󠄁
 
 Security measures in place:
 
 - Magic-link operator login: single-use token, 15-minute TTL, constant-time comparison (`Plug.Crypto.secure_compare`), cleared on use
-- Login rate limiting (5 attempts / 60s per IP)
+- Login rate limiting (5 attempts / 60s per I󠄁P󠄁,󠄁 5󠄁 /󠄁 h󠄁o󠄁u󠄁r󠄁 p󠄁e󠄁r󠄁 e󠄁m󠄁a󠄁i󠄁l󠄁)󠄁
 - Per-source HMAC webhook signature verification (secure_compare) — replaced the single bearer token this document originally described
 - Session renewal on login
 - CSRF protection on all browser routes
-- HTML email bodies stripped to plain text
-- File upload path validation (restricts to /uploads/ or https://)
+- HTML email bodies s󠄁a󠄁n󠄁i󠄁t󠄁i󠄁s󠄁e󠄁d󠄁 w󠄁i󠄁t󠄁h󠄁 a󠄁n󠄁 a󠄁l󠄁l󠄁o󠄁w󠄁l󠄁i󠄁s󠄁t󠄁;󠄁 r󠄁e󠄁m󠄁o󠄁t󠄁e󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁s󠄁 r󠄁e󠄁m󠄁o󠄁v󠄁e󠄁d󠄁 (󠄁s󠄁e󠄁e󠄁 E󠄁m󠄁a󠄁i󠄁l󠄁 a󠄁s󠄁 U󠄁n󠄁t󠄁r󠄁u󠄁s󠄁t󠄁e󠄁d󠄁 I󠄁n󠄁p󠄁u󠄁t󠄁)󠄁
+- L󠄁o󠄁g󠄁o󠄁 p󠄁a󠄁t󠄁h󠄁 v󠄁a󠄁l󠄁i󠄁d󠄁a󠄁t󠄁i󠄁o󠄁n󠄁:󠄁 s󠄁a󠄁m󠄁e󠄁-󠄁o󠄁r󠄁i󠄁g󠄁i󠄁n󠄁 `/uploads/` p󠄁a󠄁t󠄁h󠄁s󠄁 o󠄁n󠄁l󠄁y󠄁,󠄁 n󠄁o󠄁 t󠄁r󠄁a󠄁v󠄁e󠄁r󠄁s󠄁a󠄁l󠄁 (󠄁`Custyard.UploadPath`)󠄁
 - Domain format validation, color format validation
 - Sieve header value whitelist validation
 
 ## What's Next (Not Yet Built)
 
-1. [#10](https://github.com/onetimesecret/custyard/issues/10) **Email Infrastructure** - LMTP/IMAP code exists but needs MTA hookup for real deployment
-2. [#11](https://github.com/onetimesecret/custyard/issues/11) **Production Deployment** - Containerfile exists but untested
-3. [#12](https://github.com/onetimesecret/custyard/issues/12) **Team Support** - Role schema (super_admin/admin/agent) and org scoping exist; team management UI and full role enforcement pending
-4. [#13](https://github.com/onetimesecret/custyard/issues/13) **Webhook Ingestion** - Controller exists, needs full integration
-5. [#14](https://github.com/onetimesecret/custyard/issues/14) **Encryption at Rest** - Architecture defined, using SQLite for MVP
+A󠄁s󠄁 o󠄁f󠄁 2󠄁0󠄁2󠄁6󠄁-󠄁1󠄁0󠄁-󠄁2󠄁6󠄁.󠄁 E󠄁m󠄁a󠄁i󠄁l󠄁 i󠄁n󠄁f󠄁r󠄁a󠄁s󠄁t󠄁r󠄁u󠄁c󠄁t󠄁u󠄁r󠄁e󠄁,󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 d󠄁e󠄁p󠄁l󠄁o󠄁y󠄁m󠄁e󠄁n󠄁t󠄁 a󠄁n󠄁d󠄁 w󠄁e󠄁b󠄁h󠄁o󠄁o󠄁k󠄁 i󠄁n󠄁g󠄁e󠄁s󠄁t󠄁i󠄁o󠄁n󠄁 (󠄁o󠄁n󠄁e󠄁t󠄁i󠄁m󠄁e󠄁s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁#󠄁1󠄁0󠄁,󠄁 #󠄁1󠄁1󠄁,󠄁 #󠄁1󠄁3󠄁)󠄁 a󠄁r󠄁e󠄁 c󠄁l󠄁o󠄁s󠄁e󠄁d󠄁.󠄁
+
+1. **O󠄁n󠄁e󠄁t󠄁i󠄁m󠄁e󠄁 S󠄁e󠄁c󠄁r󠄁e󠄁t󠄁 p󠄁i󠄁l󠄁o󠄁t󠄁** o󠄁f󠄁 i󠄁n󠄁b󠄁o󠄁u󠄁n󠄁d󠄁 c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁s󠄁:󠄁 o󠄁n󠄁e󠄁 f󠄁o󠄁r󠄁w󠄁a󠄁r󠄁d󠄁i󠄁n󠄁g󠄁 `support@` c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁,󠄁 p󠄁l󠄁u󠄁s󠄁 a󠄁 f󠄁i󠄁r󠄁s󠄁t󠄁 r󠄁e󠄁a󠄁l󠄁 m󠄁e󠄁s󠄁s󠄁a󠄁g󠄁e󠄁 o󠄁n󠄁 d󠄁i󠄁r󠄁e󠄁c󠄁t󠄁 M󠄁X󠄁 a󠄁n󠄁d󠄁 o󠄁n󠄁 W󠄁o󠄁r󠄁k󠄁s󠄁p󠄁a󠄁c󠄁e󠄁 a󠄁d󠄁m󠄁i󠄁n󠄁 r󠄁o󠄁u󠄁t󠄁i󠄁n󠄁g󠄁 (󠄁s󠄁p󠄁e󠄁c󠄁-󠄁i󠄁n󠄁b󠄁o󠄁u󠄁n󠄁d󠄁-󠄁c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁s󠄁,󠄁 I󠄁m󠄁p󠄁l󠄁e󠄁m󠄁e󠄁n󠄁t󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 s󠄁t󠄁a󠄁t󠄁u󠄁s󠄁)󠄁.󠄁 I󠄁t󠄁 d󠄁e󠄁p󠄁e󠄁n󠄁d󠄁s󠄁 o󠄁n󠄁 t󠄁h󠄁e󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 c󠄁o󠄁n󠄁f󠄁i󠄁g󠄁 p󠄁a󠄁s󠄁s󠄁 i󠄁n󠄁 [c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁#󠄁6󠄁](https://github.com/custyard/custyard/issues/6).󠄁
+2. **O󠄁u󠄁t󠄁b󠄁o󠄁u󠄁n󠄁d󠄁 r󠄁e󠄁p󠄁l󠄁y󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁s󠄁** -󠄁 i󠄁n󠄁b󠄁o󠄁u󠄁n󠄁d󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁s󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁i󠄁r󠄁 d󠄁o󠄁w󠄁n󠄁l󠄁o󠄁a󠄁d󠄁s󠄁 a󠄁r󠄁e󠄁 d󠄁o󠄁n󠄁e󠄁;󠄁 a󠄁 r󠄁e󠄁p󠄁l󠄁y󠄁 c󠄁a󠄁n󠄁n󠄁o󠄁t󠄁 c󠄁a󠄁r󠄁r󠄁y󠄁 a󠄁 f󠄁i󠄁l󠄁e󠄁.󠄁
+3. [o󠄁n󠄁e󠄁t󠄁i󠄁m󠄁e󠄁s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁#󠄁1󠄁2󠄁](https://github.com/onetimesecret/custyard/issues/12) **T󠄁e󠄁a󠄁m󠄁 S󠄁u󠄁p󠄁p󠄁o󠄁r󠄁t󠄁** -󠄁 `teams` a󠄁n󠄁d󠄁 o󠄁p󠄁e󠄁r󠄁a󠄁t󠄁o󠄁r󠄁 r󠄁o󠄁l󠄁e󠄁s󠄁 (󠄁s󠄁u󠄁p󠄁e󠄁r󠄁_a󠄁d󠄁m󠄁i󠄁n󠄁/󠄁a󠄁d󠄁m󠄁i󠄁n󠄁/󠄁a󠄁g󠄁e󠄁n󠄁t󠄁)󠄁 e󠄁x󠄁i󠄁s󠄁t󠄁;󠄁 t󠄁h󠄁e󠄁r󠄁e󠄁 i󠄁s󠄁 n󠄁o󠄁 t󠄁e󠄁a󠄁m󠄁 o󠄁r󠄁 o󠄁p󠄁e󠄁r󠄁a󠄁t󠄁o󠄁r󠄁-󠄁m󠄁a󠄁n󠄁a󠄁g󠄁e󠄁m󠄁e󠄁n󠄁t󠄁 U󠄁I󠄁 a󠄁n󠄁d󠄁 n󠄁o󠄁 c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁s󠄁s󠄁i󠄁g󠄁n󠄁m󠄁e󠄁n󠄁t󠄁 (󠄁[c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁#󠄁2󠄁](https://github.com/custyard/custyard/issues/2) §󠄁6󠄁)󠄁.󠄁
+4. [o󠄁n󠄁e󠄁t󠄁i󠄁m󠄁e󠄁s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁#󠄁1󠄁4󠄁](https://github.com/onetimesecret/custyard/issues/14) **E󠄁n󠄁c󠄁r󠄁y󠄁p󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁t󠄁 R󠄁e󠄁s󠄁t󠄁** -󠄁 o󠄁n󠄁l󠄁y󠄁 I󠄁M󠄁A󠄁P󠄁 c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁 p󠄁a󠄁s󠄁s󠄁w󠄁o󠄁r󠄁d󠄁s󠄁 a󠄁r󠄁e󠄁 e󠄁n󠄁c󠄁r󠄁y󠄁p󠄁t󠄁e󠄁d󠄁.󠄁
+5. [c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁#󠄁1󠄁1󠄁](https://github.com/custyard/custyard/issues/11) **M󠄁e󠄁t󠄁r󠄁i󠄁c󠄁s󠄁 c󠄁o󠄁n󠄁s󠄁u󠄁m󠄁e󠄁r󠄁** -󠄁 `CustyardWeb.Telemetry.metrics/0` d󠄁e󠄁c󠄁l󠄁a󠄁r󠄁e󠄁s󠄁 m󠄁e󠄁t󠄁r󠄁i󠄁c󠄁s󠄁 t󠄁h󠄁a󠄁t󠄁 n󠄁o󠄁 r󠄁e󠄁p󠄁o󠄁r󠄁t󠄁e󠄁r󠄁 r󠄁e󠄁a󠄁d󠄁s󠄁.󠄁
+6. P󠄁u󠄁b󠄁l󠄁i󠄁c󠄁-󠄁i󠄁n󠄁t󠄁a󠄁k󠄁e󠄁 w󠄁o󠄁r󠄁k󠄁 t󠄁h󠄁a󠄁t󠄁 w󠄁a󠄁i󠄁t󠄁s󠄁 f󠄁o󠄁r󠄁 r󠄁e󠄁a󠄁l󠄁 t󠄁r󠄁a󠄁f󠄁f󠄁i󠄁c󠄁:󠄁 a󠄁t󠄁t󠄁r󠄁i󠄁b󠄁u󠄁t󠄁i󠄁o󠄁n󠄁,󠄁 i󠄁n󠄁t󠄁a󠄁k󠄁e󠄁 o󠄁b󠄁s󠄁e󠄁r󠄁v󠄁a󠄁b󠄁i󠄁l󠄁i󠄁t󠄁y󠄁,󠄁 c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁i󠄁o󠄁n󠄁 i󠄁n󠄁t󠄁o󠄁 a󠄁n󠄁 e󠄁x󠄁i󠄁s󠄁t󠄁i󠄁n󠄁g󠄁 o󠄁r󠄁g󠄁a󠄁n󠄁i󠄁z󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 w󠄁i󠄁t󠄁h󠄁 a󠄁 p󠄁o󠄁r󠄁t󠄁a󠄁l󠄁 i󠄁n󠄁v󠄁i󠄁t󠄁e󠄁,󠄁 a󠄁n󠄁d󠄁 a󠄁b󠄁u󠄁s󠄁e󠄁 c󠄁o󠄁n󠄁t󠄁r󠄁o󠄁l󠄁s󠄁 (󠄁[c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁/󠄁c󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁#󠄁2󠄁](https://github.com/custyard/custyard/issues/2) §󠄁6󠄁)󠄁.󠄁
 
 ### SDD Items Not Yet Implemented
 
@@ -249,16 +248,3 @@ Security measures in place:
 - **Organization notes and custom fields** (SDD §4.1) - Not on Organization schema.
 - **Organization-scoped search** (SDD US-9) - No search implementation.
 - **Tag filtering in attention queue** (SDD US-5) - Conversations have no tags substrate (tags exist only on projects) and the queue has no filter UI.
-
-## Recent Commits (Last 10)
-
-- 13625cf - Merge PR #18: qa/batch1-security-and-validation-fixes
-- 6ad5acd - Update doc version to reflect design progress
-- 0314269 - fix: format projects_live.ex for mix format --check-formatted
-- e56dfc7 - Fix Credo strict findings: reduce complexity and nesting depth
-- a729755 - Fix Sobelow CSRF finding: remove GET /logout route
-- 57de4e0 - Fix portal path generation to always use token-based routes
-- 3399394 - fix: format files for mix format --check-formatted
-- d492577 - Security and validation fixes across codebase
-- fde7c47 - Remove redundant Erlang options
-- a87c46e - Refactor form field updates to use render_change
