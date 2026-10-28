@@ -304,9 +304,14 @@ defmodule Custyard.Email.Outbound do
   # Store actual participants before contacting the provider. The message was
   # read under the claim's write lock, so this cannot restore stale CC data.
   defp persist_delivery_facts(message, email) do
-    fingerprint =
+    envelope =
       {email.from, email.to, email.cc, email.bcc, email.subject, email.text_body, email.html_body,
        email.headers}
+
+    # Reply-To is a separate Swoosh field, serialized outside email.headers.
+    # Keep legacy nil-Reply-To envelopes byte-identical for existing retries.
+    fingerprint =
+      if(is_nil(email.reply_to), do: envelope, else: {envelope, {:reply_to, email.reply_to}})
       |> :erlang.term_to_binary()
       |> then(&:crypto.hash(:sha256, &1))
       |> Base.encode16(case: :lower)
