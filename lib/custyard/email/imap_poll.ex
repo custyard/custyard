@@ -39,7 +39,7 @@ defmodule Custyard.Email.ImapPoll do
 
   import Ecto.Query
 
-  alias Custyard.{Credentials, InboundChannel, InboundChannels, InboundRoute, Repo}
+  alias Custyard.{Credentials, InboundChannel, InboundChannels, InboundRoute, Repo, Tenant}
   alias Custyard.Email.{ImapClient, ImapHost, Parser}
   alias Custyard.Webhooks.Adapters.Email, as: EmailAdapter
   alias Custyard.Webhooks.Dispatcher
@@ -62,7 +62,8 @@ defmodule Custyard.Email.ImapPoll do
     session_crashed: "session_crashed",
     database_unavailable: "database_unavailable",
     attachments_failed: "attachments_failed",
-    channel_deleted: "channel_deleted"
+    channel_deleted: "channel_deleted",
+    tenant_suspended: "tenant_suspended"
   }
 
   def max_messages_per_poll, do: @max_messages_per_poll
@@ -75,6 +76,12 @@ defmodule Custyard.Email.ImapPoll do
   with the error also recorded on the channel.
   """
   def establish(%InboundChannel{ingress_kind: :imap} = channel, opts \\ []) do
+    with {:ok, current} <- current_channel(channel) do
+      establish_current(current, opts)
+    end
+  end
+
+  defp establish_current(channel, opts) do
     result =
       run(channel, opts, fn client, conn, mailbox ->
         position(client, conn, channel, mailbox)
@@ -110,13 +117,19 @@ defmodule Custyard.Email.ImapPoll do
   """
   def poll(channel, opts \\ [])
 
-  def poll(%InboundChannel{ingress_kind: :imap, imap_uid_validity: nil} = channel, opts) do
+  def poll(%InboundChannel{ingress_kind: :imap} = channel, opts) do
+    with {:ok, current} <- current_channel(channel) do
+      poll_current(current, opts)
+    end
+  end
+
+  defp poll_current(%InboundChannel{imap_uid_validity: nil} = channel, opts) do
     with {:ok, _channel} <- establish(channel, opts) do
       {:ok, %{imported: 0, ignored: 0, skipped: 0, failed: 0, rebased: true}}
     end
   end
 
-  def poll(%InboundChannel{ingress_kind: :imap} = channel, opts) do
+  defp poll_current(channel, opts) do
     route = Repo.get!(InboundRoute, channel.inbound_route_id)
 
     result =
@@ -168,7 +181,8 @@ defmodule Custyard.Email.ImapPoll do
   end
 
   defp session(client, channel, opts, fun) do
-    with {:ok, password} <- password(channel),
+    with {:ok, channel} <- current_channel(channel),
+         {:ok, password} <- password(channel),
          {:ok, address, server_name} <- ImapHost.resolve(channel.imap_host),
          {:ok, conn} <-
            client.connect(
@@ -178,7 +192,8 @@ defmodule Custyard.Email.ImapPoll do
            ) do
       try do
         with :ok <- client.login(conn, channel.imap_username, password),
-             {:ok, mailbox} <- client.examine(conn, channel.imap_folder) do
+             {:ok, mailbox} <- client.examine(conn, channel.imap_folder),
+             {:ok, _current} <- current_channel(channel) do
           maybe_reencrypt(channel, password)
           fun.(client, conn, mailbox)
         end
@@ -382,8 +397,12 @@ defmodule Custyard.Email.ImapPoll do
 
   # Forward-only: a concurrent poll (two nodes) can never move it back.
   defp advance(channel, uid) do
+    active_tenants = from(t in Tenant, where: t.status == "active", select: t.id)
+
     from(c in InboundChannel,
-      where: c.id == ^channel.id and (is_nil(c.imap_last_uid) or c.imap_last_uid < ^uid)
+      where:
+        c.id == ^channel.id and c.tenant_id in subquery(active_tenants) and
+          (is_nil(c.imap_last_uid) or c.imap_last_uid < ^uid)
     )
     |> Repo.update_all(set: [imap_last_uid: uid, imap_message_attempts: 0, updated_at: now()])
   end
@@ -393,27 +412,37 @@ defmodule Custyard.Email.ImapPoll do
   end
 
   defp record(channel, attrs) do
-    case Repo.get(InboundChannel, channel.id) do
-      nil ->
-        {:error, :channel_deleted}
-
-      current ->
-        with {:ok, updated} <-
-               current |> InboundChannel.imap_state_changeset(attrs) |> Repo.update() do
-          InboundChannels.broadcast(updated)
-          {:ok, updated}
-        end
-    end
+    Repo.transaction(fn ->
+      with {:ok, current} <- current_channel(channel),
+           {:ok, updated} <-
+             current |> InboundChannel.imap_state_changeset(attrs) |> Repo.update() do
+        InboundChannels.broadcast(updated)
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   defp record_failure(channel, reason) do
-    case Repo.get(InboundChannel, channel.id) do
-      nil ->
-        :ok
+    with {:ok, current} <- current_channel(channel) do
+      record(current, failure_attrs(current, error_code(reason)))
+    end
 
-      current ->
-        record(current, failure_attrs(current, error_code(reason)))
-        :ok
+    :ok
+  end
+
+  # Resolve ownership from the stored channel, never from a stale caller snapshot.
+  defp current_channel(%InboundChannel{id: id}) do
+    case Repo.get(InboundChannel, id) do
+      nil ->
+        {:error, :channel_deleted}
+
+      channel ->
+        case Repo.get(Tenant, channel.tenant_id) do
+          %Tenant{status: "active"} -> {:ok, channel}
+          _ -> {:error, :tenant_suspended}
+        end
     end
   end
 

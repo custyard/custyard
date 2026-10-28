@@ -17,7 +17,7 @@ defmodule Custyard.Email.ImapPollers do
 
   import Ecto.Query
 
-  alias Custyard.{InboundChannel, Repo}
+  alias Custyard.{InboundChannel, Repo, Tenant}
 
   @registry Custyard.Email.ImapPollerRegistry
   @supervisor Custyard.Email.ImapPollerSupervisor
@@ -37,15 +37,26 @@ defmodule Custyard.Email.ImapPollers do
 
   @doc "True when the channel should have a running poller."
   def pollable?(%InboundChannel{} = channel) do
-    channel.ingress_kind == :imap and channel.state in [:awaiting_first_message, :active] and
-      not is_nil(channel.imap_uid_validity) and is_nil(channel.imap_auth_failed_at)
+    channel = Repo.get(InboundChannel, channel.id)
+    eligible?(channel)
   end
 
   def pollable?(nil), do: false
 
+  defp eligible?(nil), do: false
+
+  defp eligible?(channel) do
+    match?(%Tenant{status: "active"}, Repo.get(Tenant, channel.tenant_id)) and
+      channel.ingress_kind == :imap and channel.state in [:awaiting_first_message, :active] and
+      not is_nil(channel.imap_uid_validity) and is_nil(channel.imap_auth_failed_at)
+  end
+
   @doc "IDs of every channel that should have a poller."
   def pollable_channel_ids do
     from(c in InboundChannel,
+      join: t in Tenant,
+      on: t.id == c.tenant_id,
+      where: t.status == "active",
       where:
         c.ingress_kind == :imap and c.state in [:awaiting_first_message, :active] and
           not is_nil(c.imap_uid_validity) and is_nil(c.imap_auth_failed_at),
@@ -107,6 +118,7 @@ defmodule Custyard.Email.ImapPollers do
     @impl true
     def init(_opts) do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "inbound_channels")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "tenant_lifecycle")
       send(self(), :sweep)
       {:ok, %{}}
     end
@@ -117,8 +129,19 @@ defmodule Custyard.Email.ImapPollers do
       {:noreply, state}
     end
 
+    def handle_info({:tenant_status_changed, tenant_id}, state) do
+      from(c in InboundChannel, where: c.tenant_id == ^tenant_id, select: c.id)
+      |> Repo.all()
+      |> Enum.each(&ImapPollers.sync/1)
+
+      {:noreply, state}
+    end
+
     def handle_info(:sweep, state) do
-      Enum.each(ImapPollers.pollable_channel_ids(), &ImapPollers.sync/1)
+      running_ids =
+        Registry.select(Custyard.Email.ImapPollerRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+
+      Enum.each(Enum.uniq(ImapPollers.pollable_channel_ids() ++ running_ids), &ImapPollers.sync/1)
       Process.send_after(self(), :sweep, @sweep_interval_ms)
       {:noreply, state}
     end

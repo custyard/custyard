@@ -67,6 +67,33 @@ defmodule Custyard.Email.ImapPollersTest do
     eventually(fn -> ImapPollers.whereis(channel.id) == nil end)
   end
 
+  test "tenant suspension stops a running poller and resuming starts it", %{
+    route: route,
+    host: host
+  } do
+    {:created, admin} = Custyard.InstanceAdmins.create_admin("imap-lifecycle@example.com")
+
+    {:ok, channel} =
+      InboundChannels.create_channel(route, %{
+        public_address: "lifecycle@acme.example.com",
+        ingress_kind: :imap,
+        imap_host: host,
+        imap_username: "support@acme.example.com",
+        imap_password: "secret"
+      })
+
+    {:ok, channel} = InboundChannels.connect_imap(channel)
+    eventually(fn -> ImapPollers.whereis(channel.id) end)
+
+    assert {:ok, _} = Custyard.Tenants.set_status(admin, channel.tenant_id, "suspended")
+    eventually(fn -> ImapPollers.whereis(channel.id) == nil end)
+    refute channel.id in ImapPollers.pollable_channel_ids()
+
+    assert {:ok, _} = Custyard.Tenants.set_status(admin, channel.tenant_id, "active")
+    eventually(fn -> ImapPollers.whereis(channel.id) end)
+    assert channel.id in ImapPollers.pollable_channel_ids()
+  end
+
   test "forwarding channels never get a poller", %{route: route} do
     {:ok, channel} =
       InboundChannels.create_channel(route, %{public_address: "a@acme.example.com"})

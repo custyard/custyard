@@ -67,6 +67,74 @@ defmodule Custyard.Email.ImapPollTest do
 
   defp reload(channel), do: Repo.get!(InboundChannel, channel.id)
 
+  test "suspended tenant sessions do no network work or position/error writes", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    before_suspend = reload(channel)
+    before_calls = Stub.calls(host)
+    tenant = Repo.get!(Custyard.Tenant, channel.tenant_id)
+    tenant |> Ecto.Changeset.change(status: "suspended") |> Repo.update!()
+    other_tenant = insert_tenant()
+    forged_snapshot = %{channel | tenant_id: other_tenant.id, imap_uid_validity: nil}
+    Stub.put_message(host, 10, email(10))
+
+    assert {:error, :tenant_suspended} = ImapPoll.poll(forged_snapshot)
+    assert {:error, :tenant_suspended} = ImapPoll.establish(forged_snapshot)
+    assert Stub.calls(host) == before_calls
+    assert reload(channel) == before_suspend
+    refute ImapPollers.pollable?(forged_snapshot)
+    refute channel.id in ImapPollers.pollable_channel_ids()
+
+    Repo.reload!(tenant) |> Ecto.Changeset.change(status: "active") |> Repo.update!()
+    assert ImapPollers.pollable?(channel)
+    assert channel.id in ImapPollers.pollable_channel_ids()
+    assert {:ok, %{imported: 1}} = ImapPoll.poll(channel)
+    assert reload(channel).imap_last_uid == 10
+  end
+
+  test "suspending during login prevents baseline and failure-counter writes", %{
+    route: route,
+    host: host
+  } do
+    {:ok, channel} = create_imap(route, host)
+    before_session = reload(channel)
+    tenant = Repo.get!(Custyard.Tenant, channel.tenant_id)
+    Stub.put_message(host, 20, email(20))
+
+    Stub.update(
+      host,
+      &Map.put(&1, :on_login, fn ->
+        tenant |> Ecto.Changeset.change(status: "suspended") |> Repo.update!()
+      end)
+    )
+
+    assert {:error, "tenant_suspended"} = ImapPoll.establish(channel)
+    assert reload(channel) == before_session
+  end
+
+  test "suspending during an existing poll preserves its UID and error counters", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    before_poll = reload(channel)
+    tenant = Repo.get!(Custyard.Tenant, channel.tenant_id)
+    Stub.put_message(host, 30, email(30))
+
+    Stub.update(
+      host,
+      &Map.put(&1, :on_login, fn ->
+        tenant |> Ecto.Changeset.change(status: "suspended") |> Repo.update!()
+      end)
+    )
+
+    assert {:error, "tenant_suspended"} = ImapPoll.poll(channel)
+    assert reload(channel) == before_poll
+    refute {:list_after, 0} in Stub.calls(host)
+  end
+
   describe "creating an IMAP channel" do
     test "stores the password only as ciphertext", %{route: route, host: host} do
       assert {:ok, channel} = create_imap(route, host)

@@ -66,8 +66,17 @@ defmodule Custyard.Tenants do
       updated
     end)
     |> tap(fn
-      {:ok, _} -> Subscriptions.refresh(tenant_id)
-      _ -> :ok
+      {:ok, _} ->
+        Subscriptions.refresh(tenant_id)
+
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "tenant_lifecycle",
+          {:tenant_status_changed, tenant_id}
+        )
+
+      _ ->
+        :ok
     end)
   end
 
