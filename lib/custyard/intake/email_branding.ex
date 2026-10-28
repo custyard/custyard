@@ -1,6 +1,6 @@
 defmodule Custyard.Intake.EmailBranding do
   @moduledoc false
-  alias Custyard.{Conversation, Repo, Settings, Tenants}
+  alias Custyard.{Conversation, InboundChannels, Repo, Settings, Tenants}
   alias Custyard.Email.Headers
 
   def tenant_id_for_claim(%{conversation_id: id}) do
@@ -24,8 +24,12 @@ defmodule Custyard.Intake.EmailBranding do
     with {:ok, channel} <- Custyard.EmailSetup.default_reply_channel(id),
          {:ok, config} <- Custyard.EmailSetup.sending_config(id),
          address when is_binary(address) and address != "" <-
-           Custyard.InboundChannels.from_address(channel) do
-      {:ok, %{address: address, config: config}}
+           InboundChannels.from_address(channel) do
+      reply_to =
+        if channel.reply_from == :public_address and is_binary(channel.sending_domain),
+          do: channel.public_address
+
+      {:ok, %{address: address, config: config, reply_to: reply_to}}
     else
       nil -> {:error, :from_not_set}
       "" -> {:error, :from_not_set}
@@ -33,13 +37,17 @@ defmodule Custyard.Intake.EmailBranding do
     end
   end
 
-  def put_sender(email, branding, %{address: address}) do
+  def put_sender(email, branding, %{address: address} = delivery) do
     name =
       branding.name
       |> Headers.sanitize_header_text()
       |> Headers.quote_display_name()
 
-    Swoosh.Email.from(email, {name, address})
+    email = Swoosh.Email.from(email, {name, address})
+
+    if reply_to = Map.get(delivery, :reply_to),
+      do: Swoosh.Email.reply_to(email, reply_to),
+      else: email
   end
 
   def put_sender(email, branding, tenant_id) do
