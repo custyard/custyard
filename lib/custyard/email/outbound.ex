@@ -179,11 +179,31 @@ defmodule Custyard.Email.Outbound do
     with {:ok, recipient} <- delivery_recipient(message, conversation),
          {:ok, from_addr} <- resolve_from_address(message, conversation),
          email <- compose(message, conversation, recipient, from_addr),
+         email <- preserve_provider_message_id(email, conversation.tenant_id),
          {:ok, message} <- persist_delivery_facts(message, email) do
       {:ok, message, email}
     else
       {:error, reason} -> {:error, reason, message}
     end
+  end
+
+  # Lettermint replaces Message-ID unless preservation is explicitly requested.
+  # Without it, forwarded BCC archives become customer mail and replies can lose
+  # their parent ID. The provider control is not an ordinary email header:
+  # https://lettermint.co/docs/api-reference/sending/send
+  # Add the control before fingerprinting so retries retain the exact request.
+  defp preserve_provider_message_id(email, tenant_id) do
+    adapter =
+      case Custyard.EmailSetup.sending_config(tenant_id) do
+        {:ok, config} -> config[:adapter]
+        # Credential errors belong to tenant Lettermint connections. Still
+        # snapshot their envelope; delivery validates credentials afterwards.
+        {:error, _} -> Swoosh.Adapters.Lettermint
+      end
+
+    if adapter == Swoosh.Adapters.Lettermint and is_binary(email.headers["Message-ID"]),
+      do: header(email, "X-LM-Preserve-Message-ID", "true"),
+      else: email
   end
 
   # Recheck consent and whether the relationship still exists, but never let a

@@ -24,6 +24,8 @@ defmodule CustyardWeb.Operator.EmailSetupLiveTest do
     assert has_element?(view, "button[phx-click=new_channel][disabled]")
     assert html =~ "Import a real receiving route"
     assert html =~ "Reply accepted by provider"
+    assert html =~ "Set its scope to Projects"
+    assert html =~ "Deliveries return 401 until"
 
     html =
       view

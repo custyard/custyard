@@ -7,6 +7,15 @@ defmodule Custyard.Email.OutboundRecoveryTest.Adapter do
   end
 end
 
+defmodule Custyard.Email.OutboundRecoveryTest.ApiClient do
+  @behaviour Swoosh.ApiClient
+
+  def post(_url, _headers, _body, email) do
+    send(Application.fetch_env!(:custyard, :recovery_test_owner), {:attempted_email, email})
+    {:ok, 202, [], ~s({"message_id":"configured-later","status":"pending"})}
+  end
+end
+
 defmodule Custyard.Email.OutboundRecoveryTest do
   use Custyard.DataCase, async: false
 
@@ -181,6 +190,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     channel =
       insert_inbound_channel(
         organization_id: context.conversation.organization_id,
+        tenant_id: context.conversation.tenant_id,
         public_address: "support@acme.example",
         sending_domain: "mail.acme.example",
         state: :active
@@ -200,6 +210,10 @@ defmodule Custyard.Email.OutboundRecoveryTest do
 
   test "configuration failures before provider invocation remain retryable after a day",
        context do
+    original_api = Application.get_env(:swoosh, :api_client)
+    Application.put_env(:swoosh, :api_client, __MODULE__.ApiClient)
+    on_exit(fn -> Application.put_env(:swoosh, :api_client, original_api) end)
+
     Application.put_env(:custyard, Custyard.Mailer,
       adapter: Swoosh.Adapters.Lettermint,
       api_token: nil
@@ -208,19 +222,53 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:error, :sending_not_configured, failed} = Outbound.deliver(context.message)
     assert failed.delivery_failure_kind == :configuration
     assert is_nil(failed.delivery_attempted_at)
+    assert is_binary(failed.delivery_payload_hash)
     refute_receive {:attempted_email, _email}
 
     old = DateTime.utc_now() |> DateTime.add(-172_800) |> DateTime.truncate(:second)
     failed = failed |> Ecto.Changeset.change(inserted_at: old, updated_at: old) |> Repo.update!()
     assert Outbound.retryable?(failed)
 
-    Application.put_env(:custyard, Custyard.Mailer, adapter: __MODULE__.Adapter)
-    Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "configured-later"}})
+    Application.put_env(:custyard, Custyard.Mailer,
+      adapter: Swoosh.Adapters.Lettermint,
+      api_token: "configured-later"
+    )
+
     assert {:ok, retried} = Outbound.retry(failed, context.operator)
     assert {:ok, sent} = Outbound.deliver(retried)
     assert sent.delivery_status == :sent
     assert %DateTime{} = sent.delivery_attempted_at
-    assert_receive {:attempted_email, _email}
+    assert_receive {:attempted_email, email}
+    assert email.headers["X-LM-Preserve-Message-ID"] == "true"
+  end
+
+  test "missing tenant credentials still lock the return path before a retry", context do
+    tenant =
+      %Custyard.Tenant{}
+      |> Custyard.Tenant.changeset(%{
+        name: "Unconfigured tenant",
+        slug: "unconfigured-#{System.unique_integer([:positive])}"
+      })
+      |> Repo.insert!()
+
+    org = insert_organization(tenant_id: tenant.id)
+    contact = insert_contact(organization_id: org.id)
+    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+    {channel, message} = custom_domain_reply(%{conversation: conversation, contact: contact})
+
+    assert {:error, :not_configured, failed} = Outbound.deliver(message)
+    assert is_binary(failed.delivery_payload_hash)
+    assert is_nil(failed.delivery_attempted_at)
+    refute_receive {:attempted_email, _}
+
+    assert {:ok, _} =
+             InboundChannels.update_channel(channel, %{sending_domain: ""},
+               operator: context.operator
+             )
+
+    assert {:ok, retried} = Outbound.retry(failed, context.operator)
+    assert {:error, :envelope_changed, _} = Outbound.deliver(retried)
+    refute_receive {:attempted_email, _}
   end
 
   test "a missing platform From fails before recording a provider attempt", context do

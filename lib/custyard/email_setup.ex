@@ -314,6 +314,7 @@ defmodule Custyard.EmailSetup do
          snapshot = configuration_snapshot(connection),
          {:ok, opts} <- snapshot.management,
          {:ok, remote} <- provider().get_webhook(String.trim(webhook_id), opts),
+         :ok <- status_webhook_scope(remote),
          true <- valid_status_webhook?(remote, connection),
          {:ok, ciphertext} <- encrypt_secret(secret, secret_context(connection, "status_secret")) do
       mutate(operator, tenant_id, fn ->
@@ -331,6 +332,13 @@ defmodule Custyard.EmailSetup do
       error -> error
     end
   end
+
+  # Lettermint supports team, project and route targets. A hook created for an
+  # outbound route can be route-scoped even when all its events are selected.
+  # Require the project so changes to the default sending route stay covered.
+  # https://lettermint.co/docs/platform/webhooks/introduction
+  defp status_webhook_scope(%{"scope" => "project"}), do: :ok
+  defp status_webhook_scope(_), do: {:error, :status_webhook_scope}
 
   defp valid_inbound_webhook?(remote, route) do
     live_webhook?(remote) and remote["scope"] == "route" and
@@ -715,6 +723,10 @@ defmodule Custyard.EmailSetup do
   defp specific_error(:webhook_mismatch),
     do:
       "Check the webhook URL, scope, events and enabled state. Allow live deliveries and leave Basic Auth off."
+
+  defp specific_error(:status_webhook_scope),
+    do:
+      "This status webhook uses the wrong scope. In Lettermint Dashboard > Webhooks, edit it, choose Projects and select this sending project. Then save the binding again."
 
   defp specific_error(%Ecto.Changeset{errors: errors}) do
     if Keyword.has_key?(errors, :project_id),

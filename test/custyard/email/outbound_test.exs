@@ -73,6 +73,10 @@ defmodule Custyard.Email.OutboundTest do
       assert reloaded.to_addresses == ["alice@customer.com"]
       # Swoosh.Adapters.Test returns no provider id
       assert reloaded.lettermint_message_id == nil
+
+      assert_email_sent(fn email ->
+        assert email.headers["X-LM-Preserve-Message-ID"] == nil
+      end)
     end
 
     test "stale queued message cannot restore a DSAR-erased CC", %{operator_msg: msg, org: org} do

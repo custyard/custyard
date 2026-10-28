@@ -243,6 +243,16 @@ defmodule Custyard.EmailSetupTest do
     assert {:error, :webhook_mismatch} =
              EmailSetup.bind_status_webhook(c.admin, c.tenant.id, "webhook-1", "status-secret")
 
+    for scope <- ["route", "team"] do
+      fixture(:webhook, {:ok, Map.put(remote, "scope", scope)})
+
+      assert {:error, :status_webhook_scope} =
+               EmailSetup.bind_status_webhook(c.admin, c.tenant.id, "webhook-1", "status-secret")
+
+      refute EmailSetup.connection(c.tenant.id).status_secret_ciphertext
+      assert EmailSetup.error_message(:status_webhook_scope) =~ "choose Projects"
+    end
+
     fixture(:webhook, {:ok, remote})
 
     assert {:ok, connection} =
