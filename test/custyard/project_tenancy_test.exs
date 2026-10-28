@@ -86,7 +86,7 @@ defmodule Custyard.ProjectTenancyTest do
     assert {:ok, _} =
              task
              |> Repo.reload!()
-             |> Custyard.Task.changeset(%{title: "Still editable"})
+             |> Custyard.WorkItem.changeset(%{title: "Still editable"})
              |> Repo.update()
 
     assert {:ok, _} = Projects.update(staff_scope(), moved, %{organization_id: org.id})

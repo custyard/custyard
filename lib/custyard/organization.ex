@@ -13,7 +13,7 @@ defmodule Custyard.Organization do
     has_many(:contacts, Custyard.Contact)
     has_many(:threads, Custyard.Thread)
     has_many(:projects, Custyard.Project)
-    has_many(:tasks, Custyard.Task)
+    has_many(:tasks, Custyard.WorkItem)
     timestamps(type: :utc_datetime)
   end
 

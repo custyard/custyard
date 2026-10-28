@@ -678,7 +678,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
   # reply or note the staff was typing.
   defp with_scoped_task(socket, task_id, fun) do
     case scoped_task(socket, task_id) do
-      %Custyard.Task{} = task ->
+      %Custyard.WorkItem{} = task ->
         fun.(task)
 
       nil ->
@@ -700,8 +700,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
   defp scoped_task(socket, task_id) when is_integer(task_id) do
     thread_id = socket.assigns.thread.id
 
-    case Custyard.Repo.get(Custyard.Task, task_id) do
-      %Custyard.Task{thread_id: ^thread_id} = task -> task
+    case Custyard.Repo.get(Custyard.WorkItem, task_id) do
+      %Custyard.WorkItem{thread_id: ^thread_id} = task -> task
       _ -> nil
     end
   end

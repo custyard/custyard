@@ -301,7 +301,7 @@ defmodule Custyard.Organizations do
   end
 
   defp delete_customer_work(org, threads, projects) do
-    from(t in Custyard.Task,
+    from(t in Custyard.WorkItem,
       where: t.tenant_id == ^org.tenant_id,
       where:
         t.organization_id == ^org.id or t.thread_id in subquery(threads) or

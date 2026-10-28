@@ -304,8 +304,8 @@ defmodule Custyard.Factory do
          do: overrides,
          else: ensure_project(overrides)
 
-    %Custyard.Task{}
-    |> Custyard.Task.changeset(build_task(overrides))
+    %Custyard.WorkItem{}
+    |> Custyard.WorkItem.changeset(build_task(overrides))
     |> Custyard.Repo.insert!()
   end
 

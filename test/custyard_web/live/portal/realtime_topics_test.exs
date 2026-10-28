@@ -4,7 +4,7 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
   import Custyard.Factory
   import Phoenix.LiveViewTest
 
-  alias Custyard.{StaffAccount, Projects, Repo, Task}
+  alias Custyard.{StaffAccount, Projects, Repo, WorkItem}
 
   test "an open project list follows project and task changes", %{conn: conn} do
     org = insert_organization()
@@ -65,7 +65,7 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
       "portal_visible" => "true"
     })
 
-    task = Repo.get_by!(Task, project_id: project.id, title: "Portal task")
+    task = Repo.get_by!(WorkItem, project_id: project.id, title: "Portal task")
     render_click(staff_view, "cycle_task_state", %{"id" => to_string(task.id)})
     render_click(staff_view, "cycle_task_state", %{"id" => to_string(task.id)})
 

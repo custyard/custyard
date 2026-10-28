@@ -11,7 +11,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
     Project,
     Scope,
     Settings,
-    Task
+    WorkItem
   }
 
   test "tenant settings cannot affect another tenant's score or intake configuration" do
@@ -101,7 +101,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
              title: "Wrong workspace"
            }).valid?
 
-    refute Task.changeset(%Task{}, %{
+    refute WorkItem.changeset(%WorkItem{}, %{
              tenant_id: other.id,
              organization_id: org.id,
              title: "Wrong workspace"
@@ -160,7 +160,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
           {Thread, thread},
           {Custyard.Message, message},
           {Project, project},
-          {Task, task},
+          {WorkItem, task},
           {Custyard.PortalCredential, credential}
         ],
         do: refute(Repo.get(schema, record.id))

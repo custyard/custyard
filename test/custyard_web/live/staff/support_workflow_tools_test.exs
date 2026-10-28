@@ -2,7 +2,7 @@ defmodule CustyardWeb.Staff.SupportWorkflowToolsTest do
   use CustyardWeb.ConnCase, async: true
   import Phoenix.LiveViewTest
   import Custyard.Factory
-  alias Custyard.{Threads, Labels, Repo, Task}
+  alias Custyard.{Threads, Labels, Repo, WorkItem}
 
   setup %{conn: conn} do
     staff = insert_staff_account(role: "admin")
@@ -22,7 +22,7 @@ defmodule CustyardWeb.Staff.SupportWorkflowToolsTest do
     |> form("form[phx-submit=add_task]", title: "Investigate invoice", due_at: "2026-11-20T16:45")
     |> render_submit()
 
-    task = Repo.get_by!(Task, thread_id: c.thread.id)
+    task = Repo.get_by!(WorkItem, thread_id: c.thread.id)
     refute task.portal_visible
     assert task.due_at == ~U[2026-11-20 16:45:00Z]
     view |> element("[phx-click=edit_task][phx-value-id='#{task.id}']") |> render_click()

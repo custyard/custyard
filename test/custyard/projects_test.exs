@@ -1,7 +1,7 @@
 defmodule Custyard.ProjectsTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.{StaffAccount, Project, Projects, Repo, Task}
+  alias Custyard.{StaffAccount, Project, Projects, Repo, WorkItem}
 
   import Custyard.Factory
 
@@ -42,7 +42,7 @@ defmodule Custyard.ProjectsTest do
              end)
 
     assert Repo.get!(Project, stale.id).title == "Foreign project"
-    assert Repo.aggregate(Task, :count) == 0
+    assert Repo.aggregate(WorkItem, :count) == 0
   end
 
   test "scoped project update checks the destination organization" do
@@ -116,7 +116,7 @@ defmodule Custyard.ProjectsTest do
 
     assert_receive {:project_updated, id}
     assert id == project.id
-    assert Repo.aggregate(Task, :count) == 1
+    assert Repo.aggregate(WorkItem, :count) == 1
   end
 
   test "rolled-back scoped task mutation emits no project update" do
@@ -141,7 +141,7 @@ defmodule Custyard.ProjectsTest do
              )
 
     refute_received {:project_updated, _}
-    assert Repo.aggregate(Task, :count) == 0
+    assert Repo.aggregate(WorkItem, :count) == 0
   end
 
   # Helper to create a project directly
@@ -171,8 +171,8 @@ defmodule Custyard.ProjectsTest do
 
   # Helper to create a task for a project
   defp create_task(attrs) do
-    %Task{}
-    |> Task.changeset(attrs)
+    %WorkItem{}
+    |> WorkItem.changeset(attrs)
     |> Repo.insert!()
   end
 

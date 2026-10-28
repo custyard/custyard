@@ -4,7 +4,7 @@ defmodule CustyardWeb.Staff.ProjectsLiveTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
-  alias Custyard.{StaffAccount, Project, Repo, Task}
+  alias Custyard.{StaffAccount, Project, Repo, WorkItem}
 
   setup %{conn: conn} do
     # Create and authenticate a staff
@@ -101,8 +101,8 @@ defmodule CustyardWeb.Staff.ProjectsLiveTest do
   end
 
   defp create_task(attrs) do
-    %Task{}
-    |> Task.changeset(attrs)
+    %WorkItem{}
+    |> WorkItem.changeset(attrs)
     |> Repo.insert!()
   end
 

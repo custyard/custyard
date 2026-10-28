@@ -1,4 +1,4 @@
-defmodule Custyard.Task do
+defmodule Custyard.WorkItem do
   use Ecto.Schema
   import Ecto.Changeset
 

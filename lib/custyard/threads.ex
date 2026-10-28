@@ -73,7 +73,7 @@ defmodule Custyard.Threads do
       )
 
     due_task_subquery =
-      from(t in Custyard.Task,
+      from(t in Custyard.WorkItem,
         where: t.state != :done and not is_nil(t.due_at) and t.due_at <= ^now,
         group_by: t.thread_id,
         select: %{thread_id: t.thread_id, count: count(t.id), due_at: min(t.due_at)}
@@ -1001,14 +1001,14 @@ defmodule Custyard.Threads do
 
   # --- Task functions ---
 
-  alias Custyard.Task
+  alias Custyard.WorkItem
 
   @doc """
   Get a task by ID.
   WARNING: No org scoping - use get_task_for_organization/2 for user-facing requests.
   """
   def get_task!(id) do
-    Repo.get!(Task, id)
+    Repo.get!(WorkItem, id)
   end
 
   @doc """
@@ -1017,7 +1017,7 @@ defmodule Custyard.Threads do
   Returns `{:ok, task}` or `{:error, :not_found}` or `{:error, :unauthorized}`.
   """
   def get_task_for_organization(id, org_id) do
-    case Repo.get(Task, id) |> Repo.preload([:thread, :project]) do
+    case Repo.get(WorkItem, id) |> Repo.preload([:thread, :project]) do
       nil ->
         {:error, :not_found}
 
@@ -1041,8 +1041,8 @@ defmodule Custyard.Threads do
   Create a task.
   """
   def create_task(attrs) do
-    %Task{}
-    |> Task.changeset(attrs)
+    %WorkItem{}
+    |> WorkItem.changeset(attrs)
     |> Repo.insert()
     |> task_changed()
   end
@@ -1052,7 +1052,7 @@ defmodule Custyard.Threads do
   """
   def update_task_state(task, new_state) do
     task
-    |> Task.state_changeset(new_state)
+    |> WorkItem.state_changeset(new_state)
     |> Repo.update()
     |> task_changed()
   end
@@ -1062,7 +1062,7 @@ defmodule Custyard.Threads do
   """
   def update_task(task, attrs) do
     task
-    |> Task.changeset(attrs)
+    |> WorkItem.changeset(attrs)
     |> Repo.update()
     |> task_changed()
   end
@@ -1110,7 +1110,7 @@ defmodule Custyard.Threads do
   List portal-visible tasks for a thread.
   """
   def list_portal_visible_tasks(thread_id) do
-    from(t in Task,
+    from(t in WorkItem,
       where: t.thread_id == ^thread_id,
       where: t.portal_visible == true,
       order_by: [asc: t.inserted_at]
@@ -1125,7 +1125,7 @@ defmodule Custyard.Threads do
   """
   def delete_orphaned_tasks do
     {count, _} =
-      from(t in Task,
+      from(t in WorkItem,
         where: is_nil(t.organization_id),
         where: is_nil(t.thread_id),
         where: is_nil(t.project_id)
@@ -1201,7 +1201,7 @@ defmodule Custyard.Threads do
         from(p in Custyard.Project, where: p.thread_id in subquery(expired_ids))
         |> Repo.update_all(set: [thread_id: nil])
 
-        from(t in Custyard.Task, where: t.thread_id in subquery(expired_ids))
+        from(t in Custyard.WorkItem, where: t.thread_id in subquery(expired_ids))
         |> Repo.update_all(set: [thread_id: nil])
 
         from(e in Custyard.EmailConnection,
@@ -1298,7 +1298,7 @@ defmodule Custyard.Threads do
   end
 
   defp count_orphaned_tasks do
-    from(t in Task,
+    from(t in WorkItem,
       where: is_nil(t.organization_id),
       where: is_nil(t.thread_id),
       where: is_nil(t.project_id)

@@ -69,7 +69,7 @@ defmodule Custyard.Thread do
     belongs_to(:project, Custyard.Project)
     has_one(:prospect, Custyard.Prospect)
     has_many(:messages, Custyard.Message)
-    has_many(:tasks, Custyard.Task)
+    has_many(:tasks, Custyard.WorkItem)
 
     timestamps(type: :utc_datetime)
   end

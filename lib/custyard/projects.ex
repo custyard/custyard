@@ -3,7 +3,7 @@ defmodule Custyard.Projects do
   Context for project queries and operations.
   """
 
-  alias Custyard.{Authorization, StaffAccess, StaffAccount, Project, Repo, Task}
+  alias Custyard.{Authorization, StaffAccess, StaffAccount, Project, Repo, WorkItem}
   import Ecto.Query
 
   def list(%Custyard.Scope{} = scope, opts \\ []) do
@@ -95,7 +95,7 @@ defmodule Custyard.Projects do
   List portal-visible projects for an organization.
   """
   def list_portal_visible(org_id) do
-    visible_tasks = from(t in Task, where: t.portal_visible == true)
+    visible_tasks = from(t in WorkItem, where: t.portal_visible == true)
 
     from(p in Project,
       where: p.organization_id == ^org_id,
@@ -128,7 +128,8 @@ defmodule Custyard.Projects do
             project =
               project
               |> Repo.preload(
-                tasks: from(t in Task, where: t.portal_visible == true, order_by: t.inserted_at)
+                tasks:
+                  from(t in WorkItem, where: t.portal_visible == true, order_by: t.inserted_at)
               )
               |> with_progress()
 
@@ -239,7 +240,7 @@ defmodule Custyard.Projects do
 
     with {:ok, updated} <- Repo.update(changeset) do
       if updated.organization_id != project.organization_id do
-        Repo.update_all(from(t in Task, where: t.project_id == ^project.id),
+        Repo.update_all(from(t in WorkItem, where: t.project_id == ^project.id),
           set: [
             organization_id: updated.organization_id,
             updated_at: DateTime.utc_now() |> DateTime.truncate(:second)
@@ -259,7 +260,7 @@ defmodule Custyard.Projects do
 
       thread_orgs =
         Repo.all(
-          from(t in Task,
+          from(t in WorkItem,
             join: c in Custyard.Thread,
             on: c.id == t.thread_id,
             where: t.project_id == ^changeset.data.id,
@@ -300,7 +301,9 @@ defmodule Custyard.Projects do
 
   defp delete_project_records(project) do
     Repo.transaction(fn ->
-      from(t in Task, where: t.tenant_id == ^project.tenant_id and t.project_id == ^project.id)
+      from(t in WorkItem,
+        where: t.tenant_id == ^project.tenant_id and t.project_id == ^project.id
+      )
       |> Repo.delete_all()
 
       from(c in Custyard.Thread,
@@ -473,8 +476,8 @@ defmodule Custyard.Projects do
       Enum.map(template.tasks, fn task ->
         due_at = calculate_task_due_at(task.due_at, template_start, new_start_date)
 
-        %Task{}
-        |> Task.changeset(%{
+        %WorkItem{}
+        |> WorkItem.changeset(%{
           title: task.title,
           state: :open,
           portal_visible: task.portal_visible,
@@ -543,8 +546,8 @@ defmodule Custyard.Projects do
     attrs = Map.put(attrs, :project_id, project.id)
 
     result =
-      %Task{}
-      |> Task.changeset(attrs)
+      %WorkItem{}
+      |> WorkItem.changeset(attrs)
       |> Repo.insert()
 
     case result do
@@ -562,10 +565,10 @@ defmodule Custyard.Projects do
   Update a task's state.
   Broadcasts an update to project subscribers.
   """
-  def update_task_state(%Task{} = task, new_state, opts \\ []) do
+  def update_task_state(%WorkItem{} = task, new_state, opts \\ []) do
     result =
       task
-      |> Task.state_changeset(new_state)
+      |> WorkItem.state_changeset(new_state)
       |> Repo.update()
 
     case result do
@@ -586,7 +589,7 @@ defmodule Custyard.Projects do
   Delete a task.
   Broadcasts an update to project subscribers.
   """
-  def delete_task(%Task{} = task, opts \\ []) do
+  def delete_task(%WorkItem{} = task, opts \\ []) do
     project_id = task.project_id
 
     case Repo.delete(task) do
@@ -607,7 +610,7 @@ defmodule Custyard.Projects do
   Get a task by ID.
   """
   def get_task(id) do
-    Repo.get(Task, id)
+    Repo.get(WorkItem, id)
   end
 
   @doc """
@@ -615,7 +618,7 @@ defmodule Custyard.Projects do
   Returns nil when the task does not belong to the given project.
   """
   def get_project_task(project_id, task_id) do
-    Repo.get_by(Task, id: task_id, project_id: project_id)
+    Repo.get_by(WorkItem, id: task_id, project_id: project_id)
   end
 
   defp broadcast_project_update(project_id) do

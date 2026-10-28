@@ -4,7 +4,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
-  alias Custyard.{StaffAccount, Project, Repo, Task}
+  alias Custyard.{StaffAccount, Project, Repo, WorkItem}
 
   setup %{conn: conn} do
     {:ok, staff} =
@@ -32,8 +32,8 @@ defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
   end
 
   defp create_task(attrs) do
-    %Task{}
-    |> Task.changeset(attrs)
+    %WorkItem{}
+    |> WorkItem.changeset(attrs)
     |> Repo.insert!()
   end
 
@@ -59,7 +59,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
     {:ok, _} = Custyard.Projects.update(portal_scope(own), project, %{organization_id: other.id})
     assert render(view) =~ "Customer project"
     render_click(view, "add_task", %{"title" => "Allowed task"})
-    assert Repo.get_by!(Task, title: "Allowed task").tenant_id == own.tenant_id
+    assert Repo.get_by!(WorkItem, title: "Allowed task").tenant_id == own.tenant_id
   end
 
   test "invalid project ID redirects without crashing", %{conn: conn} do
@@ -186,7 +186,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
         |> render_submit()
 
       assert html =~ "New task"
-      task = Repo.get_by!(Task, title: "New task", project_id: project.id)
+      task = Repo.get_by!(WorkItem, title: "New task", project_id: project.id)
       refute task.portal_visible
     end
 
@@ -202,7 +202,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
       |> form("[data-testid=staff-task-form]", %{title: "Portal task", portal_visible: "true"})
       |> render_submit()
 
-      task = Repo.get_by(Task, title: "Portal task")
+      task = Repo.get_by(WorkItem, title: "Portal task")
       assert task.portal_visible == true
     end
   end
@@ -247,7 +247,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
         |> render_click()
 
       refute html =~ "To delete"
-      assert Repo.get(Task, task.id) == nil
+      assert Repo.get(WorkItem, task.id) == nil
     end
   end
 
@@ -344,7 +344,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
 
       render_click(view, "cycle_task_state", %{"id" => to_string(foreign_task.id)})
 
-      assert Repo.get!(Task, foreign_task.id).state == :open
+      assert Repo.get!(WorkItem, foreign_task.id).state == :open
     end
 
     test "delete_task ignores task ids from other projects", %{conn: conn} do
@@ -359,7 +359,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
 
       render_click(view, "delete_task", %{"id" => to_string(foreign_task.id)})
 
-      assert Repo.get(Task, foreign_task.id) != nil
+      assert Repo.get(WorkItem, foreign_task.id) != nil
     end
 
     test "task mutations ignore non-integer ids", %{conn: conn} do

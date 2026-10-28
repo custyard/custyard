@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Staff.ProjectDetailLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Projects, Task}
+  alias Custyard.{Projects, WorkItem}
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -325,7 +325,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLive do
     """
   end
 
-  attr :task, Task, required: true
+  attr :task, WorkItem, required: true
 
   defp task_item(assigns) do
     ~H"""

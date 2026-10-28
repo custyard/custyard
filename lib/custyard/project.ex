@@ -48,7 +48,7 @@ defmodule Custyard.Project do
     belongs_to(:thread, Custyard.Thread)
     # All threads associated with this project
     has_many(:threads, Custyard.Thread)
-    has_many(:tasks, Custyard.Task)
+    has_many(:tasks, Custyard.WorkItem)
 
     timestamps(type: :utc_datetime)
   end
