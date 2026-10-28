@@ -10,7 +10,7 @@ defmodule Custyard.Intake.ClaimEmailTest do
   alias Custyard.{RateLimit, Slug, Slugs}
 
   @confirm_url "http://localhost/claims/test-confirmation-token"
-  @conversation_url "http://localhost/threads/test-access-token"
+  @thread_url "http://localhost/threads/test-access-token"
 
   setup do
     configure_tenant_email(factory_tenant_id())
@@ -32,15 +32,15 @@ defmodule Custyard.Intake.ClaimEmailTest do
   end
 
   defp claim!(email \\ "buyer@example.com") do
-    conversation = insert_conversation(source: :public_intake)
-    {:ok, slug, token} = Slugs.claim("acme-corp", email, conversation)
-    %{conversation: conversation, slug: slug, token: token}
+    thread = insert_thread(source: :public_intake)
+    {:ok, slug, token} = Slugs.claim("acme-corp", email, thread)
+    %{thread: thread, slug: slug, token: token}
   end
 
   defp send!(slug) do
     ClaimEmail.send_confirmation(slug,
       confirm_url: @confirm_url,
-      conversation_url: @conversation_url
+      thread_url: @thread_url
     )
   end
 
@@ -64,24 +64,24 @@ defmodule Custyard.Intake.ClaimEmailTest do
         # Text and HTML bodies both carry the slug and the two platform URLs.
         assert email.text_body =~ "acme-corp"
         assert email.text_body =~ @confirm_url
-        assert email.text_body =~ @conversation_url
+        assert email.text_body =~ @thread_url
         assert email.html_body =~ "acme-corp"
         assert email.html_body =~ @confirm_url
-        assert email.html_body =~ @conversation_url
+        assert email.html_body =~ @thread_url
       end)
     end
 
     test "never carries prospect-supplied content" do
-      conversation = insert_conversation(source: :public_intake)
+      thread = insert_thread(source: :public_intake)
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :prospect,
         sender_email: nil,
         body: "PROSPECT-SECRET buy my crypto https://evil.example/spam"
       )
 
-      {:ok, slug, _token} = Slugs.claim("spam-free", "buyer@example.com", conversation)
+      {:ok, slug, _token} = Slugs.claim("spam-free", "buyer@example.com", thread)
 
       assert {:ok, _} = send!(slug)
 

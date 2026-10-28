@@ -18,7 +18,7 @@ High-touch SaaS tiers — dedicated instances, custom domains, forked codebases 
 
 This interval is the **ante-CRM period**: too early and too fluid for a CRM (no stable account, high back-and-forth, uncertain conversion), yet too important for a plain support inbox (these are the highest-value prospects, and the white-glove experience is itself the product differentiator).
 
-The platform is a managed front door for this period — analogous to a traffic waiting room, except human-paced and relationship-shaped: it absorbs interest from a page or an inbox and turns it into an orderly, operator-driven pipeline of conversations.
+The platform is a managed front door for this period — analogous to a traffic waiting room, except human-paced and relationship-shaped: it absorbs interest from a page or an inbox and turns it into an orderly, operator-driven pipeline of threads.
 
 ## 2. The Operator Problem
 
@@ -36,12 +36,12 @@ The operator profile is a lateral thinker: strong at investigating, connecting d
 
 ## 4. Product Thesis
 
-1. **The relationship is the primary object.** Every conversation, task, and project is subordinate to a customer context.
-2. **Capture has near-zero friction.** Email in, no mandatory fields; a message becomes a conversation becomes a task only when that transition is warranted.
-3. **Open intake — a net, not a filter.** Unknown senders auto-create conversations; gates are where requests die silently. The spam cost is paid on the rejection side (cheap dismiss), not the intake side. (PP §1.)
+1. **The relationship is the primary object.** Every thread, task, and project is subordinate to a customer context.
+2. **Capture has near-zero friction.** Email in, no mandatory fields; a message becomes a thread becomes a task only when that transition is warranted.
+3. **Open intake — a net, not a filter.** Unknown senders auto-create threads; gates are where requests die silently. The spam cost is paid on the rejection side (cheap dismiss), not the intake side. (PP §1.)
 4. **Attention is computed, not remembered.** A transparent, configurable scoring engine (idle time, state, tier, urgency, velocity, neglect) orders the queue; neglect thresholds fire per tier. Nothing depends on the operator remembering to check something.
 5. **No hard lifecycle boundary.** A customer's first waitlist inquiry, their onboarding project, and a request two years later live in the same relationship context. Onboarding is a phase, not a separate system.
-6. **The customer sees the relationship too.** A white-label-capable portal makes the conversation legible to the customer: file, follow, and reply without email.
+6. **The customer sees the relationship too.** A white-label-capable portal makes the thread legible to the customer: file, follow, and reply without email.
 7. **Identity is ambient.** A known participant is never re-asked for name or email; re-asking is support-ticket behavior, the model being rejected. (PP §2.)
 8. **Self-hosted with data sovereignty.** The operator controls where customer data lives.
 
@@ -49,17 +49,17 @@ The operator profile is a lateral thinker: strong at investigating, connecting d
 
 A single self-hosted application, route-partitioned into three surfaces:
 
-- **Intake** — routed inbound webhooks (per-organization callback URLs carrying routing context in the channel), plus LMTP delivery and IMAP polling against operator-controlled mail infrastructure. All paths converge on one pipeline: verify, parse, resolve sender, thread, create or append to a conversation.
-- **Operator surface** — the attention queue as the landing page; conversation detail with reply, internal notes, tasks, and state control; organization view with relationship context; neglect report; settings for scoring weights and thresholds.
-- **Customer portal** — organization-scoped request list, conversation threads, new-request filing, portal-visible tasks and projects; white-label branding and custom domains.
+- **Intake** — routed inbound webhooks (per-organization callback URLs carrying routing context in the channel), plus LMTP delivery and IMAP polling against operator-controlled mail infrastructure. All paths converge on one pipeline: verify, parse, resolve sender, thread, create or append to a thread.
+- **Operator surface** — the attention queue as the landing page; thread detail with reply, internal notes, tasks, and state control; organization view with relationship context; neglect report; settings for scoring weights and thresholds.
+- **Customer portal** — organization-scoped request list, thread threads, new-request filing, portal-visible tasks and projects; white-label branding and custom domains.
 
-The core object is the **conversation**: a five-state machine (New, Active, Waiting, Dormant, Resolved) with automatic transitions, email threading metadata, an immutable message log, and a cached attention score.
+The core object is the **thread**: a five-state machine (New, Active, Waiting, Dormant, Resolved) with automatic transitions, email threading metadata, an immutable message log, and a cached attention score.
 
 ## 6. The MVP Bar
 
-The platform proves its value when one loop works end-to-end: a prospect's pricing-page action or email becomes an identified conversation in an organization's queue; an operator replies from the queue and the reply arrives as a properly threaded email; delivery is tracked so a silent failure cannot burn a high-value prospect; the prospect follows the thread in the portal.
+The platform proves its value when one loop works end-to-end: a prospect's pricing-page action or email becomes an identified thread in an organization's queue; an operator replies from the queue and the reply arrives as a properly threaded email; delivery is tracked so a silent failure cannot burn a high-value prospect; the prospect follows the thread in the portal.
 
-This loop is specified in the [Prospect Conversation Loop feature specification](spec-conversation-loop.md).
+This loop is specified in the [Prospect Thread Loop feature specification](spec-thread-loop.md).
 
 ## 7. Document Map
 
@@ -71,14 +71,14 @@ All design documents live in `docs/design/`. Filenames are stable; versions are 
 | [product-principles.md](product-principles.md) | Product principles: open intake, portal identity, operator workflow, scoring configuration |
 | [design-decisions-email-routing.md](design-decisions-email-routing.md) | Design decisions: per-project routes, sender-resolution priority, uniqueness constraints, multi-webhook fan-out, delivery-status tracking |
 | [sdd-status.md](sdd-status.md) | Implementation status against the SDD |
-| [spec-conversation-loop.md](spec-conversation-loop.md) | Feature specification for the end-to-end MVP loop |
-| [spec-public-intake.md](spec-public-intake.md) | Feature specification for pricing-page CTA intake: anonymous-first conversations, slug claim, resume access |
+| [spec-thread-loop.md](spec-thread-loop.md) | Feature specification for the end-to-end MVP loop |
+| [spec-public-intake.md](spec-public-intake.md) | Feature specification for pricing-page CTA intake: anonymous-first threads, slug claim, resume access |
 | [design-decisions-public-intake.md](design-decisions-public-intake.md) | Implementation decisions for public intake: slug registry, hashed tokens, prospect record, consent-gated outbound, nine-PR delivery stack |
 | [spec-colonel-acknowledgment.md](spec-colonel-acknowledgment.md) | Versioned Colonel acknowledgment MVP: confirmed RabbitMQ publication, Custyard persistence, recoverable failures, and support display |
 | [acknowledgment-design-guidelines.md](acknowledgment-design-guidelines.md) | Advisory research: record models, prior art, and the proposed customer membership checkpoint versus the Colonel evidence flow |
 | This document | Problem framing, product thesis, MVP bar |
 
-**Reconciled in SDD v0.4:** SDD §5.2 (outbound) and §7 (activation flow, definition of done) now describe routed-webhook-first intake and platform-native outbound, matching the design decisions document and the conversation-loop spec; §3.3 and §4.1 were adjusted to match. The deeper architecture and data-model reconciliation — inbound-route entities, multi-webhook fan-out, per-project routes — remains in [design-decisions-email-routing.md](design-decisions-email-routing.md) and is not yet folded into SDD §3–§4.
+**Reconciled in SDD v0.4:** SDD §5.2 (outbound) and §7 (activation flow, definition of done) now describe routed-webhook-first intake and platform-native outbound, matching the design decisions document and the thread-loop spec; §3.3 and §4.1 were adjusted to match. The deeper architecture and data-model reconciliation — inbound-route entities, multi-webhook fan-out, per-project routes — remains in [design-decisions-email-routing.md](design-decisions-email-routing.md) and is not yet folded into SDD §3–§4.
 
 ## References
 

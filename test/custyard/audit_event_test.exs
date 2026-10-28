@@ -109,9 +109,9 @@ defmodule Custyard.AuditEventTest do
       assert changeset.valid?
     end
 
-    test "accepts conversation_id" do
-      conv = insert_conversation()
-      attrs = build_audit_event(conversation_id: conv.id)
+    test "accepts thread_id" do
+      conv = insert_thread()
+      attrs = build_audit_event(thread_id: conv.id)
       changeset = AuditEvent.changeset(%AuditEvent{}, attrs)
 
       assert changeset.valid?
@@ -161,13 +161,13 @@ defmodule Custyard.AuditEventTest do
       assert audit_event.organization_id == org.id
     end
 
-    test "associates with conversation" do
-      conv = insert_conversation()
-      attrs = build_audit_event(conversation_id: conv.id)
+    test "associates with thread" do
+      conv = insert_thread()
+      attrs = build_audit_event(thread_id: conv.id)
 
       {:ok, audit_event} = AuditEvent.create(attrs)
 
-      assert audit_event.conversation_id == conv.id
+      assert audit_event.thread_id == conv.id
     end
 
     test "sets inserted_at timestamp" do

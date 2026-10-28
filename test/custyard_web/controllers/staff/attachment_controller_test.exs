@@ -8,8 +8,8 @@ defmodule CustyardWeb.Staff.AttachmentControllerTest do
 
   setup %{conn: conn} do
     org = insert_organization()
-    conv = insert_conversation(organization_id: org.id)
-    message = insert_message(conversation_id: conv.id)
+    conv = insert_thread(organization_id: org.id)
+    message = insert_message(thread_id: conv.id)
 
     url = StubClient.unique_url()
     StubClient.put(url, "<html><script>alert(1)</script></html>")
@@ -88,8 +88,8 @@ defmodule CustyardWeb.Staff.AttachmentControllerTest do
 
   describe "inline/2" do
     setup %{conn: conn, org: org} do
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id)
       url = StubClient.unique_url()
       StubClient.put(url, <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "rest">>)
 

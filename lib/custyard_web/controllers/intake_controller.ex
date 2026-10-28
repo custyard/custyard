@@ -5,9 +5,9 @@ defmodule CustyardWeb.IntakeController do
   GET renders an active (form-first) or passive (informational) page per the
   staff-configured intake source; unknown and disabled keys render the
   standard 404. POST validates the message body *before* touching the
-  context, creates the conversation through
-  `Custyard.Intake.create_intake_conversation/3`, sets the signed conversation
-  cookie, and redirects to the conversation URL. Malformed or oversized input
+  context, creates the thread through
+  `Custyard.Intake.create_intake_thread/3`, sets the signed thread
+  cookie, and redirects to the thread URL. Malformed or oversized input
   re-renders the form with a structured error — never a 500.
 
   Deliberately a controller, not a LiveView: these surfaces take anonymous
@@ -24,7 +24,7 @@ defmodule CustyardWeb.IntakeController do
   alias Custyard.Email.Normalizer
   alias Custyard.Intake.ReceiptEmail
   alias Custyard.{Intake, IntakeSource, Settings, Tenants}
-  alias CustyardWeb.Plugs.ConversationCookie
+  alias CustyardWeb.Plugs.ThreadCookie
 
   plug :put_layout, html: {CustyardWeb.Layouts, :intake}
   plug CustyardWeb.Plugs.PublicRateLimit, [bucket: :intake_get] when action == :show
@@ -42,7 +42,7 @@ defmodule CustyardWeb.IntakeController do
 
     case validate_body(submission.body) do
       {:ok, body} ->
-        create_conversation(conn, body, submission)
+        create_thread(conn, body, submission)
 
       {:error, message} ->
         render_submission_error(conn, submission, message)
@@ -51,18 +51,18 @@ defmodule CustyardWeb.IntakeController do
 
   ## Submission handling -------------------------------------------------------
 
-  defp create_conversation(conn, body, submission) do
+  defp create_thread(conn, body, submission) do
     source = conn.assigns.intake_source
 
-    case Intake.create_intake_conversation(source.key, body, tenant_id: source.tenant_id) do
-      {:ok, %{conversation: conversation, access_token: token}} ->
-        capture_result = maybe_capture_email(conversation, submission.email, submission.notify)
-        receipt_result = maybe_send_receipt(capture_result, conversation, source, token)
+    case Intake.create_intake_thread(source.key, body, tenant_id: source.tenant_id) do
+      {:ok, %{thread: thread, access_token: token}} ->
+        capture_result = maybe_capture_email(thread, submission.email, submission.notify)
+        receipt_result = maybe_send_receipt(capture_result, thread, source, token)
 
         emit_submission(source, capture_result, receipt_result)
 
         conn
-        |> ConversationCookie.put_conversation_cookie(token)
+        |> ThreadCookie.put_thread_cookie(token)
         |> maybe_flash_rejected_email(capture_result)
         |> redirect(to: ~p"/threads/#{token}")
 
@@ -72,7 +72,7 @@ defmodule CustyardWeb.IntakeController do
       {:error, :unknown_source} ->
         render_not_found(conn, :disabled_mid_submission)
 
-      # Server-side loss: the Multi inserting conversation + prospect + message
+      # Server-side loss: the Multi inserting thread + prospect + message
       # did not commit. The prospect sees a generic failure and leaves. Strictly
       # more likely than the disabled-source race above, and the failure mode
       # that would take the submission counter to zero while looking like a
@@ -85,10 +85,10 @@ defmodule CustyardWeb.IntakeController do
 
   # The optional email is captured after creation. A capture failure
   # (invalid address, concurrent capture) must never fail the submission
-  # itself — the conversation and conversation redirect stand either way.
-  defp maybe_capture_email(conversation, email, notify) do
+  # itself — the thread and thread redirect stand either way.
+  defp maybe_capture_email(thread, email, notify) do
     if String.trim(email) != "" do
-      Intake.capture_email(conversation, email, notify: notify)
+      Intake.capture_email(thread, email, notify: notify)
     else
       {:error, :no_email}
     end
@@ -96,7 +96,7 @@ defmodule CustyardWeb.IntakeController do
 
   # The submission stands either way, but a rejected address was the
   # prospect's only way to hear back (and to get the resume URL); say so on
-  # the conversation page, where the email prompt lets them fix it.
+  # the thread page, where the email prompt lets them fix it.
   defp maybe_flash_rejected_email(conn, {:error, %Ecto.Changeset{}}) do
     put_flash(
       conn,
@@ -114,11 +114,11 @@ defmodule CustyardWeb.IntakeController do
   # hashed at rest — so the resume URL cannot be reconstructed later.
   # Result ignored: everything above is committed, and ReceiptEmail owns
   # its own gating, rate limiting, and failure logging.
-  defp maybe_send_receipt({:ok, _captured}, conversation, source, token) do
-    case Intake.get_prospect(conversation) do
+  defp maybe_send_receipt({:ok, _captured}, thread, source, token) do
+    case Intake.get_prospect(thread) do
       %{email: email} when is_binary(email) ->
         case ReceiptEmail.send_receipt(email, source,
-               conversation_url:
+               thread_url:
                  Tenants.url(Tenants.get_tenant!(source.tenant_id)) <> ~p"/threads/#{token}"
              ) do
           {:ok, _} -> :sent
@@ -130,7 +130,7 @@ defmodule CustyardWeb.IntakeController do
     end
   end
 
-  defp maybe_send_receipt(_capture_failed, _conversation, _source, _token), do: :skipped
+  defp maybe_send_receipt(_capture_failed, _thread, _source, _token), do: :skipped
 
   # Shape-validate the message body BEFORE any context call: non-binary and
   # oversized params get a structured 4xx with the form re-rendered, never
@@ -172,7 +172,7 @@ defmodule CustyardWeb.IntakeController do
     template = if source.mode == :passive, do: :passive, else: :active
 
     conn
-    |> assign_conversation_banner()
+    |> assign_thread_banner()
     |> assign_active_path(source)
     |> render(template, source: source, form: form)
   end
@@ -199,25 +199,25 @@ defmodule CustyardWeb.IntakeController do
     )
   end
 
-  # "Resume your conversation" banner: shown when the signed conversation cookie
+  # "Resume your thread" banner: shown when the signed thread cookie
   # verifies against a live (non-revoked, non-purged) prospect. Only a link —
-  # conversation content never renders on the intake page, so the check is
+  # thread content never renders on the intake page, so the check is
   # the lightweight access_token_valid?/1, never the preloaded thread.
-  defp assign_conversation_banner(conn) do
-    conn = fetch_cookies(conn, signed: [ConversationCookie.cookie_name()])
-    token = conn.cookies[ConversationCookie.cookie_name()]
+  defp assign_thread_banner(conn) do
+    conn = fetch_cookies(conn, signed: [ThreadCookie.cookie_name()])
+    token = conn.cookies[ThreadCookie.cookie_name()]
 
-    conversation_path =
+    thread_path =
       with token when is_binary(token) <- token,
-           {:ok, conversation} <-
-             Intake.get_conversation_by_access_token(token, conn.assigns.host_tenant.id),
-           true <- conversation.tenant_id == conn.assigns.host_tenant.id do
+           {:ok, thread} <-
+             Intake.get_thread_by_access_token(token, conn.assigns.host_tenant.id),
+           true <- thread.tenant_id == conn.assigns.host_tenant.id do
         ~p"/threads/#{token}"
       else
         _ -> nil
       end
 
-    assign(conn, :conversation_path, conversation_path)
+    assign(conn, :thread_path, thread_path)
   end
 
   # Passive pages link to the active flow; the pairing policy (first enabled

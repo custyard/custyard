@@ -4,7 +4,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
 
   alias Custyard.{
     Contact,
-    Conversation,
+    Thread,
     InboundChannel,
     Organization,
     Organizations,
@@ -50,7 +50,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
 
   test "revoked and demoted staff scopes cannot read or mutate tenant resources" do
     org = insert_organization()
-    thread = insert_conversation(organization_id: org.id)
+    thread = insert_thread(organization_id: org.id)
     project = insert_project(organization_id: org.id)
     staff = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
     scope = Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
@@ -62,11 +62,11 @@ defmodule Custyard.TenantCustomerBoundariesTest do
     assert Organizations.list(scope) == []
     assert is_nil(Organizations.get(scope, org.id))
     assert is_nil(Custyard.Projects.get(scope, project.id))
-    assert is_nil(Custyard.Conversations.get_with_messages(scope, thread.id))
+    assert is_nil(Custyard.Threads.get_with_messages(scope, thread.id))
     assert {:error, :unauthorized} = Organizations.update(scope, org, %{name: "Forbidden"})
 
     assert {:error, :unauthorized} =
-             Custyard.Conversations.with_access(scope, thread.id, fn _, _ ->
+             Custyard.Threads.with_access(scope, thread.id, fn _, _ ->
                flunk("revoked scope")
              end)
 
@@ -89,7 +89,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
              email: "alice@example.com"
            }).valid?
 
-    refute Conversation.changeset(%Conversation{}, %{
+    refute Thread.changeset(%Thread{}, %{
              tenant_id: other.id,
              organization_id: org.id,
              subject: "Wrong workspace"
@@ -130,17 +130,17 @@ defmodule Custyard.TenantCustomerBoundariesTest do
     staff = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
     scope = Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
     contact = insert_contact(organization_id: org.id)
-    thread = insert_conversation(organization_id: org.id, contact_id: contact.id)
-    message = insert_message(conversation_id: thread.id)
-    project = insert_project(organization_id: org.id, conversation_id: thread.id)
+    thread = insert_thread(organization_id: org.id, contact_id: contact.id)
+    message = insert_message(thread_id: thread.id)
+    project = insert_project(organization_id: org.id, thread_id: thread.id)
 
     task =
-      insert_task(organization_id: org.id, conversation_id: thread.id, project_id: project.id)
+      insert_task(organization_id: org.id, thread_id: thread.id, project_id: project.id)
 
     event =
       insert_audit_event(
         organization_id: org.id,
-        conversation_id: thread.id,
+        thread_id: thread.id,
         project_id: project.id
       )
 
@@ -157,7 +157,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
     for {schema, record} <- [
           {Organization, org},
           {Contact, contact},
-          {Conversation, thread},
+          {Thread, thread},
           {Custyard.Message, message},
           {Project, project},
           {Task, task},
@@ -171,7 +171,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
     assert is_nil(Repo.reload!(channel).default_project_id)
     assert Repo.reload!(event).tenant_id == org.tenant_id
     assert is_nil(Repo.reload!(event).organization_id)
-    assert is_nil(Repo.reload!(event).conversation_id)
+    assert is_nil(Repo.reload!(event).thread_id)
     assert is_nil(Repo.reload!(event).project_id)
   end
 
@@ -218,7 +218,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
     project = insert_project(organization_id: other.id)
 
     changeset =
-      Conversation.changeset(%Conversation{}, %{
+      Thread.changeset(%Thread{}, %{
         tenant_id: own.tenant_id,
         organization_id: own.id,
         subject: "Invalid customer links",

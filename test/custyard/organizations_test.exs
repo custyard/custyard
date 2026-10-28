@@ -1,7 +1,7 @@
 defmodule Custyard.OrganizationsTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.{AuditEvent, Contact, Conversation, Organizations, Prospect, Repo, Slugs}
+  alias Custyard.{AuditEvent, Contact, Thread, Organizations, Prospect, Repo, Slugs}
 
   import Custyard.Factory
 
@@ -69,13 +69,13 @@ defmodule Custyard.OrganizationsTest do
   end
 
   describe "list_organizations_with_counts/0" do
-    test "returns organizations with conversation counts" do
+    test "returns organizations with thread counts" do
       org1 = insert_organization(name: "Org with convos")
       _org2 = insert_organization(name: "Org empty")
 
-      insert_conversation(organization_id: org1.id)
-      insert_conversation(organization_id: org1.id)
-      insert_conversation(organization_id: org1.id)
+      insert_thread(organization_id: org1.id)
+      insert_thread(organization_id: org1.id)
+      insert_thread(organization_id: org1.id)
 
       result = Organizations.list_with_counts(default_scope())
 
@@ -84,8 +84,8 @@ defmodule Custyard.OrganizationsTest do
       org1_result = Enum.find(result, &(&1.org.name == "Org with convos"))
       org2_result = Enum.find(result, &(&1.org.name == "Org empty"))
 
-      assert org1_result.conversation_count == 3
-      assert org2_result.conversation_count == 0
+      assert org1_result.thread_count == 3
+      assert org2_result.thread_count == 0
     end
   end
 
@@ -148,30 +148,30 @@ defmodule Custyard.OrganizationsTest do
       %{staff: insert_staff_account(role: "admin")}
     end
 
-    test "links the conversation to a new organization, keeping :public_intake provenance", %{
+    test "links the thread to a new organization, keeping :public_intake provenance", %{
       staff: staff
     } do
-      conversation = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conversation.id)
+      thread = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: thread.id)
 
       assert {:ok, converted} =
-               Organizations.convert(scope(staff), conversation, %{name: "Acme Corp"})
+               Organizations.convert(scope(staff), thread, %{name: "Acme Corp"})
 
       assert converted.source == :public_intake
       assert %{name: "Acme Corp"} = converted.organization
     end
 
     test "creates a contact from the prospect's captured email", %{staff: staff} do
-      conversation = insert_conversation(source: :public_intake)
+      thread = insert_thread(source: :public_intake)
 
       insert_prospect(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         email: "buyer@acme.com",
         email_captured_at: DateTime.utc_now() |> DateTime.truncate(:second)
       )
 
       assert {:ok, converted} =
-               Organizations.convert(scope(staff), conversation, %{name: "Acme Corp"})
+               Organizations.convert(scope(staff), thread, %{name: "Acme Corp"})
 
       assert converted.contact_id
       contact = Repo.get_by!(Contact, organization_id: converted.organization_id)
@@ -179,26 +179,26 @@ defmodule Custyard.OrganizationsTest do
     end
 
     test "no captured email means no contact is created", %{staff: staff} do
-      conversation = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conversation.id)
+      thread = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: thread.id)
 
       assert {:ok, converted} =
-               Organizations.convert(scope(staff), conversation, %{name: "Acme Corp"})
+               Organizations.convert(scope(staff), thread, %{name: "Acme Corp"})
 
       assert is_nil(converted.contact_id)
       assert Repo.aggregate(Contact, :count) == 0
     end
 
-    test "promotes the conversation's confirmed slug claim to provisioned", %{staff: staff} do
-      conversation = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conversation.id)
-      {:ok, _slug, token} = Slugs.claim("acme-hq", "buyer@example.com", conversation)
+    test "promotes the thread's confirmed slug claim to provisioned", %{staff: staff} do
+      thread = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: thread.id)
+      {:ok, _slug, token} = Slugs.claim("acme-hq", "buyer@example.com", thread)
       {:ok, _confirmed} = Slugs.confirm(token, Process.get(:factory_tenant_id))
 
       assert {:ok, converted} =
-               Organizations.convert(scope(staff), conversation, %{name: "Acme Corp"})
+               Organizations.convert(scope(staff), thread, %{name: "Acme Corp"})
 
-      slug = Repo.get_by!(Custyard.Slug, conversation_id: conversation.id)
+      slug = Repo.get_by!(Custyard.Slug, thread_id: thread.id)
       assert slug.status == :provisioned
       assert slug.organization_id == converted.organization_id
     end
@@ -206,23 +206,23 @@ defmodule Custyard.OrganizationsTest do
     test "an unconfirmed claim is not promoted, but conversion still succeeds", %{
       staff: staff
     } do
-      conversation = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conversation.id)
-      {:ok, _slug, _token} = Slugs.claim("still-pending", "buyer@example.com", conversation)
+      thread = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: thread.id)
+      {:ok, _slug, _token} = Slugs.claim("still-pending", "buyer@example.com", thread)
 
       assert {:ok, _converted} =
-               Organizations.convert(scope(staff), conversation, %{name: "Acme"})
+               Organizations.convert(scope(staff), thread, %{name: "Acme"})
 
-      slug = Repo.get_by!(Custyard.Slug, conversation_id: conversation.id)
+      slug = Repo.get_by!(Custyard.Slug, thread_id: thread.id)
       assert slug.status == :claimed
     end
 
-    test "does not revoke or rotate conversation access", %{staff: staff} do
-      conversation = insert_conversation(source: :public_intake)
-      prospect = insert_prospect(conversation_id: conversation.id)
+    test "does not revoke or rotate thread access", %{staff: staff} do
+      thread = insert_thread(source: :public_intake)
+      prospect = insert_prospect(thread_id: thread.id)
 
       assert {:ok, _converted} =
-               Organizations.convert(scope(staff), conversation, %{name: "Acme"})
+               Organizations.convert(scope(staff), thread, %{name: "Acme"})
 
       reloaded = Repo.get!(Prospect, prospect.id)
       assert reloaded.access_token_hash == prospect.access_token_hash
@@ -232,15 +232,15 @@ defmodule Custyard.OrganizationsTest do
     test "records a :prospect_converted audit event attributed to the staff", %{
       staff: staff
     } do
-      conversation = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conversation.id)
+      thread = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: thread.id)
 
       assert {:ok, converted} =
-               Organizations.convert(scope(staff), conversation, %{name: "Acme"})
+               Organizations.convert(scope(staff), thread, %{name: "Acme"})
 
       event =
         Repo.get_by!(AuditEvent,
-          conversation_id: converted.id,
+          thread_id: converted.id,
           event_type: :prospect_converted
         )
 
@@ -249,54 +249,54 @@ defmodule Custyard.OrganizationsTest do
       assert event.payload["staff_email"] == staff.email
     end
 
-    test "refuses a conversation already linked to an organization", %{staff: staff} do
+    test "refuses a thread already linked to an organization", %{staff: staff} do
       org = insert_organization()
-      conversation = insert_conversation(organization_id: org.id, source: :public_intake)
+      thread = insert_thread(organization_id: org.id, source: :public_intake)
 
       assert {:error, :not_convertible} =
-               Organizations.convert(scope(staff), conversation, %{name: "Someone Else"})
+               Organizations.convert(scope(staff), thread, %{name: "Someone Else"})
     end
 
-    test "refuses a non-public-intake conversation", %{staff: staff} do
-      conversation = insert_conversation(organization_id: nil, source: :disambiguation)
+    test "refuses a non-public-intake thread", %{staff: staff} do
+      thread = insert_thread(organization_id: nil, source: :disambiguation)
 
       assert {:error, :not_convertible} =
-               Organizations.convert(scope(staff), conversation, %{name: "Someone Else"})
+               Organizations.convert(scope(staff), thread, %{name: "Someone Else"})
     end
 
-    test "a genuine step-2 failure compensates the organization, conversation stays unlinked", %{
+    test "a genuine step-2 failure compensates the organization, thread stays unlinked", %{
       staff: staff
     } do
-      conversation = insert_conversation(source: :public_intake)
+      thread = insert_thread(source: :public_intake)
 
       # Bypasses Prospect's changeset validation (mirrors the factory's raw-struct
       # discipline) to force a real Contact changeset error inside the transaction.
       insert_prospect(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         email: "not-an-email",
         email_captured_at: DateTime.utc_now() |> DateTime.truncate(:second)
       )
 
       assert {:error, %Ecto.Changeset{}} =
-               Organizations.convert(scope(staff), conversation, %{name: "Bad Email Co"})
+               Organizations.convert(scope(staff), thread, %{name: "Bad Email Co"})
 
       assert Organizations.list(default_scope()) == []
-      refute Repo.get!(Conversation, conversation.id).organization_id
+      refute Repo.get!(Thread, thread.id).organization_id
     end
 
     test "a concurrent conversion attempt loses the race and compensates its organization", %{
       staff: staff
     } do
-      conversation = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conversation.id)
+      thread = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: thread.id)
 
       assert {:ok, _first} =
-               Organizations.convert(scope(staff), conversation, %{name: "First Corp"})
+               Organizations.convert(scope(staff), thread, %{name: "First Corp"})
 
-      # Simulates a second staff whose in-memory conversation struct was
+      # Simulates a second staff whose in-memory thread struct was
       # loaded before the first conversion committed (organization_id still nil).
       assert {:error, :already_converted} =
-               Organizations.convert(scope(staff), conversation, %{name: "Second Corp"})
+               Organizations.convert(scope(staff), thread, %{name: "Second Corp"})
 
       assert [remaining] = Organizations.list(default_scope())
       assert remaining.name == "First Corp"

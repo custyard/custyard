@@ -29,7 +29,7 @@ AutoDismiss hook). Icons used: 14 distinct names enumerated.
 
 Prospects have no visual/link connection back to the operator's product. Plan: titled
 links per intake source. Confirmed intake sources are not associated with projects (only
-transitively via `conversations.intake_source_key` + optional `project_id`).
+transitively via `threads.intake_source_key` + optional `project_id`).
 
 ## 3. Root → dashboard redirect for authed operators
 
@@ -37,7 +37,7 @@ transitively via `conversations.intake_source_key` + optional `project_id`).
 
 ## 4. Obscured prospect email in operator thread
 
-`conversation_live.ex:1100` shows bare "via prospect"; want "via prospect abc***@company.com".
+`thread_live.ex:1100` shows bare "via prospect"; want "via prospect abc***@company.com".
 
 ## 5. Suppress duplicate identical messages
 

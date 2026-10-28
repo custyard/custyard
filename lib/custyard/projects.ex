@@ -257,21 +257,21 @@ defmodule Custyard.Projects do
     if changeset.valid? and Ecto.Changeset.changed?(changeset, :organization_id) do
       organization_id = Ecto.Changeset.get_field(changeset, :organization_id)
 
-      conversation_orgs =
+      thread_orgs =
         Repo.all(
           from(t in Task,
-            join: c in Custyard.Conversation,
-            on: c.id == t.conversation_id,
+            join: c in Custyard.Thread,
+            on: c.id == t.thread_id,
             where: t.project_id == ^changeset.data.id,
             select: c.organization_id
           )
         )
 
-      if Enum.any?(conversation_orgs, &(&1 != organization_id)) do
+      if Enum.any?(thread_orgs, &(&1 != organization_id)) do
         Ecto.Changeset.add_error(
           changeset,
           :organization_id,
-          "cannot move tasks linked to another customer's conversation"
+          "cannot move tasks linked to another customer's thread"
         )
       else
         changeset
@@ -303,7 +303,7 @@ defmodule Custyard.Projects do
       from(t in Task, where: t.tenant_id == ^project.tenant_id and t.project_id == ^project.id)
       |> Repo.delete_all()
 
-      from(c in Custyard.Conversation,
+      from(c in Custyard.Thread,
         where: c.tenant_id == ^project.tenant_id and c.project_id == ^project.id
       )
       |> Repo.update_all(set: [project_id: nil])
@@ -549,7 +549,7 @@ defmodule Custyard.Projects do
 
     case result do
       {:ok, task} ->
-        Custyard.Conversations.broadcast_task_change(task)
+        Custyard.Threads.broadcast_task_change(task)
         if Keyword.get(opts, :broadcast?, true), do: broadcast_project_update(project.id)
         {:ok, task}
 
@@ -570,7 +570,7 @@ defmodule Custyard.Projects do
 
     case result do
       {:ok, task} ->
-        Custyard.Conversations.broadcast_task_change(task)
+        Custyard.Threads.broadcast_task_change(task)
 
         if task.project_id && Keyword.get(opts, :broadcast?, true),
           do: broadcast_project_update(task.project_id)
@@ -591,7 +591,7 @@ defmodule Custyard.Projects do
 
     case Repo.delete(task) do
       {:ok, _} = result ->
-        Custyard.Conversations.broadcast_task_change(task)
+        Custyard.Threads.broadcast_task_change(task)
 
         if project_id && Keyword.get(opts, :broadcast?, true),
           do: broadcast_project_update(project_id)

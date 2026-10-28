@@ -21,7 +21,7 @@ defmodule Custyard.Intake.ArrivalEmail do
   when `:deliver_replies_async?` is set (sync in test).
 
   Every failure mode is non-fatal by construction: this is called
-  post-commit, so the conversation, prospect, and message rows are already
+  post-commit, so the thread, prospect, and message rows are already
   durable and the queue entry exists regardless. A dropped alert costs
   latency on triage, never data.
   """
@@ -31,7 +31,7 @@ defmodule Custyard.Intake.ArrivalEmail do
   require Logger
 
   alias Custyard.Email.Headers
-  alias Custyard.{Conversation, IntakeSource, RateLimit, Tenants}
+  alias Custyard.{Thread, IntakeSource, RateLimit, Tenants}
   alias Custyard.Intake.EmailBranding
   alias Custyard.Notifications.TenantDelivery
 
@@ -41,7 +41,7 @@ defmodule Custyard.Intake.ArrivalEmail do
   @doc """
   Notify the staff that a public-intake submission arrived.
 
-  `conversation` is the committed conversation, `source` the intake source
+  `thread` is the committed thread, `source` the intake source
   it came through, and `body` the (already normalized and truncated)
   submission text.
 
@@ -52,27 +52,27 @@ defmodule Custyard.Intake.ArrivalEmail do
   `{:error, :disabled}` when email notifications are switched off. Callers
   are expected to ignore the result — see the moduledoc.
   """
-  def send_arrival(%Conversation{tenant_id: id}, %IntakeSource{tenant_id: source_id}, _body)
+  def send_arrival(%Thread{tenant_id: id}, %IntakeSource{tenant_id: source_id}, _body)
       when id != source_id do
     {:error, :tenant_mismatch}
   end
 
-  def send_arrival(%Conversation{} = conversation, %IntakeSource{} = source, body) do
+  def send_arrival(%Thread{} = thread, %IntakeSource{} = source, body) do
     if email_enabled?() do
       with :ok <- TenantDelivery.ready?(source.tenant_id) do
         case RateLimit.check_rate(:intake_arrival_email, {source.tenant_id, source.key}) do
           {:deny, _retry_after_ms} ->
             Logger.warning(
               "Intake arrival notification rate-limited for source #{source.key}; " <>
-                "conversation #{conversation.id} is in the queue but unannounced"
+                "thread #{thread.id} is in the queue but unannounced"
             )
 
             {:error, :rate_limited}
 
           {:allow, _count} ->
-            conversation
+            thread
             |> compose(source, body)
-            |> deliver(conversation)
+            |> deliver(thread)
         end
       end
     else
@@ -83,43 +83,43 @@ defmodule Custyard.Intake.ArrivalEmail do
   @doc """
   Compose the arrival notification without delivering (testable seam).
   """
-  def compose(%Conversation{} = conversation, %IntakeSource{} = source, body) do
+  def compose(%Thread{} = thread, %IntakeSource{} = source, body) do
     excerpt = excerpt(body)
-    conversation_url = staff_conversation_url(conversation)
+    thread_url = staff_thread_url(thread)
 
     new()
     |> to(TenantDelivery.recipients(source.tenant_id))
     |> EmailBranding.put_sender(EmailBranding.for_tenant(source.tenant_id), source.tenant_id)
-    |> subject(arrival_subject(conversation, source))
-    |> text_body(arrival_text(conversation, source, excerpt, conversation_url))
-    |> html_body(arrival_html(conversation, source, excerpt, conversation_url))
+    |> subject(arrival_subject(thread, source))
+    |> text_body(arrival_text(thread, source, excerpt, thread_url))
+    |> html_body(arrival_html(thread, source, excerpt, thread_url))
   end
 
-  defp deliver(email, conversation) do
+  defp deliver(email, thread) do
     if Application.get_env(:custyard, :deliver_replies_async?, true) do
       case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn ->
-             do_deliver(email, conversation)
+             do_deliver(email, thread)
            end) do
         {:ok, _pid} -> {:ok, :queued}
         {:error, _reason} -> {:error, :queue_failed}
       end
     else
-      do_deliver(email, conversation)
+      do_deliver(email, thread)
     end
   end
 
-  defp do_deliver(email, conversation) do
-    case TenantDelivery.deliver(email, conversation.tenant_id) do
+  defp do_deliver(email, thread) do
+    case TenantDelivery.deliver(email, thread.tenant_id) do
       {:ok, _metadata} = result ->
-        Logger.info("Intake arrival notification sent for conversation #{conversation.id}")
+        Logger.info("Intake arrival notification sent for thread #{thread.id}")
         result
 
       {:error, _reason} = error ->
-        # The conversation is committed and already in the queue; a failed
+        # The thread is committed and already in the queue; a failed
         # alert costs triage latency, not data.
         Logger.error(
-          "Failed to send intake arrival notification for conversation " <>
-            "#{conversation.id}"
+          "Failed to send intake arrival notification for thread " <>
+            "#{thread.id}"
         )
 
         error
@@ -128,8 +128,8 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   # The subject carries prospect text, so it must survive header
   # sanitization before it is handed to Swoosh.
-  defp arrival_subject(conversation, source) do
-    label = conversation.subject || "(no subject)"
+  defp arrival_subject(thread, source) do
+    label = thread.subject || "(no subject)"
 
     Headers.sanitize_header_text("[Intake] #{source.name}: #{label}")
   end
@@ -144,31 +144,31 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   defp excerpt(_body), do: ""
 
-  defp staff_conversation_url(conversation) do
-    Tenants.url(Tenants.get_tenant!(conversation.tenant_id)) <>
-      "/app/threads/#{conversation.id}"
+  defp staff_thread_url(thread) do
+    Tenants.url(Tenants.get_tenant!(thread.tenant_id)) <>
+      "/app/threads/#{thread.id}"
   end
 
   defp email_enabled? do
     Application.get_env(:custyard, :email_enabled, false)
   end
 
-  defp arrival_text(conversation, source, excerpt, conversation_url) do
+  defp arrival_text(thread, source, excerpt, thread_url) do
     """
     A new prospect arrived through #{source.name} (#{source.key}).
 
-    Subject: #{conversation.subject || "(no subject)"}
+    Subject: #{thread.subject || "(no subject)"}
 
     #{excerpt}
 
-    Open the conversation:
+    Open the thread:
 
-    #{conversation_url}
+    #{thread_url}
     """
   end
 
-  defp arrival_html(conversation, source, excerpt, conversation_url) do
-    safe_subject = html_escape(conversation.subject || "(no subject)")
+  defp arrival_html(thread, source, excerpt, thread_url) do
+    safe_subject = html_escape(thread.subject || "(no subject)")
     safe_source = html_escape("#{source.name} (#{source.key})")
     safe_excerpt = excerpt |> html_escape() |> String.replace("\n", "<br>")
 
@@ -186,11 +186,11 @@ defmodule Custyard.Intake.ArrivalEmail do
           #{safe_excerpt}
         </div>
         <div style="text-align: center; margin: 24px 0 8px;">
-          <a href="#{conversation_url}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 16px;">
-            Open the conversation
+          <a href="#{thread_url}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 16px;">
+            Open the thread
           </a>
         </div>
-        <p style="color: #4f46e5; font-size: 14px; word-break: break-all; text-align: center;">#{conversation_url}</p>
+        <p style="color: #4f46e5; font-size: 14px; word-break: break-all; text-align: center;">#{thread_url}</p>
       </div>
     </body>
     </html>

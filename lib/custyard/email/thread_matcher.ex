@@ -1,14 +1,14 @@
 defmodule Custyard.Email.ThreadMatcher do
   @moduledoc """
-  Match inbound email to existing conversation via threading headers.
+  Match inbound email to existing thread via threading headers.
 
   Thread matching is scoped by organization to prevent cross-organization
   information boundary violations. Without organization scoping, mailing list
   cross-posts or forwarded threads could cause messages to thread into the
-  wrong organization's conversations.
+  wrong organization's threads.
   """
 
-  alias Custyard.{Conversation, Message, Organization, Prospect, Repo}
+  alias Custyard.{Thread, Message, Organization, Prospect, Repo}
   alias Custyard.Email.SenderMatcher
   import Ecto.Query
 
@@ -23,15 +23,15 @@ defmodule Custyard.Email.ThreadMatcher do
   def find_in_tenant(_parsed, _tenant_id), do: :not_found
 
   # A message can refer to several unrelated threads (mailing lists, forwards).
-  # Ambiguity never silently chooses one customer's conversation.
+  # Ambiguity never silently chooses one customer's thread.
   defp tenant_header_match(ids, tenant_id, parsed) do
     ids = Enum.filter(ids, &(is_binary(&1) and String.trim(&1) != ""))
 
-    from(c in Conversation,
+    from(c in Thread,
       join: m in Message,
-      on: m.conversation_id == c.id,
+      on: m.thread_id == c.id,
       left_join: p in Prospect,
-      on: p.conversation_id == c.id,
+      on: p.thread_id == c.id,
       where: c.tenant_id == ^tenant_id and m.message_id in ^ids,
       where: c.source in [:email, :lettermint, :public_intake, :portal],
       distinct: true,
@@ -41,7 +41,7 @@ defmodule Custyard.Email.ThreadMatcher do
     |> eligible_customers(parsed)
     |> Repo.all()
     |> case do
-      [conversation] -> {:ok, conversation}
+      [thread] -> {:ok, thread}
       [] -> :not_found
       _ambiguous -> :ambiguous
     end
@@ -49,7 +49,7 @@ defmodule Custyard.Email.ThreadMatcher do
 
   # A public link has not established a customer relationship yet. Only the
   # captured prospect may turn its email reply into a customer thread; another
-  # sender quoting its Message-ID must not claim that anonymous conversation.
+  # sender quoting its Message-ID must not claim that anonymous thread.
   # Apply this restriction before LIMIT so ineligible public references cannot
   # hide a second eligible customer and turn an ambiguous match into a merge.
   defp eligible_customers(query, parsed) do
@@ -71,7 +71,7 @@ defmodule Custyard.Email.ThreadMatcher do
   Conservative fallback for a reply whose threading headers were stripped.
 
   Requires a reply prefix, the same customer organization and an exact sender
-  who has already participated. Only one recent matching conversation qualifies.
+  who has already participated. Only one recent matching thread qualifies.
   New mail with a coincidentally identical subject does not merge.
   """
   def find_by_subject(parsed, organization_id, tenant_id) do
@@ -82,7 +82,7 @@ defmodule Custyard.Email.ThreadMatcher do
       cutoff = DateTime.utc_now() |> DateTime.add(-30 * 86_400)
 
       candidates =
-        from(c in Conversation,
+        from(c in Thread,
           join: o in Organization,
           on: o.id == c.organization_id,
           where: o.tenant_id == ^tenant_id and c.organization_id == ^organization_id,
@@ -105,14 +105,14 @@ defmodule Custyard.Email.ThreadMatcher do
     end
   end
 
-  defp sender_participated?(conversation, sender) do
-    conversation = Repo.preload(conversation, :contact)
+  defp sender_participated?(thread, sender) do
+    thread = Repo.preload(thread, :contact)
 
-    if conversation.contact && conversation.contact.email == sender do
+    if thread.contact && thread.contact.email == sender do
       true
     else
       from(m in Message,
-        where: m.conversation_id == ^conversation.id and m.source == :email,
+        where: m.thread_id == ^thread.id and m.source == :email,
         where: is_nil(m.deleted_at) and m.is_internal_note == false,
         where: is_nil(m.triage_class) or m.triage_class in [:customer, :staff_forward],
         select: m.sender_email
@@ -132,6 +132,6 @@ defmodule Custyard.Email.ThreadMatcher do
 
   defp normalize_subject(_subject), do: ""
 
-  defp unique_match([conversation]), do: {:ok, conversation}
+  defp unique_match([thread]), do: {:ok, thread}
   defp unique_match(_none_or_ambiguous), do: :not_found
 end

@@ -9,7 +9,7 @@ defmodule Custyard.Intake.ClaimEmail do
   shared `Custyard.Email.Headers` discipline.
 
   The body contains ONLY staff-configured branding, the claimed slug and tenant links (the `/c`
-  confirmation URL and the `/c` conversation URL) — NEVER prospect-supplied
+  confirmation URL and the `/c` thread URL) — NEVER prospect-supplied
   content: this mail must be useless as a spam relay.
 
   Sends are bounded by the `:claim_email_send` rate bucket keyed by the
@@ -31,7 +31,7 @@ defmodule Custyard.Intake.ClaimEmail do
   Send the confirmation email for a freshly claimed (or token-rotated)
   slug.
 
-  Requires `:confirm_url` and `:conversation_url` in `opts` — the caller owns
+  Requires `:confirm_url` and `:thread_url` in `opts` — the caller owns
   URL construction (LoginEmail precedent). Returns `{:ok, metadata}` /
   `{:error, reason}` when delivering synchronously, `{:ok, :queued}` when
   the async flag hands delivery to the task supervisor,
@@ -41,7 +41,7 @@ defmodule Custyard.Intake.ClaimEmail do
   """
   def send_confirmation(%Slug{} = slug, opts) do
     confirm_url = Keyword.fetch!(opts, :confirm_url)
-    conversation_url = Keyword.fetch!(opts, :conversation_url)
+    thread_url = Keyword.fetch!(opts, :thread_url)
 
     with {:ok, delivery} <-
            EmailBranding.delivery_settings(EmailBranding.tenant_id_for_claim(slug)) do
@@ -51,7 +51,7 @@ defmodule Custyard.Intake.ClaimEmail do
 
         {:allow, _count} ->
           slug
-          |> compose(confirm_url, conversation_url, delivery)
+          |> compose(confirm_url, thread_url, delivery)
           |> deliver(slug, delivery.config)
       end
     end
@@ -60,7 +60,7 @@ defmodule Custyard.Intake.ClaimEmail do
   @doc """
   Compose the confirmation email without delivering (testable seam).
   """
-  def compose(%Slug{} = slug, confirm_url, conversation_url, delivery \\ nil) do
+  def compose(%Slug{} = slug, confirm_url, thread_url, delivery \\ nil) do
     branding = EmailBranding.for_claim(slug)
 
     new()
@@ -69,9 +69,9 @@ defmodule Custyard.Intake.ClaimEmail do
     |> subject("Confirm your claim: #{slug.slug}")
     |> text_body(
       EmailBranding.text_header(branding) <>
-        confirmation_text(slug.slug, confirm_url, conversation_url)
+        confirmation_text(slug.slug, confirm_url, thread_url)
     )
-    |> html_body(confirmation_html(slug.slug, confirm_url, conversation_url, branding))
+    |> html_body(confirmation_html(slug.slug, confirm_url, thread_url, branding))
   end
 
   defp deliver(email, slug, config) do
@@ -101,7 +101,7 @@ defmodule Custyard.Intake.ClaimEmail do
     end
   end
 
-  defp confirmation_text(slug, confirm_url, conversation_url) do
+  defp confirmation_text(slug, confirm_url, thread_url) do
     """
     You claimed the name: #{slug}
 
@@ -109,18 +109,18 @@ defmodule Custyard.Intake.ClaimEmail do
 
     #{confirm_url}
 
-    You can return to your conversation any time with your conversation link:
+    You can return to your thread any time with your thread link:
 
-    #{conversation_url}
+    #{thread_url}
 
     If you didn't claim this name, you can safely ignore this email.
     """
   end
 
-  defp confirmation_html(slug, confirm_url, conversation_url, branding) do
+  defp confirmation_html(slug, confirm_url, thread_url, branding) do
     slug = EmailBranding.escape(slug)
     confirm_url = EmailBranding.escape(confirm_url)
-    conversation_url = EmailBranding.escape(conversation_url)
+    thread_url = EmailBranding.escape(thread_url)
 
     """
     <html>
@@ -139,9 +139,9 @@ defmodule Custyard.Intake.ClaimEmail do
         <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{confirm_url}</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
         <p style="color: #6b7280; font-size: 14px;">
-          Return to your conversation any time with your conversation link:
+          Return to your thread any time with your thread link:
         </p>
-        <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{conversation_url}</p>
+        <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{thread_url}</p>
         <p style="color: #9ca3af; font-size: 12px; margin-bottom: 0;">
           If you didn't claim this name, you can safely ignore this email.
         </p>

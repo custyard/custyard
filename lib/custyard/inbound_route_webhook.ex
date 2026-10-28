@@ -3,7 +3,7 @@ defmodule Custyard.InboundRouteWebhook do
   Represents a webhook consumer registered on an inbound route.
 
   Each route can have multiple webhooks with different purposes:
-  - `:sender_matching` — identity resolution, conversation creation
+  - `:sender_matching` — identity resolution, thread creation
   - `:enrichment` — urgency scoring, keyword extraction
   - `:notification` — staff notifications (Slack, push, email)
   - `:audit` — append-only activity log

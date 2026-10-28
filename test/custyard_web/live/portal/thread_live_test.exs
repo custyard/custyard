@@ -1,4 +1,4 @@
-defmodule CustyardWeb.Portal.ConversationLiveTest do
+defmodule CustyardWeb.Portal.ThreadLiveTest do
   use CustyardWeb.ConnCase, async: true
 
   import Phoenix.LiveViewTest
@@ -8,9 +8,9 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
   alias Custyard.{Message, Repo}
 
   describe "mount" do
-    test "renders conversation page with subject", %{conn: conn} do
+    test "renders thread page with subject", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, subject: "My Test Subject")
+      conv = insert_thread(organization_id: org.id, subject: "My Test Subject")
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -19,7 +19,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "shows back link to request list", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -28,7 +28,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "shows reply form", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -36,7 +36,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       assert html =~ "Send Reply"
     end
 
-    test "redirects if conversation not found", %{conn: conn} do
+    test "redirects if thread not found", %{conn: conn} do
       org = insert_organization()
 
       {:error, {:live_redirect, %{to: redirect_path}}} =
@@ -45,10 +45,10 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       assert redirect_path == "/portal/#{portal_token(org)}"
     end
 
-    test "redirects if conversation belongs to different org", %{conn: conn} do
+    test "redirects if thread belongs to different org", %{conn: conn} do
       org1 = insert_organization()
       org2 = insert_organization()
-      conv = insert_conversation(organization_id: org2.id)
+      conv = insert_thread(organization_id: org2.id)
 
       {:error, {:live_redirect, %{to: redirect_path}}} =
         live(conn, ~p"/portal/#{portal_token(org1)}/request/#{conv.id}")
@@ -60,10 +60,10 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
   describe "messages" do
     test "displays existing messages", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
-      insert_message(conversation_id: conv.id, body: "First message content", source: :email)
-      insert_message(conversation_id: conv.id, body: "Second message content", source: :portal)
+      insert_message(thread_id: conv.id, body: "First message content", source: :email)
+      insert_message(thread_id: conv.id, body: "Second message content", source: :portal)
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -73,10 +73,10 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "does not display internal notes", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
-      insert_message(conversation_id: conv.id, body: "Public message", is_internal_note: false)
-      insert_message(conversation_id: conv.id, body: "Internal note", is_internal_note: true)
+      insert_message(thread_id: conv.id, body: "Public message", is_internal_note: false)
+      insert_message(thread_id: conv.id, body: "Internal note", is_internal_note: true)
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -86,9 +86,9 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "styles staff messages differently", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
-      insert_message(conversation_id: conv.id, body: "Staff reply", source: :staff)
+      insert_message(thread_id: conv.id, body: "Staff reply", source: :staff)
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -98,10 +98,10 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "shows 'Support Team' label for staff messages", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         body: "Hello from support",
         source: :staff,
         sender_email: "staff@internal.example.com"
@@ -115,10 +115,10 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "shows sender email for customer messages", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         body: "Customer question",
         source: :email,
         sender_email: "customer@example.com"
@@ -131,11 +131,11 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "soft-deleted messages render the tombstone, never the original body", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, body: "Deleted staff slip")
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, body: "Deleted staff slip")
       staff = insert_staff_account(role: "admin")
 
-      {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, staff)
+      {:ok, _deleted} = Custyard.Threads.soft_delete_message(message, staff)
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -146,14 +146,14 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "an already-open view swaps to the tombstone when the delete broadcasts", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, body: "Regretted message")
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, body: "Regretted message")
       staff = insert_staff_account(role: "admin")
 
       {:ok, view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
       assert html =~ "Regretted message"
 
-      {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, staff)
+      {:ok, _deleted} = Custyard.Threads.soft_delete_message(message, staff)
 
       # The message_updated broadcast reloads the thread in place.
       html = render(view)
@@ -165,7 +165,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
   describe "reply submission" do
     test "creates new message on reply", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -174,7 +174,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       |> render_submit()
 
       # Verify message was created
-      messages = Repo.all(from m in Message, where: m.conversation_id == ^conv.id)
+      messages = Repo.all(from m in Message, where: m.thread_id == ^conv.id)
       assert length(messages) == 1
       assert hd(messages).body == "This is my reply"
       assert hd(messages).source == :portal
@@ -182,7 +182,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "clears form after successful reply", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -199,13 +199,13 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       assert html =~ "Form reply text"
 
       # Verify a new message was created and reply form is reset
-      messages = Repo.all(from m in Message, where: m.conversation_id == ^conv.id)
+      messages = Repo.all(from m in Message, where: m.thread_id == ^conv.id)
       assert length(messages) == 1
     end
 
     test "does not create message for empty reply", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -214,13 +214,13 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       |> render_submit()
 
       # No message should be created for whitespace-only body
-      messages = Repo.all(from m in Message, where: m.conversation_id == ^conv.id)
+      messages = Repo.all(from m in Message, where: m.thread_id == ^conv.id)
       assert Enum.empty?(messages)
     end
 
-    test "reply reactivates dormant conversation", %{conn: conn} do
+    test "reply reactivates dormant thread", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, state: :dormant)
+      conv = insert_thread(organization_id: org.id, state: :dormant)
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -228,13 +228,13 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       |> form("form", %{"body" => "Reactivating reply"})
       |> render_submit()
 
-      updated_conv = Repo.get!(Custyard.Conversation, conv.id)
+      updated_conv = Repo.get!(Custyard.Thread, conv.id)
       assert updated_conv.state == :active
     end
 
-    test "reply reactivates waiting conversation", %{conn: conn} do
+    test "reply reactivates waiting thread", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, state: :waiting)
+      conv = insert_thread(organization_id: org.id, state: :waiting)
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -242,13 +242,13 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       |> form("form", %{"body" => "Follow up reply"})
       |> render_submit()
 
-      updated_conv = Repo.get!(Custyard.Conversation, conv.id)
+      updated_conv = Repo.get!(Custyard.Thread, conv.id)
       assert updated_conv.state == :active
     end
 
     test "recalculates score after reply", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, cached_score: 0)
+      conv = insert_thread(organization_id: org.id, cached_score: 0)
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
@@ -256,7 +256,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       |> form("form", %{"body" => "Score update reply"})
       |> render_submit()
 
-      updated_conv = Repo.get!(Custyard.Conversation, conv.id)
+      updated_conv = Repo.get!(Custyard.Thread, conv.id)
       assert updated_conv.cached_score > 0
     end
   end
@@ -264,12 +264,12 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
   describe "tasks" do
     test "shows portal-visible tasks", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       # Insert a portal-visible task
       {:ok, task} =
-        Custyard.Conversations.create_task(%{
-          conversation_id: conv.id,
+        Custyard.Threads.create_task(%{
+          thread_id: conv.id,
           title: "Visible Task",
           state: :open,
           portal_visible: true
@@ -283,12 +283,12 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
     test "does not show non-portal-visible tasks", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       # Insert a non-portal-visible task
       {:ok, _task} =
-        Custyard.Conversations.create_task(%{
-          conversation_id: conv.id,
+        Custyard.Threads.create_task(%{
+          thread_id: conv.id,
           title: "Hidden Task",
           state: :open,
           portal_visible: false
@@ -303,17 +303,17 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
   describe "real-time updates" do
     test "updates when new message is added", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
       refute html =~ "Real-time message"
 
       # Add message and broadcast
-      insert_message(conversation_id: conv.id, body: "Real-time message")
+      insert_message(thread_id: conv.id, body: "Real-time message")
 
       Phoenix.PubSub.broadcast(
         Custyard.PubSub,
-        "conversation:#{conv.id}",
+        "thread:#{conv.id}",
         {:message_added, conv.id}
       )
 

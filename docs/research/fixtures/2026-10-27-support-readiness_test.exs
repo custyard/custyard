@@ -3,7 +3,7 @@ defmodule Custyard.AuditReplyAllTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Conversations, Repo}
+  alias Custyard.{Threads, Repo}
   alias Custyard.Email.Outbound
   alias Custyard.Webhooks.Purposes.SenderMatching
 
@@ -47,7 +47,7 @@ defmodule Custyard.AuditReplyAllTest do
     continued = Repo.preload(continued, [:contact, :prospect])
     assert continued.contact.email == "alice@customer.example"
     assert {:ok, recipient} = Outbound.reply_recipient(continued)
-    cc = Conversations.default_reply_cc(continued, operator_email: "agent@service.example")
+    cc = Threads.default_reply_cc(continued, operator_email: "agent@service.example")
 
     assert %{to: recipient, cc: cc} == %{
              to: "bob@customer.example",
@@ -55,20 +55,20 @@ defmodule Custyard.AuditReplyAllTest do
            }
   end
 
-  test "an overdue unfinished task remains in attention after its conversation is resolved" do
+  test "an overdue unfinished task remains in attention after its thread is resolved" do
     org = insert_organization()
-    conversation = insert_conversation(organization_id: org.id, state: :resolved)
+    thread = insert_thread(organization_id: org.id, state: :resolved)
 
     assert {:ok, _task} =
-             Conversations.create_task(%{
+             Threads.create_task(%{
                title: "Follow up on promised fix",
-               conversation_id: conversation.id,
+               thread_id: thread.id,
                portal_visible: false,
                due_at: DateTime.utc_now() |> DateTime.add(-86_400) |> DateTime.truncate(:second)
              })
 
-    attention = Conversations.list_for_attention_queue(organization_id: org.id)
-    assert Enum.any?(attention, &(&1.conversation.id == conversation.id))
+    attention = Threads.list_for_attention_queue(organization_id: org.id)
+    assert Enum.any?(attention, &(&1.thread.id == thread.id))
   end
 
   defp customer_message(sender, message_id) do

@@ -6,11 +6,11 @@ defmodule CustyardWeb.Live.ProspectAuth do
   session, whose 24-hour max-age and shared staff/portal keys disqualify
   it for a months-lived credential. The presented token is hashed via
   `Custyard.Auth.Token` and looked up through
-  `Custyard.Intake.get_conversation_by_access_token/2`; invalid, revoked,
-  and purged tokens all halt to the ONE uniform "conversation unavailable"
+  `Custyard.Intake.get_thread_by_access_token/2`; invalid, revoked,
+  and purged tokens all halt to the ONE uniform "thread unavailable"
   page — the same redirect for every failure class, no validity oracle.
 
-  Mounts are rate-limited per client IP (`:conversation_mount`): the plug-level
+  Mounts are rate-limited per client IP (`:thread_mount`): the plug-level
   limits never see websocket mounts, so the check lives here where it covers
   both the HTTP and the socket mount. A missing client IP (connect info not
   captured) falls back to a shared `"unknown"` key — still bounded, never a
@@ -18,13 +18,13 @@ defmodule CustyardWeb.Live.ProspectAuth do
 
   Assigns on success:
 
-    * `:conversation` — preloaded with prospect and public messages
+    * `:thread` — preloaded with prospect and public messages
     * `:branding` — tenant branding for the `:intake` layout
-    * `:access_token_hash` — key for the `:conversation_reply` rate bucket; this
+    * `:access_token_hash` — key for the `:thread_reply` rate bucket; this
       hook deliberately does not assign the plaintext token (auth and rate
-      keys are hash-based; `Prospect.ConversationLive` separately keeps the plaintext from
+      keys are hash-based; `Prospect.ThreadLive` separately keeps the plaintext from
       its mount params solely so the claim-confirmation email can carry the
-      conversation URL)
+      thread URL)
     * `:client_ip` — key for the IP-scoped mutation buckets (connect info is
       only readable during mount, so it is captured here)
   """
@@ -34,7 +34,7 @@ defmodule CustyardWeb.Live.ProspectAuth do
   import Ecto.Query
 
   alias Custyard.Auth.Token
-  alias Custyard.{Conversation, Intake, Prospect, RateLimit, Repo, Settings, Tenants}
+  alias Custyard.{Thread, Intake, Prospect, RateLimit, Repo, Settings, Tenants}
   alias CustyardWeb.ClientIP
 
   @unavailable_path "/threads/unavailable"
@@ -58,7 +58,7 @@ defmodule CustyardWeb.Live.ProspectAuth do
 
     result =
       with {:allow, _} <- RateLimit.check_rate(:public_instance_ip, client_ip || "unknown") do
-        RateLimit.check_rate(:conversation_mount, {tenant && tenant.id, client_ip || "unknown"})
+        RateLimit.check_rate(:thread_mount, {tenant && tenant.id, client_ip || "unknown"})
       end
 
     case result do
@@ -74,22 +74,22 @@ defmodule CustyardWeb.Live.ProspectAuth do
   end
 
   defp authenticate(token, client_ip, socket) when is_binary(token) do
-    case Intake.get_conversation_by_access_token(token, socket.assigns.host_tenant_id) do
-      {:ok, conversation} ->
+    case Intake.get_thread_by_access_token(token, socket.assigns.host_tenant_id) do
+      {:ok, thread} ->
         tenant_allowed? =
-          socket.assigns.host_tenant_id == conversation.tenant_id and
-            Tenants.active?(conversation.tenant_id)
+          socket.assigns.host_tenant_id == thread.tenant_id and
+            Tenants.active?(thread.tenant_id)
 
         if tenant_allowed? do
           {:cont,
            socket
-           |> assign(:conversation, conversation)
+           |> assign(:thread, thread)
            |> assign(
              :branding,
-             Tenants.branding(Tenants.get_tenant!(conversation.tenant_id))
+             Tenants.branding(Tenants.get_tenant!(thread.tenant_id))
            )
            |> assign(:access_token_hash, Token.hash(token))
-           |> assign(:client_ip, {conversation.tenant_id, client_ip || "unknown"})
+           |> assign(:client_ip, {thread.tenant_id, client_ip || "unknown"})
            |> attach_hook(:prospect_tenant_event, :handle_event, fn _, _, socket ->
              check_tenant(socket)
            end)
@@ -125,14 +125,14 @@ defmodule CustyardWeb.Live.ProspectAuth do
   end
 
   defp current_credential?(socket, tenant_id) do
-    conversation_id = socket.assigns.conversation.id
+    thread_id = socket.assigns.thread.id
     token_hash = socket.assigns.access_token_hash
 
     Repo.exists?(
       from p in Prospect,
-        join: c in Conversation,
-        on: c.id == p.conversation_id and c.tenant_id == p.tenant_id,
-        where: p.tenant_id == ^tenant_id and c.id == ^conversation_id,
+        join: c in Thread,
+        on: c.id == p.thread_id and c.tenant_id == p.tenant_id,
+        where: p.tenant_id == ^tenant_id and c.id == ^thread_id,
         where: p.access_token_hash == ^token_hash and is_nil(p.revoked_at)
     )
   end

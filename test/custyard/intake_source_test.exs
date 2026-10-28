@@ -278,7 +278,7 @@ defmodule Custyard.IntakeSourceTest do
   end
 
   describe "key_format/0" do
-    test "matches the conversations.intake_source_key format" do
+    test "matches the threads.intake_source_key format" do
       assert Regex.match?(IntakeSource.key_format(), "landing-page")
       refute Regex.match?(IntakeSource.key_format(), "Landing Page")
     end

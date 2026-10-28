@@ -285,7 +285,7 @@ fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar export pat@
 fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar erase pat@example.com --org 3 --yes"
 
 # The same, plus the messages the person sent (tombstoned and emptied), their
-# attachments, contact record, conversation subjects and rejection-log entries
+# attachments, contact record, thread subjects and rejection-log entries
 fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar erase-contact pat@example.com --org 3 --yes"
 
 fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar help"
@@ -296,7 +296,7 @@ fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar help"
   exits 1 before the database is opened.
 - Every erasure writes a `data_subject_erasure` audit event with counts only.
   Neither the audit event nor an error message contains the address.
-- Erasure is scoped to one organization: unlinked public-intake conversations
+- Erasure is scoped to one organization: unlinked public-intake threads
   and prospect records are not covered (spec-inbound-channels, Follow-ups).
 - In development the same actions are `mix custyard.dsar ...`.
 

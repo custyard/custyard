@@ -65,10 +65,10 @@ def main():
         mutex_group="atom-exhaustion")
 
     add(conn, bugs, "P1",
-        "Atom exhaustion: String.to_existing_atom in ConversationLive.set_state",
-        "conversation_live.ex:133 — user-supplied state string converted to atom. "
+        "Atom exhaustion: String.to_existing_atom in ThreadLive.set_state",
+        "thread_live.ex:133 — user-supplied state string converted to atom. "
         "Use case or Map.fetch against known states [:new, :active, :resolved, :dormant].",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex",
+        file_path="lib/custyard_web/live/staff/thread_live.ex",
         mutex_group="atom-exhaustion")
 
     add(conn, bugs, "P1",
@@ -96,7 +96,7 @@ def main():
     # Crash-on-failure patterns (Repo.insert!)
     add(conn, bugs, "P1",
         "Crash on failure: Repo.insert! in NewRequestLive message creation",
-        "new_request_live.ex:43 — after inserting conversation (correctly with Repo.insert), the message "
+        "new_request_live.ex:43 — after inserting thread (correctly with Repo.insert), the message "
         "is inserted with Repo.insert! which crashes the LiveView on validation failure. "
         "Use Repo.insert and handle {:error, changeset}.",
         file_path="lib/custyard_web/live/portal/new_request_live.ex",
@@ -110,10 +110,10 @@ def main():
         mutex_group="insert-bang")
 
     add(conn, bugs, "P1",
-        "Crash on failure: Repo.insert! in Conversations.create_message!",
-        "conversations.ex:221 — public API function that always raises. Either rename to make bang "
+        "Crash on failure: Repo.insert! in Threads.create_message!",
+        "threads.ex:221 — public API function that always raises. Either rename to make bang "
         "semantics explicit and add a non-bang version, or switch to {:ok, _}/{:error, _}.",
-        file_path="lib/custyard/conversations.ex",
+        file_path="lib/custyard/threads.ex",
         mutex_group="insert-bang")
 
     add(conn, bugs, "P1",
@@ -141,11 +141,11 @@ def main():
         exec_order=-5)
 
     add(conn, bugs, "P1",
-        "Operator ConversationLive: no org-scoping (IDOR)",
-        "conversation_live.ex mount loads conversation by ID with no check that it belongs to the "
-        "operator's org. Any authenticated operator can view/modify any conversation by changing the URL ID. "
+        "Operator ThreadLive: no org-scoping (IDOR)",
+        "thread_live.ex mount loads thread by ID with no check that it belongs to the "
+        "operator's org. Any authenticated operator can view/modify any thread by changing the URL ID. "
         "Add org-scoping check in mount.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex",
+        file_path="lib/custyard_web/live/staff/thread_live.ex",
         exec_order=-5)
 
     # ========================================================================
@@ -170,8 +170,8 @@ def main():
     add(conn, bugs, "P2",
         "Email HTML injection: message body rendered without sanitization",
         "If email body contains HTML/script tags, it may be rendered unsafely in operator views. "
-        "While HEEx auto-escapes in templates, check all raw/Phoenix.HTML.raw usage in conversation views.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        "While HEEx auto-escapes in templates, check all raw/Phoenix.HTML.raw usage in thread views.",
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, bugs, "P2",
         "LMTP server: error responses leak internal hostnames and paths",
@@ -214,7 +214,7 @@ def main():
 
     add(conn, bugs, "P2",
         "Portal requests created with no customer identification",
-        "NewRequestLive creates conversations with sender_email 'portal@{domain}' — all portal "
+        "NewRequestLive creates threads with sender_email 'portal@{domain}' — all portal "
         "requests appear as from 'Unknown'. Add optional name/email fields to the portal form.",
         file_path="lib/custyard_web/live/portal/new_request_live.ex")
 
@@ -225,21 +225,21 @@ def main():
         file_path="lib/custyard/email/processor.ex")
 
     add(conn, bugs, "P2",
-        "Conversations.update_conversation does not validate state transitions",
+        "Threads.update_thread does not validate state transitions",
         "Any state can transition to any other state. Add a state machine guard to prevent "
         "invalid transitions like resolved → new.",
-        file_path="lib/custyard/conversations.ex")
+        file_path="lib/custyard/threads.ex")
 
     add(conn, bugs, "P2",
         "PubSub broadcast in NewRequestLive uses generic topic",
-        "Broadcasting to 'conversations' topic means all connected operators receive all conversation "
-        "events regardless of org. Should be scoped to 'conversations:org:{org_id}'.",
+        "Broadcasting to 'threads' topic means all connected operators receive all thread "
+        "events regardless of org. Should be scoped to 'threads:org:{org_id}'.",
         file_path="lib/custyard_web/live/portal/new_request_live.ex",
         files="lib/custyard_web/live/portal/new_request_live.ex;lib/custyard_web/live/staff/attention_queue_live.ex")
 
     add(conn, bugs, "P2",
-        "Scoring.calculate_and_cache may raise on missing conversation",
-        "If conversation is deleted between creation and scoring, the function will crash. "
+        "Scoring.calculate_and_cache may raise on missing thread",
+        "If thread is deleted between creation and scoring, the function will crash. "
         "Add nil check or rescue.",
         file_path="lib/custyard/scoring.ex")
 
@@ -255,17 +255,17 @@ def main():
         file_path="lib/custyard/email/processor.ex")
 
     add(conn, bugs, "P2",
-        "ConversationLive.mount pattern matches {:ok, updated} without error branch",
-        "conversation_live.ex:20 — state transition in mount uses {:ok, _} = pattern. "
+        "ThreadLive.mount pattern matches {:ok, updated} without error branch",
+        "thread_live.ex:20 — state transition in mount uses {:ok, _} = pattern. "
         "If update fails, crash occurs during mount. Add error handling.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, bugs, "P2",
-        "Portal LiveViews don't scope conversations to org",
-        "Portal ConversationLive should verify the conversation belongs to the current org. "
-        "Without this check a user with one org token could access conversations from another org "
+        "Portal LiveViews don't scope threads to org",
+        "Portal ThreadLive should verify the thread belongs to the current org. "
+        "Without this check a user with one org token could access threads from another org "
         "by manipulating the request ID in the URL.",
-        file_path="lib/custyard_web/live/portal/conversation_live.ex")
+        file_path="lib/custyard_web/live/portal/thread_live.ex")
 
     add(conn, bugs, "P2",
         "OrganizationsLive save_organization missing required field validation",
@@ -292,10 +292,10 @@ def main():
         file_path="lib/custyard_web/router.ex")
 
     add(conn, bugs, "P2",
-        "ConversationLive handle_info for PubSub doesn't verify conversation ownership",
-        "The handle_info callback for conversation updates reloads any conversation by ID "
+        "ThreadLive handle_info for PubSub doesn't verify thread ownership",
+        "The handle_info callback for thread updates reloads any thread by ID "
         "without checking it belongs to the operator's scope.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, bugs, "P2",
         "No input length validation on form fields across LiveViews",
@@ -310,20 +310,20 @@ def main():
         file_path="lib/custyard_web/live/staff/projects_live.ex")
 
     add(conn, bugs, "P2",
-        "Conversation state displayed as raw atom in UI",
+        "Thread state displayed as raw atom in UI",
         "States like :new, :active, :resolved are rendered as atoms rather than human-friendly "
         "labels. Minor but visible to operators.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     # ========================================================================
     # BUGS — P3 (24 tasks)
     # ========================================================================
 
     add(conn, bugs, "P3",
-        "Conversations context has both create_message and create_message! — clarify API",
+        "Threads context has both create_message and create_message! — clarify API",
         "Having both bang and non-bang versions is fine but callers should consistently use the "
         "non-bang version for user-facing operations. Audit all callers.",
-        file_path="lib/custyard/conversations.ex")
+        file_path="lib/custyard/threads.ex")
 
     add(conn, bugs, "P3",
         "Seeds file uses Repo.insert! — fails on re-run",
@@ -355,10 +355,10 @@ def main():
         file_path="lib/custyard/organization.ex")
 
     add(conn, bugs, "P3",
-        "Conversation.state_changeset doesn't validate allowed states",
+        "Thread.state_changeset doesn't validate allowed states",
         "The state changeset accepts any atom as a state value. Should validate against "
         "the known state enum.",
-        file_path="lib/custyard/conversation.ex")
+        file_path="lib/custyard/thread.ex")
 
     add(conn, bugs, "P3",
         "Message changeset: source field not validated against enum",
@@ -367,13 +367,13 @@ def main():
         file_path="lib/custyard/message.ex")
 
     add(conn, bugs, "P3",
-        "Missing index on conversations.organization_id",
+        "Missing index on threads.organization_id",
         "If not already present, add an index for org-scoped queries in the attention queue.",
         file_path="priv/repo/migrations/")
 
     add(conn, bugs, "P3",
-        "Missing index on messages.conversation_id",
-        "Query performance for loading conversation messages. Check if index exists.",
+        "Missing index on messages.thread_id",
+        "Query performance for loading thread messages. Check if index exists.",
         file_path="priv/repo/migrations/")
 
     add(conn, bugs, "P3",
@@ -404,8 +404,8 @@ def main():
         file_path="lib/custyard/organizations.ex")
 
     add(conn, bugs, "P3",
-        "NeglectReportLive: verify query efficiency for large conversation sets",
-        "The neglect report may scan all conversations. Ensure proper indexing and pagination.",
+        "NeglectReportLive: verify query efficiency for large thread sets",
+        "The neglect report may scan all threads. Ensure proper indexing and pagination.",
         file_path="lib/custyard_web/live/staff/neglect_report_live.ex")
 
     add(conn, bugs, "P3",
@@ -421,16 +421,16 @@ def main():
         file_path="lib/custyard/email/processor.ex")
 
     add(conn, bugs, "P3",
-        "ConversationLive add_note handler is a no-op",
-        "conversation_live.ex:121 — handle_event('add_note') just returns {:noreply, socket}. "
+        "ThreadLive add_note handler is a no-op",
+        "thread_live.ex:121 — handle_event('add_note') just returns {:noreply, socket}. "
         "Either implement or remove the dead handler.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, bugs, "P3",
-        "Conversation changeset: last_customer_action_at should default to now",
-        "If not set explicitly, conversations may have nil timestamps which break sorting in "
+        "Thread changeset: last_customer_action_at should default to now",
+        "If not set explicitly, threads may have nil timestamps which break sorting in "
         "the attention queue.",
-        file_path="lib/custyard/conversation.ex")
+        file_path="lib/custyard/thread.ex")
 
     add(conn, bugs, "P3",
         "Portal helpers: raise on missing org is poor UX",
@@ -441,18 +441,18 @@ def main():
     add(conn, bugs, "P3",
         "LMTP: charset handling for non-UTF8 emails",
         "Verify that non-UTF8 encoded emails (ISO-8859-1, etc.) are properly transcoded "
-        "before storage. Mojibake in conversation views is a poor experience.",
+        "before storage. Mojibake in thread views is a poor experience.",
         file_path="lib/custyard/email/lmtp_server.ex")
 
     add(conn, bugs, "P3",
         "PubSub topic naming inconsistency",
-        "Some broadcasts use 'conversations' (plural) and some use 'conversation:{id}'. "
+        "Some broadcasts use 'threads' (plural) and some use 'thread:{id}'. "
         "Standardize naming convention.",
-        files="lib/custyard_web/live/staff/conversation_live.ex;lib/custyard_web/live/portal/new_request_live.ex")
+        files="lib/custyard_web/live/staff/thread_live.ex;lib/custyard_web/live/portal/new_request_live.ex")
 
     add(conn, bugs, "P3",
         "Task model: due_at field validation",
-        "Conversation tasks should validate due_at is in the future and is a valid datetime.",
+        "Thread tasks should validate due_at is in the future and is a valid datetime.",
         file_path="lib/custyard/task.ex")
 
     # ========================================================================
@@ -474,10 +474,10 @@ def main():
         mutex_group="atom-exhaustion")
 
     add(conn, frontend, "P1",
-        "ConversationLive: replace String.to_existing_atom with state validation",
+        "ThreadLive: replace String.to_existing_atom with state validation",
         "Replace atom conversion at L133 with case on known states. "
         "E.g., case state do \"active\" -> :active; \"resolved\" -> :resolved; ... end.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex",
+        file_path="lib/custyard_web/live/staff/thread_live.ex",
         mutex_group="atom-exhaustion")
 
     add(conn, frontend, "P1",
@@ -495,10 +495,10 @@ def main():
         mutex_group="insert-bang")
 
     add(conn, frontend, "P1",
-        "ConversationLive mount: handle update failure in state transition",
+        "ThreadLive mount: handle update failure in state transition",
         "L20: {:ok, updated} = ... crashes if update fails. "
-        "Wrap in case and handle {:error, _} by keeping existing conversation.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        "Wrap in case and handle {:error, _} by keeping existing thread.",
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P1",
         "AttentionQueueLive: verify error handling for empty/failed queries",
@@ -513,10 +513,10 @@ def main():
         file_path="lib/custyard_web/live/staff/settings_live.ex")
 
     add(conn, frontend, "P1",
-        "Portal ConversationLive: handle missing/deleted conversation",
-        "If a portal user navigates to a deleted conversation, the LiveView should show a "
+        "Portal ThreadLive: handle missing/deleted thread",
+        "If a portal user navigates to a deleted thread, the LiveView should show a "
         "friendly message rather than an Ecto.NoResultsError.",
-        file_path="lib/custyard_web/live/portal/conversation_live.ex")
+        file_path="lib/custyard_web/live/portal/thread_live.ex")
 
     add(conn, frontend, "P1",
         "Portal ProjectLive: handle missing project gracefully",
@@ -527,7 +527,7 @@ def main():
         "Custom domain views: portal_path incompatible with custom domains",
         "Portal views that build URLs using portal_path may generate incorrect paths when "
         "accessed via custom domain. Verify all navigate/patch calls in portal LiveViews.",
-        files="lib/custyard_web/live/portal/conversation_live.ex;lib/custyard_web/live/portal/request_list_live.ex;lib/custyard_web/live/portal/helpers.ex")
+        files="lib/custyard_web/live/portal/thread_live.ex;lib/custyard_web/live/portal/request_list_live.ex;lib/custyard_web/live/portal/helpers.ex")
 
     add(conn, frontend, "P1",
         "OrganizationsLive: save_organization crashes on changeset error",
@@ -541,10 +541,10 @@ def main():
         file_path="lib/custyard_web/live/staff/projects_live.ex")
 
     add(conn, frontend, "P1",
-        "ConversationLive add_task: verify error handling for task creation",
+        "ThreadLive add_task: verify error handling for task creation",
         "The add_task handler should handle validation failures (missing title, past due date) "
         "gracefully rather than crashing.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P1",
         "HomeLive: bare page with no navigation or content",
@@ -560,7 +560,7 @@ def main():
         "Submit buttons missing phx-disable-with across all forms",
         "Only 1 occurrence of phx-disable-with found in core_components.ex. All form submit "
         "buttons in LiveViews should have phx-disable-with to prevent double-submit.",
-        files="lib/custyard_web/live/portal/new_request_live.ex;lib/custyard_web/live/staff/organizations_live.ex;lib/custyard_web/live/staff/projects_live.ex;lib/custyard_web/live/staff/conversation_live.ex;lib/custyard_web/live/staff/settings_live.ex")
+        files="lib/custyard_web/live/portal/new_request_live.ex;lib/custyard_web/live/staff/organizations_live.ex;lib/custyard_web/live/staff/projects_live.ex;lib/custyard_web/live/staff/thread_live.ex;lib/custyard_web/live/staff/settings_live.ex")
 
     add(conn, frontend, "P2",
         "Missing label for= associations in OrganizationsLive form",
@@ -584,9 +584,9 @@ def main():
         file_path="lib/custyard_web/live/portal/new_request_live.ex")
 
     add(conn, frontend, "P2",
-        "Missing label for= associations in ConversationLive reply form",
+        "Missing label for= associations in ThreadLive reply form",
         "Reply/note text areas need associated labels for a11y.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P2",
         "Operator nav: Projects link missing from sidebar/nav",
@@ -598,29 +598,29 @@ def main():
         "No confirmation dialog before Mark Resolved action",
         "Clicking 'Mark resolved' immediately changes state with no undo. "
         "Add a phx-confirm or modal confirmation.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P2",
-        "No Reopen action for resolved conversations",
-        "Once a conversation is resolved, there's no UI to reopen it. "
+        "No Reopen action for resolved threads",
+        "Once a thread is resolved, there's no UI to reopen it. "
         "Add a 'Reopen' button that transitions state back to :active.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P2",
         "Duplicate component definitions across modules",
         "Multiple LiveView modules define similar helper components (status badges, form fields). "
         "Extract to shared components in core_components.ex or a dedicated component module.",
-        files="lib/custyard_web/live/staff/conversation_live.ex;lib/custyard_web/live/staff/attention_queue_live.ex;lib/custyard_web/live/staff/organizations_live.ex;lib/custyard_web/live/staff/projects_live.ex;lib/custyard_web/components/core_components.ex")
+        files="lib/custyard_web/live/staff/thread_live.ex;lib/custyard_web/live/staff/attention_queue_live.ex;lib/custyard_web/live/staff/organizations_live.ex;lib/custyard_web/live/staff/projects_live.ex;lib/custyard_web/components/core_components.ex")
 
     add(conn, frontend, "P2",
-        "AttentionQueueLive: no empty state when no conversations exist",
-        "When there are zero conversations, the page should show a helpful empty state message "
+        "AttentionQueueLive: no empty state when no threads exist",
+        "When there are zero threads, the page should show a helpful empty state message "
         "rather than just an empty table/list.",
         file_path="lib/custyard_web/live/staff/attention_queue_live.ex")
 
     add(conn, frontend, "P2",
         "Portal RequestListLive: no empty state message",
-        "Portal request list shows nothing when org has no conversations. Add empty state.",
+        "Portal request list shows nothing when org has no threads. Add empty state.",
         file_path="lib/custyard_web/live/portal/request_list_live.ex")
 
     add(conn, frontend, "P2",
@@ -640,20 +640,20 @@ def main():
         file_path="lib/custyard_web/live/staff/organizations_live.ex")
 
     add(conn, frontend, "P2",
-        "ConversationLive: reply form should clear after send",
+        "ThreadLive: reply form should clear after send",
         "Verify the reply_text and note_text assigns are cleared after successful send.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P2",
-        "ConversationLive: message timestamps not formatted for locale",
+        "ThreadLive: message timestamps not formatted for locale",
         "Message timestamps should be displayed in a human-friendly format, not raw ISO 8601.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P2",
         "Portal views: no breadcrumb or back navigation",
-        "Portal users can navigate into a conversation but have no breadcrumb trail or "
+        "Portal users can navigate into a thread but have no breadcrumb trail or "
         "back button to return to the request list.",
-        files="lib/custyard_web/live/portal/conversation_live.ex;lib/custyard_web/live/portal/project_live.ex")
+        files="lib/custyard_web/live/portal/thread_live.ex;lib/custyard_web/live/portal/project_live.ex")
 
     add(conn, frontend, "P2",
         "Color inputs: primary/secondary color fields should be color pickers",
@@ -667,9 +667,9 @@ def main():
         files="lib/custyard_web/live/staff/organizations_live.ex;lib/custyard_web/live/staff/projects_live.ex")
 
     add(conn, frontend, "P2",
-        "Portal conversation: no indication of urgency level",
-        "The portal conversation view doesn't display the urgency level set during creation.",
-        file_path="lib/custyard_web/live/portal/conversation_live.ex")
+        "Portal thread: no indication of urgency level",
+        "The portal thread view doesn't display the urgency level set during creation.",
+        file_path="lib/custyard_web/live/portal/thread_live.ex")
 
     add(conn, frontend, "P2",
         "Operator nav: active route not highlighted",
@@ -677,13 +677,13 @@ def main():
         files="lib/custyard_web/components/layouts/")
 
     add(conn, frontend, "P2",
-        "ConversationLive: task list has no visual priority/status indicators",
-        "Tasks listed in a conversation should show their status and due date visually.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        "ThreadLive: task list has no visual priority/status indicators",
+        "Tasks listed in a thread should show their status and due date visually.",
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P2",
-        "AttentionQueueLive: no pagination for large conversation lists",
-        "With many conversations, the attention queue renders everything. Add pagination or "
+        "AttentionQueueLive: no pagination for large thread lists",
+        "With many threads, the attention queue renders everything. Add pagination or "
         "virtual scrolling.",
         file_path="lib/custyard_web/live/staff/attention_queue_live.ex")
 
@@ -709,27 +709,27 @@ def main():
         file_path="lib/custyard_web/live/portal/new_request_live.ex")
 
     add(conn, frontend, "P2",
-        "ConversationLive: internal notes not visually distinguished from replies",
+        "ThreadLive: internal notes not visually distinguished from replies",
         "Internal notes should have a distinct visual style (background color, icon) to prevent "
         "operators from confusing notes with customer-visible replies.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P2",
         "ProjectLive: project detail view may be sparse",
-        "Portal project view should show associated conversations/requests for context.",
+        "Portal project view should show associated threads/requests for context.",
         file_path="lib/custyard_web/live/portal/project_live.ex")
 
     add(conn, frontend, "P2",
         "Missing ARIA roles on interactive elements",
         "Buttons used for state changes, modal toggles, and tab-like navigation lack "
         "appropriate ARIA roles and labels.",
-        files="lib/custyard_web/live/staff/conversation_live.ex;lib/custyard_web/live/staff/organizations_live.ex")
+        files="lib/custyard_web/live/staff/thread_live.ex;lib/custyard_web/live/staff/organizations_live.ex")
 
     add(conn, frontend, "P2",
         "Focus management: modals and forms don't trap focus",
         "When org edit form or task form opens, focus should move to the first field "
         "and trap within the form for keyboard users.",
-        files="lib/custyard_web/live/staff/organizations_live.ex;lib/custyard_web/live/staff/conversation_live.ex")
+        files="lib/custyard_web/live/staff/organizations_live.ex;lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, frontend, "P2",
         "Keyboard navigation: no visible focus indicators",
@@ -742,10 +742,10 @@ def main():
     # ========================================================================
 
     p3_frontend_tasks = [
-        ("Extract status badge component from ConversationLive",
+        ("Extract status badge component from ThreadLive",
          "Status badges (new/active/resolved/dormant) are defined inline. Extract to a "
          "shared component.",
-         "lib/custyard_web/live/staff/conversation_live.ex"),
+         "lib/custyard_web/live/staff/thread_live.ex"),
         ("Extract urgency badge component",
          "Urgency display is duplicated. Create a shared urgency badge component.",
          "lib/custyard_web/live/staff/attention_queue_live.ex"),
@@ -757,14 +757,14 @@ def main():
          "lib/custyard_web/components/core_components.ex"),
         ("Extract datetime formatting helper",
          "Timestamp formatting appears in multiple LiveViews. Create a shared helper.",
-         "lib/custyard_web/live/staff/conversation_live.ex"),
+         "lib/custyard_web/live/staff/thread_live.ex"),
         ("Portal layout: add org branding (name, colors) to portal views",
          "Portal views should use org primary_color and display the org name.",
          "lib/custyard_web/live/portal/"),
         ("Portal layout: favicon from org branding",
          "Custom domain portals should serve the org's branding, not default favicon.",
          "lib/custyard_web/live/portal/"),
-        ("ConversationLive: long message bodies not truncated in list view",
+        ("ThreadLive: long message bodies not truncated in list view",
          "In the attention queue, long subjects/preview text should be truncated.",
          "lib/custyard_web/live/staff/attention_queue_live.ex"),
         ("Responsive design: operator views not tested on small screens",
@@ -779,16 +779,16 @@ def main():
         ("OrganizationsLive: logo upload preview",
          "The logo upload form should show a preview of the uploaded image.",
          "lib/custyard_web/live/staff/organizations_live.ex"),
-        ("ConversationLive: add message sender avatar/initials",
+        ("ThreadLive: add message sender avatar/initials",
          "Messages should show sender identity visually (avatar or initials circle).",
-         "lib/custyard_web/live/staff/conversation_live.ex"),
+         "lib/custyard_web/live/staff/thread_live.ex"),
         ("AttentionQueueLive: add sort options (by urgency, age, score)",
          "Operators should be able to sort the attention queue by different criteria.",
          "lib/custyard_web/live/staff/attention_queue_live.ex"),
         ("NeglectReportLive: add export/download option",
          "Allow operators to export the neglect report as CSV.",
          "lib/custyard_web/live/staff/neglect_report_live.ex"),
-        ("Portal: add conversation status filter",
+        ("Portal: add thread status filter",
          "Portal users should be able to filter requests by status (open/resolved).",
          "lib/custyard_web/live/portal/request_list_live.ex"),
         ("Consistent use of data-testid attributes",
@@ -800,12 +800,12 @@ def main():
         ("Loading skeletons for LiveView async operations",
          "Replace blank loading states with skeleton loaders for better perceived performance.",
          "lib/custyard_web/live/"),
-        ("ConversationLive: add auto-scroll to newest message",
+        ("ThreadLive: add auto-scroll to newest message",
          "When new messages arrive via PubSub, the view should scroll to the latest message.",
-         "lib/custyard_web/live/staff/conversation_live.ex"),
-        ("Portal ConversationLive: add typing indicator or message status",
+         "lib/custyard_web/live/staff/thread_live.ex"),
+        ("Portal ThreadLive: add typing indicator or message status",
          "Portal users should see that their message was received.",
-         "lib/custyard_web/live/portal/conversation_live.ex"),
+         "lib/custyard_web/live/portal/thread_live.ex"),
         ("Clean up unused CSS classes",
          "Audit for Tailwind classes that aren't actually applied or are redundant.",
          "lib/custyard_web/"),
@@ -821,9 +821,9 @@ def main():
         ("Portal: add request creation confirmation page",
          "After submitting a request, show a confirmation with the request ID.",
          "lib/custyard_web/live/portal/new_request_live.ex"),
-        ("ConversationLive: add keyboard shortcut for reply (Ctrl+Enter)",
+        ("ThreadLive: add keyboard shortcut for reply (Ctrl+Enter)",
          "Power users should be able to submit replies with keyboard shortcut.",
-         "lib/custyard_web/live/staff/conversation_live.ex"),
+         "lib/custyard_web/live/staff/thread_live.ex"),
         ("Consistent button styles across operator views",
          "Some buttons use bg-indigo-600, others may use different styles. Use core_components button.",
          "lib/custyard_web/live/staff/"),
@@ -836,9 +836,9 @@ def main():
         ("Add tooltip or help text for score weights",
          "Operators may not know what each weight means. Add help text.",
          "lib/custyard_web/live/staff/settings_live.ex"),
-        ("ConversationLive: show conversation age/duration",
-         "Display how long ago the conversation was created and time since last action.",
-         "lib/custyard_web/live/staff/conversation_live.ex"),
+        ("ThreadLive: show thread age/duration",
+         "Display how long ago the thread was created and time since last action.",
+         "lib/custyard_web/live/staff/thread_live.ex"),
         ("Optimize PubSub: reduce unnecessary re-renders",
          "Handle_info for PubSub events should only re-render if data actually changed.",
          "lib/custyard_web/live/staff/attention_queue_live.ex"),
@@ -870,14 +870,14 @@ def main():
     # ========================================================================
 
     add(conn, ux, "P2",
-        "No visual feedback when conversation state changes",
+        "No visual feedback when thread state changes",
         "State changes (mark resolved, set active) happen silently. Add a flash message or "
         "visual transition to confirm the action.",
-        file_path="lib/custyard_web/live/staff/conversation_live.ex")
+        file_path="lib/custyard_web/live/staff/thread_live.ex")
 
     add(conn, ux, "P2",
-        "Operator workflow: no bulk actions for conversations",
-        "Operators handling many conversations need bulk operations (select multiple, "
+        "Operator workflow: no bulk actions for threads",
+        "Operators handling many threads need bulk operations (select multiple, "
         "mark all resolved, assign to project).",
         file_path="lib/custyard_web/live/staff/attention_queue_live.ex")
 
@@ -904,7 +904,7 @@ def main():
 
     add(conn, ux, "P3",
         "Operator dashboard: no metrics or summary statistics",
-        "Operators would benefit from seeing conversation counts, avg response time, "
+        "Operators would benefit from seeing thread counts, avg response time, "
         "and neglect score distribution at a glance.",
         file_path="lib/custyard_web/live/staff/attention_queue_live.ex")
 

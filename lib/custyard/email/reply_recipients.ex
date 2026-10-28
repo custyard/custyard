@@ -2,33 +2,33 @@ defmodule Custyard.Email.ReplyRecipients do
   @moduledoc """
   Resolves the customer side of an email reply for both the composer and sender.
 
-  The latest eligible customer message supplies Reply-To or From. A conversation's
+  The latest eligible customer message supplies Reply-To or From. A thread's
   original contact remains its customer relationship, not a permanent delivery
   target after another participant joins the thread.
   """
 
   import Ecto.Query
 
-  alias Custyard.{Conversations, EmailAddress, InboundChannels, Message, Repo}
+  alias Custyard.{Threads, EmailAddress, InboundChannels, Message, Repo}
   alias Custyard.Email.SenderMatcher
 
   @email_sources [:email, :lettermint]
 
-  def resolve(conversation, opts \\ []) do
-    with {:ok, recipient} <- recipient(conversation) do
-      {:ok, %{to: recipient, cc: cc(conversation, recipient, opts)}}
+  def resolve(thread, opts \\ []) do
+    with {:ok, recipient} <- recipient(thread) do
+      {:ok, %{to: recipient, cc: cc(thread, recipient, opts)}}
     end
   end
 
-  def recipient(conversation) do
-    conversation = Repo.preload(conversation, [:contact, :prospect])
+  def recipient(thread) do
+    thread = Repo.preload(thread, [:contact, :prospect])
 
-    case Conversations.reply_channel(conversation) do
+    case Threads.reply_channel(thread) do
       {:contact, address} ->
-        {:ok, latest_recipient(conversation) || address}
+        {:ok, latest_recipient(thread) || address}
 
       {:prospect, address} ->
-        if conversation.prospect.notify_on_reply,
+        if thread.prospect.notify_on_reply,
           do: {:ok, address},
           else: {:error, :no_consent}
 
@@ -37,30 +37,30 @@ defmodule Custyard.Email.ReplyRecipients do
     end
   end
 
-  def default_cc(conversation, opts \\ []) do
-    case resolve(conversation, opts) do
+  def default_cc(thread, opts \\ []) do
+    case resolve(thread, opts) do
       {:ok, %{cc: addresses}} -> addresses
       {:error, _} -> []
     end
   end
 
-  defp latest_recipient(%{source: source} = conversation)
+  defp latest_recipient(%{source: source} = thread)
        when source in [:email, :lettermint, :portal, :public_intake] do
-    case latest_message(conversation.id) do
+    case latest_message(thread.id) do
       nil -> nil
       message -> valid_address(message.reply_to) || valid_address(message.sender_email)
     end
   end
 
-  defp latest_recipient(_conversation), do: nil
+  defp latest_recipient(_thread), do: nil
 
-  defp cc(%{source: source} = conversation, recipient, opts) when source in @email_sources do
-    case latest_message(conversation.id) do
+  defp cc(%{source: source} = thread, recipient, opts) when source in @email_sources do
+    case latest_message(thread.id) do
       nil ->
         []
 
       message ->
-        excluded = own_addresses(conversation, opts) |> MapSet.put(recipient)
+        excluded = own_addresses(thread, opts) |> MapSet.put(recipient)
 
         excluded =
           if valid_address(message.reply_to),
@@ -74,11 +74,11 @@ defmodule Custyard.Email.ReplyRecipients do
     end
   end
 
-  defp cc(_conversation, _recipient, _opts), do: []
+  defp cc(_thread, _recipient, _opts), do: []
 
-  defp latest_message(conversation_id) do
+  defp latest_message(thread_id) do
     from(m in Message,
-      where: m.conversation_id == ^conversation_id,
+      where: m.thread_id == ^thread_id,
       where: m.source == :email and m.is_internal_note == false and is_nil(m.deleted_at),
       where: is_nil(m.triage_class) or m.triage_class in [:customer, :staff_forward],
       order_by: [desc: m.inserted_at, desc: m.id],
@@ -87,10 +87,10 @@ defmodule Custyard.Email.ReplyRecipients do
     |> Repo.one()
   end
 
-  defp own_addresses(conversation, opts) do
+  defp own_addresses(thread, opts) do
     channel =
-      if conversation.inbound_channel_id,
-        do: InboundChannels.get_channel(conversation.inbound_channel_id)
+      if thread.inbound_channel_id,
+        do: InboundChannels.get_channel(thread.inbound_channel_id)
 
     previous_ingress =
       if channel && channel.previous_ingress_token && channel.inbound_route do
@@ -98,7 +98,7 @@ defmodule Custyard.Email.ReplyRecipients do
       end
 
     [
-      Conversations.reply_identity(conversation, opts).address,
+      Threads.reply_identity(thread, opts).address,
       Keyword.get(opts, :staff_email),
       channel && channel.public_address,
       channel && InboundChannels.ingress_address(channel),

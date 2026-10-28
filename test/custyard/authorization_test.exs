@@ -15,12 +15,12 @@ defmodule Custyard.AuthorizationTest do
     assert Authorization.can_manage_project?(admin, nil)
     assert Authorization.can_modify_settings?(admin)
     refute Authorization.can_modify_settings?(agent)
-    assert Authorization.can_access_conversation?(agent, %{tenant_id: own.tenant_id})
-    refute Authorization.can_access_conversation?(agent, %{tenant_id: foreign.tenant_id})
+    assert Authorization.can_access_thread?(agent, %{tenant_id: own.tenant_id})
+    refute Authorization.can_access_thread?(agent, %{tenant_id: foreign.tenant_id})
     refute StaffAccount.can_access_organization?(agent, foreign.id)
 
     for actor <- [%InstanceAdmin{}, nil, %{}] do
-      refute Authorization.can_access_conversation?(actor, %{tenant_id: own.tenant_id})
+      refute Authorization.can_access_thread?(actor, %{tenant_id: own.tenant_id})
       refute Authorization.can_create_organization?(actor)
       refute Authorization.can_modify_settings?(actor)
     end

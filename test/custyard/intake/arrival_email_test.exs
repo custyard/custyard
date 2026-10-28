@@ -43,15 +43,15 @@ defmodule Custyard.Intake.ArrivalEmailTest do
 
   defp fixture(overrides \\ []) do
     source = insert_intake_source(overrides)
-    conversation = insert_conversation(source: :public_intake, subject: "Pricing question")
-    %{source: source, conversation: conversation}
+    thread = insert_thread(source: :public_intake, subject: "Pricing question")
+    %{source: source, thread: thread}
   end
 
   describe "send_arrival/3" do
     test "delivers to the configured staff address" do
-      %{source: source, conversation: conversation} = fixture()
+      %{source: source, thread: thread} = fixture()
 
-      assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "How much for 50 seats?")
+      assert {:ok, _} = ArrivalEmail.send_arrival(thread, source, "How much for 50 seats?")
 
       assert_email_sent(fn email ->
         assert {_name, "ops@example.com"} = hd(email.to)
@@ -62,14 +62,14 @@ defmodule Custyard.Intake.ArrivalEmailTest do
       end)
     end
 
-    test "carries a direct link to the staff conversation view" do
-      %{source: source, conversation: conversation} = fixture()
+    test "carries a direct link to the staff thread view" do
+      %{source: source, thread: thread} = fixture()
 
-      assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "hello")
+      assert {:ok, _} = ArrivalEmail.send_arrival(thread, source, "hello")
 
       expected =
         Custyard.Tenants.url(Custyard.Tenants.get_tenant!(factory_tenant_id())) <>
-          "/app/threads/#{conversation.id}"
+          "/app/threads/#{thread.id}"
 
       assert_email_sent(fn email ->
         assert email.text_body =~ expected
@@ -78,9 +78,9 @@ defmodule Custyard.Intake.ArrivalEmailTest do
     end
 
     test "identifies the intake source by name and key" do
-      %{source: source, conversation: conversation} = fixture(name: "Pricing CTA", key: "pricing")
+      %{source: source, thread: thread} = fixture(name: "Pricing CTA", key: "pricing")
 
-      assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "hello")
+      assert {:ok, _} = ArrivalEmail.send_arrival(thread, source, "hello")
 
       assert_email_sent(fn email ->
         assert email.text_body =~ "Pricing CTA"
@@ -91,9 +91,9 @@ defmodule Custyard.Intake.ArrivalEmailTest do
 
     test "sends nothing when email notifications are disabled" do
       Application.put_env(:custyard, :email_enabled, false)
-      %{source: source, conversation: conversation} = fixture()
+      %{source: source, thread: thread} = fixture()
 
-      assert {:error, :disabled} = ArrivalEmail.send_arrival(conversation, source, "hello")
+      assert {:error, :disabled} = ArrivalEmail.send_arrival(thread, source, "hello")
 
       assert_no_email_sent()
     end
@@ -107,10 +107,10 @@ defmodule Custyard.Intake.ArrivalEmailTest do
         Keyword.put(original, :intake_arrival_email, limit: 1, window_ms: 3_600_000)
       )
 
-      %{source: source, conversation: conversation} = fixture()
+      %{source: source, thread: thread} = fixture()
 
-      assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "first")
-      assert {:error, :rate_limited} = ArrivalEmail.send_arrival(conversation, source, "second")
+      assert {:ok, _} = ArrivalEmail.send_arrival(thread, source, "first")
+      assert {:error, :rate_limited} = ArrivalEmail.send_arrival(thread, source, "second")
     end
 
     test "the rate bucket is keyed per source, not globally" do
@@ -122,79 +122,79 @@ defmodule Custyard.Intake.ArrivalEmailTest do
         Keyword.put(original, :intake_arrival_email, limit: 1, window_ms: 3_600_000)
       )
 
-      %{source: source_a, conversation: conversation} = fixture()
+      %{source: source_a, thread: thread} = fixture()
       source_b = insert_intake_source()
 
-      assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source_a, "first")
-      assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source_b, "first for b")
+      assert {:ok, _} = ArrivalEmail.send_arrival(thread, source_a, "first")
+      assert {:ok, _} = ArrivalEmail.send_arrival(thread, source_b, "first for b")
     end
   end
 
   describe "compose/3 content safety" do
     test "strips newlines from prospect text before it reaches the subject" do
-      %{source: source, conversation: _} = fixture()
+      %{source: source, thread: _} = fixture()
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           source: :public_intake,
           subject: "Hello\r\nBcc: victim@example.com"
         )
 
-      email = ArrivalEmail.compose(conversation, source, "body")
+      email = ArrivalEmail.compose(thread, source, "body")
 
       refute email.subject =~ "\r"
       refute email.subject =~ "\n"
     end
 
     test "escapes prospect HTML in the body" do
-      %{source: source, conversation: conversation} = fixture()
+      %{source: source, thread: thread} = fixture()
 
-      email = ArrivalEmail.compose(conversation, source, "<script>alert(1)</script>")
+      email = ArrivalEmail.compose(thread, source, "<script>alert(1)</script>")
 
       refute email.html_body =~ "<script>"
       assert email.html_body =~ "&lt;script&gt;"
     end
 
     test "truncates a long submission to an excerpt" do
-      %{source: source, conversation: conversation} = fixture()
+      %{source: source, thread: thread} = fixture()
       body = String.duplicate("a", 900)
 
-      email = ArrivalEmail.compose(conversation, source, body)
+      email = ArrivalEmail.compose(thread, source, body)
 
       refute email.text_body =~ String.duplicate("a", 900)
       assert email.text_body =~ "…"
     end
 
-    # Conversation.changeset/2 requires :subject, so a persisted row never
+    # Thread.changeset/2 requires :subject, so a persisted row never
     # has a nil one. compose/3 is a public seam, so it still guards.
-    test "tolerates a conversation with no derived subject" do
-      %{source: source, conversation: _} = fixture()
+    test "tolerates a thread with no derived subject" do
+      %{source: source, thread: _} = fixture()
 
-      conversation = %Custyard.Conversation{
+      thread = %Custyard.Thread{
         tenant_id: factory_tenant_id(),
         id: 1,
         subject: nil,
         source: :public_intake
       }
 
-      email = ArrivalEmail.compose(conversation, source, "body")
+      email = ArrivalEmail.compose(thread, source, "body")
 
       assert email.subject =~ "(no subject)"
     end
   end
 
   describe "intake submission wiring" do
-    test "creating an intake conversation notifies the staff" do
+    test "creating an intake thread notifies the staff" do
       source = insert_intake_source(name: "Pricing CTA")
 
-      assert {:ok, %{conversation: conversation}} =
+      assert {:ok, %{thread: thread}} =
                create_intake(source.key, "We need SSO for 200 users")
 
       assert_email_sent(fn email ->
         assert {_name, "ops@example.com"} = hd(email.to)
         assert email.subject =~ "Pricing CTA"
         assert email.text_body =~ "We need SSO for 200 users"
-        assert email.text_body =~ "/app/threads/#{conversation.id}"
+        assert email.text_body =~ "/app/threads/#{thread.id}"
       end)
     end
 
@@ -202,7 +202,7 @@ defmodule Custyard.Intake.ArrivalEmailTest do
       Application.put_env(:custyard, :email_enabled, false)
       source = insert_intake_source()
 
-      assert {:ok, %{conversation: _, prospect: _, access_token: _}} =
+      assert {:ok, %{thread: _, prospect: _, access_token: _}} =
                create_intake(source.key, "hello")
 
       assert_no_email_sent()
@@ -219,7 +219,7 @@ defmodule Custyard.Intake.ArrivalEmailTest do
 
       source = insert_intake_source()
 
-      assert {:ok, %{conversation: _, prospect: _, access_token: _}} =
+      assert {:ok, %{thread: _, prospect: _, access_token: _}} =
                create_intake(source.key, "hello")
 
       assert_no_email_sent()
@@ -228,7 +228,7 @@ defmodule Custyard.Intake.ArrivalEmailTest do
 
   defp create_intake(key, body, opts \\ []),
     do:
-      Intake.create_intake_conversation(
+      Intake.create_intake_thread(
         key,
         body,
         Keyword.put(opts, :tenant_id, Custyard.Factory.factory_tenant_id())

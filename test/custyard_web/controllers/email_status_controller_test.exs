@@ -11,11 +11,11 @@ defmodule CustyardWeb.EmailStatusControllerTest do
   setup do
     org = insert_organization()
     contact = insert_contact(organization_id: org.id, email: @recipient)
-    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+    thread = insert_thread(organization_id: org.id, contact_id: contact.id)
 
     outbound =
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         delivery_status: :sent,
         lettermint_message_id: @provider_id

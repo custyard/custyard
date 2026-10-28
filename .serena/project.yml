@@ -69,7 +69,7 @@ read_only: false
 #  * `list_dir`: Lists files and directories in the given directory (optionally with recursion).
 #  * `list_memories`: Lists memories in Serena's project-specific memory store.
 #  * `onboarding`: Performs onboarding (identifying the project structure and essential tasks, e.g. for testing or building).
-#  * `prepare_for_new_conversation`: Provides instructions for preparing for a new conversation (in order to continue with the necessary context).
+#  * `prepare_for_new_thread`: Provides instructions for preparing for a new thread (in order to continue with the necessary context).
 #  * `read_file`: Reads a file within the project directory.
 #  * `read_memory`: Reads the memory with the given name from Serena's project-specific memory store.
 #  * `remove_project`: Removes a project from the Serena configuration.

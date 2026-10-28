@@ -3,7 +3,7 @@ defmodule Custyard.DataSubjects do
   Data subject requests for people who appear on email messages
   (spec-inbound-channels, Privacy and compliance).
 
-  A contact's own conversations are findable through the contact record. A
+  A contact's own threads are findable through the contact record. A
   CC'd or To'd bystander has no record of their own (D5: participants are
   not contacts), so export and erasure must also search the recipient
   lists and `Reply-To` of every message in the organization. This module
@@ -18,7 +18,7 @@ defmodule Custyard.DataSubjects do
       left alone; the counts tell the staff how many those are.
     * `erase_subject/2` is the contact-level erasure: the participation
       erasure, plus the person's own messages, their attachments, their
-      contact record, the subjects of their conversations and their
+      contact record, the subjects of their threads and their
       rejection-log entries. Staff replies keep their text, without the
       person's address.
 
@@ -35,7 +35,7 @@ defmodule Custyard.DataSubjects do
   alias Custyard.{
     AuditEvent,
     Contact,
-    Conversation,
+    Thread,
     EmailAddress,
     InboundChannelRejection,
     Message,
@@ -61,7 +61,7 @@ defmodule Custyard.DataSubjects do
           String.t(),
           integer()
         ) :: [
-          %{message: Message.t(), conversation: Conversation.t(), roles: [role()]}
+          %{message: Message.t(), thread: Thread.t(), roles: [role()]}
         ]
   def participations(scope, email, organization_id) when is_binary(email) do
     authorize_customer!(scope, organization_id, false)
@@ -70,8 +70,8 @@ defmodule Custyard.DataSubjects do
     email
     |> participation_query(organization_id)
     |> Repo.all()
-    |> Enum.map(fn {message, conversation} ->
-      %{message: message, conversation: conversation, roles: roles(message, email)}
+    |> Enum.map(fn {message, thread} ->
+      %{message: message, thread: thread, roles: roles(message, email)}
     end)
     |> Enum.reject(&(&1.roles == []))
   end
@@ -82,12 +82,12 @@ defmodule Custyard.DataSubjects do
     email = normalize(email)
 
     messages =
-      for %{message: message, conversation: conversation, roles: roles} <-
+      for %{message: message, thread: thread, roles: roles} <-
             participations(scope, email, organization_id) do
         %{
           message_id: message.id,
-          conversation_id: conversation.id,
-          subject: conversation.subject,
+          thread_id: thread.id,
+          subject: thread.subject,
           roles: roles,
           at: message.inserted_at,
           sender: if(:sender in roles, do: message.sender_email),
@@ -134,7 +134,7 @@ defmodule Custyard.DataSubjects do
       by Message-ID keeps working;
     * those messages' attachment rows are deleted; the attachment sweep
       removes the files once nothing references them;
-    * the person's contact record is deleted, and the conversations it
+    * the person's contact record is deleted, and the threads it
       owned lose the contact and their subject;
     * rejection-log entries from the address are deleted.
 
@@ -156,7 +156,7 @@ defmodule Custyard.DataSubjects do
       {attachments, _} =
         Repo.delete_all(from(a in MessageAttachment, where: a.message_id in ^sent_ids))
 
-      {conversations, contacts} = erase_contact!(email, organization_id)
+      {threads, contacts} = erase_contact!(email, organization_id)
       erase_prospect_identity!(email, organization_id)
       erase_slug_identity!(email, organization_id)
       anonymize_personal_customer!(email, organization_id)
@@ -166,7 +166,7 @@ defmodule Custyard.DataSubjects do
         erased: erased,
         messages_erased: length(sent),
         attachments_removed: attachments,
-        conversations_retitled: conversations,
+        threads_retitled: threads,
         contacts_removed: contacts,
         rejections_removed: rejections
       }
@@ -236,7 +236,7 @@ defmodule Custyard.DataSubjects do
 
   defp scrub_audit_identity!(tenant_id, email, organization_id, sent) do
     customer_threads =
-      from c in Conversation, where: c.organization_id == ^organization_id, select: c.id
+      from c in Thread, where: c.organization_id == ^organization_id, select: c.id
 
     contact_ids =
       from c in Contact,
@@ -245,14 +245,13 @@ defmodule Custyard.DataSubjects do
         select: c.id
 
     contact_threads =
-      Repo.all(from c in Conversation, where: c.contact_id in subquery(contact_ids), select: c.id)
+      Repo.all(from c in Thread, where: c.contact_id in subquery(contact_ids), select: c.id)
 
-    erased_threads = MapSet.new(contact_threads ++ Enum.map(sent, & &1.conversation_id))
+    erased_threads = MapSet.new(contact_threads ++ Enum.map(sent, & &1.thread_id))
 
     from(a in AuditEvent,
       where: a.tenant_id == ^tenant_id,
-      where:
-        a.organization_id == ^organization_id or a.conversation_id in subquery(customer_threads)
+      where: a.organization_id == ^organization_id or a.thread_id in subquery(customer_threads)
     )
     |> Repo.all()
     |> Enum.each(&scrub_audit_event!(&1, email, erased_threads))
@@ -266,7 +265,7 @@ defmodule Custyard.DataSubjects do
         SenderMatcher.extract_email(payload[field]) == email
       end)
 
-    if sender_matches or MapSet.member?(erased_threads, event.conversation_id) do
+    if sender_matches or MapSet.member?(erased_threads, event.thread_id) do
       event
       |> Ecto.Changeset.change(payload: Map.drop(payload, ["sender_email", "from", "subject"]))
       |> Repo.update!()
@@ -274,10 +273,10 @@ defmodule Custyard.DataSubjects do
   end
 
   defp erase_prospect_identity!(email, organization_id) do
-    threads = from c in Conversation, where: c.organization_id == ^organization_id, select: c.id
+    threads = from c in Thread, where: c.organization_id == ^organization_id, select: c.id
 
     from(p in Custyard.Prospect,
-      where: p.conversation_id in subquery(threads),
+      where: p.thread_id in subquery(threads),
       where: fragment("lower(trim(?))", p.email) == ^email
     )
     |> Repo.update_all(
@@ -292,11 +291,11 @@ defmodule Custyard.DataSubjects do
   end
 
   defp erase_slug_identity!(email, organization_id) do
-    threads = from c in Conversation, where: c.organization_id == ^organization_id, select: c.id
+    threads = from c in Thread, where: c.organization_id == ^organization_id, select: c.id
 
     claims =
       from s in Custyard.Slug,
-        where: s.organization_id == ^organization_id or s.conversation_id in subquery(threads),
+        where: s.organization_id == ^organization_id or s.thread_id in subquery(threads),
         where: fragment("lower(trim(?))", s.email) == ^email
 
     Repo.delete_all(from s in claims, where: s.status in [:claimed, :confirmed])
@@ -329,7 +328,7 @@ defmodule Custyard.DataSubjects do
 
     query
     |> Repo.all()
-    |> Enum.map(fn {message, _conversation} -> message end)
+    |> Enum.map(fn {message, _thread} -> message end)
     |> Enum.reject(&(roles(&1, email) == []))
     |> Enum.split_with(&sender_matches?(&1.sender_email, email))
   end
@@ -350,15 +349,15 @@ defmodule Custyard.DataSubjects do
   end
 
   # The address's own delivery outcomes, on every message in the organization
-  # (spec-conversation-loop, "Delivery Tracking"). Addresses are stored
+  # (spec-thread-loop, "Delivery Tracking"). Addresses are stored
   # normalised, so an exact match is enough.
   defp erase_recipient_statuses!(email, organization_id) do
     # SQLite allows no JOIN in DELETE, so the organization's messages come
     # from a subquery.
     message_ids =
       from(m in Message,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
+        join: c in Thread,
+        on: c.id == m.thread_id,
         where: c.organization_id == ^organization_id,
         select: m.id
       )
@@ -378,8 +377,8 @@ defmodule Custyard.DataSubjects do
       )
       |> Repo.all()
 
-    {conversations, _} =
-      from(c in Conversation, where: c.contact_id in ^contact_ids)
+    {threads, _} =
+      from(c in Thread, where: c.contact_id in ^contact_ids)
       |> Repo.update_all(
         set: [subject: @erased_subject, contact_id: nil, updated_at: DateTime.utc_now(:second)]
       )
@@ -388,7 +387,7 @@ defmodule Custyard.DataSubjects do
     |> Repo.update_all(set: [contact_id: nil, revoked_at: DateTime.utc_now(:second)])
 
     {contacts, _} = Repo.delete_all(from(c in Contact, where: c.id in ^contact_ids))
-    {conversations, contacts}
+    {threads, contacts}
   end
 
   defp erase_rejections!(tenant_id, email, organization_id) do
@@ -447,8 +446,8 @@ defmodule Custyard.DataSubjects do
   defp participation_query(email, organization_id) do
     base =
       from m in Message,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
+        join: c in Thread,
+        on: c.id == m.thread_id,
         where: c.organization_id == ^organization_id,
         order_by: [desc: m.inserted_at, desc: m.id],
         select: {m, c}

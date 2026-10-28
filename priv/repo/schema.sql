@@ -25,7 +25,7 @@ CREATE TABLE "contacts" (
 
 CREATE TABLE "messages" (
   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
-  "conversation_id" INTEGER NOT NULL ,
+  "thread_id" INTEGER NOT NULL ,
   "source" TEXT NOT NULL,
   "sender_email" TEXT,
   "body" TEXT NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE "messages" (
   "delivery_payload_hash" TEXT,
   "delivery_recipients_locked" INTEGER DEFAULT false NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  CONSTRAINT messages_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE CASCADE,
+  CONSTRAINT messages_thread_id_fkey FOREIGN KEY (tenant_id,thread_id) REFERENCES threads(tenant_id,id) ON DELETE CASCADE,
   CONSTRAINT messages_deleted_by_staff_id_fkey FOREIGN KEY (tenant_id,deleted_by_staff_id) REFERENCES staff_accounts(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT messages_inbound_channel_id_fkey FOREIGN KEY (tenant_id,inbound_channel_id) REFERENCES inbound_channels(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT messages_forwarded_by_staff_id_fkey FOREIGN KEY (tenant_id,forwarded_by_staff_id) REFERENCES staff_accounts(tenant_id,id) ON DELETE RESTRICT
@@ -70,7 +70,7 @@ CREATE TABLE "projects" (
   "target_completion_date" TEXT,
   "portal_visible" INTEGER DEFAULT true NOT NULL,
   "organization_id" INTEGER ,
-  "conversation_id" INTEGER ,
+  "thread_id" INTEGER ,
   "inserted_at" TEXT NOT NULL,
   "updated_at" TEXT NOT NULL,
   "project_type" TEXT DEFAULT 'customer' NOT NULL,
@@ -78,7 +78,7 @@ CREATE TABLE "projects" (
   "is_template" INTEGER DEFAULT false NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id),
   CONSTRAINT projects_organization_id_fkey FOREIGN KEY (tenant_id,organization_id) REFERENCES organizations(tenant_id,id) ON DELETE RESTRICT,
-  CONSTRAINT projects_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE RESTRICT
+  CONSTRAINT projects_thread_id_fkey FOREIGN KEY (tenant_id,thread_id) REFERENCES threads(tenant_id,id) ON DELETE RESTRICT
 );
 
 CREATE TABLE "settings" (
@@ -104,7 +104,7 @@ CREATE TABLE "inbound_route_webhooks" (
   "updated_at" TEXT NOT NULL
 );
 
-CREATE TABLE "conversations" (
+CREATE TABLE "threads" (
   id INTEGER PRIMARY KEY,
   organization_id INTEGER ,
   contact_id INTEGER ,
@@ -125,15 +125,15 @@ CREATE TABLE "conversations" (
   "suspect" INTEGER DEFAULT false NOT NULL,
   "language" TEXT,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id),
-  CONSTRAINT conversations_organization_id_fkey FOREIGN KEY (tenant_id,organization_id) REFERENCES organizations(tenant_id,id) ON DELETE RESTRICT,
-  CONSTRAINT conversations_contact_id_fkey FOREIGN KEY (tenant_id,contact_id) REFERENCES contacts(tenant_id,id) ON DELETE RESTRICT,
-  CONSTRAINT conversations_project_id_fkey FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id) ON DELETE RESTRICT,
-  CONSTRAINT conversations_inbound_channel_id_fkey FOREIGN KEY (tenant_id,inbound_channel_id) REFERENCES inbound_channels(tenant_id,id) ON DELETE RESTRICT
+  CONSTRAINT threads_organization_id_fkey FOREIGN KEY (tenant_id,organization_id) REFERENCES organizations(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT threads_contact_id_fkey FOREIGN KEY (tenant_id,contact_id) REFERENCES contacts(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT threads_project_id_fkey FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT threads_inbound_channel_id_fkey FOREIGN KEY (tenant_id,inbound_channel_id) REFERENCES inbound_channels(tenant_id,id) ON DELETE RESTRICT
 );
 
 CREATE TABLE "audit_events" (
   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
-  "conversation_id" INTEGER ,
+  "thread_id" INTEGER ,
   "event_type" TEXT NOT NULL,
   "source" TEXT NOT NULL,
   "message_id" TEXT,
@@ -142,10 +142,10 @@ CREATE TABLE "audit_events" (
   "project_id" INTEGER ,
   "inserted_at" TEXT NOT NULL,
   tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
-  CONSTRAINT audit_events_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT audit_events_thread_id_fkey FOREIGN KEY (tenant_id,thread_id) REFERENCES threads(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT audit_events_organization_id_fkey FOREIGN KEY (tenant_id,organization_id) REFERENCES organizations(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT audit_events_project_id_fkey FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id) ON DELETE RESTRICT,
-  CONSTRAINT audit_events_tenant_required CHECK(tenant_id IS NOT NULL OR (conversation_id IS NULL AND organization_id IS NULL AND project_id IS NULL AND event_type IN ('instance_admin_created','instance_admin_removed','installation_configured')))
+  CONSTRAINT audit_events_tenant_required CHECK(tenant_id IS NOT NULL OR (thread_id IS NULL AND organization_id IS NULL AND project_id IS NULL AND event_type IN ('instance_admin_created','instance_admin_removed','installation_configured')))
 );
 
 CREATE TABLE "staff_accounts" (
@@ -164,7 +164,7 @@ CREATE TABLE "staff_accounts" (
 
 CREATE TABLE "prospects" (
   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
-  "conversation_id" INTEGER NOT NULL ,
+  "thread_id" INTEGER NOT NULL ,
   "access_token_hash" TEXT NOT NULL,
   "email" TEXT,
   "notify_on_reply" INTEGER DEFAULT false NOT NULL,
@@ -173,7 +173,7 @@ CREATE TABLE "prospects" (
   "inserted_at" TEXT NOT NULL,
   "updated_at" TEXT NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  CONSTRAINT prospects_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE CASCADE
+  CONSTRAINT prospects_thread_id_fkey FOREIGN KEY (tenant_id,thread_id) REFERENCES threads(tenant_id,id) ON DELETE CASCADE
 );
 
 CREATE TABLE "intake_sources" (
@@ -198,7 +198,7 @@ CREATE TABLE "slugs" (
   status TEXT NOT NULL DEFAULT 'claimed'
     CHECK (status IN ('claimed','confirmed','provisioned')),
   email TEXT NULL,
-  conversation_id INTEGER NULL ,
+  thread_id INTEGER NULL ,
   organization_id INTEGER NULL ,
   confirmation_token_hash TEXT NULL,
   expires_at TEXT NULL,
@@ -207,7 +207,7 @@ CREATE TABLE "slugs" (
   updated_at TEXT NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   CHECK ((status = 'provisioned') = (organization_id IS NOT NULL)),
-  CONSTRAINT slugs_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT slugs_thread_id_fkey FOREIGN KEY (tenant_id,thread_id) REFERENCES threads(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT slugs_organization_id_fkey FOREIGN KEY (tenant_id,organization_id) REFERENCES organizations(tenant_id,id) ON DELETE RESTRICT
 );
 
@@ -399,11 +399,11 @@ CREATE TABLE "email_connections" (
   "inserted_at" TEXT NOT NULL,
   "updated_at" TEXT NOT NULL,
   "default_channel_id" INTEGER ,
-  "latest_received_conversation_id" INTEGER ,
+  "latest_received_thread_id" INTEGER ,
   "last_returning_reply_at" TEXT,
   "reply_evidence_after_message_id" INTEGER DEFAULT 0 NOT NULL,
   CONSTRAINT email_connections_default_channel_id_fkey FOREIGN KEY (tenant_id,default_channel_id) REFERENCES inbound_channels(tenant_id,id) ON DELETE RESTRICT,
-  CONSTRAINT email_connections_latest_received_conversation_id_fkey FOREIGN KEY (tenant_id,latest_received_conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE RESTRICT
+  CONSTRAINT email_connections_latest_received_thread_id_fkey FOREIGN KEY (tenant_id,latest_received_thread_id) REFERENCES threads(tenant_id,id) ON DELETE RESTRICT
 );
 
 CREATE TABLE "labels" (
@@ -415,19 +415,19 @@ CREATE TABLE "labels" (
   "updated_at" TEXT NOT NULL
 );
 
-CREATE TABLE "conversation_labels" (
+CREATE TABLE "thread_labels" (
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  conversation_id INTEGER NOT NULL,
+  thread_id INTEGER NOT NULL,
   label_id INTEGER NOT NULL,
   inserted_at TEXT NOT NULL,
-  PRIMARY KEY (conversation_id,label_id),
-  CONSTRAINT conversation_labels_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE CASCADE,
-  CONSTRAINT conversation_labels_label_id_fkey FOREIGN KEY (tenant_id,label_id) REFERENCES labels(tenant_id,id) ON DELETE CASCADE
+  PRIMARY KEY (thread_id,label_id),
+  CONSTRAINT thread_labels_thread_id_fkey FOREIGN KEY (tenant_id,thread_id) REFERENCES threads(tenant_id,id) ON DELETE CASCADE,
+  CONSTRAINT thread_labels_label_id_fkey FOREIGN KEY (tenant_id,label_id) REFERENCES labels(tenant_id,id) ON DELETE CASCADE
 );
 
 CREATE TABLE "tasks" (
   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
-  "conversation_id" INTEGER ,
+  "thread_id" INTEGER ,
   "project_id" INTEGER ,
   "organization_id" INTEGER ,
   "title" TEXT NOT NULL,
@@ -437,7 +437,7 @@ CREATE TABLE "tasks" (
   "inserted_at" TEXT NOT NULL,
   "updated_at" TEXT NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  CONSTRAINT tasks_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT tasks_thread_id_fkey FOREIGN KEY (tenant_id,thread_id) REFERENCES threads(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT tasks_project_id_fkey FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT tasks_organization_id_fkey FOREIGN KEY (tenant_id,organization_id) REFERENCES organizations(tenant_id,id) ON DELETE RESTRICT
 );
@@ -488,7 +488,7 @@ CREATE UNIQUE INDEX message_attachments_tenant_id_id_index ON message_attachment
 
 CREATE UNIQUE INDEX prospects_tenant_id_id_index ON prospects(tenant_id,id);
 
-CREATE UNIQUE INDEX conversations_tenant_id_id_index ON conversations(tenant_id,id);
+CREATE UNIQUE INDEX threads_tenant_id_id_index ON threads(tenant_id,id);
 
 CREATE UNIQUE INDEX email_connections_tenant_id_id_index ON email_connections(tenant_id,id);
 
@@ -522,11 +522,11 @@ CREATE UNIQUE INDEX inbound_channel_rejections_tenant_id_id_index ON inbound_cha
 
 CREATE INDEX "contacts_organization_id_index" ON "contacts" ("organization_id");
 
-CREATE INDEX "messages_conversation_id_index" ON "messages" ("conversation_id");
+CREATE INDEX "messages_thread_id_index" ON "messages" ("thread_id");
 
 CREATE INDEX "projects_organization_id_index" ON "projects" ("organization_id");
 
-CREATE INDEX "projects_conversation_id_index" ON "projects" ("conversation_id");
+CREATE INDEX "projects_thread_id_index" ON "projects" ("thread_id");
 
 CREATE INDEX "projects_project_type_index" ON "projects" ("project_type");
 
@@ -538,17 +538,17 @@ CREATE INDEX "inbound_route_webhooks_inbound_route_id_index" ON "inbound_route_w
 
 CREATE UNIQUE INDEX "inbound_route_webhooks_inbound_route_id_purpose_index" ON "inbound_route_webhooks" ("inbound_route_id", "purpose");
 
-CREATE INDEX "conversations_organization_id_index" ON "conversations" ("organization_id");
+CREATE INDEX "threads_organization_id_index" ON "threads" ("organization_id");
 
-CREATE INDEX "conversations_state_index" ON "conversations" ("state");
+CREATE INDEX "threads_state_index" ON "threads" ("state");
 
-CREATE INDEX "conversations_cached_score_index" ON "conversations" ("cached_score");
+CREATE INDEX "threads_cached_score_index" ON "threads" ("cached_score");
 
-CREATE INDEX "conversations_project_id_index" ON "conversations" ("project_id");
+CREATE INDEX "threads_project_id_index" ON "threads" ("project_id");
 
-CREATE INDEX "conversations_source_index" ON "conversations" ("source");
+CREATE INDEX "threads_source_index" ON "threads" ("source");
 
-CREATE INDEX "audit_events_conversation_id_index" ON "audit_events" ("conversation_id");
+CREATE INDEX "audit_events_thread_id_index" ON "audit_events" ("thread_id");
 
 CREATE INDEX "audit_events_organization_id_index" ON "audit_events" ("organization_id");
 
@@ -560,15 +560,15 @@ CREATE INDEX "staff_accounts_role_index" ON "staff_accounts" ("role");
 
 CREATE UNIQUE INDEX "staff_accounts_login_token_index" ON "staff_accounts" ("login_token");
 
-CREATE INDEX "conversations_intake_source_key_index" ON "conversations" ("intake_source_key");
+CREATE INDEX "threads_intake_source_key_index" ON "threads" ("intake_source_key");
 
-CREATE UNIQUE INDEX "prospects_conversation_id_index" ON "prospects" ("conversation_id");
+CREATE UNIQUE INDEX "prospects_thread_id_index" ON "prospects" ("thread_id");
 
 CREATE UNIQUE INDEX "prospects_access_token_hash_index" ON "prospects" ("access_token_hash");
 
 CREATE UNIQUE INDEX "slugs_organization_id_index" ON "slugs" ("organization_id") WHERE organization_id IS NOT NULL;
 
-CREATE UNIQUE INDEX "slugs_conversation_id_index" ON "slugs" ("conversation_id") WHERE conversation_id IS NOT NULL;
+CREATE UNIQUE INDEX "slugs_thread_id_index" ON "slugs" ("thread_id") WHERE thread_id IS NOT NULL;
 
 CREATE UNIQUE INDEX "slugs_confirmation_token_hash_index" ON "slugs" ("confirmation_token_hash") WHERE confirmation_token_hash IS NOT NULL;
 
@@ -586,7 +586,7 @@ CREATE UNIQUE INDEX "staff_accounts_session_claim_index" ON "staff_accounts" ("s
 
 CREATE INDEX "messages_lettermint_message_id_index" ON "messages" ("lettermint_message_id") WHERE lettermint_message_id IS NOT NULL;
 
-CREATE INDEX "conversations_inbound_channel_id_index" ON "conversations" ("inbound_channel_id");
+CREATE INDEX "threads_inbound_channel_id_index" ON "threads" ("inbound_channel_id");
 
 CREATE INDEX "messages_forwarded_by_staff_id_index" ON "messages" ("forwarded_by_staff_id");
 
@@ -602,7 +602,7 @@ CREATE UNIQUE INDEX tenants_slug_index ON tenants(slug);
 
 CREATE UNIQUE INDEX organizations_tenant_id_domain_index ON organizations(tenant_id,domain) WHERE domain IS NOT NULL AND domain != '';
 
-CREATE INDEX conversations_tenant_id_index ON conversations(tenant_id);
+CREATE INDEX threads_tenant_id_index ON threads(tenant_id);
 
 CREATE INDEX intake_sources_tenant_id_index ON intake_sources(tenant_id);
 
@@ -636,15 +636,15 @@ CREATE UNIQUE INDEX "email_connections_status_callback_token_index" ON "email_co
 
 CREATE UNIQUE INDEX "labels_tenant_id_normalized_name_index" ON "labels" ("tenant_id", "normalized_name");
 
-CREATE INDEX "conversation_labels_label_id_index" ON "conversation_labels" ("label_id");
+CREATE INDEX "thread_labels_label_id_index" ON "thread_labels" ("label_id");
 
-CREATE INDEX "tasks_conversation_id_index" ON "tasks" ("conversation_id");
+CREATE INDEX "tasks_thread_id_index" ON "tasks" ("thread_id");
 
 CREATE INDEX "tasks_project_id_index" ON "tasks" ("project_id");
 
 CREATE INDEX "tasks_organization_id_index" ON "tasks" ("organization_id");
 
-CREATE INDEX "tasks_state_due_at_conversation_id_index" ON "tasks" ("state", "due_at", "conversation_id");
+CREATE INDEX "tasks_state_due_at_thread_id_index" ON "tasks" ("state", "due_at", "thread_id");
 
 CREATE INDEX projects_tenant_id_index ON projects(tenant_id);
 

@@ -8,8 +8,8 @@ defmodule Custyard.Organizations do
   alias Custyard.{
     AuditEvent,
     Contact,
-    Conversation,
-    Conversations,
+    Thread,
+    Threads,
     Organization,
     StaffAccount,
     Prospect,
@@ -59,7 +59,7 @@ defmodule Custyard.Organizations do
     end)
   end
 
-  def convert(%Custyard.Scope{} = scope, %Conversation{tenant_id: tenant_id} = thread, attrs) do
+  def convert(%Custyard.Scope{} = scope, %Thread{tenant_id: tenant_id} = thread, attrs) do
     result =
       if tenant_id == scope.tenant_id,
         do: with_scope(scope, fn staff -> convert_prospect(thread, attrs, staff) end),
@@ -110,14 +110,14 @@ defmodule Custyard.Organizations do
     end
   end
 
-  @doc "List visible organizations with their conversation counts."
+  @doc "List visible organizations with their thread counts."
   def list_with_counts(%Custyard.Scope{tenant_id: tenant_id} = scope) do
     if Custyard.Scope.current_staff(scope) do
       Organization
       |> where([o], o.tenant_id == ^tenant_id)
-      |> join(:left, [o], c in assoc(o, :conversations))
+      |> join(:left, [o], c in assoc(o, :threads))
       |> group_by([o], o.id)
-      |> select([o, c], %{org: o, conversation_count: count(c.id)})
+      |> select([o, c], %{org: o, thread_count: count(c.id)})
       |> order_by([o], asc: o.name)
       |> Repo.all()
     else
@@ -159,8 +159,8 @@ defmodule Custyard.Organizations do
     contact_count =
       Repo.aggregate(from(c in Contact, where: c.organization_id == ^org.id), :count)
 
-    conversation_count =
-      Repo.aggregate(from(c in Conversation, where: c.organization_id == ^org.id), :count)
+    thread_count =
+      Repo.aggregate(from(c in Thread, where: c.organization_id == ^org.id), :count)
 
     # Log deletion details before executing
     Logger.warning(
@@ -169,7 +169,7 @@ defmodule Custyard.Organizations do
       organization_name: org.name,
       organization_domain: org.domain,
       contacts_to_delete: contact_count,
-      conversations_to_delete: conversation_count
+      threads_to_delete: thread_count
     )
 
     result =
@@ -194,7 +194,7 @@ defmodule Custyard.Organizations do
         # Emit telemetry for monitoring
         :telemetry.execute(
           [:custyard, :organization, :deleted],
-          %{count: 1, contacts: contact_count, conversations: conversation_count},
+          %{count: 1, contacts: contact_count, threads: thread_count},
           %{organization_id: org.id, organization_name: org.name}
         )
 
@@ -228,7 +228,7 @@ defmodule Custyard.Organizations do
 
   defp customer_work_queries(org) do
     threads =
-      from(c in Conversation,
+      from(c in Thread,
         where: c.tenant_id == ^org.tenant_id and c.organization_id == ^org.id,
         select: c.id
       )
@@ -246,18 +246,18 @@ defmodule Custyard.Organizations do
     from(a in AuditEvent,
       where: a.tenant_id == ^org.tenant_id,
       where:
-        a.organization_id == ^org.id or a.conversation_id in subquery(threads) or
+        a.organization_id == ^org.id or a.thread_id in subquery(threads) or
           a.project_id in subquery(projects)
     )
-    |> Repo.update_all(set: [organization_id: nil, conversation_id: nil, project_id: nil])
+    |> Repo.update_all(set: [organization_id: nil, thread_id: nil, project_id: nil])
   end
 
   defp detach_customer_infrastructure(org, threads, projects) do
     from(e in Custyard.EmailConnection,
       where: e.tenant_id == ^org.tenant_id,
-      where: e.latest_received_conversation_id in subquery(threads)
+      where: e.latest_received_thread_id in subquery(threads)
     )
-    |> Repo.update_all(set: [latest_received_conversation_id: nil])
+    |> Repo.update_all(set: [latest_received_thread_id: nil])
 
     from(c in Custyard.InboundChannel,
       where: c.tenant_id == ^org.tenant_id and c.default_organization_id == ^org.id
@@ -270,15 +270,15 @@ defmodule Custyard.Organizations do
     |> Repo.update_all(set: [default_project_id: nil])
 
     from(p in Custyard.Project,
-      where: p.tenant_id == ^org.tenant_id and p.conversation_id in subquery(threads)
+      where: p.tenant_id == ^org.tenant_id and p.thread_id in subquery(threads)
     )
-    |> Repo.update_all(set: [conversation_id: nil])
+    |> Repo.update_all(set: [thread_id: nil])
   end
 
   defp delete_customer_claims(org, threads) do
     from(s in Custyard.Slug,
       where: s.tenant_id == ^org.tenant_id,
-      where: s.organization_id == ^org.id or s.conversation_id in subquery(threads)
+      where: s.organization_id == ^org.id or s.thread_id in subquery(threads)
     )
     |> Repo.delete_all()
   end
@@ -304,27 +304,27 @@ defmodule Custyard.Organizations do
     from(t in Custyard.Task,
       where: t.tenant_id == ^org.tenant_id,
       where:
-        t.organization_id == ^org.id or t.conversation_id in subquery(threads) or
+        t.organization_id == ^org.id or t.thread_id in subquery(threads) or
           t.project_id in subquery(projects)
     )
     |> Repo.delete_all()
 
-    Repo.delete_all(from(c in Conversation, where: c.id in subquery(threads)))
+    Repo.delete_all(from(c in Thread, where: c.id in subquery(threads)))
     Repo.delete_all(from(p in Custyard.Project, where: p.id in subquery(projects)))
   end
 
   defp convert_prospect(
-         %Conversation{organization_id: nil, source: :public_intake} = conversation,
+         %Thread{organization_id: nil, source: :public_intake} = thread,
          org_attrs,
          %StaffAccount{} = staff
        ) do
     org_attrs =
       Map.new(org_attrs, fn {key, value} -> {to_string(key), value} end)
-      |> Map.put("tenant_id", conversation.tenant_id)
+      |> Map.put("tenant_id", thread.tenant_id)
 
     case create_organization(org_attrs) do
       {:ok, organization} ->
-        case do_convert_or_compensate(conversation, organization) do
+        case do_convert_or_compensate(thread, organization) do
           {:ok, converted} -> {:ok, {converted, organization, staff}}
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -334,14 +334,14 @@ defmodule Custyard.Organizations do
     end
   end
 
-  defp convert_prospect(%Conversation{}, _org_attrs, %StaffAccount{}),
+  defp convert_prospect(%Thread{}, _org_attrs, %StaffAccount{}),
     do: {:error, :not_convertible}
 
   # The organization (and its provisioned inbound route) is already committed
   # when step 2 runs; an exception there must not leave it behind as an orphan
   # that blocks a retry on the domain unique index.
-  defp do_convert_or_compensate(conversation, organization) do
-    do_convert(conversation, organization)
+  defp do_convert_or_compensate(thread, organization) do
+    do_convert(thread, organization)
   rescue
     error ->
       # with_scope/2 owns the transaction containing customer creation.
@@ -350,11 +350,11 @@ defmodule Custyard.Organizations do
       reraise error, __STACKTRACE__
   end
 
-  defp do_convert(conversation, organization) do
+  defp do_convert(thread, organization) do
     Repo.transaction(fn ->
-      prospect = Repo.get_by(Prospect, conversation_id: conversation.id)
+      prospect = Repo.get_by(Prospect, thread_id: thread.id)
 
-      case Slugs.promote(conversation, organization) do
+      case Slugs.promote(thread, organization) do
         {:ok, _slug} -> :ok
         {:error, :not_found} -> :ok
       end
@@ -366,13 +366,13 @@ defmodule Custyard.Organizations do
 
       {count, _} =
         Repo.update_all(
-          from(c in Conversation, where: c.id == ^conversation.id and is_nil(c.organization_id)),
+          from(c in Thread, where: c.id == ^thread.id and is_nil(c.organization_id)),
           set: set
         )
 
       case count do
         1 ->
-          Repo.get!(Conversation, conversation.id) |> Repo.preload([:organization, :contact])
+          Repo.get!(Thread, thread.id) |> Repo.preload([:organization, :contact])
 
         0 ->
           Repo.rollback(:already_converted)
@@ -398,23 +398,23 @@ defmodule Custyard.Organizations do
   defp maybe_put_contact(set, nil), do: set
   defp maybe_put_contact(set, %Contact{id: id}), do: Keyword.put(set, :contact_id, id)
 
-  defp handle_convert_result({:ok, conversation}, organization, staff) do
-    Scoring.calculate_and_cache(conversation.id)
+  defp handle_convert_result({:ok, thread}, organization, staff) do
+    Scoring.calculate_and_cache(thread.id)
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversations",
-      {:conversation_updated, conversation.id}
+      "threads",
+      {:thread_updated, thread.id}
     )
 
-    Conversations.broadcast_to_org(
-      conversation.organization_id,
-      {:conversation_updated, conversation.id}
+    Threads.broadcast_to_org(
+      thread.organization_id,
+      {:thread_updated, thread.id}
     )
 
-    record_conversion_audit(conversation, organization, staff)
+    record_conversion_audit(thread, organization, staff)
 
-    {:ok, conversation}
+    {:ok, thread}
   end
 
   # Append-only audit trail for the conversion (AuditEvent.create pattern,
@@ -422,7 +422,7 @@ defmodule Custyard.Organizations do
   # A logging failure never blocks the conversion — it already committed.
   # organization_id is deliberately omitted from the payload: it is already
   # the row's schema column.
-  defp record_conversion_audit(conversation, organization, staff) do
+  defp record_conversion_audit(thread, organization, staff) do
     case AuditEvent.create(%{
            event_type: :prospect_converted,
            source: "staff",
@@ -431,7 +431,7 @@ defmodule Custyard.Organizations do
              "staff_id" => staff.id,
              "staff_email" => staff.email
            },
-           conversation_id: conversation.id,
+           thread_id: thread.id,
            organization_id: organization.id
          }) do
       {:ok, _event} ->

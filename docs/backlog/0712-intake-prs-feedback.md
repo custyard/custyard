@@ -18,7 +18,7 @@ duplicate "Fix the following N issues" reprint that restates the inline comments
 
 ---
 
-## PR #59 — Unify scoring formula and score unlinked conversations (intake stack 1/9)
+## PR #59 — Unify scoring formula and score unlinked threads (intake stack 1/9)
 
 Merged: 2026-07-06T02:58:15Z
 
@@ -40,12 +40,12 @@ The module doc’s formula omits the neglect weight, but the implementation mult
 
 ## Pull request overview
 
-This PR is the first in the public-intake stack, aligning all scoring entrypoints to a single unified formula while changing semantics so nil-organization (“unlinked”) conversations can be scored and accrue neglect (with crash guards in reporting/notification surfaces).
+This PR is the first in the public-intake stack, aligning all scoring entrypoints to a single unified formula while changing semantics so nil-organization (“unlinked”) threads can be scored and accrue neglect (with crash guards in reporting/notification surfaces).
 
 **Changes:**
 - Unifies the attention-score calculation paths behind a shared internal component function and adds equivalence tests across paths.
 - Introduces `settings.intake_config` (with validation/defaults) to drive unlinked-tier scoring and future slug-claim TTL configuration.
-- Hardens neglect email and neglect report rendering for nil-organization conversations and adds operator settings UI + tests.
+- Hardens neglect email and neglect report rendering for nil-organization threads and adds operator settings UI + tests.
 
 ### Reviewed changes
 
@@ -56,12 +56,12 @@ Show a summary per file
 | File | Description |
 | ---- | ----------- |
 | test/custyard/settings_test.exs | Adds coverage for intake config defaults, validation, and update behavior. |
-| test/custyard/scoring/recalculator_test.exs | Adds recalculation coverage for org-linked vs unlinked conversations. |
+| test/custyard/scoring/recalculator_test.exs | Adds recalculation coverage for org-linked vs unlinked threads. |
 | test/custyard/scoring_test.exs | Updates nil-org scoring semantics and adds path-equivalence + unlinked scoring/neglect tests. |
-| test/custyard/notifications/neglect_checker_test.exs | Pins current behavior that nil-org conversations don’t enter notification sweep (join boundary) and don’t crash. |
-| test/custyard/notifications/email_test.exs | Verifies email rendering/logging doesn’t crash for nil-org conversations and uses a neutral label. |
+| test/custyard/notifications/neglect_checker_test.exs | Pins current behavior that nil-org threads don’t enter notification sweep (join boundary) and don’t crash. |
+| test/custyard/notifications/email_test.exs | Verifies email rendering/logging doesn’t crash for nil-org threads and uses a neutral label. |
 | test/custyard_web/live/staff/settings_live_test.exs | Adds LiveView tests for viewing/editing intake config and authorization handling. |
-| test/custyard_web/live/staff/neglect_report_live_test.exs | Ensures neglect report renders nil-org conversations safely and labels them appropriately. |
+| test/custyard_web/live/staff/neglect_report_live_test.exs | Ensures neglect report renders nil-org threads safely and labels them appropriately. |
 | priv/repo/migrations/20260705131000_add_intake_config_to_settings.exs | Adds `intake_config` map column to settings. |
 | lib/custyard/settings.ex | Implements intake config defaults, parsing, validation, and update API. |
 | lib/custyard/scoring.ex | Removes nil-org=0 behavior, unifies calculation via shared components, and applies standard-tier thresholds for nil-org neglect. |
@@ -83,30 +83,30 @@ I'll analyze this and get back to you.
 
 ---
 
-## PR #60 — Render, authorize, and broadcast unlinked conversations (intake stack 2/9)
+## PR #60 — Render, authorize, and broadcast unlinked threads (intake stack 2/9)
 
 Merged: 2026-07-07T04:39:39Z
 
 ### Inline comments
 
-#### [Copilot] `test/custyard/conversations_test.exs:943`
+#### [Copilot] `test/custyard/threads_test.exs:943`
 
-This test subscribes to both "conversations" and the malformed "conversations:org:" topic, but PubSub delivers the same message shape regardless of topic. That means `assert_received {:conversation_updated, ^conv_id}` does not prove the event came from the global topic; it could be coming solely from the malformed org topic and the test would still pass. Split this into two tests: one that subscribes only to the expected topics ("conversation:{id}" + "conversations") and asserts the events arrive, and another that subscribes only to "conversations:org:" and refutes receiving the update.
+This test subscribes to both "threads" and the malformed "threads:org:" topic, but PubSub delivers the same message shape regardless of topic. That means `assert_received {:thread_updated, ^conv_id}` does not prove the event came from the global topic; it could be coming solely from the malformed org topic and the test would still pass. Split this into two tests: one that subscribes only to the expected topics ("thread:{id}" + "threads") and asserts the events arrive, and another that subscribes only to "threads:org:" and refutes receiving the update.
 
-#### [Copilot] `test/custyard/conversations_test.exs:9`
+#### [Copilot] `test/custyard/threads_test.exs:9`
 
-The describe block is labeled `list_neglected/1`, but most tests in this block call `Conversations.list_neglected()` with no args (arity 0 via default). Renaming the describe string avoids confusion when scanning test output.
+The describe block is labeled `list_neglected/1`, but most tests in this block call `Threads.list_neglected()` with no args (arity 0 via default). Renaming the describe string avoids confusion when scanning test output.
 
 ### Copilot PR overview
 
 ## Pull request overview
 
-This PR is the second in the public-intake stack, extending operator-facing queue and conversation LiveViews to safely handle and surface “unlinked” (nil-organization) conversations, while updating authorization and PubSub broadcasting to avoid malformed org-scoped topics.
+This PR is the second in the public-intake stack, extending operator-facing queue and thread LiveViews to safely handle and surface “unlinked” (nil-organization) threads, while updating authorization and PubSub broadcasting to avoid malformed org-scoped topics.
 
 **Changes:**
-- Allow org-scoped operators to *see and open* nil-org conversations (while still excluding other organizations’ conversations).
-- Add human-labeled `source_badge` rendering across the operator queue card and conversation header, with a safe fallback for new/unknown sources.
-- Centralize org-topic broadcasting via `Conversations.broadcast_to_org/2`, skipping nil org IDs to prevent publishing to `"conversations:org:"`.
+- Allow org-scoped operators to *see and open* nil-org threads (while still excluding other organizations’ threads).
+- Add human-labeled `source_badge` rendering across the operator queue card and thread header, with a safe fallback for new/unknown sources.
+- Centralize org-topic broadcasting via `Threads.broadcast_to_org/2`, skipping nil org IDs to prevent publishing to `"threads:org:"`.
 
 ### Reviewed changes
 
@@ -116,16 +116,16 @@ Show a summary per file
 
 | File | Description |
 | ---- | ----------- |
-| `lib/custyard/conversations.ex` | Expands org scoping to include nil-org conversations and adds `broadcast_to_org/2` to prevent malformed org-topic broadcasts. |
-| `lib/custyard/authorization.ex` | Updates access policy so all operator roles can access nil-org conversations. |
-| `lib/custyard_web/live/staff/conversation_live.ex` | Subscribes nil-org conversations to the global topic, renders “Unlinked prospect” safely, and shows the source badge. |
+| `lib/custyard/threads.ex` | Expands org scoping to include nil-org threads and adds `broadcast_to_org/2` to prevent malformed org-topic broadcasts. |
+| `lib/custyard/authorization.ex` | Updates access policy so all operator roles can access nil-org threads. |
+| `lib/custyard_web/live/staff/thread_live.ex` | Subscribes nil-org threads to the global topic, renders “Unlinked prospect” safely, and shows the source badge. |
 | `lib/custyard_web/live/staff/attention_queue_live.ex` | Renders nil-org rows safely (no org/tier deref) and shows source badges on queue cards. |
 | `lib/custyard_web/components/operator_components.ex` | Enhances `source_badge/1` with curated labels/colors and a humanized fallback label. |
-| `lib/custyard/webhooks/purposes/sender_matching.ex` | Routes org-topic publishes through `Conversations.broadcast_to_org/2` to skip nil org IDs. |
-| `lib/custyard/conversations/dormancy_checker.ex` | Routes org-topic publishes through `Conversations.broadcast_to_org/2` to skip nil org IDs. |
-| `test/custyard/conversations_test.exs` | Adds coverage for nil-org inclusion in scoped queries and for org-topic broadcast skipping. |
+| `lib/custyard/webhooks/purposes/sender_matching.ex` | Routes org-topic publishes through `Threads.broadcast_to_org/2` to skip nil org IDs. |
+| `lib/custyard/threads/dormancy_checker.ex` | Routes org-topic publishes through `Threads.broadcast_to_org/2` to skip nil org IDs. |
+| `test/custyard/threads_test.exs` | Adds coverage for nil-org inclusion in scoped queries and for org-topic broadcast skipping. |
 | `test/custyard/authorization_test.exs` | Updates expectations for nil-org access across operator roles and adds a non-operator denial test. |
-| `test/custyard_web/live/staff/conversation_live_test.exs` | Adds nil-org rendering/access/reply tests and source badge assertions. |
+| `test/custyard_web/live/staff/thread_live_test.exs` | Adds nil-org rendering/access/reply tests and source badge assertions. |
 | `test/custyard_web/live/staff/attention_queue_live_test.exs` | Adds nil-org queue visibility and source badge rendering tests. |
 | `test/custyard_web/components/operator_components_test.exs` | Adds focused tests for source badge labels and fallback behavior. |
 
@@ -137,30 +137,30 @@ Show a summary per file
 
 Confidence Score: 3/5
 
-The broadcast hygiene, render guards, and auth changes are solid, but one gap in conversation_live.ex can crash the LiveView process under normal traffic conditions.
+The broadcast hygiene, render guards, and auth changes are solid, but one gap in thread_live.ex can crash the LiveView process under normal traffic conditions.
 
-When a nil-org conversation is open, conversation_live.ex subscribes to the global "conversations" topic. sender_matching.ex broadcasts {:conversation_created, id} on that topic every time a new inbound email creates a conversation — which is routine. conversation_live.ex has no handle_info clause for :conversation_created, and no catch-all. attention_queue_live.ex has an explicit catch-all with the comment "to prevent LiveView crashes," which is direct evidence that the missing guard causes real crashes. Any new inbound email while an operator is viewing an unlinked conversation will disconnect that LiveView session.
+When a nil-org thread is open, thread_live.ex subscribes to the global "threads" topic. sender_matching.ex broadcasts {:thread_created, id} on that topic every time a new inbound email creates a thread — which is routine. thread_live.ex has no handle_info clause for :thread_created, and no catch-all. attention_queue_live.ex has an explicit catch-all with the comment "to prevent LiveView crashes," which is direct evidence that the missing guard causes real crashes. Any new inbound email while an operator is viewing an unlinked thread will disconnect that LiveView session.
 
-lib/custyard_web/live/staff/conversation_live.ex — needs a catch-all handle_info (or an explicit {:conversation_created, _id} clause) to match what attention_queue_live.ex already does.
+lib/custyard_web/live/staff/thread_live.ex — needs a catch-all handle_info (or an explicit {:thread_created, _id} clause) to match what attention_queue_live.ex already does.
 
 Important Files Changed
 
 | Filename | Overview |
 |----------|----------|
-| lib/custyard_web/live/staff/conversation_live.ex | Adds nil-org rendering, global topic fallback subscription, and broadcast_to_org migration — but the global topic subscription introduces a crash risk from unhandled {:conversation_created, id} messages |
-| lib/custyard/authorization.ex | Adds nil-org conversation access for all StaffAccount roles; clause ordering is correct (super_admin first, nil-org second, org-match last, catch-all deny at bottom); documented and tested |
-| lib/custyard/conversations.ex | Adds broadcast_to_org/2 with nil guard, updates apply_organization_filter to OR-include nil-org rows for org-scoped queries; logic is sound and the new nil-org skip in broadcast is a strict improvement over interpolating a bare topic |
-| lib/custyard/conversations/dormancy_checker.ex | Migrates to broadcast_to_org; the inner join on organization in stale_conversations/0 already excludes nil-org conversations so the nil guard in broadcast_to_org is unreachable here but harmlessly defensive. **Superseded 2026-07-25**: the inner join was a bug, not a design choice — see the correction under Minor Observations below. The nil guard is now reachable. |
+| lib/custyard_web/live/staff/thread_live.ex | Adds nil-org rendering, global topic fallback subscription, and broadcast_to_org migration — but the global topic subscription introduces a crash risk from unhandled {:thread_created, id} messages |
+| lib/custyard/authorization.ex | Adds nil-org thread access for all StaffAccount roles; clause ordering is correct (super_admin first, nil-org second, org-match last, catch-all deny at bottom); documented and tested |
+| lib/custyard/threads.ex | Adds broadcast_to_org/2 with nil guard, updates apply_organization_filter to OR-include nil-org rows for org-scoped queries; logic is sound and the new nil-org skip in broadcast is a strict improvement over interpolating a bare topic |
+| lib/custyard/threads/dormancy_checker.ex | Migrates to broadcast_to_org; the inner join on organization in stale_threads/0 already excludes nil-org threads so the nil guard in broadcast_to_org is unreachable here but harmlessly defensive. **Superseded 2026-07-25**: the inner join was a bug, not a design choice — see the correction under Minor Observations below. The nil guard is now reachable. |
 | lib/custyard_web/components/operator_components.ex | Adds human labels for source atoms and a humanized fallback; String.capitalize gives "Public intake" for :public_intake as expected; unknown sources render neutrally without requiring a code change |
-| lib/custyard_web/live/staff/attention_queue_live.ex | Migrates raw broadcasts to broadcast_to_org, adds source_badge to queue card, and guards org-name/tier display for nil-org conversations; has a catch-all handle_info that conversation_live.ex is missing |
+| lib/custyard_web/live/staff/attention_queue_live.ex | Migrates raw broadcasts to broadcast_to_org, adds source_badge to queue card, and guards org-name/tier display for nil-org threads; has a catch-all handle_info that thread_live.ex is missing |
 
 Comments Outside Diff (1)
 
-1. `lib/custyard_web/live/staff/conversation_live.ex`, line 361-377 ([link](https://github.com/onetimesecret/custyard/blob/06ec6a19edec3a60ea1f7826dda57fd67f96d14c/lib/custyard_web/live/staff/conversation_live.ex#L361-L377))
+1. `lib/custyard_web/live/staff/thread_live.ex`, line 361-377 ([link](https://github.com/onetimesecret/custyard/blob/06ec6a19edec3a60ea1f7826dda57fd67f96d14c/lib/custyard_web/live/staff/thread_live.ex#L361-L377))
 
-   [P1]  **Missing catch-all causes crashes when viewing nil-org conversations**
+   [P1]  **Missing catch-all causes crashes when viewing nil-org threads**
 
-   `conversation_live.ex` now subscribes to the global `"conversations"` topic (not just the org-scoped one) when `organization_id` is nil. That global topic receives `{:conversation_created, id}` whenever `SenderMatching.broadcast_updates/2` fires for a new inbound email. There is no `handle_info` clause for `{:conversation_created, _id}` in this module, so any new conversation arriving while an operator has a nil-org conversation open will crash the LiveView process.
+   `thread_live.ex` now subscribes to the global `"threads"` topic (not just the org-scoped one) when `organization_id` is nil. That global topic receives `{:thread_created, id}` whenever `SenderMatching.broadcast_updates/2` fires for a new inbound email. There is no `handle_info` clause for `{:thread_created, _id}` in this module, so any new thread arriving while an operator has a nil-org thread open will crash the LiveView process.
 
    `attention_queue_live.ex` has an explicit `def handle_info(_msg, socket)` with the comment *"Catch-all for unexpected PubSub messages to prevent LiveView crashes"* — the same guard is needed here.
 
@@ -171,17 +171,17 @@ Comments Outside Diff (1)
 ---
 ### PR #60 Review Complete
 
-**Summary**: This is a well-structured PR that safely extends the operator queue and conversation views to handle nil-organization ("unlinked prospect") conversations. The implementation follows good Elixir/Phoenix patterns and addresses the critical concerns raised by previous reviewers.
+**Summary**: This is a well-structured PR that safely extends the operator queue and thread views to handle nil-organization ("unlinked prospect") threads. The implementation follows good Elixir/Phoenix patterns and addresses the critical concerns raised by previous reviewers.
 
 ---
 
 ### Strengths
 
-**Broadcast hygiene** (`lib/custyard/conversations.ex:335-343`): The new `broadcast_to_org/2` function elegantly solves the malformed topic problem with a simple pattern match guard. This is applied consistently across all broadcast sites.
+**Broadcast hygiene** (`lib/custyard/threads.ex:335-343`): The new `broadcast_to_org/2` function elegantly solves the malformed topic problem with a simple pattern match guard. This is applied consistently across all broadcast sites.
 
 **Authorization changes** (`lib/custyard/authorization.ex:74-88`): The clause ordering is correct - super_admin first, nil-org second, org-match third, catch-all deny last. The docstring clearly explains the rationale.
 
-**LiveView crash prevention** (`lib/custyard_web/live/staff/conversation_live.ex:361-367`): The explicit `handle_info({:conversation_created, _id}, socket)` clause plus catch-all addresses the Greptile finding. Both LiveViews now have matching defensive patterns.
+**LiveView crash prevention** (`lib/custyard_web/live/staff/thread_live.ex:361-367`): The explicit `handle_info({:thread_created, _id}, socket)` clause plus catch-all addresses the Greptile finding. Both LiveViews now have matching defensive patterns.
 
 **Test coverage**: 22 new tests with good coverage of edge cases - org scoping, nil-org visibility, broadcast isolation, and the malformed topic refutation test.
 
@@ -189,21 +189,21 @@ Comments Outside Diff (1)
 
 ### Minor Observations
 
-1. ~~**DormancyChecker excludes nil-org conversations by design**~~ (`lib/custyard/conversations/dormancy_checker.ex:49-61`): The `join: o in assoc(c, :organization)` (inner join) inherently excludes nil-org conversations from dormancy transitions. This appears intentional since unlinked conversations have no tier-based thresholds, but it's worth noting in case future behavior changes are needed.
+1. ~~**DormancyChecker excludes nil-org threads by design**~~ (`lib/custyard/threads/dormancy_checker.ex:49-61`): The `join: o in assoc(c, :organization)` (inner join) inherently excludes nil-org threads from dormancy transitions. This appears intentional since unlinked threads have no tier-based thresholds, but it's worth noting in case future behavior changes are needed.
 
    **Correction (2026-07-25).** Not by design. `sdd.md` §74/§80 define the automatic `waiting -> dormant` transition as inactivity-based with no carve-out for unlinked rows, and `Scoring.neglect_tier/1` already resolves a nil organization to the standard tier — so "no tier-based threshold" was never true. `NeglectChecker` was corrected to a LEFT join plus an `is_nil(organization_id)` standard-cutoff branch, and `DormancyChecker` now matches. Unlinked prospects go dormant on the standard cutoff.
 
 2. **Source badge fallback** (`lib/custyard_web/components/operator_components.ex:217-219`): The `String.capitalize/1` fallback produces "Public intake" from `:public_intake` which is good. Just confirming this matches expectations for the upcoming PR #3.
 
-3. **Test describes** (`test/custyard/conversations_test.exs:9`): The `describe "list_neglected"` block was renamed per Copilot feedback - good fix.
+3. **Test describes** (`test/custyard/threads_test.exs:9`): The `describe "list_neglected"` block was renamed per Copilot feedback - good fix.
 
 ---
 
 ### Security Considerations
 
-- **Nil-org access is intentionally permissive**: All operator roles can view unlinked conversations. The PR description notes this as "adopted-default #1, pending ratification." If the security-lens dissent prevails, the change is isolated to two clauses: `Authorization.can_access_conversation?/2:84` and `Conversations.apply_organization_filter/2:64-66`.
+- **Nil-org access is intentionally permissive**: All operator roles can view unlinked threads. The PR description notes this as "adopted-default #1, pending ratification." If the security-lens dissent prevails, the change is isolated to two clauses: `Authorization.can_access_thread?/2:84` and `Threads.apply_organization_filter/2:64-66`.
 
-- **No IDOR concerns**: The org filter applies at query time, and authorization is checked at mount time. Scoped operators cannot access other organizations' conversations even if they manipulate IDs.
+- **No IDOR concerns**: The org filter applies at query time, and authorization is checked at mount time. Scoped operators cannot access other organizations' threads even if they manipulate IDs.
 
 ---
 
@@ -216,8 +216,8 @@ Looks good to merge. The previous reviewer findings have been addressed, the imp
 @delano:
 Addressed all outstanding review feedback in 33c1727:
 
-- **greptile** (critical): `conversation_live.ex` had no `handle_info` clause for `{:conversation_created, _id}` and no catch-all, so any inbound email would crash the LiveView process while an operator had a nil-org conversation open (subscribed to the global `"conversations"` topic). Added the missing clause plus a catch-all, mirroring `attention_queue_live.ex`.
-- **Copilot**: split the nil-org broadcast test into two — one asserting delivery on the legitimate topics, one subscribed *only* to the malformed `"conversations:org:"` topic to refute delivery there. The combined test previously couldn't distinguish which topic a message arrived from.
+- **greptile** (critical): `thread_live.ex` had no `handle_info` clause for `{:thread_created, _id}` and no catch-all, so any inbound email would crash the LiveView process while an operator had a nil-org thread open (subscribed to the global `"threads"` topic). Added the missing clause plus a catch-all, mirroring `attention_queue_live.ex`.
+- **Copilot**: split the nil-org broadcast test into two — one asserting delivery on the legitimate topics, one subscribed *only* to the malformed `"threads:org:"` topic to refute delivery there. The combined test previously couldn't distinguish which topic a message arrived from.
 - **Copilot**: renamed `describe "list_neglected/1"` to `describe "list_neglected"` since the block exercises both the 0- and 1-arg forms.
 
 Full suite: 1347 tests, 0 failures, 1 skipped.
@@ -243,14 +243,14 @@ validate_questions/1 assumes questions is a list and calls length/1 and Enum.all
 
 [P1]  **`rotate_resume_token` doesn't check revocation**
 
-Every other write operation in `Intake` that touches a prospect explicitly blocks on `revoked_at`: `capture_email` rollbacks with `:no_prospect`, and `set_notification` does the same — the docstring even calls it out: "revocation removes write access entirely." `rotate_resume_token` has no such guard. If called on a revoked prospect it returns `{:ok, %{resume_token: token}}` with a token that `get_conversation_by_resume_token/1` will immediately reject (it checks `is_nil(p.revoked_at)`), leaving the caller holding a dead credential with a success tuple. There's no test covering this path, so the omission is invisible today but will confuse the PR-6 author wiring up the operator UI.
+Every other write operation in `Intake` that touches a prospect explicitly blocks on `revoked_at`: `capture_email` rollbacks with `:no_prospect`, and `set_notification` does the same — the docstring even calls it out: "revocation removes write access entirely." `rotate_resume_token` has no such guard. If called on a revoked prospect it returns `{:ok, %{resume_token: token}}` with a token that `get_thread_by_resume_token/1` will immediately reject (it checks `is_nil(p.revoked_at)`), leaving the caller holding a dead credential with a success tuple. There's no test covering this path, so the omission is invisible today but will confuse the PR-6 author wiring up the operator UI.
 
 #### [greptile-apps[bot]] `lib/custyard/intake.ex:220`
 
-[P2]  `Repo.get!` raises an unhandled `Ecto.NoResultsError` if the conversation is deleted in the narrow window between the prospect lookup and this fetch. The `on_delete: :delete_all` FK makes the race very unlikely, but a non-raising `Repo.get` with an explicit nil branch would be safer and keeps the function's contract to structured error tuples.
+[P2]  `Repo.get!` raises an unhandled `Ecto.NoResultsError` if the thread is deleted in the narrow window between the prospect lookup and this fetch. The `on_delete: :delete_all` FK makes the race very unlikely, but a non-raising `Repo.get` with an explicit nil branch would be safer and keeps the function's contract to structured error tuples.
 
 ```suggestion
-  def get_conversation_by_resume_token(token) when is_binary(token) do
+  def get_thread_by_resume_token(token) when is_binary(token) do
     hash = Token.hash(token)
 
     prospect =
@@ -264,9 +264,9 @@ Every other write operation in `Intake` that touches a prospect explicitly block
         {:error, :not_found}
 
       %Prospect{} = prospect ->
-        conversation =
-          Conversation
-          |> Repo.get(prospect.conversation_id)
+        thread =
+          Thread
+          |> Repo.get(prospect.thread_id)
           |> case do
             nil -> {:error, :not_found}
             conv -> conv
@@ -282,8 +282,8 @@ This PR adds the core “public intake” domain substrate: new Prospect + Intak
 
 **Changes:**
 - Introduces `Custyard.Prospect` and `Custyard.Auth.Token` for hashed resume-token identity + lifecycle (rotate/revoke) and email capture.
-- Introduces `Custyard.IntakeSource` + `Custyard.Intake` context to support intake CTA configuration and atomic intake conversation creation + linking flow.
-- Extends Conversation/Message/source handling and operator UI components to support `:public_intake` / `:prospect`, plus queue badges and derived `reply_channel/1`.
+- Introduces `Custyard.IntakeSource` + `Custyard.Intake` context to support intake CTA configuration and atomic intake thread creation + linking flow.
+- Extends Thread/Message/source handling and operator UI components to support `:public_intake` / `:prospect`, plus queue badges and derived `reply_channel/1`.
 
 ### Reviewed changes
 
@@ -293,30 +293,30 @@ Show a summary per file
 
 | File | Description |
 | ---- | ----------- |
-| test/support/factory.ex | Adds factories/helpers for org-exempt conversations, prospects, and intake sources. |
+| test/support/factory.ex | Adds factories/helpers for org-exempt threads, prospects, and intake sources. |
 | test/custyard/prospect_test.exs | Adds unit tests for Prospect changesets and token rotation/revocation behavior. |
 | test/custyard/message_test.exs | Adds tests for new `:prospect` message source and `:public_intake` origin. |
 | test/custyard/intake_test.exs | Adds extensive tests for Intake context: creation, resume access, email capture/linking, CRUD. |
 | test/custyard/intake_source_test.exs | Adds IntakeSource changeset validation tests (key format, caps, Q&A validation). |
 | test/custyard/email/sender_matcher_test.exs | Adds tests for new lookup-only `SenderMatcher.resolve/1` behavior. |
 | test/custyard/email_address_test.exs | Adds tests for extracted shared email validation and normalization. |
-| test/custyard/conversations_test.exs | Adds tests for derived `reply_channel/1` and queue preloads. |
-| test/custyard/conversation_test.exs | Adds tests for org requirement exemptions + creation-only intake_source_key behavior. |
+| test/custyard/threads_test.exs | Adds tests for derived `reply_channel/1` and queue preloads. |
+| test/custyard/thread_test.exs | Adds tests for org requirement exemptions + creation-only intake_source_key behavior. |
 | test/custyard/auth/token_test.exs | Adds tests for token generation + SHA-256 hashing primitive. |
 | test/custyard_web/live/staff/attention_queue_live_test.exs | Adds LiveView tests for intake badges (source tag + no-reply-channel). |
 | test/custyard_web/components/operator_components_test.exs | Adds component tests for public-intake styling and new badges/tags. |
 | priv/repo/migrations/20260705150002_create_intake_sources.exs | Creates `intake_sources` table + unique key index. |
-| priv/repo/migrations/20260705150001_create_prospects.exs | Creates `prospects` table + unique constraints for 1:1 conversation + token hash. |
-| priv/repo/migrations/20260705150000_add_intake_source_key_to_conversations.exs | Adds `conversations.intake_source_key` provenance column + index. |
-| lib/custyard/webhooks/purposes/sender_matching.ex | Routes `:public_intake` conversation source to `:prospect` message source. |
+| priv/repo/migrations/20260705150001_create_prospects.exs | Creates `prospects` table + unique constraints for 1:1 thread + token hash. |
+| priv/repo/migrations/20260705150000_add_intake_source_key_to_threads.exs | Adds `threads.intake_source_key` provenance column + index. |
+| lib/custyard/webhooks/purposes/sender_matching.ex | Routes `:public_intake` thread source to `:prospect` message source. |
 | lib/custyard/prospect.ex | Implements Prospect schema + changesets (create, capture email, notify, rotate, revoke). |
 | lib/custyard/message.ex | Extends message sources/origins enums to include intake values. |
 | lib/custyard/intake.ex | Adds Intake context: source CRUD, atomic intake creation, resume access, email capture/linking. |
 | lib/custyard/intake_source.ex | Implements IntakeSource schema + key/Q&A validation rules. |
 | lib/custyard/email/sender_matcher.ex | Adds `resolve/1` (lookup-only) and sentinel-org exclusions for intake linking. |
 | lib/custyard/email_address.ex | Extracts shared email validation and normalization logic from Contact. |
-| lib/custyard/conversations.ex | Preloads prospect for queue and adds derived `reply_channel/1`. |
-| lib/custyard/conversation.ex | Adds `:public_intake` source, org-exempt validation, intake_source_key, and `intake_changeset/2`. |
+| lib/custyard/threads.ex | Preloads prospect for queue and adds derived `reply_channel/1`. |
+| lib/custyard/thread.ex | Adds `:public_intake` source, org-exempt validation, intake_source_key, and `intake_changeset/2`. |
 | lib/custyard/contact.ex | Switches Contact email validation to delegate to `Custyard.EmailAddress`. |
 | lib/custyard/auth/token.ex | Adds shared token generation + SHA-256 hash primitive for hashed-at-rest bearer tokens. |
 | lib/custyard_web/live/staff/attention_queue_live.ex | Wires reply-channel derivation and renders intake-related badges/tags. |
@@ -334,20 +334,20 @@ Safe to merge for the pure domain layer; the rotation gap is a behavioral incons
 
 Almost all of the domain substrate is carefully implemented — the hash-at-rest discipline, sentinel-org exclusion, write-once email, and the `capture_email` revocation gate are all correct. The one gap is `rotate_resume_token`: it succeeds on a revoked prospect and returns a live-looking token that immediately cannot be used. Every other write path in the module explicitly blocks on `revoked_at`; this one doesn't, and there is no test covering the case. Before PR 6 adds operator UI for token rotation, the domain contract needs to be explicit about whether revoked prospects are writable here.
 
-`lib/custyard/intake.ex` — specifically `rotate_resume_token/1` (revocation policy) and the `Repo.get!` in `get_conversation_by_resume_token/1`.
+`lib/custyard/intake.ex` — specifically `rotate_resume_token/1` (revocation policy) and the `Repo.get!` in `get_thread_by_resume_token/1`.
 
 Important Files Changed
 
 | Filename | Overview |
 |----------|----------|
-| lib/custyard/intake.ex | Core intake context: atomic conversation creation, resume token lifecycle, and email capture with lookup-only resolution. `rotate_resume_token` lacks the revocation guard present in every other write operation, and `get_conversation_by_resume_token` uses `Repo.get!` in a spot that should never raise. |
+| lib/custyard/intake.ex | Core intake context: atomic thread creation, resume token lifecycle, and email capture with lookup-only resolution. `rotate_resume_token` lacks the revocation guard present in every other write operation, and `get_thread_by_resume_token` uses `Repo.get!` in a spot that should never raise. |
 | lib/custyard/auth/token.ex | New SHA-256 hash-at-rest primitive. Correct: 256-bit entropy, url-safe base64, deterministic hash for indexed lookup, plaintext never persisted. |
 | lib/custyard/prospect.ex | New Prospect schema with well-scoped changesets: create (token hash + FK only), capture_email (write-once, normalizes before validation), rotate, revoke. Cast lists and field guards are tight. |
 | lib/custyard/intake_source.ex | New IntakeSource schema. Key regex uses `\A`/`\z` anchors (not `^`/`$`) to block trailing-newline bypass. Q&A validation rejects unknown keys, enforces entry and field-length caps. |
 | lib/custyard/email/sender_matcher.ex | New `resolve/1` (lookup-only): sentinel org excluded on both the contact and domain paths, oldest-contact tie-break logged. Doesn't create rows; webhook `match/1` is untouched. |
-| lib/custyard/conversation.ex | Adds `:public_intake` source, `intake_source_key` (creation-only via `intake_changeset/2`), `has_one :prospect`, and extends `@org_exempt_sources` to cover `:public_intake`. Key format re-validated on intake changeset. |
-| lib/custyard/conversations.ex | Adds `reply_channel/1` (derived, never stored) and preloads prospect in `list_for_attention_queue/0`. Preload-guard logic is correct. |
-| priv/repo/migrations/20260705150001_create_prospects.exs | Prospects table: unique index on both `conversation_id` (1:1) and `resume_token_hash` (indexed lookup). `on_delete: :delete_all` FK to conversations. Correct. |
+| lib/custyard/thread.ex | Adds `:public_intake` source, `intake_source_key` (creation-only via `intake_changeset/2`), `has_one :prospect`, and extends `@org_exempt_sources` to cover `:public_intake`. Key format re-validated on intake changeset. |
+| lib/custyard/threads.ex | Adds `reply_channel/1` (derived, never stored) and preloads prospect in `list_for_attention_queue/0`. Preload-guard logic is correct. |
+| priv/repo/migrations/20260705150001_create_prospects.exs | Prospects table: unique index on both `thread_id` (1:1) and `resume_token_hash` (indexed lookup). `on_delete: :delete_all` FK to threads. Correct. |
 | priv/repo/migrations/20260705150002_create_intake_sources.exs | Intake sources table: `questions` stored as `:text` with `"[]"` default, matching the `{:array, :map}` Ecto type's JSON serialization on SQLite (consistent with `projects.tags` precedent). |
 | lib/custyard_web/components/operator_components.ex | Refactors `source_badge` color logic into private `source_colors/1` clauses; adds `intake_source_tag` and `no_reply_channel_badge` components. Both are badges only, never filters. |
 | test/custyard/intake_test.exs | 446-line test suite covering the full intake lifecycle including hash-at-rest pin, enumeration neutrality, write-once email, sentinel exclusion, and operator-linkage-wins behavior. |
@@ -728,7 +728,7 @@ Consider ensuring the HTTP request and LiveView mount use the same key (e.g. pas
 
 #### [Copilot] `lib/custyard/intake.ex:318`
 
-`add_prospect_reply/3` validates revocation and `:token_hash` against a prospect struct loaded before `do_add_prospect_reply/2` runs its transaction. If an operator revokes or rotates the token concurrently between the pre-check and the DB write, a stale handle can still insert a message and reactivate the conversation, despite the intention that rotation/revocation immediately strips access.
+`add_prospect_reply/3` validates revocation and `:token_hash` against a prospect struct loaded before `do_add_prospect_reply/2` runs its transaction. If an operator revokes or rotates the token concurrently between the pre-check and the DB write, a stale handle can still insert a message and reactivate the thread, despite the intention that rotation/revocation immediately strips access.
 
 To make rotation/revocation cut off writes atomically, move the prospect lookup + token-hash/revocation checks into the same transaction as the message insert (ideally locking the prospect row with `FOR UPDATE`, or using a conditional update/locking strategy) so there’s no time-of-check/time-of-use window.
 
@@ -784,10 +784,10 @@ Show a summary per file
 | lib/custyard_web/plugs/no_referrer.ex | Adds `Referrer-Policy: no-referrer` plug for bearer-token-in-path surfaces. |
 | lib/custyard_web/live/resume_live.ex | Implements prospect-facing resume thread UI and websocket mutation handling with rate limiting. |
 | lib/custyard_web/live/resume_auth.ex | Implements on-mount token authentication + mount rate limiting for resume LiveView. |
-| lib/custyard_web/controllers/resume_html/unavailable.html.heex | Adds static uniform “conversation unavailable” page template. |
+| lib/custyard_web/controllers/resume_html/unavailable.html.heex | Adds static uniform “thread unavailable” page template. |
 | lib/custyard_web/controllers/resume_html.ex | Adds HTML template module for resume dead views. |
 | lib/custyard_web/controllers/resume_controller.ex | Adds dead-view controller endpoint for uniform unavailable rendering. |
-| lib/custyard_web/controllers/intake_html/resume_banner.html.heex | Adds shared “resume your conversation” banner component. |
+| lib/custyard_web/controllers/intake_html/resume_banner.html.heex | Adds shared “resume your thread” banner component. |
 | lib/custyard_web/controllers/intake_html/passive.html.heex | Adds passive-mode intake page template. |
 | lib/custyard_web/controllers/intake_html/message_form.html.heex | Adds shared intake message form component for active/passive pages. |
 | lib/custyard_web/controllers/intake_html/active.html.heex | Adds active-mode intake page template. |
@@ -886,7 +886,7 @@ The test coverage is thorough:
 - Enumeration neutrality byte-identical comparison test
 - Rate limiting for all surfaces (mount, reply, email capture)
 - Token rotation/revocation mid-session shutdown
-- IDOR prevention (conversation ID guessing)
+- IDOR prevention (thread ID guessing)
 - Malformed input handling (non-binary, oversized)
 - Custom domain exclusion regression test
 - Cookie attribute verification
@@ -1020,7 +1020,7 @@ Important Files Changed
 | lib/custyard_web/live/resume_live.ex | Claim panel logic is well-structured; `resend_confirmation/2` discards the `send_confirmation_email/3` result and unconditionally flashes success — the same honesty fix applied to the initial claim path was missed here. |
 | lib/custyard/slugs.ex | Core slug registry context: claim/confirm/rotate/release/expiry all correct; lazy-expiry inside the claim transaction is well-designed; `Repo.get!` after `update_all` in `confirm/1` and `rotate_confirmation_token/1` can raise on a concurrent operator delete in the tiny window after the update. |
 | lib/custyard/slug.ex | Schema and changeset for slug registry: validation, normalization, reserved-word enforcement, and punycode guard all look correct and well-tested. |
-| priv/repo/migrations/20260705170000_create_slugs.exs | Raw-SQL CREATE TABLE with both DB CHECK constraints (status enum + provisioned↔org_id pairing), partial unique indexes on conversation_id/org_id/token_hash, and supporting indexes — all appropriate for SQLite's constraint model. |
+| priv/repo/migrations/20260705170000_create_slugs.exs | Raw-SQL CREATE TABLE with both DB CHECK constraints (status enum + provisioned↔org_id pairing), partial unique indexes on thread_id/org_id/token_hash, and supporting indexes — all appropriate for SQLite's constraint model. |
 | lib/custyard/intake/claim_email.ex | Confirmation email composer: follows the LoginEmail pattern, applies Headers discipline, body contains only server-controlled values (slug, platform URLs) with no prospect content — XSS and spam-relay risks correctly mitigated. |
 | lib/custyard_web/controllers/claim_confirmation_controller.ex | Scanner-safe GET peek / POST confirm controller; all four failure classes (invalid/expired/used/purged) render one identical page with no validity oracle — correct. |
 | lib/custyard_web/live/staff/slugs_live.ex | Operator slug list + release: double-gated (live_session + event re-check), conditional delete prevents stale-click promotion races, audit event on release — all correct. |
@@ -1090,31 +1090,31 @@ Merged: 2026-07-12T02:19:25Z
 
 ### Inline comments
 
-#### [Copilot] `lib/custyard_web/live/staff/conversation_live.ex:138`
+#### [Copilot] `lib/custyard_web/live/staff/thread_live.ex:138`
 
-This branch checks `conversation.source` from the pre-reload snapshot, but the socket has just been reloaded. Using the stale local `conversation` can lead to inconsistent behavior if the conversation source ever changes (or if this pattern is copied to other fields). Prefer reading from `socket.assigns.conversation` after `reload_conversation/1`.
+This branch checks `thread.source` from the pre-reload snapshot, but the socket has just been reloaded. Using the stale local `thread` can lead to inconsistent behavior if the thread source ever changes (or if this pattern is copied to other fields). Prefer reading from `socket.assigns.thread` after `reload_thread/1`.
 
-#### [Copilot] `lib/custyard/conversations.ex:888`
+#### [Copilot] `lib/custyard/threads.ex:888`
 
-The retention split query doesn't account for `conversations.source` being NULL. In SQL, `NULL != :public_intake` evaluates to NULL (not true), so resolved conversations with a NULL source would never be purged. Since the column was added without `null: false` (migration 20260325060001), it’s safer to treat NULL as non-intake here.
+The retention split query doesn't account for `threads.source` being NULL. In SQL, `NULL != :public_intake` evaluates to NULL (not true), so resolved threads with a NULL source would never be purged. Since the column was added without `null: false` (migration 20260325060001), it’s safer to treat NULL as non-intake here.
 
-#### [greptile-apps[bot]] `lib/custyard/conversations.ex:412`
+#### [greptile-apps[bot]] `lib/custyard/threads.ex:412`
 
 [P2]  **`reply_delivery/1` can silently return stale results when called with a preloaded struct**
 
-`preload_reply_channel_assocs/1` skips the DB read when both `:contact` and `:prospect` are already loaded — it checks `Ecto.assoc_loaded?` but never forces a re-read. Every call site in this PR is correct: `send_reply/3` force-preloads before calling `reply_deliverable?/1`, `Outbound.deliver/1` force-preloads before calling `reply_channel/1`, and `assign_reply_delivery/2` receives a freshly loaded struct from `get_with_messages/1`. But the public API has no contract on freshness. A future caller who passes a socket-snapshot conversation (both assocs loaded, ages old) will get a stale consent decision with no warning. Worth adding a freshness note to the docstring — something like "callers must ensure associations reflect committed DB state; force-preload before calling when in doubt."
+`preload_reply_channel_assocs/1` skips the DB read when both `:contact` and `:prospect` are already loaded — it checks `Ecto.assoc_loaded?` but never forces a re-read. Every call site in this PR is correct: `send_reply/3` force-preloads before calling `reply_deliverable?/1`, `Outbound.deliver/1` force-preloads before calling `reply_channel/1`, and `assign_reply_delivery/2` receives a freshly loaded struct from `get_with_messages/1`. But the public API has no contract on freshness. A future caller who passes a socket-snapshot thread (both assocs loaded, ages old) will get a stale consent decision with no warning. Worth adding a freshness note to the docstring — something like "callers must ensure associations reflect committed DB state; force-preload before calling when in doubt."
 
 #### [greptile-apps[bot]] `lib/custyard/email/outbound.ex:170`
 
 [P2]  **`branding_name()` now runs a DB read for all nil-org mail, not just public-intake**
 
-Before this PR, the nil-org fallback in `from_name/1` returned `"Custyard"` — a constant. Now it calls `branding_name()` → `Settings.get_branding()`, which is a DB round-trip on every email composition. The public-intake clause (`defp from_name(%{source: :public_intake})`) is intentional. The catch-all clause is the unintended wider scope. If `Settings.get_branding/0` is uncached this adds a query per outbound email for every non-intake conversation that lacks an organization. The PR description acknowledges the scope creep ("unpinned in the non-intake direction") but the code has no comment to that effect, so the next developer won't know this is a carry-forward rather than deliberate design.
+Before this PR, the nil-org fallback in `from_name/1` returned `"Custyard"` — a constant. Now it calls `branding_name()` → `Settings.get_branding()`, which is a DB round-trip on every email composition. The public-intake clause (`defp from_name(%{source: :public_intake})`) is intentional. The catch-all clause is the unintended wider scope. If `Settings.get_branding/0` is uncached this adds a query per outbound email for every non-intake thread that lacks an organization. The PR description acknowledges the scope creep ("unpinned in the non-intake direction") but the code has no comment to that effect, so the next developer won't know this is a carry-forward rather than deliberate design.
 
-#### [greptile-apps[bot]] `lib/custyard_web/live/staff/conversation_live.ex:143`
+#### [greptile-apps[bot]] `lib/custyard_web/live/staff/thread_live.ex:143`
 
 [P2]  **Flash suppression uses current deliverability, not the delivery status of the message just sent**
 
-`reply_will_email?` is recomputed by `reload_conversation()` before the `cond` runs. It reflects the prospect's consent state at reload time, not at send time. If the prospect toggles consent in the window between `send_reply/3` (which withheld the message) and `reload_conversation()`, `reply_will_email?` can be `true` even though the message was inserted as `:withheld` — the flash is suppressed and no advisory explains what happened. The withheld indicator on the message itself is authoritative, so there is no data loss, but the operator sees a confusing silent state. This could be made accurate by checking the returned message's `delivery_status` directly rather than the recomputed socket assign.
+`reply_will_email?` is recomputed by `reload_thread()` before the `cond` runs. It reflects the prospect's consent state at reload time, not at send time. If the prospect toggles consent in the window between `send_reply/3` (which withheld the message) and `reload_thread()`, `reply_will_email?` can be `true` even though the message was inserted as `:withheld` — the flash is suppressed and no advisory explains what happened. The withheld indicator on the message itself is authoritative, so there is no data loss, but the operator sees a confusing silent state. This could be made accurate by checking the returned message's `delivery_status` directly rather than the recomputed socket assign.
 
 ### Copilot PR overview
 
@@ -1123,9 +1123,9 @@ Before this PR, the nil-org fallback in `from_name/1` returned `"Custyard"` — 
 This PR extends the public-intake “prospect channel” flow to be consent-gated end-to-end, introducing a `:withheld` delivery status for replies that are recorded but deliberately not emailed, while also hardening outbound From-identity and improving email threading and retention behavior.
 
 **Changes:**
-- Add `:withheld` delivery status and enforce a two-layer consent gate (primary in `Conversations.send_reply/3`, secondary in `Email.Outbound.deliver/1`).
+- Add `:withheld` delivery status and enforce a two-layer consent gate (primary in `Threads.send_reply/3`, secondary in `Email.Outbound.deliver/1`).
 - Ensure public-intake outbound mail uses platform From-address + instance branding display name (preventing operator/org From leaks) and improve prospect threading via synthetic Message-IDs for web replies.
-- Split retention: non-intake resolved conversations purge at the existing bound; `:public_intake` retains longer and purges cascade to prospect resume tokens; operator UI reflects `:withheld` state and consent advisories.
+- Split retention: non-intake resolved threads purge at the existing bound; `:public_intake` retains longer and purges cascade to prospect resume tokens; operator UI reflects `:withheld` state and consent advisories.
 
 ### Reviewed changes
 
@@ -1137,14 +1137,14 @@ Show a summary per file
 | ---- | ----------- |
 | test/custyard/message_test.exs | Extends delivery status coverage to include `:withheld`. |
 | test/custyard/email/outbound_test.exs | Adds public-intake prospect delivery matrix tests (consent, From identity, threading, header discipline). |
-| test/custyard/conversations_test.exs | Adds send-reply consent-gate tests and retention split tests (including purge cascade to prospect). |
+| test/custyard/threads_test.exs | Adds send-reply consent-gate tests and retention split tests (including purge cascade to prospect). |
 | test/custyard_web/live/resume_live_test.exs | Verifies purged resume tokens land on the uniform unavailable page. |
-| test/custyard_web/live/staff/conversation_live_test.exs | Validates operator UI behavior for `:withheld` and consent advisory visibility. |
+| test/custyard_web/live/staff/thread_live_test.exs | Validates operator UI behavior for `:withheld` and consent advisory visibility. |
 | lib/custyard/message.ex | Introduces `:withheld` and documents its intent vs provider-side suppression. |
 | lib/custyard/intake.ex | Generates synthetic RFC 5322 Message-IDs for prospect web messages and broadcasts on consent flips. |
 | lib/custyard/email/outbound.ex | Adds defense-in-depth consent re-check, recipient fallback to prospect email, and From-name branding behavior. |
-| lib/custyard/conversations.ex | Implements reply deliverability classification, primary consent gate, and retention split for `:public_intake`. |
-| lib/custyard_web/live/staff/conversation_live.ex | Adds consent advisory, `:withheld` delivery indicator, and deliverability assigns used by the UI. |
+| lib/custyard/threads.ex | Implements reply deliverability classification, primary consent gate, and retention split for `:public_intake`. |
+| lib/custyard_web/live/staff/thread_live.ex | Adds consent advisory, `:withheld` delivery indicator, and deliverability assigns used by the UI. |
 
 ---
 
@@ -1158,18 +1158,18 @@ Safe to merge. The consent gate is correct at both layers, the force-preload dis
 
 Three non-blocking findings: the public reply_delivery/1 API has no freshness contract in its docstring (a footgun for future callers), branding_name() quietly added a DB read to all nil-org email composition (not just intake, as intended), and the post-send flash uses recomputed deliverability rather than the actual delivery status of the message just sent. None of these affect correctness of the consent gate or data integrity.
 
-lib/custyard/conversations.ex (reply_delivery/1 docstring), lib/custyard/email/outbound.ex (from_name fallback scope), and lib/custyard_web/live/staff/conversation_live.ex (flash suppression logic) are the three spots worth a second look before the next developer touches them.
+lib/custyard/threads.ex (reply_delivery/1 docstring), lib/custyard/email/outbound.ex (from_name fallback scope), and lib/custyard_web/live/staff/thread_live.ex (flash suppression logic) are the three spots worth a second look before the next developer touches them.
 
 Important Files Changed
 
 | Filename | Overview |
 |----------|----------|
-| lib/custyard/conversations.ex | Adds reply_delivery/1, reply_deliverable?/1, and the consent gate in send_reply/3. Force preload before calling reply_deliverable? is correct. The cleanup_resolved_conversations query silently drops NULL-source rows (acknowledged carry-forward, schema default prevents it in practice). Logic is sound. |
+| lib/custyard/threads.ex | Adds reply_delivery/1, reply_deliverable?/1, and the consent gate in send_reply/3. Force preload before calling reply_deliverable? is correct. The cleanup_resolved_threads query silently drops NULL-source rows (acknowledged carry-forward, schema default prevents it in practice). Logic is sound. |
 | lib/custyard/email/outbound.ex | Secondary consent gate via resolve_recipient, from_name public-intake clause, and branding_name fallback. The from_name non-intake fallback now calls branding_name() (DB read) for all nil-org mail, broadening scope beyond intake. Current behavior is reasonable, but the change is undocumented in the code. |
-| lib/custyard/intake.ex | Adds synthetic Message-IDs to prospect web messages and broadcasts {:conversation_updated} on set_notification. Both changes are correct and well-scoped. broadcast_notification_change correctly gates on {:ok, _}. |
+| lib/custyard/intake.ex | Adds synthetic Message-IDs to prospect web messages and broadcasts {:thread_updated} on set_notification. Both changes are correct and well-scoped. broadcast_notification_change correctly gates on {:ok, _}. |
 | lib/custyard/message.ex | Adds :withheld to @delivery_statuses. No migration needed (Ecto.Enum stored as string in SQLite). Change is minimal and correct. |
-| lib/custyard_web/live/staff/conversation_live.ex | Adds assign_reply_delivery, the :withheld delivery indicator, and the consent advisory. The post-send flash logic uses reply_will_email? (current consent state after reload, not delivery status of the just-sent message) — a minor category mismatch, but the withheld delivery indicator in the thread is authoritative. |
-| test/custyard/conversations_test.exs | New describe blocks cover both consent gate layers, delivery matrix, retention split, cascade, and From-identity leak. The fresh/1 helper correctly re-reads from DB. Coverage is thorough. |
+| lib/custyard_web/live/staff/thread_live.ex | Adds assign_reply_delivery, the :withheld delivery indicator, and the consent advisory. The post-send flash logic uses reply_will_email? (current consent state after reload, not delivery status of the just-sent message) — a minor category mismatch, but the withheld delivery indicator in the thread is authoritative. |
+| test/custyard/threads_test.exs | New describe blocks cover both consent gate layers, delivery matrix, retention split, cascade, and From-identity leak. The fresh/1 helper correctly re-reads from DB. Coverage is thorough. |
 | test/custyard/email/outbound_test.exs | Adds prospect-channel, From-identity leak regression, and header-discipline tests. intake_message_fixture correctly bypasses send_reply/3 to exercise the secondary gate directly. |
 | test/custyard_web/live/resume_live_test.exs | Adds retention purge test: verifies prospect cascade, token resolution failure, and uniform unavailable page. Correct end-to-end coverage. |
 
@@ -1184,7 +1184,7 @@ Important Files Changed
 
 **Overall Assessment: Well-designed and thoroughly tested implementation**
 
-This PR implements a robust two-layer consent gate for public-intake conversations with excellent test coverage (1712 tests). The architecture is sound, the code follows Elixir/Phoenix best practices, and the security considerations are well-handled.
+This PR implements a robust two-layer consent gate for public-intake threads with excellent test coverage (1712 tests). The architecture is sound, the code follows Elixir/Phoenix best practices, and the security considerations are well-handled.
 
 ---
 
@@ -1211,7 +1211,7 @@ The two-layer consent gate is well-designed:
 ### Issues Identified
 
 **Issue 1: Stale association risk in `reply_delivery/1` (P2)**
-`lib/custyard/conversations.ex:391-412`
+`lib/custyard/threads.ex:391-412`
 
 The docstring now correctly documents the freshness contract (lines 391-396), but future callers who don't read it could pass stale associations. The current implementation relies on documentation rather than enforcement.
 
@@ -1220,12 +1220,12 @@ The docstring now correctly documents the freshness contract (lines 391-396), bu
 **Issue 2: `branding_name()` scope creep (P2)**
 `lib/custyard/email/outbound.ex:162-170`
 
-The catch-all `from_name/1` clause now calls `branding_name()` for all nil-org conversations, not just `public_intake`. This adds a DB read per email for non-intake nil-org mail. The PR description acknowledges this as a carry-forward, but no code comment documents it.
+The catch-all `from_name/1` clause now calls `branding_name()` for all nil-org threads, not just `public_intake`. This adds a DB read per email for non-intake nil-org mail. The PR description acknowledges this as a carry-forward, but no code comment documents it.
 
 *Recommendation:* Add a comment at line 162 explaining the scope creep is known and deferred.
 
 **Issue 3: Flash uses recomputed deliverability (P3)**
-`lib/custyard_web/live/staff/conversation_live.ex:121-143`
+`lib/custyard_web/live/staff/thread_live.ex:121-143`
 
 The `cond` at line 121 now correctly checks `message.delivery_status == :withheld` first (line 125), which is ground truth. This addresses the race condition concern. The remaining branches that check `socket.assigns.reply_will_email?` are secondary fallbacks.
 
@@ -1235,16 +1235,16 @@ The `cond` at line 121 now correctly checks `message.delivery_status == :withhel
 
 ### Copilot's Issue: Pre-reload snapshot concern
 
-The Copilot comment about using `conversation.source` from a pre-reload snapshot at line 133 is technically valid but not a bug:
-- `conversation.source` is immutable after creation
+The Copilot comment about using `thread.source` from a pre-reload snapshot at line 133 is technically valid but not a bug:
+- `thread.source` is immutable after creation
 - The check is gating flash suppression, not security-critical logic
-- The subsequent `reload_conversation()` ensures the full socket state is fresh
+- The subsequent `reload_thread()` ensures the full socket state is fresh
 
 ---
 
 ### Minor Observations
 
-1. **Retention query NULL handling** (`conversations.ex:887-889`): The `is_nil(c.source) or c.source != :public_intake` clause correctly handles NULL sources, matching the schema default behavior.
+1. **Retention query NULL handling** (`threads.ex:887-889`): The `is_nil(c.source) or c.source != :public_intake` clause correctly handles NULL sources, matching the schema default behavior.
 
 2. **Synthetic Message-IDs** (`intake.ex:367-376`): Good practice — enables proper In-Reply-To/References threading even for web-originated prospect messages.
 
@@ -1305,13 +1305,13 @@ The docs claim that reading the prospect inside the transaction means a concurre
 
 #### [Copilot] `lib/custyard/organizations.ex:371`
 
-convert_prospect/3 makes its own link race-safe via `UPDATE ... WHERE organization_id IS NULL`, but other code paths can still overwrite `conversation.organization_id` after conversion if they run with a stale in-memory `%Conversation{organization_id: nil}`. For example, `Intake.capture_email/3` (used from ResumeLive with `socket.assigns.conversation`) updates `organization_id` via a plain `Repo.update()` without a DB-side guard (see lib/custyard/intake.ex link_conversation and lib/custyard_web/live/resume_live.ex do_capture_email). That can clobber a just-converted link and leave the newly created organization orphaned.
+convert_prospect/3 makes its own link race-safe via `UPDATE ... WHERE organization_id IS NULL`, but other code paths can still overwrite `thread.organization_id` after conversion if they run with a stale in-memory `%Thread{organization_id: nil}`. For example, `Intake.capture_email/3` (used from ResumeLive with `socket.assigns.thread`) updates `organization_id` via a plain `Repo.update()` without a DB-side guard (see lib/custyard/intake.ex link_thread and lib/custyard_web/live/resume_live.ex do_capture_email). That can clobber a just-converted link and leave the newly created organization orphaned.
 
 #### [greptile-apps[bot]] `lib/custyard/slugs.ex:280`
 
 [P2]  **Non-exhaustive `case count`**
 
-The `case count do 1 -> ...; 0 -> ...` only handles two values. If a conversation ever has more than one confirmed slug claim (no unique index on `(conversation_id, status = confirmed)` is visible in this diff), `update_all` returns `count > 1`, hits no branch, and raises `CaseClauseError` inside the transaction. The error would bubble out as an uncaught exception rather than `{:error, reason}`, bypassing the compensation path in `handle_convert_result`. Adding `_ -> {:ok, :provisioned}` or a DB-level constraint would make this safe.
+The `case count do 1 -> ...; 0 -> ...` only handles two values. If a thread ever has more than one confirmed slug claim (no unique index on `(thread_id, status = confirmed)` is visible in this diff), `update_all` returns `count > 1`, hits no branch, and raises `CaseClauseError` inside the transaction. The error would bubble out as an uncaught exception rather than `{:error, reason}`, bypassing the compensation path in `handle_convert_result`. Adding `_ -> {:ok, :provisioned}` or a DB-level constraint would make this safe.
 
 #### [greptile-apps[bot]] `lib/custyard/slugs.ex:254`
 
@@ -1326,7 +1326,7 @@ Line 230 says `convert_prospect/2` but the actual function is `convert_prospect/
 Implements the final step of the public-intake stack by adding prospect-to-organization conversion, including a transactional backend conversion path, a slug-claim promotion mechanism, and operator UI support to trigger conversion with safe prefills and auditing.
 
 **Changes:**
-- Add `Organizations.convert_prospect/3` to convert an unlinked `:public_intake` conversation into a newly created organization with transactional linking, optional contact creation, and post-commit side effects.
+- Add `Organizations.convert_prospect/3` to convert an unlinked `:public_intake` thread into a newly created organization with transactional linking, optional contact creation, and post-commit side effects.
 - Add `Slugs.promote/2` to conditionally promote a confirmed slug claim to `:provisioned` and attach it to the new organization.
 - Add operator LiveView controls/tests for “Convert to organization”, plus audit event support for `:prospect_converted` and shared form helper (`empty_to_nil/1`).
 
@@ -1341,12 +1341,12 @@ Show a summary per file
 | test/custyard/slugs_test.exs | Adds coverage for `Slugs.promote/2` behavior across confirmed/unconfirmed/absent/already-provisioned cases. |
 | test/custyard/organizations_test.exs | Adds coverage for `Organizations.convert_prospect/3` happy path, contact creation, slug promotion, compensation paths, and concurrency race outcome. |
 | test/custyard/audit_event_test.exs | Extends audit event type coverage to include `:prospect_converted`. |
-| test/custyard_web/live/staff/conversation_live_test.exs | Adds LiveView coverage for convert UI visibility, prefill, authorization gating, and refusal messaging. |
+| test/custyard_web/live/staff/thread_live_test.exs | Adds LiveView coverage for convert UI visibility, prefill, authorization gating, and refusal messaging. |
 | lib/custyard/slugs.ex | Adds `promote/2` implementation and documents slug promotion semantics. |
 | lib/custyard/organizations.ex | Adds `convert_prospect/3` implementation, including transactional linking and audit recording. |
 | lib/custyard/audit_event.ex | Adds `:prospect_converted` to allowed `AuditEvent` enum values. |
 | lib/custyard_web/live/staff/organizations_live.ex | Removes local `empty_to_nil/1` in favor of shared helper import. |
-| lib/custyard_web/live/staff/conversation_live.ex | Adds convert UI, prefill logic, and event handling to invoke conversion. |
+| lib/custyard_web/live/staff/thread_live.ex | Adds convert UI, prefill logic, and event handling to invoke conversion. |
 | lib/custyard_web/form_helpers.ex | Adds shared `empty_to_nil/1` helper for optional text inputs. |
 
 ---
@@ -1357,34 +1357,34 @@ Show a summary per file
 
 Confidence Score: 3/5
 
-The core conversion logic and compensation path are correct, but the LiveView stays subscribed to the wrong PubSub topic after a conversion completes, meaning the operator's page will silently go stale for org-scoped broadcasts on the newly-linked conversation.
+The core conversion logic and compensation path are correct, but the LiveView stays subscribed to the wrong PubSub topic after a conversion completes, meaning the operator's page will silently go stale for org-scoped broadcasts on the newly-linked thread.
 
-The transaction logic, race guards, and test coverage are thorough. The subscription issue in ConversationLive is a present behavioral gap — after conversion the socket is subscribed to `"conversations"` (global) while the conversation is now linked and will receive state-change broadcasts on `"conversations:org:{id}"`. The operator who just converted a prospect won't see subsequent real-time updates without a page refresh. The non-exhaustive `case count` in `Slugs.promote/2` is a latent crash path if the one-confirmed-slug-per-conversation invariant is ever violated.
+The transaction logic, race guards, and test coverage are thorough. The subscription issue in ThreadLive is a present behavioral gap — after conversion the socket is subscribed to `"threads"` (global) while the thread is now linked and will receive state-change broadcasts on `"threads:org:{id}"`. The operator who just converted a prospect won't see subsequent real-time updates without a page refresh. The non-exhaustive `case count` in `Slugs.promote/2` is a latent crash path if the one-confirmed-slug-per-thread invariant is ever violated.
 
-lib/custyard_web/live/staff/conversation_live.ex (subscription not re-established after conversion), lib/custyard/slugs.ex (non-exhaustive case count)
+lib/custyard_web/live/staff/thread_live.ex (subscription not re-established after conversion), lib/custyard/slugs.ex (non-exhaustive case count)
 
 Important Files Changed
 
 | Filename | Overview |
 |----------|----------|
-| lib/custyard_web/live/staff/conversation_live.ex | Adds convert prospect UI with double authorization checks and correct error handling, but PubSub subscription is not updated after conversion leaves the socket subscribed to the wrong topic. |
+| lib/custyard_web/live/staff/thread_live.ex | Adds convert prospect UI with double authorization checks and correct error handling, but PubSub subscription is not updated after conversion leaves the socket subscribed to the wrong topic. |
 | lib/custyard/organizations.ex | Adds `convert_prospect/3`: two-step flow (create org, then a single transaction for slug promotion, contact creation, and conditional link). Race and compensation logic is correct; post-commit broadcasts and audit trail look solid. |
 | lib/custyard/slugs.ex | Adds `promote/2`: race-safe conditional UPDATE (WHERE status = confirmed). Non-exhaustive `case count` and doc arity mismatch noted. |
 | lib/custyard_web/form_helpers.ex | Extracts `empty_to_nil/2` from `OrganizationsLive` into shared helper; straightforward deduplication. |
 | lib/custyard/audit_event.ex | Adds `:prospect_converted` to the `@event_types` enum list; minimal, correct change. |
 | test/custyard/organizations_test.exs | Comprehensive tests for `convert_prospect/3`: happy path, contact creation, slug promotion states, resume-token untouched, audit event attribution, not-convertible guards, step-2 compensation, concurrent-conversion race, and Lettermint failure. |
-| test/custyard_web/live/staff/conversation_live_test.exs | LiveView tests cover happy path, hidden button for already-linked conversations, role gating for admin operators, and direct unauthorized event submission. |
+| test/custyard_web/live/staff/thread_live_test.exs | LiveView tests cover happy path, hidden button for already-linked threads, role gating for admin operators, and direct unauthorized event submission. |
 | test/custyard/slugs_test.exs | Tests for `promote/2` cover confirmed, unconfirmed, no-claim, and already-provisioned cases — all expected states. |
 | lib/custyard_web/live/staff/organizations_live.ex | Removes now-duplicated `empty_to_nil/2` private function; no other changes. |
 | test/custyard/audit_event_test.exs | Adds `:prospect_converted` to the expected event types assertion; correct. |
 
 Comments Outside Diff (1)
 
-1. `lib/custyard_web/live/staff/conversation_live.ex`, line 49-66 ([link](https://github.com/onetimesecret/custyard/blob/3f1d6e169b984479982d352243fb48aebb0b7976/lib/custyard_web/live/staff/conversation_live.ex#L49-L66))
+1. `lib/custyard_web/live/staff/thread_live.ex`, line 49-66 ([link](https://github.com/onetimesecret/custyard/blob/3f1d6e169b984479982d352243fb48aebb0b7976/lib/custyard_web/live/staff/thread_live.ex#L49-L66))
 
    [P1]  **PubSub subscription not updated after conversion**
 
-   `mount_conversation` subscribes to the global `"conversations"` topic when `conversation.organization_id` is nil, with the comment that "state changes are only published on the global topic" for unlinked conversations. The implication is that org-linked conversations publish state changes to the org-scoped topic (`"conversations:org:{id}"`) instead. After conversion succeeds and `reload_conversation` runs, the conversation now has an `organization_id`, but the socket is still subscribed to the global topic — not to `"conversations:org:{new_org_id}"`. Any subsequent state-change broadcast that only goes to the org-scoped topic won't reach this LiveView until a manual page refresh.
+   `mount_thread` subscribes to the global `"threads"` topic when `thread.organization_id` is nil, with the comment that "state changes are only published on the global topic" for unlinked threads. The implication is that org-linked threads publish state changes to the org-scoped topic (`"threads:org:{id}"`) instead. After conversion succeeds and `reload_thread` runs, the thread now has an `organization_id`, but the socket is still subscribed to the global topic — not to `"threads:org:{new_org_id}"`. Any subsequent state-change broadcast that only goes to the org-scoped topic won't reach this LiveView until a manual page refresh.
 
 ### Claude review bot
 
@@ -1404,23 +1404,23 @@ This is a well-structured PR that implements the final piece of the public-intak
 ### Issues Requiring Attention
 
 #### 1. PubSub Subscription Not Updated After Conversion (P1)
-**File:** `lib/custyard_web/live/staff/conversation_live.ex:49-66`
+**File:** `lib/custyard_web/live/staff/thread_live.ex:49-66`
 
-The `mount_conversation/3` subscribes to topics based on `organization_id`:
-- Nil-org conversations subscribe to global `"conversations"` topic
-- Org-linked conversations subscribe to `"conversations:org:{id}"`
+The `mount_thread/3` subscribes to topics based on `organization_id`:
+- Nil-org threads subscribe to global `"threads"` topic
+- Org-linked threads subscribe to `"threads:org:{id}"`
 
-After a successful conversion, `reload_conversation/1` is called but the PubSub subscription remains on the global topic. The newly-linked conversation will now receive broadcasts on `"conversations:org:{new_org_id}"`, which the LiveView won't receive.
+After a successful conversion, `reload_thread/1` is called but the PubSub subscription remains on the global topic. The newly-linked thread will now receive broadcasts on `"threads:org:{new_org_id}"`, which the LiveView won't receive.
 
 **Suggested fix:** After successful conversion in `handle_convert_result/2`, unsubscribe from the global topic and subscribe to the org-scoped topic:
 
 ```elixir
-defp handle_convert_result({:ok, conversation}, socket) do
+defp handle_convert_result({:ok, thread}, socket) do
   if connected?(socket) do
-    Phoenix.PubSub.unsubscribe(Custyard.PubSub, "conversations")
+    Phoenix.PubSub.unsubscribe(Custyard.PubSub, "threads")
     Phoenix.PubSub.subscribe(
       Custyard.PubSub,
-      "conversations:org:#{conversation.organization_id}"
+      "threads:org:#{thread.organization_id}"
     )
   end
 
@@ -1428,7 +1428,7 @@ defp handle_convert_result({:ok, conversation}, socket) do
    socket
    |> assign(:show_convert_form, false)
    |> put_flash(:info, "Converted to a new organization")
-   |> reload_conversation()}
+   |> reload_thread()}
 end
 ```
 
@@ -1442,7 +1442,7 @@ case count do
 end
 ```
 
-If `update_all` ever returns `count > 1` (e.g., if the one-confirmed-slug-per-conversation invariant is violated), this raises `CaseClauseError` inside the transaction, bypassing the compensation path.
+If `update_all` ever returns `count > 1` (e.g., if the one-confirmed-slug-per-thread invariant is violated), this raises `CaseClauseError` inside the transaction, bypassing the compensation path.
 
 **Suggested fix:**
 ```elixir
@@ -1478,7 +1478,7 @@ The comment states reading the prospect inside the transaction prevents a concur
 
 4. **Authorization double-check** - The `convert_prospect` event handler checks authorization again (line 254), not just relying on UI gating.
 
-5. **Preload safety** - The returned conversation in `do_convert/2` preloads `:organization` and `:contact` (line 375), preventing N+1 queries downstream.
+5. **Preload safety** - The returned thread in `do_convert/2` preloads `:organization` and `:contact` (line 375), preventing N+1 queries downstream.
 
 ---
 
@@ -1500,7 +1500,7 @@ Test coverage is thorough:
 
 ### Minor Suggestions
 
-1. **Consider extracting subscription logic** - The PubSub subscription pattern in `mount_conversation/3` could be extracted to a helper that's reusable after conversion.
+1. **Consider extracting subscription logic** - The PubSub subscription pattern in `mount_thread/3` could be extracted to a helper that's reusable after conversion.
 
 2. **Form helper import** - Good deduplication moving `empty_to_nil/1` to `FormHelpers`. The import pattern is clean.
 

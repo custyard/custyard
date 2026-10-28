@@ -4,12 +4,12 @@ Customer onboarding platform with email ingestion via LMTP/IMAP.
 
 ## Background
 
-Custyard is a self-hosted, relationship-centric service platform for the **ante-CRM period**: the interval between a prospect's first pricing-page inquiry ("Join the Waitlist", "Contact Us") and a stable, everyday client relationship. It ingests customer communication with zero friction (routed webhooks, LMTP/IMAP, portal filings), resolves every message to an organization/contact/conversation automatically, and replaces the staff's queue discipline with a transparent, configurable attention-scoring engine plus neglect detection — while a white-label-capable portal makes the white-glove relationship legible to the customer.
+Custyard is a self-hosted, relationship-centric service platform for the **ante-CRM period**: the interval between a prospect's first pricing-page inquiry ("Join the Waitlist", "Contact Us") and a stable, everyday client relationship. It ingests customer communication with zero friction (routed webhooks, LMTP/IMAP, portal filings), resolves every message to an organization/contact/thread automatically, and replaces the staff's queue discipline with a transparent, configurable attention-scoring engine plus neglect detection — while a white-label-capable portal makes the white-glove relationship legible to the customer.
 
 The full framing lives in the design docs:
 
 - [Problem space and product thesis](docs/design/problem-space.md) — the ante-CRM framing, why existing tool categories don't fit, and the document map
-- [Prospect conversation loop spec](docs/design/spec-conversation-loop.md) — the end-to-end MVP loop: intake → attention queue → threaded reply → delivery tracking → portal
+- [Prospect thread loop spec](docs/design/spec-thread-loop.md) — the end-to-end MVP loop: intake → attention queue → threaded reply → delivery tracking → portal
 - [Software design document](docs/design/sdd.md) and [implementation status](docs/design/sdd-status.md)
 
 ## Ownership and access

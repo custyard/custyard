@@ -22,22 +22,22 @@ Planning Artifacts:
 
 Core Implementation:
 
-- lib/custyard/conversations.ex - Conversation CRUD, state transitions, attention queue queries
+- lib/custyard/threads.ex - Thread CRUD, state transitions, attention queue queries
 - lib/custyard/scoring.ex - Composite scoring algorithm with breakdown/transparency
 - lib/custyard/scoring/scheduler.ex - Background recalculation (5-min interval), dormancy checks, neglect notifications
-- lib/custyard/scoring/recalculator.ex - Batch score recalculation (100-conversation batches)
+- lib/custyard/scoring/recalculator.ex - Batch score recalculation (100-thread batches)
 - lib/custyard/email/parser.ex - RFC 5322 parsing, MIME multipart, charset handling
 - lib/custyard/email/processor.ex - Email workflow orchestration (webhook payloads, sender matching, threading)
 - lib/custyard/email/lmtp_server.ex - LMTP server with STARTTLS, rate limiting
 - lib/custyard/email/imap_pollers.ex, imap_poll.ex - per-channel IMAP polling (inbound-channels Phase 3)
 - lib/custyard/email/sender_matcher.ex - Contact/org matching, on-demand creation, unmatched handling
 - lib/custyard/email/thread_matcher.ex - In-Reply-To/References header threading
-- lib/custyard/email/sieve_header_mapper.ex - Sieve-injected header → conversation property mapping
+- lib/custyard/email/sieve_header_mapper.ex - Sieve-injected header → thread property mapping
 - lib/custyard/notifications/neglect_checker.ex - Threshold breach detection, transition-based notifications
 - lib/custyard/notifications/email.ex - Neglect alert email delivery (Swoosh)
-- lib/custyard/conversations/dormancy_checker.ex - Automatic waiting → dormant transitions
-- lib/custyard_web/live/staff/\*.ex - Attention queue, neglect report, org/project management, conversation detail
-- lib/custyard_web/live/portal/\*.ex - Customer portal with requests, projects, conversations
+- lib/custyard/threads/dormancy_checker.ex - Automatic waiting → dormant transitions
+- lib/custyard_web/live/staff/\*.ex - Attention queue, neglect report, org/project management, thread detail
+- lib/custyard_web/live/portal/\*.ex - Customer portal with requests, projects, threads
 
 Security:
 
@@ -53,10 +53,10 @@ Security:
 
 | User Story | Feature                                | Status |
 | ---------- | -------------------------------------- | ------ |
-| US-1       | Inbound email creates a conversation   | Done   |
+| US-1       | Inbound email creates a thread   | Done   |
 | US-2       | Sieve pre-routing injects metadata     | Done   |
-| US-3       | Lightweight conversation state model   | Done   |
-| US-4       | Conversations spawn tasks              | Done   |
+| US-3       | Lightweight thread state model   | Done   |
+| US-4       | Threads spawn tasks              | Done   |
 | US-5       | Attention queue with composite scoring | Done   |
 | US-6       | Neglect alerts and thresholds          | Done   |
 | US-7       | Customer portal (view, file, reply)    | Done   |
@@ -87,10 +87,10 @@ Security:
 | ----------------- | ---------------------------------------------------------------------------------------------- | ------- |
 | Organization      | name, domain, tier, token, branding fields, custom_domain. Unique indices on token/domain.     | Done    |
 | Contact           | email, name, is_admin, email_status (valid/bounced/suppressed, from delivery events). Composite unique (email, org_id). No portal account yet. | Done    |
-| Conversation      | Full state model, urgency, cached_score, snoozed_until, last_neglect_notification. No tags substrate (SDD §4.1 freeform labels). | Partial |
+| Thread      | Full state model, urgency, cached_score, snoozed_until, last_neglect_notification. No tags substrate (SDD §4.1 freeform labels). | Partial |
 | Message           | source, o󠄁r󠄁i󠄁g󠄁i󠄁n󠄁,󠄁 s󠄁e󠄁n󠄁d󠄁e󠄁r󠄁_e󠄁m󠄁a󠄁i󠄁l󠄁,󠄁 b󠄁o󠄁d󠄁y󠄁,󠄁 h󠄁t󠄁m󠄁l󠄁_b󠄁o󠄁d󠄁y󠄁,󠄁 t󠄁o󠄁/󠄁c󠄁c󠄁 a󠄁d󠄁d󠄁r󠄁e󠄁s󠄁s󠄁e󠄁s󠄁,󠄁 r󠄁e󠄁p󠄁l󠄁y󠄁_t󠄁o󠄁,󠄁 m󠄁e󠄁s󠄁s󠄁a󠄁g󠄁e󠄁_i󠄁d󠄁,󠄁 i󠄁n󠄁_r󠄁e󠄁p󠄁l󠄁y󠄁_t󠄁o󠄁,󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁_s󠄁t󠄁a󠄁t󠄁u󠄁s󠄁,󠄁 t󠄁r󠄁i󠄁a󠄁g󠄁e󠄁_c󠄁l󠄁a󠄁s󠄁s󠄁,󠄁 a󠄁u󠄁t󠄁h󠄁e󠄁n󠄁t󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁,󠄁 i󠄁s󠄁_i󠄁n󠄁t󠄁e󠄁r󠄁n󠄁a󠄁l󠄁_n󠄁o󠄁t󠄁e󠄁,󠄁 d󠄁e󠄁l󠄁e󠄁t󠄁e󠄁d󠄁_a󠄁t󠄁;󠄁 i󠄁n󠄁s󠄁e󠄁r󠄁t󠄁e󠄁d󠄁_a󠄁t󠄁 a󠄁n󠄁d󠄁 u󠄁p󠄁d󠄁a󠄁t󠄁e󠄁d󠄁_a󠄁t󠄁.󠄁 P󠄁e󠄁r󠄁-󠄁r󠄁e󠄁c󠄁i󠄁p󠄁i󠄁e󠄁n󠄁t󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁 i󠄁n󠄁 `message_recipient_statuses`.󠄁 | Done    |
 | Attachment        | `message_attachments` (inbound-channels Phase 2): content-addressed files under `ATTACHMENT_DIR`, sniffed type, per-channel cap, authenticated operator and portal download. Outbound attachments not yet. | Partial |
-| Task              | title, state, portal_visible, due_at. FK to conversation and project.                          | Done    |
+| Task              | title, state, portal_visible, due_at. FK to thread and project.                          | Done    |
 | Project           | title, description, dates, portal_visible, project_type, tags, is_template.                    | Done    |
 | Project Template  | is_template flag on Project. Template instantiation with date calculation.                     | Done    |
 | Activity Log      | `audit_events` (󠄁`Custyard.AuditEvent`)󠄁 i󠄁s󠄁 a󠄁n󠄁 a󠄁p󠄁p󠄁e󠄁n󠄁d󠄁-󠄁o󠄁n󠄁l󠄁y󠄁 l󠄁o󠄁g󠄁 o󠄁f󠄁 w󠄁e󠄁b󠄁h󠄁o󠄁o󠄁k󠄁 p󠄁r󠄁o󠄁c󠄁e󠄁s󠄁s󠄁i󠄁n󠄁g󠄁,󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁-󠄁s󠄁t󠄁a󠄁t󠄁u󠄁s󠄁 c󠄁h󠄁a󠄁n󠄁g󠄁e󠄁s󠄁,󠄁 p󠄁r󠄁o󠄁s󠄁p󠄁e󠄁c󠄁t󠄁 c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁i󠄁o󠄁n󠄁,󠄁 s󠄁l󠄁u󠄁g󠄁 r󠄁e󠄁l󠄁e󠄁a󠄁s󠄁e󠄁,󠄁 o󠄁p󠄁e󠄁r󠄁a󠄁t󠄁o󠄁r󠄁 a󠄁c󠄁c󠄁o󠄁u󠄁n󠄁t󠄁s󠄁 a󠄁n󠄁d󠄁 a󠄁c󠄁k󠄁n󠄁o󠄁w󠄁l󠄁e󠄁d󠄁g󠄁m󠄁e󠄁n󠄁t󠄁s󠄁.󠄁 I󠄁t󠄁 d󠄁o󠄁e󠄁s󠄁 n󠄁o󠄁t󠄁 f󠄁e󠄁e󠄁d󠄁 t󠄁h󠄁e󠄁 o󠄁r󠄁g󠄁a󠄁n󠄁i󠄁z󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 t󠄁i󠄁m󠄁e󠄁l󠄁i󠄁n󠄁e󠄁 t󠄁h󠄁e󠄁 S󠄁D󠄁D󠄁 d󠄁e󠄁s󠄁c󠄁r󠄁i󠄁b󠄁e󠄁s󠄁.󠄁 | P󠄁a󠄁r󠄁t󠄁i󠄁a󠄁l󠄁 |
@@ -116,7 +116,7 @@ All scoring components implemented per spec:
 
 ### Acceptance Criteria Coverage
 
-US-1 (Email → Conversation):
+US-1 (Email → Thread):
 
 - [x] Sender matched to Contact → links to Contact and Organization
 - [x] Unknown sender, known domain → links to Organization with flag
@@ -128,7 +128,7 @@ US-1 (Email → Conversation):
 US-2 (Sieve Pre-routing):
 
 - [x] Reads configurable custom headers
-- [x] Maps header values to conversation properties (tier, urgency)
+- [x] Maps header values to thread properties (tier, urgency)
 - [x] Purely additive — works correctly with no custom headers
 
 US-3 (State Model):
@@ -143,9 +143,9 @@ US-3 (State Model):
 US-4 (Tasks):
 
 - [x] Title, due date, portal visibility
-- [x] Conversation can have zero or many tasks
+- [x] Thread can have zero or many tasks
 - [x] States: Open, In Progress, Done
-- [x] Task completion does not auto-resolve conversation
+- [x] Task completion does not auto-resolve thread
 - [ ] Effort estimate field (not implemented)
 - [ ] Description field (not implemented)
 
@@ -171,8 +171,8 @@ US-7 (Client Portal):
 
 - [x] Scoped to organization (no cross-org visibility)
 - [x] File new requests (title + description)
-- [x] View conversations with state and last activity
-- [x] Reply to existing conversations
+- [x] View threads with state and last activity
+- [x] Reply to existing threads
 - [x] View portal-visible tasks
 - [ ] Per-contact authentication (uses org token instead of Rodauth)
 - [ ] Admin vs non-admin contact visibility scoping
@@ -186,10 +186,10 @@ US-8 (White-label Branding):
 
 US-9 (Organization View):
 
-- [x] All conversations grouped by state
+- [x] All threads grouped by state
 - [x] Contact list
 - [x] Organization metadata (tier, domain, branding)
-- [x] One-click navigation from conversation → organization
+- [x] One-click navigation from thread → organization
 - [ ] Unified activity timeline (no ActivityLog entity yet)
 - [ ] Freeform notes / custom fields
 - [ ] Search within organization scope
@@ -199,7 +199,7 @@ US-10 (Projects with Templates):
 - [x] Title, description, dates, task list
 - [x] Templates with is_template flag
 - [x] Portal visibility (per-project and per-task)
-- [x] Project linked to conversation (optional)
+- [x] Project linked to thread (optional)
 - [x] No "project completion" lifecycle state
 - [x] T󠄁e󠄁m󠄁p󠄁l󠄁a󠄁t󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁n󠄁t󠄁i󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 w󠄁i󠄁t󠄁h󠄁 r󠄁e󠄁l󠄁a󠄁t󠄁i󠄁v󠄁e󠄁 →󠄁 a󠄁b󠄁s󠄁o󠄁l󠄁u󠄁t󠄁e󠄁 d󠄁a󠄁t󠄁e󠄁 c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁i󠄁o󠄁n󠄁 (󠄁`Projects.create_from_template/3` k󠄁e󠄁e󠄁p󠄁s󠄁 e󠄁a󠄁c󠄁h󠄁 t󠄁a󠄁s󠄁k󠄁'󠄁s󠄁 o󠄁f󠄁f󠄁s󠄁e󠄁t󠄁 f󠄁r󠄁o󠄁m󠄁 t󠄁h󠄁e󠄁 t󠄁e󠄁m󠄁p󠄁l󠄁a󠄁t󠄁e󠄁'󠄁s󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁 d󠄁a󠄁t󠄁e󠄁)󠄁
 
@@ -243,8 +243,8 @@ A󠄁s󠄁 o󠄁f󠄁 2󠄁0󠄁2󠄁6󠄁-󠄁1󠄁0󠄁-󠄁2󠄁6󠄁.󠄁 E�
 - **Portal Account entity** (SDD §4.1) - Per-contact authentication with Rodauth. Currently using org-level token auth instead of individual contact accounts.
 - **Activity Log entity** (SDD §4.1) - Append-only log for organization timeline and audit trail. Organization timeline view exists but without dedicated log table.
 - **Attachment entity** (SDD §4.1) - Inbound side done in inbound-channels Phase 2 (`Custyard.MessageAttachment`, `Custyard.Attachments`). Portal download followed. Outbound reply attachments remain.
-- ~~**Outbound delivery-status webhook** (SDD §5.2)~~ - Done in inbound-channels Phase 0: `Custyard.Email.DeliveryStatus` applies Lettermint lifecycle events to `messages.delivery_status` (rank rule, terminal states, `:withheld` and inbound rows never touched), writes a `:delivery_status_updated` audit event, and the conversation view shows delivered/suppressed indicators. Secret: `WEBHOOK_SECRET_LETTERMINT_STATUS`. Bounced and suppressed replies flag the recipient contact (`contacts.email_status`) and send the operator a notice; a later delivery clears the flag. Delivery is tracked per recipient (`message_recipient_statuses`): the message indicator follows the To address, a failed CC is listed under the message, and the notice goes out once per failed recipient.
+- ~~**Outbound delivery-status webhook** (SDD §5.2)~~ - Done in inbound-channels Phase 0: `Custyard.Email.DeliveryStatus` applies Lettermint lifecycle events to `messages.delivery_status` (rank rule, terminal states, `:withheld` and inbound rows never touched), writes a `:delivery_status_updated` audit event, and the thread view shows delivered/suppressed indicators. Secret: `WEBHOOK_SECRET_LETTERMINT_STATUS`. Bounced and suppressed replies flag the recipient contact (`contacts.email_status`) and send the operator a notice; a later delivery clears the flag. Delivery is tracked per recipient (`message_recipient_statuses`): the message indicator follows the To address, a failed CC is listed under the message, and the notice goes out once per failed recipient.
 - **Task effort estimate / description fields** (SDD §4.1) - Task schema has title, state, due_at, portal_visible but not effort_estimate or description.
 - **Organization notes and custom fields** (SDD §4.1) - Not on Organization schema.
 - **Organization-scoped search** (SDD US-9) - No search implementation.
-- **Tag filtering in attention queue** (SDD US-5) - Conversations have no tags substrate (tags exist only on projects) and the queue has no filter UI.
+- **Tag filtering in attention queue** (SDD US-5) - Threads have no tags substrate (tags exist only on projects) and the queue has no filter UI.

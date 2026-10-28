@@ -2,14 +2,14 @@ defmodule Custyard.Message do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Custyard.{Conversation, Repo}
+  alias Custyard.{Thread, Repo}
 
   # Message types: how the message was sent
-  # :prospect — anonymous public-intake submission or conversation-link reply
+  # :prospect — anonymous public-intake submission or thread-link reply
   @sources [:email, :portal, :staff, :prospect]
 
   # Origins: which adapter/integration the message came from (for audit/reporting)
-  # Aligns with Conversation.@sources for consistent tracking
+  # Aligns with Thread.@sources for consistent tracking
   @origins [
     :email,
     :lettermint,
@@ -34,7 +34,7 @@ defmodule Custyard.Message do
   # distinct from provider-side :suppressed: consent-withheld is an expected
   # state, provider-suppressed is a delivery failure.
   #
-  # Ranking (spec-conversation-loop, Delivery Tracking): pending < sending <
+  # Ranking (spec-thread-loop, Delivery Tracking): pending < sending <
   # sent < delivered; bounced, suppressed and failed are terminal. A status
   # event only advances a message when its rank is higher or it is terminal.
   # :staff_sent — a reply the staff sent from their own mailbox, outside
@@ -100,7 +100,7 @@ defmodule Custyard.Message do
     belongs_to :forwarded_by_staff, Custyard.StaffAccount
     field :forwarded_by_email, :string
     has_many :attachments, Custyard.MessageAttachment
-    # Per-recipient delivery outcome (spec-conversation-loop, "Delivery Tracking")
+    # Per-recipient delivery outcome (spec-thread-loop, "Delivery Tracking")
     has_many :recipient_statuses, Custyard.MessageRecipientStatus
 
     # Soft delete (GitHub-style tombstone): the body stays in the database and
@@ -110,7 +110,7 @@ defmodule Custyard.Message do
     belongs_to :deleted_by_staff, Custyard.StaffAccount
 
     belongs_to :tenant, Custyard.Tenant
-    belongs_to :conversation, Custyard.Conversation
+    belongs_to :thread, Custyard.Thread
 
     timestamps(type: :utc_datetime)
   end
@@ -145,10 +145,10 @@ defmodule Custyard.Message do
       :html_body,
       :forwarded_by_staff_id,
       :forwarded_by_email,
-      :conversation_id
+      :thread_id
     ])
-    |> put_tenant_from_conversation()
-    |> validate_required([:tenant_id, :source, :body, :conversation_id])
+    |> put_tenant_from_thread()
+    |> validate_required([:tenant_id, :source, :body, :thread_id])
     |> validate_length(:body, max: 100_000)
     |> validate_length(:html_body, max: 500_000)
     |> validate_length(:forwarded_by_email, max: 255)
@@ -157,7 +157,7 @@ defmodule Custyard.Message do
     |> validate_length(:to_addresses, max: 50)
     |> validate_length(:cc_addresses, max: 50)
     # Note: :source and :origin use Ecto.Enum which validates values automatically
-    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:thread_id)
     |> foreign_key_constraint(:inbound_channel_id)
     |> foreign_key_constraint(:forwarded_by_staff_id)
     |> foreign_key_constraint(:tenant_id)
@@ -243,11 +243,11 @@ defmodule Custyard.Message do
 
   # The parent thread supplies authoritative tenant ownership for all writers.
   # Explicit attributes remain subject to the composite database foreign key.
-  defp put_tenant_from_conversation(changeset) do
-    case get_field(changeset, :conversation_id) do
+  defp put_tenant_from_thread(changeset) do
+    case get_field(changeset, :thread_id) do
       id when is_integer(id) ->
-        case Repo.get(Conversation, id) do
-          %Conversation{tenant_id: tenant_id} ->
+        case Repo.get(Thread, id) do
+          %Thread{tenant_id: tenant_id} ->
             case get_field(changeset, :tenant_id) do
               nil -> put_change(changeset, :tenant_id, tenant_id)
               ^tenant_id -> changeset

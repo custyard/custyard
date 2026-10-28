@@ -23,7 +23,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         metadata: %{html_body: "<p>Hello <b>bold</b></p>"}
       }
 
-      assert {:ok, _conversation} =
+      assert {:ok, _thread} =
                SenderMatching.process(normalized, %{
                  tenant_id: org.tenant_id,
                  default_organization_id: org.id,
@@ -46,17 +46,17 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
           message_id: "plus-tag@example.com"
         })
 
-      assert {:ok, conversation} =
+      assert {:ok, thread} =
                SenderMatching.process(normalized, %{
                  tenant_id: org.tenant_id,
                  default_organization_id: org.id
                })
 
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert message.to_addresses == ["support+billing@example.com"]
     end
 
-    test "creates new conversation and message for new sender" do
+    test "creates new thread and message for new sender" do
       org = insert_organization(domain: "acme.example.com")
 
       normalized = %{
@@ -76,28 +76,28 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         project_id: nil
       }
 
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
-      assert conversation.organization_id == org.id
-      assert conversation.subject == "Help needed"
-      assert conversation.state == :new
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
+      assert thread.organization_id == org.id
+      assert thread.subject == "Help needed"
+      assert thread.state == :new
 
       # Verify message was created
       messages = Repo.all(Message)
       assert length(messages) == 1
       [message] = messages
-      assert message.conversation_id == conversation.id
+      assert message.thread_id == thread.id
       assert message.body == "I need assistance with my account"
       assert message.source == :email
     end
 
-    test "threads reply to existing conversation" do
+    test "threads reply to existing thread" do
       org = insert_organization(domain: "acme.example.com")
       contact = insert_contact(organization_id: org.id, email: "bob@acme.example.com")
 
-      existing_conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      existing_conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       existing_msg =
-        insert_message(conversation_id: existing_conv.id, message_id: "orig-msg@example.com")
+        insert_message(thread_id: existing_conv.id, message_id: "orig-msg@example.com")
 
       normalized = %{
         from: "bob@acme.example.com",
@@ -116,23 +116,23 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         project_id: nil
       }
 
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
-      # Should return the existing conversation, not create a new one
-      assert conversation.id == existing_conv.id
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
+      # Should return the existing thread, not create a new one
+      assert thread.id == existing_conv.id
 
-      # Should now have 2 messages on the conversation
-      messages = Message |> Ecto.Query.where(conversation_id: ^existing_conv.id) |> Repo.all()
+      # Should now have 2 messages on the thread
+      messages = Message |> Ecto.Query.where(thread_id: ^existing_conv.id) |> Repo.all()
       assert length(messages) == 2
     end
 
-    test "returns existing conversation for duplicate message_id (idempotency)" do
+    test "returns existing thread for duplicate message_id (idempotency)" do
       org = insert_organization(domain: "acme.example.com")
 
-      # Create existing conversation with a message
-      existing_conv = insert_conversation(organization_id: org.id, subject: "Original")
+      # Create existing thread with a message
+      existing_conv = insert_thread(organization_id: org.id, subject: "Original")
 
       _existing_msg =
-        insert_message(conversation_id: existing_conv.id, message_id: "dup-msg@example.com")
+        insert_message(thread_id: existing_conv.id, message_id: "dup-msg@example.com")
 
       # Try to process the same message_id again
       normalized = %{
@@ -152,9 +152,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         project_id: nil
       }
 
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
-      # Should return existing conversation, not create duplicate
-      assert conversation.id == existing_conv.id
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
+      # Should return existing thread, not create duplicate
+      assert thread.id == existing_conv.id
 
       # Should not have created an additional message
       messages = Message |> Ecto.Query.where(message_id: "dup-msg@example.com") |> Repo.all()
@@ -197,7 +197,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
 
       assert length(messages) == 2
 
-      assert MapSet.new(Enum.map(messages, & &1.conversation_id)) ==
+      assert MapSet.new(Enum.map(messages, & &1.thread_id)) ==
                MapSet.new([first.id, second.id])
     end
 
@@ -229,7 +229,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert {:ok, retry} = SenderMatching.process(second_event, route_context)
       assert retry.id == first.id
 
-      messages = Message |> Ecto.Query.where(conversation_id: ^first.id) |> Repo.all()
+      messages = Message |> Ecto.Query.where(thread_id: ^first.id) |> Repo.all()
       assert Enum.sort(Enum.map(messages, & &1.body)) == ["First", "Second"]
     end
 
@@ -284,8 +284,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         project_id: nil
       }
 
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
-      assert conversation.urgency == :urgent
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
+      assert thread.urgency == :urgent
     end
 
     test "detects elevated subject keywords" do
@@ -308,8 +308,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         project_id: nil
       }
 
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
-      assert conversation.urgency == :elevated
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
+      assert thread.urgency == :elevated
     end
 
     test "a suspect delivery stays at normal urgency despite a mapped priority header" do
@@ -345,9 +345,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         triage_class: :suspect
       }
 
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
-      assert conversation.suspect == true
-      assert conversation.urgency == :normal
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
+      assert thread.suspect == true
+      assert thread.urgency == :normal
 
       # The same header on customer mail still applies.
       customer = %{
@@ -362,21 +362,21 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert trusted.urgency == :urgent
     end
 
-    test "reactivates dormant conversation on new message" do
+    test "reactivates dormant thread on new message" do
       org = insert_organization(domain: "acme.example.com")
 
-      # Create dormant conversation
+      # Create dormant thread
       dormant_conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :dormant,
           subject: "Old issue"
         )
 
       existing_msg =
-        insert_message(conversation_id: dormant_conv.id, message_id: "old-msg@example.com")
+        insert_message(thread_id: dormant_conv.id, message_id: "old-msg@example.com")
 
-      # Reply to dormant conversation
+      # Reply to dormant thread
       normalized = %{
         from: "alice@acme.example.com",
         subject: "Re: Old issue",
@@ -394,10 +394,10 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         project_id: nil
       }
 
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
-      assert conversation.id == dormant_conv.id
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
+      assert thread.id == dormant_conv.id
       # Should be reactivated
-      assert conversation.state == :active
+      assert thread.state == :active
     end
 
     test "assigns project_id from route context" do
@@ -421,8 +421,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         default_project_id: project.id
       }
 
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
-      assert conversation.project_id == project.id
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
+      assert thread.project_id == project.id
     end
 
     test "refuses sender matching without tenant context" do
@@ -444,7 +444,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert Repo.aggregate(Message, :count) == 0
     end
 
-    test "a Slack event creates a conversation with no contact" do
+    test "a Slack event creates a thread with no contact" do
       org = insert_organization(domain: "slack.example.com")
       route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 7}
 
@@ -460,12 +460,12 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
           }
         })
 
-      assert {:ok, conversation} = SenderMatching.process(event, route_context)
-      assert conversation.organization_id == nil
-      assert conversation.contact_id == nil
-      assert conversation.source == :slack
+      assert {:ok, thread} = SenderMatching.process(event, route_context)
+      assert thread.organization_id == nil
+      assert thread.contact_id == nil
+      assert thread.source == :slack
 
-      [message] = Message |> Ecto.Query.where(conversation_id: ^conversation.id) |> Repo.all()
+      [message] = Message |> Ecto.Query.where(thread_id: ^thread.id) |> Repo.all()
       assert message.sender_email == "U12345"
       assert message.body == "hello from slack"
     end
@@ -505,7 +505,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert {:ok, second} = SenderMatching.process(reply.("p2", "Second"), route_context)
       assert second.id == first.id
 
-      messages = Message |> Ecto.Query.where(conversation_id: ^first.id) |> Repo.all()
+      messages = Message |> Ecto.Query.where(thread_id: ^first.id) |> Repo.all()
       assert Enum.sort(Enum.map(messages, & &1.body)) == ["First", "Second"]
     end
 
@@ -523,20 +523,20 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      assert {:ok, conversation} =
+      assert {:ok, thread} =
                SenderMatching.process(normalized, %{
                  tenant_id: org.tenant_id,
                  default_organization_id: org.id,
                  project_id: nil
                })
 
-      assert conversation.subject == "(no subject)"
+      assert thread.subject == "(no subject)"
 
-      [message] = Message |> Ecto.Query.where(conversation_id: ^conversation.id) |> Repo.all()
+      [message] = Message |> Ecto.Query.where(thread_id: ^thread.id) |> Repo.all()
       assert message.body == "(empty message)"
     end
 
-    test "a missing From yields a conversation without a contact" do
+    test "a missing From yields a thread without a contact" do
       org = insert_organization(domain: "nofrom.example.com")
 
       normalized = %{
@@ -550,22 +550,22 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      assert {:ok, conversation} =
+      assert {:ok, thread} =
                SenderMatching.process(normalized, %{
                  tenant_id: org.tenant_id,
                  default_organization_id: org.id,
                  project_id: nil
                })
 
-      assert conversation.contact_id == nil
+      assert thread.contact_id == nil
     end
   end
 
-  describe "customer replies to waiting conversations" do
-    test "an inbound email reactivates a conversation waiting on the customer" do
+  describe "customer replies to waiting threads" do
+    test "an inbound email reactivates a thread waiting on the customer" do
       org = insert_organization(domain: "acme.example.com")
-      waiting = insert_conversation(organization_id: org.id, state: :waiting, subject: "Pending")
-      existing = insert_message(conversation_id: waiting.id, message_id: "waiting-1@example.com")
+      waiting = insert_thread(organization_id: org.id, state: :waiting, subject: "Pending")
+      existing = insert_message(thread_id: waiting.id, message_id: "waiting-1@example.com")
 
       normalized = %{
         from: "alice@acme.example.com",
@@ -578,20 +578,20 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      assert {:ok, conversation} =
+      assert {:ok, thread} =
                SenderMatching.process(normalized, %{
                  tenant_id: org.tenant_id,
                  default_organization_id: org.id,
                  project_id: nil
                })
 
-      assert conversation.id == waiting.id
-      assert conversation.state == :active
+      assert thread.id == waiting.id
+      assert thread.state == :active
     end
   end
 
   describe "provider delivery id dedup" do
-    alias Custyard.Conversation
+    alias Custyard.Thread
     alias Custyard.Webhooks.Adapters.Lettermint
 
     defp lettermint_envelope(delivery_id, headers) do
@@ -614,7 +614,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       }
     end
 
-    test "a retried delivery creates exactly one conversation and one message" do
+    test "a retried delivery creates exactly one thread and one message" do
       org = insert_organization(domain: "acme.example.com")
       route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 3}
 
@@ -629,7 +629,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert {:ok, retry} = SenderMatching.process(normalized, route_context)
       assert retry.id == first.id
 
-      assert Repo.aggregate(Conversation, :count) == 1
+      assert Repo.aggregate(Thread, :count) == 1
       assert Repo.aggregate(Message, :count) == 1
     end
 
@@ -644,9 +644,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert {:ok, retry} = SenderMatching.process(normalized, route_context)
       assert retry.id == first.id
 
-      assert Repo.aggregate(Conversation, :count) == 1
+      assert Repo.aggregate(Thread, :count) == 1
       [message] = Repo.all(Message)
-      assert message.conversation_id == first.id
+      assert message.thread_id == first.id
       assert message.message_id == nil
     end
 
@@ -660,32 +660,32 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
           ])
         )
 
-      assert {:ok, conversation} =
+      assert {:ok, thread} =
                SenderMatching.process(normalized, %{
                  tenant_id: org.tenant_id,
                  default_organization_id: org.id,
                  route_id: 3
                })
 
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert message.provider_delivery_id == "delivery-3"
       assert message.lettermint_message_id == "lm-delivery-3"
       assert message.message_id == "<stored-3@acme.example.com>"
     end
 
-    test "a replayed delivery does not reactivate a resolved conversation" do
+    test "a replayed delivery does not reactivate a resolved thread" do
       org = insert_organization(domain: "acme.example.com")
       route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 3}
 
       {:ok, normalized} = Lettermint.normalize(lettermint_envelope("delivery-4", []))
-      assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
+      assert {:ok, thread} = SenderMatching.process(normalized, route_context)
 
-      conversation
-      |> Conversation.state_changeset(:resolved)
+      thread
+      |> Thread.state_changeset(:resolved)
       |> Repo.update!()
 
       assert {:ok, replayed} = SenderMatching.process(normalized, route_context)
-      assert replayed.id == conversation.id
+      assert replayed.id == thread.id
       assert replayed.state == :resolved
     end
   end

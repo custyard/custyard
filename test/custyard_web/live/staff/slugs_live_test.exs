@@ -21,9 +21,9 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
   end
 
   defp claim!(slug_text, email \\ "buyer@example.com") do
-    conversation = insert_conversation(source: :public_intake)
-    {:ok, slug, token} = Slugs.claim(slug_text, email, conversation)
-    %{conversation: conversation, slug: slug, token: token}
+    thread = insert_thread(source: :public_intake)
+    {:ok, slug, token} = Slugs.claim(slug_text, email, thread)
+    %{thread: thread, slug: slug, token: token}
   end
 
   defp release_audit_events do
@@ -31,8 +31,8 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
   end
 
   describe "listing" do
-    test "renders slug, status, email, expiry, and the conversation link", %{conn: conn} do
-      %{slug: slug, conversation: conversation} = claim!("listed-claim")
+    test "renders slug, status, email, expiry, and the thread link", %{conn: conn} do
+      %{slug: slug, thread: thread} = claim!("listed-claim")
 
       {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
 
@@ -41,7 +41,7 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
       assert html =~ "Provisional"
       assert html =~ "buyer@example.com"
       assert html =~ ~s(staff-slug-expiry-#{slug.id})
-      assert html =~ ~s(href="/app/threads/#{conversation.id}")
+      assert html =~ ~s(href="/app/threads/#{thread.id}")
     end
 
     test "renders confirmed and provisioned statuses", %{conn: conn} do
@@ -81,7 +81,7 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
   describe "release" do
     test "releases a claimed slug, writes the audit event, and re-opens the name",
          %{conn: conn, staff: staff} do
-      %{slug: slug, conversation: conversation} = claim!("give-back")
+      %{slug: slug, thread: thread} = claim!("give-back")
 
       {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
 
@@ -90,20 +90,20 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
       assert render(view) =~ "released"
       refute Repo.get(Slug, slug.id)
 
-      # The conversation survives — only the slug row dies.
-      assert Repo.get(Custyard.Conversation, conversation.id)
+      # The thread survives — only the slug row dies.
+      assert Repo.get(Custyard.Thread, thread.id)
 
       # Audit trail (append-only, :slug_released).
       assert [event] = release_audit_events()
       assert event.source == "staff"
-      assert event.conversation_id == conversation.id
+      assert event.thread_id == thread.id
       assert event.payload["slug"] == "give-back"
       assert event.payload["status"] == "claimed"
       assert event.payload["email"] == "buyer@example.com"
       assert event.payload["staff_id"] == staff.id
 
       # Released means claimable again — by anyone.
-      other = insert_conversation(source: :public_intake)
+      other = insert_thread(source: :public_intake)
       assert {:ok, _slug, _token} = Slugs.claim("give-back", "next@example.com", other)
     end
 

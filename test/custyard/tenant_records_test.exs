@@ -19,8 +19,8 @@ defmodule Custyard.TenantRecordsTest do
   test "message and provider delivery ids deduplicate within each tenant" do
     a = tenant("Alpha")
     b = tenant("Beta")
-    ca = insert_conversation(tenant_id: a.id, organization_id: customer(a).id)
-    cb = insert_conversation(tenant_id: b.id, organization_id: customer(b).id)
+    ca = insert_thread(tenant_id: a.id, organization_id: customer(a).id)
+    cb = insert_thread(tenant_id: b.id, organization_id: customer(b).id)
 
     attrs = %{
       source: :email,
@@ -29,12 +29,12 @@ defmodule Custyard.TenantRecordsTest do
       provider_delivery_id: "same-provider-id"
     }
 
-    assert {:ok, ma} = Message.insert_idempotent(Map.put(attrs, :conversation_id, ca.id))
-    assert {:ok, mb} = Message.insert_idempotent(Map.put(attrs, :conversation_id, cb.id))
+    assert {:ok, ma} = Message.insert_idempotent(Map.put(attrs, :thread_id, ca.id))
+    assert {:ok, mb} = Message.insert_idempotent(Map.put(attrs, :thread_id, cb.id))
     assert ma.id != mb.id
     assert ma.tenant_id == a.id
     assert mb.tenant_id == b.id
-    assert {:ok, ^ma} = Message.insert_idempotent(Map.put(attrs, :conversation_id, ca.id))
+    assert {:ok, ^ma} = Message.insert_idempotent(Map.put(attrs, :thread_id, ca.id))
   end
 
   test "portal credentials are hashed, tenant bound and independently revoked" do
@@ -90,10 +90,10 @@ defmodule Custyard.TenantRecordsTest do
   test "identical attachments in different tenants have separate files" do
     a = tenant("Alpha")
     b = tenant("Beta")
-    ca = insert_conversation(tenant_id: a.id, organization_id: customer(a).id)
-    cb = insert_conversation(tenant_id: b.id, organization_id: customer(b).id)
-    ma = insert_message(conversation_id: ca.id)
-    mb = insert_message(conversation_id: cb.id)
+    ca = insert_thread(tenant_id: a.id, organization_id: customer(a).id)
+    cb = insert_thread(tenant_id: b.id, organization_id: customer(b).id)
+    ma = insert_message(thread_id: ca.id)
+    mb = insert_message(thread_id: cb.id)
     descriptors = [%{content: "shared content", filename: "test.txt"}]
     assert {:ok, [aa]} = Attachments.fetch_for_message(ma, descriptors)
     assert {:ok, [ab]} = Attachments.fetch_for_message(mb, descriptors)

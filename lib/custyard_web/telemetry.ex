@@ -124,12 +124,12 @@ defmodule CustyardWeb.Telemetry do
       summary("vm.total_run_queue_lengths.io"),
 
       # Queue depth, sampled by periodic_measurements/0 every 10s.
-      last_value("custyard.conversations.active.count",
-        description: "Open conversations — every state but :resolved"
+      last_value("custyard.threads.active.count",
+        description: "Open threads — every state but :resolved"
       ),
-      last_value("custyard.conversations.by_state.count",
+      last_value("custyard.threads.by_state.count",
         tags: [:state],
-        description: "Open conversations per state, the queue-depth breakdown"
+        description: "Open threads per state, the queue-depth breakdown"
       ),
 
       # LMTP Server Metrics (events emitted by LMTPServer)
@@ -167,24 +167,24 @@ defmodule CustyardWeb.Telemetry do
       # Scoring System Metrics (events to be emitted by Scoring)
       summary("custyard.scoring.calculate.stop.duration",
         unit: {:native, :millisecond},
-        description: "Single conversation score calculation duration"
+        description: "Single thread score calculation duration"
       ),
       summary("custyard.scoring.batch.stop.duration",
         unit: {:native, :millisecond},
         description: "Batch score recalculation duration"
       ),
       last_value("custyard.scoring.batch.count",
-        description: "Number of conversations in last batch recalculation"
+        description: "Number of threads in last batch recalculation"
       ),
 
       # Sender Matching Metrics (events to be emitted by SenderMatching)
       summary("custyard.sender_matching.process.stop.duration",
         unit: {:native, :millisecond},
         tags: [:result],
-        description: "Sender matching and conversation creation duration"
+        description: "Sender matching and thread creation duration"
       ),
-      counter("custyard.conversation.created.count",
-        description: "Total conversations created"
+      counter("custyard.thread.created.count",
+        description: "Total threads created"
       ),
       counter("custyard.message.created.count",
         tags: [:source],
@@ -219,20 +219,20 @@ defmodule CustyardWeb.Telemetry do
 
   defp periodic_measurements do
     [
-      # Periodic measurement for active conversation count
-      {__MODULE__, :measure_conversation_counts, []}
+      # Periodic measurement for active thread count
+      {__MODULE__, :measure_thread_counts, []}
     ]
   end
 
   @doc false
-  def measure_conversation_counts do
+  def measure_thread_counts do
     # Import Ecto.Query for this measurement function
     import Ecto.Query, only: [from: 2]
 
     try do
-      # Count active (non-resolved) conversations by state
+      # Count active (non-resolved) threads by state
       counts =
-        from(c in Custyard.Conversation,
+        from(c in Custyard.Thread,
           where: c.state != :resolved,
           group_by: c.state,
           select: {c.state, count(c.id)}
@@ -242,19 +242,19 @@ defmodule CustyardWeb.Telemetry do
 
       total = Enum.sum(Map.values(counts))
 
-      :telemetry.execute([:custyard, :conversations, :active], %{count: total}, %{})
+      :telemetry.execute([:custyard, :threads, :active], %{count: total}, %{})
 
       # The breakdown goes out as one event per state with `state` as a tag,
       # rather than riding along as a map in the metadata: a map-valued tag is
       # not something a reporter can group by.
       #
-      # Zero-filled from Conversation.states/0 because `group_by` returns no row
-      # for a state with no conversations. Emitting only the states present would
+      # Zero-filled from Thread.states/0 because `group_by` returns no row
+      # for a state with no threads. Emitting only the states present would
       # leave a `last_value` gauge reporting the stale count from the last sample
       # where that state was non-empty — a drained queue would read as full.
-      for state <- Custyard.Conversation.states(), state != :resolved do
+      for state <- Custyard.Thread.states(), state != :resolved do
         :telemetry.execute(
-          [:custyard, :conversations, :by_state],
+          [:custyard, :threads, :by_state],
           %{count: Map.get(counts, state, 0)},
           %{state: state}
         )

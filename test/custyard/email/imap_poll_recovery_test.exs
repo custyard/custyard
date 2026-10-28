@@ -9,7 +9,7 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Attachments, Conversation, InboundChannel, InboundChannels, Message}
+  alias Custyard.{Attachments, Thread, InboundChannel, InboundChannels, Message}
   alias Custyard.{Credentials, MessageAttachment}
   alias Custyard.Email.ImapClient.Stub
   alias Custyard.Email.ImapPoll
@@ -111,7 +111,7 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
       stored = reload(channel)
       assert stored.imap_last_uid == 1
       assert stored.imap_message_attempts == 0
-      assert Repo.aggregate(Conversation, :count) == 1
+      assert Repo.aggregate(Thread, :count) == 1
       assert [^message] = Repo.all(Message)
       assert [%{state: :fetched}] = Attachments.list_for_message(message.id)
     end

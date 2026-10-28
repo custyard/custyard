@@ -1,10 +1,10 @@
-defmodule Custyard.ConversationsTest do
+defmodule Custyard.ThreadsTest do
   # SQLite doesn't support async tests due to database locking
   use Custyard.DataCase, async: false
 
   alias Custyard.Auth.Token
   alias Custyard.Email.Outbound
-  alias Custyard.{Conversations, Intake, Message, Prospect, Repo}
+  alias Custyard.{Threads, Intake, Message, Prospect, Repo}
 
   import Custyard.Factory
   import Swoosh.TestAssertions
@@ -20,7 +20,7 @@ defmodule Custyard.ConversationsTest do
 
   defp current_scope do
     tenant_id = Process.get(:factory_tenant_id)
-    key = {:conversation_scope, tenant_id}
+    key = {:thread_scope, tenant_id}
 
     case Process.get(key) do
       nil ->
@@ -37,18 +37,18 @@ defmodule Custyard.ConversationsTest do
     own = insert_tenant()
     foreign = insert_tenant()
     staff = insert_staff_account(role: "agent", tenant_id: own.id)
-    thread = insert_conversation(tenant_id: own.id, organization_id: nil, source: :public_intake)
+    thread = insert_thread(tenant_id: own.id, organization_id: nil, source: :public_intake)
 
     other =
-      insert_conversation(tenant_id: foreign.id, organization_id: nil, source: :public_intake)
+      insert_thread(tenant_id: foreign.id, organization_id: nil, source: :public_intake)
 
     assert {:ok, :allowed} =
-             Conversations.with_access(scope(staff), thread.id, fn _, _ ->
+             Threads.with_access(scope(staff), thread.id, fn _, _ ->
                {:ok, :allowed}
              end)
 
     assert {:error, :unauthorized} =
-             Conversations.with_access(scope(staff), other.id, fn _, _ ->
+             Threads.with_access(scope(staff), other.id, fn _, _ ->
                flunk("foreign thread")
              end)
   end
@@ -59,10 +59,10 @@ defmodule Custyard.ConversationsTest do
     Repo.delete!(org)
 
     thread =
-      insert_conversation(tenant_id: org.tenant_id, organization_id: nil, source: :public_intake)
+      insert_thread(tenant_id: org.tenant_id, organization_id: nil, source: :public_intake)
 
     assert {:ok, :allowed} =
-             Conversations.with_access(scope(staff), thread.id, fn _, _ ->
+             Threads.with_access(scope(staff), thread.id, fn _, _ ->
                {:ok, :allowed}
              end)
   end
@@ -70,7 +70,7 @@ defmodule Custyard.ConversationsTest do
   test "a thread cannot be relinked to another workspace's customer" do
     own = insert_organization()
     foreign = insert_organization(tenant_id: insert_tenant().id)
-    thread = insert_conversation(tenant_id: own.tenant_id, organization_id: own.id)
+    thread = insert_thread(tenant_id: own.tenant_id, organization_id: own.id)
 
     assert_raise Ecto.ConstraintError, fn ->
       thread |> Ecto.Changeset.change(organization_id: foreign.id) |> Repo.update!()
@@ -81,34 +81,34 @@ defmodule Custyard.ConversationsTest do
     own = insert_tenant()
     foreign = insert_tenant()
     staff = insert_staff_account(role: "admin", tenant_id: own.id)
-    thread = insert_conversation(tenant_id: own.id)
+    thread = insert_thread(tenant_id: own.id)
     staff |> Ecto.Changeset.change(tenant_id: foreign.id) |> Repo.update!()
 
     assert {:error, :unauthorized} =
-             Conversations.send_reply(thread, "Stale assignment", staff: staff)
+             Threads.send_reply(thread, "Stale assignment", staff: staff)
   end
 
   describe "list_neglected" do
-    test "returns conversations excluding resolved" do
+    test "returns threads excluding resolved" do
       org = insert_organization()
-      active = insert_conversation(organization_id: org.id, state: :active)
-      _resolved = insert_conversation(organization_id: org.id, state: :resolved)
+      active = insert_thread(organization_id: org.id, state: :active)
+      _resolved = insert_thread(organization_id: org.id, state: :resolved)
 
-      results = Conversations.neglected(current_scope())
+      results = Threads.neglected(current_scope())
       ids = Enum.map(results, & &1.id)
 
       assert active.id in ids
       refute Enum.any?(results, &(&1.state == :resolved))
     end
 
-    test "excludes snoozed conversations" do
+    test "excludes snoozed threads" do
       org = insert_organization()
       future = DateTime.add(DateTime.utc_now(), 3600, :second)
 
-      _snoozed = insert_conversation(organization_id: org.id, snoozed_until: future)
-      active = insert_conversation(organization_id: org.id, snoozed_until: nil)
+      _snoozed = insert_thread(organization_id: org.id, snoozed_until: future)
+      active = insert_thread(organization_id: org.id, snoozed_until: nil)
 
-      results = Conversations.neglected(current_scope())
+      results = Threads.neglected(current_scope())
       ids = Enum.map(results, & &1.id)
 
       assert active.id in ids
@@ -118,23 +118,23 @@ defmodule Custyard.ConversationsTest do
     test "preloads organization and contact" do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id)
-      _conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      _conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
-      [result] = Conversations.neglected(current_scope())
+      [result] = Threads.neglected(current_scope())
 
       assert result.organization.id == org.id
       assert result.contact.id == contact.id
     end
 
-    test "org scoping includes nil-org conversations and excludes other orgs" do
+    test "org scoping includes nil-org threads and excludes other orgs" do
       org = insert_organization()
       other_org = insert_organization()
 
-      own = insert_conversation(organization_id: org.id)
-      other = insert_conversation(organization_id: other_org.id)
-      unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
+      own = insert_thread(organization_id: org.id)
+      other = insert_thread(organization_id: other_org.id)
+      unlinked = insert_thread(organization_id: nil, source: :disambiguation)
 
-      results = Conversations.neglected(current_scope(), organization_id: org.id)
+      results = Threads.neglected(current_scope(), organization_id: org.id)
       ids = Enum.map(results, & &1.id)
 
       assert own.id in ids
@@ -144,80 +144,80 @@ defmodule Custyard.ConversationsTest do
   end
 
   describe "list_for_attention_queue/1" do
-    test "returns conversations ordered by cached_score descending" do
+    test "returns threads ordered by cached_score descending" do
       org = insert_organization()
 
-      conv_low = insert_conversation(organization_id: org.id, cached_score: 10)
-      conv_high = insert_conversation(organization_id: org.id, cached_score: 50)
-      conv_mid = insert_conversation(organization_id: org.id, cached_score: 30)
+      conv_low = insert_thread(organization_id: org.id, cached_score: 10)
+      conv_high = insert_thread(organization_id: org.id, cached_score: 50)
+      conv_mid = insert_thread(organization_id: org.id, cached_score: 30)
 
-      results = Conversations.list(current_scope())
-      ids = Enum.map(results, & &1.conversation.id)
+      results = Threads.list(current_scope())
+      ids = Enum.map(results, & &1.thread.id)
 
       assert ids == [conv_high.id, conv_mid.id, conv_low.id]
     end
 
-    test "excludes snoozed conversations" do
+    test "excludes snoozed threads" do
       org = insert_organization()
       future = DateTime.add(DateTime.utc_now(), 3600, :second)
 
-      _snoozed = insert_conversation(organization_id: org.id, snoozed_until: future)
-      active = insert_conversation(organization_id: org.id, snoozed_until: nil)
+      _snoozed = insert_thread(organization_id: org.id, snoozed_until: future)
+      active = insert_thread(organization_id: org.id, snoozed_until: nil)
 
-      results = Conversations.list(current_scope())
-      ids = Enum.map(results, & &1.conversation.id)
+      results = Threads.list(current_scope())
+      ids = Enum.map(results, & &1.thread.id)
 
       assert active.id in ids
-      refute Enum.any?(results, &(&1.conversation.snoozed_until != nil))
+      refute Enum.any?(results, &(&1.thread.snoozed_until != nil))
     end
 
     test "filters by state" do
       org = insert_organization()
 
-      new_conv = insert_conversation(organization_id: org.id, state: :new)
-      active_conv = insert_conversation(organization_id: org.id, state: :active)
-      _waiting_conv = insert_conversation(organization_id: org.id, state: :waiting)
+      new_conv = insert_thread(organization_id: org.id, state: :new)
+      active_conv = insert_thread(organization_id: org.id, state: :active)
+      _waiting_conv = insert_thread(organization_id: org.id, state: :waiting)
 
-      new_results = Conversations.list(current_scope(), filter: "new")
-      new_ids = Enum.map(new_results, & &1.conversation.id)
+      new_results = Threads.list(current_scope(), filter: "new")
+      new_ids = Enum.map(new_results, & &1.thread.id)
 
       assert new_conv.id in new_ids
       refute active_conv.id in new_ids
     end
 
     test "includes message count" do
-      conv = insert_conversation()
-      insert_message(conversation_id: conv.id)
-      insert_message(conversation_id: conv.id)
+      conv = insert_thread()
+      insert_message(thread_id: conv.id)
+      insert_message(thread_id: conv.id)
 
-      [result] = Conversations.list(current_scope())
+      [result] = Threads.list(current_scope())
 
       assert result.message_count == 2
     end
 
-    test "org scoping includes nil-org conversations and excludes other orgs" do
+    test "org scoping includes nil-org threads and excludes other orgs" do
       org = insert_organization()
       other_org = insert_organization()
 
-      own = insert_conversation(organization_id: org.id)
-      other = insert_conversation(organization_id: other_org.id)
-      unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
+      own = insert_thread(organization_id: org.id)
+      other = insert_thread(organization_id: other_org.id)
+      unlinked = insert_thread(organization_id: nil, source: :disambiguation)
 
-      results = Conversations.list(current_scope(), organization_id: org.id)
-      ids = Enum.map(results, & &1.conversation.id)
+      results = Threads.list(current_scope(), organization_id: org.id)
+      ids = Enum.map(results, & &1.thread.id)
 
       assert own.id in ids
       assert unlinked.id in ids
       refute other.id in ids
     end
 
-    test "unscoped (super_admin) queue includes nil-org conversations" do
+    test "unscoped (super_admin) queue includes nil-org threads" do
       org = insert_organization()
-      own = insert_conversation(organization_id: org.id)
-      unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
+      own = insert_thread(organization_id: org.id)
+      unlinked = insert_thread(organization_id: nil, source: :disambiguation)
 
-      results = Conversations.list(current_scope())
-      ids = Enum.map(results, & &1.conversation.id)
+      results = Threads.list(current_scope())
+      ids = Enum.map(results, & &1.thread.id)
 
       assert own.id in ids
       assert unlinked.id in ids
@@ -225,26 +225,26 @@ defmodule Custyard.ConversationsTest do
   end
 
   describe "list_for_organization/2" do
-    test "returns conversations for the given organization" do
+    test "returns threads for the given organization" do
       org1 = insert_organization()
       org2 = insert_organization()
 
-      conv1 = insert_conversation(organization_id: org1.id)
-      _conv2 = insert_conversation(organization_id: org2.id)
+      conv1 = insert_thread(organization_id: org1.id)
+      _conv2 = insert_thread(organization_id: org2.id)
 
-      results = Conversations.list_for_organization(org1.id)
+      results = Threads.list_for_organization(org1.id)
       ids = Enum.map(results, & &1.id)
 
       assert ids == [conv1.id]
     end
 
-    test "excludes resolved conversations by default" do
+    test "excludes resolved threads by default" do
       org = insert_organization()
 
-      active = insert_conversation(organization_id: org.id, state: :active)
-      _resolved = insert_conversation(organization_id: org.id, state: :resolved)
+      active = insert_thread(organization_id: org.id, state: :active)
+      _resolved = insert_thread(organization_id: org.id, state: :resolved)
 
-      results = Conversations.list_for_organization(org.id)
+      results = Threads.list_for_organization(org.id)
       ids = Enum.map(results, & &1.id)
 
       assert ids == [active.id]
@@ -253,10 +253,10 @@ defmodule Custyard.ConversationsTest do
     test "includes resolved when option set" do
       org = insert_organization()
 
-      active = insert_conversation(organization_id: org.id, state: :active)
-      resolved = insert_conversation(organization_id: org.id, state: :resolved)
+      active = insert_thread(organization_id: org.id, state: :active)
+      resolved = insert_thread(organization_id: org.id, state: :resolved)
 
-      results = Conversations.list_for_organization(org.id, include_resolved: true)
+      results = Threads.list_for_organization(org.id, include_resolved: true)
       ids = Enum.map(results, & &1.id)
 
       assert active.id in ids
@@ -268,76 +268,76 @@ defmodule Custyard.ConversationsTest do
       contact1 = insert_contact(organization_id: org.id)
       contact2 = insert_contact(organization_id: org.id)
 
-      conv1 = insert_conversation(organization_id: org.id, contact_id: contact1.id)
-      _conv2 = insert_conversation(organization_id: org.id, contact_id: contact2.id)
+      conv1 = insert_thread(organization_id: org.id, contact_id: contact1.id)
+      _conv2 = insert_thread(organization_id: org.id, contact_id: contact2.id)
 
-      results = Conversations.list_for_organization(org.id, contact_id: contact1.id)
+      results = Threads.list_for_organization(org.id, contact_id: contact1.id)
       ids = Enum.map(results, & &1.id)
 
       assert ids == [conv1.id]
     end
   end
 
-  describe "get_conversation/1" do
-    test "returns conversation when found" do
-      conv = insert_conversation()
+  describe "get_thread/1" do
+    test "returns thread when found" do
+      conv = insert_thread()
 
-      result = Conversations.get(current_scope(), conv.id)
+      result = Threads.get(current_scope(), conv.id)
 
       assert result.id == conv.id
     end
 
     test "returns nil when not found" do
-      assert Conversations.get(current_scope(), 99_999) == nil
+      assert Threads.get(current_scope(), 99_999) == nil
     end
   end
 
-  describe "get_conversation!/1" do
-    test "returns conversation when found" do
-      conv = insert_conversation()
+  describe "get_thread!/1" do
+    test "returns thread when found" do
+      conv = insert_thread()
 
-      result = Conversations.get!(current_scope(), conv.id)
+      result = Threads.get!(current_scope(), conv.id)
 
       assert result.id == conv.id
     end
 
     test "raises when not found" do
       assert_raise Ecto.NoResultsError, fn ->
-        Conversations.get!(current_scope(), 99_999)
+        Threads.get!(current_scope(), 99_999)
       end
     end
   end
 
-  describe "get_conversation_for_organization/2" do
-    test "returns conversation when org matches" do
+  describe "get_thread_for_organization/2" do
+    test "returns thread when org matches" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
-      assert {:ok, result} = Conversations.get_conversation_for_organization(conv.id, org.id)
+      assert {:ok, result} = Threads.get_thread_for_organization(conv.id, org.id)
       assert result.id == conv.id
     end
 
-    test "returns error when conversation not found" do
-      assert {:error, :not_found} = Conversations.get_conversation_for_organization(99_999, 1)
+    test "returns error when thread not found" do
+      assert {:error, :not_found} = Threads.get_thread_for_organization(99_999, 1)
     end
 
     test "returns error when org does not match" do
       org1 = insert_organization()
       org2 = insert_organization()
-      conv = insert_conversation(organization_id: org1.id)
+      conv = insert_thread(organization_id: org1.id)
 
       assert {:error, :unauthorized} =
-               Conversations.get_conversation_for_organization(conv.id, org2.id)
+               Threads.get_thread_for_organization(conv.id, org2.id)
     end
   end
 
   describe "get_with_messages/1" do
     test "preloads messages in order" do
-      conv = insert_conversation()
-      msg1 = insert_message(conversation_id: conv.id)
-      msg2 = insert_message(conversation_id: conv.id)
+      conv = insert_thread()
+      msg1 = insert_message(thread_id: conv.id)
+      msg2 = insert_message(thread_id: conv.id)
 
-      result = Conversations.get_with_messages(current_scope(), conv.id)
+      result = Threads.get_with_messages(current_scope(), conv.id)
 
       assert length(result.messages) == 2
       assert [first, second] = result.messages
@@ -348,9 +348,9 @@ defmodule Custyard.ConversationsTest do
     test "preloads organization and contact" do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id)
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
-      result = Conversations.get_with_messages(current_scope(), conv.id)
+      result = Threads.get_with_messages(current_scope(), conv.id)
 
       assert result.organization.id == org.id
       assert result.contact.id == contact.id
@@ -359,22 +359,22 @@ defmodule Custyard.ConversationsTest do
 
   describe "list_public_messages/1" do
     test "returns non-internal messages" do
-      conv = insert_conversation()
-      public = insert_message(conversation_id: conv.id, is_internal_note: false)
-      _internal = insert_message(conversation_id: conv.id, is_internal_note: true)
+      conv = insert_thread()
+      public = insert_message(thread_id: conv.id, is_internal_note: false)
+      _internal = insert_message(thread_id: conv.id, is_internal_note: true)
 
-      results = Conversations.list_public_messages(conv.id)
+      results = Threads.list_public_messages(conv.id)
       ids = Enum.map(results, & &1.id)
 
       assert ids == [public.id]
     end
 
     test "orders messages by inserted_at ascending" do
-      conv = insert_conversation()
-      first = insert_message(conversation_id: conv.id, is_internal_note: false)
-      second = insert_message(conversation_id: conv.id, is_internal_note: false)
+      conv = insert_thread()
+      first = insert_message(thread_id: conv.id, is_internal_note: false)
+      second = insert_message(thread_id: conv.id, is_internal_note: false)
 
-      results = Conversations.list_public_messages(conv.id)
+      results = Threads.list_public_messages(conv.id)
       ids = Enum.map(results, & &1.id)
 
       assert ids == [first.id, second.id]
@@ -383,27 +383,27 @@ defmodule Custyard.ConversationsTest do
 
   describe "count_messages/1" do
     test "returns count of messages" do
-      conv = insert_conversation()
-      insert_message(conversation_id: conv.id)
-      insert_message(conversation_id: conv.id)
-      insert_message(conversation_id: conv.id)
+      conv = insert_thread()
+      insert_message(thread_id: conv.id)
+      insert_message(thread_id: conv.id)
+      insert_message(thread_id: conv.id)
 
-      assert Conversations.count_messages(conv.id) == 3
+      assert Threads.count_messages(conv.id) == 3
     end
 
-    test "returns 0 for conversation with no messages" do
-      conv = insert_conversation()
+    test "returns 0 for thread with no messages" do
+      conv = insert_thread()
 
-      assert Conversations.count_messages(conv.id) == 0
+      assert Threads.count_messages(conv.id) == 0
     end
   end
 
-  describe "create_conversation/1" do
-    test "creates a conversation with valid attributes" do
+  describe "create_thread/1" do
+    test "creates a thread with valid attributes" do
       org = insert_organization()
 
       assert {:ok, conv} =
-               Conversations.create(current_scope(), %{
+               Threads.create(current_scope(), %{
                  subject: "Test subject",
                  organization_id: org.id
                })
@@ -414,35 +414,35 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "returns error for invalid attributes" do
-      assert {:error, changeset} = Conversations.create(current_scope(), %{})
+      assert {:error, changeset} = Threads.create(current_scope(), %{})
       assert %{subject: ["can't be blank"]} = errors_on(changeset)
     end
   end
 
   describe "create_message/1" do
     test "creates a message" do
-      conv = insert_conversation()
+      conv = insert_thread()
 
       assert {:ok, message} =
-               Conversations.create_message(%{
-                 conversation_id: conv.id,
+               Threads.create_message(%{
+                 thread_id: conv.id,
                  source: :email,
                  body: "Test message",
                  is_internal_note: false
                })
 
       assert message.body == "Test message"
-      assert message.conversation_id == conv.id
+      assert message.thread_id == conv.id
     end
   end
 
   describe "create_message!/1" do
     test "creates a message and returns it" do
-      conv = insert_conversation()
+      conv = insert_thread()
 
       message =
-        Conversations.create_message!(%{
-          conversation_id: conv.id,
+        Threads.create_message!(%{
+          thread_id: conv.id,
           source: :portal,
           body: "Test message",
           is_internal_note: false
@@ -453,11 +453,11 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "raises on invalid attributes" do
-      conv = insert_conversation()
+      conv = insert_thread()
 
       assert_raise Ecto.InvalidChangesetError, fn ->
-        Conversations.create_message!(%{
-          conversation_id: conv.id,
+        Threads.create_message!(%{
+          thread_id: conv.id,
           source: :email
           # missing body
         })
@@ -467,11 +467,11 @@ defmodule Custyard.ConversationsTest do
 
   describe "soft_delete_message/2" do
     test "stamps deleted_at and the deleting staff, keeping the original body" do
-      conv = insert_conversation()
-      message = insert_message(conversation_id: conv.id, body: "Sensitive content")
+      conv = insert_thread()
+      message = insert_message(thread_id: conv.id, body: "Sensitive content")
       staff = insert_staff_account()
 
-      assert {:ok, deleted} = Conversations.soft_delete_message(message, staff)
+      assert {:ok, deleted} = Threads.soft_delete_message(message, staff)
 
       assert %DateTime{} = deleted.deleted_at
       assert deleted.deleted_by_staff_id == staff.id
@@ -482,27 +482,27 @@ defmodule Custyard.ConversationsTest do
       assert %DateTime{} = reloaded.deleted_at
     end
 
-    test "broadcasts message_updated on the conversation topic" do
-      conv = insert_conversation()
-      message = insert_message(conversation_id: conv.id)
+    test "broadcasts message_updated on the thread topic" do
+      conv = insert_thread()
+      message = insert_message(thread_id: conv.id)
       staff = insert_staff_account()
 
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv.id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{conv.id}")
 
-      assert {:ok, _deleted} = Conversations.soft_delete_message(message, staff)
+      assert {:ok, _deleted} = Threads.soft_delete_message(message, staff)
 
       conv_id = conv.id
       assert_received {:message_updated, ^conv_id}
     end
 
     test "is idempotent and preserves the original deletion attribution" do
-      conv = insert_conversation()
-      message = insert_message(conversation_id: conv.id)
+      conv = insert_thread()
+      message = insert_message(thread_id: conv.id)
       first_staff = insert_staff_account()
       second_staff = insert_staff_account()
 
-      {:ok, deleted} = Conversations.soft_delete_message(message, first_staff)
-      assert {:ok, unchanged} = Conversations.soft_delete_message(deleted, second_staff)
+      {:ok, deleted} = Threads.soft_delete_message(message, first_staff)
+      assert {:ok, unchanged} = Threads.soft_delete_message(deleted, second_staff)
 
       assert unchanged.deleted_at == deleted.deleted_at
       assert unchanged.deleted_by_staff_id == first_staff.id
@@ -513,95 +513,95 @@ defmodule Custyard.ConversationsTest do
   end
 
   describe "update_state/2" do
-    test "updates conversation state" do
-      conv = insert_conversation(state: :new)
+    test "updates thread state" do
+      conv = insert_thread(state: :new)
 
-      assert {:ok, updated} = Conversations.update_state(conv, :active)
+      assert {:ok, updated} = Threads.update_state(conv, :active)
       assert updated.state == :active
     end
 
     test "allows valid state transitions" do
       # :new -> :active
-      conv = insert_conversation(state: :new)
-      assert {:ok, _} = Conversations.update_state(conv, :active)
+      conv = insert_thread(state: :new)
+      assert {:ok, _} = Threads.update_state(conv, :active)
 
       # :active -> :waiting
-      conv = insert_conversation(state: :active)
-      assert {:ok, _} = Conversations.update_state(conv, :waiting)
+      conv = insert_thread(state: :active)
+      assert {:ok, _} = Threads.update_state(conv, :waiting)
 
       # :waiting -> :dormant
-      conv = insert_conversation(state: :waiting)
-      assert {:ok, _} = Conversations.update_state(conv, :dormant)
+      conv = insert_thread(state: :waiting)
+      assert {:ok, _} = Threads.update_state(conv, :dormant)
 
       # :dormant -> :active (reactivate)
-      conv = insert_conversation(state: :dormant)
-      assert {:ok, _} = Conversations.update_state(conv, :active)
+      conv = insert_thread(state: :dormant)
+      assert {:ok, _} = Threads.update_state(conv, :active)
 
       # :active -> :resolved
-      conv = insert_conversation(state: :active)
-      assert {:ok, _} = Conversations.update_state(conv, :resolved)
+      conv = insert_thread(state: :active)
+      assert {:ok, _} = Threads.update_state(conv, :resolved)
 
       # :resolved -> :active (reopen)
-      conv = insert_conversation(state: :resolved)
-      assert {:ok, _} = Conversations.update_state(conv, :active)
+      conv = insert_thread(state: :resolved)
+      assert {:ok, _} = Threads.update_state(conv, :active)
     end
 
     test "prevents invalid state transitions" do
       # :new cannot go directly to :dormant
-      conv = insert_conversation(state: :new)
-      assert {:error, changeset} = Conversations.update_state(conv, :dormant)
+      conv = insert_thread(state: :new)
+      assert {:error, changeset} = Threads.update_state(conv, :dormant)
       assert %{state: [error_msg]} = errors_on(changeset)
       assert error_msg =~ "cannot transition from new to dormant"
 
       # :new cannot go to :waiting
-      conv = insert_conversation(state: :new)
-      assert {:error, changeset} = Conversations.update_state(conv, :waiting)
+      conv = insert_thread(state: :new)
+      assert {:error, changeset} = Threads.update_state(conv, :waiting)
       assert %{state: [_]} = errors_on(changeset)
 
       # :resolved cannot go to :waiting
-      conv = insert_conversation(state: :resolved)
-      assert {:error, changeset} = Conversations.update_state(conv, :waiting)
+      conv = insert_thread(state: :resolved)
+      assert {:error, changeset} = Threads.update_state(conv, :waiting)
       assert %{state: [_]} = errors_on(changeset)
 
       # :dormant cannot go to :waiting
-      conv = insert_conversation(state: :dormant)
-      assert {:error, changeset} = Conversations.update_state(conv, :waiting)
+      conv = insert_thread(state: :dormant)
+      assert {:error, changeset} = Threads.update_state(conv, :waiting)
       assert %{state: [_]} = errors_on(changeset)
     end
 
     test "allows same state (no-op)" do
-      conv = insert_conversation(state: :active)
-      assert {:ok, updated} = Conversations.update_state(conv, :active)
+      conv = insert_thread(state: :active)
+      assert {:ok, updated} = Threads.update_state(conv, :active)
       assert updated.state == :active
     end
   end
 
   describe "snooze/2" do
     test "sets snoozed_until timestamp" do
-      conv = insert_conversation()
+      conv = insert_thread()
       until = DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:second)
 
-      assert {:ok, snoozed} = Conversations.snooze(conv, until)
+      assert {:ok, snoozed} = Threads.snooze(conv, until)
       assert snoozed.snoozed_until == until
     end
   end
 
-  describe "update_conversation/2" do
-    test "updates conversation with valid attributes" do
-      conv = insert_conversation()
+  describe "update_thread/2" do
+    test "updates thread with valid attributes" do
+      conv = insert_thread()
 
       assert {:ok, updated} =
-               Conversations.update_conversation(conv, %{subject: "Updated subject"})
+               Threads.update_thread(conv, %{subject: "Updated subject"})
 
       assert updated.subject == "Updated subject"
     end
 
     test "ignores cached_score in attrs (computed field)" do
-      conv = insert_conversation(cached_score: 10)
+      conv = insert_thread(cached_score: 10)
 
       # cached_score should not be updatable via changeset
       assert {:ok, updated} =
-               Conversations.update_conversation(conv, %{cached_score: 9999, subject: "Test"})
+               Threads.update_thread(conv, %{cached_score: 9999, subject: "Test"})
 
       # Score unchanged (input ignored)
       assert updated.cached_score == 10
@@ -610,19 +610,19 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "updates last_staff_action_at" do
-      conv = insert_conversation()
+      conv = insert_thread()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       assert {:ok, updated} =
-               Conversations.update_conversation(conv, %{last_staff_action_at: now})
+               Threads.update_thread(conv, %{last_staff_action_at: now})
 
       assert updated.last_staff_action_at == now
     end
   end
 
   describe "reload!/1" do
-    test "reloads conversation from database" do
-      conv = insert_conversation(cached_score: 10)
+    test "reloads thread from database" do
+      conv = insert_thread(cached_score: 10)
 
       # Update the score directly in the database
       Custyard.Repo.update!(Ecto.Changeset.change(conv, cached_score: 99))
@@ -631,100 +631,100 @@ defmodule Custyard.ConversationsTest do
       assert conv.cached_score == 10
 
       # Reloaded struct has new value
-      reloaded = Conversations.reload!(conv)
+      reloaded = Threads.reload!(conv)
       assert reloaded.cached_score == 99
     end
   end
 
   describe "task functions" do
     test "create_task/1 creates a task" do
-      conv = insert_conversation()
+      conv = insert_thread()
 
       assert {:ok, task} =
-               Conversations.create_task(%{title: "Fix bug", conversation_id: conv.id})
+               Threads.create_task(%{title: "Fix bug", thread_id: conv.id})
 
       assert task.title == "Fix bug"
       assert task.state == :open
     end
 
     test "get_task!/1 retrieves a task" do
-      conv = insert_conversation()
-      {:ok, task} = Conversations.create_task(%{title: "Test", conversation_id: conv.id})
+      conv = insert_thread()
+      {:ok, task} = Threads.create_task(%{title: "Test", thread_id: conv.id})
 
-      result = Conversations.get_task!(task.id)
+      result = Threads.get_task!(task.id)
       assert result.id == task.id
     end
 
     test "update_task_state/2 changes task state" do
-      conv = insert_conversation()
-      {:ok, task} = Conversations.create_task(%{title: "Test", conversation_id: conv.id})
+      conv = insert_thread()
+      {:ok, task} = Threads.create_task(%{title: "Test", thread_id: conv.id})
 
-      assert {:ok, updated} = Conversations.update_task_state(task, :in_progress)
+      assert {:ok, updated} = Threads.update_task_state(task, :in_progress)
       assert updated.state == :in_progress
     end
 
     test "update_task/2 updates task attributes" do
-      conv = insert_conversation()
-      {:ok, task} = Conversations.create_task(%{title: "Test", conversation_id: conv.id})
+      conv = insert_thread()
+      {:ok, task} = Threads.create_task(%{title: "Test", thread_id: conv.id})
 
       assert {:ok, updated} =
-               Conversations.update_task(task, %{title: "Updated", portal_visible: false})
+               Threads.update_task(task, %{title: "Updated", portal_visible: false})
 
       assert updated.title == "Updated"
       assert updated.portal_visible == false
     end
 
     test "delete_task/1 removes a task" do
-      conv = insert_conversation()
-      {:ok, task} = Conversations.create_task(%{title: "Test", conversation_id: conv.id})
+      conv = insert_thread()
+      {:ok, task} = Threads.create_task(%{title: "Test", thread_id: conv.id})
 
-      assert {:ok, _} = Conversations.delete_task(task)
-      assert_raise Ecto.NoResultsError, fn -> Conversations.get_task!(task.id) end
+      assert {:ok, _} = Threads.delete_task(task)
+      assert_raise Ecto.NoResultsError, fn -> Threads.get_task!(task.id) end
     end
   end
 
   describe "list_portal_visible_tasks/1" do
     test "returns only portal-visible tasks" do
-      conv = insert_conversation()
+      conv = insert_thread()
 
       {:ok, visible} =
-        Conversations.create_task(%{
+        Threads.create_task(%{
           title: "Visible",
-          conversation_id: conv.id,
+          thread_id: conv.id,
           portal_visible: true
         })
 
       {:ok, _hidden} =
-        Conversations.create_task(%{
+        Threads.create_task(%{
           title: "Hidden",
-          conversation_id: conv.id,
+          thread_id: conv.id,
           portal_visible: false
         })
 
-      results = Conversations.list_portal_visible_tasks(conv.id)
+      results = Threads.list_portal_visible_tasks(conv.id)
       ids = Enum.map(results, & &1.id)
 
       assert ids == [visible.id]
     end
 
     test "orders tasks by inserted_at" do
-      conv = insert_conversation()
+      conv = insert_thread()
 
       {:ok, first} =
-        Conversations.create_task(%{
+        Threads.create_task(%{
           title: "First",
-          conversation_id: conv.id,
+          thread_id: conv.id,
           portal_visible: true
         })
 
       {:ok, second} =
-        Conversations.create_task(%{
+        Threads.create_task(%{
           title: "Second",
-          conversation_id: conv.id,
+          thread_id: conv.id,
           portal_visible: true
         })
 
-      results = Conversations.list_portal_visible_tasks(conv.id)
+      results = Threads.list_portal_visible_tasks(conv.id)
       ids = Enum.map(results, & &1.id)
 
       assert ids == [first.id, second.id]
@@ -745,7 +745,7 @@ defmodule Custyard.ConversationsTest do
         )
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           inbound_channel_id: channel.id
@@ -759,7 +759,7 @@ defmodule Custyard.ConversationsTest do
       channel: channel
     } do
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         sender_email: "Alice <alice@customer.example>",
         reply_to: "alice-alt@customer.example",
@@ -768,13 +768,13 @@ defmodule Custyard.ConversationsTest do
         triage_class: :customer
       )
 
-      assert Conversations.default_reply_cc(conv, staff_email: "me@acme.example") ==
+      assert Threads.default_reply_cc(conv, staff_email: "me@acme.example") ==
                ["boss@customer.example"]
     end
 
     test "ignores auto-responses and suspect messages", %{conv: conv} do
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         sender_email: "alice@customer.example",
         cc_addresses: ["real@customer.example"],
@@ -782,29 +782,29 @@ defmodule Custyard.ConversationsTest do
       )
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         sender_email: "noreply@spammer.example",
         cc_addresses: ["victim@elsewhere.example"],
         triage_class: :auto_response
       )
 
-      assert Conversations.default_reply_cc(conv) == ["real@customer.example"]
+      assert Threads.default_reply_cc(conv) == ["real@customer.example"]
     end
 
     test "is empty without an email message, and always for prospects" do
       org = insert_organization()
-      assert Conversations.default_reply_cc(insert_conversation(organization_id: org.id)) == []
+      assert Threads.default_reply_cc(insert_thread(organization_id: org.id)) == []
 
-      prospect_conv = insert_conversation(organization_id: org.id, source: :public_intake)
+      prospect_conv = insert_thread(organization_id: org.id, source: :public_intake)
 
       insert_message(
-        conversation_id: prospect_conv.id,
+        thread_id: prospect_conv.id,
         source: :email,
         cc_addresses: ["x@example.com"]
       )
 
-      assert Conversations.default_reply_cc(prospect_conv) == []
+      assert Threads.default_reply_cc(prospect_conv) == []
     end
   end
 
@@ -813,8 +813,8 @@ defmodule Custyard.ConversationsTest do
       org = insert_organization(name: "Reply Corp")
       contact = insert_contact(organization_id: org.id, email: "customer@example.com")
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           subject: "Need help",
@@ -824,19 +824,19 @@ defmodule Custyard.ConversationsTest do
       # Add a customer message to thread against
       _customer_msg =
         insert_message(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           source: :email,
           sender_email: "customer@example.com",
           message_id: "<inbound-123@customer.com>",
           body: "Please help me"
         )
 
-      {:ok, org: org, contact: contact, conversation: conversation}
+      {:ok, org: org, contact: contact, thread: thread}
     end
 
-    test "stores a normalised CC list on the reply", %{conversation: conv} do
+    test "stores a normalised CC list on the reply", %{thread: conv} do
       {:ok, message} =
-        Conversations.send_reply(conv, "Looping in",
+        Threads.send_reply(conv, "Looping in",
           cc: " Boss@Example.com, boss@example.com;ops@example.com "
         )
 
@@ -844,59 +844,59 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "public intake cannot accept CC recipients even through the context", %{
-      conversation: conv
+      thread: conv
     } do
       conv |> Ecto.Changeset.change(source: :public_intake) |> Repo.update!()
       # Pass the old snapshot to exercise the transaction's current-source gate.
       assert {:ok, reply} =
-               Conversations.send_reply(conv, "Private reply", cc: ["other@example.com"])
+               Threads.send_reply(conv, "Private reply", cc: ["other@example.com"])
 
       assert reply.cc_addresses == []
     end
 
-    test "rejects an invalid CC address before writing anything", %{conversation: conv} do
+    test "rejects an invalid CC address before writing anything", %{thread: conv} do
       before = Repo.aggregate(Message, :count)
 
       assert {:error, {:invalid_cc, ["nope"]}} =
-               Conversations.send_reply(conv, "Looping in", cc: ["ok@example.com", "nope"])
+               Threads.send_reply(conv, "Looping in", cc: ["ok@example.com", "nope"])
 
       assert Repo.aggregate(Message, :count) == before
     end
 
-    test "rejects more than 20 CC addresses", %{conversation: conv} do
+    test "rejects more than 20 CC addresses", %{thread: conv} do
       cc = for n <- 1..21, do: "p#{n}@example.com"
-      assert {:error, {:invalid_cc, :too_many}} = Conversations.send_reply(conv, "Hi", cc: cc)
+      assert {:error, {:invalid_cc, :too_many}} = Threads.send_reply(conv, "Hi", cc: cc)
     end
 
-    test "creates a message with correct attributes", %{conversation: conv} do
-      {:ok, message} = Conversations.send_reply(conv, "Here is your answer")
+    test "creates a message with correct attributes", %{thread: conv} do
+      {:ok, message} = Threads.send_reply(conv, "Here is your answer")
 
       assert message.source == :staff
       assert message.body == "Here is your answer"
       assert message.is_internal_note == false
-      assert message.conversation_id == conv.id
+      assert message.thread_id == conv.id
       assert message.delivery_status == :pending
     end
 
-    test "sets in_reply_to from last customer message", %{conversation: conv} do
-      {:ok, message} = Conversations.send_reply(conv, "Following up")
+    test "sets in_reply_to from last customer message", %{thread: conv} do
+      {:ok, message} = Threads.send_reply(conv, "Following up")
 
       assert message.in_reply_to == "<inbound-123@customer.com>"
     end
 
     test "threads in_reply_to to the latest customer message when messages were preloaded ascending",
-         %{conversation: conv} do
+         %{thread: conv} do
       # Backdate the setup message so the newer one wins on inserted_at
       backdated =
         DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
 
       Repo.update_all(
-        from(m in Custyard.Message, where: m.conversation_id == ^conv.id),
+        from(m in Custyard.Message, where: m.thread_id == ^conv.id),
         set: [inserted_at: backdated]
       )
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         message_id: "<inbound-456@customer.com>",
         body: "Any update?"
@@ -905,29 +905,29 @@ defmodule Custyard.ConversationsTest do
       # get_with_messages/1 preloads messages ascending — the same shape the
       # LiveView passes in. Regression: the already-loaded association must
       # not decide which message gets threaded.
-      preloaded = Conversations.get_with_messages(current_scope(), conv.id)
+      preloaded = Threads.get_with_messages(current_scope(), conv.id)
 
-      {:ok, message} = Conversations.send_reply(preloaded, "Reply to the follow-up")
+      {:ok, message} = Threads.send_reply(preloaded, "Reply to the follow-up")
 
       assert message.in_reply_to == "<inbound-456@customer.com>"
     end
 
-    test "breaks inserted_at ties for in_reply_to by message id", %{conversation: conv} do
+    test "breaks inserted_at ties for in_reply_to by message id", %{thread: conv} do
       # Inserted within the same second as the setup message
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         message_id: "<inbound-tie@customer.com>",
         body: "Second message, same second"
       )
 
-      {:ok, message} = Conversations.send_reply(conv, "Tiebreak reply")
+      {:ok, message} = Threads.send_reply(conv, "Tiebreak reply")
 
       assert message.in_reply_to == "<inbound-tie@customer.com>"
     end
 
-    test "generates a unique outbound message_id", %{conversation: conv} do
-      {:ok, message} = Conversations.send_reply(conv, "Reply one")
+    test "generates a unique outbound message_id", %{thread: conv} do
+      {:ok, message} = Threads.send_reply(conv, "Reply one")
 
       assert message.message_id != nil
       assert String.starts_with?(message.message_id, "<")
@@ -935,34 +935,34 @@ defmodule Custyard.ConversationsTest do
       assert message.message_id =~ ~r/c#{conv.id}@/
     end
 
-    test "transitions conversation state to :active", %{conversation: conv} do
+    test "transitions thread state to :active", %{thread: conv} do
       assert conv.state == :waiting
 
-      {:ok, _message} = Conversations.send_reply(conv, "On it")
+      {:ok, _message} = Threads.send_reply(conv, "On it")
 
-      reloaded = Repo.get!(Custyard.Conversation, conv.id)
+      reloaded = Repo.get!(Custyard.Thread, conv.id)
       assert reloaded.state == :active
     end
 
-    test "updates last_staff_action_at", %{conversation: conv} do
+    test "updates last_staff_action_at", %{thread: conv} do
       assert conv.last_staff_action_at == nil
 
-      {:ok, _message} = Conversations.send_reply(conv, "Done")
+      {:ok, _message} = Threads.send_reply(conv, "Done")
 
-      reloaded = Repo.get!(Custyard.Conversation, conv.id)
+      reloaded = Repo.get!(Custyard.Thread, conv.id)
       assert reloaded.last_staff_action_at != nil
     end
 
     test "does not use staff personal email when tenant sending is unconfigured", %{
-      conversation: conv
+      thread: conv
     } do
-      {:ok, message} = Conversations.send_reply(conv, "Reply", staff_email: "agent@corp.com")
+      {:ok, message} = Threads.send_reply(conv, "Reply", staff_email: "agent@corp.com")
 
       assert is_nil(message.sender_email)
     end
 
     test "route infrastructure does not select a sending identity", %{
-      conversation: conv,
+      thread: conv,
       org: org
     } do
       # Create a route with a from_address for this org
@@ -973,7 +973,7 @@ defmodule Custyard.ConversationsTest do
       )
 
       {:ok, message} =
-        Conversations.send_reply(conv, "Reply", staff_email: "agent@corp.com")
+        Threads.send_reply(conv, "Reply", staff_email: "agent@corp.com")
 
       assert is_nil(message.sender_email)
     end
@@ -984,8 +984,8 @@ defmodule Custyard.ConversationsTest do
     } do
       project = insert_project(organization_id: org.id)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           project_id: project.id,
@@ -1005,7 +1005,7 @@ defmodule Custyard.ConversationsTest do
         from_address: "projects@acme.com"
       )
 
-      {:ok, message} = Conversations.send_reply(conversation, "Project reply")
+      {:ok, message} = Threads.send_reply(thread, "Project reply")
 
       assert is_nil(message.sender_email)
     end
@@ -1016,8 +1016,8 @@ defmodule Custyard.ConversationsTest do
     } do
       project = insert_project(organization_id: org.id)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           project_id: project.id,
@@ -1036,31 +1036,31 @@ defmodule Custyard.ConversationsTest do
         project_id: project.id
       )
 
-      {:ok, message} = Conversations.send_reply(conversation, "Project reply")
+      {:ok, message} = Threads.send_reply(thread, "Project reply")
 
       assert is_nil(message.sender_email)
     end
 
-    test "returns error on empty body", %{conversation: conv} do
+    test "returns error on empty body", %{thread: conv} do
       # Empty body should fail validation since body is required
-      result = Conversations.send_reply(conv, "")
+      result = Threads.send_reply(conv, "")
 
       assert {:error, _reason} = result
     end
 
-    test "sets origin to :email for email-sourced conversation", %{conversation: conv} do
-      # Default conversation source is :email
-      {:ok, message} = Conversations.send_reply(conv, "Reply to email thread")
+    test "sets origin to :email for email-sourced thread", %{thread: conv} do
+      # Default thread source is :email
+      {:ok, message} = Threads.send_reply(conv, "Reply to email thread")
 
       assert message.origin == :email
     end
 
-    test "sets origin to :lettermint for lettermint-sourced conversation" do
+    test "sets origin to :lettermint for lettermint-sourced thread" do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "lm-customer@example.com")
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           subject: "Lettermint thread",
@@ -1068,23 +1068,23 @@ defmodule Custyard.ConversationsTest do
         )
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :email,
         message_id: "<lm-msg@lettermint.test>",
         body: "Hello from lettermint"
       )
 
-      {:ok, message} = Conversations.send_reply(conversation, "Lettermint reply")
+      {:ok, message} = Threads.send_reply(thread, "Lettermint reply")
 
       assert message.origin == :lettermint
     end
 
-    test "sets origin to :portal for portal-sourced conversation" do
+    test "sets origin to :portal for portal-sourced thread" do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "portal-user@example.com")
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           subject: "Portal thread",
@@ -1092,22 +1092,22 @@ defmodule Custyard.ConversationsTest do
         )
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :portal,
         body: "Portal message"
       )
 
-      {:ok, message} = Conversations.send_reply(conversation, "Portal reply")
+      {:ok, message} = Threads.send_reply(thread, "Portal reply")
 
       assert message.origin == :portal
     end
 
-    test "defaults origin to :email for disambiguation-sourced conversation" do
+    test "defaults origin to :email for disambiguation-sourced thread" do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "ambig@example.com")
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           subject: "Disambiguation thread",
@@ -1115,117 +1115,117 @@ defmodule Custyard.ConversationsTest do
         )
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :email,
         body: "Disambiguated message"
       )
 
-      {:ok, message} = Conversations.send_reply(conversation, "Disambiguation reply")
+      {:ok, message} = Threads.send_reply(thread, "Disambiguation reply")
 
       assert message.origin == :email
     end
 
-    test "broadcasts PubSub events on success", %{conversation: conv} do
+    test "broadcasts PubSub events on success", %{thread: conv} do
       conv_id = conv.id
 
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:#{conv.organization_id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{conv_id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads:org:#{conv.organization_id}")
 
-      {:ok, _message} = Conversations.send_reply(conv, "Broadcast test")
+      {:ok, _message} = Threads.send_reply(conv, "Broadcast test")
 
       assert_received {:message_added, ^conv_id}
-      assert_received {:conversation_updated, ^conv_id}
-      assert_received {:conversation_updated, ^conv_id}
+      assert_received {:thread_updated, ^conv_id}
+      assert_received {:thread_updated, ^conv_id}
     end
 
-    test "sender_email is nil when no route and no staff_email", %{conversation: conv} do
-      {:ok, message} = Conversations.send_reply(conv, "No sender")
+    test "sender_email is nil when no route and no staff_email", %{thread: conv} do
+      {:ok, message} = Threads.send_reply(conv, "No sender")
 
       assert is_nil(message.sender_email)
     end
 
-    test "message and conversation update are atomic", %{conversation: conv} do
-      # Verify both the message insert and conversation update happen together
+    test "message and thread update are atomic", %{thread: conv} do
+      # Verify both the message insert and thread update happen together
       before_count =
         Repo.one(
           from m in Custyard.Message,
-            where: m.conversation_id == ^conv.id and m.source == :staff,
+            where: m.thread_id == ^conv.id and m.source == :staff,
             select: count()
         )
 
-      {:ok, message} = Conversations.send_reply(conv, "Atomic test")
+      {:ok, message} = Threads.send_reply(conv, "Atomic test")
 
       after_count =
         Repo.one(
           from m in Custyard.Message,
-            where: m.conversation_id == ^conv.id and m.source == :staff,
+            where: m.thread_id == ^conv.id and m.source == :staff,
             select: count()
         )
 
       # Exactly one staff message was created
       assert after_count == before_count + 1
 
-      # Both the message and conversation update succeeded
-      reloaded_conv = Repo.get!(Custyard.Conversation, conv.id)
+      # Both the message and thread update succeeded
+      reloaded_conv = Repo.get!(Custyard.Thread, conv.id)
       assert reloaded_conv.state == :active
       assert reloaded_conv.last_staff_action_at != nil
-      assert message.conversation_id == conv.id
+      assert message.thread_id == conv.id
     end
 
-    test "reply on a nil-org conversation broadcasts on the global topic" do
-      conversation =
-        insert_conversation(
+    test "reply on a nil-org thread broadcasts on the global topic" do
+      thread =
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           subject: "Unlinked reply thread"
         )
 
-      conv_id = conversation.id
+      conv_id = thread.id
 
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{conv_id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
 
-      {:ok, message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
+      {:ok, message} = Threads.send_reply(thread, "Reply to unlinked prospect")
 
       assert message.source == :staff
       assert_received {:message_added, ^conv_id}
-      assert_received {:conversation_updated, ^conv_id}
+      assert_received {:thread_updated, ^conv_id}
     end
 
-    test "reply on a nil-org conversation never broadcasts to the malformed bare org topic" do
-      conversation =
-        insert_conversation(
+    test "reply on a nil-org thread never broadcasts to the malformed bare org topic" do
+      thread =
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           subject: "Unlinked reply thread"
         )
 
       # Subscribing only to the malformed topic a nil org would interpolate
-      # into isolates this assertion from the legitimate "conversations" topic.
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:")
+      # into isolates this assertion from the legitimate "threads" topic.
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads:org:")
 
-      {:ok, _message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
+      {:ok, _message} = Threads.send_reply(thread, "Reply to unlinked prospect")
 
-      refute_received {:conversation_updated, _id}
+      refute_received {:thread_updated, _id}
     end
   end
 
   describe "broadcast_to_org/2" do
     test "publishes to the org-scoped topic for a real organization id" do
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:123")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads:org:123")
 
-      assert :ok = Conversations.broadcast_to_org(123, {:conversation_updated, 7})
+      assert :ok = Threads.broadcast_to_org(123, {:thread_updated, 7})
 
-      assert_received {:conversation_updated, 7}
+      assert_received {:thread_updated, 7}
     end
 
     test "skips the broadcast entirely when organization_id is nil" do
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads:org:")
 
-      assert :ok = Conversations.broadcast_to_org(nil, {:conversation_updated, 7})
+      assert :ok = Threads.broadcast_to_org(nil, {:thread_updated, 7})
 
-      refute_received {:conversation_updated, 7}
+      refute_received {:thread_updated, 7}
     end
   end
 
@@ -1233,9 +1233,9 @@ defmodule Custyard.ConversationsTest do
     test "prefers the linked contact's email" do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "customer@example.com")
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
-      assert Conversations.reply_channel(conv) == {:contact, "customer@example.com"}
+      assert Threads.reply_channel(conv) == {:contact, "customer@example.com"}
     end
 
     test "contact email wins over a captured prospect email" do
@@ -1243,58 +1243,58 @@ defmodule Custyard.ConversationsTest do
       contact = insert_contact(organization_id: org.id, email: "customer@example.com")
 
       conv =
-        insert_conversation(
+        insert_thread(
           source: :public_intake,
           organization_id: contact.organization_id,
           contact_id: contact.id
         )
 
-      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+      insert_prospect(thread_id: conv.id, email: "prospect@example.com")
 
-      assert Conversations.reply_channel(conv) == {:contact, "customer@example.com"}
+      assert Threads.reply_channel(conv) == {:contact, "customer@example.com"}
     end
 
     test "falls back to a captured, non-revoked prospect email" do
-      conv = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+      conv = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: conv.id, email: "prospect@example.com")
 
-      assert Conversations.reply_channel(conv) == {:prospect, "prospect@example.com"}
+      assert Threads.reply_channel(conv) == {:prospect, "prospect@example.com"}
     end
 
     test "returns :none when the prospect email is revoked" do
-      conv = insert_conversation(source: :public_intake)
+      conv = insert_thread(source: :public_intake)
 
       insert_prospect(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         email: "prospect@example.com",
         revoked_at: DateTime.utc_now() |> DateTime.truncate(:second)
       )
 
-      assert Conversations.reply_channel(conv) == :none
+      assert Threads.reply_channel(conv) == :none
     end
 
     test "returns :none when the prospect has no email" do
-      conv = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conv.id)
+      conv = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: conv.id)
 
-      assert Conversations.reply_channel(conv) == :none
+      assert Threads.reply_channel(conv) == :none
     end
 
     test "returns :none with neither contact nor prospect" do
-      conv = insert_conversation(source: :public_intake)
+      conv = insert_thread(source: :public_intake)
 
-      assert Conversations.reply_channel(conv) == :none
+      assert Threads.reply_channel(conv) == :none
     end
 
     test "list_for_attention_queue/1 preloads the prospect for reply_channel" do
-      conv = insert_conversation(source: :public_intake, state: :new)
-      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+      conv = insert_thread(source: :public_intake, state: :new)
+      insert_prospect(thread_id: conv.id, email: "prospect@example.com")
 
-      [%{conversation: loaded}] = Conversations.list(current_scope())
+      [%{thread: loaded}] = Threads.list(current_scope())
 
       assert Ecto.assoc_loaded?(loaded.prospect)
       assert Ecto.assoc_loaded?(loaded.contact)
-      assert Conversations.reply_channel(loaded) == {:prospect, "prospect@example.com"}
+      assert Threads.reply_channel(loaded) == {:prospect, "prospect@example.com"}
     end
   end
 
@@ -1307,10 +1307,10 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "prospect with opt-in: reply is pending and delivers to the prospect email" do
-      {conversation, _prospect} =
+      {thread, _prospect} =
         intake_fixture(email: "prospect@example.com", notify_on_reply: true)
 
-      {:ok, message} = Conversations.send_reply(conversation, "Happy to help")
+      {:ok, message} = Threads.send_reply(thread, "Happy to help")
       assert message.delivery_status == :pending
 
       # Async delivery is disabled in test config; exercise delivery directly.
@@ -1323,10 +1323,10 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "prospect without opt-in: reply is withheld and delivery is skipped" do
-      {conversation, _prospect} =
+      {thread, _prospect} =
         intake_fixture(email: "prospect@example.com", notify_on_reply: false)
 
-      {:ok, message} = Conversations.send_reply(conversation, "Saved but not emailed")
+      {:ok, message} = Threads.send_reply(thread, "Saved but not emailed")
 
       assert message.delivery_status == :withheld
       assert Repo.get!(Custyard.Message, message.id).delivery_status == :withheld
@@ -1334,9 +1334,9 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "no captured email at all: reply is withheld" do
-      {conversation, _prospect} = intake_fixture([])
+      {thread, _prospect} = intake_fixture([])
 
-      {:ok, message} = Conversations.send_reply(conversation, "No recipient anywhere")
+      {:ok, message} = Threads.send_reply(thread, "No recipient anywhere")
 
       assert message.delivery_status == :withheld
       assert_no_email_sent()
@@ -1345,24 +1345,24 @@ defmodule Custyard.ConversationsTest do
     test "revoked prospect has no reply channel: reply is withheld" do
       revoked_at = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      {conversation, _prospect} =
+      {thread, _prospect} =
         intake_fixture(
           email: "prospect@example.com",
           notify_on_reply: true,
           revoked_at: revoked_at
         )
 
-      {:ok, message} = Conversations.send_reply(conversation, "Revoked prospect")
+      {:ok, message} = Threads.send_reply(thread, "Revoked prospect")
 
       assert message.delivery_status == :withheld
       assert_no_email_sent()
     end
 
-    test "non-intake conversation with no recipient keeps the visible failure path" do
+    test "non-intake thread with no recipient keeps the visible failure path" do
       org = insert_organization()
-      conversation = insert_conversation(organization_id: org.id, contact_id: nil)
+      thread = insert_thread(organization_id: org.id, contact_id: nil)
 
-      {:ok, message} = Conversations.send_reply(conversation, "No recipient anywhere")
+      {:ok, message} = Threads.send_reply(thread, "No recipient anywhere")
 
       # :withheld is reserved for the public-intake consent gate — a
       # non-intake no-recipient reply stays :pending and delivery records
@@ -1378,8 +1378,8 @@ defmodule Custyard.ConversationsTest do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "matched@example.com")
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           source: :public_intake,
           organization_id: org.id,
           contact_id: contact.id,
@@ -1387,12 +1387,12 @@ defmodule Custyard.ConversationsTest do
         )
 
       insert_prospect(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         email: "prospect@example.com",
         notify_on_reply: false
       )
 
-      {:ok, message} = Conversations.send_reply(conversation, "Established customer path")
+      {:ok, message} = Threads.send_reply(thread, "Established customer path")
       assert message.delivery_status == :pending
 
       {:ok, delivered} = Outbound.deliver(message)
@@ -1404,11 +1404,11 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "public-intake replies never carry the staff's personal address" do
-      {conversation, _prospect} =
+      {thread, _prospect} =
         intake_fixture(email: "prospect@example.com", notify_on_reply: true)
 
       {:ok, message} =
-        Conversations.send_reply(conversation, "Reply", staff_email: "staff-personal@example.com")
+        Threads.send_reply(thread, "Reply", staff_email: "staff-personal@example.com")
 
       assert message.sender_email == "support@custyard.local"
     end
@@ -1422,46 +1422,46 @@ defmodule Custyard.ConversationsTest do
         from_address: "support@acme.com"
       )
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           source: :public_intake,
           organization_id: org.id,
           subject: "Linked intake thread"
         )
 
       insert_prospect(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         email: "prospect@example.com",
         notify_on_reply: true
       )
 
       {:ok, message} =
-        Conversations.send_reply(conversation, "Reply", staff_email: "staff-personal@example.com")
+        Threads.send_reply(thread, "Reply", staff_email: "staff-personal@example.com")
 
       # Source-keyed rule: neither the org route address nor the staff's
       # personal address — nil selects Outbound's platform fallback.
       assert message.sender_email == "support@custyard.local"
     end
 
-    test "sets origin to :email for public-intake conversations" do
-      {conversation, _prospect} =
+    test "sets origin to :email for public-intake threads" do
+      {thread, _prospect} =
         intake_fixture(email: "prospect@example.com", notify_on_reply: true)
 
-      {:ok, message} = Conversations.send_reply(conversation, "Origin check")
+      {:ok, message} = Threads.send_reply(thread, "Origin check")
 
       assert message.origin == :email
     end
 
     test "toggling notify_on_reply between replies flips delivery" do
-      {conversation, prospect} =
+      {thread, prospect} =
         intake_fixture(email: "prospect@example.com", notify_on_reply: false)
 
-      {:ok, first} = Conversations.send_reply(fresh(conversation), "First reply")
+      {:ok, first} = Threads.send_reply(fresh(thread), "First reply")
       assert first.delivery_status == :withheld
 
       {:ok, _} = prospect |> Prospect.notification_changeset(true) |> Repo.update()
 
-      {:ok, second} = Conversations.send_reply(fresh(conversation), "Second reply")
+      {:ok, second} = Threads.send_reply(fresh(thread), "Second reply")
       assert second.delivery_status == :pending
 
       {:ok, delivered} = Outbound.deliver(second)
@@ -1476,154 +1476,154 @@ defmodule Custyard.ConversationsTest do
         |> Prospect.notification_changeset(false)
         |> Repo.update()
 
-      {:ok, third} = Conversations.send_reply(fresh(conversation), "Third reply")
+      {:ok, third} = Threads.send_reply(fresh(thread), "Third reply")
       assert third.delivery_status == :withheld
     end
   end
 
-  describe "cleanup_resolved_conversations/2" do
+  describe "cleanup_resolved_threads/2" do
     test "purges dependent rows while preserving tenant audit and optional project links" do
       org = insert_organization()
-      thread = insert_conversation(organization_id: org.id, state: :resolved)
-      message = insert_message(conversation_id: thread.id)
-      insert_prospect(conversation_id: thread.id)
-      project = insert_project(organization_id: org.id, conversation_id: thread.id)
-      task = insert_task(organization_id: org.id, conversation_id: thread.id)
-      event = insert_audit_event(conversation_id: thread.id, organization_id: org.id)
+      thread = insert_thread(organization_id: org.id, state: :resolved)
+      message = insert_message(thread_id: thread.id)
+      insert_prospect(thread_id: thread.id)
+      project = insert_project(organization_id: org.id, thread_id: thread.id)
+      task = insert_task(organization_id: org.id, thread_id: thread.id)
+      event = insert_audit_event(thread_id: thread.id, organization_id: org.id)
       backdate_updated_at(thread, 91)
-      assert Conversations.cleanup_resolved_conversations(90) == 1
+      assert Threads.cleanup_resolved_threads(90) == 1
       refute Repo.get(Message, message.id)
-      refute Repo.get_by(Prospect, conversation_id: thread.id)
-      assert Repo.reload!(project).conversation_id == nil
-      assert Repo.reload!(task).conversation_id == nil
+      refute Repo.get_by(Prospect, thread_id: thread.id)
+      assert Repo.reload!(project).thread_id == nil
+      assert Repo.reload!(task).thread_id == nil
       assert Repo.reload!(event).tenant_id == org.tenant_id
-      assert Repo.reload!(event).conversation_id == nil
+      assert Repo.reload!(event).thread_id == nil
     end
 
-    test "purges resolved non-intake conversations after 90 days and keeps younger ones" do
+    test "purges resolved non-intake threads after 90 days and keeps younger ones" do
       org = insert_organization()
-      old = insert_conversation(organization_id: org.id, state: :resolved)
-      young = insert_conversation(organization_id: org.id, state: :resolved)
+      old = insert_thread(organization_id: org.id, state: :resolved)
+      young = insert_thread(organization_id: org.id, state: :resolved)
       backdate_updated_at(old, 91)
       backdate_updated_at(young, 89)
 
-      assert Conversations.cleanup_resolved_conversations(90) == 1
-      assert Repo.get(Custyard.Conversation, old.id) == nil
-      assert Repo.get(Custyard.Conversation, young.id)
+      assert Threads.cleanup_resolved_threads(90) == 1
+      assert Repo.get(Custyard.Thread, old.id) == nil
+      assert Repo.get(Custyard.Thread, young.id)
     end
 
-    test "purges a resolved conversation that has audit events and keeps its trail" do
+    test "purges a resolved thread that has audit events and keeps its trail" do
       org = insert_organization()
-      old = insert_conversation(organization_id: org.id, state: :resolved)
+      old = insert_thread(organization_id: org.id, state: :resolved)
       backdate_updated_at(old, 91)
-      event = insert_audit_event(conversation_id: old.id, organization_id: org.id)
+      event = insert_audit_event(thread_id: old.id, organization_id: org.id)
 
-      assert Conversations.cleanup_resolved_conversations(90) == 1
-      assert Repo.get(Custyard.Conversation, old.id) == nil
+      assert Threads.cleanup_resolved_threads(90) == 1
+      assert Repo.get(Custyard.Thread, old.id) == nil
 
       kept = Repo.get!(Custyard.AuditEvent, event.id)
-      assert kept.conversation_id == nil
+      assert kept.thread_id == nil
       assert kept.organization_id == org.id
     end
 
-    test "keeps resolved public-intake conversations well past the 90-day bound" do
-      conversation = insert_conversation(source: :public_intake, state: :resolved)
-      backdate_updated_at(conversation, 364)
+    test "keeps resolved public-intake threads well past the 90-day bound" do
+      thread = insert_thread(source: :public_intake, state: :resolved)
+      backdate_updated_at(thread, 364)
 
-      assert Conversations.cleanup_resolved_conversations(90) == 0
-      assert Repo.get(Custyard.Conversation, conversation.id)
+      assert Threads.cleanup_resolved_threads(90) == 0
+      assert Repo.get(Custyard.Thread, thread.id)
     end
 
-    test "purges resolved public-intake conversations after 365 days" do
-      conversation = insert_conversation(source: :public_intake, state: :resolved)
-      backdate_updated_at(conversation, 366)
+    test "purges resolved public-intake threads after 365 days" do
+      thread = insert_thread(source: :public_intake, state: :resolved)
+      backdate_updated_at(thread, 366)
 
-      assert Conversations.cleanup_resolved_conversations(90) == 1
-      assert Repo.get(Custyard.Conversation, conversation.id) == nil
+      assert Threads.cleanup_resolved_threads(90) == 1
+      assert Repo.get(Custyard.Thread, thread.id) == nil
     end
 
-    test "purges resolved conversations with a NULL source column at the standard bound" do
+    test "purges resolved threads with a NULL source column at the standard bound" do
       # The DB column has no NOT NULL constraint (only the Ecto schema
       # default), so a legacy row or a bypass-the-schema insert can leave
       # source NULL. Force it directly, bypassing the changeset default.
-      conversation = insert_conversation(state: :resolved)
-      backdate_updated_at(conversation, 91)
+      thread = insert_thread(state: :resolved)
+      backdate_updated_at(thread, 91)
 
       Repo.update_all(
-        from(c in Custyard.Conversation, where: c.id == ^conversation.id),
+        from(c in Custyard.Thread, where: c.id == ^thread.id),
         set: [source: nil]
       )
 
-      assert Conversations.cleanup_resolved_conversations(90) == 1
-      assert Repo.get(Custyard.Conversation, conversation.id) == nil
+      assert Threads.cleanup_resolved_threads(90) == 1
+      assert Repo.get(Custyard.Thread, thread.id) == nil
     end
 
     test "dry run counts the retention split without deleting" do
       org = insert_organization()
-      non_intake = insert_conversation(organization_id: org.id, state: :resolved)
-      intake_young = insert_conversation(source: :public_intake, state: :resolved)
-      intake_old = insert_conversation(source: :public_intake, state: :resolved)
+      non_intake = insert_thread(organization_id: org.id, state: :resolved)
+      intake_young = insert_thread(source: :public_intake, state: :resolved)
+      intake_old = insert_thread(source: :public_intake, state: :resolved)
       backdate_updated_at(non_intake, 91)
       backdate_updated_at(intake_young, 120)
       backdate_updated_at(intake_old, 366)
 
-      assert Conversations.cleanup_resolved_conversations(90, dry_run: true) == 2
-      assert Repo.get(Custyard.Conversation, non_intake.id)
-      assert Repo.get(Custyard.Conversation, intake_young.id)
-      assert Repo.get(Custyard.Conversation, intake_old.id)
+      assert Threads.cleanup_resolved_threads(90, dry_run: true) == 2
+      assert Repo.get(Custyard.Thread, non_intake.id)
+      assert Repo.get(Custyard.Thread, intake_young.id)
+      assert Repo.get(Custyard.Thread, intake_old.id)
     end
 
     test "purging cascades to the prospect so the access token stops resolving" do
       {token, hash} = Token.generate()
-      conversation = insert_conversation(source: :public_intake, state: :resolved)
-      prospect = insert_prospect(conversation_id: conversation.id, access_token_hash: hash)
-      backdate_updated_at(conversation, 366)
+      thread = insert_thread(source: :public_intake, state: :resolved)
+      prospect = insert_prospect(thread_id: thread.id, access_token_hash: hash)
+      backdate_updated_at(thread, 366)
 
-      assert {:ok, _conversation} =
-               Intake.get_conversation_by_access_token(token, Process.get(:factory_tenant_id))
+      assert {:ok, _thread} =
+               Intake.get_thread_by_access_token(token, Process.get(:factory_tenant_id))
 
-      assert Conversations.cleanup_resolved_conversations(90) == 1
+      assert Threads.cleanup_resolved_threads(90) == 1
 
       assert Repo.get(Prospect, prospect.id) == nil
 
-      assert Intake.get_conversation_by_access_token(token, Process.get(:factory_tenant_id)) ==
+      assert Intake.get_thread_by_access_token(token, Process.get(:factory_tenant_id)) ==
                {:error, :not_found}
     end
 
     test "run_cleanup applies the public-intake retention split" do
-      intake_old = insert_conversation(source: :public_intake, state: :resolved)
-      intake_young = insert_conversation(source: :public_intake, state: :resolved)
+      intake_old = insert_thread(source: :public_intake, state: :resolved)
+      intake_young = insert_thread(source: :public_intake, state: :resolved)
       backdate_updated_at(intake_old, 366)
       backdate_updated_at(intake_young, 120)
 
-      %{resolved_conversations: count} = Conversations.run_cleanup(dry_run: true)
+      %{resolved_threads: count} = Threads.run_cleanup(dry_run: true)
       assert count == 1
     end
 
     # The non-dry path was never exercised: cleanup_orphaned_contacts/1
     # expressed its anti-join as a DELETE-with-JOIN, which SQLite rejects,
     # so run_cleanup/1 raised on any real invocation. It is scheduled now
-    # (Conversations.RetentionSweep), so this pins the whole path.
+    # (Threads.RetentionSweep), so this pins the whole path.
     test "run_cleanup deletes for real, not only under dry_run" do
-      intake_old = insert_conversation(source: :public_intake, state: :resolved)
-      intake_young = insert_conversation(source: :public_intake, state: :resolved)
+      intake_old = insert_thread(source: :public_intake, state: :resolved)
+      intake_young = insert_thread(source: :public_intake, state: :resolved)
       backdate_updated_at(intake_old, 366)
       backdate_updated_at(intake_young, 120)
 
-      counts = Conversations.run_cleanup()
+      counts = Threads.run_cleanup()
 
-      assert counts.resolved_conversations == 1
-      refute Repo.get(Custyard.Conversation, intake_old.id)
-      assert Repo.get(Custyard.Conversation, intake_young.id)
+      assert counts.resolved_threads == 1
+      refute Repo.get(Custyard.Thread, intake_old.id)
+      assert Repo.get(Custyard.Thread, intake_young.id)
     end
 
-    test "run_cleanup removes contacts left with no conversations" do
+    test "run_cleanup removes contacts left with no threads" do
       org = insert_organization()
       orphan = insert_contact(organization_id: org.id)
       kept = insert_contact(organization_id: org.id)
-      _live = insert_conversation(organization_id: org.id, contact_id: kept.id, state: :active)
+      _live = insert_thread(organization_id: org.id, contact_id: kept.id, state: :active)
 
-      counts = Conversations.run_cleanup()
+      counts = Threads.run_cleanup()
 
       assert counts.orphaned_contacts >= 1
       refute Repo.get(Custyard.Contact, orphan.id)
@@ -1633,12 +1633,12 @@ defmodule Custyard.ConversationsTest do
 
   # --- helpers ---
 
-  # Public-intake conversation with a prospect message and a prospect row.
+  # Public-intake thread with a prospect message and a prospect row.
   defp intake_fixture(prospect_overrides) do
-    conversation = insert_conversation(source: :public_intake, subject: "Intake question")
+    thread = insert_thread(source: :public_intake, subject: "Intake question")
 
     insert_message(
-      conversation_id: conversation.id,
+      thread_id: thread.id,
       source: :prospect,
       sender_email: nil,
       body: "Hello, can you help me?"
@@ -1648,27 +1648,27 @@ defmodule Custyard.ConversationsTest do
       insert_prospect(
         Keyword.merge(
           [
-            conversation_id: conversation.id,
+            thread_id: thread.id,
             email_captured_at: DateTime.utc_now() |> DateTime.truncate(:second)
           ],
           prospect_overrides
         )
       )
 
-    {conversation, prospect}
+    {thread, prospect}
   end
 
   # Re-read without preloaded associations so send_reply sees fresh consent.
-  defp fresh(conversation), do: Conversations.get!(current_scope(), conversation.id)
+  defp fresh(thread), do: Threads.get!(current_scope(), thread.id)
 
-  defp backdate_updated_at(conversation, days) do
+  defp backdate_updated_at(thread, days) do
     backdated =
       DateTime.utc_now()
       |> DateTime.add(-days * 24 * 60 * 60, :second)
       |> DateTime.truncate(:second)
 
     Repo.update_all(
-      from(c in Custyard.Conversation, where: c.id == ^conversation.id),
+      from(c in Custyard.Thread, where: c.id == ^thread.id),
       set: [updated_at: backdated]
     )
   end
@@ -1704,19 +1704,19 @@ defmodule Custyard.ConversationsTest do
           state: :active
         )
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           inbound_channel_id: channel.id
         )
 
       {:ok, message} =
-        Conversations.send_reply(conversation, "Reply", staff_email: "agent@corp.com")
+        Threads.send_reply(thread, "Reply", staff_email: "agent@corp.com")
 
       assert message.sender_email == "help@acme.example.com"
 
-      assert Conversations.reply_identity(conversation, staff_email: "agent@corp.com") == %{
+      assert Threads.reply_identity(thread, staff_email: "agent@corp.com") == %{
                address: "help@acme.example.com",
                name: "Acme Help",
                source: :channel
@@ -1728,10 +1728,10 @@ defmodule Custyard.ConversationsTest do
       route: route
     } do
       channel = insert_inbound_channel(inbound_route_id: route.id, state: :active)
-      conversation = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+      thread = insert_thread(organization_id: org.id, inbound_channel_id: channel.id)
 
       assert %{name: "Tenant", source: :channel} =
-               Conversations.reply_identity(conversation)
+               Threads.reply_identity(thread)
     end
 
     test "the ingress fallback replies from local+token@domain", %{org: org, route: route} do
@@ -1743,15 +1743,15 @@ defmodule Custyard.ConversationsTest do
           state: :active
         )
 
-      conversation = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+      thread = insert_thread(organization_id: org.id, inbound_channel_id: channel.id)
 
       expected = "help+#{channel.ingress_token}@#{route.lettermint_route_domain}"
       assert Custyard.InboundChannels.ingress_address(channel) == expected
 
-      {:ok, message} = Conversations.send_reply(conversation, "Reply")
+      {:ok, message} = Threads.send_reply(thread, "Reply")
       assert message.sender_email == expected
 
-      assert %{address: ^expected, source: :channel} = Conversations.reply_identity(conversation)
+      assert %{address: ^expected, source: :channel} = Threads.reply_identity(thread)
     end
 
     test "a preloaded channel association is used without a lookup", %{org: org, route: route} do
@@ -1762,18 +1762,18 @@ defmodule Custyard.ConversationsTest do
           state: :active
         )
 
-      conversation =
-        insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+      thread =
+        insert_thread(organization_id: org.id, inbound_channel_id: channel.id)
         |> Repo.preload(:inbound_channel)
 
       assert %{address: "help@acme.example.com", source: :channel} =
-               Conversations.reply_identity(conversation)
+               Threads.reply_identity(thread)
     end
 
     test "without a channel tenant setup is required", %{org: org} do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
-      assert Conversations.reply_identity(conversation, staff_email: "agent@corp.com") == %{
+      assert Threads.reply_identity(thread, staff_email: "agent@corp.com") == %{
                address: nil,
                name: "Tenant",
                source: :platform
@@ -1783,15 +1783,15 @@ defmodule Custyard.ConversationsTest do
     test "public intake uses the tenant's support channel", %{route: route} do
       channel = insert_inbound_channel(inbound_route_id: route.id, state: :active)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           source: :public_intake,
           tenant_id: route.tenant_id,
           organization_id: nil,
           inbound_channel_id: channel.id
         )
 
-      assert Conversations.reply_identity(conversation) == %{
+      assert Threads.reply_identity(thread) == %{
                address: channel.public_address,
                name: "Tenant",
                source: :channel

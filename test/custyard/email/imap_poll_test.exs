@@ -4,7 +4,7 @@ defmodule Custyard.Email.ImapPollTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Conversation, InboundChannel, InboundChannelRejection, InboundChannels, Message}
+  alias Custyard.{Thread, InboundChannel, InboundChannelRejection, InboundChannels, Message}
   alias Custyard.Email.{ImapPoll, ImapPollers, Parser}
   alias Custyard.Email.ImapClient.Stub
   alias Custyard.Webhooks.Adapters.Email, as: EmailAdapter
@@ -121,7 +121,7 @@ defmodule Custyard.Email.ImapPollTest do
       assert channel.imap_last_uid == 9
       assert channel.imap_last_error == nil
       assert ImapPollers.pollable?(reload(channel))
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
     test "a rejected login is recorded and leaves the channel pending",
@@ -166,7 +166,7 @@ defmodule Custyard.Email.ImapPollTest do
       assert channel.imap_last_polled_at
 
       subjects =
-        from(c in Conversation, where: c.inbound_channel_id == ^channel.id, order_by: c.id)
+        from(c in Thread, where: c.inbound_channel_id == ^channel.id, order_by: c.id)
         |> Repo.all()
         |> Enum.map(& &1.subject)
 
@@ -358,7 +358,7 @@ defmodule Custyard.Email.ImapPollTest do
       assert [%{classification: :channel_paused}] =
                InboundChannels.list_rejections_for_route(route.id)
 
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
   end
 

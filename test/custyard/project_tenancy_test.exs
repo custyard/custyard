@@ -32,7 +32,7 @@ defmodule Custyard.ProjectTenancyTest do
     assert Repo.reload!(project).tenant_id == tenant.id
   end
 
-  test "projects cannot attach another tenant's conversation or move through another customer" do
+  test "projects cannot attach another tenant's thread or move through another customer" do
     {:ok, tenant} =
       Tenants.create_tenant(%{
         name: "Projects",
@@ -40,17 +40,17 @@ defmodule Custyard.ProjectTenancyTest do
       })
 
     org = insert_organization(tenant_id: tenant.id)
-    foreign = insert_conversation()
+    foreign = insert_thread()
 
     changeset =
       Project.changeset(%Project{}, %{
         title: "Bad link",
         organization_id: org.id,
-        conversation_id: foreign.id
+        thread_id: foreign.id
       })
 
     refute changeset.valid?
-    assert "must belong to the project's workspace" in errors_on(changeset).conversation_id
+    assert "must belong to the project's workspace" in errors_on(changeset).thread_id
     admin = insert_staff_account(role: "admin", tenant_id: tenant.id)
 
     assert {:error, changeset} =
@@ -59,10 +59,10 @@ defmodule Custyard.ProjectTenancyTest do
                project_type: :internal,
                portal_visible: false,
                tenant_id: foreign.tenant_id,
-               conversation_id: foreign.id
+               thread_id: foreign.id
              })
 
-    assert "must belong to the project's workspace" in errors_on(changeset).conversation_id
+    assert "must belong to the project's workspace" in errors_on(changeset).thread_id
     project = insert_project(organization_id: org.id)
 
     assert {:error, :unauthorized} =
@@ -93,17 +93,17 @@ defmodule Custyard.ProjectTenancyTest do
     assert Repo.reload!(task).organization_id == org.id
   end
 
-  test "a project move cannot carry a task away from its conversation's customer" do
+  test "a project move cannot carry a task away from its thread's customer" do
     org = insert_organization()
     destination = insert_organization(tenant_id: org.tenant_id)
     admin = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
-    conversation = insert_conversation(organization_id: org.id)
+    thread = insert_thread(organization_id: org.id)
     project = insert_project(organization_id: org.id)
 
     {:ok, task} =
       Projects.create_task(project, %{
-        title: "Conversation task",
-        conversation_id: conversation.id
+        title: "Thread task",
+        thread_id: thread.id
       })
 
     for update <- [
@@ -115,7 +115,7 @@ defmodule Custyard.ProjectTenancyTest do
       assert {:error, changeset} = update.()
 
       assert errors_on(changeset).organization_id == [
-               "cannot move tasks linked to another customer's conversation"
+               "cannot move tasks linked to another customer's thread"
              ]
 
       assert Repo.reload!(project).organization_id == org.id

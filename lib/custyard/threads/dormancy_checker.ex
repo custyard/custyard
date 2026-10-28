@@ -1,12 +1,12 @@
-defmodule Custyard.Conversations.DormancyChecker do
+defmodule Custyard.Threads.DormancyChecker do
   @moduledoc """
-  Transitions stale waiting conversations to dormant state.
+  Transitions stale waiting threads to dormant state.
 
-  A conversation becomes dormant when it has been in :waiting state with no
+  A thread becomes dormant when it has been in :waiting state with no
   customer action beyond the tier-based dormancy threshold. This is the
   automatic `waiting -> dormant` transition described in `docs/design/sdd.md`
-  §74/§80 — an inactivity signal, not a suppression one. Dormant conversations
-  stay in the attention queue (`Conversations.list_for_attention_queue/1`
+  §74/§80 — an inactivity signal, not a suppression one. Dormant threads
+  stay in the attention queue (`Threads.list_for_attention_queue/1`
   excludes only `:resolved` and snoozed rows) and score *higher* than waiting
   ones (`Scoring` weights dormant 25 against waiting 0), so the transition
   raises queue position rather than lowering it. `sdd.md` §477 describes a
@@ -22,19 +22,19 @@ defmodule Custyard.Conversations.DormancyChecker do
   """
 
   import Ecto.Query
-  alias Custyard.{Conversation, Conversations, Repo, Settings}
+  alias Custyard.{Thread, Threads, Repo, Settings}
 
   # Organization tiers carrying their own dormancy threshold. Unlinked
-  # conversations have no tier and are handled separately, on the standard
+  # threads have no tier and are handled separately, on the standard
   # cutoff, matching `Scoring.neglect_tier/1` and `NeglectChecker`.
   @dormancy_tiers [:enterprise, :standard, :basic]
 
   @doc """
-  Find and transition all stale waiting conversations to dormant.
+  Find and transition all stale waiting threads to dormant.
 
-  Returns the count of transitioned conversations.
+  Returns the count of transitioned threads.
   """
-  def transition_stale_conversations do
+  def transition_stale_threads do
     Custyard.Tenants.list_tenants()
     |> Enum.filter(&(&1.status == "active"))
     |> Enum.map(fn tenant ->
@@ -48,12 +48,12 @@ defmodule Custyard.Conversations.DormancyChecker do
   end
 
   @doc """
-  Query conversations in :waiting state that have exceeded their dormancy threshold.
+  Query threads in :waiting state that have exceeded their dormancy threshold.
 
   Uses the critical threshold from Settings.get_neglect_thresholds/0 as the
   dormancy cutoff for each tier.
 
-  Unlinked conversations (nil organization — public intake and disambiguation)
+  Unlinked threads (nil organization — public intake and disambiguation)
   have no tier to join against, so they are matched by a dedicated
   `is_nil(organization_id)` branch on the standard-tier cutoff. That mirrors
   `Scoring.neglect_tier/1` and `NeglectChecker.list_notification_candidates/1`.
@@ -61,7 +61,7 @@ defmodule Custyard.Conversations.DormancyChecker do
   changes nothing, because every tier comparison is NULL for them and
   `NULL OR NULL OR NULL` is not TRUE.
   """
-  def stale_conversations(tenant_id) do
+  def stale_threads(tenant_id) do
     # Thresholds are database-configurable; the critical threshold doubles as
     # the dormancy cutoff.
     Settings.get_neglect_thresholds(tenant_id)
@@ -70,7 +70,7 @@ defmodule Custyard.Conversations.DormancyChecker do
   end
 
   defp stale_query(thresholds, tenant_id) do
-    from(c in Conversation,
+    from(c in Thread,
       left_join: o in assoc(c, :organization),
       where: c.tenant_id == ^tenant_id,
       where: c.state == :waiting,
@@ -101,10 +101,10 @@ defmodule Custyard.Conversations.DormancyChecker do
   end
 
   # Dormant means no activity from either side for the whole period
-  # (sdd.md, US-3). Measuring only the customer side turned a conversation
+  # (sdd.md, US-3). Measuring only the customer side turned a thread
   # dormant minutes after the staff replied and marked it waiting, before
   # the customer had any chance to answer. An staff who never acted does
-  # not hold the conversation back.
+  # not hold the thread back.
   defp quiet_since(cutoff) do
     dynamic(
       [c],
@@ -123,29 +123,29 @@ defmodule Custyard.Conversations.DormancyChecker do
   end
 
   # Guarded by the whole stale condition, re-evaluated by the UPDATE itself:
-  # a customer reply that reactivated the conversation, or a staff reply
+  # a customer reply that reactivated the thread, or a staff reply
   # that left it :waiting, between the SELECT above and this UPDATE must win,
   # not be overwritten with :dormant from a stale struct.
-  defp transition_to_dormant(%Conversation{id: id} = conversation, thresholds) do
+  defp transition_to_dormant(%Thread{id: id} = thread, thresholds) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     still_stale =
-      from(c in stale_query(thresholds, conversation.tenant_id), where: c.id == ^id, select: c.id)
+      from(c in stale_query(thresholds, thread.tenant_id), where: c.id == ^id, select: c.id)
 
     {count, _} =
-      from(c in Conversation, where: c.id in subquery(still_stale))
+      from(c in Thread, where: c.id in subquery(still_stale))
       |> Repo.update_all(set: [state: :dormant, updated_at: now])
 
     if count == 1 do
       Phoenix.PubSub.broadcast(
         Custyard.PubSub,
-        "conversations",
-        {:conversation_updated, id}
+        "threads",
+        {:thread_updated, id}
       )
 
-      Conversations.broadcast_to_org(
-        conversation.organization_id,
-        {:conversation_updated, id}
+      Threads.broadcast_to_org(
+        thread.organization_id,
+        {:thread_updated, id}
       )
 
       true

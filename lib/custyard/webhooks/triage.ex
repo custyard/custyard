@@ -12,9 +12,9 @@ defmodule Custyard.Webhooks.Triage do
 
     1. `{:own_echo, %Message{}}` - the Message-ID belongs to a staff
        reply Custyard sent from this organization (D4 archive copy).
-    2. `{:staff_sent, %{conversation:, staff:, email:}}` - a reply the
+    2. `{:staff_sent, %{thread:, staff:, email:}}` - a reply the
        staff sent from their own mailbox, outside Custyard, that threads
-       to a known conversation.
+       to a known thread.
     3. `{:staff_forward, %{original:, staff:, email:}}` - customer
        mail a staff forwarded in by hand (the backlog-import path):
        the original sender, subject and body are unwrapped from the
@@ -24,10 +24,10 @@ defmodule Custyard.Webhooks.Triage do
     5. `{:auto_response, reason}` - auto-submitted, bulk or bounce mail.
     6. `{:suspect, reason}` - spam-flagged or DKIM+DMARC failing mail from a
        sender who is not a known contact in the organization. A contact
-       whose only conversations are themselves suspect does not count:
+       whose only threads are themselves suspect does not count:
        suspect mail creates its own contact, and that must not whitelist
        the sender's next message. An staff clearing the suspect flag on
-       any of those conversations is what makes the sender known.
+       any of those threads is what makes the sender known.
     7. `{:customer, nil}` - everything else.
 
   Classes 2 and 3 need an authenticated staff identity: `From` is
@@ -41,7 +41,7 @@ defmodule Custyard.Webhooks.Triage do
 
   alias Custyard.{
     Contact,
-    Conversation,
+    Thread,
     InboundChannel,
     InboundRoute,
     Message,
@@ -56,7 +56,7 @@ defmodule Custyard.Webhooks.Triage do
 
   @type classification ::
           {:own_echo, struct()}
-          | {:staff_sent, %{conversation: struct(), staff: struct() | nil, email: String.t()}}
+          | {:staff_sent, %{thread: struct(), staff: struct() | nil, email: String.t()}}
           | {:staff_forward, %{original: map(), staff: struct() | nil, email: String.t()}}
           | {:verification,
              %{provider: :google | :proton, code: String.t() | nil, link: String.t() | nil}}
@@ -110,8 +110,8 @@ defmodule Custyard.Webhooks.Triage do
       candidates ->
         query =
           from m in Message,
-            join: c in Conversation,
-            on: c.id == m.conversation_id,
+            join: c in Thread,
+            on: c.id == m.thread_id,
             where: m.source == :staff,
             where: is_nil(m.triage_class) or m.triage_class != :staff_sent,
             where: m.message_id in ^candidates,
@@ -154,8 +154,8 @@ defmodule Custyard.Webhooks.Triage do
         match = ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
 
         case match do
-          {:ok, conversation} ->
-            {:staff_sent, Map.put(identity, :conversation, conversation)}
+          {:ok, thread} ->
+            {:staff_sent, Map.put(identity, :thread, thread)}
 
           no_match when no_match in [:not_found, :ambiguous] ->
             staff_forward(normalized, identity)
@@ -425,19 +425,19 @@ defmodule Custyard.Webhooks.Triage do
 
   defp known_contact?(nil, _organization_id), do: false
 
-  # A contact counts as known unless every conversation it has is suspect.
+  # A contact counts as known unless every thread it has is suspect.
   # Sender matching creates a contact for the first suspect delivery; without
   # this rule that contact would exempt the sender's second message. A
-  # contact with no conversations at all (staff-created or imported) is
-  # known, as is one with at least one conversation a staff accepted or
+  # contact with no threads at all (staff-created or imported) is
+  # known, as is one with at least one thread a staff accepted or
   # cleared.
   defp known_contact?(email, route) do
     suspect_only =
-      from v in Conversation,
+      from v in Thread,
         where: v.contact_id == parent_as(:contact).id and v.suspect == true
 
     accepted =
-      from v in Conversation,
+      from v in Thread,
         where: v.contact_id == parent_as(:contact).id and v.suspect == false
 
     query =

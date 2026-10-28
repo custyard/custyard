@@ -296,7 +296,7 @@ defmodule CustyardWeb.Staff.SettingsLive do
           </button>
         </div>
         <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
-          These weights affect how conversations are ranked in the attention queue.
+          These weights affect how threads are ranked in the attention queue.
           Higher weights give more importance to that factor.
         </p>
 
@@ -373,7 +373,7 @@ defmodule CustyardWeb.Staff.SettingsLive do
           </button>
         </div>
         <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
-          Hours without staff action before conversations are flagged.
+          Hours without staff action before threads are flagged.
           (warning, critical) by tier.
         </p>
 
@@ -479,7 +479,7 @@ defmodule CustyardWeb.Staff.SettingsLive do
         </div>
         <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
           Public intake behavior. The unlinked tier score is the tier-equivalent score
-          for conversations without an organization (0-100). The slug claim TTL is how
+          for threads without an organization (0-100). The slug claim TTL is how
           long an unconfirmed slug claim lives (1-720 hours).
         </p>
 

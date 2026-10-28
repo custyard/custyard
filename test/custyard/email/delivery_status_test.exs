@@ -107,11 +107,11 @@ defmodule Custyard.Email.DeliveryStatusTest do
     setup do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "alice@customer.com")
-      conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      thread = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       outbound =
         insert_message(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           source: :staff,
           sender_email: "support@acme.com",
           message_id: "<reply-001@custyard.local>",
@@ -120,12 +120,12 @@ defmodule Custyard.Email.DeliveryStatusTest do
           lettermint_message_id: @provider_id
         )
 
-      {:ok, org: org, conversation: conversation, outbound: outbound}
+      {:ok, org: org, thread: thread, outbound: outbound}
     end
 
     test "delivered advances the message and writes an audit event with only allowed keys", %{
       org: org,
-      conversation: conversation,
+      thread: thread,
       outbound: outbound
     } do
       envelope = envelope("message.delivered", "evt-1", delivered_data())
@@ -139,7 +139,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       assert audit.event_type == :delivery_status_updated
       assert audit.source == "lettermint"
       assert audit.message_id == "<reply-001@custyard.local>"
-      assert audit.conversation_id == conversation.id
+      assert audit.thread_id == thread.id
       assert audit.organization_id == org.id
 
       assert audit.payload == %{
@@ -265,12 +265,12 @@ defmodule Custyard.Email.DeliveryStatusTest do
     end
 
     test "an inbound message with the same provider id is never touched", %{
-      conversation: conversation,
+      thread: thread,
       outbound: outbound
     } do
       inbound =
         insert_message(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           source: :email,
           origin: :lettermint,
           sender_email: "alice@customer.com",
@@ -291,13 +291,13 @@ defmodule Custyard.Email.DeliveryStatusTest do
     end
 
     test "only an inbound message matches: ignored as unknown", %{
-      conversation: conversation,
+      thread: thread,
       outbound: outbound
     } do
       Repo.delete!(outbound)
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :email,
         sender_email: "alice@customer.com",
         message_id: "<inbound-002@customer.com>",
@@ -319,9 +319,9 @@ defmodule Custyard.Email.DeliveryStatusTest do
       assert Repo.aggregate(AuditEvent, :count) == 0
     end
 
-    test "withheld messages are not advanced", %{conversation: conversation} do
+    test "withheld messages are not advanced", %{thread: thread} do
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         body: "Recorded but not emailed",
         delivery_status: :withheld,
@@ -369,10 +369,10 @@ defmodule Custyard.Email.DeliveryStatusTest do
       org = insert_organization()
       alice = insert_contact(organization_id: org.id, email: "Alice@Customer.com")
       bob = insert_contact(organization_id: org.id, email: "bob@customer.com")
-      conversation = insert_conversation(organization_id: org.id, contact_id: alice.id)
+      thread = insert_thread(organization_id: org.id, contact_id: alice.id)
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         sender_email: "support@acme.com",
         message_id: "<reply-002@custyard.local>",
@@ -383,7 +383,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
         cc_addresses: ["bob@customer.com"]
       )
 
-      {:ok, org: org, alice: alice, bob: bob, conversation: conversation}
+      {:ok, org: org, alice: alice, bob: bob, thread: thread}
     end
 
     test "a hard bounce flags the recipient at the event time", %{alice: alice, bob: bob} do
@@ -395,7 +395,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       assert Repo.reload!(bob).email_status == :valid
     end
 
-    test "a bounced CC address flags that contact, not the conversation's", %{
+    test "a bounced CC address flags that contact, not the thread's", %{
       alice: alice,
       bob: bob
     } do
@@ -507,11 +507,11 @@ defmodule Custyard.Email.DeliveryStatusTest do
     setup do
       org = insert_organization()
       alice = insert_contact(organization_id: org.id, email: "alice@customer.com")
-      conversation = insert_conversation(organization_id: org.id, contact_id: alice.id)
+      thread = insert_thread(organization_id: org.id, contact_id: alice.id)
 
       outbound =
         insert_message(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           source: :staff,
           sender_email: "support@acme.com",
           message_id: "<reply-003@custyard.local>",
@@ -522,7 +522,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
           cc_addresses: ["bob@customer.com"]
         )
 
-      {:ok, conversation: conversation, outbound: outbound}
+      {:ok, thread: thread, outbound: outbound}
     end
 
     test "a CC bounce records the recipient and leaves the message's status alone", %{
@@ -698,11 +698,11 @@ defmodule Custyard.Email.DeliveryStatusTest do
     end
 
     test "a message that recorded no recipients treats every address as primary", %{
-      conversation: conversation
+      thread: thread
     } do
       legacy =
         insert_message(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           source: :staff,
           body: "Sent before recipient lists existed",
           delivery_status: :sent,

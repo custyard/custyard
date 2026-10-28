@@ -38,17 +38,17 @@ defmodule CustyardWeb.Router do
     plug :put_root_layout, html: {CustyardWeb.Layouts, :portal_root}
   end
 
-  # Public prospect surfaces (/i intake, /c conversation, /claim slug-claim):
+  # Public prospect surfaces (/i intake, /c thread, /claim slug-claim):
   # anonymous, hammerable, and carrying bearer tokens in the path. The
-  # conversation URL must never leak via the Referer header, and the pages render
+  # thread URL must never leak via the Referer header, and the pages render
   # the sparse staff-branded :intake layout instead of the app chrome.
   pipeline :public_intake do
     plug CustyardWeb.Plugs.NoReferrer
     plug :put_root_layout, html: {CustyardWeb.Layouts, :intake_root}
   end
 
-  pipeline :conversation_cookie do
-    plug CustyardWeb.Plugs.ConversationCookie
+  pipeline :thread_cookie do
+    plug CustyardWeb.Plugs.ThreadCookie
   end
 
   scope "/", CustyardWeb do
@@ -68,20 +68,20 @@ defmodule CustyardWeb.Router do
     post "/:source_key", IntakeController, :create
   end
 
-  # Conversation access — the token in the URL is the credential; every mount
+  # Thread access — the token in the URL is the credential; every mount
   # re-authenticates it (nothing lives in the session). The uniform
-  # "conversation unavailable" page is a dead view so invalid tokens never
+  # "thread unavailable" page is a dead view so invalid tokens never
   # cost a LiveView socket; it must be declared before the catch-all live
   # route ("unavailable" is not a valid token shape, but order still matters).
   scope "/threads", CustyardWeb do
-    pipe_through [:browser, :public_intake, :conversation_cookie]
+    pipe_through [:browser, :public_intake, :thread_cookie]
 
-    get "/unavailable", Prospect.ConversationController, :unavailable
+    get "/unavailable", Prospect.ThreadController, :unavailable
 
-    live_session :prospect_conversation,
+    live_session :prospect_thread,
       on_mount: [{CustyardWeb.Live.ProspectAuth, :default}],
       layout: {CustyardWeb.Layouts, :intake} do
-      live "/:token", Prospect.ConversationLive, :show
+      live "/:token", Prospect.ThreadLive, :show
     end
   end
 
@@ -128,7 +128,7 @@ defmodule CustyardWeb.Router do
       layout: {CustyardWeb.Layouts, :staff} do
       live "/", AttentionQueueLive, :index
       live "/threads", AttentionQueueLive, :index
-      live "/threads/:id", ConversationLive, :show
+      live "/threads/:id", ThreadLive, :show
       live "/projects", ProjectsLive, :index
       live "/projects/:id", ProjectDetailLive, :show
       live "/neglect", NeglectReportLive, :index
@@ -174,7 +174,7 @@ defmodule CustyardWeb.Router do
       on_mount: [{CustyardWeb.Live.PortalAuth, :default}],
       layout: {CustyardWeb.Layouts, :portal} do
       live "/", RequestListLive, :index
-      live "/request/:id", ConversationLive, :show
+      live "/request/:id", ThreadLive, :show
       live "/new", NewRequestLive, :new
       live "/projects", ProjectsListLive, :index
       live "/projects/:id", ProjectLive, :show

@@ -1,7 +1,7 @@
 defmodule Custyard.LabelsTest do
   use Custyard.DataCase, async: true
   import Custyard.Factory
-  alias Custyard.{Conversations, Labels, Scope, Tenants}
+  alias Custyard.{Threads, Labels, Scope, Tenants}
 
   defp scope(staff), do: Scope.for_staff(staff, Tenants.get_tenant!(staff.tenant_id))
 
@@ -21,31 +21,31 @@ defmodule Custyard.LabelsTest do
     staff =
       insert_staff_account(role: "admin", organization_id: org.id, tenant_id: tenant.id)
 
-    conversation = insert_conversation(organization_id: org.id)
+    thread = insert_thread(organization_id: org.id)
 
     %{
       tenant: tenant,
       other_org: other_org,
       org: org,
       staff: staff,
-      conversation: conversation
+      thread: thread
     }
   end
 
   test "labels are reusable within a tenant and assignments are idempotent", c do
-    assert {:ok, label} = Labels.create_and_assign(scope(c.staff), c.conversation, " Billing ")
+    assert {:ok, label} = Labels.create_and_assign(scope(c.staff), c.thread, " Billing ")
     assert label.name == "Billing"
-    assert {:ok, _} = Labels.assign(scope(c.staff), c.conversation, label.id)
-    assert %{assigned: [^label]} = Labels.for_conversation(scope(c.staff), c.conversation)
+    assert {:ok, _} = Labels.assign(scope(c.staff), c.thread, label.id)
+    assert %{assigned: [^label]} = Labels.for_thread(scope(c.staff), c.thread)
 
     assert {:error, changeset} =
-             Labels.create_and_assign(scope(c.staff), c.conversation, "billing")
+             Labels.create_and_assign(scope(c.staff), c.thread, "billing")
 
     assert "has already been taken" in errors_on(changeset).tenant_id
-    assert {:ok, :removed} = Labels.remove(scope(c.staff), c.conversation, label.id)
+    assert {:ok, :removed} = Labels.remove(scope(c.staff), c.thread, label.id)
 
     assert %{assigned: [], available: [^label]} =
-             Labels.for_conversation(scope(c.staff), c.conversation)
+             Labels.for_thread(scope(c.staff), c.thread)
   end
 
   test "foreign labels cannot be read, assigned or used to cross tenant boundaries", c do
@@ -56,60 +56,60 @@ defmodule Custyard.LabelsTest do
         tenant_id: c.other_org.tenant_id
       )
 
-    foreign_conversation = insert_conversation(organization_id: c.other_org.id)
+    foreign_thread = insert_thread(organization_id: c.other_org.id)
 
     {:ok, label} =
-      Labels.create_and_assign(scope(foreign_staff), foreign_conversation, "Private")
+      Labels.create_and_assign(scope(foreign_staff), foreign_thread, "Private")
 
     refute label in Labels.list(scope(c.staff))
 
     assert %{available: [], assigned: []} =
-             Labels.for_conversation(scope(c.staff), foreign_conversation)
+             Labels.for_thread(scope(c.staff), foreign_thread)
 
-    assert {:error, :not_found} = Labels.assign(scope(c.staff), c.conversation, label.id)
+    assert {:error, :not_found} = Labels.assign(scope(c.staff), c.thread, label.id)
 
     assert {:error, :unauthorized} =
-             Labels.assign(scope(c.staff), foreign_conversation, label.id)
+             Labels.assign(scope(c.staff), foreign_thread, label.id)
 
-    assert Conversations.list(scope(c.staff), organization_id: c.org.id, label_id: label.id) ==
+    assert Threads.list(scope(c.staff), organization_id: c.org.id, label_id: label.id) ==
              []
   end
 
   test "agents can apply existing labels but cannot define labels", c do
-    {:ok, label} = Labels.create_and_assign(scope(c.staff), c.conversation, "Bug")
-    {:ok, _} = Labels.remove(scope(c.staff), c.conversation, label.id)
+    {:ok, label} = Labels.create_and_assign(scope(c.staff), c.thread, "Bug")
+    {:ok, _} = Labels.remove(scope(c.staff), c.thread, label.id)
 
     agent =
       insert_staff_account(role: "agent", organization_id: c.org.id, tenant_id: c.tenant.id)
 
-    assert {:ok, _} = Labels.assign(scope(agent), c.conversation, label.id)
-    assert {:error, :unauthorized} = Labels.create_and_assign(scope(agent), c.conversation, "New")
+    assert {:ok, _} = Labels.assign(scope(agent), c.thread, label.id)
+    assert {:error, :unauthorized} = Labels.create_and_assign(scope(agent), c.thread, "New")
   end
 
-  test "unlinked public conversations use their workspace labels", c do
-    conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
-    assert is_nil(conversation.organization_id)
+  test "unlinked public threads use their workspace labels", c do
+    thread = insert_thread(source: :public_intake, tenant_id: c.tenant.id)
+    assert is_nil(thread.organization_id)
 
     assert {:ok, label} =
-             Labels.create_and_assign(scope(c.staff), conversation, "Public question")
+             Labels.create_and_assign(scope(c.staff), thread, "Public question")
 
-    assert %{assigned: [^label]} = Labels.for_conversation(scope(c.staff), conversation)
-    id = conversation.id
-    assert %{^id => [^label]} = Labels.for_conversations([conversation])
+    assert %{assigned: [^label]} = Labels.for_thread(scope(c.staff), thread)
+    id = thread.id
+    assert %{^id => [^label]} = Labels.for_threads([thread])
 
-    assert [%{conversation: %{id: ^id}}] =
-             Conversations.list(scope(c.staff), label_id: label.id)
+    assert [%{thread: %{id: ^id}}] =
+             Threads.list(scope(c.staff), label_id: label.id)
   end
 
   test "tenant staff can filter with their workspace labels only", c do
-    {:ok, label} = Labels.create_and_assign(scope(c.staff), c.conversation, "Customer request")
+    {:ok, label} = Labels.create_and_assign(scope(c.staff), c.thread, "Customer request")
 
     for role <- ["admin", "agent"] do
       staff = insert_staff_account(role: role, tenant_id: c.tenant.id)
       assert Labels.list(scope(staff)) == [label]
       assert Labels.list(scope(staff)) == [label]
       assert Labels.list(%{scope(staff) | tenant_id: c.other_org.tenant_id}) == []
-      assert %{available: [^label]} = Labels.for_conversation(scope(staff), c.conversation)
+      assert %{available: [^label]} = Labels.for_thread(scope(staff), c.thread)
     end
 
     assert Labels.list(nil) == []

@@ -1,33 +1,33 @@
 defmodule Custyard.Notifications.NeglectChecker do
   @moduledoc """
-  Detects when conversations cross neglect thresholds and dispatches notifications.
+  Detects when threads cross neglect thresholds and dispatches notifications.
 
   This module is called periodically by the Scoring.Scheduler to check for
-  conversations that have newly reached warning or critical neglect status.
-  Notifications are only sent when a conversation transitions to a higher
+  threads that have newly reached warning or critical neglect status.
+  Notifications are only sent when a thread transitions to a higher
   neglect level (ok -> warning, warning -> critical, or ok -> critical).
 
   Email dispatch is delegated to the `Custyard.Notifications.Email` module,
   which must be configured with an email adapter (e.g., Swoosh).
 
-  The query is optimized to only load conversations that have exceeded at least
+  The query is optimized to only load threads that have exceeded at least
   one neglect threshold, avoiding full table scans in deployments with many
-  active conversations.
+  active threads.
   """
 
   import Ecto.Query
   require Logger
 
-  alias Custyard.{Conversation, Repo, Settings}
+  alias Custyard.{Thread, Repo, Settings}
   alias Custyard.Notifications.Email, as: NotificationEmail
 
   # Organization tiers carrying their own neglect thresholds. Unlinked
-  # conversations have no tier and are handled separately, on the standard
+  # threads have no tier and are handled separately, on the standard
   # cutoff, matching `Scoring.neglect_tier/1`.
   @neglect_tiers [:enterprise, :standard, :basic]
 
   @doc """
-  Check all active conversations for neglect threshold breaches and dispatch notifications.
+  Check all active threads for neglect threshold breaches and dispatch notifications.
 
   Returns `{:ok, count}` where count is the number of notifications dispatched.
   """
@@ -49,13 +49,13 @@ defmodule Custyard.Notifications.NeglectChecker do
   end
 
   @doc """
-  List conversations that might need neglect notifications.
+  List threads that might need neglect notifications.
 
-  Only loads conversations that have exceeded at least the warning threshold
+  Only loads threads that have exceeded at least the warning threshold
   for their organization's tier. This is optimized to avoid loading all
-  active conversations on every check.
+  active threads on every check.
 
-  Unlinked conversations (nil organization — public intake and
+  Unlinked threads (nil organization — public intake and
   disambiguation) have no tier to join against, so they are matched by a
   dedicated `is_nil(organization_id)` branch on the standard-tier cutoff.
   That mirrors `Scoring.neglect_tier/1`, which already scores them as
@@ -64,9 +64,9 @@ defmodule Custyard.Notifications.NeglectChecker do
   them and `NULL OR NULL OR NULL` is not TRUE.
 
   Excludes:
-  - Resolved conversations (no longer need attention)
-  - Currently snoozed conversations
-  - Suspect conversations (triage flagged, not yet cleared by a staff)
+  - Resolved threads (no longer need attention)
+  - Currently snoozed threads
+  - Suspect threads (triage flagged, not yet cleared by a staff)
   """
   def list_notification_candidates(tenant_id, thresholds \\ nil) do
     now = DateTime.utc_now()
@@ -74,7 +74,7 @@ defmodule Custyard.Notifications.NeglectChecker do
     # Use provided thresholds or load from Settings
     thresholds = thresholds || Settings.get_neglect_thresholds(tenant_id)
 
-    from(c in Conversation,
+    from(c in Thread,
       left_join: o in assoc(c, :organization),
       left_join: ct in assoc(c, :contact),
       where: c.tenant_id == ^tenant_id,
@@ -84,7 +84,7 @@ defmodule Custyard.Notifications.NeglectChecker do
       # clears the flag (spec-inbound-channels D6); unattended spam must not
       # page anyone.
       where: c.suspect == false,
-      # Only load conversations that have exceeded their tier's warning threshold
+      # Only load threads that have exceeded their tier's warning threshold
       # This is the key optimization - we filter in the DB instead of loading all
       where: ^past_warning_cutoff(thresholds),
       preload: [organization: o, contact: ct]
@@ -118,26 +118,26 @@ defmodule Custyard.Notifications.NeglectChecker do
   end
 
   @doc """
-  Clear `last_neglect_notification` on conversations a staff has since
+  Clear `last_neglect_notification` on threads a staff has since
   acted on, so the next time one of them is neglected a fresh alert goes out.
 
-  Such conversations never reach `check_and_notify_single/2`: the candidate
+  Such threads never reach `check_and_notify_single/2`: the candidate
   query only loads rows already past their warning cutoff, which means the
-  `:ok` branch there (and its reset) is unreachable, and a conversation that
+  `:ok` branch there (and its reset) is unreachable, and a thread that
   once went `:critical` would never be alerted on again.
 
-  Returns the number of conversations reset.
+  Returns the number of threads reset.
   """
   def reset_recovered_notifications(tenant_id, thresholds \\ nil) do
     thresholds = thresholds || Settings.get_neglect_thresholds(tenant_id)
     past_cutoff = past_warning_cutoff(thresholds)
 
-    # For an unlinked conversation every tier branch of the cutoff is NULL,
+    # For an unlinked thread every tier branch of the cutoff is NULL,
     # so the disjunction is NULL rather than false whenever its own branch
     # is false, and NOT NULL would never select it. coalesce makes "not past
     # the cutoff" mean exactly that.
     recovered =
-      from(c in Conversation,
+      from(c in Thread,
         left_join: o in assoc(c, :organization),
         where: c.tenant_id == ^tenant_id,
         where: not is_nil(c.last_neglect_notification),
@@ -146,10 +146,10 @@ defmodule Custyard.Notifications.NeglectChecker do
       )
 
     # A subquery, not a list of ids: the first pass after this reset became
-    # reachable covers every conversation ever alerted on, which can exceed
+    # reachable covers every thread ever alerted on, which can exceed
     # SQLite's bound-parameter limit.
     {count, _} =
-      from(c in Conversation, where: c.id in subquery(recovered))
+      from(c in Thread, where: c.id in subquery(recovered))
       |> Repo.update_all(set: [last_neglect_notification: nil])
 
     count
@@ -164,17 +164,17 @@ defmodule Custyard.Notifications.NeglectChecker do
     DateTime.add(DateTime.utc_now(), -hours, :hour)
   end
 
-  defp check_and_notify_single(conversation, _thresholds) do
+  defp check_and_notify_single(thread, _thresholds) do
     alias Custyard.Scoring
-    current_status = Scoring.neglect_status(conversation)
-    last_notified = conversation.last_neglect_notification
+    current_status = Scoring.neglect_status(thread)
+    last_notified = thread.last_neglect_notification
 
     cond do
       # No notification needed for :ok status
       current_status == :ok ->
         # If we previously notified, reset the tracking
         if last_notified do
-          update_notification_tracking(conversation, nil)
+          update_notification_tracking(thread, nil)
         end
 
         false
@@ -185,8 +185,8 @@ defmodule Custyard.Notifications.NeglectChecker do
 
       # New threshold breach - send notification
       true ->
-        dispatch_notification(conversation, current_status)
-        update_notification_tracking(conversation, current_status)
+        dispatch_notification(thread, current_status)
+        update_notification_tracking(thread, current_status)
         true
     end
   end
@@ -198,24 +198,24 @@ defmodule Custyard.Notifications.NeglectChecker do
   defp notification_already_sent?(:critical, :critical), do: true
   defp notification_already_sent?(:warning, :critical), do: false
 
-  defp update_notification_tracking(conversation, level) do
-    conversation
+  defp update_notification_tracking(thread, level) do
+    thread
     |> Ecto.Changeset.change(last_neglect_notification: level)
     |> Repo.update!()
   end
 
-  defp dispatch_notification(conversation, level) do
+  defp dispatch_notification(thread, level) do
     Logger.info(
-      "Neglect notification: conversation #{conversation.id} (#{conversation.subject}) " <>
-        "reached #{level} for org #{org_label(conversation.organization)}"
+      "Neglect notification: thread #{thread.id} (#{thread.subject}) " <>
+        "reached #{level} for org #{org_label(thread.organization)}"
     )
 
     # Delegate to email module when configured
     # This will be a no-op if email is not configured
-    NotificationEmail.deliver_neglect_alert(conversation, level)
+    NotificationEmail.deliver_neglect_alert(thread, level)
   end
 
-  # Unlinked conversations now reach this path; the log line must not
+  # Unlinked threads now reach this path; the log line must not
   # dereference a nil organization.
   defp org_label(nil), do: "(unlinked)"
   defp org_label(organization), do: organization.name

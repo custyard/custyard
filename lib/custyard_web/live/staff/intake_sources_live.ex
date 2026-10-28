@@ -446,7 +446,7 @@ defmodule CustyardWeb.Staff.IntakeSourcesLive do
           </div>
           <p class="text-xs text-gray-500 dark:text-zinc-400 mt-1">
             Optional link back to your product, shown to prospects on this source's
-            pages and their conversation threads. Appears only when both title and
+            pages and their thread threads. Appears only when both title and
             URL (http/https) are set.
           </p>
         </div>
@@ -635,7 +635,7 @@ defmodule CustyardWeb.Staff.IntakeSourcesLive do
           <button
             phx-click="delete"
             phx-value-id={@source.id}
-            data-confirm={"Delete intake source \"#{@source.name}\"? Existing conversations keep their provenance tag."}
+            data-confirm={"Delete intake source \"#{@source.name}\"? Existing threads keep their provenance tag."}
             class="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-950"
             data-testid={"staff-intake-source-delete-#{@source.id}"}
           >

@@ -1,16 +1,16 @@
-defmodule CustyardWeb.Prospect.ConversationLive do
+defmodule CustyardWeb.Prospect.ThreadLive do
   @moduledoc """
-  The prospect-facing conversation view behind the access token.
+  The prospect-facing thread view behind the access token.
 
   `CustyardWeb.Live.ProspectAuth` authenticates the URL token on every mount
-  and assigns the conversation; this module only renders and forwards
+  and assigns the thread; this module only renders and forwards
   mutations to `Custyard.Intake`. Enumeration neutrality is binding here:
   the page never renders organization or contact linkage — not the org name,
   not a tier, not a sender email — so the rendered result is byte-identical
   whether a captured email matched a contact, an org domain, or nothing.
 
   Every mutating event checks its rate bucket directly (plug limits never
-  see websocket events): replies use `:conversation_reply` keyed by the token hash
+  see websocket events): replies use `:thread_reply` keyed by the token hash
   (the abuse handle is the credential, not the network path), while email
   capture and the notification toggle share the IP-keyed `:email_capture`
   bucket — both are low-frequency prospect-preference writes from the same
@@ -20,7 +20,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   Token rotation is enforced against mounted sockets, not just fresh
   mounts: every mutation passes the mount-time `:token_hash` to the
   context, which refuses it once the stored hash rotates, and the
-  `{:conversation_access_changed, id}` broadcast from rotation/revocation makes
+  `{:thread_access_changed, id}` broadcast from rotation/revocation makes
   the view re-authenticate — so an open tab on a rotated-away token stops
   receiving staff replies instead of streaming them until disconnect.
   """
@@ -29,23 +29,23 @@ defmodule CustyardWeb.Prospect.ConversationLive do
 
   alias Custyard.Email.Normalizer
   alias Custyard.Intake.{ClaimEmail, ReceiptEmail}
-  alias Custyard.{Conversations, Intake, IntakeSource, RateLimit, Slug, Slugs}
+  alias Custyard.{Threads, Intake, IntakeSource, RateLimit, Slug, Slugs}
 
   @unavailable_path "/threads/unavailable"
 
   @impl true
   def mount(params, _session, socket) do
-    # :conversation, :branding, :access_token_hash, :client_ip come from
+    # :thread, :branding, :access_token_hash, :client_ip come from
     # the ProspectAuth on_mount hook.
-    conversation = socket.assigns.conversation
+    thread = socket.assigns.thread
 
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conversation.id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{thread.id}")
     end
 
     {:ok,
      socket
-     |> assign(:page_title, "Your conversation")
+     |> assign(:page_title, "Your thread")
      # Per-source branding link: provenance-keyed (intake_source_key stores
      # the key string, not an FK), so the source may be disabled or deleted
      # after creation — a deleted source yields nil and renders no link
@@ -54,21 +54,21 @@ defmodule CustyardWeb.Prospect.ConversationLive do
      # is unaffected.
      |> assign(
        :intake_source,
-       Intake.get_source_by_key(conversation.intake_source_key, conversation.tenant_id)
+       Intake.get_source_by_key(thread.intake_source_key, thread.tenant_id)
      )
-     |> assign(:prospect, conversation.prospect)
-     |> assign(:messages, conversation.messages)
-     |> assign(:tasks, Conversations.list_portal_visible_tasks(conversation.id))
+     |> assign(:prospect, thread.prospect)
+     |> assign(:messages, thread.messages)
+     |> assign(:tasks, Threads.list_portal_visible_tasks(thread.id))
      |> assign(:reply_form, empty_reply_form())
      |> assign(:email_form, empty_email_form())
      # The plaintext access token, kept ONLY so the claim-confirmation
-     # email can carry the /r conversation URL the prospect already holds — the
+     # email can carry the /r thread URL the prospect already holds — the
      # email is the durable copy of the credential, and only the hash is
      # stored, so the URL cannot be reconstructed anywhere else. Never
      # rendered; never used for auth (that stays hash-based in ProspectAuth).
      |> assign(:access_token, params["token"])
-     |> assign(:slug_claim, Slugs.get_claim_for_conversation(conversation.id))
-     |> assign(:claim_form, empty_claim_form(conversation.prospect))
+     |> assign(:slug_claim, Slugs.get_claim_for_thread(thread.id))
+     |> assign(:claim_form, empty_claim_form(thread.prospect))
      |> assign(:claim_notify, false)
      # The reply box stays collapsed behind an "Add comment" button while the
      # prospect's own message is the most recent — it auto-opens (see
@@ -88,7 +88,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   def handle_event("submit_reply", params, socket) do
     # Rate check first: every reply attempt counts, valid or not — the
     # anonymous surface must bound the flood, not just the successes.
-    case RateLimit.check_rate(:conversation_reply, socket.assigns.access_token_hash) do
+    case RateLimit.check_rate(:thread_reply, socket.assigns.access_token_hash) do
       {:deny, _retry_after_ms} ->
         {:noreply,
          put_flash(socket, :error, "You are replying too quickly. Please wait and try again.")}
@@ -164,20 +164,20 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   defp submit_reply(socket, body) do
     case validate_body(body) do
       :ok ->
-        case Intake.add_prospect_reply(socket.assigns.conversation, body,
+        case Intake.add_prospect_reply(socket.assigns.thread, body,
                token_hash: socket.assigns.access_token_hash
              ) do
-          {:ok, %{conversation: updated}} ->
-            conversation = %{
-              socket.assigns.conversation
+          {:ok, %{thread: updated}} ->
+            thread = %{
+              socket.assigns.thread
               | state: updated.state,
                 last_customer_action_at: updated.last_customer_action_at
             }
 
             {:noreply,
              socket
-             |> assign(:conversation, conversation)
-             |> assign(:messages, Conversations.list_public_messages(conversation.id))
+             |> assign(:thread, thread)
+             |> assign(:messages, Threads.list_public_messages(thread.id))
              |> assign(:reply_form, empty_reply_form())
              # Collapse again: the prospect's new message is now the most
              # recent, so the box returns to the "Add comment" affordance.
@@ -213,17 +213,17 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   end
 
   defp do_capture_email(socket, email, notify) do
-    conversation = socket.assigns.conversation
+    thread = socket.assigns.thread
 
-    case Intake.capture_email(conversation, email,
+    case Intake.capture_email(thread, email,
            notify: notify,
            token_hash: socket.assigns.access_token_hash
          ) do
       # Enumeration-neutral by construction: capture_email returns {:ok, _}
       # regardless of whether the email matched a contact, an org domain, or
       # nothing — and nothing rendered below depends on the link outcome.
-      {:ok, _conversation} ->
-        prospect = Intake.get_prospect(conversation)
+      {:ok, _thread} ->
+        prospect = Intake.get_prospect(thread)
         send_capture_receipt(socket, prospect)
 
         {:noreply,
@@ -236,7 +236,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
         {:noreply, redirect(socket, to: @unavailable_path)}
 
       {:error, :already_captured} ->
-        {:noreply, assign(socket, :prospect, Intake.get_prospect(conversation))}
+        {:noreply, assign(socket, :prospect, Intake.get_prospect(thread))}
 
       {:error, %Ecto.Changeset{}} ->
         {:noreply, put_flash(socket, :error, "That email address doesn't look valid.")}
@@ -253,8 +253,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
     case socket.assigns.intake_source do
       %IntakeSource{} = source ->
         ReceiptEmail.send_receipt(email, source,
-          conversation_url:
-            conversation_origin(socket) <> ~p"/threads/#{socket.assigns.access_token}"
+          thread_url: thread_origin(socket) <> ~p"/threads/#{socket.assigns.access_token}"
         )
 
       _no_source ->
@@ -271,17 +270,17 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   # failure re-renders the form without touching the prospect, so nothing
   # is captured against a slug the prospect doesn't hold.
   defp claim_slug(socket, %{slug: slug_text, email: email, notify: notify}) do
-    conversation = socket.assigns.conversation
+    thread = socket.assigns.thread
 
-    case Slugs.claim(slug_text, email, conversation) do
+    case Slugs.claim(slug_text, email, thread) do
       {:ok, slug, confirmation_token} ->
         maybe_capture_email(socket, slug.email, notify)
         send_result = send_confirmation_email(socket, slug, confirmation_token)
 
         {:noreply,
          socket
-         |> assign(:slug_claim, Slugs.get_claim_for_conversation(conversation.id))
-         |> assign(:prospect, Intake.get_prospect(conversation))
+         |> assign(:slug_claim, Slugs.get_claim_for_thread(thread.id))
+         |> assign(:prospect, Intake.get_prospect(thread))
          |> assign(:claim_form, empty_claim_form(nil))
          |> assign(:claim_notify, false)
          |> put_claim_flash(send_result)}
@@ -302,13 +301,13 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   # opt-in, so it falls through to set_notification instead of being
   # silently dropped. An unchecked box never turns an earlier opt-in off.
   defp maybe_capture_email(socket, email, notify) do
-    case Intake.capture_email(socket.assigns.conversation, email,
+    case Intake.capture_email(socket.assigns.thread, email,
            notify: notify,
            token_hash: socket.assigns.access_token_hash
          ) do
       {:error, :already_captured} when notify ->
         _result =
-          Intake.set_notification(socket.assigns.conversation, true,
+          Intake.set_notification(socket.assigns.thread, true,
             token_hash: socket.assigns.access_token_hash
           )
 
@@ -325,16 +324,16 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   # committed before this call; async mailer failures surface as
   # {:ok, :queued} and stay fire-and-forget.
   defp send_confirmation_email(socket, slug, confirmation_token) do
-    base = conversation_origin(socket)
+    base = thread_origin(socket)
 
     ClaimEmail.send_confirmation(slug,
       confirm_url: base <> ~p"/claims/#{confirmation_token}",
-      conversation_url: base <> ~p"/threads/#{socket.assigns.access_token}"
+      thread_url: base <> ~p"/threads/#{socket.assigns.access_token}"
     )
   end
 
-  defp conversation_origin(socket) do
-    socket.assigns.conversation.tenant_id
+  defp thread_origin(socket) do
+    socket.assigns.thread.tenant_id
     |> Custyard.Tenants.get_tenant!()
     |> Custyard.Tenants.url()
   end
@@ -396,7 +395,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
              assign(
                socket,
                :slug_claim,
-               Slugs.get_claim_for_conversation(socket.assigns.conversation.id)
+               Slugs.get_claim_for_thread(socket.assigns.thread.id)
              )}
         end
     end
@@ -418,7 +417,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   end
 
   defp toggle_notifications(socket, notify?) do
-    case Intake.set_notification(socket.assigns.conversation, notify?,
+    case Intake.set_notification(socket.assigns.thread, notify?,
            token_hash: socket.assigns.access_token_hash
          ) do
       {:ok, prospect} ->
@@ -436,16 +435,14 @@ defmodule CustyardWeb.Prospect.ConversationLive do
 
   @impl true
   def handle_info({:message_added, _id}, socket) do
-    {:noreply,
-     assign(socket, :messages, Conversations.list_public_messages(socket.assigns.conversation.id))}
+    {:noreply, assign(socket, :messages, Threads.list_public_messages(socket.assigns.thread.id))}
   end
 
   # Message-level change (staff soft delete, delivery status): refresh the
   # thread so tombstones replace deleted bodies in already-open tabs.
   @impl true
   def handle_info({:message_updated, _id}, socket) do
-    {:noreply,
-     assign(socket, :messages, Conversations.list_public_messages(socket.assigns.conversation.id))}
+    {:noreply, assign(socket, :messages, Threads.list_public_messages(socket.assigns.thread.id))}
   end
 
   # Rotation or revocation happened while this socket was mounted:
@@ -454,8 +451,8 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   # read side — without it a tab opened before rotation keeps receiving
   # staff replies over PubSub until it happens to disconnect.
   @impl true
-  def handle_info({:conversation_access_changed, _id}, socket) do
-    prospect = Intake.get_prospect(socket.assigns.conversation)
+  def handle_info({:thread_access_changed, _id}, socket) do
+    prospect = Intake.get_prospect(socket.assigns.thread)
 
     if prospect && is_nil(prospect.revoked_at) &&
          prospect.access_token_hash == socket.assigns.access_token_hash do
@@ -465,8 +462,8 @@ defmodule CustyardWeb.Prospect.ConversationLive do
     end
   end
 
-  def handle_info({:conversation_updated, _id}, socket) do
-    prospect = Intake.get_prospect(socket.assigns.conversation)
+  def handle_info({:thread_updated, _id}, socket) do
+    prospect = Intake.get_prospect(socket.assigns.thread)
 
     if prospect && is_nil(prospect.revoked_at) &&
          prospect.access_token_hash == socket.assigns.access_token_hash do
@@ -474,7 +471,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
        assign(
          socket,
          :tasks,
-         Conversations.list_portal_visible_tasks(socket.assigns.conversation.id)
+         Threads.list_portal_visible_tasks(socket.assigns.thread.id)
        )}
     else
       {:noreply, redirect(socket, to: @unavailable_path)}
@@ -511,8 +508,8 @@ defmodule CustyardWeb.Prospect.ConversationLive do
     Slug.claim_changeset(%Slug{}, %{
       slug: slug,
       email: email,
-      conversation_id: socket.assigns.conversation.id,
-      tenant_id: socket.assigns.conversation.tenant_id,
+      thread_id: socket.assigns.thread.id,
+      tenant_id: socket.assigns.thread.tenant_id,
       expires_at: DateTime.utc_now() |> DateTime.truncate(:second),
       confirmation_token_hash: "shape-check-placeholder"
     })
@@ -551,19 +548,19 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div data-testid="resume-conversation">
+    <div data-testid="resume-thread">
       <div class="flex items-start justify-between gap-4 mb-6">
         <h1
           class="text-2xl font-semibold text-zinc-900 dark:text-zinc-100"
           data-testid="resume-subject"
         >
-          {@conversation.subject}
+          {@thread.subject}
         </h1>
         <span
-          class={"shrink-0 text-sm px-3 py-1 rounded-full #{state_color(@conversation.state)}"}
+          class={"shrink-0 text-sm px-3 py-1 rounded-full #{state_color(@thread.state)}"}
           data-testid="resume-state"
         >
-          {state_label(@conversation.state)}
+          {state_label(@thread.state)}
         </span>
       </div>
 

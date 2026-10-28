@@ -7,8 +7,8 @@ defmodule CustyardWeb.Live.PortalAuthTest do
   test "portal token grants only its customer on the registered tenant host", %{conn: conn} do
     customer = insert_organization()
     other = insert_organization()
-    insert_conversation(organization_id: customer.id, subject: "Customer private thread")
-    insert_conversation(organization_id: other.id, subject: "Other private thread")
+    insert_thread(organization_id: customer.id, subject: "Customer private thread")
+    insert_thread(organization_id: other.id, subject: "Other private thread")
     conn = conn |> init_test_session(%{portal_org_id: other.id, portal_custom_domain: true})
     {:ok, _, html} = live(conn, "/portal/#{portal_token(customer)}")
     assert html =~ "Customer private thread"

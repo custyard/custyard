@@ -4,7 +4,7 @@ defmodule Custyard.Email.OutboundQueueTest do
   import Custyard.Factory
   import Swoosh.TestAssertions
 
-  alias Custyard.{Conversations, Message, Repo}
+  alias Custyard.{Threads, Message, Repo}
   alias Custyard.Email.OutboundQueue
   alias Custyard.PubSub
   alias Ecto.Adapters.SQL.Sandbox
@@ -16,9 +16,9 @@ defmodule Custyard.Email.OutboundQueueTest do
     org = insert_organization()
     configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
-    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+    thread = insert_thread(organization_id: org.id, contact_id: contact.id)
 
-    assert {:ok, message} = Conversations.send_reply(conversation, "Hello from the queue")
+    assert {:ok, message} = Threads.send_reply(thread, "Hello from the queue")
     assert Repo.get!(Message, message.id).delivery_status == :pending
 
     assert OutboundQueue.drain_pending() == 1
@@ -48,9 +48,9 @@ defmodule Custyard.Email.OutboundQueueTest do
     org = insert_organization()
     configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
-    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+    thread = insert_thread(organization_id: org.id, contact_id: contact.id)
 
-    assert {:ok, message} = Conversations.send_reply(conversation, "Delivery survives saturation")
+    assert {:ok, message} = Threads.send_reply(thread, "Delivery survives saturation")
     assert Repo.get!(Message, message.id).delivery_status == :pending
 
     assert OutboundQueue.drain_pending() == 1
@@ -62,16 +62,16 @@ defmodule Custyard.Email.OutboundQueueTest do
     org = insert_organization()
     configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
-    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
-    Phoenix.PubSub.subscribe(PubSub, "conversation:#{conversation.id}")
+    thread = insert_thread(organization_id: org.id, contact_id: contact.id)
+    Phoenix.PubSub.subscribe(PubSub, "thread:#{thread.id}")
 
     {:ok, worker} = OutboundQueue.start_link([])
     Sandbox.allow(Repo, self(), worker)
     on_exit(fn -> if Process.alive?(worker), do: GenServer.stop(worker) end)
 
-    assert {:ok, message} = Conversations.send_reply(conversation, "Worker handles this reply")
+    assert {:ok, message} = Threads.send_reply(thread, "Worker handles this reply")
     assert_receive {:message_updated, id}, 2_000
-    assert id == conversation.id
+    assert id == thread.id
     assert Repo.get!(Message, message.id).delivery_status == :sent
     assert_email_sent(to: contact.email)
     assert Process.alive?(worker)
@@ -84,8 +84,8 @@ defmodule Custyard.Email.OutboundQueueTest do
     setup do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id)
-      conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
-      {:ok, message} = Conversations.send_reply(conversation, "Interrupted reply")
+      thread = insert_thread(organization_id: org.id, contact_id: contact.id)
+      {:ok, message} = Threads.send_reply(thread, "Interrupted reply")
       {:ok, message: message, contact: contact}
     end
 

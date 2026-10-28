@@ -12,13 +12,13 @@ defmodule Custyard.Attachments do
   Files are tenant scoped and named by SHA-256 (`<dir>/<tenant>/<ab>/<sha256>`), so a declared
   filename can never become a path and identical content is stored once.
   Serving goes through `CustyardWeb.Staff.AttachmentController`, which
-  checks the staff's access to the conversation; the directory is never
+  checks the staff's access to the thread; the directory is never
   a static path.
   """
 
   import Ecto.Query
 
-  alias Custyard.{Conversation, Message, MessageAttachment, Repo, Scope}
+  alias Custyard.{Thread, Message, MessageAttachment, Repo, Scope}
   alias Custyard.Attachments.{Client, Sniffer}
 
   require Logger
@@ -436,8 +436,8 @@ defmodule Custyard.Attachments do
         from a in MessageAttachment,
           join: m in Message,
           on: m.id == a.message_id,
-          join: c in Conversation,
-          on: c.id == m.conversation_id,
+          join: c in Thread,
+          on: c.id == m.thread_id,
           where: a.id == ^id and a.tenant_id == ^tenant_id and m.tenant_id == ^tenant_id,
           where: c.tenant_id == ^tenant_id and a.state == :fetched and is_nil(m.deleted_at),
           where: c.suspect == false,
@@ -450,7 +450,7 @@ defmodule Custyard.Attachments do
 
   @doc """
   An attachment the portal of `organization_id` may download: fetched, on a
-  message that is neither an internal note nor deleted, in a conversation of
+  message that is neither an internal note nor deleted, in a thread of
   that organization that is not suspect. `nil` otherwise, so the caller
   answers 404 for missing and foreign attachments alike.
   """
@@ -458,8 +458,8 @@ defmodule Custyard.Attachments do
     from(a in MessageAttachment,
       join: m in Message,
       on: m.id == a.message_id,
-      join: c in Conversation,
-      on: c.id == m.conversation_id,
+      join: c in Thread,
+      on: c.id == m.thread_id,
       where:
         a.id == ^id and a.state == :fetched and is_nil(m.deleted_at) and
           m.is_internal_note == false and c.suspect == false and
@@ -471,12 +471,12 @@ defmodule Custyard.Attachments do
   @doc """
   Set `:attachments` on portal messages to the downloadable ones, in
   position order: fetched files on messages that are not deleted, and none
-  at all while the conversation is suspect. Mirrors `get_for_portal/2`.
+  at all while the thread is suspect. Mirrors `get_for_portal/2`.
   """
-  def preload_for_portal(messages, %Conversation{suspect: true}),
+  def preload_for_portal(messages, %Thread{suspect: true}),
     do: Enum.map(messages, &%{&1 | attachments: []})
 
-  def preload_for_portal(messages, %Conversation{}) do
+  def preload_for_portal(messages, %Thread{}) do
     query = from(a in MessageAttachment, where: a.state == :fetched, order_by: a.position)
 
     messages

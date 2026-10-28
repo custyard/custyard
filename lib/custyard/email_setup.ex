@@ -181,7 +181,7 @@ defmodule Custyard.EmailSetup do
       sending_checked_at: nil,
       sending_check_status: "unchecked",
       last_signed_inbound_at: nil,
-      latest_received_conversation_id: nil,
+      latest_received_thread_id: nil,
       last_returning_reply_at: nil,
       last_reply_accepted_at: nil,
       last_reply_delivered_at: nil
@@ -393,7 +393,7 @@ defmodule Custyard.EmailSetup do
   end
 
   @doc "Record a newly stored customer email, never triage notices or a repeated webhook."
-  def record_inbound(route, conversation, normalized, %{eligible?: true, provider_delivery_id: id}) do
+  def record_inbound(route, thread, normalized, %{eligible?: true, provider_delivery_id: id}) do
     Repo.transaction(fn ->
       Repo.update_all(
         from(c in EmailConnection,
@@ -403,26 +403,26 @@ defmodule Custyard.EmailSetup do
         []
       )
 
-      do_record_inbound(route, conversation, normalized, id)
+      do_record_inbound(route, thread, normalized, id)
     end)
 
     :ok
   end
 
-  def record_inbound(_route, _conversation, _normalized, _observation), do: :ok
+  def record_inbound(_route, _thread, _normalized, _observation), do: :ok
 
-  defp do_record_inbound(route, conversation, normalized, id) do
+  defp do_record_inbound(route, thread, normalized, id) do
     with %{webhook_secret_ciphertext: secret} <- Repo.get(InboundRoute, route.id),
          true <- secret == route.webhook_secret_ciphertext,
          %{tenant_id: tenant_id, suspect: false} <-
-           Repo.get(Custyard.Conversation, conversation.id),
+           Repo.get(Custyard.Thread, thread.id),
          true <- tenant_id == route.tenant_id,
          %Custyard.Message{} = message <-
            Repo.one(
              from(m in Custyard.Message,
                join: c in Custyard.InboundChannel,
                on: c.id == m.inbound_channel_id,
-               where: m.provider_delivery_id == ^id and m.conversation_id == ^conversation.id,
+               where: m.provider_delivery_id == ^id and m.thread_id == ^thread.id,
                where:
                  m.source == :email and m.origin == :lettermint and m.triage_class == :customer,
                where: is_nil(m.deleted_at) and m.is_internal_note == false,
@@ -435,7 +435,7 @@ defmodule Custyard.EmailSetup do
 
       evidence = [
         last_signed_inbound_at: observed,
-        latest_received_conversation_id: conversation.id
+        latest_received_thread_id: thread.id
       ]
 
       evidence =
@@ -464,10 +464,10 @@ defmodule Custyard.EmailSetup do
 
     Repo.exists?(
       from(m in Custyard.Message,
-        join: c in assoc(m, :conversation),
+        join: c in assoc(m, :thread),
         join: connection in EmailConnection,
         on: connection.tenant_id == c.tenant_id,
-        where: m.conversation_id == ^message.conversation_id and m.id < ^message.id,
+        where: m.thread_id == ^message.thread_id and m.id < ^message.id,
         where: m.id > connection.reply_evidence_after_message_id,
         where: m.message_id in ^references and m.source == :staff,
         where: m.delivery_status in [:sent, :delivered] and not is_nil(m.lettermint_message_id),
@@ -481,7 +481,7 @@ defmodule Custyard.EmailSetup do
     Repo.update_all(from(c in EmailConnection, where: c.tenant_id == ^tenant_id),
       set: [
         last_signed_inbound_at: nil,
-        latest_received_conversation_id: nil,
+        latest_received_thread_id: nil,
         last_returning_reply_at: nil
       ]
     )
@@ -521,8 +521,8 @@ defmodule Custyard.EmailSetup do
 
   def record_reply_accepted(%{lettermint_message_id: id} = message)
       when is_binary(id) and id != "" do
-    message = Repo.preload(message, :conversation)
-    record_reply_evidence(message.conversation.tenant_id, :last_reply_accepted_at, message.id)
+    message = Repo.preload(message, :thread)
+    record_reply_evidence(message.thread.tenant_id, :last_reply_accepted_at, message.id)
   end
 
   def record_reply_accepted(_message), do: :ok
@@ -548,7 +548,7 @@ defmodule Custyard.EmailSetup do
   def status_message_belongs?(connection, %{"data" => %{"message_id" => id}}) do
     Repo.exists?(
       from(m in Custyard.Message,
-        join: c in assoc(m, :conversation),
+        join: c in assoc(m, :thread),
         where: m.lettermint_message_id == ^id and c.tenant_id == ^connection.tenant_id
       )
     )

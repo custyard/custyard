@@ -1,18 +1,18 @@
 defmodule CustyardWeb.Staff.NeglectReportLive do
   @moduledoc """
-  Dedicated view showing all conversations at warning or critical neglect status,
+  Dedicated view showing all threads at warning or critical neglect status,
   grouped by organization. Useful for triage after being away or during volume spikes.
   """
   use CustyardWeb, :live_view
 
   import CustyardWeb.StaffComponents
 
-  alias Custyard.{Conversations, Scoring}
+  alias Custyard.{Threads, Scoring}
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
     end
 
     socket =
@@ -24,12 +24,12 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
   end
 
   @impl true
-  def handle_info({:conversation_updated, _id}, socket) do
+  def handle_info({:thread_updated, _id}, socket) do
     {:noreply, load_neglected(socket)}
   end
 
   @impl true
-  def handle_info({:conversation_created, _id}, socket) do
+  def handle_info({:thread_created, _id}, socket) do
     {:noreply, load_neglected(socket)}
   end
 
@@ -40,12 +40,12 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
   end
 
   defp load_neglected(socket) do
-    conversations =
-      Conversations.neglected(socket.assigns.current_scope)
+    threads =
+      Threads.neglected(socket.assigns.current_scope)
 
     # Filter to only neglected items and enrich with status
     neglected =
-      conversations
+      threads
       |> Enum.map(fn conv ->
         neglect_status = Scoring.neglect_status(conv)
         hours_idle = hours_since(conv.last_staff_action_at || conv.inserted_at)
@@ -54,7 +54,7 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
       |> Enum.filter(fn {_, status, _} -> status in [:warning, :critical] end)
       |> Enum.map(fn {conv, status, hours_idle} ->
         %{
-          conversation: conv,
+          thread: conv,
           neglect_status: status,
           hours_idle: hours_idle
         }
@@ -63,10 +63,10 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
     # Group by organization
     grouped =
       neglected
-      |> Enum.group_by(fn item -> item.conversation.organization end)
+      |> Enum.group_by(fn item -> item.thread.organization end)
       |> Enum.sort_by(fn {org, items} ->
         # Sort orgs by most critical items first, then by name.
-        # org is nil for unlinked prospect conversations (e.g. disambiguation).
+        # org is nil for unlinked prospect threads (e.g. disambiguation).
         critical_count = Enum.count(items, &(&1.neglect_status == :critical))
         {-critical_count, (org && org.name) || ""}
       end)
@@ -76,7 +76,7 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
     warning_count = total_count - critical_count
 
     socket
-    |> assign(:grouped_conversations, grouped)
+    |> assign(:grouped_threads, grouped)
     |> assign(:total_count, total_count)
     |> assign(:critical_count, critical_count)
     |> assign(:warning_count, warning_count)
@@ -137,7 +137,7 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
       </div>
 
       <div class="space-y-6">
-        <div :for={{org, items} <- @grouped_conversations} data-testid="staff-neglect-org-group">
+        <div :for={{org, items} <- @grouped_threads} data-testid="staff-neglect-org-group">
           <div class="flex items-center gap-2 mb-2">
             <span
               class="text-sm font-medium text-gray-700 dark:text-zinc-300"
@@ -152,9 +152,9 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
           <div class="space-y-2">
             <.link
               :for={item <- items}
-              navigate={~p"/app/threads/#{item.conversation.id}"}
+              navigate={~p"/app/threads/#{item.thread.id}"}
               class="block"
-              data-testid={"staff-neglect-item-#{item.conversation.id}"}
+              data-testid={"staff-neglect-item-#{item.thread.id}"}
             >
               <div class={[
                 "bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-3 hover:shadow-sm transition-shadow flex items-center gap-3 border-l-4",
@@ -166,14 +166,14 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
                     class="text-sm text-gray-800 dark:text-zinc-200 truncate"
                     data-testid="staff-neglect-subject"
                   >
-                    {item.conversation.subject}
+                    {item.thread.subject}
                   </div>
                   <div
                     class="text-xs text-gray-500 dark:text-zinc-400"
                     data-testid="staff-neglect-contact"
                   >
-                    {if item.conversation.contact,
-                      do: item.conversation.contact.name || item.conversation.contact.email,
+                    {if item.thread.contact,
+                      do: item.thread.contact.name || item.thread.contact.email,
                       else: "Unknown contact"}
                   </div>
                 </div>

@@ -1,7 +1,7 @@
 defmodule Custyard.Email.DeliveryStatus do
   @moduledoc """
   Applies Lettermint delivery lifecycle events to an outbound message
-  (spec-conversation-loop, "Delivery Tracking").
+  (spec-thread-loop, "Delivery Tracking").
 
   Lettermint sends one event per recipient and names it in `data.recipient`.
   Each recipient keeps its own latest status in `message_recipient_statuses`,
@@ -35,9 +35,9 @@ defmodule Custyard.Email.DeliveryStatus do
 
   A recipient whose status becomes bounced or suppressed sends the staff a
   notice, once per recipient, naming it and its role. A bounced or suppressed
-  recipient that is a contact of the conversation's organization is also
+  recipient that is a contact of the thread's organization is also
   flagged (`contacts.email_status`), and a later delivery to it clears the
-  flag (spec-conversation-loop, "Bounce and Suppression Handling"). The flag
+  flag (spec-thread-loop, "Bounce and Suppression Handling"). The flag
   follows the recipient, not the message, and applies even when nothing else
   changes, because an earlier recipient's event may already have set it.
   """
@@ -46,7 +46,7 @@ defmodule Custyard.Email.DeliveryStatus do
 
   require Logger
 
-  alias Custyard.{AuditEvent, Contact, Conversation, Message, MessageRecipientStatus, Repo}
+  alias Custyard.{AuditEvent, Contact, Thread, Message, MessageRecipientStatus, Repo}
   alias Custyard.Email.Outbound
   alias Custyard.Notifications.Email, as: NotificationEmail
 
@@ -354,7 +354,7 @@ defmodule Custyard.Email.DeliveryStatus do
   end
 
   defp record_audit(%Message{} = message, from_status, recipient, incoming) do
-    %Message{conversation: conversation} = Repo.preload(message, :conversation)
+    %Message{thread: thread} = Repo.preload(message, :thread)
     data = incoming.data
     response = map_or_empty(data["response"])
     recipient = recipient || %{role: nil, from: nil, to: nil}
@@ -364,8 +364,8 @@ defmodule Custyard.Email.DeliveryStatus do
       event_type: :delivery_status_updated,
       source: @source,
       message_id: message.message_id,
-      conversation_id: message.conversation_id,
-      organization_id: conversation && conversation.organization_id,
+      thread_id: message.thread_id,
+      organization_id: thread && thread.organization_id,
       payload: %{
         "event" => incoming.event,
         "delivery_id" => scalar(incoming.delivery_id),
@@ -422,8 +422,8 @@ defmodule Custyard.Email.DeliveryStatus do
     :ok
   end
 
-  defp message_organization(%Message{conversation_id: conversation_id}) do
-    from(c in Conversation, where: c.id == ^conversation_id, select: c.organization_id)
+  defp message_organization(%Message{thread_id: thread_id}) do
+    from(c in Thread, where: c.id == ^thread_id, select: c.organization_id)
     |> Repo.one()
   end
 
@@ -473,10 +473,10 @@ defmodule Custyard.Email.DeliveryStatus do
   defp notify_staff(_message, _recipient, _incoming), do: :ok
 
   defp send_notice(%Message{} = message, status, recipient, role) do
-    %Message{conversation: conversation} =
-      Repo.preload(message, conversation: [:organization, :contact])
+    %Message{thread: thread} =
+      Repo.preload(message, thread: [:organization, :contact])
 
-    NotificationEmail.deliver_delivery_failure(conversation, status, recipient, role)
+    NotificationEmail.deliver_delivery_failure(thread, status, recipient, role)
   rescue
     exception ->
       Logger.error(

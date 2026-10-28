@@ -103,7 +103,7 @@ config :sentry,
 # Rate-limit buckets for the public intake surfaces (Custyard.RateLimit).
 # Deliberately app config, not staff Settings — see
 # docs/design/design-decisions-public-intake.md. Keys per bucket:
-# client IP unless noted (conversation_reply: token hash; claim_email_send:
+# client IP unless noted (thread_reply: token hash; claim_email_send:
 # downcased email; intake_arrival_email: intake source key;
 # intake_receipt_email: downcased captured email).
 config :custyard, :rate_limit_buckets,
@@ -112,8 +112,8 @@ config :custyard, :rate_limit_buckets,
   account_login_email: [limit: 5, window_ms: 3_600_000],
   intake_get: [limit: 60, window_ms: 60_000],
   intake_post: [limit: 5, window_ms: 3_600_000],
-  conversation_mount: [limit: 30, window_ms: 600_000],
-  conversation_reply: [limit: 20, window_ms: 3_600_000],
+  thread_mount: [limit: 30, window_ms: 600_000],
+  thread_reply: [limit: 20, window_ms: 3_600_000],
   email_capture: [limit: 5, window_ms: 3_600_000],
   claim_submit: [limit: 3, window_ms: 3_600_000],
   claim_confirm: [limit: 10, window_ms: 60_000],

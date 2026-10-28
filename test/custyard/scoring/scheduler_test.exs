@@ -8,38 +8,38 @@ defmodule Custyard.Scoring.SchedulerTest do
   """
   use Custyard.DataCase, async: true
 
-  alias Custyard.{Conversation, InboundChannels, Repo, Scoring}
-  alias Custyard.Conversations.DormancyChecker
+  alias Custyard.{Thread, InboundChannels, Repo, Scoring}
+  alias Custyard.Threads.DormancyChecker
   alias Custyard.Scoring.Recalculator
 
   import Custyard.Factory
 
   describe "Recalculator.recalculate_all/0" do
-    test "recalculates scores for new conversations" do
+    test "recalculates scores for new threads" do
       org = insert_organization(tier: :enterprise)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :new,
           cached_score: 0,
           last_staff_action_at: DateTime.utc_now()
         )
 
-      assert conversation.cached_score == 0
+      assert thread.cached_score == 0
 
       Recalculator.recalculate_all()
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       # new(30) + enterprise(20) = 50
       assert updated.cached_score == 50
     end
 
-    test "recalculates scores for active conversations" do
+    test "recalculates scores for active threads" do
       org = insert_organization(tier: :standard)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :active,
           cached_score: 0,
@@ -48,16 +48,16 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Recalculator.recalculate_all()
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       # active(15) + standard(10) = 25
       assert updated.cached_score == 25
     end
 
-    test "recalculates scores for waiting conversations" do
+    test "recalculates scores for waiting threads" do
       org = insert_organization(tier: :basic)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :waiting,
           cached_score: 0,
@@ -66,16 +66,16 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Recalculator.recalculate_all()
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       # waiting(0) + basic(5) = 5
       assert updated.cached_score == 5
     end
 
-    test "recalculates scores for dormant conversations" do
+    test "recalculates scores for dormant threads" do
       org = insert_organization(tier: :standard)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :dormant,
           cached_score: 0,
@@ -84,16 +84,16 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Recalculator.recalculate_all()
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       # dormant(25) + standard(10) = 35
       assert updated.cached_score == 35
     end
 
-    test "skips resolved conversations" do
+    test "skips resolved threads" do
       org = insert_organization(tier: :standard)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :resolved,
           cached_score: 0,
@@ -102,16 +102,16 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Recalculator.recalculate_all()
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       # Resolved should not be updated
       assert updated.cached_score == 0
     end
 
-    test "skips currently snoozed conversations" do
+    test "skips currently snoozed threads" do
       org = insert_organization(tier: :standard)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :new,
           cached_score: 0,
@@ -121,16 +121,16 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Recalculator.recalculate_all()
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       # Snoozed should not be updated
       assert updated.cached_score == 0
     end
 
-    test "recalculates conversations with expired snooze" do
+    test "recalculates threads with expired snooze" do
       org = insert_organization(tier: :standard)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :new,
           cached_score: 0,
@@ -140,18 +140,18 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Recalculator.recalculate_all()
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       # Expired snooze should be recalculated
       # new(30) + standard(10) = 40
       assert updated.cached_score == 40
     end
 
-    test "recalculates multiple conversations" do
+    test "recalculates multiple threads" do
       org = insert_organization(tier: :standard)
 
-      conversations =
+      threads =
         for _ <- 1..5 do
-          insert_conversation(
+          insert_thread(
             organization_id: org.id,
             state: :new,
             cached_score: 0,
@@ -161,8 +161,8 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Recalculator.recalculate_all()
 
-      for conv <- conversations do
-        updated = Repo.get!(Conversation, conv.id)
+      for conv <- threads do
+        updated = Repo.get!(Thread, conv.id)
         assert updated.cached_score == 40
       end
     end
@@ -171,8 +171,8 @@ defmodule Custyard.Scoring.SchedulerTest do
       org = insert_organization(tier: :standard)
 
       # 10 hours idle - should have significant idle score
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :new,
           cached_score: 0,
@@ -181,7 +181,7 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Recalculator.recalculate_all()
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       breakdown = Scoring.breakdown(updated)
 
       # idle: ln(11) * 10 ~= 24
@@ -191,46 +191,46 @@ defmodule Custyard.Scoring.SchedulerTest do
     end
   end
 
-  describe "DormancyChecker.transition_stale_conversations/0" do
-    test "transitions waiting conversation past threshold to dormant" do
+  describe "DormancyChecker.transition_stale_threads/0" do
+    test "transitions waiting thread past threshold to dormant" do
       org = insert_organization(tier: :standard)
 
       # 50 hours idle on both sides - past standard dormancy threshold (48h)
       idle_since = DateTime.add(DateTime.utc_now(), -50, :hour)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: idle_since,
           last_staff_action_at: idle_since
         )
 
-      count = DormancyChecker.transition_stale_conversations()
+      count = DormancyChecker.transition_stale_threads()
 
       assert count == 1
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       assert updated.state == :dormant
     end
 
-    test "does not transition recent waiting conversations" do
+    test "does not transition recent waiting threads" do
       org = insert_organization(tier: :standard)
 
       # 1 hour idle - well within threshold
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: DateTime.add(DateTime.utc_now(), -1, :hour),
           last_staff_action_at: DateTime.utc_now()
         )
 
-      count = DormancyChecker.transition_stale_conversations()
+      count = DormancyChecker.transition_stale_threads()
 
       assert count == 0
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       assert updated.state == :waiting
     end
 
@@ -240,19 +240,19 @@ defmodule Custyard.Scoring.SchedulerTest do
       # 10 hours idle on both sides - past enterprise threshold (8h)
       idle_since = DateTime.add(DateTime.utc_now(), -10, :hour)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: idle_since,
           last_staff_action_at: idle_since
         )
 
-      count = DormancyChecker.transition_stale_conversations()
+      count = DormancyChecker.transition_stale_threads()
 
       assert count == 1
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       assert updated.state == :dormant
     end
 
@@ -262,19 +262,19 @@ defmodule Custyard.Scoring.SchedulerTest do
       # 50 hours idle on both sides - under basic threshold (72h)
       idle_since = DateTime.add(DateTime.utc_now(), -50, :hour)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: idle_since,
           last_staff_action_at: idle_since
         )
 
-      count = DormancyChecker.transition_stale_conversations()
+      count = DormancyChecker.transition_stale_threads()
 
       assert count == 0
 
-      updated = Repo.get!(Conversation, conversation.id)
+      updated = Repo.get!(Thread, thread.id)
       assert updated.state == :waiting
 
       # Now test past threshold
@@ -287,66 +287,66 @@ defmodule Custyard.Scoring.SchedulerTest do
         )
       )
 
-      count = DormancyChecker.transition_stale_conversations()
+      count = DormancyChecker.transition_stale_threads()
       assert count == 1
 
-      final = Repo.get!(Conversation, conversation.id)
+      final = Repo.get!(Thread, thread.id)
       assert final.state == :dormant
     end
 
-    test "only transitions waiting state conversations" do
+    test "only transitions waiting state threads" do
       org = insert_organization(tier: :standard)
 
-      # Create conversations in various states, all past threshold
+      # Create threads in various states, all past threshold
       new_conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :new,
           last_customer_action_at: DateTime.add(DateTime.utc_now(), -100, :hour)
         )
 
       active_conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
           last_customer_action_at: DateTime.add(DateTime.utc_now(), -100, :hour)
         )
 
       waiting_conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: DateTime.add(DateTime.utc_now(), -100, :hour)
         )
 
-      count = DormancyChecker.transition_stale_conversations()
+      count = DormancyChecker.transition_stale_threads()
 
       # Only waiting should transition
       assert count == 1
 
-      assert Repo.get!(Conversation, new_conv.id).state == :new
-      assert Repo.get!(Conversation, active_conv.id).state == :active
-      assert Repo.get!(Conversation, waiting_conv.id).state == :dormant
+      assert Repo.get!(Thread, new_conv.id).state == :new
+      assert Repo.get!(Thread, active_conv.id).state == :active
+      assert Repo.get!(Thread, waiting_conv.id).state == :dormant
     end
 
-    test "transitions multiple stale conversations" do
+    test "transitions multiple stale threads" do
       org = insert_organization(tier: :standard)
 
-      conversations =
+      threads =
         for _ <- 1..3 do
-          insert_conversation(
+          insert_thread(
             organization_id: org.id,
             state: :waiting,
             last_customer_action_at: DateTime.add(DateTime.utc_now(), -100, :hour)
           )
         end
 
-      count = DormancyChecker.transition_stale_conversations()
+      count = DormancyChecker.transition_stale_threads()
 
       assert count == 3
 
-      for conv <- conversations do
-        updated = Repo.get!(Conversation, conv.id)
+      for conv <- threads do
+        updated = Repo.get!(Thread, conv.id)
         assert updated.state == :dormant
       end
     end
@@ -370,8 +370,8 @@ defmodule Custyard.Scoring.SchedulerTest do
     test "scores increase with idle time on repeated recalculations" do
       org = insert_organization(tier: :standard)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           state: :new,
           cached_score: 0,
@@ -380,10 +380,10 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       # First recalculation - no idle time
       Recalculator.recalculate_all()
-      score1 = Repo.get!(Conversation, conversation.id).cached_score
+      score1 = Repo.get!(Thread, thread.id).cached_score
 
       # Simulate time passing
-      conv = Repo.get!(Conversation, conversation.id)
+      conv = Repo.get!(Thread, thread.id)
 
       Repo.update!(
         Ecto.Changeset.change(conv,
@@ -394,7 +394,7 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       # Second recalculation - with idle time
       Recalculator.recalculate_all()
-      score2 = Repo.get!(Conversation, conversation.id).cached_score
+      score2 = Repo.get!(Thread, thread.id).cached_score
 
       # Score should be higher due to idle time
       assert score2 > score1

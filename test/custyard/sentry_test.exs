@@ -29,7 +29,7 @@ defmodule Custyard.SentryTest do
   end
 
   describe "scrub_path/1 redacts bearer tokens in the path" do
-    test "conversation token" do
+    test "thread token" do
       assert Scrub.scrub_path("/threads/abc123token") == "/threads/#{@redacted}"
     end
 
@@ -258,7 +258,7 @@ defmodule Custyard.SentryTest do
     end
 
     test "scrubs the access token from an inspected-crash-state message + extra" do
-      # Shape taken from a real ConversationLive crash: the token appears as a
+      # Shape taken from a real ThreadLive crash: the token appears as a
       # bare keyed value in both the message and extra.crash_reason.
       state = ~s|#Socket<assigns: %{access_token: "leaktok", branding: nil}>|
 

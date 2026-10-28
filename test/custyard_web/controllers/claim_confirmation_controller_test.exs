@@ -27,8 +27,8 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       public_instance_ip: @generous,
       intake_get: @generous,
       intake_post: @generous,
-      conversation_mount: @generous,
-      conversation_reply: @generous,
+      thread_mount: @generous,
+      thread_reply: @generous,
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
@@ -41,9 +41,9 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
   end
 
   defp claim! do
-    conversation = insert_conversation(source: :public_intake)
-    {:ok, slug, token} = Slugs.claim("acme-corp", "buyer@example.com", conversation)
-    %{conversation: conversation, slug: slug, token: token}
+    thread = insert_thread(source: :public_intake)
+    {:ok, slug, token} = Slugs.claim("acme-corp", "buyer@example.com", thread)
+    %{thread: thread, slug: slug, token: token}
   end
 
   defp expire!(%Slug{} = slug) do
@@ -100,7 +100,7 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
   end
 
   describe "POST /claim/:token/confirm" do
-    test "consumes the token and renders the success page without the conversation URL", %{
+    test "consumes the token and renders the success page without the thread URL", %{
       conn: conn
     } do
       %{slug: slug, token: token} = claim!()
@@ -110,7 +110,7 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
 
       assert html =~ "claim-confirmed-page"
       assert html =~ "acme-corp"
-      # The success page must not mint or reveal the conversation URL.
+      # The success page must not mint or reveal the thread URL.
       refute html =~ "/threads/"
 
       reloaded = Repo.get!(Slug, slug.id)
@@ -126,8 +126,8 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       {:ok, other} = Tenants.create_tenant(%{name: "Beacon", slug: "beacon-claims"})
       {:ok, _} = Tenants.add_host(tenant.id, "atlas-claims.test")
       {:ok, _} = Tenants.add_host(other.id, "beacon-claims.test")
-      conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
-      {:ok, slug, token} = Slugs.claim("atlas-claim", "buyer@example.com", conversation)
+      thread = insert_thread(source: :public_intake, tenant_id: tenant.id)
+      {:ok, slug, token} = Slugs.claim("atlas-claim", "buyer@example.com", thread)
 
       %{tenant: tenant, other: other, slug: slug, token: token}
     end
@@ -177,12 +177,12 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       post(build_conn(), ~p"/claims/#{used_token}/confirm")
 
       # Expired token
-      conversation = insert_conversation(source: :public_intake)
-      {:ok, expired_slug, expired_token} = Slugs.claim("lapsed", "b@example.com", conversation)
+      thread = insert_thread(source: :public_intake)
+      {:ok, expired_slug, expired_token} = Slugs.claim("lapsed", "b@example.com", thread)
       expire!(expired_slug)
 
       # Purged token (claim released entirely)
-      other = insert_conversation(source: :public_intake)
+      other = insert_thread(source: :public_intake)
       {:ok, purged_slug, purged_token} = Slugs.claim("purged", "c@example.com", other)
       {:ok, _} = Slugs.release(staff_scope(purged_slug.tenant_id), purged_slug)
 

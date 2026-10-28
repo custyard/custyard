@@ -1,51 +1,51 @@
 defmodule Custyard.Webhooks.Purposes.SenderMatching do
   @moduledoc """
-  Identity resolution, conversation creation, and org/project assignment.
+  Identity resolution, thread creation, and org/project assignment.
 
   This is the first webhook purpose to fire and is synchronous — it creates
-  the conversation record that all other purposes reference.
+  the thread record that all other purposes reference.
 
   The receiving tenant is required routing context. Existing threads and
   sender identities take precedence over channel customer and project hints.
 
   Route context may also carry the triage outcome
   (docs/design/spec-inbound-channels.md, D5/D6): `channel_id` (nil on a
-  route without a channel) is stamped on the conversation and every message as
-  `inbound_channel_id`; `triage_class` `:suspect` creates the conversation
+  route without a channel) is stamped on the thread and every message as
+  `inbound_channel_id`; `triage_class` `:suspect` creates the thread
   with `suspect: true` and urgency pinned to `:normal`. Email facts (To, CC,
   Reply-To, authentication summary, spam score) are copied from the
   normalized metadata onto each inbound message.
   """
 
-  alias Custyard.{Conversation, Conversations, Message, Repo, Scoring}
+  alias Custyard.{Thread, Threads, Message, Repo, Scoring}
   alias Custyard.Email.{Normalizer, SenderMatcher, SieveHeaderMapper, ThreadMatcher}
 
   require Logger
 
   @doc """
-  Process an incoming normalized payload and create/update a conversation.
+  Process an incoming normalized payload and create/update a thread.
 
   Verified route context supplies the tenant and optional channel hints.
   """
   def process(normalized, route_context) do
     with {:ok, org, contact} <- resolve_sender(normalized, route_context),
-         {:ok, {conversation, is_new}} <-
-           transact_conversation(normalized, org, contact, route_context) do
-      broadcast_updates(conversation, is_new)
-      {:ok, Repo.reload!(conversation)}
+         {:ok, {thread, is_new}} <-
+           transact_thread(normalized, org, contact, route_context) do
+      broadcast_updates(thread, is_new)
+      {:ok, Repo.reload!(thread)}
     end
   end
 
-  defp transact_conversation(normalized, org, contact, route_context) do
+  defp transact_thread(normalized, org, contact, route_context) do
     Repo.transaction(fn ->
-      case find_or_create_conversation(normalized, org, contact, route_context) do
-        {:ok, conversation, is_new} ->
+      case find_or_create_thread(normalized, org, contact, route_context) do
+        {:ok, thread, is_new} ->
           # Create message with idempotent insert to handle race conditions.
           # If a concurrent request already created a message with this message_id,
-          # we need to use that message's conversation instead.
-          case create_message_with_dedup(conversation, normalized, is_new, route_context) do
-            {:ok, final_conversation, final_is_new} ->
-              {final_conversation, final_is_new}
+          # we need to use that message's thread instead.
+          case create_message_with_dedup(thread, normalized, is_new, route_context) do
+            {:ok, final_thread, final_is_new} ->
+              {final_thread, final_is_new}
 
             {:error, reason} ->
               Repo.rollback(reason)
@@ -57,25 +57,25 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     end)
   end
 
-  defp broadcast_updates(conversation, is_new) do
-    Scoring.calculate_and_cache(conversation.id)
+  defp broadcast_updates(thread, is_new) do
+    Scoring.calculate_and_cache(thread.id)
 
-    event = if is_new, do: :conversation_created, else: :conversation_updated
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {event, conversation.id})
+    event = if is_new, do: :thread_created, else: :thread_updated
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {event, thread.id})
 
     # Broadcast to org-scoped topic for portal LiveViews (skipped for nil org)
-    Conversations.broadcast_to_org(conversation.organization_id, {event, conversation.id})
+    Threads.broadcast_to_org(thread.organization_id, {event, thread.id})
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversation:#{conversation.id}",
-      {:message_added, conversation.id}
+      "thread:#{thread.id}",
+      {:message_added, thread.id}
     )
   end
 
   defp resolve_sender(normalized, %{tenant_id: tenant_id} = context) when is_integer(tenant_id) do
     case ThreadMatcher.find_in_tenant(normalized, tenant_id) do
-      {:ok, %Conversation{organization_id: org_id}} when is_integer(org_id) ->
+      {:ok, %Thread{organization_id: org_id}} when is_integer(org_id) ->
         SenderMatcher.match_within_org(normalized.from, org_id)
 
       _ ->
@@ -87,34 +87,34 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
 
   defp resolve_sender(_normalized, _context), do: {:error, :tenant_required}
 
-  defp find_or_create_conversation(normalized, org, contact, %{tenant_id: tenant_id} = context) do
+  defp find_or_create_thread(normalized, org, contact, %{tenant_id: tenant_id} = context) do
     with :not_found <- find_delivery(normalized, tenant_id),
          :not_found <- find_thread(normalized, org, tenant_id) do
-      case create_conversation(normalized, org, contact, context) do
-        {:ok, conversation} -> {:ok, conversation, true}
+      case create_thread(normalized, org, contact, context) do
+        {:ok, thread} -> {:ok, thread, true}
         error -> error
       end
     else
-      {:replay, conversation} ->
-        {:ok, conversation, false}
+      {:replay, thread} ->
+        {:ok, thread, false}
 
-      {:ok, conversation} ->
-        conversation = maybe_link_customer(conversation, org, contact)
-        {:ok, maybe_reactivate(conversation), false}
+      {:ok, thread} ->
+        thread = maybe_link_customer(thread, org, contact)
+        {:ok, maybe_reactivate(thread), false}
     end
   end
 
   defp maybe_link_customer(
-         %Conversation{organization_id: nil, source: :public_intake} = conversation,
+         %Thread{organization_id: nil, source: :public_intake} = thread,
          %{id: org_id},
          contact
        ) do
-    conversation
-    |> Conversation.changeset(%{organization_id: org_id, contact_id: contact && contact.id})
+    thread
+    |> Thread.changeset(%{organization_id: org_id, contact_id: contact && contact.id})
     |> Repo.update!()
   end
 
-  defp maybe_link_customer(conversation, _org, _contact), do: conversation
+  defp maybe_link_customer(thread, _org, _contact), do: thread
 
   defp find_thread(%{source: source, in_reply_to: marker}, _org, tenant_id)
        when source in [:zendesk, :intercom, :slack] and is_binary(marker) do
@@ -122,8 +122,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
 
     Repo.one(
       from m in Message,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
+        join: c in Thread,
+        on: c.id == m.thread_id,
         where: m.tenant_id == ^tenant_id and c.source == ^source,
         where: m.message_id == ^marker or m.in_reply_to == ^marker,
         select: c,
@@ -131,7 +131,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     )
     |> case do
       nil -> :not_found
-      conversation -> {:ok, conversation}
+      thread -> {:ok, thread}
     end
   end
 
@@ -170,8 +170,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
         else: dynamic(false)
 
     from(m in Message,
-      join: c in Conversation,
-      on: c.id == m.conversation_id,
+      join: c in Thread,
+      on: c.id == m.thread_id,
       where: m.tenant_id == ^tenant_id,
       where: ^dynamic([m], ^delivery or ^mail),
       select: c,
@@ -180,11 +180,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     |> Repo.one()
     |> case do
       nil -> :not_found
-      conversation -> {:replay, conversation}
+      thread -> {:replay, thread}
     end
   end
 
-  defp create_conversation(normalized, org, contact, route_context) do
+  defp create_thread(normalized, org, contact, route_context) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     suspect? = route_context[:triage_class] == :suspect
@@ -213,32 +213,32 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     # the Sieve overrides so a mapped header cannot undo it.
     attrs = if suspect?, do: Map.put(attrs, :urgency, :normal), else: attrs
 
-    %Conversation{}
-    |> Conversation.changeset(attrs)
-    |> Conversation.suspect_changeset(suspect?)
+    %Thread{}
+    |> Thread.changeset(attrs)
+    |> Thread.suspect_changeset(suspect?)
     |> Repo.insert()
     |> case do
-      {:ok, conversation} ->
-        maybe_label_hint(conversation, route_context[:default_label_id])
-        {:ok, conversation}
+      {:ok, thread} ->
+        maybe_label_hint(thread, route_context[:default_label_id])
+        {:ok, thread}
 
       error ->
         error
     end
   end
 
-  defp maybe_label_hint(_conversation, nil), do: :ok
+  defp maybe_label_hint(_thread, nil), do: :ok
 
-  defp maybe_label_hint(conversation, id) do
-    case Repo.get_by(Custyard.Label, id: id, tenant_id: conversation.tenant_id) do
+  defp maybe_label_hint(thread, id) do
+    case Repo.get_by(Custyard.Label, id: id, tenant_id: thread.tenant_id) do
       nil ->
         :ok
 
       label ->
         Repo.insert!(
-          %Custyard.ConversationLabel{
-            tenant_id: conversation.tenant_id,
-            conversation_id: conversation.id,
+          %Custyard.ThreadLabel{
+            tenant_id: thread.tenant_id,
+            thread_id: thread.id,
             label_id: label.id
           },
           on_conflict: :nothing
@@ -261,11 +261,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     end
   end
 
-  defp create_message_with_dedup(conversation, normalized, is_new, route_context),
-    do: insert_message(conversation, normalized, is_new, route_context)
+  defp create_message_with_dedup(thread, normalized, is_new, route_context),
+    do: insert_message(thread, normalized, is_new, route_context)
 
   @doc """
-  Attributes for an inbound message in `conversation` built from the
+  Attributes for an inbound message in `thread` built from the
   normalized payload: source/origin, sender, body, threading ids, the dedup
   scope and provider ids, and the D5 email facts. `route_context` supplies
   `channel_id` and `triage_class`. The triage class is recorded for email
@@ -275,13 +275,13 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   Shared with the dispatcher, which appends auto-responses to an existing
   thread without running sender matching.
   """
-  def inbound_message_attrs(conversation, normalized, route_context) do
+  def inbound_message_attrs(thread, normalized, route_context) do
     origin = normalized[:source]
     source = message_source(origin)
     metadata = normalized[:metadata] || %{}
 
     %{
-      conversation_id: conversation.id,
+      thread_id: thread.id,
       source: source,
       origin: origin,
       sender_email: normalized.from,
@@ -291,7 +291,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       message_id: normalized.message_id,
       in_reply_to: normalized.in_reply_to,
       is_internal_note: false,
-      tenant_id: conversation.tenant_id,
+      tenant_id: thread.tenant_id,
       to_addresses: to_addresses(normalized, metadata, route_context),
       cc_addresses: cc_addresses(metadata)
     }
@@ -367,25 +367,25 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp spam_score(score) when is_number(score), do: score / 1
   defp spam_score(_score), do: nil
 
-  defp insert_message(conversation, normalized, is_new, route_context) do
-    attrs = inbound_message_attrs(conversation, normalized, route_context)
+  defp insert_message(thread, normalized, is_new, route_context) do
+    attrs = inbound_message_attrs(thread, normalized, route_context)
 
     case Message.insert_idempotent(attrs) do
       {:ok, message} ->
         # Check if the message was newly inserted or already existed
-        if message.conversation_id == conversation.id do
-          # Message was inserted into our conversation - normal path
-          update_conversation_timestamp(conversation)
-          {:ok, conversation, is_new}
+        if message.thread_id == thread.id do
+          # Message was inserted into our thread - normal path
+          update_thread_timestamp(thread)
+          {:ok, thread, is_new}
         else
-          # Message already existed in a DIFFERENT conversation (race condition)
-          # Delete the duplicate conversation we just created (if we created one)
+          # Message already existed in a DIFFERENT thread (race condition)
+          # Delete the duplicate thread we just created (if we created one)
           if is_new do
-            Repo.delete!(conversation)
+            Repo.delete!(thread)
           end
 
-          # Return the existing conversation
-          existing_conv = Repo.get!(Conversation, message.conversation_id)
+          # Return the existing thread
+          existing_conv = Repo.get!(Thread, message.thread_id)
           {:ok, existing_conv, false}
         end
 
@@ -397,10 +397,10 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp put_present(attrs, _key, nil), do: attrs
   defp put_present(attrs, key, value), do: Map.put(attrs, key, value)
 
-  defp update_conversation_timestamp(conversation) do
+  defp update_thread_timestamp(thread) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    conversation
+    thread
     |> Ecto.Changeset.change(last_customer_action_at: now)
     |> Repo.update!()
   end
@@ -421,16 +421,16 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     :email
   end
 
-  # A customer message unblocks a conversation that was waiting on the
+  # A customer message unblocks a thread that was waiting on the
   # customer, exactly as the portal and public-intake reply paths already do;
   # leaving it :waiting kept the reply out of the attention queue.
-  defp maybe_reactivate(conversation) do
-    if conversation.state in [:waiting, :dormant, :resolved] do
-      conversation
-      |> Conversation.state_changeset(:active)
+  defp maybe_reactivate(thread) do
+    if thread.state in [:waiting, :dormant, :resolved] do
+      thread
+      |> Thread.state_changeset(:active)
       |> Repo.update!()
     else
-      conversation
+      thread
     end
   end
 

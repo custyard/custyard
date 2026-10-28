@@ -1,6 +1,6 @@
 defmodule Custyard.Prospect do
   @moduledoc """
-  Anonymous prospect identity attached 1:1 to a public-intake conversation.
+  Anonymous prospect identity attached 1:1 to a public-intake thread.
 
   Created at intake time, the prospect row holds the hashed access token
   (the plaintext is shown to the submitter exactly once and never persisted),
@@ -10,7 +10,7 @@ defmodule Custyard.Prospect do
   The prospect persists unchanged through linking and conversion — it is the
   access credential holder and notification preference, not the identity. The
   "no reply channel" flag is derived from this record by
-  `Custyard.Conversations.reply_channel/1`, never stored.
+  `Custyard.Threads.reply_channel/1`, never stored.
   """
 
   use Ecto.Schema
@@ -26,7 +26,7 @@ defmodule Custyard.Prospect do
     field :revoked_at, :utc_datetime
 
     belongs_to :tenant, Custyard.Tenant
-    belongs_to :conversation, Custyard.Conversation
+    belongs_to :thread, Custyard.Thread
 
     timestamps(type: :utc_datetime)
   end
@@ -34,23 +34,23 @@ defmodule Custyard.Prospect do
   @doc """
   Changeset for creating a prospect at intake time.
 
-  Only the conversation link and the token hash are settable here; email
+  Only the thread link and the token hash are settable here; email
   capture goes through `capture_email_changeset/2`.
   """
   def create_changeset(prospect, attrs) do
     prospect
-    |> cast(attrs, [:tenant_id, :conversation_id, :access_token_hash])
+    |> cast(attrs, [:tenant_id, :thread_id, :access_token_hash])
     |> put_tenant()
-    |> validate_required([:tenant_id, :conversation_id, :access_token_hash])
-    |> unique_constraint(:conversation_id)
+    |> validate_required([:tenant_id, :thread_id, :access_token_hash])
+    |> unique_constraint(:thread_id)
     |> unique_constraint(:access_token_hash)
-    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:thread_id)
   end
 
   defp put_tenant(changeset) do
-    case get_field(changeset, :conversation_id) do
+    case get_field(changeset, :thread_id) do
       id when is_integer(id) ->
-        case Custyard.Repo.get(Custyard.Conversation, id) do
+        case Custyard.Repo.get(Custyard.Thread, id) do
           %{tenant_id: tenant_id} ->
             case get_field(changeset, :tenant_id) do
               nil -> put_change(changeset, :tenant_id, tenant_id)
@@ -101,7 +101,7 @@ defmodule Custyard.Prospect do
   end
 
   @doc """
-  Changeset for revoking conversation access.
+  Changeset for revoking thread access.
   """
   def revoke_changeset(prospect, revoked_at) do
     cast(prospect, %{revoked_at: revoked_at}, [:revoked_at])

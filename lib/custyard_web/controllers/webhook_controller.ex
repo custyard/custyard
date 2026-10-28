@@ -121,9 +121,9 @@ defmodule CustyardWeb.WebhookController do
 
   defp dispatch_normalized(conn, route, normalized, observation) do
     case Dispatcher.dispatch(route, normalized) do
-      {:ok, conversation} ->
-        Custyard.EmailSetup.record_inbound(route, conversation, normalized, observation)
-        json(conn, %{status: "ok", conversation_id: conversation.id})
+      {:ok, thread} ->
+        Custyard.EmailSetup.record_inbound(route, thread, normalized, observation)
+        json(conn, %{status: "ok", thread_id: thread.id})
 
       # Channel resolution or triage decided the delivery must not become a
       # customer message (unmatched recipient, paused channel, own echo,

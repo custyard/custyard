@@ -85,7 +85,7 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
   end
 
   describe "IMAP-polled email dispatches through correct org route" do
-    test "conversation is created with org_id from the poller's configured route" do
+    test "thread is created with org_id from the poller's configured route" do
       org = insert_organization(domain: "polled-org.example.com")
       _contact = insert_contact(organization_id: org.id, email: "sender@external.com")
 
@@ -97,9 +97,9 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
           subject: "Via IMAP poller"
         )
 
-      assert {:ok, conversation} = parse_normalize_dispatch(raw, route)
-      assert conversation.organization_id == org.id
-      assert conversation.subject == "Via IMAP poller"
+      assert {:ok, thread} = parse_normalize_dispatch(raw, route)
+      assert thread.organization_id == org.id
+      assert thread.subject == "Via IMAP poller"
     end
 
     test "IMAP-polled email with project route sets project_id" do
@@ -119,8 +119,8 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
           subject: "Project-scoped IMAP email"
         )
 
-      assert {:ok, conversation} = parse_normalize_dispatch(raw, route)
-      assert conversation.project_id == project.id
+      assert {:ok, thread} = parse_normalize_dispatch(raw, route)
+      assert thread.project_id == project.id
     end
   end
 
@@ -148,7 +148,7 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
       # record (it always runs sender_matching as a blocking step). The dispatch
       # should still succeed.
       result = parse_normalize_dispatch(raw, route)
-      assert {:ok, _conversation} = result
+      assert {:ok, _thread} = result
     end
 
     test "no route exists for a nonexistent tenant" do

@@ -3,13 +3,13 @@ defmodule Custyard.Scoring.RecalculatorTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Conversation, Scoring}
+  alias Custyard.{Thread, Scoring}
   alias Custyard.Scoring.Recalculator
 
   describe "recalculate_all/0" do
-    test "preserves scores for conversations without an organization" do
+    test "preserves scores for threads without an organization" do
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           state: :new,
@@ -21,22 +21,22 @@ defmodule Custyard.Scoring.RecalculatorTest do
 
       assert Recalculator.recalculate_all() == 1
 
-      recalculated = Repo.get!(Conversation, conv.id)
+      recalculated = Repo.get!(Thread, conv.id)
       assert recalculated.cached_score == score
     end
 
-    test "recalculates org-linked and unlinked conversations in one sweep" do
+    test "recalculates org-linked and unlinked threads in one sweep" do
       org = insert_organization(tier: :standard)
 
       linked =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :new,
           last_staff_action_at: DateTime.utc_now()
         )
 
       unlinked =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           state: :new,
@@ -47,8 +47,8 @@ defmodule Custyard.Scoring.RecalculatorTest do
 
       # Both score new(30) + tier(10): the unlinked tier score defaults to the
       # standard tier score on purpose
-      assert Repo.get!(Conversation, linked.id).cached_score == 40
-      assert Repo.get!(Conversation, unlinked.id).cached_score == 40
+      assert Repo.get!(Thread, linked.id).cached_score == 40
+      assert Repo.get!(Thread, unlinked.id).cached_score == 40
     end
   end
 end

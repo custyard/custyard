@@ -9,7 +9,7 @@ defmodule Custyard.Attachments.Recovery do
 
   alias Custyard.{
     Attachments,
-    Conversation,
+    Thread,
     InboundChannel,
     InboundRouteWebhook,
     Message,
@@ -21,35 +21,35 @@ defmodule Custyard.Attachments.Recovery do
   alias Custyard.Lettermint.Client
   alias Custyard.Webhooks.Adapters.Lettermint
 
-  def recover(conversation_id, opts \\ []) do
-    case Repo.get(Conversation, conversation_id) do
-      %Conversation{suspect: false} = conversation ->
+  def recover(thread_id, opts \\ []) do
+    case Repo.get(Thread, thread_id) do
+      %Thread{suspect: false} = thread ->
         messages =
           Repo.all(
             from m in Message,
               join: a in MessageAttachment,
               on: a.message_id == m.id,
               where:
-                m.conversation_id == ^conversation.id and is_nil(m.deleted_at) and
+                m.thread_id == ^thread.id and is_nil(m.deleted_at) and
                   (a.skip_reason == "suspect" or a.state in [:failed, :pending]),
               distinct: true
           )
 
-        results = Enum.map(messages, &recover_message(&1, conversation, opts))
+        results = Enum.map(messages, &recover_message(&1, thread, opts))
         if Enum.all?(results, &(&1 == :ok)), do: :ok, else: {:error, :recovery_incomplete}
 
       _ ->
-        {:error, :conversation_unavailable}
+        {:error, :thread_unavailable}
     end
   rescue
     _error -> {:error, :recovery_incomplete}
   end
 
-  defp recover_message(message, conversation, opts) do
+  defp recover_message(message, thread, opts) do
     client = Keyword.get_lazy(opts, :client, &Client.client/0)
 
     with %InboundChannel{} = channel <- Repo.get(InboundChannel, message.inbound_channel_id),
-         true <- channel.tenant_id == conversation.tenant_id,
+         true <- channel.tenant_id == thread.tenant_id,
          true <- is_binary(message.provider_delivery_id),
          true <-
            Code.ensure_loaded?(client) and function_exported?(client, :get_webhook_delivery, 2) do
@@ -93,7 +93,7 @@ defmodule Custyard.Attachments.Recovery do
          true <- normalized.metadata.lettermint_message_id == message.lettermint_message_id,
          descriptors when descriptors != [] <- normalized.metadata.attachments,
          # Trust may have been revoked while the provider request was running.
-         %Conversation{suspect: false} <- Repo.get(Conversation, message.conversation_id),
+         %Thread{suspect: false} <- Repo.get(Thread, message.thread_id),
          %Message{deleted_at: nil} <- Repo.get(Message, message.id),
          {:ok, rows} <-
            Attachments.fetch_for_message(message, descriptors,

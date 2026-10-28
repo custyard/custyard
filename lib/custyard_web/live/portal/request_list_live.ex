@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Portal.RequestListLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.Conversations
+  alias Custyard.Threads
 
   @impl true
   def mount(_params, _session, socket) do
@@ -9,7 +9,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
 
     if connected?(socket) do
       org = socket.assigns.current_org
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations:org:#{org.id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads:org:#{org.id}")
     end
 
     {:ok,
@@ -19,16 +19,16 @@ defmodule CustyardWeb.Portal.RequestListLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, socket), do: {:noreply, load_conversations(socket)}
+  def handle_params(_params, _uri, socket), do: {:noreply, load_threads(socket)}
 
   @impl true
-  def handle_info({:conversation_updated, _id}, socket) do
-    {:noreply, load_conversations(socket)}
+  def handle_info({:thread_updated, _id}, socket) do
+    {:noreply, load_threads(socket)}
   end
 
   @impl true
-  def handle_info({:conversation_created, _id}, socket) do
-    {:noreply, load_conversations(socket)}
+  def handle_info({:thread_created, _id}, socket) do
+    {:noreply, load_threads(socket)}
   end
 
   # Catch-all for unexpected messages to prevent FunctionClauseError crashes
@@ -37,10 +37,10 @@ defmodule CustyardWeb.Portal.RequestListLive do
     {:noreply, socket}
   end
 
-  defp load_conversations(socket) do
+  defp load_threads(socket) do
     org = socket.assigns.current_org
-    conversations = Conversations.list_for_organization(org.id)
-    assign(socket, :conversations, conversations)
+    threads = Threads.list_for_organization(org.id)
+    assign(socket, :threads, threads)
   end
 
   @impl true
@@ -83,7 +83,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
 
       <div class="space-y-4">
         <.link
-          :for={conv <- @conversations}
+          :for={conv <- @threads}
           navigate={"#{@portal_path}/request/#{conv.id}"}
           class="block"
           data-testid={"portal-request-item-#{conv.id}"}
@@ -117,7 +117,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
         </.link>
 
         <div
-          :if={@conversations == []}
+          :if={@threads == []}
           class="text-center py-12"
           data-testid="portal-empty-state"
         >

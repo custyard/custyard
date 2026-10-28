@@ -1,15 +1,15 @@
 defmodule Custyard.Email.SieveHeaderMapper do
   @moduledoc """
-  Maps Sieve-injected email headers to conversation properties.
+  Maps Sieve-injected email headers to thread properties.
 
   Staffs can configure Sieve rules on their MTA to inject custom headers
   before forwarding email to the platform. This module reads those headers
-  and maps their values to conversation properties.
+  and maps their values to thread properties.
 
   ## Supported Properties
 
   - `tier` - Organization service tier (enterprise, standard, basic)
-  - `urgency` - Conversation urgency level (urgent, elevated, normal)
+  - `urgency` - Thread urgency level (urgent, elevated, normal)
 
   ## Configuration
 
@@ -54,7 +54,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
   }
 
   @doc """
-  Extract conversation property overrides from email headers.
+  Extract thread property overrides from email headers.
 
   Takes a map of headers and returns a map of property atoms to their values.
   Only returns properties that have valid mappings configured and valid values.
@@ -123,7 +123,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
   end
 
   @doc """
-  Merge extracted properties into conversation attributes.
+  Merge extracted properties into thread attributes.
 
   Takes existing attrs and applies property overrides from headers.
   Sieve-injected properties take precedence over auto-detected values.
@@ -139,7 +139,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
         urgency -> Map.put(attrs, :urgency, urgency)
       end
 
-    # Note: tier is on Organization, not Conversation
+    # Note: tier is on Organization, not Thread
     # If tier override is needed, it should be handled separately
 
     attrs

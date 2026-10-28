@@ -525,7 +525,7 @@ defmodule CustyardWeb.Staff.EmailSetupLive do
             }
           />
           <p class="text-xs">
-            Email conversations keep their receiving address. Portal and form requests use this choice; if several addresses are active, choose one explicitly.
+            Email threads keep their receiving address. Portal and form requests use this choice; if several addresses are active, choose one explicitly.
           </p>
           <.button>Save default address</.button>
         </form>
@@ -585,7 +585,7 @@ defmodule CustyardWeb.Staff.EmailSetupLive do
           Deliveries return 401 until the binding and this webhook's signing secret are saved successfully. Changing the scope keeps the same signing secret.
         </p>
         <p class="text-sm">
-          Send a new message from an external mailbox to your support address. Open its conversation, send a reply, confirm it arrived, then reply back and confirm the same thread. A provider test event alone does not verify forwarding.
+          Send a new message from an external mailbox to your support address. Open its thread, send a reply, confirm it arrived, then reply back and confirm the same thread. A provider test event alone does not verify forwarding.
         </p>
         <dl class="text-sm space-y-1" aria-live="polite">
           <div>
@@ -604,16 +604,16 @@ defmodule CustyardWeb.Staff.EmailSetupLive do
             </dd>
           </div>
           <div>
-            <dt class="inline font-medium">Returning reply matched to the same conversation:</dt><dd class="inline">
+            <dt class="inline font-medium">Returning reply matched to the same thread:</dt><dd class="inline">
               {observed(@connection.last_returning_reply_at)}
             </dd>
           </div>
         </dl>
         <.link
-          :if={@connection.latest_received_conversation_id}
-          navigate={~p"/app/threads/#{@connection.latest_received_conversation_id}"}
+          :if={@connection.latest_received_thread_id}
+          navigate={~p"/app/threads/#{@connection.latest_received_thread_id}"}
           class="underline text-sm"
-        >Open the received conversation</.link>
+        >Open the received thread</.link>
         <p class="text-xs">
           Delivery means the recipient server accepted the message. Confirm inbox receipt and the returning reply yourself. If nothing arrives, inspect Lettermint activity, webhook delivery attempts and quarantine; silence alone is normal for a quiet support mailbox.
         </p>

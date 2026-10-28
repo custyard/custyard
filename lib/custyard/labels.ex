@@ -1,11 +1,11 @@
 defmodule Custyard.Labels do
-  @moduledoc "Tenant-owned, staff-only conversation labels."
+  @moduledoc "Tenant-owned, staff-only thread labels."
   import Ecto.Query
 
   alias Custyard.{
     Authorization,
-    ConversationLabel,
-    Conversations,
+    ThreadLabel,
+    Threads,
     Label,
     Repo,
     Scope
@@ -19,9 +19,9 @@ defmodule Custyard.Labels do
 
   def list(_), do: []
 
-  def for_conversation(%Scope{} = scope, conversation) do
-    if Scope.current_staff(scope) && Authorization.can_access_conversation?(scope, conversation) do
-      case tenant_id(conversation) do
+  def for_thread(%Scope{} = scope, thread) do
+    if Scope.current_staff(scope) && Authorization.can_access_thread?(scope, thread) do
+      case tenant_id(thread) do
         nil ->
           %{available: [], assigned: []}
 
@@ -31,8 +31,8 @@ defmodule Custyard.Labels do
 
           assigned_ids =
             Repo.all(
-              from cl in ConversationLabel,
-                where: cl.conversation_id == ^conversation.id,
+              from cl in ThreadLabel,
+                where: cl.thread_id == ^thread.id,
                 select: cl.label_id
             )
 
@@ -43,24 +43,24 @@ defmodule Custyard.Labels do
     end
   end
 
-  def for_conversations(conversations) do
-    ids = Enum.map(conversations, & &1.id)
+  def for_threads(threads) do
+    ids = Enum.map(threads, & &1.id)
 
     Repo.all(
-      from cl in ConversationLabel,
+      from cl in ThreadLabel,
         join: l in Label,
         on: l.id == cl.label_id,
-        join: c in Custyard.Conversation,
-        on: c.id == cl.conversation_id,
-        where: cl.conversation_id in ^ids and c.tenant_id == l.tenant_id,
-        select: {cl.conversation_id, l},
+        join: c in Custyard.Thread,
+        on: c.id == cl.thread_id,
+        where: cl.thread_id in ^ids and c.tenant_id == l.tenant_id,
+        select: {cl.thread_id, l},
         order_by: l.name
     )
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
   end
 
-  def create_and_assign(%Scope{} = scope, conversation, name) do
-    mutate(scope, conversation, fn current, current_staff ->
+  def create_and_assign(%Scope{} = scope, thread, name) do
+    mutate(scope, thread, fn current, current_staff ->
       tenant_id = tenant_id(current)
 
       cond do
@@ -80,8 +80,8 @@ defmodule Custyard.Labels do
     end)
   end
 
-  def assign(%Scope{} = scope, conversation, label_id) do
-    mutate(scope, conversation, fn current, _ ->
+  def assign(%Scope{} = scope, thread, label_id) do
+    mutate(scope, thread, fn current, _ ->
       case scoped_label(current, label_id) do
         %Label{} = label -> insert_assignment(current, label)
         _ -> {:error, :not_found}
@@ -89,13 +89,13 @@ defmodule Custyard.Labels do
     end)
   end
 
-  def remove(%Scope{} = scope, conversation, label_id) do
-    mutate(scope, conversation, fn current, _ ->
+  def remove(%Scope{} = scope, thread, label_id) do
+    mutate(scope, thread, fn current, _ ->
       case scoped_label(current, label_id) do
         %Label{id: id} ->
           Repo.delete_all(
-            from cl in ConversationLabel,
-              where: cl.conversation_id == ^current.id and cl.label_id == ^id
+            from cl in ThreadLabel,
+              where: cl.thread_id == ^current.id and cl.label_id == ^id
           )
 
           {:ok, :removed}
@@ -106,40 +106,38 @@ defmodule Custyard.Labels do
     end)
   end
 
-  defp mutate(%Scope{} = scope, conversation, fun) do
-    result = Conversations.with_access(scope, conversation.id, fun)
+  defp mutate(%Scope{} = scope, thread, fun) do
+    result = Threads.with_access(scope, thread.id, fun)
 
     if match?({:ok, _}, result) do
-      event = {:conversation_updated, conversation.id}
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", event)
-      Phoenix.PubSub.broadcast(Custyard.PubSub, "conversation:#{conversation.id}", event)
-      Conversations.broadcast_to_org(conversation.organization_id, event)
+      event = {:thread_updated, thread.id}
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", event)
+      Phoenix.PubSub.broadcast(Custyard.PubSub, "thread:#{thread.id}", event)
+      Threads.broadcast_to_org(thread.organization_id, event)
     end
 
     result
   end
 
-  defp scoped_label(conversation, id) do
+  defp scoped_label(thread, id) do
     with {id, ""} <- Integer.parse(to_string(id)),
-         tenant_id when is_integer(tenant_id) <- tenant_id(conversation) do
+         tenant_id when is_integer(tenant_id) <- tenant_id(thread) do
       Repo.one(from l in Label, where: l.id == ^id and l.tenant_id == ^tenant_id)
     else
       _ -> nil
     end
   end
 
-  defp insert_assignment(conversation, label) do
-    %ConversationLabel{
-      tenant_id: conversation.tenant_id,
-      conversation_id: conversation.id,
+  defp insert_assignment(thread, label) do
+    %ThreadLabel{
+      tenant_id: thread.tenant_id,
+      thread_id: thread.id,
       label_id: label.id
     }
     |> Repo.insert(on_conflict: :nothing)
   end
 
-  defp tenant_id(conversation) do
-    Repo.one(
-      from c in Custyard.Conversation, where: c.id == ^conversation.id, select: c.tenant_id
-    )
+  defp tenant_id(thread) do
+    Repo.one(from c in Custyard.Thread, where: c.id == ^thread.id, select: c.tenant_id)
   end
 end

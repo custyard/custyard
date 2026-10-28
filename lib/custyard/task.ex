@@ -12,7 +12,7 @@ defmodule Custyard.Task do
     field(:due_at, :utc_datetime)
 
     belongs_to(:organization, Custyard.Organization)
-    belongs_to(:conversation, Custyard.Conversation)
+    belongs_to(:thread, Custyard.Thread)
     belongs_to(:project, Custyard.Project)
 
     timestamps(type: :utc_datetime)
@@ -30,7 +30,7 @@ defmodule Custyard.Task do
       :portal_visible,
       :due_at,
       :organization_id,
-      :conversation_id,
+      :thread_id,
       :project_id
     ])
     |> validate_required([:title])
@@ -41,7 +41,7 @@ defmodule Custyard.Task do
     |> validate_required([:tenant_id])
     |> foreign_key_constraint(:tenant_id)
     |> foreign_key_constraint(:organization_id)
-    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:thread_id)
     |> foreign_key_constraint(:project_id)
   end
 
@@ -69,14 +69,14 @@ defmodule Custyard.Task do
   end
 
   defp validate_parent_scope(changeset) do
-    conversation = parent(Custyard.Conversation, get_field(changeset, :conversation_id))
+    thread = parent(Custyard.Thread, get_field(changeset, :thread_id))
     project = parent(Custyard.Project, get_field(changeset, :project_id))
     org_id = get_field(changeset, :organization_id)
-    parent_orgs = Enum.map(Enum.reject([conversation, project], &is_nil/1), & &1.organization_id)
+    parent_orgs = Enum.map(Enum.reject([thread, project], &is_nil/1), & &1.organization_id)
     organization = parent(Custyard.Organization, org_id)
 
     parent_tenants =
-      Enum.map(Enum.reject([conversation, project, organization], &is_nil/1), & &1.tenant_id)
+      Enum.map(Enum.reject([thread, project, organization], &is_nil/1), & &1.tenant_id)
 
     changeset = put_parent_tenant(changeset, Enum.uniq(parent_tenants))
     validate_parent_customer(changeset, org_id, parent_orgs, parent_tenants)
@@ -95,10 +95,10 @@ defmodule Custyard.Task do
   defp validate_parent_customer(changeset, org_id, parent_orgs, parent_tenants) do
     cond do
       length(Enum.uniq(parent_tenants)) > 1 ->
-        add_error(changeset, :project_id, "must belong to the conversation's workspace")
+        add_error(changeset, :project_id, "must belong to the thread's workspace")
 
       length(Enum.uniq(parent_orgs)) > 1 ->
-        add_error(changeset, :project_id, "must belong to the conversation's organization")
+        add_error(changeset, :project_id, "must belong to the thread's organization")
 
       org_id && Enum.any?(parent_orgs, &(&1 != org_id)) ->
         add_error(changeset, :organization_id, "must match the task's parent organization")
@@ -123,18 +123,18 @@ defmodule Custyard.Task do
     |> validate_inclusion(:state, @states)
   end
 
-  # Tasks must have at least one of: organization_id, conversation_id, or project_id
+  # Tasks must have at least one of: organization_id, thread_id, or project_id
   # This prevents orphaned tasks that cannot be attributed to any organization
   defp validate_has_parent_or_org(changeset) do
     org_id = get_field(changeset, :organization_id)
-    conv_id = get_field(changeset, :conversation_id)
+    conv_id = get_field(changeset, :thread_id)
     proj_id = get_field(changeset, :project_id)
 
     if is_nil(org_id) and is_nil(conv_id) and is_nil(proj_id) do
       add_error(
         changeset,
         :organization_id,
-        "task must have an organization, conversation, or project"
+        "task must have an organization, thread, or project"
       )
     else
       changeset

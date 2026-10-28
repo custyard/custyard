@@ -5,7 +5,7 @@ defmodule CustyardWeb.TenantWorkflowTest do
 
   alias Custyard.{
     Authorization,
-    Conversations,
+    Threads,
     Intake,
     StaffAccount,
     Organizations,
@@ -50,9 +50,9 @@ defmodule CustyardWeb.TenantWorkflowTest do
     acme = insert_organization(tenant_id: a.id, name: "Acme A")
     beta = insert_organization(tenant_id: a.id, name: "Beta A")
     other = insert_organization(tenant_id: b.id)
-    c1 = insert_conversation(organization_id: acme.id, subject: "Acme visible")
-    c2 = insert_conversation(organization_id: beta.id, subject: "Beta visible")
-    c3 = insert_conversation(organization_id: other.id, subject: "Foreign hidden")
+    c1 = insert_thread(organization_id: acme.id, subject: "Acme visible")
+    c2 = insert_thread(organization_id: beta.id, subject: "Beta visible")
+    c3 = insert_thread(organization_id: other.id, subject: "Foreign hidden")
 
     {:ok, source} =
       Intake.create_source(Custyard.Scope.for_staff(staff(a, "admin"), a), %{
@@ -61,19 +61,19 @@ defmodule CustyardWeb.TenantWorkflowTest do
         tenant_id: a.id
       })
 
-    {:ok, %{conversation: public}} =
-      Intake.create_intake_conversation(source.key, "Public onboarding", tenant_id: a.id)
+    {:ok, %{thread: public}} =
+      Intake.create_intake_thread(source.key, "Public onboarding", tenant_id: a.id)
 
     op = staff(a)
-    assert Authorization.can_access_conversation?(op, c1)
-    assert Authorization.can_access_conversation?(op, c2)
-    assert Authorization.can_access_conversation?(op, public)
-    refute Authorization.can_access_conversation?(op, c3)
+    assert Authorization.can_access_thread?(op, c1)
+    assert Authorization.can_access_thread?(op, c2)
+    assert Authorization.can_access_thread?(op, public)
+    refute Authorization.can_access_thread?(op, c3)
 
     assert MapSet.new(
              Enum.map(
-               Conversations.list(Custyard.Scope.for_staff(op, a)),
-               & &1.conversation.id
+               Threads.list(Custyard.Scope.for_staff(op, a)),
+               & &1.thread.id
              )
            ) == MapSet.new([c1.id, c2.id, public.id])
 
@@ -85,7 +85,7 @@ defmodule CustyardWeb.TenantWorkflowTest do
     assert {:error, {:redirect, _}} = live(conn, "/app/threads/#{c3.id}")
   end
 
-  test "private public conversation URL stays available, branded, and constrained by tenant host",
+  test "private public thread URL stays available, branded, and constrained by tenant host",
        %{conn: conn, atlas: a, beacon: b} do
     {:ok, source} =
       Intake.create_source(Custyard.Scope.for_staff(staff(a, "admin"), a), %{
@@ -94,12 +94,10 @@ defmodule CustyardWeb.TenantWorkflowTest do
         tenant_id: a.id
       })
 
-    {:ok, %{conversation: conversation, access_token: token}} =
-      Intake.create_intake_conversation(source.key, "A private onboarding question",
-        tenant_id: a.id
-      )
+    {:ok, %{thread: thread, access_token: token}} =
+      Intake.create_intake_thread(source.key, "A private onboarding question", tenant_id: a.id)
 
-    assert conversation.tenant_id == a.id
+    assert thread.tenant_id == a.id
     {:ok, _view, html} = live(%{conn | host: Tenants.host(a)}, "/threads/#{token}")
     assert html =~ "Atlas onboarding"
     assert html =~ "A private onboarding question"
@@ -117,8 +115,8 @@ defmodule CustyardWeb.TenantWorkflowTest do
   } do
     acme = insert_organization(tenant_id: a.id, name: "Acme")
     beta = insert_organization(tenant_id: a.id, name: "Beta")
-    insert_conversation(organization_id: acme.id, subject: "Acme private")
-    insert_conversation(organization_id: beta.id, subject: "Beta private")
+    insert_thread(organization_id: acme.id, subject: "Acme private")
+    insert_thread(organization_id: beta.id, subject: "Beta private")
     {:ok, _view, html} = live(%{conn | host: Tenants.host(a)}, "/portal/#{portal_token(acme)}")
     assert html =~ "Atlas onboarding"
     assert html =~ "Acme private"
@@ -157,10 +155,10 @@ defmodule CustyardWeb.TenantWorkflowTest do
         tenant_id: a.id
       })
 
-    {:ok, %{conversation: conversation}} =
-      Intake.create_intake_conversation(source.key, "Question", tenant_id: a.id)
+    {:ok, %{thread: thread}} =
+      Intake.create_intake_thread(source.key, "Question", tenant_id: a.id)
 
-    assert {:ok, captured} = Intake.capture_email(conversation, contact.email)
+    assert {:ok, captured} = Intake.capture_email(thread, contact.email)
     assert captured.organization_id == nil
     assert captured.tenant_id == a.id
   end

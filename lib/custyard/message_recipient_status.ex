@@ -1,7 +1,7 @@
 defmodule Custyard.MessageRecipientStatus do
   @moduledoc """
   The latest delivery status of one recipient of an outbound message
-  (spec-conversation-loop, "Delivery Tracking").
+  (spec-thread-loop, "Delivery Tracking").
 
   Lettermint reports delivery per recipient. `Custyard.Email.DeliveryStatus`
   keeps one row per address a message was sent to and applies the rank and

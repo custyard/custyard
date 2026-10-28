@@ -94,23 +94,23 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
     end
   end
 
-  describe "LMTP email creates conversation with correct organization_id" do
-    test "conversation is scoped to the org that owns the route" do
+  describe "LMTP email creates thread with correct organization_id" do
+    test "thread is scoped to the org that owns the route" do
       org = insert_organization(domain: "acme.example.com")
       _contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
 
       route = create_route_with_webhook(%{organization_id: org.id, route_type: :general})
 
       raw = sample_email("alice@acme.example.com", "support@custyard.test")
-      assert {:ok, conversation} = parse_normalize_dispatch(raw, route)
+      assert {:ok, thread} = parse_normalize_dispatch(raw, route)
 
-      assert conversation.organization_id == org.id
-      assert conversation.state == :new
+      assert thread.organization_id == org.id
+      assert thread.state == :new
     end
   end
 
   describe "LMTP email with project route" do
-    test "conversation gets project_id from project route" do
+    test "thread gets project_id from project route" do
       org = insert_organization(domain: "acme.example.com")
       _contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
       project = insert_project(organization_id: org.id, title: "Website Redesign")
@@ -127,9 +127,9 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
           subject: "Project-scoped email"
         )
 
-      assert {:ok, conversation} = parse_normalize_dispatch(raw, route)
-      assert conversation.project_id == project.id
-      assert conversation.organization_id == org.id
+      assert {:ok, thread} = parse_normalize_dispatch(raw, route)
+      assert thread.project_id == project.id
+      assert thread.organization_id == org.id
     end
   end
 
@@ -155,7 +155,7 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
   end
 
   describe "cross-org scoping" do
-    test "email dispatched to org-A route does not create conversation in org-B" do
+    test "email dispatched to org-A route does not create thread in org-B" do
       org_a = insert_organization(domain: "alpha.example.com")
       other_tenant = insert_tenant()
       org_b = insert_organization(tenant_id: other_tenant.id, domain: "beta.example.com")
@@ -170,12 +170,12 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
           subject: "Org-A scoped message"
         )
 
-      assert {:ok, conversation} = parse_normalize_dispatch(raw, route_a)
-      assert conversation.organization_id == org_a.id
-      refute conversation.organization_id == org_b.id
+      assert {:ok, thread} = parse_normalize_dispatch(raw, route_a)
+      assert thread.organization_id == org_a.id
+      refute thread.organization_id == org_b.id
     end
 
-    test "same sender email on different org routes creates separate conversations" do
+    test "same sender email on different org routes creates separate threads" do
       org_a = insert_organization(domain: "alpha.example.com")
       other_tenant = insert_tenant()
       org_b = insert_organization(tenant_id: other_tenant.id, domain: "beta.example.com")
@@ -206,13 +206,13 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
     end
   end
 
-  describe "threading: reply via LMTP threads to existing conversation" do
-    test "reply with In-Reply-To threads to existing conversation in same org" do
+  describe "threading: reply via LMTP threads to existing thread" do
+    test "reply with In-Reply-To threads to existing thread in same org" do
       org = insert_organization(domain: "acme.example.com")
       _contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
       route = create_route_with_webhook(%{organization_id: org.id, route_type: :general})
 
-      # Create initial conversation via the pipeline
+      # Create initial thread via the pipeline
       original_msg_id = "<original-#{System.unique_integer([:positive])}@acme.example.com>"
 
       raw_original =
@@ -235,11 +235,11 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
 
       assert {:ok, reply_conv} = parse_normalize_dispatch(raw_reply, route)
 
-      # Reply should thread to the same conversation
+      # Reply should thread to the same thread
       assert reply_conv.id == original_conv.id
 
-      # Verify both messages exist on the conversation
-      messages = Custyard.Conversations.list_public_messages(reply_conv.id)
+      # Verify both messages exist on the thread
+      messages = Custyard.Threads.list_public_messages(reply_conv.id)
       assert length(messages) == 2
     end
   end

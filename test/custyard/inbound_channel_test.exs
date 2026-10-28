@@ -358,7 +358,7 @@ defmodule Custyard.InboundChannelTest do
   end
 
   describe "receiving?/1" do
-    test "is true for the states that create conversations" do
+    test "is true for the states that create threads" do
       for state <- [:pending_verification, :awaiting_first_message, :active] do
         assert InboundChannel.receiving?(channel(%{state: state}))
       end

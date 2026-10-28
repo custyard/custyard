@@ -5,7 +5,7 @@ defmodule Custyard.AuditEvent do
   and acknowledgment replays and bindings).
 
   Provides an append-only audit log for compliance and debugging.
-  Records are queryable by conversation, organization, or message_id.
+  Records are queryable by thread, organization, or message_id.
   """
 
   use Ecto.Schema
@@ -53,7 +53,7 @@ defmodule Custyard.AuditEvent do
     field :payload, :map
 
     belongs_to :tenant, Custyard.Tenant
-    belongs_to :conversation, Custyard.Conversation
+    belongs_to :thread, Custyard.Thread
     belongs_to :organization, Custyard.Organization
     belongs_to :project, Custyard.Project
 
@@ -71,7 +71,7 @@ defmodule Custyard.AuditEvent do
       :source,
       :message_id,
       :payload,
-      :conversation_id,
+      :thread_id,
       :organization_id,
       :project_id
     ])
@@ -80,7 +80,7 @@ defmodule Custyard.AuditEvent do
     |> require_tenant_for_workspace_event()
     |> validate_length(:source, max: 100)
     |> validate_length(:message_id, max: 500)
-    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:thread_id)
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:project_id)
   end
@@ -94,7 +94,7 @@ defmodule Custyard.AuditEvent do
   defp put_resource_tenant(changeset) do
     Enum.reduce(
       [
-        conversation_id: Custyard.Conversation,
+        thread_id: Custyard.Thread,
         organization_id: Custyard.Organization,
         project_id: Custyard.Project
       ],

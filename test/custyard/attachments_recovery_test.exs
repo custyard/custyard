@@ -1,7 +1,7 @@
 defmodule Custyard.Attachments.RecoveryTest do
   use Custyard.DataCase, async: true
   import Custyard.Factory
-  alias Custyard.{Attachments, Conversations, MessageAttachment, Repo}
+  alias Custyard.{Attachments, Threads, MessageAttachment, Repo}
   alias Custyard.Attachments.{Recovery, StubClient}
 
   defmodule Provider do
@@ -20,12 +20,12 @@ defmodule Custyard.Attachments.RecoveryTest do
       lettermint_webhook_id: "webhook"
     )
 
-    conversation =
-      insert_conversation(organization_id: org.id, inbound_channel_id: channel.id, suspect: true)
+    thread =
+      insert_thread(organization_id: org.id, inbound_channel_id: channel.id, suspect: true)
 
     message =
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         inbound_channel_id: channel.id,
         provider_delivery_id: "delivery",
         lettermint_message_id: "provider-message"
@@ -49,12 +49,12 @@ defmodule Custyard.Attachments.RecoveryTest do
     }
 
     Process.put({:delivery, "webhook", "delivery"}, {:ok, %{"payload" => payload}})
-    %{conversation: conversation, channel: channel, message: message, payload: payload}
+    %{thread: thread, channel: channel, message: message, payload: payload}
   end
 
-  test "trust permits recovery from retained delivery without saving URLs", %{conversation: conv} do
-    assert {:error, :conversation_unavailable} = Recovery.recover(conv.id, client: Provider)
-    assert {:ok, _} = Conversations.set_suspect(conv, false)
+  test "trust permits recovery from retained delivery without saving URLs", %{thread: conv} do
+    assert {:error, :thread_unavailable} = Recovery.recover(conv.id, client: Provider)
+    assert {:ok, _} = Threads.set_suspect(conv, false)
     assert :ok = Recovery.recover(conv.id, client: Provider)
     assert [%{state: :fetched, filename: "note.txt"}] = Repo.all(MessageAttachment)
     refute inspect(Repo.all(MessageAttachment)) =~ "https://"
@@ -63,7 +63,7 @@ defmodule Custyard.Attachments.RecoveryTest do
   end
 
   test "threaded messages recover through their own route and attachment cap", %{
-    conversation: conv,
+    thread: conv,
     channel: original_channel,
     message: message,
     payload: payload
@@ -82,7 +82,7 @@ defmodule Custyard.Attachments.RecoveryTest do
 
     Process.put({:delivery, "reply-webhook", "delivery"}, {:ok, %{"payload" => payload}})
     assert original_channel.inbound_route_id != reply_channel.inbound_route_id
-    Conversations.set_suspect(conv, false)
+    Threads.set_suspect(conv, false)
 
     assert :ok = Recovery.recover(conv.id, client: Provider)
     assert_received {:requested_delivery, "reply-webhook", "delivery"}
@@ -91,7 +91,7 @@ defmodule Custyard.Attachments.RecoveryTest do
   end
 
   test "a message channel from another tenant cannot supply recovery credentials", %{
-    conversation: conv,
+    thread: conv,
     message: message
   } do
     tenant =
@@ -109,11 +109,11 @@ defmodule Custyard.Attachments.RecoveryTest do
     end
 
     assert Repo.get!(Custyard.Message, message.id).inbound_channel_id != foreign_channel.id
-    assert Repo.get!(Custyard.Conversation, conv.id).tenant_id != tenant.id
+    assert Repo.get!(Custyard.Thread, conv.id).tenant_id != tenant.id
   end
 
   test "shared tenant inbox recovers using the real route webhook binding", %{
-    conversation: conv,
+    thread: conv,
     channel: channel,
     payload: payload
   } do
@@ -126,25 +126,25 @@ defmodule Custyard.Attachments.RecoveryTest do
     )
 
     Process.put({:delivery, "bound-provider-webhook", "delivery"}, {:ok, %{"payload" => payload}})
-    Conversations.set_suspect(conv, false)
+    Threads.set_suspect(conv, false)
     assert :ok = Recovery.recover(conv.id, client: Provider)
     assert_received {:requested_delivery, "bound-provider-webhook", "delivery"}
     refute_received {:requested_delivery, "webhook", "delivery"}
     assert [%{state: :fetched}] = Repo.all(MessageAttachment)
   end
 
-  test "missing message channel does not fall back to the conversation route", %{
-    conversation: conv,
+  test "missing message channel does not fall back to the thread route", %{
+    thread: conv,
     message: message
   } do
     message |> Ecto.Changeset.change(inbound_channel_id: nil) |> Repo.update!()
-    Conversations.set_suspect(conv, false)
+    Threads.set_suspect(conv, false)
     assert {:error, :recovery_incomplete} = Recovery.recover(conv.id, client: Provider)
     refute_received {:requested_delivery, _, _}
   end
 
-  test "deleted messages are not recovered", %{conversation: conv} do
-    Conversations.set_suspect(conv, false)
+  test "deleted messages are not recovered", %{thread: conv} do
+    Threads.set_suspect(conv, false)
     [row] = Repo.all(MessageAttachment)
 
     Repo.get!(Custyard.Message, row.message_id)
@@ -155,18 +155,18 @@ defmodule Custyard.Attachments.RecoveryTest do
     assert [%{skip_reason: "suspect"}] = Repo.all(MessageAttachment)
   end
 
-  test "missing retained payload stays visible and can be retried", %{conversation: conv} do
-    Conversations.set_suspect(conv, false)
+  test "missing retained payload stays visible and can be retried", %{thread: conv} do
+    Threads.set_suspect(conv, false)
     Process.put({:delivery, "webhook", "delivery"}, {:error, :expired})
     assert {:error, :recovery_incomplete} = Recovery.recover(conv.id, client: Provider)
     assert [%{skip_reason: "suspect"}] = Repo.all(MessageAttachment)
   end
 
   test "a different delivery cannot replace attachment content", %{
-    conversation: conv,
+    thread: conv,
     payload: payload
   } do
-    Conversations.set_suspect(conv, false)
+    Threads.set_suspect(conv, false)
 
     Process.put(
       {:delivery, "webhook", "delivery"},

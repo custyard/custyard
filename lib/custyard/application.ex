@@ -120,7 +120,7 @@ defmodule Custyard.Application do
   # directly with an injected clock or explicit options.
   defp maybe_add_intake_sweeps(children) do
     if Application.get_env(:custyard, :start_intake_sweeps, true) do
-      children ++ [Custyard.Slugs.ClaimExpiry, Custyard.Conversations.RetentionSweep]
+      children ++ [Custyard.Slugs.ClaimExpiry, Custyard.Threads.RetentionSweep]
     else
       children
     end

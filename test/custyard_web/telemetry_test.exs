@@ -14,7 +14,7 @@ defmodule CustyardWeb.TelemetryTest do
 
   import Custyard.Factory
 
-  alias Custyard.Conversation
+  alias Custyard.Thread
 
   # Deliberately NOT `alias CustyardWeb.Telemetry`: that shadows the top-level
   # `Telemetry` namespace, so `Telemetry.Metrics.Summary` below would resolve to
@@ -22,8 +22,8 @@ defmodule CustyardWeb.TelemetryTest do
   alias Telemetry.Metrics
 
   @poller_events [
-    [:custyard, :conversations, :active],
-    [:custyard, :conversations, :by_state]
+    [:custyard, :threads, :active],
+    [:custyard, :threads, :by_state]
   ]
 
   describe "metrics/0 declarations" do
@@ -56,7 +56,7 @@ defmodule CustyardWeb.TelemetryTest do
   describe "periodic_measurements/0 emissions" do
     test "every event emitted is declared in metrics/0" do
       emitted =
-        capture_events(@poller_events, &CustyardWeb.Telemetry.measure_conversation_counts/0)
+        capture_events(@poller_events, &CustyardWeb.Telemetry.measure_thread_counts/0)
         |> Enum.map(fn {event, _measurements, _metadata} -> event end)
         |> Enum.uniq()
 
@@ -75,7 +75,7 @@ defmodule CustyardWeb.TelemetryTest do
 
     test "every declared tag and measurement is present in what the emit site sends" do
       events =
-        capture_events(@poller_events, &CustyardWeb.Telemetry.measure_conversation_counts/0)
+        capture_events(@poller_events, &CustyardWeb.Telemetry.measure_thread_counts/0)
 
       metrics = CustyardWeb.Telemetry.metrics()
 
@@ -100,20 +100,20 @@ defmodule CustyardWeb.TelemetryTest do
     end
 
     test "reports zero for an empty state rather than omitting it" do
-      # `group_by` returns no row for a state with no conversations. If those
+      # `group_by` returns no row for a state with no threads. If those
       # states were simply skipped, a last_value gauge would keep reporting the
       # count from the last sample where the state was non-empty, and a drained
       # queue would read as full.
       by_state = poll_by_state()
 
-      expected = Enum.reject(Conversation.states(), &(&1 == :resolved))
+      expected = Enum.reject(Thread.states(), &(&1 == :resolved))
 
       assert Enum.sort(Map.keys(by_state)) == Enum.sort(expected)
       assert Map.values(by_state) |> Enum.all?(&(&1 == 0))
     end
 
-    test "counts a conversation under its own state and leaves the others at zero" do
-      insert_conversation(state: :waiting)
+    test "counts a thread under its own state and leaves the others at zero" do
+      insert_thread(state: :waiting)
 
       by_state = poll_by_state()
 
@@ -125,17 +125,17 @@ defmodule CustyardWeb.TelemetryTest do
     end
 
     test "the total matches the sum of the per-state breakdown" do
-      insert_conversation(state: :new)
-      insert_conversation(state: :waiting)
+      insert_thread(state: :new)
+      insert_thread(state: :waiting)
       # :resolved is excluded from the queue-depth measurement entirely.
-      insert_conversation(state: :resolved)
+      insert_thread(state: :resolved)
 
       events =
-        capture_events(@poller_events, &CustyardWeb.Telemetry.measure_conversation_counts/0)
+        capture_events(@poller_events, &CustyardWeb.Telemetry.measure_thread_counts/0)
 
       [{_event, %{count: total}, _metadata}] =
         Enum.filter(events, fn {event, _m, _md} ->
-          event == [:custyard, :conversations, :active]
+          event == [:custyard, :threads, :active]
         end)
 
       assert total == 2
@@ -144,12 +144,12 @@ defmodule CustyardWeb.TelemetryTest do
   end
 
   defp poll_by_state do
-    capture_events(@poller_events, &CustyardWeb.Telemetry.measure_conversation_counts/0)
+    capture_events(@poller_events, &CustyardWeb.Telemetry.measure_thread_counts/0)
     |> by_state_map()
   end
 
   defp by_state_map(events) do
-    for {[:custyard, :conversations, :by_state], %{count: count}, %{state: state}} <- events,
+    for {[:custyard, :threads, :by_state], %{count: count}, %{state: state}} <- events,
         into: %{},
         do: {state, count}
   end

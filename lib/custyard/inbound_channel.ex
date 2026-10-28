@@ -103,7 +103,7 @@ defmodule Custyard.InboundChannel do
     field(:archive_copy, :boolean, default: false)
     # D9: per-message attachment cap in megabytes; 0 disables fetching.
     field(:attachment_limit_mb, :integer, default: 10)
-    # Points added to the attention score of the channel's conversations
+    # Points added to the attention score of the channel's threads
     # (Custyard.Scoring), so security@ can outrank sales@. 0 is neutral.
     field(:attention_bonus, :integer, default: 0)
     field(:sending_domain_status, :string)
@@ -435,7 +435,7 @@ defmodule Custyard.InboundChannel do
   def forwarding?(%__MODULE__{ingress_kind: :forward}), do: true
   def forwarding?(%__MODULE__{}), do: false
 
-  @doc "States in which deliveries become conversations."
+  @doc "States in which deliveries become threads."
   def receiving?(%__MODULE__{state: state}),
     do: state in [:pending_verification, :awaiting_first_message, :active]
 

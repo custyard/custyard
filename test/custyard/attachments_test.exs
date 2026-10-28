@@ -14,8 +14,8 @@ defmodule Custyard.AttachmentsTest do
 
   setup do
     org = insert_organization()
-    conv = insert_conversation(organization_id: org.id)
-    message = insert_message(conversation_id: conv.id)
+    conv = insert_thread(organization_id: org.id)
+    message = insert_message(thread_id: conv.id)
     %{org: org, conv: conv, message: message}
   end
 
@@ -370,7 +370,7 @@ defmodule Custyard.AttachmentsTest do
       d = descriptor()
       StubClient.put(d.url, "secret bytes")
       {:ok, [fetched]} = Attachments.fetch_for_message(message, [d])
-      other_message = insert_message(conversation_id: message.conversation_id)
+      other_message = insert_message(thread_id: message.thread_id)
 
       {:ok, [skipped]} =
         Attachments.fetch_for_message(other_message, [descriptor()], limit_bytes: 0)
@@ -396,7 +396,7 @@ defmodule Custyard.AttachmentsTest do
       refute Attachments.get(scope(stranger), fetched.id)
     end
 
-    test "marking the conversation suspect blocks already fetched files", %{
+    test "marking the thread suspect blocks already fetched files", %{
       fetched: fetched,
       conv: conv
     } do

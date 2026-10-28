@@ -11,8 +11,8 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
   setup do
     org = insert_organization()
     {:ok, _} = Custyard.Tenants.add_host(org.tenant_id, "portal.acme.test")
-    conv = insert_conversation(organization_id: org.id)
-    message = insert_message(conversation_id: conv.id, body: "Invoice attached")
+    conv = insert_thread(organization_id: org.id)
+    message = insert_message(thread_id: conv.id, body: "Invoice attached")
     %{org: org, conv: conv, attachment: fetched_attachment(message)}
   end
 
@@ -80,19 +80,19 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
       assert Attachments.get_for_portal(attachment.id, org.id).id == attachment.id
     end
 
-    test "refuses internal notes, deleted messages and suspect conversations", %{org: org} do
-      conv = insert_conversation(organization_id: org.id)
-      note = fetched_attachment(insert_message(conversation_id: conv.id, is_internal_note: true))
+    test "refuses internal notes, deleted messages and suspect threads", %{org: org} do
+      conv = insert_thread(organization_id: org.id)
+      note = fetched_attachment(insert_message(thread_id: conv.id, is_internal_note: true))
 
-      deleted_message = insert_message(conversation_id: conv.id)
+      deleted_message = insert_message(thread_id: conv.id)
       deleted = fetched_attachment(deleted_message)
 
       deleted_message
       |> Ecto.Changeset.change(deleted_at: DateTime.utc_now(:second))
       |> Repo.update!()
 
-      suspect_conv = insert_conversation(organization_id: org.id, suspect: true)
-      suspect = fetched_attachment(insert_message(conversation_id: suspect_conv.id))
+      suspect_conv = insert_thread(organization_id: org.id, suspect: true)
+      suspect = fetched_attachment(insert_message(thread_id: suspect_conv.id))
 
       for attachment <- [note, deleted, suspect] do
         assert Attachments.get_for_portal(attachment.id, org.id) == nil
@@ -100,7 +100,7 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
     end
 
     test "refuses an attachment that was not fetched", %{org: org, conv: conv} do
-      message = insert_message(conversation_id: conv.id)
+      message = insert_message(thread_id: conv.id)
 
       {:ok, [skipped]} =
         Attachments.fetch_for_message(
@@ -146,7 +146,7 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
 
     test "lists nothing under a deleted message", %{conn: conn, org: org, conv: conv} do
       Custyard.Message
-      |> Repo.get_by!(conversation_id: conv.id)
+      |> Repo.get_by!(thread_id: conv.id)
       |> Ecto.Changeset.change(deleted_at: DateTime.utc_now(:second))
       |> Repo.update!()
 
@@ -156,7 +156,7 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
       refute has_element?(view, ~s([data-testid="portal-message-attachments"]))
     end
 
-    test "lists nothing while the conversation is suspect", %{conn: conn, org: org, conv: conv} do
+    test "lists nothing while the thread is suspect", %{conn: conn, org: org, conv: conv} do
       conv |> Ecto.Changeset.change(suspect: true) |> Repo.update!()
 
       {:ok, view, _html} = live(conn, "/portal/#{portal_token(org)}/request/#{conv.id}")

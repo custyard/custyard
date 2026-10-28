@@ -21,7 +21,7 @@ defmodule CustyardWeb.HomeLive do
         {if @current_tenant, do: "Welcome to #{@current_tenant.name}", else: "Welcome to Custyard"}
         <:subtitle>
           {if @current_tenant,
-            do: "Support conversations, shared updates and follow-up tasks",
+            do: "Support threads, shared updates and follow-up tasks",
             else: "Customer management system"}
         </:subtitle>
       </.header>
@@ -36,7 +36,7 @@ defmodule CustyardWeb.HomeLive do
         </.link>
         <p class="text-sm text-gray-500 dark:text-zinc-400" data-testid="home-portal-info">
           {if @current_tenant,
-            do: "Customers: open the private conversation or portal link shared with you.",
+            do: "Customers: open the private thread or portal link shared with you.",
             else: "Customer portals are accessed via your organization's dedicated URL."}
         </p>
       </div>

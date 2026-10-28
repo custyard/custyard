@@ -38,7 +38,7 @@ defmodule CustyardWeb.StaffComponents do
   end
 
   @doc """
-  Renders a conversation state badge (new/active/waiting/dormant/resolved).
+  Renders a thread state badge (new/active/waiting/dormant/resolved).
 
   ## Examples
 
@@ -136,7 +136,7 @@ defmodule CustyardWeb.StaffComponents do
   end
 
   @doc """
-  Renders a contact's email-validity flag (spec-conversation-loop, "Bounce
+  Renders a contact's email-validity flag (spec-thread-loop, "Bounce
   and Suppression Handling"). Renders nothing for a valid address.
 
   ## Examples
@@ -200,7 +200,7 @@ defmodule CustyardWeb.StaffComponents do
   end
 
   @doc """
-  Renders a source badge with a human label for the conversation/route source.
+  Renders a source badge with a human label for the thread/route source.
 
   Known sources get a curated label and color; any other atom falls back to a
   humanized label with neutral styling, so new source values render sensibly
@@ -265,7 +265,7 @@ defmodule CustyardWeb.StaffComponents do
   end
 
   @doc """
-  Renders a tag-style badge for a conversation's intake source key (CTA
+  Renders a tag-style badge for a thread's intake source key (CTA
   provenance).
 
   ## Examples
@@ -286,10 +286,10 @@ defmodule CustyardWeb.StaffComponents do
   end
 
   @doc """
-  Renders an amber badge flagging a public-intake conversation with no reply
+  Renders an amber badge flagging a public-intake thread with no reply
   channel (no linked contact email and no captured prospect email).
 
-  A badge, never a filter — flagged conversations stay fully visible in the
+  A badge, never a filter — flagged threads stay fully visible in the
   attention queue.
 
   ## Examples

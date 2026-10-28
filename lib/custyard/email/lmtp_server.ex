@@ -1009,7 +1009,7 @@ defmodule Custyard.Email.LMTPServer do
          {:ok, parsed} <- Parser.parse(raw_data),
          {:ok, normalized} <- EmailAdapter.normalize(parsed),
          %InboundRoute{} = route <- Repo.get(InboundRoute, channel.inbound_route_id),
-         {:ok, _conversation} <- Dispatcher.dispatch(route, normalized, channel: channel) do
+         {:ok, _thread} <- Dispatcher.dispatch(route, normalized, channel: channel) do
       :ok
     else
       # Triage dropped the delivery deliberately and logged a rejection row;

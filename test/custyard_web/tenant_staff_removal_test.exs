@@ -55,8 +55,8 @@ defmodule CustyardWeb.TenantStaffRemovalTest do
   test "staff removal preserves message history and clears tenant-constrained actor references",
        c do
     customer = insert_organization(tenant_id: c.tenant.id)
-    conversation = insert_conversation(organization_id: customer.id)
-    message = insert_message(conversation_id: conversation.id, body: "Preserved history")
+    thread = insert_thread(organization_id: customer.id)
+    message = insert_message(thread_id: thread.id, body: "Preserved history")
 
     message =
       message

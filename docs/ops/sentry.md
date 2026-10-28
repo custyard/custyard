@@ -79,7 +79,7 @@ controllers/plugs (not LiveView):
 ### Process / LiveView crash reports (best-effort)
 
 `Sentry.LoggerHandler` reports crashes by `inspect`-ing the crashed process's
-state into the event. Custyard's conversation LiveView keeps the raw access
+state into the event. Custyard's thread LiveView keeps the raw access
 token, the prospect record, and message bodies in socket assigns, so a crash
 would otherwise embed them. `before_send` redacts, in the crash message and
 `:extra`, the value of any sensitive key — `access_token`, `token`,
@@ -90,9 +90,9 @@ correlation). This is verified against a **real** LiveView crash in
 `test/custyard_web/sentry_liveview_crash_test.exs`.
 
 > **Residual risk:** key-based redaction cannot catch sensitive data that
-> appears *without* a recognizable key — most notably **conversation/message
+> appears *without* a recognizable key — most notably **thread/message
 > body text** embedded in an inspected socket. Treat the Sentry project as
-> potentially containing conversation content and restrict access accordingly.
+> potentially containing thread content and restrict access accordingly.
 > It is self-hosted on our own EU infrastructure, which bounds the exposure.
 
 Client IP (from `x-forwarded-for`) is retained: it is operationally useful for
@@ -100,5 +100,5 @@ abuse triage and the instance is self-hosted in the EU.
 
 Tests: `test/custyard/sentry_test.exs` (redaction rules, the `before_send`
 arity-1 contract, the `PlugContext` `url_scrubber` wiring) and
-`test/custyard_web/sentry_liveview_crash_test.exs` (a real conversation-LiveView
+`test/custyard_web/sentry_liveview_crash_test.exs` (a real thread-LiveView
 crash, end-to-end).

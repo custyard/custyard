@@ -10,7 +10,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
     test "persists audit event to database" do
       org = insert_organization()
       project = insert_project(organization_id: org.id)
-      conv = insert_conversation(organization_id: org.id, project_id: project.id)
+      conv = insert_thread(organization_id: org.id, project_id: project.id)
 
       normalized = %{
         source: :lettermint,
@@ -26,7 +26,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       assert :ok = Audit.process(conv, normalized, route_context)
 
-      event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
+      event = Repo.get_by!(AuditEvent, thread_id: conv.id)
       assert event.event_type == :webhook_received
       assert event.source == "lettermint"
       assert event.message_id == "msg-123@example.com"
@@ -36,7 +36,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
     test "records operational metadata without retaining sender or subject" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       normalized = %{
         source: :zendesk,
@@ -48,7 +48,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       Audit.process(conv, normalized, route_context)
 
-      event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
+      event = Repo.get_by!(AuditEvent, thread_id: conv.id)
       assert event.payload["source"] == "zendesk"
       refute Map.has_key?(event.payload, "sender_email")
       refute Map.has_key?(event.payload, "subject")
@@ -60,7 +60,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
     test "records final customer attribution rather than channel hints" do
       org = insert_organization()
       project = insert_project(organization_id: org.id)
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       normalized = %{
         source: :email,
@@ -74,7 +74,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       assert :ok = Audit.process(conv, normalized, route_context)
 
-      event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
+      event = Repo.get_by!(AuditEvent, thread_id: conv.id)
       assert event.organization_id == org.id
       assert event.project_id == nil
       assert event.tenant_id == conv.tenant_id
@@ -82,7 +82,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
     test "handles missing source gracefully" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       normalized = %{
         sender_email: "user@test.com"
@@ -92,13 +92,13 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       assert :ok = Audit.process(conv, normalized, route_context)
 
-      event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
+      event = Repo.get_by!(AuditEvent, thread_id: conv.id)
       assert event.source == "unknown"
     end
 
     test "handles nil message_id" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       normalized = %{
         source: :portal,
@@ -109,7 +109,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       assert :ok = Audit.process(conv, normalized, route_context)
 
-      event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
+      event = Repo.get_by!(AuditEvent, thread_id: conv.id)
       assert event.message_id == nil
     end
   end
@@ -117,7 +117,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
   describe "error handling" do
     test "returns :ok even when database insert fails due to validation" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       normalized = %{
         # source is nil which will fail validation when converted to string
@@ -133,11 +133,11 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       # No audit event should be created due to validation failure
       events = Repo.all(AuditEvent)
-      refute Enum.any?(events, fn e -> e.conversation_id == conv.id end)
+      refute Enum.any?(events, fn e -> e.thread_id == conv.id end)
     end
 
     test "returns :ok when rescue catches exception" do
-      # Use a fake conversation struct with an ID that doesn't exist in FK
+      # Use a fake thread struct with an ID that doesn't exist in FK
       fake_conv = %{id: -999_999}
 
       normalized = %{

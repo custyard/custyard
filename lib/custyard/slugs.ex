@@ -11,7 +11,7 @@ defmodule Custyard.Slugs do
 
   Expiry is enforced twice: lazily inside `claim/3`'s transaction (an
   expired claimed row on the requested slug — or on the claiming
-  conversation — is deleted before the insert), and by the hourly
+  thread — is deleted before the insert), and by the hourly
   `Custyard.Slugs.ClaimExpiry` sweep. Confirmation tokens are stored
   hash-only via `Custyard.Auth.Token`; the plaintext leaves this module
   exactly once per generation.
@@ -25,7 +25,7 @@ defmodule Custyard.Slugs do
   import Ecto.Query
 
   alias Custyard.Auth.Token
-  alias Custyard.{Conversation, Organization, Repo, Settings, Slug}
+  alias Custyard.{Thread, Organization, Repo, Settings, Slug}
 
   @max_live_claims_per_email 3
 
@@ -33,33 +33,33 @@ defmodule Custyard.Slugs do
   def max_live_claims_per_email, do: @max_live_claims_per_email
 
   @doc """
-  Claim `slug_text` for `conversation`, anchored to `email`.
+  Claim `slug_text` for `thread`, anchored to `email`.
 
   One transaction: lazy expiry first (an expired claimed row holding the
-  requested slug — or held by this conversation — is deleted so dead rows
+  requested slug — or held by this thread — is deleted so dead rows
   never block a live claim), then the per-email bound (at most
   #{@max_live_claims_per_email} live claimed/confirmed rows per anchor
   email, counted inside the transaction), then the insert. The unique
   indexes arbitrate races: a lost race surfaces as a changeset error on
-  `:slug` (taken) or `:conversation_id` (one live claim per conversation).
+  `:slug` (taken) or `:thread_id` (one live claim per thread).
 
-  `expires_at` = now + `Settings.get_intake_config(conversation.tenant_id).slug_claim_ttl_hours`.
+  `expires_at` = now + `Settings.get_intake_config(thread.tenant_id).slug_claim_ttl_hours`.
 
   Returns `{:ok, slug_record, confirmation_token}` — the ONLY place the
   plaintext confirmation token for a new claim exists; only its hash is
   stored — or `{:error, changeset}`.
   """
-  def claim(slug_text, email, %Conversation{} = conversation) do
-    ttl_hours = Settings.get_intake_config(conversation.tenant_id).slug_claim_ttl_hours
+  def claim(slug_text, email, %Thread{} = thread) do
+    ttl_hours = Settings.get_intake_config(thread.tenant_id).slug_claim_ttl_hours
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     {token, hash} = Token.generate()
 
     changeset =
       Slug.claim_changeset(%Slug{}, %{
         slug: slug_text,
-        tenant_id: conversation.tenant_id,
+        tenant_id: thread.tenant_id,
         email: email,
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         expires_at: DateTime.add(now, ttl_hours, :hour),
         confirmation_token_hash: hash
       })
@@ -74,11 +74,11 @@ defmodule Custyard.Slugs do
   defp insert_claim(changeset, now, token) do
     slug_text = Ecto.Changeset.get_field(changeset, :slug)
     email = Ecto.Changeset.get_field(changeset, :email)
-    conversation_id = Ecto.Changeset.get_field(changeset, :conversation_id)
+    thread_id = Ecto.Changeset.get_field(changeset, :thread_id)
     tenant_id = Ecto.Changeset.get_field(changeset, :tenant_id)
 
     Repo.transaction(fn ->
-      release_expired_claims(slug_text, conversation_id, tenant_id, now)
+      release_expired_claims(slug_text, thread_id, tenant_id, now)
 
       if live_claim_count_for_email(email, tenant_id, now) >= @max_live_claims_per_email do
         changeset
@@ -100,14 +100,14 @@ defmodule Custyard.Slugs do
 
   # Lazy expiry inside the claim transaction: dead (expired, still-claimed)
   # rows must not block either unique index — neither the slug being
-  # claimed by a new party nor the one-claim-per-conversation rule when the
-  # conversation's own earlier claim lapsed.
-  defp release_expired_claims(slug_text, conversation_id, tenant_id, now) do
+  # claimed by a new party nor the one-claim-per-thread rule when the
+  # thread's own earlier claim lapsed.
+  defp release_expired_claims(slug_text, thread_id, tenant_id, now) do
     Repo.delete_all(
       from s in Slug,
         where:
           s.tenant_id == ^tenant_id and s.status == :claimed and s.expires_at <= ^now and
-            (s.slug == ^slug_text or s.conversation_id == ^conversation_id)
+            (s.slug == ^slug_text or s.thread_id == ^thread_id)
     )
   end
 
@@ -288,11 +288,11 @@ defmodule Custyard.Slugs do
   end
 
   @doc """
-  Promote a conversation's confirmed claim to `provisioned`, linking it to
+  Promote a thread's confirmed claim to `provisioned`, linking it to
   `organization`. Called only from `Custyard.Organizations.convert_prospect/3`,
   inside its conversion transaction.
 
-  Race-safe conditional UPDATE: `WHERE conversation_id = ? AND status =
+  Race-safe conditional UPDATE: `WHERE thread_id = ? AND status =
   'confirmed'`. A claim that was released, expired away, never confirmed, or
   already promoted between load and this call updates zero rows —
   `{:error, :not_found}`, which the caller treats as "nothing to promote,"
@@ -303,7 +303,7 @@ defmodule Custyard.Slugs do
   caller only needs to know whether the promotion happened, so this skips
   the extra `SELECT` a re-fetch would cost on every conversion.
   """
-  def promote(%Conversation{id: conversation_id, tenant_id: tenant_id}, %Organization{
+  def promote(%Thread{id: thread_id, tenant_id: tenant_id}, %Organization{
         id: organization_id,
         tenant_id: tenant_id
       }) do
@@ -311,7 +311,7 @@ defmodule Custyard.Slugs do
 
     {count, _} =
       Repo.update_all(
-        from(s in Slug, where: s.conversation_id == ^conversation_id and s.status == :confirmed),
+        from(s in Slug, where: s.thread_id == ^thread_id and s.status == :confirmed),
         set: [status: :provisioned, organization_id: organization_id, updated_at: now]
       )
 
@@ -342,17 +342,17 @@ defmodule Custyard.Slugs do
   end
 
   @doc """
-  The conversation's live claim: a non-expired claimed row, or a
+  The thread's live claim: a non-expired claimed row, or a
   confirmed/provisioned one. Expired unswept rows are invisible here —
   the claim panel offers a fresh claim instead.
   """
-  def get_claim_for_conversation(conversation_id) do
+  def get_claim_for_thread(thread_id) do
     now = DateTime.utc_now()
 
     Repo.one(
       from s in Slug,
         where:
-          s.conversation_id == ^conversation_id and
+          s.thread_id == ^thread_id and
             (s.status in [:confirmed, :provisioned] or
                (s.status == :claimed and s.expires_at > ^now))
     )
@@ -381,7 +381,7 @@ defmodule Custyard.Slugs do
 
   @doc """
   Delete every claimed row whose expiry has passed as of `now` (injectable
-  clock). Returns the count deleted. Only the slug rows die — conversations
+  clock). Returns the count deleted. Only the slug rows die — threads
   are untouched.
 
   Called hourly by `Custyard.Slugs.ClaimExpiry`; public so tests drive it
@@ -394,16 +394,16 @@ defmodule Custyard.Slugs do
     count + delete_orphaned_claims()
   end
 
-  # The retention purge deletes resolved public-intake conversations and
-  # nilifies slugs.conversation_id. A claimed or confirmed row left behind
-  # has no prospect who can act on it and no conversation promote/2 could
+  # The retention purge deletes resolved public-intake threads and
+  # nilifies slugs.thread_id. A claimed or confirmed row left behind
+  # has no prospect who can act on it and no thread promote/2 could
   # ever match, yet it kept the name blocked forever. Provisioned rows
   # belong to an organization and are untouched.
   defp delete_orphaned_claims do
     {count, _} =
       Repo.delete_all(
         from s in Slug,
-          where: s.status in [:claimed, :confirmed] and is_nil(s.conversation_id)
+          where: s.status in [:claimed, :confirmed] and is_nil(s.thread_id)
       )
 
     count
@@ -411,14 +411,14 @@ defmodule Custyard.Slugs do
 
   @doc """
   Delete the live (claimed or confirmed, not provisioned) claim held by a
-  conversation, if any. Used when the conversation's access is revoked.
+  thread, if any. Used when the thread's access is revoked.
   Returns the number of rows deleted (0 or 1).
   """
-  def release_claim_for_conversation(conversation_id) do
+  def release_claim_for_thread(thread_id) do
     {count, _} =
       Repo.delete_all(
         from s in Slug,
-          where: s.conversation_id == ^conversation_id and s.status in [:claimed, :confirmed]
+          where: s.thread_id == ^thread_id and s.status in [:claimed, :confirmed]
       )
 
     count

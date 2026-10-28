@@ -66,11 +66,11 @@ defmodule Custyard.Webhooks.TriageTest do
       org: org,
       route: route
     } do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
       reply =
         insert_message(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           source: :staff,
           message_id: "<reply-1.c1@custyard.local>"
         )
@@ -86,10 +86,10 @@ defmodule Custyard.Webhooks.TriageTest do
     end
 
     test "matches after whitespace normalization of the Message-ID", %{org: org, route: route} do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         message_id: "<reply-2.c1@custyard.local>"
       )
@@ -104,10 +104,10 @@ defmodule Custyard.Webhooks.TriageTest do
 
     test "a staff message in another tenant is not an echo", %{route: route} do
       other_tenant = insert_tenant()
-      other = insert_conversation(tenant_id: other_tenant.id)
+      other = insert_thread(tenant_id: other_tenant.id)
 
       insert_message(
-        conversation_id: other.id,
+        thread_id: other.id,
         source: :staff,
         message_id: "<reply-3.c9@custyard.local>"
       )
@@ -121,10 +121,10 @@ defmodule Custyard.Webhooks.TriageTest do
     end
 
     test "a customer message with the same Message-ID is not an echo", %{org: org, route: route} do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :email,
         message_id: "<dup-4@customer.example.com>"
       )
@@ -147,8 +147,8 @@ defmodule Custyard.Webhooks.TriageTest do
           email: "me@acme.example.com"
         )
 
-      conv = insert_conversation(organization_id: org.id)
-      insert_message(conversation_id: conv.id, message_id: "<orig@customer.example.com>")
+      conv = insert_thread(organization_id: org.id)
+      insert_message(thread_id: conv.id, message_id: "<orig@customer.example.com>")
       %{staff: staff, conv: conv}
     end
 
@@ -194,7 +194,7 @@ defmodule Custyard.Webhooks.TriageTest do
 
       assert {:staff_sent,
               %{
-                conversation: %{id: conv_id},
+                thread: %{id: conv_id},
                 staff: %{id: op_id},
                 email: "me@acme.example.com"
               }} =
@@ -518,10 +518,10 @@ defmodule Custyard.Webhooks.TriageTest do
     end
 
     test "own echo beats auto-response", %{org: org, route: route} do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         message_id: "<echo-5.c1@custyard.local>"
       )
@@ -586,27 +586,27 @@ defmodule Custyard.Webhooks.TriageTest do
       assert {:suspect, :spam_flagged} = Triage.classify(payload, route, nil)
     end
 
-    test "a contact whose only conversations are suspect does not exempt the sender", %{
+    test "a contact whose only threads are suspect does not exempt the sender", %{
       org: org,
       route: route
     } do
       # Sender matching created this contact from the first suspect delivery.
       contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
-      insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+      insert_thread(organization_id: org.id, contact_id: contact.id, suspect: true)
 
       payload = normalized() |> put_metadata(%{is_spam: true})
       assert {:suspect, :spam_flagged} = Triage.classify(payload, route, nil)
     end
 
-    test "one accepted conversation makes the sender known", %{org: org, route: route} do
+    test "one accepted thread makes the sender known", %{org: org, route: route} do
       contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
-      insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+      insert_thread(organization_id: org.id, contact_id: contact.id, suspect: true)
 
       cleared =
-        insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+        insert_thread(organization_id: org.id, contact_id: contact.id, suspect: true)
 
       # The staff dismissing the flag is what whitelists the sender.
-      {:ok, _} = Custyard.Conversations.set_suspect(cleared, false)
+      {:ok, _} = Custyard.Threads.set_suspect(cleared, false)
 
       payload = normalized() |> put_metadata(%{is_spam: true})
       assert {:customer, nil} = Triage.classify(payload, route, nil)

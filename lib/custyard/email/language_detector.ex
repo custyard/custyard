@@ -1,7 +1,7 @@
 defmodule Custyard.Email.LanguageDetector do
   @moduledoc """
   Dependency-free language detection for customer mail, good enough to
-  route and badge a conversation (spec-inbound-channels Phase 2,
+  route and badge a thread (spec-inbound-channels Phase 2,
   "language detection as an enrichment purpose").
 
   Scores the text's words against a short list of high-frequency function

@@ -3,7 +3,7 @@ defmodule Custyard.Sentry do
   Sentry data-scrubbing hooks for Custyard.
 
   Custyard's public surfaces carry bearer credentials **in the URL path**, not
-  in headers — a conversation token (`/threads/:token`), a slug-claim token
+  in headers — a thread token (`/threads/:token`), a slug-claim token
   (`/claims/:token`), a staff magic-link token
   (`/app/login/verify/:token`), a routed-webhook callback token
   (`/api/webhook/route/:token`) and the unguessable portal org token
@@ -58,7 +58,7 @@ defmodule Custyard.Sentry do
   ]
 
   # Crash reports (Sentry.LoggerHandler) `inspect/1` the crashed process's state
-  # into the event message and `:extra.crash_reason`. Custyard's conversation
+  # into the event message and `:extra.crash_reason`. Custyard's thread
   # LiveView keeps the raw access token (and prospect email) in socket assigns,
   # so a crash surfaces them as *bare values keyed by name* — e.g.
   # `access_token: "..."` — which the path patterns above cannot catch. These

@@ -13,7 +13,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   use CustyardWeb.ConnCase, async: false
   import Custyard.Factory
   import Phoenix.LiveViewTest
-  alias Custyard.{Conversations, EmailSetup, InboundChannels, Intake, RateLimit, Repo, Tenants}
+  alias Custyard.{Threads, EmailSetup, InboundChannels, Intake, RateLimit, Repo, Tenants}
   alias Custyard.Intake.{ArrivalEmail, ClaimEmail, EmailBranding, ReceiptEmail}
 
   setup do
@@ -71,7 +71,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     %{tenant: tenant, source: source, channel: channel, admin: admin}
   end
 
-  test "submission receipt uses the tenant identity and canonical conversation origin", c do
+  test "submission receipt uses the tenant identity and canonical thread origin", c do
     conn =
       post(%{build_conn() | host: Tenants.host(c.tenant)}, "/intake/#{c.source.key}", %{
         "submission" => %{
@@ -90,8 +90,8 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   end
 
   test "late email capture and claim confirmation preserve tenant URLs and consent", c do
-    {:ok, %{conversation: conversation, access_token: token}} =
-      Intake.create_intake_conversation(c.source.key, "PRIVATE support question",
+    {:ok, %{thread: thread, access_token: token}} =
+      Intake.create_intake_thread(c.source.key, "PRIVATE support question",
         tenant_id: c.tenant.id
       )
 
@@ -106,7 +106,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     assert_receive {:email, %Swoosh.Email{to: [{_, "late@example.com"}]} = receipt}
     assert receipt.text_body =~ Tenants.url(c.tenant) <> "/threads/#{token}"
     assert_branding(receipt, c.tenant)
-    refute Intake.get_prospect(conversation).notify_on_reply
+    refute Intake.get_prospect(thread).notify_on_reply
 
     view
     |> form("[data-testid=resume-claim-form]", %{
@@ -130,7 +130,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     assert confirmation_page =~ "Confirm claim"
     refute claim.text_body =~ "PRIVATE support question"
     refute claim.html_body =~ "PRIVATE support question"
-    refute Intake.get_prospect(conversation).notify_on_reply
+    refute Intake.get_prospect(thread).notify_on_reply
   end
 
   test "tenant receipts and claims keep the public return address with a sending subdomain", c do
@@ -139,23 +139,21 @@ defmodule CustyardWeb.TenantPublicEmailTest do
                staff: c.admin
              )
 
-    conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
-    conversation_url = Tenants.url(c.tenant) <> "/threads/receipt-token"
+    thread = insert_thread(source: :public_intake, tenant_id: c.tenant.id)
+    thread_url = Tenants.url(c.tenant) <> "/threads/receipt-token"
 
     assert {:ok, _} =
-             ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: conversation_url
-             )
+             ReceiptEmail.send_receipt("buyer@example.com", c.source, thread_url: thread_url)
 
     assert_custom_domain_return_path()
 
     assert {:ok, slug, _} =
-             Custyard.Slugs.claim("custom-domain-claim", "buyer@example.com", conversation)
+             Custyard.Slugs.claim("custom-domain-claim", "buyer@example.com", thread)
 
     assert {:ok, _} =
              ClaimEmail.send_confirmation(slug,
                confirm_url: Tenants.url(c.tenant) <> "/claims/claim-token",
-               conversation_url: conversation_url
+               thread_url: thread_url
              )
 
     assert_custom_domain_return_path()
@@ -171,7 +169,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     assert {:ok, _} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/threads/receipt-token"
+               thread_url: Tenants.url(c.tenant) <> "/threads/receipt-token"
              )
 
     assert_receive {:email, email}
@@ -210,7 +208,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
       })
 
     assert "/threads/" <> token = redirected_to(conn)
-    assert {:ok, _} = Intake.get_conversation_by_access_token(token, c.tenant.id)
+    assert {:ok, _} = Intake.get_thread_by_access_token(token, c.tenant.id)
     refute_receive {:tenant_delivery_headers, _}
     refute_receive {:email, %Swoosh.Email{to: [{_, "quiet@example.com"}]}}
     {:ok, view, _} = live(%{build_conn() | host: Tenants.host(c.tenant)}, "/threads/#{token}")
@@ -230,7 +228,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     assert {:error, :no_default_channel} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/threads/test-token"
+               thread_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     refute_receive {:email, _}
@@ -241,7 +239,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     assert {:ok, _} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/threads/test-token"
+               thread_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     assert_receive {:email, email}
@@ -262,13 +260,13 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     # The public domain has not been verified for sending. An explicitly chosen
     # ingress identity must not silently switch to that address or the platform.
     assert is_nil(c.channel.sending_domain_status)
-    conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
-    assert is_nil(Conversations.reply_identity(conversation).address)
+    thread = insert_thread(source: :public_intake, tenant_id: c.tenant.id)
+    assert is_nil(Threads.reply_identity(thread).address)
     assert {:error, :from_not_set} = EmailBranding.delivery_settings(c.tenant.id)
 
     assert {:error, :from_not_set} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/threads/test-token"
+               thread_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     refute_receive {:email, _}
@@ -292,8 +290,8 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     foreign = insert_staff_account(role: "agent", tenant_id: other.id, organization_id: nil)
     local = insert_staff_account(role: "agent", tenant_id: c.tenant.id, organization_id: nil)
 
-    conversation =
-      insert_conversation(
+    thread =
+      insert_thread(
         source: :public_intake,
         tenant_id: c.tenant.id,
         subject: "PRIVATE tenant subject"
@@ -302,13 +300,13 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     expected = MapSet.new([c.admin.email, local.email])
 
-    assert {:ok, _} = ArrivalEmail.send_arrival(conversation, c.source, "PRIVATE tenant body")
+    assert {:ok, _} = ArrivalEmail.send_arrival(thread, c.source, "PRIVATE tenant body")
     assert_receive {:email, arrival}
     assert MapSet.new(Enum.map(arrival.to, &elem(&1, 1))) == expected
     assert arrival.text_body =~ "PRIVATE tenant body"
 
     assert arrival.text_body =~
-             Tenants.url(c.tenant) <> "/app/threads/#{conversation.id}"
+             Tenants.url(c.tenant) <> "/app/threads/#{thread.id}"
 
     refute Enum.any?(arrival.to, &(elem(&1, 1) == foreign.email))
     assert arrival.from == {~s("Atlas, Support"), "support@atlas.example"}
@@ -316,10 +314,10 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     assert {"x-lettermint-token", "atlas-private-token"} in headers
 
     for send_alert <- [
-          fn -> Custyard.Notifications.Email.deliver_neglect_alert(conversation, :warning) end,
+          fn -> Custyard.Notifications.Email.deliver_neglect_alert(thread, :warning) end,
           fn ->
             Custyard.Notifications.Email.deliver_delivery_failure(
-              conversation,
+              thread,
               :bounced,
               "customer@example.com"
             )
@@ -338,14 +336,14 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   test "tenant notifications skip when staff are absent", c do
     Repo.delete!(c.admin)
 
-    conversation =
-      insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
+    thread =
+      insert_thread(source: :public_intake, tenant_id: c.tenant.id)
       |> Repo.preload([:organization, :contact])
 
-    assert {:error, :no_staff} = ArrivalEmail.send_arrival(conversation, c.source, "PRIVATE")
+    assert {:error, :no_staff} = ArrivalEmail.send_arrival(thread, c.source, "PRIVATE")
 
     assert {:error, :no_staff} =
-             Custyard.Notifications.Email.deliver_neglect_alert(conversation, :warning)
+             Custyard.Notifications.Email.deliver_neglect_alert(thread, :warning)
 
     refute_receive {:email, _}
   end

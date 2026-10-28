@@ -320,7 +320,7 @@ defmodule Custyard.Email.ImapPoll do
       normalized = put_delivery_id(normalized, channel, uid)
 
       case Dispatcher.dispatch(route, normalized, channel: channel) do
-        {:ok, _conversation} ->
+        {:ok, _thread} ->
           {:advance, :imported}
 
         {:ignored, _reason} ->

@@ -14,10 +14,10 @@ defmodule Custyard.TaskTest do
       assert changeset.valid?
     end
 
-    test "valid with conversation_id" do
+    test "valid with thread_id" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_task(conversation_id: conv.id)
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_task(thread_id: conv.id)
       changeset = Task.changeset(%Task{}, attrs)
 
       assert changeset.valid?
@@ -34,22 +34,22 @@ defmodule Custyard.TaskTest do
 
     test "valid with multiple parent associations" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
-      attrs = build_task(organization_id: org.id, conversation_id: conv.id)
+      attrs = build_task(organization_id: org.id, thread_id: conv.id)
       changeset = Task.changeset(%Task{}, attrs)
 
       assert changeset.valid?
     end
 
     test "invalid without any parent association" do
-      # Task without organization_id, conversation_id, or project_id
+      # Task without organization_id, thread_id, or project_id
       attrs = build_task()
       changeset = Task.changeset(%Task{}, attrs)
 
       refute changeset.valid?
 
-      assert "task must have an organization, conversation, or project" in errors_on(changeset).organization_id
+      assert "task must have an organization, thread, or project" in errors_on(changeset).organization_id
     end
 
     test "requires title" do
@@ -140,18 +140,18 @@ defmodule Custyard.TaskTest do
     test "rejects conflicting parent organizations" do
       org = insert_organization()
       other = insert_organization()
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
       project = insert_project(organization_id: other.id)
 
       changeset =
         Task.changeset(%Task{}, %{
           title: "Cross scope",
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           project_id: project.id
         })
 
       refute changeset.valid?
-      assert "must belong to the conversation's organization" in errors_on(changeset).project_id
+      assert "must belong to the thread's organization" in errors_on(changeset).project_id
     end
 
     test "unlinked tasks cannot connect parents from different workspaces" do
@@ -161,7 +161,7 @@ defmodule Custyard.TaskTest do
           slug: "task-#{System.unique_integer([:positive])}"
         })
 
-      conversation = insert_conversation(source: :public_intake)
+      thread = insert_thread(source: :public_intake)
 
       project =
         %Custyard.Project{}
@@ -171,12 +171,12 @@ defmodule Custyard.TaskTest do
       changeset =
         Task.changeset(%Task{}, %{
           title: "Cross workspace",
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           project_id: project.id
         })
 
       refute changeset.valid?
-      assert "must belong to the conversation's workspace" in errors_on(changeset).project_id
+      assert "must belong to the thread's workspace" in errors_on(changeset).project_id
     end
   end
 

@@ -181,7 +181,7 @@ defmodule Custyard.Settings do
   skipped and the default for that key is used instead.
 
   Keys:
-  - `:unlinked_tier_score` - tier-equivalent score for conversations without
+  - `:unlinked_tier_score` - tier-equivalent score for threads without
     an organization (0..100, default 10 = standard tier)
   - `:slug_claim_ttl_hours` - lifetime of an unconfirmed slug claim
     (1..720, default 72)
@@ -233,7 +233,7 @@ defmodule Custyard.Settings do
 
   Supported properties:
   - "tier" - maps to organization tier (enterprise, standard, basic)
-  - "urgency" - maps to conversation urgency (urgent, elevated, normal)
+  - "urgency" - maps to thread urgency (urgent, elevated, normal)
   - "queue" - reserved for future queue assignment
   """
   def update_sieve_header_mappings(%Scope{} = scope, mappings) when is_map(mappings) do

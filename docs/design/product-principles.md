@@ -15,7 +15,7 @@ The platform sits on the open-vs-gated spectrum toward open. The intake channel 
 
 Auto-creating contacts and orgs for unknown senders makes the platform a net. Rejecting or gating makes it a filter. The net model fits the problem statement because one of the explicit failure modes being solved is things getting lost during the lateral thinking phase. If an unknown sender hits a gate, and the operator is deep in a TLS incident for Acme Corp, that gate becomes a place where requests die silently. The whole point of the attention queue is that nothing requires the operator to remember to check something.
 
-The risk of the net model is garbage: spam, vendor outreach, automated notifications all become conversations. The mitigation isn't gating; it's making the unmatched queue cheap to triage. A quick-dismiss action ("not a customer request") that archives without creating a real contact. The system is open on intake, cheap on rejection, and nothing blocks on operator action to enter the system.
+The risk of the net model is garbage: spam, vendor outreach, automated notifications all become threads. The mitigation isn't gating; it's making the unmatched queue cheap to triage. A quick-dismiss action ("not a customer request") that archives without creating a real contact. The system is open on intake, cheap on rejection, and nothing blocks on operator action to enter the system.
 
 ---
 
@@ -43,17 +43,17 @@ No marketing page. This isn't a product you're selling from its own UI; it's inf
 
 For a single-operator system (which the MVP is), auto-transition from New to Active on view is correct. There's no "someone else might be working on this" ambiguity. The operator viewed it, the operator is the only operator, therefore it's active. The SDD already specifies this, and the wireframe reflects it.
 
-Revisit for multi-operator v2. At that point, "view" and "claim" diverge. An operator might open a conversation to read context for a different conversation, not to work on it.
+Revisit for multi-operator v2. At that point, "view" and "claim" diverge. An operator might open a thread to read context for a different thread, not to work on it.
 
 ### 4.2 No Confirmation on Resolve
 
-No confirmation on resolve is correct for the lateral thinker profile. Confirmation dialogs are a linear-thinker safety net: "are you sure you want to complete this sequential step?" For someone who's bouncing between five conversations, a modal that interrupts the flow of "done, done, come back to this, done" adds friction at exactly the wrong moment. The cost of accidental resolution is low because of how Reopen works.
+No confirmation on resolve is correct for the lateral thinker profile. Confirmation dialogs are a linear-thinker safety net: "are you sure you want to complete this sequential step?" For someone who's bouncing between five threads, a modal that interrupts the flow of "done, done, come back to this, done" adds friction at exactly the wrong moment. The cost of accidental resolution is low because of how Reopen works.
 
 ### 4.3 Reopen Action
 
-The SDD already specifies that any inbound message on a Resolved conversation transitions it back to Active. So "reopen" already exists as a natural consequence of the customer replying. The missing case is operator-initiated reopen: "I resolved this but I was wrong, there's more work." Adding an explicit Reopen action that transitions Resolved back to Active is the right call. It's cheap (one state transition, no workflow implications), it eliminates the need for a confirmation dialog on resolve (because the mistake is easily reversible), and it matches the onboarding platform pattern where project states are fluid rather than ceremonial.
+The SDD already specifies that any inbound message on a Resolved thread transitions it back to Active. So "reopen" already exists as a natural consequence of the customer replying. The missing case is operator-initiated reopen: "I resolved this but I was wrong, there's more work." Adding an explicit Reopen action that transitions Resolved back to Active is the right call. It's cheap (one state transition, no workflow implications), it eliminates the need for a confirmation dialog on resolve (because the mistake is easily reversible), and it matches the onboarding platform pattern where project states are fluid rather than ceremonial.
 
-The resolved state should have a visual "Reopen" affordance on the conversation detail, but it should not appear in the attention queue by default. Resolved means out of queue unless reactivated.
+The resolved state should have a visual "Reopen" affordance on the thread detail, but it should not appear in the attention queue by default. Resolved means out of queue unless reactivated.
 
 ---
 

@@ -12,7 +12,7 @@ defmodule Custyard.Email.LettermintThreadingTest do
   use Custyard.DataCase, async: false
   import Custyard.Factory
 
-  alias Custyard.{Conversations, Message, Repo}
+  alias Custyard.{Threads, Message, Repo}
   alias Custyard.Email.{Outbound, ThreadMatcher}
   alias Custyard.Webhooks.Dispatcher
 
@@ -48,8 +48,8 @@ defmodule Custyard.Email.LettermintThreadingTest do
         state: :active
       )
 
-    conversation =
-      insert_conversation(
+    thread =
+      insert_thread(
         organization_id: org.id,
         contact_id: contact.id,
         inbound_channel_id: channel.id,
@@ -57,14 +57,14 @@ defmodule Custyard.Email.LettermintThreadingTest do
       )
 
     insert_message(
-      conversation_id: conversation.id,
+      thread_id: thread.id,
       source: :email,
       sender_email: contact.email,
       triage_class: :customer,
       message_id: "<customer-original@customer.example>"
     )
 
-    {:ok, reply} = Conversations.send_reply(conversation, "A support answer")
+    {:ok, reply} = Threads.send_reply(thread, "A support answer")
     assert {:ok, sent} = Outbound.deliver(reply)
     assert_receive {:payload, payload}
 
@@ -73,7 +73,7 @@ defmodule Custyard.Email.LettermintThreadingTest do
       contact: contact,
       route: route,
       channel: channel,
-      conversation: conversation,
+      thread: thread,
       sent: sent,
       payload: payload
     }
@@ -92,7 +92,7 @@ defmodule Custyard.Email.LettermintThreadingTest do
              )
 
     assert Repo.aggregate(Message, :count) == before_count
-    assert {:ok, c.contact.email} == Outbound.reply_recipient(c.conversation)
+    assert {:ok, c.contact.email} == Outbound.reply_recipient(c.thread)
   end
 
   test "a customer reply referencing only the delivered ID keeps its thread", c do
@@ -102,8 +102,8 @@ defmodule Custyard.Email.LettermintThreadingTest do
       normalized(c.contact.email, "<customer-return@customer.example>")
       |> Map.put(:in_reply_to, c.payload["headers"]["Message-ID"])
 
-    assert {:ok, matched} = ThreadMatcher.find_in_tenant(incoming, c.conversation.tenant_id)
-    assert matched.id == c.conversation.id
+    assert {:ok, matched} = ThreadMatcher.find_in_tenant(incoming, c.thread.tenant_id)
+    assert matched.id == c.thread.id
     assert matched.organization_id == c.org.id
   end
 

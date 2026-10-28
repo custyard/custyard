@@ -1,4 +1,4 @@
-# Prospect Conversation Loop
+# Prospect Thread Loop
 
 **Version:** 0.4 — Supplements SDD v0.4; supersedes SDD §5.2 MVP outbound behavior
 **Date:** 2026-07-05
@@ -11,10 +11,10 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 
 ## Goals
 
-- A prospect's first contact — pricing-page call-to-action or email — becomes an identified conversation in the attention queue without operator intervention.
+- A prospect's first contact — pricing-page call-to-action or email — becomes an identified thread in the attention queue without operator intervention.
 - Operator replies are composed in the platform and arrive in the customer's mail client as correctly threaded email.
 - The delivery outcome of every outbound message is recorded and visible; delivery failure is never silent.
-- Customers follow and continue the same conversation through the portal.
+- Customers follow and continue the same thread through the portal.
 
 ## Non-Goals
 
@@ -30,18 +30,18 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Each organization has one or more inbound routes, each with a unique callback URL; the route token embedded in the URL identifies the route.
 - Inbound webhook requests are verified by cryptographic signature and timestamp window before any processing.
 - Inbound message processing is idempotent, keyed on the email message identifier; redelivery of the same message does not create duplicate records.
-- A message arriving on an organization's route creates a conversation in that organization, or appends to an existing conversation matched by threading headers (In-Reply-To, then References).
+- A message arriving on an organization's route creates a thread in that organization, or appends to an existing thread matched by threading headers (In-Reply-To, then References).
 - Sender resolution follows a fixed priority: route context, contact match within the route's organization, global contact match (catchall routes only), organization domain match, unmatched queue.
 - Intake requires no fields beyond what the message itself provides.
-- Requests filed through the portal are attributed to the authenticated contact; portal-sourced conversations are never anonymous.
+- Requests filed through the portal are attributed to the authenticated contact; portal-sourced threads are never anonymous.
 
 ### Operator Reply
 
-- A reply composed in the conversation view is delivered as email to the conversation's contact.
+- A reply composed in the thread view is delivered as email to the thread's contact.
 - Outbound email carries threading headers: In-Reply-To names the most recent customer message; References lists all thread ancestors.
 - Delivery is asynchronous; composing and sending does not block the operator interface.
-- Sending a reply transitions the conversation state through validated state-machine transitions, not direct attribute writes.
-- Each organization has a configured reply-from address; an outbound reply uses its conversation's organization reply-from address as the From identity.
+- Sending a reply transitions the thread state through validated state-machine transitions, not direct attribute writes.
+- Each organization has a configured reply-from address; an outbound reply uses its thread's organization reply-from address as the From identity.
 - A reply-from address is valid only if it corresponds to a verified sending domain registered with the email service.
 
 ### Sender Verification
@@ -58,7 +58,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Delivery statuses are ranked: pending precedes sent precedes delivered; bounced, suppressed, and failed are terminal. An incoming status event updates a status only if its rank exceeds the current status or it is a terminal state different from the current one. Lower-ranked, equal, or duplicate events are ignored, so out-of-order event delivery does not regress a status.
 - The email service reports delivery per recipient. Each outbound message records the latest status of every address it was sent to (To, CC, archive copy), applying the rank rule to each recipient on its own and in the order of the events' own timestamps, so a late event never undoes a recipient's newer status.
 - The message's delivery status, and so its indicator, follows its primary recipient: the To address the reply was sent to. An event for a CC or other secondary recipient records that recipient's status and never changes the message's. A bounced CC address therefore leaves a reply the customer received marked delivered. An event that names no recipient, or one for a message that recorded no recipient lists, applies to the message as a whole.
-- Each outbound message in the conversation thread displays a delivery indicator; bounce and suppression states are visually distinct. Failed CC and other secondary recipients are listed next to the message, apart from the indicator.
+- Each outbound message in the thread thread displays a delivery indicator; bounce and suppression states are visually distinct. Failed CC and other secondary recipients are listed next to the message, apart from the indicator.
 - Delivery audit events record the message's and the recipient's status before and after and the recipient's role (To, CC, other); never an address.
 - *Implemented:* `Custyard.Email.DeliveryStatus` keeps `message_recipient_statuses` (one row per message and address; `role` fixed from the To and CC lists captured at send time; `status_at` the provider's event time) and derives `messages.delivery_status` from the To recipient. The operator thread lists failed secondary recipients under the message. Erasing a data subject removes the rows that name the address.
 
@@ -68,17 +68,17 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - A contact with a bounced or suppressed email-validity status is visibly flagged in the operator interface.
 - A bounce or suppression on an outbound reply raises operator attention through notification, the attention queue, or both.
 - An email-validity flag does not automatically block future sends to the contact; dispatch remains at operator discretion.
-- *Implemented:* `contacts.email_status` is set from the event's `data.recipient`, so a bounced CC address flags that contact and never the conversation's. A later `message.delivered` to the address clears the flag, and events apply in their own timestamp order. Changing the contact's address also clears it. The conversation sidebar and the organization's contacts list show the flag. Each recipient whose status becomes bounced or suppressed sends the operator one notice naming the conversation, the recipient and whether it was a CC, so a CC failure is reported even when the customer's copy was delivered.
+- *Implemented:* `contacts.email_status` is set from the event's `data.recipient`, so a bounced CC address flags that contact and never the thread's. A later `message.delivered` to the address clears the flag, and events apply in their own timestamp order. Changing the contact's address also clears it. The thread sidebar and the organization's contacts list show the flag. Each recipient whose status becomes bounced or suppressed sends the operator one notice naming the thread, the recipient and whether it was a CC, so a CC failure is reported even when the customer's copy was delivered.
 
 ### Portal
 
-- A contact with portal access sees the full conversation thread, including operator replies and the conversation's current state.
-- A portal reply appends to the same conversation the operator sees and reactivates a Dormant or Resolved conversation.
+- A contact with portal access sees the full thread thread, including operator replies and the thread's current state.
+- A portal reply appends to the same thread the operator sees and reactivates a Dormant or Resolved thread.
 
 ### Authorization
 
 - Route and settings management is restricted to operators with the admin role.
-- Operator access to a conversation is authorized; possession of a conversation identifier alone does not grant access.
+- Operator access to a thread is authorized; possession of a thread identifier alone does not grant access.
 
 ## Non-Functional Requirements
 
@@ -90,7 +90,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 ## In Scope
 
 - Routed webhook intake per organization.
-- Sender identity resolution and conversation threading.
+- Sender identity resolution and thread threading.
 - Platform-composed outbound replies with email threading.
 - Delivery-status ingestion and per-message indicators.
 - Portal thread visibility and replies.
@@ -102,12 +102,12 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Per-contact portal authentication accounts (portal access via organization token suffices for this loop).
 - Contact-validity management beyond the flag, such as blocking sends or removing addresses (see Resolved Decisions).
 - Attachment handling on outbound replies.
-- Conversation merging.
+- Thread merging.
 
 ## Dependencies
 
 - Transactional email service providing per-organization inbound routes, an outbound sending interface, and delivery-status webhook callbacks (Lettermint).
-- Existing conversation state machine, attention scoring engine, and portal surfaces (SDD §4–§6).
+- Existing thread state machine, attention scoring engine, and portal surfaces (SDD §4–§6).
 
 ## Constraints
 
@@ -124,12 +124,12 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 
 ## Acceptance Criteria
 
-- A message delivered to an organization's route URL appears in the attention queue as a conversation linked to that organization and, when the sender is resolvable, to the correct contact.
-- Redelivering the same inbound message produces no additional conversation or message records.
+- A message delivered to an organization's route URL appears in the attention queue as a thread linked to that organization and, when the sender is resolvable, to the correct contact.
+- Redelivering the same inbound message produces no additional thread or message records.
 - A webhook request with an invalid signature or stale timestamp is rejected with no side effects.
 - An operator reply arrives in the customer's mailbox threaded under the original message in standard mail clients.
-- After the email service reports delivery lifecycle events, the message record reflects the corresponding status, and the conversation thread displays it.
-- A bounced reply is visually distinguishable in the conversation thread.
+- After the email service reports delivery lifecycle events, the message record reflects the corresponding status, and the thread thread displays it.
+- A bounced reply is visually distinguishable in the thread thread.
 - A contact with portal access sees the operator's reply in the portal thread without email access.
 - An operator without the admin role cannot create, modify, or delete routes or settings.
 - Setting an organization reply-from address that is not a verified sending domain is rejected at configuration time.

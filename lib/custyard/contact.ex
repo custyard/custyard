@@ -15,7 +15,7 @@ defmodule Custyard.Contact do
     field(:email_status_at, :utc_datetime)
 
     belongs_to(:organization, Custyard.Organization)
-    has_many(:conversations, Custyard.Conversation)
+    has_many(:threads, Custyard.Thread)
 
     timestamps(type: :utc_datetime)
   end
@@ -38,7 +38,7 @@ defmodule Custyard.Contact do
 
   @doc """
   Changeset for updating an existing contact.
-  Does not allow changing organization_id to prevent orphaning conversations.
+  Does not allow changing organization_id to prevent orphaning threads.
   """
   def update_changeset(contact, attrs) do
     contact

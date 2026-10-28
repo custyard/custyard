@@ -222,7 +222,7 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
             type="button"
             phx-click="remove_staff"
             phx-value-id={staff.id}
-            data-confirm={"Remove access for #{staff.email}? Their staff account will be deleted. Conversation history stays available."}
+            data-confirm={"Remove access for #{staff.email}? Their staff account will be deleted. Thread history stays available."}
             phx-disable-with="Removing..."
             class="text-sm text-red-700 dark:text-red-400"
             aria-label={"Remove staff account #{staff.email}"}

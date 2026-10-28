@@ -2,7 +2,7 @@ defmodule Custyard.Email.OutboundQueue do
   @moduledoc """
   Drains persisted staff replies awaiting email delivery.
 
-  `Conversations.send_reply/3` commits a pending message before notifying this
+  `Threads.send_reply/3` commits a pending message before notifying this
   worker. A periodic scan also finds messages left pending by a process crash,
   supervisor saturation, or a lost wake-up. The worker is the sole automatic
   sender in the single-node deployment model.

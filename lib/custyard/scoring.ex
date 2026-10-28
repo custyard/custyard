@@ -8,11 +8,11 @@ defmodule Custyard.Scoring do
           channel_bonus
 
   `channel_bonus` is the `attention_bonus` of the inbound channel the
-  conversation arrived on (spec-inbound-channels, "Functional impacts by
+  thread arrived on (spec-inbound-channels, "Functional impacts by
   surface"): plain points, 0 by default, so a channel such as `security@` can
-  outrank `sales@`. Conversations without a channel get 0.
+  outrank `sales@`. Threads without a channel get 0.
 
-  Conversations without an organization (unlinked prospects) score with all
+  Threads without an organization (unlinked prospects) score with all
   components: the tier component comes from the configurable
   `intake_config.unlinked_tier_score` setting (default equal to the standard
   tier) and neglect tracking uses the standard-tier thresholds.
@@ -20,7 +20,7 @@ defmodule Custyard.Scoring do
 
   require Logger
   import Ecto.Query
-  alias Custyard.{Conversation, Message, Repo, Settings}
+  alias Custyard.{Thread, Message, Repo, Settings}
 
   # State scores
   @state_scores %{
@@ -54,21 +54,21 @@ defmodule Custyard.Scoring do
   }
 
   @doc """
-  Calculate and cache score for a conversation.
+  Calculate and cache score for a thread.
 
   Returns `{:ok, score}` on success, `{:error, reason}` on failure.
   Non-raising version to allow callers to handle errors gracefully.
   """
-  def calculate_and_cache(conversation_id) do
-    case Repo.get(Conversation, conversation_id) do
+  def calculate_and_cache(thread_id) do
+    case Repo.get(Thread, thread_id) do
       nil ->
         {:error, :not_found}
 
-      conversation ->
-        conversation = Repo.preload(conversation, [:organization, :inbound_channel])
-        score = calculate(conversation)
+      thread ->
+        thread = Repo.preload(thread, [:organization, :inbound_channel])
+        score = calculate(thread)
 
-        case conversation
+        case thread
              |> Ecto.Changeset.change(cached_score: score)
              |> Repo.update() do
           {:ok, _updated} ->
@@ -81,20 +81,20 @@ defmodule Custyard.Scoring do
   end
 
   @doc """
-  Calculate and cache scores for a list of conversation IDs.
+  Calculate and cache scores for a list of thread IDs.
   More efficient than calling calculate_and_cache/1 in a loop as it batch-preloads
   message counts in a single query.
   """
-  def calculate_and_cache_batch(conversation_ids) when is_list(conversation_ids) do
-    if Enum.empty?(conversation_ids), do: :ok
+  def calculate_and_cache_batch(thread_ids) when is_list(thread_ids) do
+    if Enum.empty?(thread_ids), do: :ok
 
     start_time = System.monotonic_time()
-    batch_size = length(conversation_ids)
+    batch_size = length(thread_ids)
 
-    # Batch load conversations with organizations
-    conversations =
-      from(c in Conversation,
-        where: c.id in ^conversation_ids,
+    # Batch load threads with organizations
+    threads =
+      from(c in Thread,
+        where: c.id in ^thread_ids,
         preload: [:organization, :inbound_channel]
       )
       |> Repo.all()
@@ -104,26 +104,26 @@ defmodule Custyard.Scoring do
 
     message_counts =
       from(m in Message,
-        where: m.conversation_id in ^conversation_ids,
+        where: m.thread_id in ^thread_ids,
         where: m.inserted_at >= ^cutoff,
         where: is_nil(m.triage_class) or m.triage_class != :auto_response,
-        group_by: m.conversation_id,
-        select: {m.conversation_id, count(m.id)}
+        group_by: m.thread_id,
+        select: {m.thread_id, count(m.id)}
       )
       |> Repo.all()
       |> Map.new()
 
-    # Staff settings are identical for every conversation in the batch;
+    # Staff settings are identical for every thread in the batch;
     # read them once rather than four times per row (see preload_settings/0).
     settings =
-      conversations
+      threads
       |> Enum.map(& &1.tenant_id)
       |> Enum.uniq()
       |> Map.new(&{&1, preload_settings(&1)})
 
     # Calculate and update each - use non-raising update to handle race conditions
     updated_count =
-      conversations
+      threads
       |> Enum.map(fn conv ->
         msg_count = Map.get(message_counts, conv.id, 0)
 
@@ -152,8 +152,8 @@ defmodule Custyard.Scoring do
   end
 
   # Internal: Calculate score with pre-fetched message count (batch path)
-  defp calculate_with_message_count(conversation, message_count, settings) do
-    conversation
+  defp calculate_with_message_count(thread, message_count, settings) do
+    thread
     |> components(message_count, settings)
     |> components_total()
   end
@@ -166,24 +166,24 @@ defmodule Custyard.Scoring do
   @doc """
   Calculate score without caching (for display/debugging).
   """
-  def calculate(conversation, settings \\ nil) do
-    conversation
-    |> components(nil, settings || preload_settings(conversation.tenant_id))
+  def calculate(thread, settings \\ nil) do
+    thread
+    |> components(nil, settings || preload_settings(thread.tenant_id))
     |> components_total()
   end
 
   @doc """
-  Read every staff setting the per-conversation scoring functions need,
+  Read every staff setting the per-thread scoring functions need,
   in one pass.
 
   `Settings.get/0` is an uncached `Repo.one`, and scoring a single
-  conversation reaches for settings four times (weights, the unlinked-tier
+  thread reaches for settings four times (weights, the unlinked-tier
   score, and neglect thresholds twice — once directly and once through the
   neglect bonus). Keeping the reads together avoids redundant database work
   on any backend, and on Turso each read is a network round trip.
 
   Pass the result to `breakdown/2` and `neglect_status/2` when scoring more
-  than one conversation. Reads are per-call, so hold a bundle only for the
+  than one thread. Reads are per-call, so hold a bundle only for the
   duration of one render or sweep.
   """
   def preload_settings(tenant_id) do
@@ -200,14 +200,14 @@ defmodule Custyard.Scoring do
   Options:
 
   - `:settings` — a `preload_settings/0` bundle, to avoid re-reading
-    staff settings per conversation.
-  - `:message_count` — the conversation's 24h message count when the caller
-    already has it, which skips a per-conversation `COUNT` query.
+    staff settings per thread.
+  - `:message_count` — the thread's 24h message count when the caller
+    already has it, which skips a per-thread `COUNT` query.
   """
-  def breakdown(conversation, opts \\ []) do
-    settings = Keyword.get(opts, :settings) || preload_settings(conversation.tenant_id)
+  def breakdown(thread, opts \\ []) do
+    settings = Keyword.get(opts, :settings) || preload_settings(thread.tenant_id)
     message_count = Keyword.get(opts, :message_count)
-    components = components(conversation, message_count, settings)
+    components = components(thread, message_count, settings)
 
     %{
       idle: round(components.idle),
@@ -225,9 +225,9 @@ defmodule Custyard.Scoring do
   # unweighted channel bonus.
   # `message_count` overrides the 24h message-count query for the batch path;
   # pass nil to compute velocity from the database.
-  defp components(conversation, message_count, settings) do
-    conversation =
-      conversation
+  defp components(thread, message_count, settings) do
+    thread =
+      thread
       |> ensure_preloaded(:organization)
       |> ensure_preloaded(:inbound_channel)
 
@@ -235,25 +235,25 @@ defmodule Custyard.Scoring do
 
     velocity =
       case message_count do
-        nil -> velocity_score(conversation)
+        nil -> velocity_score(thread)
         count -> velocity_score_from_count(count)
       end
 
     %{
-      idle: idle_score(conversation) * weights.idle,
-      state: state_score(conversation) * weights.state,
-      tier: tier_score(conversation, settings) * weights.tier,
-      urgency: urgency_score(conversation) * weights.urgency,
+      idle: idle_score(thread) * weights.idle,
+      state: state_score(thread) * weights.state,
+      tier: tier_score(thread, settings) * weights.tier,
+      urgency: urgency_score(thread) * weights.urgency,
       velocity: velocity * weights.velocity,
-      neglect: neglect_bonus(conversation, settings) * weights.neglect,
-      channel: channel_bonus(conversation)
+      neglect: neglect_bonus(thread, settings) * weights.neglect,
+      channel: channel_bonus(thread)
     }
   end
 
   defp channel_bonus(%{inbound_channel: %{attention_bonus: bonus}}) when is_integer(bonus),
     do: bonus
 
-  defp channel_bonus(_conversation), do: 0
+  defp channel_bonus(_thread), do: 0
 
   defp components_total(components) do
     components
@@ -263,22 +263,22 @@ defmodule Custyard.Scoring do
   end
 
   @doc """
-  Get neglect status for a conversation.
+  Get neglect status for a thread.
 
-  Conversations without an organization (unlinked prospects) are tracked
+  Threads without an organization (unlinked prospects) are tracked
   on the standard-tier thresholds.
 
   Optionally accepts pre-loaded thresholds to avoid repeated Settings lookups
-  when checking multiple conversations.
+  when checking multiple threads.
   """
-  def neglect_status(conversation, thresholds \\ nil)
+  def neglect_status(thread, thresholds \\ nil)
 
-  def neglect_status(conversation, thresholds) do
-    conversation = ensure_preloaded(conversation, :organization)
+  def neglect_status(thread, thresholds) do
+    thread = ensure_preloaded(thread, :organization)
 
-    hours_idle = hours_since_staff_action(conversation)
-    thresholds = thresholds || get_neglect_thresholds(conversation.tenant_id)
-    {warning, critical} = Map.get(thresholds, neglect_tier(conversation), {24, 48})
+    hours_idle = hours_since_staff_action(thread)
+    thresholds = thresholds || get_neglect_thresholds(thread.tenant_id)
+    {warning, critical} = Map.get(thresholds, neglect_tier(thread), {24, 48})
 
     cond do
       hours_idle >= critical -> :critical
@@ -288,52 +288,52 @@ defmodule Custyard.Scoring do
   end
 
   defp neglect_tier(%{organization: nil}), do: :standard
-  defp neglect_tier(conversation), do: conversation.organization.tier
+  defp neglect_tier(thread), do: thread.organization.tier
 
   # Private functions
 
-  defp idle_score(conversation) do
-    hours = hours_since_staff_action(conversation)
+  defp idle_score(thread) do
+    hours = hours_since_staff_action(thread)
     # Log scale: ln(hours + 1) * 10, capped at 40
     min(40, :math.log(hours + 1) * 10)
   end
 
-  defp state_score(conversation) do
-    Map.get(@state_scores, conversation.state, 0)
+  defp state_score(thread) do
+    Map.get(@state_scores, thread.state, 0)
   end
 
-  # Conversations without an organization (unlinked prospects) get the
+  # Threads without an organization (unlinked prospects) get the
   # configurable tier-equivalent score from intake_config.
   defp tier_score(%{organization: nil}, settings) do
     settings.unlinked_tier_score
   end
 
-  defp tier_score(conversation, _settings) do
-    tier = conversation.organization.tier
+  defp tier_score(thread, _settings) do
+    tier = thread.organization.tier
     Map.get(@tier_scores, tier, 10)
   end
 
-  defp urgency_score(conversation) do
-    Map.get(@urgency_scores, conversation.urgency, 0)
+  defp urgency_score(thread) do
+    Map.get(@urgency_scores, thread.urgency, 0)
   end
 
-  defp velocity_score(conversation) do
-    count = message_count_24h(conversation)
+  defp velocity_score(thread) do
+    count = message_count_24h(thread)
     # Log scale: ln(count + 1) * 3, capped at 10
     min(10, :math.log(count + 1) * 3)
   end
 
-  defp neglect_bonus(conversation, settings) do
-    case neglect_status(conversation, settings.thresholds) do
+  defp neglect_bonus(thread, settings) do
+    case neglect_status(thread, settings.thresholds) do
       :critical -> 15
       :warning -> 7
       :ok -> 0
     end
   end
 
-  defp hours_since_staff_action(conversation) do
-    case conversation.last_staff_action_at do
-      nil -> hours_since(conversation.inserted_at)
+  defp hours_since_staff_action(thread) do
+    case thread.last_staff_action_at do
+      nil -> hours_since(thread.inserted_at)
       dt -> hours_since(dt)
     end
   end
@@ -343,13 +343,13 @@ defmodule Custyard.Scoring do
   end
 
   # Auto-responses (vacation notices, bounces appended to the thread) are
-  # system messages and must not read as conversation activity; the batch
+  # system messages and must not read as thread activity; the batch
   # query above applies the same exclusion.
-  defp message_count_24h(conversation) do
+  defp message_count_24h(thread) do
     cutoff = DateTime.add(DateTime.utc_now(), -24, :hour)
 
     from(m in Message,
-      where: m.conversation_id == ^conversation.id,
+      where: m.thread_id == ^thread.id,
       where: m.inserted_at >= ^cutoff,
       where: is_nil(m.triage_class) or m.triage_class != :auto_response,
       select: count(m.id)

@@ -1,4 +1,4 @@
-defmodule CustyardWeb.Prospect.ConversationLiveTest do
+defmodule CustyardWeb.Prospect.ThreadLiveTest do
   # Shares the rate-limit ETS table and rewrites bucket config — sequential only.
   use CustyardWeb.ConnCase, async: false
 
@@ -6,7 +6,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
   import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias Custyard.{Conversation, Conversations, Intake, Message, Prospect, RateLimit, Repo}
+  alias Custyard.{Thread, Threads, Intake, Message, Prospect, RateLimit, Repo}
   alias Custyard.Auth.Token
 
   @generous [limit: 1000, window_ms: 60_000]
@@ -30,8 +30,8 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       public_instance_ip: @generous,
       intake_get: @generous,
       intake_post: @generous,
-      conversation_mount: @generous,
-      conversation_reply: @generous,
+      thread_mount: @generous,
+      thread_reply: @generous,
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
@@ -50,13 +50,13 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       do: configure_tenant_email(source.tenant_id)
 
     {:ok, result} =
-      Intake.create_intake_conversation(source.key, body, tenant_id: source.tenant_id)
+      Intake.create_intake_thread(source.key, body, tenant_id: source.tenant_id)
 
     result
   end
 
-  defp message_count(conversation_id) do
-    Repo.one(from m in Message, where: m.conversation_id == ^conversation_id, select: count())
+  defp message_count(thread_id) do
+    Repo.one(from m in Message, where: m.thread_id == ^thread_id, select: count())
   end
 
   # The reply box collapses behind "Add comment" whenever the prospect's own
@@ -74,24 +74,24 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
   describe "mount and thread rendering" do
     test "only explicitly shared tasks appear and live changes refresh their state" do
-      %{conversation: conversation, access_token: token} = create_intake!()
-      other = insert_conversation(source: :public_intake)
+      %{thread: thread, access_token: token} = create_intake!()
+      other = insert_thread(source: :public_intake)
 
       insert_task(
-        conversation_id: other.id,
-        title: "Other conversation task",
+        thread_id: other.id,
+        title: "Other thread task",
         portal_visible: true
       )
 
       insert_task(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         title: "Private investigation",
         portal_visible: false
       )
 
       shared =
         insert_task(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           title: "Send corrected invoice",
           portal_visible: true,
           due_at: ~U[2026-11-20 16:45:00Z]
@@ -102,7 +102,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, _label} =
         Custyard.Labels.create_and_assign(
           Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id)),
-          conversation,
+          thread,
           "Private label"
         )
 
@@ -116,28 +116,28 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       assert html =~ "2026-11-20 16:45 UTC"
       refute html =~ "Private investigation"
-      refute html =~ "Other conversation task"
+      refute html =~ "Other thread task"
       refute html =~ "Private label"
       refute has_element?(view, "[data-testid=resume-tasks] button")
 
-      {:ok, shared} = Conversations.update_task_state(shared, :done)
+      {:ok, shared} = Threads.update_task_state(shared, :done)
       assert has_element?(view, "[data-testid=resume-task-#{shared.id}]", "Done")
-      {:ok, _} = Conversations.update_task(shared, %{portal_visible: false})
+      {:ok, _} = Threads.update_task(shared, %{portal_visible: false})
       refute has_element?(view, "[data-testid=resume-tasks]")
     end
 
     test "task refresh does not reveal new content after the token is revoked" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
       {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
-      prospect = Intake.get_prospect(conversation)
+      prospect = Intake.get_prospect(thread)
 
       prospect
       |> Ecto.Changeset.change(revoked_at: DateTime.utc_now() |> DateTime.truncate(:second))
       |> Repo.update!()
 
       {:ok, _} =
-        Conversations.create_task(%{
-          conversation_id: conversation.id,
+        Threads.create_task(%{
+          thread_id: thread.id,
           title: "Must remain private",
           portal_visible: true
         })
@@ -146,24 +146,24 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "message notifications reject a revoked credential without an access-change broadcast" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
       {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
 
-      Intake.get_prospect(conversation)
+      Intake.get_prospect(thread)
       |> Ecto.Changeset.change(revoked_at: DateTime.utc_now(:second))
       |> Repo.update!()
 
-      insert_message(conversation_id: conversation.id, body: "Private after revocation")
-      send(view.pid, {:message_added, conversation.id})
+      insert_message(thread_id: thread.id, body: "Private after revocation")
+      send(view.pid, {:message_added, thread.id})
 
       assert_redirect(view, @unavailable)
     end
 
     test "a rotated credential cannot claim a slug on an already connected view" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
       {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
 
-      Intake.get_prospect(conversation)
+      Intake.get_prospect(thread)
       |> Prospect.rotate_token_changeset(Token.hash("replacement-token"))
       |> Repo.update!()
 
@@ -172,14 +172,14 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       })
 
       assert_redirect(view, @unavailable)
-      refute Custyard.Slugs.get_claim_for_conversation(conversation.id)
+      refute Custyard.Slugs.get_claim_for_thread(thread.id)
     end
 
     test "a fresh session shows the thread including staff replies" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         body: "Staff here, happy to help",
         sender_email: "staff-private@example.com"
@@ -188,7 +188,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       # Cookie-less fresh conn: the URL alone is the credential.
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
-      assert html =~ ~s(data-testid="resume-conversation")
+      assert html =~ ~s(data-testid="resume-thread")
       assert html =~ "Hello, I need help with X"
       assert html =~ "Staff here, happy to help"
       assert html =~ "Support Team"
@@ -197,7 +197,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "the reply box is gated by who spoke last" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       # Prospect's own message is the most recent → collapsed behind a button.
       {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
@@ -209,7 +209,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       assert html =~ ~s(data-testid="resume-reply-form")
 
       # When the team spoke last, the form shows automatically as "Reply".
-      insert_message(conversation_id: conversation.id, source: :staff, body: "On it!")
+      insert_message(thread_id: thread.id, source: :staff, body: "On it!")
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-reply-form")
@@ -217,10 +217,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "internal notes are never rendered" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         body: "INTERNAL: lowball them",
         is_internal_note: true
@@ -231,14 +231,14 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       refute html =~ "INTERNAL: lowball them"
     end
 
-    test "a conversation id alone grants nothing (IDOR)" do
-      %{conversation: conversation} = create_intake!()
+    test "a thread id alone grants nothing (IDOR)" do
+      %{thread: thread} = create_intake!()
 
       for guess <- [
-            "#{conversation.id}",
+            "#{thread.id}",
             "0",
             "999999",
-            "id-#{conversation.id}",
+            "id-#{thread.id}",
             String.duplicate("a", 43)
           ] do
         assert {:error, {:redirect, %{to: @unavailable}}} =
@@ -247,8 +247,8 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "a revoked prospect gets the same uniform unavailable page as an invalid token" do
-      %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _prospect} = Intake.revoke_thread_access(thread)
 
       assert {:error, {:redirect, %{to: @unavailable}}} =
                live(build_conn(), ~p"/threads/#{token}")
@@ -256,18 +256,18 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       # Identical failure rendering for every class: same redirect target,
       # one static page.
       html = build_conn() |> get(@unavailable) |> html_response(200)
-      assert html =~ "Conversation unavailable"
-      refute html =~ conversation.subject
+      assert html =~ "Thread unavailable"
+      refute html =~ thread.subject
     end
 
     test "the email prompt renders only while no email is captured" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-email-prompt")
       refute html =~ ~s(data-testid="resume-notify-toggle")
 
-      {:ok, _conversation} = Intake.capture_email(conversation, "captured@example.com")
+      {:ok, _thread} = Intake.capture_email(thread, "captured@example.com")
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       refute html =~ ~s(data-testid="resume-email-prompt")
@@ -275,7 +275,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "mounts are rate limited per client IP with a graceful redirect" do
-      put_buckets(conversation_mount: [limit: 2, window_ms: 60_000])
+      put_buckets(thread_mount: [limit: 2, window_ms: 60_000])
       %{access_token: token} = create_intake!()
 
       # First page view: disconnected + connected mount = the whole budget.
@@ -288,17 +288,17 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
   describe "deleted messages (staff soft delete)" do
     test "a deleted message renders the tombstone, never the original body" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       message =
         insert_message(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           source: :staff,
           body: "Staff reply sent by mistake"
         )
 
       staff = insert_staff_account(role: "admin")
-      {:ok, _deleted} = Conversations.soft_delete_message(message, staff)
+      {:ok, _deleted} = Threads.soft_delete_message(message, staff)
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -308,14 +308,14 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "an already-open view swaps to the tombstone when the delete broadcasts" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       # A follow-up with a body distinct from the intake message: the intake
-      # body seeds the conversation subject, which stays visible after the
+      # body seeds the thread subject, which stays visible after the
       # delete — only the message body must vanish.
       message =
         insert_message(
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           source: :prospect,
           body: "Accidentally pasted a password here"
         )
@@ -324,7 +324,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       assert html =~ "Accidentally pasted a password here"
 
       staff = insert_staff_account(role: "admin")
-      {:ok, _deleted} = Conversations.soft_delete_message(message, staff)
+      {:ok, _deleted} = Threads.soft_delete_message(message, staff)
 
       # The message_updated broadcast reloads the thread in place.
       html = render(view)
@@ -343,7 +343,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
         )
 
       {:ok, %{access_token: token}} =
-        Intake.create_intake_conversation(source.key, "Hello", tenant_id: source.tenant_id)
+        Intake.create_intake_thread(source.key, "Hello", tenant_id: source.tenant_id)
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -371,13 +371,13 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
         )
 
       {:ok, %{access_token: token}} =
-        Intake.create_intake_conversation(source.key, "Hello", tenant_id: source.tenant_id)
+        Intake.create_intake_thread(source.key, "Hello", tenant_id: source.tenant_id)
 
       {:ok, _deleted} = Intake.delete_source(staff_scope(source.tenant_id), source)
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
-      assert html =~ ~s(data-testid="resume-conversation")
+      assert html =~ ~s(data-testid="resume-thread")
       assert html =~ "Hello"
       refute html =~ ~s(data-testid="resume-source-link")
     end
@@ -391,7 +391,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
         )
 
       {:ok, %{access_token: token}} =
-        Intake.create_intake_conversation(source.key, "Hello", tenant_id: source.tenant_id)
+        Intake.create_intake_thread(source.key, "Hello", tenant_id: source.tenant_id)
 
       {:ok, _source} =
         Intake.update_source(staff_scope(source.tenant_id), source, %{enabled: false})
@@ -404,9 +404,9 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
   end
 
   describe "prospect replies" do
-    test "a reply reactivates a resolved conversation and mirrors inbound semantics" do
-      %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, _conversation} = Conversations.update_conversation(conversation, %{state: :resolved})
+    test "a reply reactivates a resolved thread and mirrors inbound semantics" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _thread} = Threads.update_thread(thread, %{state: :resolved})
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -414,13 +414,13 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       assert html =~ "I am back!"
 
-      reloaded = Repo.get!(Conversation, conversation.id)
+      reloaded = Repo.get!(Thread, thread.id)
       assert reloaded.state == :active
       assert reloaded.last_customer_action_at
       assert reloaded.cached_score > 0
 
       messages =
-        Repo.all(from m in Message, where: m.conversation_id == ^conversation.id, order_by: m.id)
+        Repo.all(from m in Message, where: m.thread_id == ^thread.id, order_by: m.id)
 
       reply = List.last(messages)
       assert reply.source == :prospect
@@ -431,46 +431,46 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "reply bodies are validated and bounded like intake submissions" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       submit_reply(view, "   ")
 
-      assert message_count(conversation.id) == 1
+      assert message_count(thread.id) == 1
 
       oversized = String.duplicate("a", 100_001)
 
       submit_reply(view, oversized)
 
-      assert message_count(conversation.id) == 1
+      assert message_count(thread.id) == 1
     end
 
     test "resending the latest message verbatim is refused with a friendly notice" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       submit_reply(view, "Any update?")
-      assert message_count(conversation.id) == 2
+      assert message_count(thread.id) == 2
 
       html = submit_reply(view, "Any update?")
 
       assert html =~ "Looks like you already sent that message."
-      assert message_count(conversation.id) == 2
+      assert message_count(thread.id) == 2
 
       # Whitespace doesn't dodge the check.
       submit_reply(view, "  Any update? \n")
-      assert message_count(conversation.id) == 2
+      assert message_count(thread.id) == 2
 
       # Different content still goes through.
       submit_reply(view, "Any update at all?")
-      assert message_count(conversation.id) == 3
+      assert message_count(thread.id) == 3
     end
 
     test "replies over websocket are rate limited by token hash with no message row" do
-      put_buckets(conversation_reply: [limit: 2, window_ms: 60_000])
-      %{conversation: conversation, access_token: token} = create_intake!()
+      put_buckets(thread_reply: [limit: 2, window_ms: 60_000])
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -478,30 +478,30 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
         submit_reply(view, "Reply #{n}")
       end
 
-      assert message_count(conversation.id) == 3
+      assert message_count(thread.id) == 3
 
       html = submit_reply(view, "Reply 3")
 
       assert html =~ "replying too quickly"
-      assert message_count(conversation.id) == 3
+      assert message_count(thread.id) == 3
     end
 
     test "mid-session revocation shuts the mounted view down to the uniform page" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       # The revocation broadcast alone re-authenticates the mounted socket:
       # no further mutation is needed for the view to halt, and no reply
       # could land afterwards (the context refuses revoked prospects too).
-      {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
+      {:ok, _prospect} = Intake.revoke_thread_access(thread)
 
       assert_redirect(view, @unavailable)
-      assert message_count(conversation.id) == 1
+      assert message_count(thread.id) == 1
     end
 
     test "token rotation shuts down sockets mounted under the old token" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -509,10 +509,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       # the socket re-reads the prospect, sees its mount-time hash no longer
       # matches, and halts to the uniform page — it neither keeps write
       # access nor keeps receiving staff replies over PubSub.
-      {:ok, %{access_token: _new_token}} = Intake.rotate_access_token(conversation)
+      {:ok, %{access_token: _new_token}} = Intake.rotate_access_token(thread)
 
       assert_redirect(view, @unavailable)
-      assert message_count(conversation.id) == 1
+      assert message_count(thread.id) == 1
     end
   end
 
@@ -523,7 +523,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       contact =
         insert_contact(organization_id: org.id, email: "buyer@acme-rockets.example")
 
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -534,8 +534,8 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
         })
         |> render_submit()
 
-      # The conversation linked...
-      reloaded = Repo.get!(Conversation, conversation.id)
+      # The thread linked...
+      reloaded = Repo.get!(Thread, thread.id)
       assert reloaded.organization_id == org.id
       assert reloaded.contact_id == contact.id
 
@@ -543,7 +543,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       refute html =~ "Acme Rockets Inc"
       refute html =~ "acme-rockets.example"
 
-      prospect = Repo.get_by!(Prospect, conversation_id: conversation.id)
+      prospect = Repo.get_by!(Prospect, thread_id: thread.id)
       assert prospect.email == "buyer@acme-rockets.example"
       assert prospect.notify_on_reply
     end
@@ -583,7 +583,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
     test "capture attempts are rate limited per IP, counting failures" do
       put_buckets(email_capture: [limit: 1, window_ms: 60_000])
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -602,14 +602,14 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
         |> render_submit()
 
       assert html =~ "Too many attempts"
-      assert Repo.get_by!(Prospect, conversation_id: conversation.id).email == nil
+      assert Repo.get_by!(Prospect, thread_id: thread.id).email == nil
     end
   end
 
   describe "notification toggle" do
     test "the prospect can change the notification choice at any time" do
-      %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, _conversation} = Intake.capture_email(conversation, "toggle@example.com")
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _thread} = Intake.capture_email(thread, "toggle@example.com")
 
       {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-notify-toggle")
@@ -618,19 +618,19 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       |> element(~s([data-testid="resume-notify-form"]))
       |> render_change(%{"notify" => "true"})
 
-      assert Repo.get_by!(Prospect, conversation_id: conversation.id).notify_on_reply
+      assert Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
 
       view
       |> element(~s([data-testid="resume-notify-form"]))
       |> render_change(%{"notify" => "false"})
 
-      refute Repo.get_by!(Prospect, conversation_id: conversation.id).notify_on_reply
+      refute Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
     end
 
     test "the toggle shares the :email_capture bucket" do
       put_buckets(email_capture: [limit: 1, window_ms: 60_000])
-      %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, _conversation} = Intake.capture_email(conversation, "toggle@example.com")
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _thread} = Intake.capture_email(thread, "toggle@example.com")
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -645,7 +645,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       assert html =~ "Too many changes"
       # The denied toggle did not write.
-      assert Repo.get_by!(Prospect, conversation_id: conversation.id).notify_on_reply
+      assert Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
     end
   end
 
@@ -660,7 +660,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       |> render_submit(%{"claim" => %{"slug" => slug, "email" => email, "notify" => notify}})
     end
 
-    test "offers the claim form when the conversation has no live claim" do
+    test "offers the claim form when the thread has no live claim" do
       %{access_token: token} = create_intake!()
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
@@ -673,25 +673,25 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "submit claims the slug, captures the email, honors notify, and sends the email" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       html = submit_claim(view, "Acme-Corp", "Buyer@Example.com", "true")
 
       # The claim committed, normalized.
-      claim = Slugs.get_claim_for_conversation(conversation.id)
+      claim = Slugs.get_claim_for_thread(thread.id)
       assert claim.slug == "acme-corp"
       assert claim.email == "buyer@example.com"
       assert claim.status == :claimed
 
       # Email captured with the notify choice honored.
-      prospect = Repo.get_by!(Prospect, conversation_id: conversation.id)
+      prospect = Repo.get_by!(Prospect, thread_id: thread.id)
       assert prospect.email == "buyer@example.com"
       assert prospect.notify_on_reply
 
       # The confirmation email carries the slug, the /c confirm URL, and
-      # the /r conversation URL the prospect already holds.
+      # the /r thread URL the prospect already holds.
       assert_email_sent(fn email ->
         assert email.text_body =~ "acme-corp"
         assert email.text_body =~ "/claims/"
@@ -705,45 +705,45 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "notify unchecked leaves notifications off" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       submit_claim(view, "quiet-corp", "quiet@example.com", "false")
 
-      refute Repo.get_by!(Prospect, conversation_id: conversation.id).notify_on_reply
+      refute Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
     end
 
     test "claim-then-capture ordering: a failed claim captures nothing" do
       taken = create_intake!("Original claim")
-      {:ok, _slug, _token} = Slugs.claim("contested", "first@example.com", taken.conversation)
+      {:ok, _slug, _token} = Slugs.claim("contested", "first@example.com", taken.thread)
 
-      %{conversation: conversation, access_token: token} = create_intake!("Second prospect")
+      %{thread: thread, access_token: token} = create_intake!("Second prospect")
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       html = submit_claim(view, "contested", "second@example.com")
 
       # The changeset error renders; nothing was captured or sent.
       assert html =~ "is already claimed"
-      assert Repo.get_by!(Prospect, conversation_id: conversation.id).email == nil
+      assert Repo.get_by!(Prospect, thread_id: thread.id).email == nil
       refute_email_sent()
-      assert is_nil(Slugs.get_claim_for_conversation(conversation.id))
+      assert is_nil(Slugs.get_claim_for_thread(thread.id))
     end
 
     test "claim-then-capture ordering: a capture failure never loses the claim" do
       # Write-once email already captured — the capture step inside the
       # claim submit returns :already_captured, and the claim must stand.
-      %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, _} = Intake.capture_email(conversation, "first@example.com")
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _} = Intake.capture_email(thread, "first@example.com")
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       html = submit_claim(view, "sturdy-claim", "different@example.com")
 
-      claim = Slugs.get_claim_for_conversation(conversation.id)
+      claim = Slugs.get_claim_for_thread(thread.id)
       assert claim.slug == "sturdy-claim"
       # The claim anchors to the address it was submitted with...
       assert claim.email == "different@example.com"
       # ...while the write-once prospect email stands untouched.
-      assert Repo.get_by!(Prospect, conversation_id: conversation.id).email ==
+      assert Repo.get_by!(Prospect, thread_id: thread.id).email ==
                "first@example.com"
 
       # The confirmation email still goes out to the claim's anchor.
@@ -755,16 +755,16 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "claiming with notify on an already-captured email still opts into notifications" do
-      %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, _} = Intake.capture_email(conversation, "first@example.com")
-      refute Repo.get_by!(Prospect, conversation_id: conversation.id).notify_on_reply
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _} = Intake.capture_email(thread, "first@example.com")
+      refute Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       submit_claim(view, "notify-me", "different@example.com", "true")
 
       # capture_email returned :already_captured (write-once email), but a
       # checked notify box is an explicit opt-in and must not be dropped.
-      prospect = Repo.get_by!(Prospect, conversation_id: conversation.id)
+      prospect = Repo.get_by!(Prospect, thread_id: thread.id)
       assert prospect.email == "first@example.com"
       assert prospect.notify_on_reply
     end
@@ -772,19 +772,19 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "a rate-limited confirmation email changes the claim flash, not the claim" do
       put_buckets(claim_email_send: [limit: 1, window_ms: 60_000])
 
-      # Exhaust the per-email daily budget from another conversation
+      # Exhaust the per-email daily budget from another thread
       # claiming with the same anchor email.
       first = create_intake!("Earlier claim")
       {:ok, first_view, _html} = live(build_conn(), ~p"/threads/#{first.access_token}")
       submit_claim(first_view, "first-claim", "shared@example.com")
       assert_email_sent()
 
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       html = submit_claim(view, "quota-hit", "shared@example.com")
 
       # The claim committed and the panel flips to provisional...
-      assert Slugs.get_claim_for_conversation(conversation.id).status == :claimed
+      assert Slugs.get_claim_for_thread(thread.id).status == :claimed
       assert html =~ ~s(data-testid="resume-claim-status-provisional")
 
       # ...but no email went out, and the flash must say so instead of
@@ -794,11 +794,11 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       assert html =~ "confirmation email limit is reached"
     end
 
-    test "conversation and conversation access survive claim expiry with a fresh claim form" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+    test "thread and thread access survive claim expiry with a fresh claim form" do
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, slug, _confirmation_token} =
-        Slugs.claim("short-lived", "buyer@example.com", conversation)
+        Slugs.claim("short-lived", "buyer@example.com", thread)
 
       past = DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
 
@@ -807,7 +807,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       assert Slugs.delete_expired_claims() == 1
 
-      # Expiry released only the slug row: the conversation link still
+      # Expiry released only the slug row: the thread link still
       # authenticates and the thread still renders...
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ "Hello, I need help with X"
@@ -818,8 +818,8 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "prefills the claim email from a captured prospect email" do
-      %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, _} = Intake.capture_email(conversation, "captured@example.com")
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _} = Intake.capture_email(thread, "captured@example.com")
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -827,12 +827,12 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "shows the confirmed state once the claim confirms" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, _slug, confirmation_token} =
-        Slugs.claim("all-done", "buyer@example.com", conversation)
+        Slugs.claim("all-done", "buyer@example.com", thread)
 
-      {:ok, _} = Slugs.confirm(confirmation_token, conversation.tenant_id)
+      {:ok, _} = Slugs.confirm(confirmation_token, thread.tenant_id)
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -842,10 +842,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
 
     test "resend rotates the confirmation token and sends a fresh email" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, claim, _confirmation_token} =
-        Slugs.claim("resend-me", "buyer@example.com", conversation)
+        Slugs.claim("resend-me", "buyer@example.com", thread)
 
       {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-claim-resend")
@@ -868,10 +868,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
     test "resend is bucket-limited and a denied resend does not rotate the token" do
       put_buckets(claim_email_send: [limit: 1, window_ms: 60_000])
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, claim, _confirmation_token} =
-        Slugs.claim("throttled", "buyer@example.com", conversation)
+        Slugs.claim("throttled", "buyer@example.com", thread)
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -892,7 +892,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
     test "shape-invalid claims render errors without consuming the :claim_submit budget" do
       put_buckets(claim_submit: [limit: 1, window_ms: 60_000])
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
@@ -906,7 +906,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       # The whole budget is still available: the shape-valid claim commits.
       submit_claim(view, "valid-name", "buyer@example.com")
-      assert Slugs.get_claim_for_conversation(conversation.id).slug == "valid-name"
+      assert Slugs.get_claim_for_thread(thread.id).slug == "valid-name"
     end
 
     test "shape-valid claims are bounded by the IP-keyed :claim_submit bucket" do
@@ -915,9 +915,9 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       # A taken slug is an EXISTENCE outcome, not a shape failure — probing
       # it must consume budget so enumeration stays bounded.
       holder = create_intake!("Earlier claim")
-      {:ok, _slug, _token} = Slugs.claim("contested", "first@example.com", holder.conversation)
+      {:ok, _slug, _token} = Slugs.claim("contested", "first@example.com", holder.thread)
 
-      %{conversation: conversation, access_token: token} = create_intake!()
+      %{thread: thread, access_token: token} = create_intake!()
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       html = submit_claim(view, "contested", "second@example.com")
@@ -925,15 +925,15 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       html = submit_claim(view, "fresh-name", "second@example.com")
       assert html =~ "Too many claim attempts"
-      assert is_nil(Slugs.get_claim_for_conversation(conversation.id))
+      assert is_nil(Slugs.get_claim_for_thread(thread.id))
     end
   end
 
   describe "retention purge" do
-    test "a purged conversation's conversation URL lands on the uniform unavailable page" do
-      %{conversation: conversation, access_token: token} = create_intake!()
+    test "a purged thread's thread URL lands on the uniform unavailable page" do
+      %{thread: thread, access_token: token} = create_intake!()
 
-      {:ok, _conversation} = Conversations.update_conversation(conversation, %{state: :resolved})
+      {:ok, _thread} = Threads.update_thread(thread, %{state: :resolved})
 
       # Past the 365-day public-intake retention bound
       backdated =
@@ -942,18 +942,18 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
         |> DateTime.truncate(:second)
 
       Repo.update_all(
-        from(c in Conversation, where: c.id == ^conversation.id),
+        from(c in Thread, where: c.id == ^thread.id),
         set: [updated_at: backdated]
       )
 
-      assert Conversations.cleanup_resolved_conversations(90) == 1
+      assert Threads.cleanup_resolved_threads(90) == 1
 
-      # The prospect cascaded away with the conversation, so the token no
+      # The prospect cascaded away with the thread, so the token no
       # longer resolves...
-      assert Intake.get_conversation_by_access_token(token, conversation.tenant_id) ==
+      assert Intake.get_thread_by_access_token(token, thread.tenant_id) ==
                {:error, :not_found}
 
-      # ...and the conversation URL renders the same unavailable page as an
+      # ...and the thread URL renders the same unavailable page as an
       # invalid token — no validity oracle.
       assert {:error, {:redirect, %{to: @unavailable}}} =
                live(build_conn(), ~p"/threads/#{token}")

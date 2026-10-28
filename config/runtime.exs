@@ -59,7 +59,7 @@ if config_env() == :prod do
   #
   # This is deliberately stricter than the Lettermint route-provisioning
   # management configuration below, which can remain unavailable without
-  # preventing staffs from opening existing conversations.
+  # preventing staffs from opening existing threads.
   known_mail_adapters = ~w(mailgun sendgrid smtp postmark lettermint local)
 
   mail_adapter =

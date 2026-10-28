@@ -119,7 +119,7 @@ defmodule CustyardWeb.Endpoint do
     log: {__MODULE__, :request_log_level, []}
 
   @doc false
-  # Custyard's bearer credentials travel in the path: conversation resume
+  # Custyard's bearer credentials travel in the path: thread resume
   # tokens (/c/:token, multi-use and months-lived), slug-claim tokens,
   # staff magic links, webhook callback tokens and the portal organization
   # token. Phoenix.Logger writes the request line ("GET /c/<token>") at :info,

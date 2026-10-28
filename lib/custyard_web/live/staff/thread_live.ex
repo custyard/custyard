@@ -1,6 +1,6 @@
-defmodule CustyardWeb.Staff.ConversationLive do
+defmodule CustyardWeb.Staff.ThreadLive do
   @moduledoc """
-  Staff view for a single conversation with reply, state management, and task tools.
+  Staff view for a single thread with reply, state management, and task tools.
 
   ## Authorization Model
 
@@ -20,8 +20,8 @@ defmodule CustyardWeb.Staff.ConversationLive do
   alias Custyard.{
     Attachments,
     Authorization,
-    Conversation,
-    Conversations,
+    Thread,
+    Threads,
     Labels,
     Message,
     MessageRecipientStatus,
@@ -32,106 +32,106 @@ defmodule CustyardWeb.Staff.ConversationLive do
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
-    case load_conversation(socket.assigns.current_scope, id) do
+    case load_thread(socket.assigns.current_scope, id) do
       nil ->
         {:ok,
          socket
-         |> put_flash(:error, "Conversation not found")
+         |> put_flash(:error, "Thread not found")
          |> redirect(to: ~p"/app")}
 
-      conversation ->
-        if Authorization.can_access_conversation?(socket.assigns.current_staff, conversation) do
-          mount_conversation(socket, id, conversation)
+      thread ->
+        if Authorization.can_access_thread?(socket.assigns.current_staff, thread) do
+          mount_thread(socket, id, thread)
         else
           {:ok,
            socket
-           |> put_flash(:error, "You do not have access to this conversation")
+           |> put_flash(:error, "You do not have access to this thread")
            |> redirect(to: ~p"/app")}
         end
     end
   end
 
-  defp mount_conversation(socket, id, conversation) do
+  defp mount_thread(socket, id, thread) do
     if connected?(socket) do
-      # Subscribe to org-scoped topic instead of global "conversations" to reduce
-      # unnecessary PubSub traffic. Unlinked (nil-org) conversations have no org
+      # Subscribe to org-scoped topic instead of global "threads" to reduce
+      # unnecessary PubSub traffic. Unlinked (nil-org) threads have no org
       # topic, and their state changes are only published on the global topic
-      # (the "conversation:{id}" topic carries message events, not state changes),
-      # so fall back to the global topic; handle_info filters by conversation id.
-      if conversation.organization_id do
+      # (the "thread:{id}" topic carries message events, not state changes),
+      # so fall back to the global topic; handle_info filters by thread id.
+      if thread.organization_id do
         Phoenix.PubSub.subscribe(
           Custyard.PubSub,
-          "conversations:org:#{conversation.organization_id}"
+          "threads:org:#{thread.organization_id}"
         )
       else
-        Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+        Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
       end
 
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{id}")
     end
 
-    case activate_if_new(conversation, socket.assigns.current_scope) do
+    case activate_if_new(thread, socket.assigns.current_scope) do
       {:ok, current} ->
         if current &&
-             Authorization.can_access_conversation?(socket.assigns.current_staff, current) do
-          mount_loaded_conversation(socket, current)
+             Authorization.can_access_thread?(socket.assigns.current_staff, current) do
+          mount_loaded_thread(socket, current)
         else
           {:ok,
            socket
-           |> put_flash(:error, "You do not have access to this conversation")
+           |> put_flash(:error, "You do not have access to this thread")
            |> redirect(to: ~p"/app")}
         end
 
       {:error, :unauthorized} ->
         {:ok,
          socket
-         |> put_flash(:error, "You do not have access to this conversation")
+         |> put_flash(:error, "You do not have access to this thread")
          |> redirect(to: ~p"/app")}
     end
   end
 
-  defp activate_if_new(%Conversation{state: :new} = conversation, scope) do
+  defp activate_if_new(%Thread{state: :new} = thread, scope) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    case Conversations.with_access(scope, conversation.id, fn current, _staff ->
+    case Threads.with_access(scope, thread.id, fn current, _staff ->
            if current.state == :new do
-             Conversations.transition_state(current, :new, :active, last_staff_action_at: now)
+             Threads.transition_state(current, :new, :active, last_staff_action_at: now)
            else
              {:ok, :already_transitioned}
            end
          end) do
-      {:ok, %Conversation{}} ->
-        Scoring.calculate_and_cache(conversation.id)
-        broadcast_conversation_update(conversation.id, conversation.organization_id)
-        {:ok, load_conversation(scope, conversation.id)}
+      {:ok, %Thread{}} ->
+        Scoring.calculate_and_cache(thread.id)
+        broadcast_thread_update(thread.id, thread.organization_id)
+        {:ok, load_thread(scope, thread.id)}
 
       {:ok, :already_transitioned} ->
-        {:ok, load_conversation(scope, conversation.id)}
+        {:ok, load_thread(scope, thread.id)}
 
       {:error, :unauthorized} = error ->
         error
     end
   end
 
-  defp activate_if_new(conversation, _scope), do: {:ok, conversation}
+  defp activate_if_new(thread, _scope), do: {:ok, thread}
 
-  defp mount_loaded_conversation(socket, conversation) do
-    breakdown = Scoring.breakdown(conversation)
-    neglect_status = Scoring.neglect_status(conversation)
-    other_conversations = fetch_other_org_conversations(conversation)
+  defp mount_loaded_thread(socket, thread) do
+    breakdown = Scoring.breakdown(thread)
+    neglect_status = Scoring.neglect_status(thread)
+    other_threads = fetch_other_org_threads(thread)
 
     socket =
       socket
-      |> assign(:page_title, truncate_subject(conversation.subject))
-      |> assign(:conversation, conversation)
-      |> assign_labels(conversation)
-      |> assign_reply_delivery(conversation)
-      |> assign_reply_identity(conversation)
+      |> assign(:page_title, truncate_subject(thread.subject))
+      |> assign(:thread, thread)
+      |> assign_labels(thread)
+      |> assign_reply_delivery(thread)
+      |> assign_reply_identity(thread)
       |> assign(:reply_cc_edited?, false)
-      |> assign_reply_cc(conversation)
+      |> assign_reply_cc(thread)
       |> assign(:breakdown, breakdown)
       |> assign(:neglect_status, neglect_status)
-      |> assign(:other_conversations, other_conversations)
+      |> assign(:other_threads, other_threads)
       |> assign(:reply_text, "")
       |> assign(:note_text, "")
       |> assign(:new_task_title, "")
@@ -146,9 +146,9 @@ defmodule CustyardWeb.Staff.ConversationLive do
       |> assign(:show_convert_form, false)
       |> assign(:convert_form_data, %{name: "", domain: ""})
       |> attach_hook(
-        :authorize_conversation_events,
+        :authorize_thread_events,
         :handle_event,
-        &authorize_conversation_event/3
+        &authorize_thread_event/3
       )
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :staff}}
@@ -156,10 +156,10 @@ defmodule CustyardWeb.Staff.ConversationLive do
 
   @impl true
   def handle_event("send_reply", %{"body" => body} = params, socket) when byte_size(body) > 0 do
-    conversation = socket.assigns.conversation
+    thread = socket.assigns.thread
     staff = socket.assigns.current_staff
 
-    case Conversations.send_reply(conversation, body,
+    case Threads.send_reply(thread, body,
            staff: staff,
            staff_email: staff.email,
            expected_recipient:
@@ -171,7 +171,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
           socket
           |> assign(:reply_text, "")
           |> assign(:reply_cc_edited?, false)
-          |> reload_conversation()
+          |> reload_thread()
 
         {:noreply, flash_undeliverable_reply(socket, message)}
 
@@ -182,7 +182,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
         {:noreply,
          socket
          |> assign(:reply_text, body)
-         |> reload_conversation()
+         |> reload_thread()
          |> put_flash(:error, "The recipient changed. Review the updated reply before sending.")}
 
       {:error, reason} ->
@@ -193,24 +193,24 @@ defmodule CustyardWeb.Staff.ConversationLive do
   def handle_event("send_reply", _params, socket), do: {:noreply, socket}
 
   def handle_event("add_note", %{"body" => body}, socket) when byte_size(body) > 0 do
-    conversation = socket.assigns.conversation
+    thread = socket.assigns.thread
 
-    case conversation_mutation(socket, fn current, _staff ->
-           Conversations.create_message(%{
+    case thread_mutation(socket, fn current, _staff ->
+           Threads.create_message(%{
              source: :staff,
              body: body,
              is_internal_note: true,
-             conversation_id: current.id
+             thread_id: current.id
            })
          end) do
       {:ok, _message} ->
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
-          "conversation:#{conversation.id}",
-          {:message_added, conversation.id}
+          "thread:#{thread.id}",
+          {:message_added, thread.id}
         )
 
-        {:noreply, socket |> assign(:note_text, "") |> reload_conversation()}
+        {:noreply, socket |> assign(:note_text, "") |> reload_thread()}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
@@ -224,18 +224,18 @@ defmodule CustyardWeb.Staff.ConversationLive do
 
   # Soft delete: the message row (and its body) stays in the database; every
   # rendering surface shows a tombstone instead. Scoped to the loaded
-  # conversation's messages so an id from another conversation is a no-op.
+  # thread's messages so an id from another thread is a no-op.
   def handle_event("delete_message", %{"id" => id}, socket) do
-    case find_conversation_message(socket.assigns.conversation, id) do
+    case find_thread_message(socket.assigns.thread, id) do
       nil ->
         {:noreply, put_flash(socket, :error, "Message not found")}
 
       message ->
-        case conversation_mutation(socket, fn _current, current_staff ->
-               Conversations.soft_delete_message(message, current_staff)
+        case thread_mutation(socket, fn _current, current_staff ->
+               Threads.soft_delete_message(message, current_staff)
              end) do
           {:ok, _message} ->
-            {:noreply, reload_conversation(socket)}
+            {:noreply, reload_thread(socket)}
 
           {:error, :unauthorized} ->
             {:noreply, access_revoked(socket)}
@@ -247,21 +247,21 @@ defmodule CustyardWeb.Staff.ConversationLive do
   end
 
   def handle_event("retry_attachments", _params, socket) do
-    case conversation_mutation(socket, fn current, _staff -> {:ok, current} end) do
-      {:ok, _conversation} -> {:noreply, begin_attachment_recovery(socket)}
+    case thread_mutation(socket, fn current, _staff -> {:ok, current} end) do
+      {:ok, _thread} -> {:noreply, begin_attachment_recovery(socket)}
       _ -> {:noreply, access_revoked(socket)}
     end
   end
 
   def handle_event("retry_reply", %{"id" => id}, socket) do
-    case find_conversation_message(socket.assigns.conversation, id) do
+    case find_thread_message(socket.assigns.thread, id) do
       nil ->
         {:noreply, put_flash(socket, :error, "Message not found")}
 
       message ->
         case Outbound.retry(socket.assigns.current_scope, message) do
           {:ok, _} ->
-            {:noreply, reload_conversation(socket)}
+            {:noreply, reload_thread(socket)}
 
           {:error, :unauthorized} ->
             {:noreply, access_revoked(socket)}
@@ -277,22 +277,22 @@ defmodule CustyardWeb.Staff.ConversationLive do
     end
   end
 
-  # Triage flagged the conversation as suspect (spec-inbound-channels D6).
+  # Triage flagged the thread as suspect (spec-inbound-channels D6).
   # The flag is a notification suppressor, never a filter; clearing it is an
   # staff judgement and goes through the same locked access check as
   # every other mutation.
   def handle_event("dismiss_suspect", _params, socket) do
-    case conversation_mutation(socket, fn current, _current_staff ->
-           Conversations.set_suspect(current, false)
+    case thread_mutation(socket, fn current, _current_staff ->
+           Threads.set_suspect(current, false)
          end) do
-      {:ok, _conversation} ->
-        {:noreply, begin_attachment_recovery(reload_conversation(socket))}
+      {:ok, _thread} ->
+        {:noreply, begin_attachment_recovery(reload_thread(socket))}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to update the conversation")}
+        {:noreply, put_flash(socket, :error, "Failed to update the thread")}
     end
   end
 
@@ -320,14 +320,14 @@ defmodule CustyardWeb.Staff.ConversationLive do
 
   def handle_event("set_state", %{"state" => state}, socket)
       when state in ~w(active waiting resolved) do
-    if Authorization.can_set_conversation_state?(socket.assigns.current_staff) do
-      conversation = socket.assigns.conversation
+    if Authorization.can_set_thread_state?(socket.assigns.current_staff) do
+      thread = socket.assigns.thread
       new_state = String.to_existing_atom(state)
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      case conversation_mutation(socket, fn current, current_staff ->
-             if Authorization.can_set_conversation_state?(current_staff) do
-               Conversations.update_conversation(current, %{
+      case thread_mutation(socket, fn current, current_staff ->
+             if Authorization.can_set_thread_state?(current_staff) do
+               Threads.update_thread(current, %{
                  state: new_state,
                  last_staff_action_at: now
                })
@@ -336,10 +336,10 @@ defmodule CustyardWeb.Staff.ConversationLive do
              end
            end) do
         {:ok, _} ->
-          Scoring.calculate_and_cache(conversation.id)
-          broadcast_conversation_update(conversation.id, conversation.organization_id)
+          Scoring.calculate_and_cache(thread.id)
+          broadcast_thread_update(thread.id, thread.organization_id)
 
-          {:noreply, reload_conversation(socket)}
+          {:noreply, reload_thread(socket)}
 
         {:error, :unauthorized} ->
           {:noreply, access_revoked(socket)}
@@ -348,7 +348,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
           {:noreply, put_flash(socket, :error, "Failed to update state")}
       end
     else
-      {:noreply, put_flash(socket, :error, "Only admins can change conversation state")}
+      {:noreply, put_flash(socket, :error, "Only admins can change thread state")}
     end
   end
 
@@ -362,7 +362,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
       {:noreply,
        socket
        |> assign(:show_convert_form, true)
-       |> assign(:convert_form_data, prefill_convert_form(socket.assigns.conversation))}
+       |> assign(:convert_form_data, prefill_convert_form(socket.assigns.thread))}
     else
       {:noreply, put_flash(socket, :error, "Only tenant administrators can convert prospects")}
     end
@@ -390,7 +390,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
         domain: empty_to_nil(Map.get(params, "domain", ""))
       }
 
-      Organizations.convert(socket.assigns.current_scope, socket.assigns.conversation, attrs)
+      Organizations.convert(socket.assigns.current_scope, socket.assigns.thread, attrs)
       |> handle_convert_result(socket)
     else
       {:noreply, put_flash(socket, :error, "Only tenant administrators can convert prospects")}
@@ -403,19 +403,19 @@ defmodule CustyardWeb.Staff.ConversationLive do
 
   def handle_event("create_label", %{"name" => name}, socket) do
     socket.assigns.current_scope
-    |> Labels.create_and_assign(socket.assigns.conversation, name)
+    |> Labels.create_and_assign(socket.assigns.thread, name)
     |> label_result(socket)
   end
 
   def handle_event("assign_label", %{"label_id" => id}, socket) do
     socket.assigns.current_scope
-    |> Labels.assign(socket.assigns.conversation, id)
+    |> Labels.assign(socket.assigns.thread, id)
     |> label_result(socket)
   end
 
   def handle_event("remove_label", %{"id" => id}, socket) do
     socket.assigns.current_scope
-    |> Labels.remove(socket.assigns.conversation, id)
+    |> Labels.remove(socket.assigns.thread, id)
     |> label_result(socket)
   end
 
@@ -440,12 +440,12 @@ defmodule CustyardWeb.Staff.ConversationLive do
       due_at = params["due_at"]
       portal_visible = params["portal_visible"] == "true"
 
-      case conversation_mutation(socket, fn current, _staff ->
-             Conversations.create_task(%{
+      case thread_mutation(socket, fn current, _staff ->
+             Threads.create_task(%{
                title: title,
                due_at: due_at,
                portal_visible: portal_visible,
-               conversation_id: current.id
+               thread_id: current.id
              })
            end) do
         {:ok, _task} ->
@@ -456,7 +456,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
            |> assign(:new_task_portal_visible, false)
            |> assign(:show_task_form, false)
            |> put_flash(:info, "Task created")
-           |> reload_conversation()}
+           |> reload_thread()}
 
         {:error, :unauthorized} ->
           {:noreply, access_revoked(socket)}
@@ -478,11 +478,11 @@ defmodule CustyardWeb.Staff.ConversationLive do
           :done -> :open
         end
 
-      case conversation_mutation(socket, fn _current, _staff ->
-             Conversations.update_task_state(task, new_state)
+      case thread_mutation(socket, fn _current, _staff ->
+             Threads.update_task_state(task, new_state)
            end) do
         {:ok, _} ->
-          {:noreply, reload_conversation(socket)}
+          {:noreply, reload_thread(socket)}
 
         {:error, :unauthorized} ->
           {:noreply, access_revoked(socket)}
@@ -528,8 +528,8 @@ defmodule CustyardWeb.Staff.ConversationLive do
         due_at = params["due_at"]
         portal_visible = params["portal_visible"] == "true"
 
-        case conversation_mutation(socket, fn _current, _staff ->
-               Conversations.update_task(task, %{
+        case thread_mutation(socket, fn _current, _staff ->
+               Threads.update_task(task, %{
                  title: title,
                  due_at: due_at,
                  portal_visible: portal_visible
@@ -539,7 +539,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
             {:noreply,
              socket
              |> assign(:editing_task_id, nil)
-             |> reload_conversation()}
+             |> reload_thread()}
 
           {:error, :unauthorized} ->
             {:noreply, access_revoked(socket)}
@@ -560,14 +560,14 @@ defmodule CustyardWeb.Staff.ConversationLive do
   end
 
   defp delete_scoped_task(socket, task) do
-    case conversation_mutation(socket, fn _current, _staff ->
-           Conversations.delete_task(task)
+    case thread_mutation(socket, fn _current, _staff ->
+           Threads.delete_task(task)
          end) do
       {:ok, _} ->
         {:noreply,
          socket
          |> assign(:editing_task_id, nil)
-         |> reload_conversation()}
+         |> reload_thread()}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
@@ -579,27 +579,27 @@ defmodule CustyardWeb.Staff.ConversationLive do
 
   @impl true
   def handle_info({:message_added, _id}, socket) do
-    {:noreply, reload_conversation(socket)}
+    {:noreply, reload_thread(socket)}
   end
 
   # Broadcast by Email.Outbound when async delivery resolves, so the
   # pending/sent/failed indicator updates without a manual refresh.
   def handle_info({:message_updated, _id}, socket) do
-    {:noreply, reload_conversation(socket)}
+    {:noreply, reload_thread(socket)}
   end
 
-  def handle_info({:conversation_updated, id}, socket) do
-    if id == socket.assigns.conversation.id do
-      {:noreply, reload_conversation(socket)}
+  def handle_info({:thread_updated, id}, socket) do
+    if id == socket.assigns.thread.id do
+      {:noreply, reload_thread(socket)}
     else
       {:noreply, socket}
     end
   end
 
-  # Nil-org conversations subscribe to the global "conversations" topic (see
-  # mount_conversation/3), which also carries :conversation_created for every
-  # new inbound email — never relevant to an already-open conversation.
-  def handle_info({:conversation_created, _id}, socket) do
+  # Nil-org threads subscribe to the global "threads" topic (see
+  # mount_thread/3), which also carries :thread_created for every
+  # new inbound email — never relevant to an already-open thread.
+  def handle_info({:thread_created, _id}, socket) do
     {:noreply, socket}
   end
 
@@ -608,29 +608,29 @@ defmodule CustyardWeb.Staff.ConversationLive do
     {:noreply, socket}
   end
 
-  defp broadcast_conversation_update(id, organization_id) do
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
-    Conversations.broadcast_to_org(organization_id, {:conversation_updated, id})
+  defp broadcast_thread_update(id, organization_id) do
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, id})
+    Threads.broadcast_to_org(organization_id, {:thread_updated, id})
   end
 
-  defp handle_convert_result({:ok, _conversation}, socket) do
+  defp handle_convert_result({:ok, _thread}, socket) do
     {:noreply,
      socket
      |> assign(:show_convert_form, false)
      |> put_flash(:info, "Converted to a new organization")
-     |> reload_conversation()}
+     |> reload_thread()}
   end
 
   defp handle_convert_result({:error, :already_converted}, socket) do
     {:noreply,
      socket
      |> assign(:show_convert_form, false)
-     |> put_flash(:error, "This conversation was already converted")
-     |> reload_conversation()}
+     |> put_flash(:error, "This thread was already converted")
+     |> reload_thread()}
   end
 
   defp handle_convert_result({:error, :not_convertible}, socket) do
-    {:noreply, put_flash(socket, :error, "This conversation cannot be converted")}
+    {:noreply, put_flash(socket, :error, "This thread cannot be converted")}
   end
 
   defp handle_convert_result({:error, %Ecto.Changeset{} = changeset}, socket) do
@@ -641,9 +641,9 @@ defmodule CustyardWeb.Staff.ConversationLive do
   # Prefill only — never auto-set: freemail domains would match-link every
   # same-domain prospect if the staff submitted the form unedited, so
   # both fields stay plain editable text inputs.
-  defp prefill_convert_form(conversation) do
-    slug = Slugs.get_claim_for_conversation(conversation.id)
-    prospect = conversation.prospect
+  defp prefill_convert_form(thread) do
+    slug = Slugs.get_claim_for_thread(thread.id)
+    prospect = thread.prospect
 
     %{
       name: (slug && slug.slug) || "",
@@ -660,20 +660,20 @@ defmodule CustyardWeb.Staff.ConversationLive do
     end
   end
 
-  # Find a message by id within the already-loaded conversation thread.
-  # Inherently conversation-scoped: an id belonging to another conversation
+  # Find a message by id within the already-loaded thread thread.
+  # Inherently thread-scoped: an id belonging to another thread
   # simply isn't in the list.
-  defp find_conversation_message(conversation, id) when is_binary(id) do
+  defp find_thread_message(thread, id) when is_binary(id) do
     case Integer.parse(id) do
-      {int_id, ""} -> Enum.find(conversation.messages, &(&1.id == int_id))
+      {int_id, ""} -> Enum.find(thread.messages, &(&1.id == int_id))
       _ -> nil
     end
   end
 
-  # Resolve a task id from the UI against this conversation and run `fun`
+  # Resolve a task id from the UI against this thread and run `fun`
   # with it. A task that was deleted from another session (nothing
   # broadcasts task deletions, so the row stays on screen), an id from
-  # another conversation, or a malformed id ends in a flash and a reload
+  # another thread, or a malformed id ends in a flash and a reload
   # rather than a raise that would crash the LiveView and drop any draft
   # reply or note the staff was typing.
   defp with_scoped_task(socket, task_id, fun) do
@@ -686,7 +686,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
          socket
          |> assign(:editing_task_id, nil)
          |> put_flash(:error, "That task no longer exists")
-         |> reload_conversation()}
+         |> reload_thread()}
     end
   end
 
@@ -698,18 +698,18 @@ defmodule CustyardWeb.Staff.ConversationLive do
   end
 
   defp scoped_task(socket, task_id) when is_integer(task_id) do
-    conversation_id = socket.assigns.conversation.id
+    thread_id = socket.assigns.thread.id
 
     case Custyard.Repo.get(Custyard.Task, task_id) do
-      %Custyard.Task{conversation_id: ^conversation_id} = task -> task
+      %Custyard.Task{thread_id: ^thread_id} = task -> task
       _ -> nil
     end
   end
 
   defp scoped_task(_socket, _task_id), do: nil
 
-  defp load_conversation(scope, id) do
-    Conversations.get_with_messages(scope, id)
+  defp load_thread(scope, id) do
+    Threads.get_with_messages(scope, id)
   rescue
     Ecto.NoResultsError -> nil
     Ecto.Query.CastError -> nil
@@ -718,74 +718,74 @@ defmodule CustyardWeb.Staff.ConversationLive do
   # A LiveView stays connected after mount. Check the current database row before
   # every client event so a prospect linked to another organization cannot keep
   # mutating it through an already-open socket.
-  defp authorize_conversation_event(_event, _params, socket) do
-    conversation = Conversations.get(socket.assigns.current_scope, socket.assigns.conversation.id)
+  defp authorize_thread_event(_event, _params, socket) do
+    thread = Threads.get(socket.assigns.current_scope, socket.assigns.thread.id)
 
-    if conversation &&
-         Authorization.can_access_conversation?(socket.assigns.current_staff, conversation) do
+    if thread &&
+         Authorization.can_access_thread?(socket.assigns.current_staff, thread) do
       {:cont, socket}
     else
       {:halt, access_revoked(socket)}
     end
   end
 
-  defp conversation_mutation(socket, fun) do
-    Conversations.with_access(
+  defp thread_mutation(socket, fun) do
+    Threads.with_access(
       socket.assigns.current_scope,
-      socket.assigns.conversation.id,
+      socket.assigns.thread.id,
       fun
     )
   end
 
   defp access_revoked(socket) do
     socket
-    |> put_flash(:error, "You no longer have access to this conversation")
+    |> put_flash(:error, "You no longer have access to this thread")
     |> push_navigate(to: ~p"/app")
   end
 
   defp begin_attachment_recovery(socket) do
-    id = socket.assigns.conversation.id
+    id = socket.assigns.thread.id
     start_async(socket, :recover_attachments, fn -> Recovery.recover(id) end)
   end
 
   @impl true
   def handle_async(:recover_attachments, {:ok, :ok}, socket) do
-    {:noreply, reload_conversation(socket)}
+    {:noreply, reload_thread(socket)}
   end
 
   def handle_async(:recover_attachments, _result, socket) do
     {:noreply,
      socket
-     |> reload_conversation()
+     |> reload_thread()
      |> put_flash(
        :error,
        "Some attachments could not be recovered. Retry while the provider still retains the original delivery (28 days)."
      )}
   end
 
-  defp reload_conversation(socket) do
-    case load_conversation(socket.assigns.current_scope, socket.assigns.conversation.id) do
+  defp reload_thread(socket) do
+    case load_thread(socket.assigns.current_scope, socket.assigns.thread.id) do
       nil ->
-        # Conversation was deleted - redirect to queue
+        # Thread was deleted - redirect to queue
         socket
-        |> put_flash(:error, "Conversation no longer exists")
+        |> put_flash(:error, "Thread no longer exists")
         |> push_navigate(to: ~p"/app")
 
-      conversation ->
-        if Authorization.can_access_conversation?(socket.assigns.current_staff, conversation) do
-          breakdown = Scoring.breakdown(conversation)
-          neglect_status = Scoring.neglect_status(conversation)
-          other_conversations = fetch_other_org_conversations(conversation)
+      thread ->
+        if Authorization.can_access_thread?(socket.assigns.current_staff, thread) do
+          breakdown = Scoring.breakdown(thread)
+          neglect_status = Scoring.neglect_status(thread)
+          other_threads = fetch_other_org_threads(thread)
 
           socket
-          |> assign(:conversation, conversation)
-          |> assign_labels(conversation)
-          |> assign_reply_delivery(conversation)
-          |> assign_reply_identity(conversation)
-          |> assign_reply_cc(conversation)
+          |> assign(:thread, thread)
+          |> assign_labels(thread)
+          |> assign_reply_delivery(thread)
+          |> assign_reply_identity(thread)
+          |> assign_reply_cc(thread)
           |> assign(:breakdown, breakdown)
           |> assign(:neglect_status, neglect_status)
-          |> assign(:other_conversations, other_conversations)
+          |> assign(:other_threads, other_threads)
         else
           access_revoked(socket)
         end
@@ -793,31 +793,31 @@ defmodule CustyardWeb.Staff.ConversationLive do
   end
 
   # The consent advisory keys on :prospect_no_consent specifically — a
-  # public-intake conversation with no captured email (or revoked conversation
+  # public-intake thread with no captured email (or revoked thread
   # access) has no opt-in to speak of, and that state is conveyed by the
   # reply-channel badge instead.
-  defp assign_reply_delivery(socket, conversation) do
-    reply_delivery = Conversations.reply_delivery(conversation)
+  defp assign_reply_delivery(socket, thread) do
+    reply_delivery = Threads.reply_delivery(thread)
 
     socket
     |> assign(:reply_delivery, reply_delivery)
     |> assign(:reply_will_email?, reply_delivery in [:contact, :prospect_opted_in])
-    |> assign(:reply_recipient, reply_recipient(conversation))
+    |> assign(:reply_recipient, reply_recipient(thread))
   end
 
   # The To of the next reply, from the resolver delivery uses, so the
   # composer never shows an address the reply will not go to.
-  defp reply_recipient(conversation) do
-    case Outbound.reply_recipient(conversation) do
-      {:ok, address} -> %{address: address, reply_to?: reply_to_override?(conversation, address)}
+  defp reply_recipient(thread) do
+    case Outbound.reply_recipient(thread) do
+      {:ok, address} -> %{address: address, reply_to?: reply_to_override?(thread, address)}
       {:error, _reason} -> nil
     end
   end
 
   # Email threads follow their latest participant or Reply-To. A prospect's
   # recipient remains the address for which consent was captured.
-  defp reply_to_override?(conversation, address) do
-    case Conversations.reply_channel(conversation) do
+  defp reply_to_override?(thread, address) do
+    case Threads.reply_channel(thread) do
       {:contact, email} -> String.downcase(address) != String.downcase(email)
       _other -> false
     end
@@ -826,7 +826,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
   # Ground truth for this message: :withheld is only ever set by the
   # public-intake consent gate at send time, so this can't be fooled by a
   # consent flip that happens before the reload runs. The reply-box advisory
-  # already explains the withheld delivery for public-intake conversations.
+  # already explains the withheld delivery for public-intake threads.
   defp flash_undeliverable_reply(socket, message) do
     cond do
       message.delivery_status == :withheld ->
@@ -835,7 +835,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
       socket.assigns.reply_will_email? ->
         socket
 
-      socket.assigns.conversation.source == :public_intake ->
+      socket.assigns.thread.source == :public_intake ->
         socket
 
       true ->
@@ -857,12 +857,12 @@ defmodule CustyardWeb.Staff.ConversationLive do
   # Reply-all CC the composer starts from (spec-inbound-channels D5). A list
   # the staff has edited survives a reload triggered by an incoming
   # message; an untouched one follows the latest customer message.
-  defp assign_reply_cc(%{assigns: %{reply_cc_edited?: true}} = socket, _conversation),
+  defp assign_reply_cc(%{assigns: %{reply_cc_edited?: true}} = socket, _thread),
     do: socket
 
-  defp assign_reply_cc(socket, conversation) do
+  defp assign_reply_cc(socket, thread) do
     cc =
-      Conversations.default_reply_cc(conversation,
+      Threads.default_reply_cc(thread,
         staff_email: socket.assigns.current_staff.email
       )
 
@@ -870,11 +870,11 @@ defmodule CustyardWeb.Staff.ConversationLive do
   end
 
   # The From identity the next reply will carry (spec-inbound-channels D3).
-  # The platform fallback has no address of its own on the conversation, so
+  # The platform fallback has no address of its own on the thread, so
   # the configured instance sender is shown instead.
-  defp assign_reply_identity(socket, conversation) do
+  defp assign_reply_identity(socket, thread) do
     identity =
-      Conversations.reply_identity(conversation,
+      Threads.reply_identity(thread,
         staff_email: socket.assigns.current_staff.email
       )
 
@@ -893,23 +893,23 @@ defmodule CustyardWeb.Staff.ConversationLive do
 
     socket
     |> assign(:reply_identity, identity)
-    |> assign(:archive_copy_address, archive_copy_address(conversation))
+    |> assign(:archive_copy_address, archive_copy_address(thread))
   end
 
   # D4: the mailbox that receives a BCC of every reply, when the channel asks.
-  defp archive_copy_address(%Conversation{
+  defp archive_copy_address(%Thread{
          inbound_channel: %Custyard.InboundChannel{archive_copy: true, public_address: address}
        }),
        do: address
 
-  defp archive_copy_address(_conversation), do: nil
+  defp archive_copy_address(_thread), do: nil
 
-  defp fetch_other_org_conversations(%{organization_id: nil}), do: []
+  defp fetch_other_org_threads(%{organization_id: nil}), do: []
 
-  defp fetch_other_org_conversations(conversation) do
-    conversation.organization_id
-    |> Conversations.list_for_organization(include_resolved: false)
-    |> Enum.reject(&(&1.id == conversation.id))
+  defp fetch_other_org_threads(thread) do
+    thread.organization_id
+    |> Threads.list_for_organization(include_resolved: false)
+    |> Enum.reject(&(&1.id == thread.id))
     |> Enum.take(5)
   end
 
@@ -920,15 +920,15 @@ defmodule CustyardWeb.Staff.ConversationLive do
     String.slice(subject, 0, 47) <> "..."
   end
 
-  defp assign_labels(socket, conversation) do
-    labels = Labels.for_conversation(socket.assigns.current_scope, conversation)
+  defp assign_labels(socket, thread) do
+    labels = Labels.for_thread(socket.assigns.current_scope, thread)
 
     socket
     |> assign(:available_labels, labels.available)
-    |> assign(:conversation_labels, labels.assigned)
+    |> assign(:thread_labels, labels.assigned)
   end
 
-  defp label_result({:ok, _}, socket), do: {:noreply, reload_conversation(socket)}
+  defp label_result({:ok, _}, socket), do: {:noreply, reload_thread(socket)}
 
   defp label_result({:error, :unauthorized}, socket),
     do: {:noreply, put_flash(socket, :error, "You do not have permission to change these labels")}
@@ -960,33 +960,33 @@ defmodule CustyardWeb.Staff.ConversationLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex flex-1 min-h-0" data-testid="staff-conversation-page">
+    <div class="flex flex-1 min-h-0" data-testid="staff-thread-page">
       <%!-- Left: message thread --%>
-      <div class="flex-1 flex flex-col min-w-0" data-testid="staff-conversation-thread">
+      <div class="flex-1 flex flex-col min-w-0" data-testid="staff-thread-thread">
         <div class="border-b border-gray-200 dark:border-zinc-700 px-4 py-3 flex items-center gap-3 bg-white dark:bg-zinc-800">
           <.link
             navigate={~p"/app"}
             class="text-sm text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
-            data-testid="staff-conversation-back"
+            data-testid="staff-thread-back"
           >
             &larr; Queue
           </.link>
           <span
             class="font-semibold text-gray-900 dark:text-zinc-100 truncate flex-1"
-            data-testid="staff-conversation-subject"
+            data-testid="staff-thread-subject"
           >
-            {@conversation.subject}
+            {@thread.subject}
           </span>
           <span
-            :if={@conversation.inbound_channel}
+            :if={@thread.inbound_channel}
             class="text-xs px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300 truncate max-w-[14rem]"
-            title={"Received on channel #{@conversation.inbound_channel.public_address}"}
-            data-testid="conversation-channel"
+            title={"Received on channel #{@thread.inbound_channel.public_address}"}
+            data-testid="thread-channel"
           >
-            {@conversation.inbound_channel.public_address}
+            {@thread.inbound_channel.public_address}
           </span>
           <button
-            :if={not @conversation.suspect and recoverable_attachments?(@conversation)}
+            :if={not @thread.suspect and recoverable_attachments?(@thread)}
             type="button"
             phx-click="retry_attachments"
             phx-disable-with="Recovering…"
@@ -996,31 +996,31 @@ defmodule CustyardWeb.Staff.ConversationLive do
             Retry attachment recovery
           </button>
           <span
-            :if={@conversation.suspect}
+            :if={@thread.suspect}
             class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
-            title="Triage flagged this conversation: notifications are suppressed until a staff clears it"
-            data-testid="conversation-suspect-badge"
+            title="Triage flagged this thread: notifications are suppressed until a staff clears it"
+            data-testid="thread-suspect-badge"
           >
             suspect
             <button
               phx-click="dismiss_suspect"
               class="underline hover:text-amber-950 dark:hover:text-amber-100"
-              aria-label="Mark this conversation as not suspect"
+              aria-label="Mark this thread as not suspect"
               data-testid="dismiss-suspect"
             >
               Not suspect
             </button>
           </span>
           <span
-            :if={@conversation.language}
+            :if={@thread.language}
             class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300 uppercase"
-            title={"Detected language: #{Custyard.Email.LanguageDetector.name(@conversation.language)}"}
-            data-testid="conversation-language"
+            title={"Detected language: #{Custyard.Email.LanguageDetector.name(@thread.language)}"}
+            data-testid="thread-language"
           >
-            {@conversation.language}
+            {@thread.language}
           </span>
-          <.source_badge source={@conversation.source} />
-          <.state_badge state={@conversation.state} />
+          <.source_badge source={@thread.source} />
+          <.state_badge state={@thread.state} />
           <button
             phx-click="toggle_sidebar"
             class="lg:hidden text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 p-1"
@@ -1048,19 +1048,19 @@ defmodule CustyardWeb.Staff.ConversationLive do
           id="message-thread"
           phx-hook="ScrollBottom"
           class="flex-1 overflow-y-auto px-4 py-4 bg-gray-50 dark:bg-zinc-800 space-y-1"
-          data-testid="staff-conversation-messages"
+          data-testid="staff-thread-messages"
         >
           <div
-            :if={@conversation.messages == []}
+            :if={@thread.messages == []}
             class="text-center py-8 text-gray-500 dark:text-zinc-400"
             data-testid="staff-no-messages"
           >
             No messages yet
           </div>
-          <%= for message <- @conversation.messages do %>
+          <%= for message <- @thread.messages do %>
             <.message_bubble
               message={message}
-              prospect_email={@conversation.prospect && @conversation.prospect.email}
+              prospect_email={@thread.prospect && @thread.prospect.email}
             />
           <% end %>
         </div>
@@ -1068,7 +1068,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
         <div class="border-t border-gray-200 dark:border-zinc-700 p-3 space-y-2 bg-white dark:bg-zinc-800">
           <%!-- Consent advisory: shown only when a prospect email was
           captured without the reply-notification opt-in. The reply still
-          saves and stays visible via the conversation link, so sending is never
+          saves and stays visible via the thread link, so sending is never
           blocked — the staff just knows up front that no email goes
           out. No-email and revoked states are covered by the reply-channel
           badge, not this opt-in wording. --%>
@@ -1078,7 +1078,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
             data-testid="staff-reply-consent-advisory"
           >
             This prospect has not opted into email replies — replies are not
-            emailed, but stay visible via their conversation link.
+            emailed, but stay visible via their thread link.
           </p>
           <p
             class="text-xs text-gray-500 dark:text-zinc-400 truncate"
@@ -1113,9 +1113,9 @@ defmodule CustyardWeb.Staff.ConversationLive do
               </span>
             </p>
             <%!-- Reply-all CC (spec-inbound-channels D5): visible and editable;
-            hidden for prospect conversations, which never carry a CC. --%>
+            hidden for prospect threads, which never carry a CC. --%>
             <label
-              :if={@conversation.source != :public_intake}
+              :if={@thread.source != :public_intake}
               class="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400"
             >
               <span class="w-6">CC</span>
@@ -1199,7 +1199,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
             else: "hidden"
           )
         ]}
-        data-testid="staff-conversation-sidebar"
+        data-testid="staff-thread-sidebar"
       >
         <%!-- Mobile close button --%>
         <div class="lg:hidden flex justify-between items-center p-3 border-b border-gray-200 dark:border-zinc-700">
@@ -1232,16 +1232,16 @@ defmodule CustyardWeb.Staff.ConversationLive do
             <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-1">
               Organization
             </div>
-            <%= if @conversation.organization do %>
+            <%= if @thread.organization do %>
               <.link
-                navigate={~p"/app/customers/#{@conversation.organization.id}"}
+                navigate={~p"/app/customers/#{@thread.organization.id}"}
                 class="text-sm text-indigo-600 hover:underline font-medium"
                 data-testid="staff-sidebar-org-link"
               >
-                {@conversation.organization.name}
+                {@thread.organization.name}
               </.link>
               <div class="mt-1">
-                <.tier_badge tier={@conversation.organization.tier} />
+                <.tier_badge tier={@thread.organization.tier} />
               </div>
             <% else %>
               <div
@@ -1252,7 +1252,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
               </div>
               <button
                 :if={
-                  @conversation.source == :public_intake and
+                  @thread.source == :public_intake and
                     Authorization.can_create_organization?(@current_staff) and
                     not @show_convert_form
                 }
@@ -1318,19 +1318,19 @@ defmodule CustyardWeb.Staff.ConversationLive do
               Contact
             </div>
             <div class="text-sm text-gray-800 dark:text-zinc-200">
-              {if @conversation.contact,
-                do: @conversation.contact.name || @conversation.contact.email,
+              {if @thread.contact,
+                do: @thread.contact.name || @thread.contact.email,
                 else: "Unknown"}
             </div>
-            <%= if @conversation.contact && @conversation.contact.email do %>
+            <%= if @thread.contact && @thread.contact.email do %>
               <div
                 class="text-xs text-gray-500 dark:text-zinc-400"
                 data-testid="staff-sidebar-contact-email"
               >
-                {@conversation.contact.email}
+                {@thread.contact.email}
               </div>
-              <div :if={@conversation.contact.email_status != :valid} class="mt-1">
-                <.email_status_badge status={@conversation.contact.email_status} />
+              <div :if={@thread.contact.email_status != :valid} class="mt-1">
+                <.email_status_badge status={@thread.contact.email_status} />
               </div>
             <% end %>
           </div>
@@ -1341,7 +1341,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
               Actions
             </div>
             <div class="space-y-1.5" data-testid="staff-state-actions">
-              <%= if @conversation.state == :resolved do %>
+              <%= if @thread.state == :resolved do %>
                 <button
                   phx-click="set_state"
                   phx-value-state="active"
@@ -1356,11 +1356,11 @@ defmodule CustyardWeb.Staff.ConversationLive do
                 in place. aria-pressed + solid styling mark the active state. --%>
                 <button
                   phx-click="set_state"
-                  phx-value-state={if @conversation.state == :waiting, do: "active", else: "waiting"}
-                  aria-pressed={to_string(@conversation.state == :waiting)}
+                  phx-value-state={if @thread.state == :waiting, do: "active", else: "waiting"}
+                  aria-pressed={to_string(@thread.state == :waiting)}
                   class={[
                     "w-full text-left text-sm px-3 py-1.5 rounded border",
-                    if(@conversation.state == :waiting,
+                    if(@thread.state == :waiting,
                       do:
                         "bg-yellow-200 hover:bg-yellow-100 text-yellow-900 border-yellow-400 font-medium",
                       else: "bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border-yellow-200"
@@ -1368,14 +1368,14 @@ defmodule CustyardWeb.Staff.ConversationLive do
                   ]}
                   data-testid="staff-state-waiting"
                 >
-                  {if @conversation.state == :waiting,
+                  {if @thread.state == :waiting,
                     do: "Waiting on customer — click to resume",
                     else: "Waiting on customer"}
                 </button>
                 <button
                   phx-click="set_state"
                   phx-value-state="resolved"
-                  data-confirm="Mark this conversation as resolved?"
+                  data-confirm="Mark this thread as resolved?"
                   class="w-full text-left text-sm px-3 py-1.5 rounded bg-green-50 hover:bg-green-100 text-green-800 border border-green-200"
                   data-testid="staff-state-resolved"
                 >
@@ -1386,16 +1386,16 @@ defmodule CustyardWeb.Staff.ConversationLive do
           </div>
 
           <section
-            :if={@conversation.tenant_id}
+            :if={@thread.tenant_id}
             class="mb-5"
             data-testid="staff-labels-section"
           >
             <h3 class="text-xs font-semibold text-gray-500 dark:text-zinc-400 mb-2">Labels</h3>
             <div class="flex flex-wrap gap-1 mb-2">
               <span
-                :for={label <- @conversation_labels}
+                :for={label <- @thread_labels}
                 class="inline-flex items-center gap-1 rounded bg-indigo-50 dark:bg-indigo-950 px-2 py-1 text-xs"
-                data-testid={"conversation-label-#{label.id}"}
+                data-testid={"thread-label-#{label.id}"}
               >
                 {label.name}
                 <button
@@ -1405,7 +1405,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
                   aria-label={"Remove label #{label.name}"}
                 >×</button>
               </span>
-              <span :if={@conversation_labels == []} class="text-xs text-gray-500">No labels</span>
+              <span :if={@thread_labels == []} class="text-xs text-gray-500">No labels</span>
             </div>
             <form
               :if={@available_labels != []}
@@ -1450,13 +1450,13 @@ defmodule CustyardWeb.Staff.ConversationLive do
               class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-2"
               data-testid="staff-tasks-section"
             >
-              Tasks ({length(@conversation.tasks)})
+              Tasks ({length(@thread.tasks)})
             </div>
-            <%= if Enum.empty?(@conversation.tasks) do %>
+            <%= if Enum.empty?(@thread.tasks) do %>
               <div class="text-xs text-gray-400 dark:text-zinc-500">No tasks yet</div>
             <% else %>
               <div class="space-y-2">
-                <%= for task <- @conversation.tasks do %>
+                <%= for task <- @thread.tasks do %>
                   <%= if @editing_task_id == task.id do %>
                     <.task_edit_form
                       task={task}
@@ -1473,7 +1473,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
 
             <%= if @show_task_form do %>
               <form
-                id="staff-conversation-task-form"
+                id="staff-thread-task-form"
                 phx-submit="add_task"
                 phx-change="update_new_task"
                 class="mt-3 space-y-2 p-2 bg-gray-50 dark:bg-zinc-800 rounded border border-gray-200 dark:border-zinc-700"
@@ -1548,14 +1548,14 @@ defmodule CustyardWeb.Staff.ConversationLive do
             <% end %>
           </div>
 
-          <%!-- Other open conversations for this org --%>
-          <div :if={@other_conversations != []} data-testid="staff-sidebar-other-conversations">
+          <%!-- Other open threads for this org --%>
+          <div :if={@other_threads != []} data-testid="staff-sidebar-other-threads">
             <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-2">
-              Other Open ({length(@other_conversations)})
+              Other Open ({length(@other_threads)})
             </div>
             <div class="space-y-1.5">
               <.link
-                :for={conv <- @other_conversations}
+                :for={conv <- @other_threads}
                 navigate={~p"/app/threads/#{conv.id}"}
                 class="block text-sm text-gray-700 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 truncate"
                 data-testid={"staff-other-conv-#{conv.id}"}
@@ -1794,8 +1794,8 @@ defmodule CustyardWeb.Staff.ConversationLive do
     """
   end
 
-  defp recoverable_attachments?(conversation) do
-    Enum.any?(conversation.messages, fn message ->
+  defp recoverable_attachments?(thread) do
+    Enum.any?(thread.messages, fn message ->
       Enum.any?(
         message_attachments(message),
         &(&1.skip_reason == "suspect" or &1.state in [:failed, :pending])
@@ -1803,7 +1803,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
     end)
   end
 
-  # Attachments are preloaded by Conversations.get_with_messages/1; a message
+  # Attachments are preloaded by Threads.get_with_messages/1; a message
   # reached through another loader renders without them rather than raising.
   defp message_attachments(%Message{attachments: attachments}) when is_list(attachments),
     do: attachments
@@ -2103,7 +2103,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
     ~H"""
     <span
       class="inline-flex items-center text-xs text-gray-400 dark:text-zinc-500"
-      title="Not emailed — visible via conversation link"
+      title="Not emailed — visible via thread link"
       data-testid="delivery-status-withheld"
     >
       <svg
@@ -2123,7 +2123,7 @@ defmodule CustyardWeb.Staff.ConversationLive do
   end
 
   # Failed CC and other secondary recipients of an outbound message, shown
-  # apart from the indicator (spec-conversation-loop, "Delivery Tracking").
+  # apart from the indicator (spec-thread-loop, "Delivery Tracking").
   defp secondary_recipient_failures(%Message{recipient_statuses: statuses})
        when is_list(statuses) do
     statuses

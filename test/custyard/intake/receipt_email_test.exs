@@ -8,7 +8,7 @@ defmodule Custyard.Intake.ReceiptEmailTest do
   alias Custyard.Intake.ReceiptEmail
   alias Custyard.RateLimit
 
-  @conversation_url "http://localhost/threads/test-access-token"
+  @thread_url "http://localhost/threads/test-access-token"
 
   setup do
     configure_tenant_email(factory_tenant_id())
@@ -35,7 +35,7 @@ defmodule Custyard.Intake.ReceiptEmailTest do
 
   defp send!(email \\ "buyer@example.com", source \\ nil) do
     source = source || insert_intake_source(name: "Pricing CTA")
-    ReceiptEmail.send_receipt(email, source, conversation_url: @conversation_url)
+    ReceiptEmail.send_receipt(email, source, thread_url: @thread_url)
   end
 
   describe "send_receipt/3" do
@@ -44,8 +44,8 @@ defmodule Custyard.Intake.ReceiptEmailTest do
 
       assert_email_sent(fn email ->
         assert {_name, "buyer@example.com"} = hd(email.to)
-        assert email.text_body =~ @conversation_url
-        assert email.html_body =~ @conversation_url
+        assert email.text_body =~ @thread_url
+        assert email.html_body =~ @thread_url
       end)
     end
 
@@ -82,7 +82,7 @@ defmodule Custyard.Intake.ReceiptEmailTest do
       assert {:ok, _} = send!("other@example.com")
     end
 
-    test "requires the caller to supply the conversation URL" do
+    test "requires the caller to supply the thread URL" do
       source = insert_intake_source()
 
       assert_raise KeyError, fn ->
@@ -97,7 +97,7 @@ defmodule Custyard.Intake.ReceiptEmailTest do
     test "carries no prospect-supplied content" do
       source = insert_intake_source(name: "Pricing CTA")
 
-      email = ReceiptEmail.compose("buyer@example.com", source, @conversation_url)
+      email = ReceiptEmail.compose("buyer@example.com", source, @thread_url)
 
       assert email.subject == "We received your message"
       refute email.subject =~ "buyer@example.com"
@@ -106,7 +106,7 @@ defmodule Custyard.Intake.ReceiptEmailTest do
     test "escapes a staff-configured source name in the HTML body" do
       source = insert_intake_source(name: "A&B <Sales>")
 
-      email = ReceiptEmail.compose("buyer@example.com", source, @conversation_url)
+      email = ReceiptEmail.compose("buyer@example.com", source, @thread_url)
 
       refute email.html_body =~ "<Sales>"
       assert email.html_body =~ "&amp;B"

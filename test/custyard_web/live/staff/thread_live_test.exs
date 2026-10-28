@@ -1,4 +1,4 @@
-defmodule CustyardWeb.Staff.ConversationLiveTest do
+defmodule CustyardWeb.Staff.ThreadLiveTest do
   use CustyardWeb.ConnCase, async: true
 
   import Phoenix.LiveViewTest
@@ -6,7 +6,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
   alias Custyard.Attachments.StubClient
   alias Custyard.Email.{DeliveryStatus, Outbound}
-  alias Custyard.{Attachments, Conversations, StaffAccount, Repo, Scoring}
+  alias Custyard.{Attachments, Threads, StaffAccount, Repo, Scoring}
 
   setup %{conn: conn} do
     # Create and authenticate a staff
@@ -32,8 +32,8 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     conn: conn
   } do
     org = insert_organization()
-    conv = insert_conversation(organization_id: org.id, suspect: true)
-    message = insert_message(conversation_id: conv.id)
+    conv = insert_thread(organization_id: org.id, suspect: true)
+    message = insert_message(thread_id: conv.id)
 
     {:ok, [_]} =
       Attachments.fetch_for_message(
@@ -52,10 +52,10 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
   end
 
   describe "mount/3" do
-    test "renders conversation view", %{conn: conn} do
+    test "renders thread view", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      insert_message(conversation_id: conv.id, body: "Hello from customer")
+      conv = insert_thread(organization_id: org.id)
+      insert_message(thread_id: conv.id, body: "Hello from customer")
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -66,10 +66,10 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "renders a stored HTML body as markup with the plain text behind a toggle",
          %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         body: "Hello bold",
         html_body: "<p>Hello <b>bold</b></p>"
       )
@@ -83,8 +83,8 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "lists attachments with a download link or the reason they were not fetched",
          %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, body: "See attached")
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, body: "See attached")
 
       url = StubClient.unique_url()
       StubClient.put(url, "hello")
@@ -94,7 +94,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
           %{filename: "notes.txt", content_type: "text/plain", size: 5, content_id: nil, url: url}
         ])
 
-      another_message = insert_message(conversation_id: conv.id)
+      another_message = insert_message(thread_id: conv.id)
 
       {:ok, [skipped]} =
         Attachments.fetch_for_message(
@@ -130,26 +130,26 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "shows the detected language in the header", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      {:ok, _} = conv |> Custyard.Conversation.changeset(%{language: "de"}) |> Repo.update()
+      conv = insert_thread(organization_id: org.id)
+      {:ok, _} = conv |> Custyard.Thread.changeset(%{language: "de"}) |> Repo.update()
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
-      assert has_element?(view, ~s([data-testid="conversation-language"]), "de")
+      assert has_element?(view, ~s([data-testid="thread-language"]), "de")
     end
 
-    test "transitions new conversation to active on view", %{conn: conn} do
+    test "transitions new thread to active on view", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, state: :new)
+      conv = insert_thread(organization_id: org.id, state: :new)
 
       {:ok, _view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
-      updated = Custyard.Repo.get!(Custyard.Conversation, conv.id)
+      updated = Custyard.Repo.get!(Custyard.Thread, conv.id)
       assert updated.state == :active
     end
 
     test "shows score breakdown", %{conn: conn} do
       org = insert_organization(tier: :enterprise)
-      conv = insert_conversation(organization_id: org.id, state: :new, urgency: :urgent)
+      conv = insert_thread(organization_id: org.id, state: :new, urgency: :urgent)
       Scoring.calculate_and_cache(conv.id)
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
@@ -162,7 +162,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "shows organization and contact info", %{conn: conn} do
       org = insert_organization(name: "Acme Corp", tier: :enterprise)
       contact = insert_contact(organization_id: org.id, name: "Alice", email: "alice@acme.com")
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -176,7 +176,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "alice@acme.com")
       contact |> Ecto.Changeset.change(email_status: :bounced) |> Repo.update!()
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -186,11 +186,11 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
   test "shows an email's cid: image from its own attachment", %{conn: conn} do
     org = insert_organization()
-    conv = insert_conversation(organization_id: org.id)
+    conv = insert_thread(organization_id: org.id)
 
     message =
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         html_body: ~S|<p>Our logo <img src="cid:logo@acme" alt="Logo" /></p>|
       )
 
@@ -213,7 +213,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     setup do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "alice@customer.example")
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
       %{conv: conv}
     end
 
@@ -231,7 +231,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "shows the latest participant instead of the original contact", %{conn: conn, conv: conv} do
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         triage_class: :customer,
         sender_email: "bob@customer.example"
@@ -254,7 +254,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       conv: conv
     } do
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         triage_class: :customer,
         reply_to: "Billing@Customer.example"
@@ -270,7 +270,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "ignores a Reply-To on an auto-response", %{conn: conn, conv: conv} do
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         triage_class: :auto_response,
         reply_to: "robot@customer.example"
@@ -283,8 +283,8 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     end
 
     test "shows an opted-in prospect's address, not as a Reply-To", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conv.id, email: "p@example.com", notify_on_reply: true)
+      conv = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: conv.id, email: "p@example.com", notify_on_reply: true)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -295,8 +295,8 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     end
 
     test "shows no To for a prospect who has not opted in", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conv.id, email: "p@example.com", notify_on_reply: false)
+      conv = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: conv.id, email: "p@example.com", notify_on_reply: false)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -318,14 +318,14 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
         )
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           inbound_channel_id: channel.id
         )
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         sender_email: "Alice <alice@customer.example>",
         to_addresses: ["help@acme.example", "ops@customer.example"],
@@ -360,7 +360,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> render_change()
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         sender_email: "alice@customer.example",
         cc_addresses: ["new@customer.example"],
@@ -384,7 +384,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> render_submit()
 
       [reply] =
-        Conversations.list_public_messages(conv.id) |> Enum.filter(&(&1.source == :staff))
+        Threads.list_public_messages(conv.id) |> Enum.filter(&(&1.source == :staff))
 
       assert reply.cc_addresses == ["boss@customer.example"]
       assert has_element?(view, ~s([data-testid="staff-message-cc"]), "boss@customer.example")
@@ -399,7 +399,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
         |> render_submit()
 
       assert html =~ "Invalid CC address: not an address"
-      assert Enum.all?(Conversations.list_public_messages(conv.id), &(&1.source != :staff))
+      assert Enum.all?(Threads.list_public_messages(conv.id), &(&1.source != :staff))
     end
 
     test "the composer says when a copy of replies is kept in the mailbox (D4)", %{
@@ -421,9 +421,9 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
              )
     end
 
-    test "prospect conversations have no CC field", %{conn: conn} do
+    test "prospect threads have no CC field", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, source: :public_intake)
+      conv = insert_thread(organization_id: org.id, source: :public_intake)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
       refute has_element?(view, ~s([data-testid="staff-reply-cc"]))
@@ -433,7 +433,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
   describe "handle_event send_reply" do
     test "creates a reply message", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -441,7 +441,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "This is my reply")
       |> render_submit()
 
-      messages = Conversations.list_public_messages(conv.id)
+      messages = Threads.list_public_messages(conv.id)
       assert length(messages) == 1
       assert hd(messages).body == "This is my reply"
       assert hd(messages).source == :staff
@@ -450,7 +450,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "reply message has delivery_status pending", %{conn: conn} do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "pending@customer.com")
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -458,14 +458,14 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "Outbound reply")
       |> render_submit()
 
-      [message] = Conversations.list_public_messages(conv.id)
+      [message] = Threads.list_public_messages(conv.id)
       # async delivery is disabled via test config, so status stays :pending
       assert message.delivery_status == :pending
     end
 
     test "reply message has a generated RFC 5322 message_id", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -473,7 +473,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "Reply with message ID")
       |> render_submit()
 
-      [message] = Conversations.list_public_messages(conv.id)
+      [message] = Threads.list_public_messages(conv.id)
       assert message.message_id != nil
       # RFC 5322 Message-ID format: <unique.cN@domain>
       assert message.message_id =~ ~r/^<.+\.c\d+@.+>$/
@@ -481,10 +481,10 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "reply message has in_reply_to from last customer message", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
       # Insert a customer message with a known message_id
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         message_id: "<customer-msg-123@example.com>",
         body: "Customer question"
@@ -496,24 +496,24 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "Reply to thread")
       |> render_submit()
 
-      messages = Conversations.list_public_messages(conv.id)
+      messages = Threads.list_public_messages(conv.id)
       reply = Enum.find(messages, &(&1.source == :staff))
       assert reply.in_reply_to == "<customer-msg-123@example.com>"
     end
 
     test "reply threads to the latest of multiple customer messages", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         message_id: "<older-msg@example.com>",
         body: "First question"
       )
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         message_id: "<newer-msg@example.com>",
         body: "Follow-up question"
@@ -525,14 +525,14 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "Answering the follow-up")
       |> render_submit()
 
-      messages = Conversations.list_public_messages(conv.id)
+      messages = Threads.list_public_messages(conv.id)
       reply = Enum.find(messages, &(&1.source == :staff))
       assert reply.in_reply_to == "<newer-msg@example.com>"
     end
 
     test "reply message in_reply_to is nil when no prior customer messages", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -540,13 +540,13 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "First message in thread")
       |> render_submit()
 
-      [message] = Conversations.list_public_messages(conv.id)
+      [message] = Threads.list_public_messages(conv.id)
       assert message.in_reply_to == nil
     end
 
     test "clears reply input after sending", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -562,7 +562,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "empty body does not create a message", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -570,13 +570,13 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "")
       |> render_submit()
 
-      messages = Conversations.list_public_messages(conv.id)
+      messages = Threads.list_public_messages(conv.id)
       assert messages == []
     end
 
     test "warns the staff when the contact has no email address", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, contact_id: nil)
+      conv = insert_thread(organization_id: org.id, contact_id: nil)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -587,7 +587,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
       # The reply is still recorded, but the staff sees the warning
       assert html =~ "no email address"
-      assert [_message] = Conversations.list_public_messages(conv.id)
+      assert [_message] = Threads.list_public_messages(conv.id)
     end
   end
 
@@ -596,7 +596,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       org = insert_organization()
       configure_tenant_email(org.tenant_id)
       contact = insert_contact(organization_id: org.id, email: "live@customer.com")
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -609,7 +609,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
       # Resolve the delivery the async task would normally perform; the
       # message_updated broadcast must refresh the indicator in the view.
-      [message] = Conversations.list_public_messages(conv.id)
+      [message] = Threads.list_public_messages(conv.id)
       {:ok, _} = Outbound.deliver(message)
 
       html = render(view)
@@ -620,10 +620,10 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "delivery indicator shows delivered once the status webhook confirms", %{conn: conn} do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "live@customer.com")
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :staff,
         body: "Confirmed by the provider",
         delivery_status: :delivered
@@ -641,11 +641,11 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     } do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "live@customer.com")
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       message =
         insert_message(
-          conversation_id: conv.id,
+          thread_id: conv.id,
           source: :staff,
           body: "Reached the customer, not the CC",
           delivery_status: :delivered,
@@ -688,10 +688,10 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "delivery indicator shows suppressed distinctly from bounced", %{conn: conn} do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "live@customer.com")
-      conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :staff,
         body: "Refused by the provider",
         delivery_status: :suppressed
@@ -706,7 +706,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "delivery indicator shows failed when delivery fails", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, contact_id: nil)
+      conv = insert_thread(organization_id: org.id, contact_id: nil)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -714,7 +714,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "Undeliverable")
       |> render_submit()
 
-      [message] = Conversations.list_public_messages(conv.id)
+      [message] = Threads.list_public_messages(conv.id)
       {:error, :no_recipient_email, _} = Outbound.deliver(message)
 
       html = render(view)
@@ -729,8 +729,8 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       staff: staff
     } do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, body: "Sensitive customer detail")
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, body: "Sensitive customer detail")
 
       {:ok, view, html} = live(conn, ~p"/app/threads/#{conv.id}")
       assert html =~ "Sensitive customer detail"
@@ -756,8 +756,8 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       staff: staff
     } do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, body: "Doomed message")
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, body: "Doomed message")
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -765,7 +765,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
              |> element(~s([data-testid="staff-message-delete-#{message.id}"]))
              |> render() =~ "data-confirm"
 
-      {:ok, _} = Conversations.soft_delete_message(message, staff)
+      {:ok, _} = Threads.soft_delete_message(message, staff)
 
       # The message_updated broadcast refreshes the open view: tombstone in,
       # delete affordance gone.
@@ -777,13 +777,13 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "deleting an unknown message id flashes an error and deletes nothing", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      other_conv = insert_conversation(organization_id: org.id)
-      foreign = insert_message(conversation_id: other_conv.id, body: "Other thread")
+      conv = insert_thread(organization_id: org.id)
+      other_conv = insert_thread(organization_id: org.id)
+      foreign = insert_message(thread_id: other_conv.id, body: "Other thread")
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
-      # An id from another conversation is out of scope for this view.
+      # An id from another thread is out of scope for this view.
       html = render_click(view, "delete_message", %{"id" => to_string(foreign.id)})
 
       assert html =~ "Message not found"
@@ -793,16 +793,16 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
   describe "consent-withheld replies (public intake)" do
     test "delivery indicator shows withheld", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
+      conv = insert_thread(source: :public_intake)
 
       insert_prospect(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         email: "prospect@example.com",
         notify_on_reply: false
       )
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :staff,
         sender_email: nil,
         body: "Recorded but not emailed",
@@ -816,10 +816,10 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     end
 
     test "reply without prospect consent shows the advisory and records withheld", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
+      conv = insert_thread(source: :public_intake)
 
       insert_prospect(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         email: "prospect@example.com",
         notify_on_reply: false
       )
@@ -832,17 +832,17 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
         |> form("form[phx-submit=send_reply]", body: "Reply without consent")
         |> render_submit()
 
-      [message] = Conversations.list_public_messages(conv.id)
+      [message] = Threads.list_public_messages(conv.id)
       assert message.delivery_status == :withheld
       assert html =~ "delivery-status-withheld"
       refute html =~ "delivery-status-pending"
     end
 
     test "advisory is absent when the prospect has opted in", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
+      conv = insert_thread(source: :public_intake)
 
       insert_prospect(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         email: "prospect@example.com",
         notify_on_reply: true
       )
@@ -853,21 +853,21 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     end
 
     test "advisory is absent when no email was captured", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
+      conv = insert_thread(source: :public_intake)
 
       # Prospect row without a captured email: there is no opt-in to speak
       # of, so the opt-in advisory would misstate the cause — the "no reply
       # channel" state is conveyed by the reply-channel badge instead.
-      insert_prospect(conversation_id: conv.id)
+      insert_prospect(thread_id: conv.id)
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
       refute html =~ "staff-reply-consent-advisory"
     end
 
-    test "advisory is absent on non-intake conversations", %{conn: conn} do
+    test "advisory is absent on non-intake threads", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -877,12 +877,12 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
   describe "prospect message via label" do
     test "shows the masked prospect email when one was captured", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
+      conv = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: conv.id, email: "prospect@example.com")
 
       # sender_email is nil on real prospect messages (see Intake) — the via
       # label is the only place the captured email should surface.
-      insert_message(conversation_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
+      insert_message(thread_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -891,9 +891,9 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     end
 
     test "masks all but the first char when the local part is 3 chars or fewer", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conv.id, email: "abc@example.com")
-      insert_message(conversation_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
+      conv = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: conv.id, email: "abc@example.com")
+      insert_message(thread_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -902,9 +902,9 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     end
 
     test "keeps plain via prospect when no email was captured", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
-      insert_prospect(conversation_id: conv.id)
-      insert_message(conversation_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
+      conv = insert_thread(source: :public_intake)
+      insert_prospect(thread_id: conv.id)
+      insert_message(thread_id: conv.id, source: :prospect, sender_email: nil, body: "Hi")
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -917,7 +917,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
   describe "handle_event add_note" do
     test "creates an internal note", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -933,9 +933,9 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
   end
 
   describe "handle_event set_state" do
-    test "sets conversation to waiting", %{conn: conn} do
+    test "sets thread to waiting", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, state: :active)
+      conv = insert_thread(organization_id: org.id, state: :active)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -943,13 +943,13 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> element("[phx-click=set_state][phx-value-state=waiting]")
       |> render_click()
 
-      updated = Custyard.Repo.get!(Custyard.Conversation, conv.id)
+      updated = Custyard.Repo.get!(Custyard.Thread, conv.id)
       assert updated.state == :waiting
     end
 
-    test "sets conversation to resolved", %{conn: conn} do
+    test "sets thread to resolved", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, state: :active)
+      conv = insert_thread(organization_id: org.id, state: :active)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -957,15 +957,15 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> element("[phx-click=set_state][phx-value-state=resolved]")
       |> render_click()
 
-      updated = Custyard.Repo.get!(Custyard.Conversation, conv.id)
+      updated = Custyard.Repo.get!(Custyard.Thread, conv.id)
       assert updated.state == :resolved
     end
 
-    test "waiting button toggles: clicking on a waiting conversation reverts to active", %{
+    test "waiting button toggles: clicking on a waiting thread reverts to active", %{
       conn: conn
     } do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, state: :waiting)
+      conv = insert_thread(organization_id: org.id, state: :waiting)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -979,13 +979,13 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> element("[data-testid=staff-state-waiting]")
       |> render_click()
 
-      updated = Custyard.Repo.get!(Custyard.Conversation, conv.id)
+      updated = Custyard.Repo.get!(Custyard.Thread, conv.id)
       assert updated.state == :active
     end
 
     test "waiting button reflects the toggled state after clicking", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, state: :active)
+      conv = insert_thread(organization_id: org.id, state: :active)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1010,7 +1010,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
   describe "task CRUD" do
     test "creates a task", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1030,8 +1030,8 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "toggles task state", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      {:ok, task} = Conversations.create_task(%{title: "Test task", conversation_id: conv.id})
+      conv = insert_thread(organization_id: org.id)
+      {:ok, task} = Threads.create_task(%{title: "Test task", thread_id: conv.id})
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1040,16 +1040,16 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> element("[phx-click=toggle_task][phx-value-id=\"#{task.id}\"]")
       |> render_click()
 
-      updated = Conversations.get_task!(task.id)
+      updated = Threads.get_task!(task.id)
       assert updated.state == :in_progress
     end
 
     test "edits a task", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, task} =
-        Conversations.create_task(%{title: "Original title", conversation_id: conv.id})
+        Threads.create_task(%{title: "Original title", thread_id: conv.id})
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1063,16 +1063,16 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=save_task]", title: "Updated title")
       |> render_submit()
 
-      updated = Conversations.get_task!(task.id)
+      updated = Threads.get_task!(task.id)
       assert updated.title == "Updated title"
     end
 
     test "deletes a task", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, task} =
-        Conversations.create_task(%{title: "Task to delete", conversation_id: conv.id})
+        Threads.create_task(%{title: "Task to delete", thread_id: conv.id})
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1081,20 +1081,20 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> element("[phx-click=delete_task][phx-value-id=\"#{task.id}\"]")
       |> render_click()
 
-      assert_raise Ecto.NoResultsError, fn -> Conversations.get_task!(task.id) end
+      assert_raise Ecto.NoResultsError, fn -> Threads.get_task!(task.id) end
     end
   end
 
   describe "PubSub subscription" do
     test "updates when message_added event received", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
       # Simulate a new message being added
-      Conversations.create_message!(%{
-        conversation_id: conv.id,
+      Threads.create_message!(%{
+        thread_id: conv.id,
         source: :email,
         body: "New incoming message",
         is_internal_note: false
@@ -1102,7 +1102,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
       Phoenix.PubSub.broadcast(
         Custyard.PubSub,
-        "conversation:#{conv.id}",
+        "thread:#{conv.id}",
         {:message_added, conv.id}
       )
 
@@ -1113,7 +1113,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     end
   end
 
-  describe "nil-organization conversations" do
+  describe "nil-organization threads" do
     defp insert_scoped_staff(org_id, role \\ "agent") do
       {:ok, staff} =
         %StaffAccount{}
@@ -1135,15 +1135,15 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> put_staff_session(staff.id)
     end
 
-    test "renders a nil-org conversation without crashing", %{conn: conn} do
+    test "renders a nil-org thread without crashing", %{conn: conn} do
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           subject: "Anonymous request"
         )
 
-      insert_message(conversation_id: conv.id, body: "Hello from an unlinked prospect")
+      insert_message(thread_id: conv.id, body: "Hello from an unlinked prospect")
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1157,7 +1157,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "header shows the source badge", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, source: :portal)
+      conv = insert_thread(organization_id: org.id, source: :portal)
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1165,12 +1165,12 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       assert html =~ "Portal"
     end
 
-    test "org-scoped staff can open a nil-org conversation" do
+    test "org-scoped staff can open a nil-org thread" do
       org = insert_organization()
       staff = insert_scoped_staff(org.id)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           subject: "Unlinked but visible"
@@ -1184,19 +1184,19 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       assert html =~ "Unlinked prospect"
     end
 
-    test "org-scoped staff still cannot open another org's conversation" do
+    test "org-scoped staff still cannot open another org's thread" do
       org = insert_organization()
       other_org = insert_organization(tenant_id: insert_tenant().id)
       staff = insert_scoped_staff(org.id)
 
-      conv = insert_conversation(organization_id: other_org.id, subject: "Foreign conversation")
+      conv = insert_thread(organization_id: other_org.id, subject: "Foreign thread")
 
       conn = conn_for_staff(staff)
 
       assert {:error, {:redirect, %{to: "/app", flash: flash}}} =
                live(conn, ~p"/app/threads/#{conv.id}")
 
-      assert flash["error"] =~ "Conversation not found"
+      assert flash["error"] =~ "Thread not found"
     end
 
     test "linking an unassigned customer within the tenant preserves staff access" do
@@ -1204,8 +1204,8 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       customer = insert_organization()
       contact = insert_contact(organization_id: customer.id, email: "known@customer.example")
       staff = insert_scoped_staff(own.id, "admin")
-      conv = insert_conversation(organization_id: nil, source: :public_intake, state: :active)
-      insert_prospect(conversation_id: conv.id)
+      conv = insert_thread(organization_id: nil, source: :public_intake, state: :active)
+      insert_prospect(thread_id: conv.id)
       {:ok, view, _} = live(conn_for_staff(staff), ~p"/app/threads/#{conv.id}")
       assert {:ok, linked} = Custyard.Intake.capture_email(conv, contact.email)
       assert linked.organization_id == customer.id
@@ -1213,17 +1213,17 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       assert Process.alive?(view.pid)
     end
 
-    test "super_admin can open a nil-org conversation", %{conn: conn} do
+    test "super_admin can open a nil-org thread", %{conn: conn} do
       # Default setup staff is super_admin
-      conv = insert_conversation(organization_id: nil, source: :disambiguation)
+      conv = insert_thread(organization_id: nil, source: :disambiguation)
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
       assert html =~ conv.subject
     end
 
-    test "reply on a nil-org conversation records the message without crashing", %{conn: conn} do
-      conv = insert_conversation(organization_id: nil, source: :disambiguation)
+    test "reply on a nil-org thread records the message without crashing", %{conn: conn} do
+      conv = insert_thread(organization_id: nil, source: :disambiguation)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1231,7 +1231,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> form("form[phx-submit=send_reply]", body: "Reply to unlinked prospect")
       |> render_submit()
 
-      [message] = Conversations.list_public_messages(conv.id)
+      [message] = Threads.list_public_messages(conv.id)
       assert message.body == "Reply to unlinked prospect"
       assert message.source == :staff
     end
@@ -1241,10 +1241,10 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "super_admin converts an unlinked public-intake prospect into a new organization", %{
       conn: conn
     } do
-      conv = insert_conversation(organization_id: nil, source: :public_intake)
+      conv = insert_thread(organization_id: nil, source: :public_intake)
 
       insert_prospect(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         email: "buyer@acme.com",
         email_captured_at: DateTime.utc_now() |> DateTime.truncate(:second)
       )
@@ -1265,17 +1265,17 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       |> render_submit()
 
       converted =
-        Custyard.Repo.get!(Custyard.Conversation, conv.id) |> Repo.preload(:organization)
+        Custyard.Repo.get!(Custyard.Thread, conv.id) |> Repo.preload(:organization)
 
       assert converted.organization.name == "Acme Corp"
       assert converted.source == :public_intake
     end
 
-    test "the convert button is hidden for a conversation already linked to an organization", %{
+    test "the convert button is hidden for a thread already linked to an organization", %{
       conn: conn
     } do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, source: :public_intake)
+      conv = insert_thread(organization_id: org.id, source: :public_intake)
 
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1285,7 +1285,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "agents do not see the convert button on a nil-org prospect" do
       org = insert_organization()
       staff = insert_scoped_staff(org.id, "agent")
-      conv = insert_conversation(organization_id: nil, source: :public_intake)
+      conv = insert_thread(organization_id: nil, source: :public_intake)
 
       conn = conn_for_staff(staff)
       {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
@@ -1296,7 +1296,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     test "a direct convert_prospect event from an agent is refused" do
       org = insert_organization()
       staff = insert_scoped_staff(org.id, "agent")
-      conv = insert_conversation(organization_id: nil, source: :public_intake)
+      conv = insert_thread(organization_id: nil, source: :public_intake)
 
       conn = conn_for_staff(staff)
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
@@ -1304,20 +1304,20 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       html = render_click(view, "convert_prospect", %{"name" => "Sneaky Corp"})
 
       assert html =~ "Only tenant administrators can convert prospects"
-      assert Custyard.Repo.get!(Custyard.Conversation, conv.id).organization_id == nil
+      assert Custyard.Repo.get!(Custyard.Thread, conv.id).organization_id == nil
     end
   end
 
   describe "stale task rows" do
     test "acting on a deleted task shows a notice instead of crashing", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      {:ok, task} = Conversations.create_task(%{title: "Gone soon", conversation_id: conv.id})
+      conv = insert_thread(organization_id: org.id)
+      {:ok, task} = Threads.create_task(%{title: "Gone soon", thread_id: conv.id})
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
       # Deleted from another session: nothing tells this view
-      {:ok, _} = Conversations.delete_task(task)
+      {:ok, _} = Threads.delete_task(task)
 
       html = render_click(view, "toggle_task", %{"id" => "#{task.id}"})
       assert html =~ "no longer exists"
@@ -1328,22 +1328,22 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       assert Process.alive?(view.pid)
     end
 
-    test "a task of another conversation cannot be edited through this view", %{conn: conn} do
+    test "a task of another thread cannot be edited through this view", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      other = insert_conversation(organization_id: org.id)
-      {:ok, task} = Conversations.create_task(%{title: "Elsewhere", conversation_id: other.id})
+      conv = insert_thread(organization_id: org.id)
+      other = insert_thread(organization_id: org.id)
+      {:ok, task} = Threads.create_task(%{title: "Elsewhere", thread_id: other.id})
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
       html = render_click(view, "toggle_task", %{"id" => "#{task.id}"})
       assert html =~ "no longer exists"
-      assert Conversations.get_task!(task.id).state == :open
+      assert Threads.get_task!(task.id).state == :open
     end
   end
 
   describe "inbound channel surfaces" do
-    test "header shows the channel badge when the conversation arrived on a channel", %{
+    test "header shows the channel badge when the thread arrived on a channel", %{
       conn: conn
     } do
       org = insert_organization()
@@ -1355,11 +1355,11 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
           state: :active
         )
 
-      conv = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+      conv = insert_thread(organization_id: org.id, inbound_channel_id: channel.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
-      assert view |> element("[data-testid=conversation-channel]") |> render() =~
+      assert view |> element("[data-testid=thread-channel]") |> render() =~
                "support@acme.example.com"
 
       refute render(view) =~ channel.ingress_token
@@ -1367,35 +1367,35 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "no channel badge without a channel", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
-      refute has_element?(view, "[data-testid=conversation-channel]")
-      refute has_element?(view, "[data-testid=conversation-suspect-badge]")
+      refute has_element?(view, "[data-testid=thread-channel]")
+      refute has_element?(view, "[data-testid=thread-suspect-badge]")
     end
 
     test "suspect badge can be dismissed", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      {:ok, _} = Conversations.set_suspect(conv, true)
+      conv = insert_thread(organization_id: org.id)
+      {:ok, _} = Threads.set_suspect(conv, true)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
-      assert has_element?(view, "[data-testid=conversation-suspect-badge]")
+      assert has_element?(view, "[data-testid=thread-suspect-badge]")
       view |> element("[data-testid=dismiss-suspect]") |> render_click()
 
-      refute has_element?(view, "[data-testid=conversation-suspect-badge]")
-      refute Custyard.Repo.get!(Custyard.Conversation, conv.id).suspect
+      refute has_element?(view, "[data-testid=thread-suspect-badge]")
+      refute Custyard.Repo.get!(Custyard.Thread, conv.id).suspect
     end
 
     test "email messages carry a collapsed details line with envelope data", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       msg =
         insert_message(
-          conversation_id: conv.id,
+          thread_id: conv.id,
           source: :email,
           sender_email: "alice@customer.example",
           to_addresses: ["support@acme.example.com"],
@@ -1432,10 +1432,10 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "reply-to equal to the sender is not repeated", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         source: :email,
         sender_email: "alice@customer.example",
         reply_to: "Alice@Customer.example",
@@ -1454,16 +1454,16 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "authentication badge variants: unauthenticated and no data", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       none =
         insert_message(
-          conversation_id: conv.id,
+          thread_id: conv.id,
           source: :email,
           authentication: %{"spf" => "pass"}
         )
 
-      missing = insert_message(conversation_id: conv.id, source: :email, authentication: nil)
+      missing = insert_message(thread_id: conv.id, source: :email, authentication: nil)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1480,9 +1480,9 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
     test "staff and portal messages have no details line", %{conn: conn} do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      insert_message(conversation_id: conv.id, source: :staff, body: "Reply")
-      insert_message(conversation_id: conv.id, source: :portal, body: "Portal")
+      conv = insert_thread(organization_id: org.id)
+      insert_message(thread_id: conv.id, source: :staff, body: "Reply")
+      insert_message(thread_id: conv.id, source: :portal, body: "Portal")
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1494,11 +1494,11 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
       conn: conn
     } do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       auto =
         insert_message(
-          conversation_id: conv.id,
+          thread_id: conv.id,
           source: :email,
           triage_class: :auto_response,
           body: "I am out of the office"
@@ -1506,7 +1506,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
 
       suspect =
         insert_message(
-          conversation_id: conv.id,
+          thread_id: conv.id,
           source: :email,
           triage_class: :suspect,
           body: "Urgent wire transfer"
@@ -1536,7 +1536,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
           state: :active
         )
 
-      conv = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
+      conv = insert_thread(organization_id: org.id, inbound_channel_id: channel.id)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
@@ -1548,7 +1548,7 @@ defmodule CustyardWeb.Staff.ConversationLiveTest do
     end
 
     test "composer falls back to the platform sender for public intake", %{conn: conn} do
-      conv = insert_conversation(source: :public_intake)
+      conv = insert_thread(source: :public_intake)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 

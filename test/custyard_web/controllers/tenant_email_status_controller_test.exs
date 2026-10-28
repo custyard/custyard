@@ -37,11 +37,11 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
       Repo.update!(Ecto.Changeset.change(connection, status_secret_ciphertext: ciphertext))
 
     org = insert_organization(tenant_id: tenant.id)
-    conversation = insert_conversation(tenant_id: tenant.id, organization_id: org.id)
+    thread = insert_thread(tenant_id: tenant.id, organization_id: org.id)
 
     message =
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "tenant-provider-id"
@@ -118,7 +118,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
       )
 
     insert_message(
-      conversation_id: c.message.conversation_id,
+      thread_id: c.message.thread_id,
       source: :email,
       delivery_status: nil,
       lettermint_message_id: foreign.lettermint_message_id

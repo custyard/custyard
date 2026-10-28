@@ -1446,7 +1446,7 @@ defmodule CustyardWeb.Staff.ChannelSetupComponent do
           <span>MB per message</span>
           <span class="text-xs text-gray-500 dark:text-zinc-400">(0 lists attachments without fetching)</span>
         </form>
-        <%!-- Attention score points for this channel's conversations. --%>
+        <%!-- Attention score points for this channel's threads. --%>
         <form
           id={"attention-bonus-form-#{@channel.id}"}
           phx-change="set_attention_bonus"
@@ -1467,7 +1467,7 @@ defmodule CustyardWeb.Staff.ChannelSetupComponent do
           />
           <span>points</span>
           <span class="text-xs text-gray-500 dark:text-zinc-400">
-            (0 to {InboundChannel.max_attention_bonus()}; a new conversation scores 30 for its state)
+            (0 to {InboundChannel.max_attention_bonus()}; a new thread scores 30 for its state)
           </span>
         </form>
       </section>

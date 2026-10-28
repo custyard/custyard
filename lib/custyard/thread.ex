@@ -1,4 +1,4 @@
-defmodule Custyard.Conversation do
+defmodule Custyard.Thread do
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -15,9 +15,9 @@ defmodule Custyard.Conversation do
     :public_intake
   ]
 
-  # Sources whose conversations may exist without an organization:
-  # - :disambiguation — limbo conversations awaiting manual routing
-  # - :public_intake — anonymous prospect conversations (linked later, if ever)
+  # Sources whose threads may exist without an organization:
+  # - :disambiguation — limbo threads awaiting manual routing
+  # - :public_intake — anonymous prospect threads (linked later, if ever)
 
   @neglect_levels [:ok, :warning, :critical]
 
@@ -33,7 +33,7 @@ defmodule Custyard.Conversation do
     resolved: [:active]
   }
 
-  schema "conversations" do
+  schema "threads" do
     field(:tenant_id, :id)
     belongs_to(:tenant, Custyard.Tenant, define_field: false)
     field(:subject, :string)
@@ -43,7 +43,7 @@ defmodule Custyard.Conversation do
     field(:cached_score, :integer, default: 0)
 
     # CTA provenance: which public intake source (by key string, not FK)
-    # created this conversation. Creation-only — deliberately absent from the
+    # created this thread. Creation-only — deliberately absent from the
     # changeset/2 cast list; set via intake_changeset/2 at creation.
     field(:intake_source_key, :string)
 
@@ -79,8 +79,8 @@ defmodule Custyard.Conversation do
   def sources, do: @sources
 
   @doc false
-  def changeset(conversation, attrs) do
-    conversation
+  def changeset(thread, attrs) do
+    thread
     |> cast(attrs, [
       :tenant_id,
       :subject,
@@ -118,19 +118,19 @@ defmodule Custyard.Conversation do
   so the flag is set only by triage at creation and cleared only by an
   explicit staff action.
   """
-  def suspect_changeset(conversation, suspect?) when is_boolean(suspect?) do
-    change(conversation, suspect: suspect?)
+  def suspect_changeset(thread, suspect?) when is_boolean(suspect?) do
+    change(thread, suspect: suspect?)
   end
 
   @doc """
-  Changeset for creating a public-intake conversation.
+  Changeset for creating a public-intake thread.
 
   Extends `changeset/2` with `:intake_source_key`, which is creation-only
   provenance: it is deliberately absent from the `changeset/2` cast list so
   staff-facing update paths can never set or change it.
   """
-  def intake_changeset(conversation, attrs) do
-    conversation
+  def intake_changeset(thread, attrs) do
+    thread
     |> changeset(attrs)
     |> cast(attrs, [:intake_source_key])
     |> validate_format(:intake_source_key, Custyard.IntakeSource.key_format())
@@ -158,17 +158,17 @@ defmodule Custyard.Conversation do
   end
 
   @doc """
-  Changeset for transitioning conversation state.
+  Changeset for transitioning thread state.
 
   Validates that the transition is allowed according to the state machine.
   Invalid transitions will add an error to the changeset.
   """
-  def state_changeset(conversation, new_state) do
+  def state_changeset(thread, new_state) do
     changeset =
-      conversation
+      thread
       |> cast(%{state: new_state}, [:state])
 
-    current_state = conversation.state
+    current_state = thread.state
 
     # If state hasn't changed, no validation needed
     if current_state == new_state do
@@ -193,10 +193,10 @@ defmodule Custyard.Conversation do
   end
 
   @doc """
-  Changeset for snoozing a conversation.
+  Changeset for snoozing a thread.
   """
-  def snooze_changeset(conversation, until) do
-    conversation
+  def snooze_changeset(thread, until) do
+    thread
     |> cast(%{snoozed_until: until}, [:snoozed_until])
   end
 
@@ -215,8 +215,8 @@ defmodule Custyard.Conversation do
   user-provided input while allowing internal processes to update
   computed/system fields.
   """
-  def internal_changeset(conversation, attrs) do
-    conversation
+  def internal_changeset(thread, attrs) do
+    thread
     |> cast(attrs, [:cached_score, :last_neglect_notification])
   end
 
@@ -259,7 +259,7 @@ defmodule Custyard.Conversation do
 
   defp immutable_tenant(changeset, tenant_id) do
     if changeset.data.__meta__.state == :loaded and changeset.data.tenant_id != tenant_id,
-      do: add_error(changeset, :tenant_id, "cannot move a conversation between tenants"),
+      do: add_error(changeset, :tenant_id, "cannot move a thread between tenants"),
       else: changeset
   end
 
@@ -301,5 +301,5 @@ defmodule Custyard.Conversation do
 
   defp reference_tenant(%{tenant_id: tenant_id}), do: tenant_id
 
-  # Disambiguation and public-intake conversations can have nil organization_id
+  # Disambiguation and public-intake threads can have nil organization_id
 end

@@ -215,9 +215,9 @@ defmodule Custyard.EmailSetupTest do
     channel =
       insert_inbound_channel(tenant_id: c.tenant.id, inbound_route_id: route.id, state: :active)
 
-    assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
+    assert {:ok, thread} = Dispatcher.dispatch(route, normalized, channel: channel)
     assert_receive {:new_message, id}, 1_000
-    assert id == conversation.id
+    assert id == thread.id
 
     notification = Enum.find(route.webhooks, &(&1.purpose == :notification))
     {:ok, _} = Custyard.InboundRoutes.disable_webhook(notification)
@@ -297,11 +297,11 @@ defmodule Custyard.EmailSetupTest do
   test "changing a legacy sender records the evidence boundary before the wizard is opened", c do
     channel = reply_channel(c.tenant.id, "legacy-support@example.com")
     customer = insert_organization(tenant_id: c.tenant.id)
-    conversation = insert_conversation(organization_id: customer.id)
+    thread = insert_thread(organization_id: customer.id)
 
     old_reply =
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "old-legacy-reply"

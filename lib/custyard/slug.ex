@@ -54,7 +54,7 @@ defmodule Custyard.Slug do
     field :expires_at, :utc_datetime
     field :confirmed_at, :utc_datetime
 
-    belongs_to :conversation, Custyard.Conversation
+    belongs_to :thread, Custyard.Thread
     belongs_to :organization, Custyard.Organization
 
     timestamps(type: :utc_datetime)
@@ -91,7 +91,7 @@ defmodule Custyard.Slug do
       :tenant_id,
       :slug,
       :email,
-      :conversation_id,
+      :thread_id,
       :expires_at,
       :confirmation_token_hash
     ])
@@ -101,7 +101,7 @@ defmodule Custyard.Slug do
       :tenant_id,
       :slug,
       :email,
-      :conversation_id,
+      :thread_id,
       :expires_at,
       :confirmation_token_hash
     ])
@@ -113,9 +113,9 @@ defmodule Custyard.Slug do
     |> validate_length(:email, max: 320, message: "must be at most 320 characters")
     |> EmailAddress.validate_email(:email)
     |> unique_constraint([:tenant_id, :slug], error_key: :slug, message: "is already claimed")
-    |> unique_constraint(:conversation_id, message: "already has a slug claim")
+    |> unique_constraint(:thread_id, message: "already has a slug claim")
     |> unique_constraint(:confirmation_token_hash)
-    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:thread_id)
   end
 
   # Downcase/trim BEFORE validation so "Acme " and "acme" are the same

@@ -1,13 +1,13 @@
-defmodule Custyard.Conversations.RetentionSweepTest do
+defmodule Custyard.Threads.RetentionSweepTest do
   use Custyard.DataCase, async: false
 
   import Custyard.Factory
 
-  alias Custyard.{Conversation, InboundChannelRejection, InboundChannels}
-  alias Custyard.Conversations.RetentionSweep
+  alias Custyard.{Thread, InboundChannelRejection, InboundChannels}
+  alias Custyard.Threads.RetentionSweep
 
   @zero_counts %{
-    resolved_conversations: 0,
+    resolved_threads: 0,
     orphaned_contacts: 0,
     orphaned_tasks: 0,
     channel_rejections: 0,
@@ -16,15 +16,15 @@ defmodule Custyard.Conversations.RetentionSweepTest do
     attachment_files: 0
   }
 
-  # cleanup_resolved_conversations/2 bounds on :updated_at, so ageing a row
+  # cleanup_resolved_threads/2 bounds on :updated_at, so ageing a row
   # means backdating that column past the changeset.
-  defp aged_conversation!(overrides) do
+  defp aged_thread!(overrides) do
     days = Keyword.fetch!(overrides, :days_old)
     attrs = Keyword.delete(overrides, :days_old)
-    conversation = insert_conversation(attrs)
+    thread = insert_thread(attrs)
     stamp = DateTime.add(DateTime.utc_now(), -days * 24, :hour) |> DateTime.truncate(:second)
 
-    conversation
+    thread
     |> Ecto.Changeset.change(updated_at: stamp)
     |> Repo.update!()
   end
@@ -38,51 +38,51 @@ defmodule Custyard.Conversations.RetentionSweepTest do
   end
 
   describe "sweep/1" do
-    test "deletes resolved conversations past the standard bound" do
+    test "deletes resolved threads past the standard bound" do
       org = insert_organization(tier: :standard)
 
-      stale = aged_conversation!(organization_id: org.id, state: :resolved, days_old: 120)
-      fresh = aged_conversation!(organization_id: org.id, state: :resolved, days_old: 30)
+      stale = aged_thread!(organization_id: org.id, state: :resolved, days_old: 120)
+      fresh = aged_thread!(organization_id: org.id, state: :resolved, days_old: 30)
 
       counts = RetentionSweep.sweep()
 
-      assert counts.resolved_conversations >= 1
-      refute Repo.get(Conversation, stale.id)
-      assert Repo.get(Conversation, fresh.id)
+      assert counts.resolved_threads >= 1
+      refute Repo.get(Thread, stale.id)
+      assert Repo.get(Thread, fresh.id)
     end
 
-    # Public-intake conversations honour the months-later conversation path
+    # Public-intake threads honour the months-later thread path
     # and are held for a year, not 90 days.
-    test "holds resolved public-intake conversations to the longer bound" do
+    test "holds resolved public-intake threads to the longer bound" do
       held =
-        aged_conversation!(source: :public_intake, state: :resolved, days_old: 200)
+        aged_thread!(source: :public_intake, state: :resolved, days_old: 200)
 
       expired =
-        aged_conversation!(source: :public_intake, state: :resolved, days_old: 400)
+        aged_thread!(source: :public_intake, state: :resolved, days_old: 400)
 
       RetentionSweep.sweep()
 
-      assert Repo.get(Conversation, held.id)
-      refute Repo.get(Conversation, expired.id)
+      assert Repo.get(Thread, held.id)
+      refute Repo.get(Thread, expired.id)
     end
 
     test "dry_run reports without deleting" do
       org = insert_organization(tier: :standard)
-      stale = aged_conversation!(organization_id: org.id, state: :resolved, days_old: 120)
+      stale = aged_thread!(organization_id: org.id, state: :resolved, days_old: 120)
 
       counts = RetentionSweep.sweep(dry_run: true)
 
-      assert counts.resolved_conversations >= 1
-      assert Repo.get(Conversation, stale.id)
+      assert counts.resolved_threads >= 1
+      assert Repo.get(Thread, stale.id)
     end
 
-    test "unresolved conversations are never swept, however old" do
+    test "unresolved threads are never swept, however old" do
       org = insert_organization(tier: :standard)
-      ancient = aged_conversation!(organization_id: org.id, state: :active, days_old: 900)
+      ancient = aged_thread!(organization_id: org.id, state: :active, days_old: 900)
 
       RetentionSweep.sweep()
 
-      assert Repo.get(Conversation, ancient.id)
+      assert Repo.get(Thread, ancient.id)
     end
 
     test "returns a zeroed count map rather than raising when cleanup fails" do
@@ -118,7 +118,7 @@ defmodule Custyard.Conversations.RetentionSweepTest do
       assert counts.channel_rejections == 1
       assert counts.channel_verifications == 1
       assert counts.channel_tokens == 1
-      assert Map.has_key?(counts, :resolved_conversations)
+      assert Map.has_key?(counts, :resolved_threads)
 
       refute Repo.get(InboundChannelRejection, old_rejection.id)
       assert Repo.get(InboundChannelRejection, fresh_rejection.id)

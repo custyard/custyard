@@ -17,7 +17,7 @@ defmodule Custyard.InboundChannels do
     * Health: `mark_received/2` on every accepted delivery,
       `check_quiet_channels/1` run by `Custyard.Scoring.Scheduler`, and the
       rejection log; `sweep_expired/1` is run by
-      `Custyard.Conversations.RetentionSweep`
+      `Custyard.Threads.RetentionSweep`
     * Audit events for every admin action. Payloads never carry the ingress
       token or message content.
 
@@ -284,7 +284,7 @@ defmodule Custyard.InboundChannels do
   @doc """
   Update staff-editable attributes (display name, provider, reply_from,
   sending_domain, quiet window, attention bonus). A changed attention bonus rescores the
-  channel's active conversations at once.
+  channel's active threads at once.
   """
   def update_channel(%InboundChannel{} = channel, attrs, opts \\ []) when is_map(attrs) do
     staff_mutation(channel, opts, fn channel -> do_update_channel(channel, attrs, opts) end)
@@ -312,7 +312,7 @@ defmodule Custyard.InboundChannels do
 
   defp rescore(%InboundChannel{id: id}) do
     Recalculator.recalculate_channel(id)
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, nil})
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, nil})
   end
 
   @doc """
@@ -432,7 +432,7 @@ defmodule Custyard.InboundChannels do
     end
   end
 
-  @doc "Pause: deliveries are logged to the rejection log instead of becoming conversations."
+  @doc "Pause: deliveries are logged to the rejection log instead of becoming threads."
   def pause(%InboundChannel{} = channel, opts \\ []) do
     transition(channel, opts, &InboundChannel.state_changeset(&1, :paused, %{paused_at: now()}))
   end
@@ -799,7 +799,7 @@ defmodule Custyard.InboundChannels do
 
     * `{:ok, channel}` for a receiving channel that matched
     * `{:paused, channel}` / `{:revoked, channel}` when the token matched a
-      channel that must not create conversations
+      channel that must not create threads
     * `{:error, :no_channel}` when the route has channels but nothing matched
 
   Only the recipient (`data.recipient`, falling back to `normalized.to`) is

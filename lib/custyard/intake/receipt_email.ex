@@ -26,7 +26,7 @@ defmodule Custyard.Intake.ReceiptEmail do
   Bounded by the `:intake_receipt_email` bucket keyed by the (already
   downcased) captured address. Delivery runs through the supervised task
   pool when `:deliver_replies_async?` is set (sync in test). A failure
-  changes nothing about the submission: the conversation, prospect, and
+  changes nothing about the submission: the thread, prospect, and
   message rows are committed before this is called.
   """
 
@@ -41,7 +41,7 @@ defmodule Custyard.Intake.ReceiptEmail do
   @doc """
   Send the submission receipt to a captured prospect address.
 
-  Requires `:conversation_url` in `opts` — the caller owns URL
+  Requires `:thread_url` in `opts` — the caller owns URL
   construction. Returns `{:ok, metadata}` / `{:error, reason}` when
   delivering synchronously, `{:ok, :queued}` when the task supervisor
   takes the job, `{:error, :queue_failed}` when it refuses,
@@ -49,7 +49,7 @@ defmodule Custyard.Intake.ReceiptEmail do
   `{:error, :disabled}` when email notifications are switched off.
   """
   def send_receipt(email, %IntakeSource{} = source, opts) when is_binary(email) do
-    conversation_url = Keyword.fetch!(opts, :conversation_url)
+    thread_url = Keyword.fetch!(opts, :thread_url)
 
     if email_enabled?() do
       with {:ok, delivery} <- EmailBranding.delivery_settings(source.tenant_id) do
@@ -59,7 +59,7 @@ defmodule Custyard.Intake.ReceiptEmail do
 
           {:allow, _count} ->
             email
-            |> compose(source, conversation_url, delivery)
+            |> compose(source, thread_url, delivery)
             |> deliver(delivery.config)
         end
       end
@@ -71,7 +71,7 @@ defmodule Custyard.Intake.ReceiptEmail do
   @doc """
   Compose the receipt without delivering (testable seam).
   """
-  def compose(email, %IntakeSource{} = source, conversation_url, delivery \\ nil)
+  def compose(email, %IntakeSource{} = source, thread_url, delivery \\ nil)
       when is_binary(email) do
     branding = EmailBranding.for_tenant(source.tenant_id)
 
@@ -79,8 +79,8 @@ defmodule Custyard.Intake.ReceiptEmail do
     |> to(email)
     |> EmailBranding.put_sender(branding, delivery || source.tenant_id)
     |> subject(Headers.sanitize_header_text("We received your message"))
-    |> text_body(EmailBranding.text_header(branding) <> receipt_text(source, conversation_url))
-    |> html_body(receipt_html(source, conversation_url, branding))
+    |> text_body(EmailBranding.text_header(branding) <> receipt_text(source, thread_url))
+    |> html_body(receipt_html(source, thread_url, branding))
   end
 
   defp deliver(email_struct, config) do
@@ -97,7 +97,7 @@ defmodule Custyard.Intake.ReceiptEmail do
   end
 
   # The recipient address is deliberately absent from both log lines: it is
-  # prospect PII, and the conversation is durable without it.
+  # prospect PII, and the thread is durable without it.
   defp do_deliver(email_struct, config) do
     case Custyard.Mailer.deliver(email_struct, config) do
       {:ok, _metadata} = result ->
@@ -115,23 +115,23 @@ defmodule Custyard.Intake.ReceiptEmail do
   end
 
   # Staff-configured source name only — no submitted content.
-  defp receipt_text(source, conversation_url) do
+  defp receipt_text(source, thread_url) do
     """
     Thanks for contacting us through #{source.name}. Your message is with
     our team and we will reply on this thread.
 
-    Return to your conversation any time with this link:
+    Return to your thread any time with this link:
 
-    #{conversation_url}
+    #{thread_url}
 
     Keep it somewhere safe — anyone with the link can read and reply to
-    this conversation, and we cannot send you a replacement.
+    this thread, and we cannot send you a replacement.
     """
   end
 
-  defp receipt_html(source, conversation_url, branding) do
+  defp receipt_html(source, thread_url, branding) do
     safe_source = html_escape(source.name)
-    conversation_url = html_escape(conversation_url)
+    thread_url = html_escape(thread_url)
 
     """
     <html>
@@ -143,16 +143,16 @@ defmodule Custyard.Intake.ReceiptEmail do
           message is with our team and we will reply on this thread.
         </p>
         <div style="text-align: center; margin: 24px 0;">
-          <a href="#{conversation_url}" style="display: inline-block; background: #{branding.color}; color: white; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 16px;">
-            Return to your conversation
+          <a href="#{thread_url}" style="display: inline-block; background: #{branding.color}; color: white; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 16px;">
+            Return to your thread
           </a>
         </div>
         <p style="color: #6b7280; font-size: 14px;">Or copy and paste this link into your browser:</p>
-        <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{conversation_url}</p>
+        <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{thread_url}</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
         <p style="color: #9ca3af; font-size: 12px; margin-bottom: 0;">
           Keep this link somewhere safe — anyone with it can read and reply to
-          this conversation, and we cannot send you a replacement.
+          this thread, and we cannot send you a replacement.
         </p>
       </div>
     </body>

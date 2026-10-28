@@ -1,9 +1,9 @@
-defmodule Custyard.Conversations.RetentionSweep do
+defmodule Custyard.Threads.RetentionSweep do
   @moduledoc """
   Daily sweep enforcing the documented retention bounds.
 
-  `Conversations.run_cleanup/1` implements the conversation bounds — 90 days
-  for resolved conversations, 365 for resolved public-intake ones (spec: NFR
+  `Threads.run_cleanup/1` implements the thread bounds — 90 days
+  for resolved threads, 365 for resolved public-intake ones (spec: NFR
   Retention), plus orphaned contacts and tasks — and was fully tested but
   had no caller, so nothing ever ran it. Prospect emails accumulated
   indefinitely, contradicting the stated policy.
@@ -30,11 +30,11 @@ defmodule Custyard.Conversations.RetentionSweep do
 
   require Logger
 
-  alias Custyard.{Conversations, InboundChannels}
+  alias Custyard.{Threads, InboundChannels}
 
   @interval :timer.hours(24)
   @zero_counts %{
-    resolved_conversations: 0,
+    resolved_threads: 0,
     orphaned_contacts: 0,
     orphaned_tasks: 0,
     channel_rejections: 0,
@@ -63,7 +63,7 @@ defmodule Custyard.Conversations.RetentionSweep do
   @doc """
   Delete every row past its retention bound.
 
-  `opts` are passed through to `Conversations.run_cleanup/1`, so a caller
+  `opts` are passed through to `Threads.run_cleanup/1`, so a caller
   can pass `dry_run: true` or override either bound. Returns the counts map
   `run_cleanup/1` returns plus `channel_rejections`, `channel_verifications`
   and `channel_tokens` from `InboundChannels.sweep_expired/0`, or a zeroed
@@ -73,13 +73,13 @@ defmodule Custyard.Conversations.RetentionSweep do
   def sweep(opts \\ []) do
     counts =
       opts
-      |> Conversations.run_cleanup()
+      |> Threads.run_cleanup()
       |> Map.merge(channel_counts(opts))
 
     if Enum.any?(counts, fn {_key, count} -> count > 0 end) do
       Logger.info(
-        "Conversations.RetentionSweep: deleted " <>
-          "#{counts.resolved_conversations} conversations, " <>
+        "Threads.RetentionSweep: deleted " <>
+          "#{counts.resolved_threads} threads, " <>
           "#{counts.orphaned_contacts} contacts, #{counts.orphaned_tasks} tasks, " <>
           "#{counts.channel_rejections} channel rejections; cleared " <>
           "#{counts.channel_verifications} channel verifications, " <>
@@ -90,7 +90,7 @@ defmodule Custyard.Conversations.RetentionSweep do
     counts
   rescue
     e ->
-      Logger.error("Conversations.RetentionSweep: sweep failed: #{inspect(e)}")
+      Logger.error("Threads.RetentionSweep: sweep failed: #{inspect(e)}")
       @zero_counts
   end
 
@@ -110,7 +110,7 @@ defmodule Custyard.Conversations.RetentionSweep do
         channel_rejections: rejections,
         channel_verifications: verifications,
         channel_tokens: tokens,
-        # Files whose attachment rows went with their swept conversations.
+        # Files whose attachment rows went with their swept threads.
         attachment_files: Custyard.Attachments.sweep_orphan_files()
       }
     end

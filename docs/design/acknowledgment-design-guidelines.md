@@ -2,7 +2,7 @@
 
 Research reviewed: 2026-10-23. Status: advisory research and proposed extension guidance, not an accepted specification or an implementation report.
 
-This document captures the membership-growth discussion and its technical research for Custyard. It distinguishes the proposed customer checkpoint from the existing Colonel acknowledgment flow. Earlier conversational recommendations are proposals; silence in the discussion does not establish acceptance.
+This document captures the membership-growth discussion and its technical research for Custyard. It distinguishes the proposed customer checkpoint from the existing Colonel acknowledgment flow. Earlier threadal recommendations are proposals; silence in the discussion does not establish acceptance.
 
 ## 1. Scope and source authority
 
@@ -23,7 +23,7 @@ Consequently, applying a one-per-organization constraint to the existing evidenc
 
 ## 2. The originating use case
 
-The conversation proposes fixed subscription pricing with unlimited members and a one-time organization acknowledgment when membership growth reaches a checkpoint, replacing a soft numerical limit. These are requested product semantics, not verified Custyard or OTS behavior.
+The thread proposes fixed subscription pricing with unlimited members and a one-time organization acknowledgment when membership growth reaches a checkpoint, replacing a soft numerical limit. These are requested product semantics, not verified Custyard or OTS behavior.
 
 | Approach | Purpose | Experience |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ The conversation proposes fixed subscription pricing with unlimited members and 
 
 The proposed checkpoint has no upgrade, discretionary approval, or recurring sequence of numerical caps. Only a person authorized to manage that organization's members can confirm. Confirmation neither grants permissions nor bypasses unrelated restrictions. Repeated submissions preserve the original fact. Renewal, billing synchronization, plan changes, and entitlement recalculation do not erase it. Copy revisions do not automatically require confirmation again.
 
-These requirements come from the user's conversation, including: “one confirmation per organization for the membership-growth policy” and “Billing synchronization, renewal, plan changes, and entitlement recalculation must not erase the acknowledgment.” They are requirements for a proposed customer flow, not guarantees supplied by the existing Colonel service.
+These requirements come from the user's thread, including: “one confirmation per organization for the membership-growth policy” and “Billing synchronization, renewal, plan changes, and entitlement recalculation must not erase the acknowledgment.” They are requirements for a proposed customer flow, not guarantees supplied by the existing Colonel service.
 
 An acknowledgment records an action; it does not prove subsequent usage is appropriate. Resource monitoring and abuse controls remain separate design concerns.
 
@@ -48,7 +48,7 @@ An acknowledgment records an action; it does not prove subsequent usage is appro
 | Subscription entitlement | What the subscribed plan includes |
 | Abuse monitoring | Signals and responses concerning actual behavior |
 
-Recommendation: make evidence queryable independently of audit-log retention, billing lifecycles, conversations, and support emails. An audit event may reference the evidence record; it need not be the authoritative record itself. Microsoft Entra demonstrates separate acceptance reporting and audit events, with different retention behavior [R1].
+Recommendation: make evidence queryable independently of audit-log retention, billing lifecycles, threads, and support emails. An audit event may reference the evidence record; it need not be the authoritative record itself. Microsoft Entra demonstrates separate acceptance reporting and audit events, with different retention behavior [R1].
 
 ## 4. Conventional relationships
 
@@ -177,7 +177,7 @@ These are research references, not dependency selections or procurement recommen
 | Fides [R11] | Privacy-engineering reference implementation | Public application repository is archived; distinguish it from the Fides ontology used by Astralis |
 | Ethyca Astralis [R12–R18] | Consent history, effective preferences, and runtime governance built on Fides | Commercial platform reference; its organization acknowledgment fit and migration terms need separate evaluation |
 
-Recommendation for Custyard: retain the existing dedicated evidence model and snapshot approach. Introduce a separate customer checkpoint contract and state model only when that feature is accepted. A general limits-override framework, document-authoring service, and event-sourced consent engine are not implied by the conversation.
+Recommendation for Custyard: retain the existing dedicated evidence model and snapshot approach. Introduce a separate customer checkpoint contract and state model only when that feature is accepted. A general limits-override framework, document-authoring service, and event-sourced consent engine are not implied by the thread.
 
 ### Ethyca Astralis and the Fides lineage
 
@@ -217,7 +217,7 @@ These are design interpretations, not an integration proposal:
 2. **Keep stable identity separate from presented revision.** Astralis' notice key/history distinction reinforces the existing statement key/version split.
 3. **Keep capture, projection, and enforcement distinct.** Historical evidence answers what happened; effective preferences answer what applies now; a policy engine decides whether a particular operation is allowed. Custyard can maintain those boundaries without adopting a general governance engine.
 4. **Do not infer organization delegation from custom identifiers.** A custom account identifier does not by itself model a person acting for an organization, validate membership-management authority, or provide one-per-organization business idempotency. Those requirements remain to be designed explicitly.
-5. **Use the appropriate scope.** Astralis is relevant if requirements expand into multiple privacy purposes, changing preferences, downstream enforcement, and enterprise governance. Its public documentation does not establish an off-the-shelf implementation of this conversation's permanent membership-growth checkpoint.
+5. **Use the appropriate scope.** Astralis is relevant if requirements expand into multiple privacy purposes, changing preferences, downstream enforcement, and enterprise governance. Its public documentation does not establish an off-the-shelf implementation of this thread's permanent membership-growth checkpoint.
 
 The Astralis findings refine the earlier Fides entry: an archived public application repository is insufficient evidence to dismiss the continuing commercial product. For the present Custyard feature, the most useful contribution is the explicit separation of submitted evidence from derived effective state.
 

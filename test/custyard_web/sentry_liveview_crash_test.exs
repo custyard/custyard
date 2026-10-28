@@ -2,7 +2,7 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
   @moduledoc """
   End-to-end proof for the LiveView/process-crash scrubbing path.
 
-  A crashed `ConversationLive` never passes through `Sentry.PlugContext`;
+  A crashed `ThreadLive` never passes through `Sentry.PlugContext`;
   `Sentry.LoggerHandler` reports it by `inspect/1`-ing the crashed socket state
   into the event message and `:extra.crash_reason`. Because the raw access
   token lives in socket assigns, it surfaces there as a bare `access_token:
@@ -27,8 +27,8 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
       public_instance_ip: @generous,
       intake_get: @generous,
       intake_post: @generous,
-      conversation_mount: @generous,
-      conversation_reply: @generous,
+      thread_mount: @generous,
+      thread_reply: @generous,
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
@@ -51,7 +51,7 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     )
   end
 
-  # Crash a real ConversationLive and return the inspected raw :logger crash
+  # Crash a real ThreadLive and return the inspected raw :logger crash
   # report — i.e. what Sentry.LoggerHandler would turn into an event.
   defp capture_crash_report(token) do
     {:ok, agent} = Agent.start_link(fn -> [] end)
@@ -106,11 +106,11 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     end
   end
 
-  test "a real ConversationLive crash report is scrubbed of the raw access token" do
+  test "a real ThreadLive crash report is scrubbed of the raw access token" do
     source = insert_intake_source(mode: :active)
 
     {:ok, %{access_token: token}} =
-      Intake.create_intake_conversation(source.key, "Hello crash", tenant_id: source.tenant_id)
+      Intake.create_intake_thread(source.key, "Hello crash", tenant_id: source.tenant_id)
 
     report = capture_crash_report(token)
 

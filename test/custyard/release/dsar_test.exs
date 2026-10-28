@@ -5,7 +5,7 @@ defmodule Custyard.Release.DsarTest do
   import Custyard.Factory
   import ExUnit.CaptureIO
 
-  alias Custyard.{AuditEvent, Contact, Conversation, InboundChannelRejection}
+  alias Custyard.{AuditEvent, Contact, Thread, InboundChannelRejection}
   alias Custyard.{Message, MessageAttachment, Organization}
   alias Custyard.Release.Dsar
 
@@ -22,7 +22,7 @@ defmodule Custyard.Release.DsarTest do
   defp state do
     %{
       messages: Repo.all(from(m in Message, order_by: m.id)),
-      conversations: Repo.all(from(c in Conversation, order_by: c.id)),
+      threads: Repo.all(from(c in Thread, order_by: c.id)),
       contacts: Repo.all(from(c in Contact, order_by: c.id)),
       attachments: Repo.all(from(a in MessageAttachment, order_by: a.id)),
       rejections: Repo.all(from(r in InboundChannelRejection, order_by: r.id)),
@@ -35,12 +35,12 @@ defmodule Custyard.Release.DsarTest do
   setup do
     org = insert_organization()
     pat = insert_contact(organization_id: org.id, email: @email, name: "Pat")
-    own = insert_conversation(organization_id: org.id, contact_id: pat.id, subject: "My order")
-    other = insert_conversation(organization_id: org.id, subject: "Invoice")
+    own = insert_thread(organization_id: org.id, contact_id: pat.id, subject: "My order")
+    other = insert_thread(organization_id: org.id, subject: "Invoice")
 
     sent =
       insert_message(
-        conversation_id: own.id,
+        thread_id: own.id,
         sender_email: "Pat <#{@email}>",
         to_addresses: ["help@acme.example"],
         body: "Order 42 for Pat"
@@ -56,7 +56,7 @@ defmodule Custyard.Release.DsarTest do
 
     cc =
       insert_message(
-        conversation_id: other.id,
+        thread_id: other.id,
         sender_email: "alice@customer.example",
         to_addresses: ["help@acme.example"],
         cc_addresses: ["PAT@example.com", "boss@customer.example"],
@@ -232,7 +232,7 @@ defmodule Custyard.Release.DsarTest do
              Sent messages erased: 1
              Attachments removed: 1
              Contact records removed: 1
-             Conversation subjects erased: 1
+             Thread subjects erased: 1
              Rejection-log entries removed: 1
              """
 
@@ -242,7 +242,7 @@ defmodule Custyard.Release.DsarTest do
       assert sent.deleted_at
       assert Repo.get!(Message, ctx.cc.id).cc_addresses == ["boss@customer.example"]
       refute Repo.get(Contact, ctx.pat.id)
-      assert Repo.get!(Conversation, ctx.own.id).subject == "(erased)"
+      assert Repo.get!(Thread, ctx.own.id).subject == "(erased)"
       assert Repo.aggregate(MessageAttachment, :count) == 0
       assert Repo.aggregate(InboundChannelRejection, :count) == 0
 

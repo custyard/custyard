@@ -11,7 +11,7 @@ defmodule Custyard.SlugTest do
           tenant_id: Custyard.Factory.factory_tenant_id(),
           slug: "acme-corp",
           email: "claimant@example.com",
-          conversation_id: 1,
+          thread_id: 1,
           expires_at: DateTime.add(DateTime.utc_now(), 72, :hour),
           confirmation_token_hash: Token.generate() |> elem(1)
         },
@@ -156,12 +156,12 @@ defmodule Custyard.SlugTest do
   end
 
   describe "required fields" do
-    test "slug, email, conversation, expiry, and token hash are all required" do
+    test "slug, email, thread, expiry, and token hash are all required" do
       cs = Slug.claim_changeset(%Slug{}, %{})
 
       errors = errors_on(cs)
 
-      for field <- [:slug, :email, :conversation_id, :expires_at, :confirmation_token_hash] do
+      for field <- [:slug, :email, :thread_id, :expires_at, :confirmation_token_hash] do
         assert "can't be blank" in Map.fetch!(errors, field)
       end
     end

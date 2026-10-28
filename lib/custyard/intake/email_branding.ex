@@ -1,12 +1,12 @@
 defmodule Custyard.Intake.EmailBranding do
   @moduledoc false
-  alias Custyard.{Conversation, InboundChannels, Repo, Tenants}
+  alias Custyard.{Thread, InboundChannels, Repo, Tenants}
   alias Custyard.Email.Headers
 
-  def tenant_id_for_claim(%{conversation_id: id}) do
-    case id && Repo.get(Conversation, id) do
-      %Conversation{tenant_id: tenant_id} -> tenant_id
-      _ -> raise ArgumentError, "claim requires a tenant-owned conversation"
+  def tenant_id_for_claim(%{thread_id: id}) do
+    case id && Repo.get(Thread, id) do
+      %Thread{tenant_id: tenant_id} -> tenant_id
+      _ -> raise ArgumentError, "claim requires a tenant-owned thread"
     end
   end
 
@@ -61,10 +61,10 @@ defmodule Custyard.Intake.EmailBranding do
     }
   end
 
-  def for_claim(%{conversation_id: id}) do
-    case id && Repo.get(Conversation, id) do
-      %Conversation{tenant_id: tenant_id} -> for_tenant(tenant_id)
-      _ -> raise ArgumentError, "claim requires a tenant-owned conversation"
+  def for_claim(%{thread_id: id}) do
+    case id && Repo.get(Thread, id) do
+      %Thread{tenant_id: tenant_id} -> for_tenant(tenant_id)
+      _ -> raise ArgumentError, "claim requires a tenant-owned thread"
     end
   end
 

@@ -28,11 +28,11 @@ defmodule Custyard.Authorization do
       when is_integer(id), do: true
 
   def can_manage_project?(staff, id), do: can_manage_organization?(staff, id)
-  def can_set_conversation_state?(staff), do: has_minimum_role?(staff, "admin")
+  def can_set_thread_state?(staff), do: has_minimum_role?(staff, "admin")
 
-  def can_access_conversation?(%StaffAccount{tenant_id: id}, %{tenant_id: id})
+  def can_access_thread?(%StaffAccount{tenant_id: id}, %{tenant_id: id})
       when is_integer(id), do: true
 
-  def can_access_conversation?(%Scope{} = scope, resource), do: Scope.tenant?(scope, resource)
-  def can_access_conversation?(_, _), do: false
+  def can_access_thread?(%Scope{} = scope, resource), do: Scope.tenant?(scope, resource)
+  def can_access_thread?(_, _), do: false
 end

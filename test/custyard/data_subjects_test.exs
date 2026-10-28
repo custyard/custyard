@@ -6,7 +6,7 @@ defmodule Custyard.DataSubjectsTest do
 
   alias Custyard.Email.{Outbound, SenderMatcher}
 
-  alias Custyard.{AuditEvent, Contact, Conversation, DataSubjects, Message, Repo}
+  alias Custyard.{AuditEvent, Contact, Thread, DataSubjects, Message, Repo}
   alias Custyard.{InboundChannelRejection, MessageAttachment, MessageRecipientStatus}
 
   defp scope(org) do
@@ -27,12 +27,12 @@ defmodule Custyard.DataSubjectsTest do
   setup do
     org = insert_organization()
     other_org = insert_organization()
-    conv = insert_conversation(organization_id: org.id, subject: "Invoice")
-    other_conv = insert_conversation(organization_id: other_org.id)
+    conv = insert_thread(organization_id: org.id, subject: "Invoice")
+    other_conv = insert_thread(organization_id: other_org.id)
 
     sent =
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         sender_email: "Pat <pat@example.com>",
         to_addresses: ["help@acme.example"],
         body: "I wrote this"
@@ -40,7 +40,7 @@ defmodule Custyard.DataSubjectsTest do
 
     cc =
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         sender_email: "alice@customer.example",
         to_addresses: ["help@acme.example"],
         cc_addresses: ["PAT@example.com", "boss@customer.example"],
@@ -49,15 +49,15 @@ defmodule Custyard.DataSubjectsTest do
 
     reply_to =
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         sender_email: "alice@customer.example",
         to_addresses: ["pat@example.com", "help@acme.example"],
         reply_to: "pat@example.com",
         body: "Alice again"
       )
 
-    unrelated = insert_message(conversation_id: conv.id, sender_email: "zed@example.com")
-    foreign = insert_message(conversation_id: other_conv.id, cc_addresses: ["pat@example.com"])
+    unrelated = insert_message(thread_id: conv.id, sender_email: "zed@example.com")
+    foreign = insert_message(thread_id: other_conv.id, cc_addresses: ["pat@example.com"])
 
     %{org: org, sent: sent, cc: cc, reply_to: reply_to, unrelated: unrelated, foreign: foreign}
   end
@@ -191,19 +191,19 @@ defmodule Custyard.DataSubjectsTest do
     contact = insert_contact(organization_id: business.id, email: "alice@gmail.com")
 
     thread =
-      insert_conversation(
+      insert_thread(
         organization_id: business.id,
         contact_id: contact.id,
         source: :public_intake
       )
 
     prospect =
-      insert_prospect(conversation_id: thread.id, email: "alice@gmail.com", notify_on_reply: true)
+      insert_prospect(thread_id: thread.id, email: "alice@gmail.com", notify_on_reply: true)
 
     assert {:ok, pending_claim, _} =
              Custyard.Slugs.claim("pending-business", "alice@gmail.com", thread)
 
-    second = insert_conversation(organization_id: business.id, source: :public_intake)
+    second = insert_thread(organization_id: business.id, source: :public_intake)
 
     assert {:ok, retained_slug, _} =
              Custyard.Slugs.claim("retained-business", "alice@gmail.com", second)
@@ -237,7 +237,7 @@ defmodule Custyard.DataSubjectsTest do
     own =
       insert_audit_event(
         organization_id: ctx.org.id,
-        conversation_id: ctx.sent.conversation_id,
+        thread_id: ctx.sent.thread_id,
         payload: %{
           "sender_email" => "Pat <pat@example.com>",
           "subject" => "Pat private subject",
@@ -248,7 +248,7 @@ defmodule Custyard.DataSubjectsTest do
 
     associated =
       insert_audit_event(
-        conversation_id: ctx.sent.conversation_id,
+        thread_id: ctx.sent.thread_id,
         payload: %{
           "from" => "staff@example.com",
           "subject" => "Pat copied subject",
@@ -256,12 +256,12 @@ defmodule Custyard.DataSubjectsTest do
         }
       )
 
-    unrelated_thread = insert_conversation(organization_id: ctx.org.id)
+    unrelated_thread = insert_thread(organization_id: ctx.org.id)
 
     unrelated =
       insert_audit_event(
         organization_id: ctx.org.id,
-        conversation_id: unrelated_thread.id,
+        thread_id: unrelated_thread.id,
         payload: %{
           "sender_email" => "someone@example.com",
           "subject" => "Another person's subject"
@@ -270,7 +270,7 @@ defmodule Custyard.DataSubjectsTest do
 
     another_customer =
       insert_audit_event(
-        conversation_id: ctx.foreign.conversation_id,
+        thread_id: ctx.foreign.thread_id,
         payload: %{"sender_email" => "pat@example.com", "subject" => "Different customer"}
       )
 
@@ -375,19 +375,19 @@ defmodule Custyard.DataSubjectsTest do
   test "sender wildcard characters are literal and matching roles agree", ctx do
     exact =
       insert_message(
-        conversation_id: ctx.cc.conversation_id,
+        thread_id: ctx.cc.thread_id,
         sender_email: " Person <a_%!@example.com> "
       )
 
     unrelated =
       insert_message(
-        conversation_id: ctx.cc.conversation_id,
+        thread_id: ctx.cc.thread_id,
         sender_email: "Person <aZanything!@example.com>"
       )
 
     recipient =
       insert_message(
-        conversation_id: ctx.cc.conversation_id,
+        thread_id: ctx.cc.thread_id,
         sender_email: "someone@example.com",
         cc_addresses: [" A_%!@example.com "]
       )
@@ -465,11 +465,11 @@ defmodule Custyard.DataSubjectsTest do
       pat = insert_contact(organization_id: ctx.org.id, email: "Pat@Example.com", name: "Pat")
 
       own =
-        insert_conversation(organization_id: ctx.org.id, contact_id: pat.id, subject: "My order")
+        insert_thread(organization_id: ctx.org.id, contact_id: pat.id, subject: "My order")
 
       own_message =
         insert_message(
-          conversation_id: own.id,
+          thread_id: own.id,
           sender_email: "pat@example.com",
           to_addresses: ["help@acme.example"],
           body: "Order 42 for Pat",
@@ -478,7 +478,7 @@ defmodule Custyard.DataSubjectsTest do
 
       reply =
         insert_message(
-          conversation_id: own.id,
+          thread_id: own.id,
           source: :staff,
           sender_email: "help@acme.example",
           to_addresses: ["pat@example.com"],
@@ -561,7 +561,7 @@ defmodule Custyard.DataSubjectsTest do
                erased: 3,
                messages_erased: 2,
                attachments_removed: 1,
-               conversations_retitled: 1,
+               threads_retitled: 1,
                contacts_removed: 1,
                rejections_removed: 1
              }
@@ -580,7 +580,7 @@ defmodule Custyard.DataSubjectsTest do
       assert Repo.aggregate(MessageAttachment, :count) == 0
       refute Repo.get(Contact, ctx.pat.id)
 
-      own = Repo.get!(Conversation, ctx.own.id)
+      own = Repo.get!(Thread, ctx.own.id)
       assert own.subject == "(erased)"
       assert own.contact_id == nil
       assert Repo.aggregate(InboundChannelRejection, :count) == 0
@@ -602,7 +602,7 @@ defmodule Custyard.DataSubjectsTest do
       assert Repo.get!(Message, ctx.cc.id).cc_addresses == ["boss@customer.example"]
       assert Repo.get!(Message, ctx.unrelated.id).deleted_at == nil
       assert Repo.get!(Message, ctx.foreign.id).cc_addresses == ["pat@example.com"]
-      assert Repo.get!(Conversation, ctx.sent.conversation_id).subject == "Invoice"
+      assert Repo.get!(Thread, ctx.sent.thread_id).subject == "Invoice"
     end
 
     test "writes one audit event with counts and no address", ctx do

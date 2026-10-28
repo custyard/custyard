@@ -22,7 +22,7 @@ This document outlines a comprehensive testing strategy for Custyard's email inf
 | `Custyard.Notifications.Email` | `lib/custyard/notifications/email.ex` | Alert composition |
 | `Custyard.Email.Processor` | `lib/custyard/email/processor.ex` | Inbound webhook handler |
 | `Custyard.Email.SenderMatcher` | `lib/custyard/email/sender_matcher.ex` | Contact/Org resolution |
-| `Custyard.Email.ThreadMatcher` | `lib/custyard/email/thread_matcher.ex` | Conversation threading |
+| `Custyard.Email.ThreadMatcher` | `lib/custyard/email/thread_matcher.ex` | Thread threading |
 | `Custyard.Email.SieveHeaderMapper` | `lib/custyard/email/sieve_header_mapper.ex` | MTA metadata extraction |
 | `CustyardWeb.WebhookController` | `lib/custyard_web/controllers/webhook_controller.ex` | HTTP endpoint |
 
@@ -152,7 +152,7 @@ end
    - Empty references skipped
 
 3. **Threading edge cases**
-   - Cross-conversation message-id collision (should not happen, but handle)
+   - Cross-thread message-id collision (should not happen, but handle)
    - Malformed message-ids
 
 ---
@@ -166,14 +166,14 @@ end
 **Test categories:**
 
 1. **Happy path**
-   - POST valid payload -> 200 with conversation_id
-   - New conversation created
+   - POST valid payload -> 200 with thread_id
+   - New thread created
    - Message created
    - PubSub events broadcast
 
 2. **Threading**
-   - Reply to existing conversation
-   - Conversation state transitions (dormant -> active)
+   - Reply to existing thread
+   - Thread state transitions (dormant -> active)
 
 3. **Error handling**
    - Invalid payload structure -> 422
@@ -194,7 +194,7 @@ defmodule CustyardWeb.WebhookControllerTest do
   import Custyard.Fixtures.EmailPayloads
 
   describe "POST /api/webhook/inbound" do
-    test "creates conversation from valid email", %{conn: conn} do
+    test "creates thread from valid email", %{conn: conn} do
       org = insert_organization(domain: "acme.example.com")
       _contact = insert_contact(organization_id: org.id, email: "alice@acme.example.com")
 
@@ -202,7 +202,7 @@ defmodule CustyardWeb.WebhookControllerTest do
         "from" => "alice@acme.example.com"
       }))
 
-      assert %{"status" => "ok", "conversation_id" => conv_id} = json_response(conn, 200)
+      assert %{"status" => "ok", "thread_id" => conv_id} = json_response(conn, 200)
       assert is_integer(conv_id)
     end
 
@@ -240,16 +240,16 @@ end
 
 **Scenarios:**
 
-1. **New customer email creates conversation**
+1. **New customer email creates thread**
    - HTTP POST to webhook
-   - Conversation appears in Attention Queue (LiveView)
+   - Thread appears in Attention Queue (LiveView)
    - Operator can view message
 
-2. **Customer reply threads to existing conversation**
-   - Create initial conversation
+2. **Customer reply threads to existing thread**
+   - Create initial thread
    - POST reply with In-Reply-To header
-   - Message appends to existing conversation
-   - Conversation bumped in queue
+   - Message appends to existing thread
+   - Thread bumped in queue
 
 3. **Operator reply triggers outbound email**
    - Operator sends reply via LiveView
@@ -257,7 +257,7 @@ end
    - Email captured by Swoosh.TestAssertions
 
 4. **Neglect alert email flow**
-   - Create old conversation
+   - Create old thread
    - Trigger neglect check
    - Alert email sent
    - Verify recipient and content
@@ -265,8 +265,8 @@ end
 ### 4.2 PubSub Event Verification
 
 ```elixir
-test "broadcasts conversation_created on new email", %{conn: conn} do
-  Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+test "broadcasts thread_created on new email", %{conn: conn} do
+  Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
 
   org = insert_organization(domain: "acme.example.com")
   insert_contact(organization_id: org.id, email: "alice@acme.example.com")
@@ -275,7 +275,7 @@ test "broadcasts conversation_created on new email", %{conn: conn} do
     "from" => "alice@acme.example.com"
   }))
 
-  assert_receive {:conversation_created, _conv_id}, 1000
+  assert_receive {:thread_created, _conv_id}, 1000
 end
 ```
 
@@ -466,9 +466,9 @@ end
 
 **Scenarios:**
 
-1. **Real-time conversation updates**
+1. **Real-time thread updates**
    - POST webhook while viewing Attention Queue
-   - Verify new conversation appears without refresh
+   - Verify new thread appears without refresh
    - Verify LiveView receives PubSub update
 
 2. **Email notification preferences**
@@ -514,7 +514,7 @@ Benchee.run(%{
 :telemetry.execute(
   [:custyard, :email, :inbound, :processed],
   %{duration: duration_ms},
-  %{organization_id: org.id, is_new_conversation: is_new}
+  %{organization_id: org.id, is_new_thread: is_new}
 )
 
 :telemetry.execute(
@@ -543,9 +543,9 @@ Benchee.run(%{
 ```
 Email Infrastructure (Suite)
 ├── Inbound Email Processing (Section)
-│   ├── TC-001: New email creates conversation
-│   ├── TC-002: Reply threads to existing conversation
-│   ├── TC-003: Dormant conversation reactivated
+│   ├── TC-001: New email creates thread
+│   ├── TC-002: Reply threads to existing thread
+│   ├── TC-003: Dormant thread reactivated
 │   ├── TC-004: Unknown sender creates placeholder org
 │   ├── TC-005: Urgency detected from keywords
 │   └── TC-006: Sieve headers override urgency
@@ -651,7 +651,7 @@ Based on common email webhook patterns (Postmark, SendGrid), expected Lettermint
 |------|---------|
 | `/Users/d/Projects/experiments/custyard/lib/custyard/email/processor.ex` | Inbound processing logic |
 | `/Users/d/Projects/experiments/custyard/lib/custyard/email/sender_matcher.ex` | Contact/org resolution |
-| `/Users/d/Projects/experiments/custyard/lib/custyard/email/thread_matcher.ex` | Conversation threading |
+| `/Users/d/Projects/experiments/custyard/lib/custyard/email/thread_matcher.ex` | Thread threading |
 | `/Users/d/Projects/experiments/custyard/lib/custyard/email/sieve_header_mapper.ex` | MTA header extraction |
 | `/Users/d/Projects/experiments/custyard/lib/custyard_web/controllers/webhook_controller.ex` | HTTP endpoint |
 | `/Users/d/Projects/experiments/custyard/lib/custyard/notifications/email.ex` | Outbound composition |

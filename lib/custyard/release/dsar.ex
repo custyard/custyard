@@ -28,7 +28,7 @@ defmodule Custyard.Release.Dsar do
         person did not send. Reports how many messages they sent.
     erase-contact EMAIL --org ID --yes
         The same, and also erase the messages the person sent, their
-        attachments, their contact record, the subjects of their conversations
+        attachments, their contact record, the subjects of their threads
         and their rejection-log entries.
     help
         Show this help.
@@ -144,7 +144,7 @@ defmodule Custyard.Release.Dsar do
          Sent messages erased: #{counts.messages_erased}
          Attachments removed: #{counts.attachments_removed}
          Contact records removed: #{counts.contacts_removed}
-         Conversation subjects erased: #{counts.conversations_retitled}
+         Thread subjects erased: #{counts.threads_retitled}
          Rejection-log entries removed: #{counts.rejections_removed}
          """}
 

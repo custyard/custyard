@@ -4,7 +4,7 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
   (spec-inbound-channels D9).
 
   Finds the message the delivery produced (by provider delivery id, else by
-  Message-ID inside the conversation), resumes durable attachment slots on
+  Message-ID inside the thread), resumes durable attachment slots on
   replay, applies the channel's per-message cap and
   records every attachment as fetched or skipped. Suspect mail is listed but
   never fetched: the staff sees the filenames and can clear the flag
@@ -17,14 +17,14 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
 
   require Logger
 
-  def process(conversation, normalized, route_context) do
+  def process(thread, normalized, route_context) do
     descriptors = descriptors(normalized)
 
-    case find_message(conversation.id, normalized) do
+    case find_message(thread.id, normalized) do
       %Message{} = message ->
-        opts = [limit_bytes: limit(route_context), skip: skip_reason(conversation, route_context)]
+        opts = [limit_bytes: limit(route_context), skip: skip_reason(thread, route_context)]
         {:ok, rows} = Attachments.fetch_for_message(message, descriptors, opts)
-        broadcast(conversation.id)
+        broadcast(thread.id)
 
         if Enum.any?(rows, &(&1.state in [:failed, :pending])),
           do: {:error, :attachment_fetch_failed},
@@ -35,7 +35,7 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
     end
   rescue
     _error ->
-      Logger.error("Attachment processing failed for conversation #{conversation.id}")
+      Logger.error("Attachment processing failed for thread #{thread.id}")
       {:error, :attachment_processing_failed}
   end
 
@@ -47,13 +47,13 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
     end
   end
 
-  defp find_message(conversation_id, normalized) do
+  defp find_message(thread_id, normalized) do
     delivery_id = get_in(normalized, [:metadata, :provider_delivery_id])
     message_id = normalized[:message_id]
 
     query =
       from m in Message,
-        where: m.conversation_id == ^conversation_id,
+        where: m.thread_id == ^thread_id,
         order_by: [desc: m.id],
         limit: 1
 
@@ -74,14 +74,14 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
   defp limit(_route_context), do: Attachments.default_limit_bytes()
 
   defp skip_reason(%{suspect: true}, _context), do: "suspect"
-  defp skip_reason(_conversation, %{triage_class: :suspect}), do: "suspect"
-  defp skip_reason(_conversation, _route_context), do: nil
+  defp skip_reason(_thread, %{triage_class: :suspect}), do: "suspect"
+  defp skip_reason(_thread, _route_context), do: nil
 
-  defp broadcast(conversation_id) do
+  defp broadcast(thread_id) do
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversation:#{conversation_id}",
-      {:message_added, conversation_id}
+      "thread:#{thread_id}",
+      {:message_added, thread_id}
     )
   end
 end

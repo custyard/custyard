@@ -13,7 +13,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
   import Custyard.Factory
   import ExUnit.CaptureLog
 
-  alias Custyard.{Conversations, InboundChannels, Message, Repo}
+  alias Custyard.{Threads, InboundChannels, Message, Repo}
   alias Custyard.Email.{Outbound, OutboundQueue}
 
   setup do
@@ -36,18 +36,18 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     org = insert_organization()
     configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
-    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+    thread = insert_thread(organization_id: org.id, contact_id: contact.id)
     staff = insert_staff_account(role: "admin")
 
     insert_message(
-      conversation_id: conversation.id,
+      thread_id: thread.id,
       source: :email,
       sender_email: contact.email,
       message_id: "<original@customer.example>"
     )
 
-    {:ok, message} = Conversations.send_reply(conversation, "Please try this fix.")
-    %{message: message, staff: staff, contact: contact, conversation: conversation}
+    {:ok, message} = Threads.send_reply(thread, "Please try this fix.")
+    %{message: message, staff: staff, contact: contact, thread: thread}
   end
 
   test "confirmed rejection retries with the same idempotency key and no raw error logging",
@@ -77,7 +77,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert failed.delivery_payload_hash == canonical_hash
 
     insert_message(
-      conversation_id: context.conversation.id,
+      thread_id: context.thread.id,
       source: :email,
       sender_email: context.contact.email,
       message_id: "<later@customer.example>"
@@ -228,21 +228,21 @@ defmodule Custyard.Email.OutboundRecoveryTest do
   defp custom_domain_reply(context) do
     channel =
       insert_inbound_channel(
-        organization_id: context.conversation.organization_id,
-        tenant_id: context.conversation.tenant_id,
+        organization_id: context.thread.organization_id,
+        tenant_id: context.thread.tenant_id,
         public_address: "support@acme.example",
         sending_domain: "mail.acme.example",
         state: :active
       )
 
-    conversation =
-      insert_conversation(
-        organization_id: context.conversation.organization_id,
+    thread =
+      insert_thread(
+        organization_id: context.thread.organization_id,
         contact_id: context.contact.id,
         inbound_channel_id: channel.id
       )
 
-    {:ok, message} = Conversations.send_reply(conversation, "A reply using the custom sender")
+    {:ok, message} = Threads.send_reply(thread, "A reply using the custom sender")
     assert message.sender_email == "support@mail.acme.example"
     {channel, message}
   end
@@ -297,8 +297,8 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     staff = insert_staff_account(tenant_id: tenant.id, role: "admin")
     org = insert_organization(tenant_id: tenant.id)
     contact = insert_contact(organization_id: org.id)
-    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
-    {channel, message} = custom_domain_reply(%{conversation: conversation, contact: contact})
+    thread = insert_thread(organization_id: org.id, contact_id: contact.id)
+    {channel, message} = custom_domain_reply(%{thread: thread, contact: contact})
 
     assert {:error, :not_configured, failed} = Outbound.deliver(message)
     assert is_binary(failed.delivery_payload_hash)
@@ -332,7 +332,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
 
   test "a later participant cannot redirect an already queued reply", context do
     insert_message(
-      conversation_id: context.conversation.id,
+      thread_id: context.thread.id,
       source: :email,
       sender_email: "bob@customer.example",
       triage_class: :customer
@@ -350,7 +350,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
              Custyard.DataSubjects.erase_participation(
                staff_scope(context.message.tenant_id),
                context.contact.email,
-               context.conversation.organization_id
+               context.thread.organization_id
              )
 
     assert {:error, :no_recipient_email, failed} = Outbound.deliver(context.message)
@@ -361,7 +361,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
 
   test "a stale composer must review a changed recipient before insertion", context do
     insert_message(
-      conversation_id: context.conversation.id,
+      thread_id: context.thread.id,
       source: :email,
       sender_email: "bob@customer.example",
       triage_class: :customer
@@ -370,7 +370,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     count = Repo.aggregate(Message, :count)
 
     assert {:error, :recipient_changed} =
-             Conversations.send_reply(context.conversation, "Reply to old preview",
+             Threads.send_reply(context.thread, "Reply to old preview",
                expected_recipient: context.contact.email
              )
 

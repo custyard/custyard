@@ -60,7 +60,7 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> json_response(200)
 
       assert response["status"] == "ok"
-      assert is_integer(response["conversation_id"])
+      assert is_integer(response["thread_id"])
     end
 
     test "handles Slack URL verification challenge", %{conn: conn} do
@@ -123,9 +123,9 @@ defmodule CustyardWeb.WebhookControllerTest do
 
       assert response["status"] == "ok"
 
-      # Verify the conversation was assigned to the project
-      conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
-      assert conversation.project_id == project.id
+      # Verify the thread was assigned to the project
+      thread = Repo.get!(Custyard.Thread, response["thread_id"])
+      assert thread.project_id == project.id
     end
   end
 
@@ -151,7 +151,7 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, org: org, route: route}
     end
 
-    test "reply with In-Reply-To threads into existing conversation", %{
+    test "reply with In-Reply-To threads into existing thread", %{
       conn: conn,
       route: route
     } do
@@ -165,7 +165,7 @@ defmodule CustyardWeb.WebhookControllerTest do
         )
         |> json_response(200)
 
-      conversation_id = first_response["conversation_id"]
+      thread_id = first_response["thread_id"]
 
       reply_response =
         conn
@@ -173,10 +173,10 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> json_response(200)
 
       assert reply_response["status"] == "ok"
-      assert reply_response["conversation_id"] == conversation_id
+      assert reply_response["thread_id"] == thread_id
     end
 
-    test "unrelated In-Reply-To starts a new conversation", %{conn: conn, route: route} do
+    test "unrelated In-Reply-To starts a new thread", %{conn: conn, route: route} do
       first_response =
         conn
         |> post(~p"/api/webhook/route/#{route.callback_token}", standard_payload())
@@ -190,10 +190,10 @@ defmodule CustyardWeb.WebhookControllerTest do
         )
         |> json_response(200)
 
-      assert reply_response["conversation_id"] != first_response["conversation_id"]
+      assert reply_response["thread_id"] != first_response["thread_id"]
     end
 
-    test "html-only payload creates a conversation with stripped body", %{
+    test "html-only payload creates a thread with stripped body", %{
       conn: conn,
       route: route
     } do
@@ -208,7 +208,7 @@ defmodule CustyardWeb.WebhookControllerTest do
       assert response["status"] == "ok"
 
       message =
-        Repo.get_by!(Custyard.Message, conversation_id: response["conversation_id"])
+        Repo.get_by!(Custyard.Message, thread_id: response["thread_id"])
 
       assert message.body =~ "HTML only body"
       refute message.body =~ "<p>"
@@ -418,7 +418,7 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> insert_configured_route()
 
       # Payload with required from field but will fail on message creation
-      # due to missing conversation data
+      # due to missing thread data
       params = %{
         "from" => "test@example.com",
         "subject" => "",
@@ -446,7 +446,7 @@ defmodule CustyardWeb.WebhookControllerTest do
         })
         |> insert_configured_route()
 
-      # Valid from but empty subject (should succeed and create conversation)
+      # Valid from but empty subject (should succeed and create thread)
       params = %{
         "from" => "test@example.com",
         "to" => "support+controller-test-token@inbound.test",
@@ -520,7 +520,7 @@ defmodule CustyardWeb.WebhookControllerTest do
       assert response["reason"] == "invalid payload"
     end
 
-    test "a payload without a sender is accepted as a contactless conversation", %{conn: conn} do
+    test "a payload without a sender is accepted as a contactless thread", %{conn: conn} do
       route = authenticated_route(:lettermint)
 
       params = %{
@@ -537,8 +537,8 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> post(~p"/api/webhook/route/#{route.callback_token}", params)
         |> json_response(200)
 
-      conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
-      assert conversation.contact_id == nil
+      thread = Repo.get!(Custyard.Thread, response["thread_id"])
+      assert thread.contact_id == nil
     end
 
     test "non-string fields are tolerated", %{conn: conn} do
@@ -558,10 +558,10 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> post(~p"/api/webhook/route/#{route.callback_token}", params)
         |> json_response(200)
 
-      conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
-      assert conversation.subject == "(no subject)"
+      thread = Repo.get!(Custyard.Thread, response["thread_id"])
+      assert thread.subject == "(no subject)"
 
-      message = Repo.get_by!(Custyard.Message, conversation_id: conversation.id)
+      message = Repo.get_by!(Custyard.Message, thread_id: thread.id)
       assert message.body == "Only HTML"
     end
   end
@@ -608,7 +608,7 @@ defmodule CustyardWeb.WebhookControllerTest do
       }
     end
 
-    test "an enveloped message.inbound creates a conversation", %{conn: conn, route: route} do
+    test "an enveloped message.inbound creates a thread", %{conn: conn, route: route} do
       params = lettermint_event("message.inbound")
 
       response =
@@ -617,12 +617,12 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> json_response(200)
 
       assert response["status"] == "ok"
-      assert is_integer(response["conversation_id"])
+      assert is_integer(response["thread_id"])
 
-      conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
-      assert conversation.subject == "Question about my order"
+      thread = Repo.get!(Custyard.Thread, response["thread_id"])
+      assert thread.subject == "Question about my order"
 
-      message = Repo.get_by!(Custyard.Message, conversation_id: conversation.id)
+      message = Repo.get_by!(Custyard.Message, thread_id: thread.id)
       assert message.provider_delivery_id == params["id"]
       assert message.sender_email == "John Doe <customer@example.com>"
     end
@@ -640,7 +640,7 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> json_response(200)
 
       assert response == %{"status" => "ignored", "event" => "message.delivered"}
-      assert Repo.aggregate(Custyard.Conversation, :count) == 0
+      assert Repo.aggregate(Custyard.Thread, :count) == 0
       assert Repo.aggregate(Custyard.Message, :count) == 0
     end
 
@@ -660,7 +660,7 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> json_response(200)
 
       assert response == %{"status" => "ignored", "reason" => "no_channel"}
-      assert Repo.aggregate(Custyard.Conversation, :count) == 0
+      assert Repo.aggregate(Custyard.Thread, :count) == 0
 
       assert [rejection] = Custyard.InboundChannels.list_rejections_for_route(route.id)
       assert rejection.classification == :no_channel
@@ -685,7 +685,7 @@ defmodule CustyardWeb.WebhookControllerTest do
         |> json_response(200)
 
       assert response == %{"status" => "ignored", "reason" => "provider_notice"}
-      assert Repo.aggregate(Custyard.Conversation, :count) == 0
+      assert Repo.aggregate(Custyard.Thread, :count) == 0
     end
   end
 
@@ -698,7 +698,7 @@ defmodule CustyardWeb.WebhookControllerTest do
            |> json_response(401) ==
              %{"status" => "error", "reason" => "unauthorized"}
 
-    assert Repo.aggregate(Custyard.Conversation, :count) == 0
+    assert Repo.aggregate(Custyard.Thread, :count) == 0
   end
 
   defp insert_configured_route(changeset) do

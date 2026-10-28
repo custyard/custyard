@@ -12,7 +12,7 @@ defmodule CustyardWeb.Staff.OrganizationDetailLiveTest do
   test "customer details contain customer work without email infrastructure", %{conn: conn} do
     customer = insert_organization(name: "Acme")
     contact = insert_contact(organization_id: customer.id, name: "Alice")
-    thread = insert_conversation(organization_id: customer.id, subject: "Onboarding question")
+    thread = insert_thread(organization_id: customer.id, subject: "Onboarding question")
     project = insert_project(organization_id: customer.id, title: "Launch")
     {:ok, _, html} = live(conn, "/app/customers/#{customer.id}")
 

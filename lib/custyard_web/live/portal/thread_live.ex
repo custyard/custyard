@@ -1,7 +1,7 @@
-defmodule CustyardWeb.Portal.ConversationLive do
+defmodule CustyardWeb.Portal.ThreadLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Attachments, Conversations, Scoring}
+  alias Custyard.{Attachments, Threads, Scoring}
 
   @impl true
   def mount(params, _session, socket) do
@@ -9,22 +9,22 @@ defmodule CustyardWeb.Portal.ConversationLive do
     org = socket.assigns.current_org
     id = params["id"]
 
-    case Conversations.get_conversation_for_organization(id, org.id) do
+    case Threads.get_thread_for_organization(id, org.id) do
       {:error, _} ->
         {:ok,
          socket
          |> put_flash(:error, "Request not found")
          |> push_navigate(to: socket.assigns.portal_home_path)}
 
-      {:ok, conversation} ->
+      {:ok, thread} ->
         if connected?(socket) do
-          Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
+          Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{id}")
         end
 
         {:ok,
          socket
-         |> assign(:conversation, conversation)
-         |> assign(:page_title, conversation.subject)
+         |> assign(:thread, thread)
+         |> assign(:page_title, thread.subject)
          |> assign(:reply_form, to_form(%{"body" => ""}))
          |> load_messages()
          |> load_tasks()}
@@ -32,33 +32,33 @@ defmodule CustyardWeb.Portal.ConversationLive do
   end
 
   defp load_messages(socket) do
-    conv = socket.assigns.conversation
+    conv = socket.assigns.thread
 
     messages =
       conv.id
-      |> Conversations.list_public_messages()
+      |> Threads.list_public_messages()
       |> Attachments.preload_for_portal(conv)
 
     assign(socket, :messages, messages)
   end
 
   defp load_tasks(socket) do
-    conv = socket.assigns.conversation
-    tasks = Conversations.list_portal_visible_tasks(conv.id)
+    conv = socket.assigns.thread
+    tasks = Threads.list_portal_visible_tasks(conv.id)
     assign(socket, :tasks, tasks)
   end
 
   @impl true
   def handle_event("submit_reply", %{"body" => body}, socket) do
-    conv = socket.assigns.conversation
+    conv = socket.assigns.thread
     org = socket.assigns.current_org
 
-    # Re-verify the conversation still belongs to this organization
-    case Conversations.get_conversation_for_organization(conv.id, org.id) do
+    # Re-verify the thread still belongs to this organization
+    case Threads.get_thread_for_organization(conv.id, org.id) do
       {:error, _} ->
         {:noreply,
          socket
-         |> put_flash(:error, "This conversation is no longer accessible")
+         |> put_flash(:error, "This thread is no longer accessible")
          |> push_navigate(to: socket.assigns.portal_home_path)}
 
       {:ok, conv} ->
@@ -71,16 +71,16 @@ defmodule CustyardWeb.Portal.ConversationLive do
       sender_email =
         socket.assigns.portal_credential.contact && socket.assigns.portal_credential.contact.email
 
-      case Conversations.create_message(%{
+      case Threads.create_message(%{
              tenant_id: org.tenant_id,
-             conversation_id: conv.id,
+             thread_id: conv.id,
              source: :portal,
              sender_email: sender_email,
              body: body,
              is_internal_note: false
            }) do
         {:ok, _message} ->
-          # Update conversation timestamps and reactivate if needed, in a single write
+          # Update thread timestamps and reactivate if needed, in a single write
           now = DateTime.utc_now() |> DateTime.truncate(:second)
 
           update_attrs =
@@ -90,37 +90,36 @@ defmodule CustyardWeb.Portal.ConversationLive do
               %{last_customer_action_at: now}
             end
 
-          case Conversations.update_conversation(conv, update_attrs) do
+          case Threads.update_thread(conv, update_attrs) do
             {:ok, updated_conv} ->
               Scoring.calculate_and_cache(conv.id)
 
               Phoenix.PubSub.broadcast(
                 Custyard.PubSub,
-                "conversations",
-                {:conversation_updated, conv.id}
+                "threads",
+                {:thread_updated, conv.id}
               )
 
               Phoenix.PubSub.broadcast(
                 Custyard.PubSub,
-                "conversations:org:#{conv.organization_id}",
-                {:conversation_updated, conv.id}
+                "threads:org:#{conv.organization_id}",
+                {:thread_updated, conv.id}
               )
 
               Phoenix.PubSub.broadcast(
                 Custyard.PubSub,
-                "conversation:#{conv.id}",
+                "thread:#{conv.id}",
                 {:message_added, conv.id}
               )
 
               {:noreply,
                socket
                |> assign(:reply_form, to_form(%{"body" => ""}))
-               |> assign(:conversation, updated_conv)
+               |> assign(:thread, updated_conv)
                |> load_messages()}
 
             {:error, _changeset} ->
-              {:noreply,
-               put_flash(socket, :error, "Failed to update conversation. Please try again.")}
+              {:noreply, put_flash(socket, :error, "Failed to update thread. Please try again.")}
           end
 
         {:error, _changeset} ->
@@ -144,20 +143,20 @@ defmodule CustyardWeb.Portal.ConversationLive do
   end
 
   @impl true
-  def handle_info({:conversation_updated, _}, socket) do
-    # Reload conversation to get updated state, urgency, etc.
-    conv = socket.assigns.conversation
+  def handle_info({:thread_updated, _}, socket) do
+    # Reload thread to get updated state, urgency, etc.
+    conv = socket.assigns.thread
     org = socket.assigns.current_org
 
-    case Conversations.get_conversation_for_organization(conv.id, org.id) do
+    case Threads.get_thread_for_organization(conv.id, org.id) do
       {:ok, updated_conv} ->
         {:noreply,
          socket
-         |> assign(:conversation, updated_conv)
+         |> assign(:thread, updated_conv)
          |> load_tasks()}
 
       {:error, _} ->
-        # Conversation no longer accessible (deleted or org changed)
+        # Thread no longer accessible (deleted or org changed)
         {:noreply,
          socket
          |> put_flash(:info, "This request has been closed or moved")
@@ -174,7 +173,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-conversation">
+    <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-thread">
       <.link
         navigate={@portal_home_path}
         class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"
@@ -186,15 +185,15 @@ defmodule CustyardWeb.Portal.ConversationLive do
       <div class="flex items-start justify-between gap-4 mb-6">
         <h1
           class="text-2xl font-semibold text-gray-900 dark:text-zinc-100"
-          data-testid="portal-conversation-subject"
+          data-testid="portal-thread-subject"
         >
-          {@conversation.subject}
+          {@thread.subject}
         </h1>
         <span
-          class={"shrink-0 text-sm px-3 py-1 rounded-full #{state_color(@conversation.state)}"}
-          data-testid="portal-conversation-state"
+          class={"shrink-0 text-sm px-3 py-1 rounded-full #{state_color(@thread.state)}"}
+          data-testid="portal-thread-state"
         >
-          {state_label(@conversation.state)}
+          {state_label(@thread.state)}
         </span>
       </div>
 
@@ -204,7 +203,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
           class="text-center py-8 text-gray-500 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 rounded-lg"
           data-testid="portal-no-messages"
         >
-          No messages yet. Start the conversation by sending a reply below.
+          No messages yet. Start the thread by sending a reply below.
         </div>
         <div
           :for={msg <- @messages}
@@ -264,7 +263,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
           name="body"
           id="portal-reply-textarea"
           rows="4"
-          aria-label="Reply to conversation"
+          aria-label="Reply to thread"
           class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500 phx-submit-loading:opacity-50 phx-submit-loading:cursor-not-allowed"
           placeholder="Write a reply..."
           phx-hook="ResetOnSubmit"
@@ -370,7 +369,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
     end
   end
 
-  # Conversation state styling and labels for customers
+  # Thread state styling and labels for customers
   defp state_color(:new), do: "bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300"
 
   defp state_color(:active),

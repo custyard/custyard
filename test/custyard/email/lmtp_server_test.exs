@@ -165,7 +165,7 @@ defmodule Custyard.Email.LMTPServerTest do
     state = %{to: [], channel: nil, from: "sender@external.example", max_recipients: 100}
     assert {:ok, updated} = LMTPServer.handle_RCPT("support@#{c.test_org.domain}", state)
     assert updated.channel.tenant_id == c.test_org.tenant_id
-    assert Repo.aggregate(Custyard.Conversation, :count) == 0
+    assert Repo.aggregate(Custyard.Thread, :count) == 0
   end
 
   test "suspended tenant recipients are refused and audited", c do
@@ -349,7 +349,7 @@ defmodule Custyard.Email.LMTPServerTest do
       :gen_tcp.close(socket)
     end
 
-    test "creates conversation from processed email", %{recipient_org: recipient_org} do
+    test "creates thread from processed email", %{recipient_org: recipient_org} do
       {:ok, socket} =
         :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
 
@@ -372,13 +372,13 @@ defmodule Custyard.Email.LMTPServerTest do
 
       :gen_tcp.close(socket)
 
-      # Conversation is created under the recipient's org (resolved from RCPT TO domain),
+      # Thread is created under the recipient's org (resolved from RCPT TO domain),
       # not the sender's org. This is the correct behavior — the inbound route belongs
       # to the org that owns the recipient domain.
-      conversations = Custyard.Conversations.list_for_organization(recipient_org.id)
-      assert conversations != []
+      threads = Custyard.Threads.list_for_organization(recipient_org.id)
+      assert threads != []
 
-      [conv | _] = conversations
+      [conv | _] = threads
       assert conv.subject == "Test email"
     end
   end
@@ -625,10 +625,10 @@ defmodule Custyard.Email.LMTPServerTest do
       send_email_via_socket(socket2, "alice@example.com", "Second message via LMTP")
       :gen_tcp.close(socket2)
 
-      # Conversations are created under the recipient's org (custyard.test),
+      # Threads are created under the recipient's org (custyard.test),
       # not the sender's org, because the inbound route resolves from RCPT TO domain.
-      conversations = Custyard.Conversations.list_for_organization(recipient_org.id)
-      assert Enum.count(conversations) >= 2
+      threads = Custyard.Threads.list_for_organization(recipient_org.id)
+      assert Enum.count(threads) >= 2
     end
 
     defp send_email_via_socket(socket, from, subject) do

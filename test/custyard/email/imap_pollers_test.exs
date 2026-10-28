@@ -5,7 +5,7 @@ defmodule Custyard.Email.ImapPollersTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Conversation, InboundChannels}
+  alias Custyard.{Thread, InboundChannels}
   alias Custyard.Email.{ImapChannelPoller, ImapPollers}
   alias Custyard.Email.ImapClient.Stub
 
@@ -60,7 +60,7 @@ defmodule Custyard.Email.ImapPollersTest do
     )
 
     assert :ok = ImapChannelPoller.poll_now(channel.id)
-    eventually(fn -> Repo.aggregate(Conversation, :count) == 1 end)
+    eventually(fn -> Repo.aggregate(Thread, :count) == 1 end)
     eventually(fn -> InboundChannels.get_channel!(channel.id).state == :active end)
 
     {:ok, _paused} = InboundChannels.pause(InboundChannels.get_channel!(channel.id))

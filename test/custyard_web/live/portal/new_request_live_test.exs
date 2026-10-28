@@ -5,7 +5,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
   import Custyard.Factory
   import Ecto.Query
 
-  alias Custyard.{Conversation, Message, Repo}
+  alias Custyard.{Thread, Message, Repo}
 
   describe "mount" do
     test "renders new request form", %{conn: conn} do
@@ -40,7 +40,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
   end
 
   describe "form submission" do
-    test "creates conversation on submit", %{conn: conn} do
+    test "creates thread on submit", %{conn: conn} do
       org = insert_organization()
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
@@ -53,8 +53,8 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
       })
       |> render_submit()
 
-      # Verify conversation was created
-      conv = Repo.one(from c in Conversation, where: c.organization_id == ^org.id)
+      # Verify thread was created
+      conv = Repo.one(from c in Thread, where: c.organization_id == ^org.id)
       assert conv.subject == "Test Request Subject"
       assert conv.state == :new
       assert conv.urgency == :normal
@@ -74,15 +74,15 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
       |> render_submit()
 
       # Verify message was created
-      conv = Repo.one(from c in Conversation, where: c.organization_id == ^org.id)
-      msg = Repo.one(from m in Message, where: m.conversation_id == ^conv.id)
+      conv = Repo.one(from c in Thread, where: c.organization_id == ^org.id)
+      msg = Repo.one(from m in Message, where: m.thread_id == ^conv.id)
 
       assert msg.body == "This is the message body"
       assert msg.source == :portal
       assert msg.is_internal_note == false
     end
 
-    test "redirects to conversation page after submit", %{conn: conn} do
+    test "redirects to thread page after submit", %{conn: conn} do
       org = insert_organization()
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
@@ -99,7 +99,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
       assert redirect_path =~ ~r"/portal/#{portal_token(org)}/request/\d+"
     end
 
-    test "creates elevated urgency conversation", %{conn: conn} do
+    test "creates elevated urgency thread", %{conn: conn} do
       org = insert_organization()
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
@@ -112,11 +112,11 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
       })
       |> render_submit()
 
-      conv = Repo.one(from c in Conversation, where: c.organization_id == ^org.id)
+      conv = Repo.one(from c in Thread, where: c.organization_id == ^org.id)
       assert conv.urgency == :elevated
     end
 
-    test "creates urgent urgency conversation", %{conn: conn} do
+    test "creates urgent urgency thread", %{conn: conn} do
       org = insert_organization()
 
       {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
@@ -129,7 +129,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
       })
       |> render_submit()
 
-      conv = Repo.one(from c in Conversation, where: c.organization_id == ^org.id)
+      conv = Repo.one(from c in Thread, where: c.organization_id == ^org.id)
       assert conv.urgency == :urgent
     end
 
@@ -146,8 +146,8 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
       })
       |> render_submit()
 
-      conv = Repo.one(from c in Conversation, where: c.organization_id == ^org.id)
-      # New conversation should have score calculated (new=30 + standard=10 + idle ~= 40-42)
+      conv = Repo.one(from c in Thread, where: c.organization_id == ^org.id)
+      # New thread should have score calculated (new=30 + standard=10 + idle ~= 40-42)
       assert conv.cached_score >= 40
       assert conv.cached_score <= 45
     end

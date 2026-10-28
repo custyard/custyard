@@ -18,14 +18,14 @@ Search(pattern: "String\.to_existing_atom|String\.to_atom", path: "/Users/d/Proj
     lib/custyard/email/sieve_header_mapper.ex:97:      {:ok, atom_value} -> {String.to_existing_atom(property), atom_value}
     lib/custyard/email/sieve_header_mapper.ex:111:    {:ok, String.to_existing_atom(value)}
     lib/custyard/email/sieve_header_mapper.ex:115:    {:ok, String.to_existing_atom(value)}
-    lib/custyard_web/live/staff/conversation_live.ex:133:    new_state = String.to_existing_atom(state)
+    lib/custyard_web/live/staff/thread_live.ex:133:    new_state = String.to_existing_atom(state)
     lib/custyard_web/live/portal/new_request_live.ex:30:        urgency: String.to_existing_atom(params["urgency"]),
 ```
 
 The pattern appears in two main contexts:
 
 1.  **Direct user input (dangerous):** In LiveView event handlers where form parameters are directly passed:
-    *   `conversation_live.ex:133`: The `state` parameter from buttons like "Waiting on customer" / "Mark resolved".
+    *   `thread_live.ex:133`: The `state` parameter from buttons like "Waiting on customer" / "Mark resolved".
     *   `new_request_live.ex:30`: The urgency dropdown value.
     *   `organizations_live.ex:73,111`: Form field names and the `tier` value.
     *   `projects_live.ex:75`: Form field names.

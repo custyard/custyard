@@ -1,7 +1,7 @@
 defmodule Custyard.Email.DeliveryStatusNoticeTest do
   @moduledoc """
   The staff notice for a bounced or suppressed reply
-  (spec-conversation-loop, "Bounce and Suppression Handling").
+  (spec-thread-loop, "Bounce and Suppression Handling").
   """
   # async: false - turns on :email_enabled for the whole VM.
   use Custyard.DataCase, async: false
@@ -29,15 +29,15 @@ defmodule Custyard.Email.DeliveryStatusNoticeTest do
       insert_staff_account(tenant_id: org.tenant_id, email: "staff@tenant.example")
       contact = insert_contact(organization_id: org.id, email: "alice@customer.com")
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           subject: "Billing question"
         )
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         sender_email: "support@acme.com",
         body: "We can help with that.",
@@ -84,15 +84,15 @@ defmodule Custyard.Email.DeliveryStatusNoticeTest do
       insert_staff_account(tenant_id: org.tenant_id, email: "staff@tenant.example")
       contact = insert_contact(organization_id: org.id, email: "alice@customer.com")
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           subject: "Billing question"
         )
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :staff,
         sender_email: "support@acme.com",
         body: "We can help with that.",

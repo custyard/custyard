@@ -1,12 +1,12 @@
 defmodule Custyard.Scoring.Scheduler do
   @moduledoc """
-  Periodically recalculates attention scores for all active conversations.
+  Periodically recalculates attention scores for all active threads.
 
   Idle time components of the scoring formula go stale without periodic
   recalculation, so this GenServer invokes `Recalculator.recalculate_all/0`
   on a fixed interval.
 
-  Also runs dormancy checks to transition stale waiting conversations,
+  Also runs dormancy checks to transition stale waiting threads,
   neglect notification checks, and the inbound channel quiet check
   (`Custyard.InboundChannels.check_quiet_channels/1`).
   """
@@ -14,7 +14,7 @@ defmodule Custyard.Scoring.Scheduler do
   use GenServer
   require Logger
 
-  alias Custyard.Conversations.DormancyChecker
+  alias Custyard.Threads.DormancyChecker
   alias Custyard.Email.LMTPServer
   alias Custyard.InboundChannels
   alias Custyard.Notifications.NeglectChecker
@@ -58,7 +58,7 @@ defmodule Custyard.Scoring.Scheduler do
 
     case safe_recalculate() do
       {:ok, count} ->
-        Logger.info("Scoring.Scheduler: recalculated #{count} conversations")
+        Logger.info("Scoring.Scheduler: recalculated #{count} threads")
 
       {:error, reason} ->
         Logger.error("Scoring.Scheduler: recalculation failed: #{inspect(reason)}")
@@ -71,7 +71,7 @@ defmodule Custyard.Scoring.Scheduler do
         :ok
 
       {:ok, count} ->
-        Logger.info("Scoring.Scheduler: transitioned #{count} conversations to dormant")
+        Logger.info("Scoring.Scheduler: transitioned #{count} threads to dormant")
 
       {:error, reason} ->
         Logger.error("Scoring.Scheduler: dormancy check failed: #{inspect(reason)}")
@@ -122,7 +122,7 @@ defmodule Custyard.Scoring.Scheduler do
   end
 
   defp safe_dormancy_check do
-    count = DormancyChecker.transition_stale_conversations()
+    count = DormancyChecker.transition_stale_threads()
     {:ok, count}
   rescue
     e -> {:error, e}

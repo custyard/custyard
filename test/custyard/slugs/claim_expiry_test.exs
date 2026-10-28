@@ -4,12 +4,12 @@ defmodule Custyard.Slugs.ClaimExpiryTest do
   import Custyard.Factory
 
   alias Custyard.Slugs.ClaimExpiry
-  alias Custyard.{Conversation, Slug, Slugs}
+  alias Custyard.{Thread, Slug, Slugs}
 
   defp claim!(slug_text, email) do
-    conversation = insert_conversation(source: :public_intake)
-    {:ok, slug, token} = Slugs.claim(slug_text, email, conversation)
-    %{conversation: conversation, slug: slug, token: token}
+    thread = insert_thread(source: :public_intake)
+    {:ok, slug, token} = Slugs.claim(slug_text, email, thread)
+    %{thread: thread, slug: slug, token: token}
   end
 
   test "the sweep process is not running in tests (flag off in config/test.exs)" do
@@ -19,7 +19,7 @@ defmodule Custyard.Slugs.ClaimExpiryTest do
 
   describe "sweep/1 with an injected clock" do
     test "deletes claimed rows past expiry as of the injected now" do
-      %{slug: slug, conversation: conversation} = claim!("sweep-me", "buyer@example.com")
+      %{slug: slug, thread: thread} = claim!("sweep-me", "buyer@example.com")
 
       # A clock just before expiry deletes nothing.
       before_expiry = DateTime.add(slug.expires_at, -1, :minute)
@@ -30,8 +30,8 @@ defmodule Custyard.Slugs.ClaimExpiryTest do
       after_expiry = DateTime.add(slug.expires_at, 1, :minute)
       assert ClaimExpiry.sweep(after_expiry) == 1
       refute Repo.get(Slug, slug.id)
-      assert Repo.get(Conversation, conversation.id)
-      assert Slugs.available?("sweep-me", conversation.tenant_id)
+      assert Repo.get(Thread, thread.id)
+      assert Slugs.available?("sweep-me", thread.tenant_id)
     end
 
     test "confirmed and provisioned rows are never swept" do

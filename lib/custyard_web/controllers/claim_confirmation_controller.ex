@@ -10,7 +10,7 @@ defmodule CustyardWeb.ClaimConfirmationController do
   Invalid, expired, already-used, and purged tokens ALL render one
   identical generic page (the PR-6 uniform-unavailable pattern) — token
   handling exposes no validity oracle. The success page deliberately does
-  not mint or reveal the conversation URL: the email the prospect already holds
+  not mint or reveal the thread URL: the email the prospect already holds
   is the only carrier of that credential.
   """
 
@@ -56,7 +56,7 @@ defmodule CustyardWeb.ClaimConfirmationController do
   defp claim_on_host?(conn, slug), do: conn.assigns.host_tenant.id == slug.tenant_id
 
   # One identical rendering for every failure class — same template, same
-  # status, same assigns — mirroring the conversation surface's unavailable page.
+  # status, same assigns — mirroring the thread surface's unavailable page.
   defp render_unavailable(conn) do
     conn
     |> assign(:page_title, "Confirmation unavailable")

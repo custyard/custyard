@@ -11,7 +11,7 @@ defmodule Custyard.Organization do
     field(:domain, :string)
     field(:tier, Ecto.Enum, values: [:enterprise, :standard, :basic], default: :standard)
     has_many(:contacts, Custyard.Contact)
-    has_many(:conversations, Custyard.Conversation)
+    has_many(:threads, Custyard.Thread)
     has_many(:projects, Custyard.Project)
     has_many(:tasks, Custyard.Task)
     timestamps(type: :utc_datetime)

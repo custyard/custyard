@@ -3,16 +3,16 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
   import CustyardWeb.StaffComponents
 
-  alias Custyard.{Conversations, EmailSetup, Labels, Scoring}
+  alias Custyard.{Threads, EmailSetup, Labels, Scoring}
 
   # Debounce delay for PubSub-triggered reloads (milliseconds)
-  # This prevents N+1 query storms when multiple conversations update rapidly
+  # This prevents N+1 query storms when multiple threads update rapidly
   @reload_debounce_ms 500
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
       Process.send_after(self(), :refresh_deadlines, 60_000)
     end
 
@@ -28,7 +28,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       |> assign(:show_score_breakdown, nil)
       |> assign(:show_snooze_menu, nil)
       |> assign(:reload_timer, nil)
-      |> load_conversations()
+      |> load_threads()
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :staff}}
   end
@@ -47,7 +47,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       |> assign(:filter, filter)
       |> assign(:labels, labels)
       |> assign(:label_id, label && label.id)
-      |> load_conversations()
+      |> load_threads()
 
     {:noreply, socket}
   end
@@ -86,24 +86,24 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
   def handle_event("snooze", %{"id" => id, "duration" => duration}, socket) do
     with {id, ""} <- Integer.parse(id),
-         true <- queue_contains_conversation?(socket, id) do
+         true <- queue_contains_thread?(socket, id) do
       until = calculate_snooze_until(duration)
 
-      case Conversations.with_access(socket.assigns.current_scope, id, fn current, _staff ->
-             Conversations.snooze(current, until)
+      case Threads.with_access(socket.assigns.current_scope, id, fn current, _staff ->
+             Threads.snooze(current, until)
            end) do
-        {:ok, conversation} ->
-          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+        {:ok, thread} ->
+          Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, id})
 
-          Conversations.broadcast_to_org(
-            conversation.organization_id,
-            {:conversation_updated, id}
+          Threads.broadcast_to_org(
+            thread.organization_id,
+            {:thread_updated, id}
           )
 
-          {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_conversations()}
+          {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_threads()}
 
         {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "Failed to snooze conversation")}
+          {:noreply, put_flash(socket, :error, "Failed to snooze thread")}
       end
     else
       _ -> {:noreply, socket}
@@ -112,22 +112,22 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
   def handle_event("unsnooze", %{"id" => id}, socket) do
     with {id, ""} <- Integer.parse(id),
-         true <- queue_contains_conversation?(socket, id) do
-      case Conversations.with_access(socket.assigns.current_scope, id, fn current, _staff ->
-             Conversations.unsnooze(current)
+         true <- queue_contains_thread?(socket, id) do
+      case Threads.with_access(socket.assigns.current_scope, id, fn current, _staff ->
+             Threads.unsnooze(current)
            end) do
-        {:ok, conversation} ->
-          Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
+        {:ok, thread} ->
+          Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, id})
 
-          Conversations.broadcast_to_org(
-            conversation.organization_id,
-            {:conversation_updated, id}
+          Threads.broadcast_to_org(
+            thread.organization_id,
+            {:thread_updated, id}
           )
 
-          {:noreply, load_conversations(socket)}
+          {:noreply, load_threads(socket)}
 
         {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "Failed to un-snooze conversation")}
+          {:noreply, put_flash(socket, :error, "Failed to un-snooze thread")}
       end
     else
       _ -> {:noreply, socket}
@@ -135,11 +135,11 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   end
 
   @impl true
-  def handle_info({:conversation_updated, _id}, socket) do
+  def handle_info({:thread_updated, _id}, socket) do
     {:noreply, schedule_reload(socket)}
   end
 
-  def handle_info({:conversation_created, _id}, socket) do
+  def handle_info({:thread_created, _id}, socket) do
     {:noreply, schedule_reload(socket)}
   end
 
@@ -148,12 +148,12 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     {:noreply,
      socket
      |> assign(:reload_timer, nil)
-     |> load_conversations()}
+     |> load_threads()}
   end
 
   def handle_info(:refresh_deadlines, socket) do
     Process.send_after(self(), :refresh_deadlines, 60_000)
-    {:noreply, load_conversations(socket)}
+    {:noreply, load_threads(socket)}
   end
 
   # Catch-all for unexpected PubSub messages to prevent LiveView crashes
@@ -173,7 +173,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     assign(socket, :reload_timer, timer)
   end
 
-  defp load_conversations(socket) do
+  defp load_threads(socket) do
     filter = socket.assigns.filter
     now = DateTime.utc_now()
 
@@ -182,16 +182,16 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     # 24h messages, which is a remote round trip each in production.
     settings = Scoring.preload_settings(socket.assigns.current_tenant.id)
 
-    conversations =
-      Conversations.list(socket.assigns.current_scope,
+    threads =
+      Threads.list(socket.assigns.current_scope,
         filter: filter,
         label_id: socket.assigns.label_id
       )
 
-    labels_by_conversation = Labels.for_conversations(Enum.map(conversations, & &1.conversation))
+    labels_by_thread = Labels.for_threads(Enum.map(threads, & &1.thread))
 
-    conversations =
-      Enum.map(conversations, fn %{conversation: conv, message_count: message_count} = item ->
+    threads =
+      Enum.map(threads, fn %{thread: conv, message_count: message_count} = item ->
         neglect_status = Scoring.neglect_status(conv, settings.thresholds)
 
         breakdown =
@@ -201,21 +201,21 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         is_snoozed = conv.snoozed_until && DateTime.compare(conv.snoozed_until, now) == :gt
 
         %{
-          conversation: conv,
+          thread: conv,
           neglect_status: neglect_status,
           breakdown: breakdown,
           hours_idle: hours_idle,
           message_count: message_count,
           due_task_count: item.due_task_count,
-          labels: Map.get(labels_by_conversation, conv.id, []),
+          labels: Map.get(labels_by_thread, conv.id, []),
           is_snoozed: is_snoozed,
           # Derived from preloaded contact/prospect — no extra queries
-          reply_channel: Conversations.reply_channel(conv)
+          reply_channel: Threads.reply_channel(conv)
         }
       end)
 
     socket
-    |> assign(:conversations, conversations)
+    |> assign(:threads, threads)
     |> assign(:email_setup, EmailSetup.summary(socket.assigns.current_tenant.id))
     |> assign(
       :can_setup_email,
@@ -227,8 +227,8 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     )
   end
 
-  defp queue_contains_conversation?(socket, id) do
-    Enum.any?(socket.assigns.conversations, fn item -> item.conversation.id == id end)
+  defp queue_contains_thread?(socket, id) do
+    Enum.any?(socket.assigns.threads, fn item -> item.thread.id == id end)
   end
 
   defp hours_since(nil), do: 0
@@ -289,7 +289,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           What needs attention
         </h1>
         <span class="text-xs text-gray-400 dark:text-zinc-500" data-testid="staff-queue-count">
-          {length(@conversations)} {if length(@conversations) == 1, do: "item", else: "items"}
+          {length(@threads)} {if length(@threads) == 1, do: "item", else: "items"}
         </span>
       </div>
 
@@ -324,7 +324,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       </form>
 
       <div class="space-y-2">
-        <%= if Enum.empty?(@conversations) do %>
+        <%= if Enum.empty?(@threads) do %>
           <div
             class="text-center text-gray-400 dark:text-zinc-500 py-12"
             data-testid="staff-queue-empty"
@@ -332,11 +332,11 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             Nothing needs attention right now.
           </div>
         <% else %>
-          <%= for item <- @conversations do %>
+          <%= for item <- @threads do %>
             <.queue_card
               item={item}
-              show_score={@show_score_breakdown == item.conversation.id}
-              show_snooze={@show_snooze_menu == item.conversation.id}
+              show_score={@show_score_breakdown == item.thread.id}
+              show_snooze={@show_snooze_menu == item.thread.id}
             />
           <% end %>
         <% end %>
@@ -385,22 +385,22 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     ~H"""
     <div
       class={"bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 hover:shadow-md transition-shadow border-l-4 #{@border_color}"}
-      data-testid={"staff-queue-card-#{@item.conversation.id}"}
+      data-testid={"staff-queue-card-#{@item.thread.id}"}
     >
-      <.link navigate={~p"/app/threads/#{@item.conversation.id}"} class="block">
+      <.link navigate={~p"/app/threads/#{@item.thread.id}"} class="block">
         <div class="flex items-start justify-between mb-1">
           <div class="flex items-center gap-2">
             <span
               class="font-semibold text-gray-900 dark:text-zinc-100"
               data-testid="staff-queue-org-name"
             >
-              {if @item.conversation.organization,
-                do: @item.conversation.organization.name,
+              {if @item.thread.organization,
+                do: @item.thread.organization.name,
                 else: "Unlinked prospect"}
             </span>
             <.tier_badge
-              :if={@item.conversation.organization}
-              tier={@item.conversation.organization.tier}
+              :if={@item.thread.organization}
+              tier={@item.thread.organization.tier}
             />
             <.neglect_badge level={@item.neglect_status} />
           </div>
@@ -415,25 +415,25 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           class="text-sm text-gray-500 dark:text-zinc-400 mb-1"
           data-testid="staff-queue-contact"
         >
-          {if @item.conversation.contact,
-            do: @item.conversation.contact.name || @item.conversation.contact.email,
+          {if @item.thread.contact,
+            do: @item.thread.contact.name || @item.thread.contact.email,
             else: "Unknown contact"}
         </div>
         <div
           class="text-sm text-gray-800 dark:text-zinc-200 mb-2"
           data-testid="staff-queue-subject"
         >
-          {@item.conversation.subject}
+          {@item.thread.subject}
         </div>
         <div class="flex items-center gap-2 flex-wrap">
-          <.state_badge state={@item.conversation.state} />
-          <.urgency_badge urgency={@item.conversation.urgency} />
-          <.source_badge source={@item.conversation.source} />
+          <.state_badge state={@item.thread.state} />
+          <.urgency_badge urgency={@item.thread.urgency} />
+          <.source_badge source={@item.thread.source} />
           <span
             :if={@item.due_task_count > 0}
             class="text-xs rounded px-2 py-0.5 bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
             data-testid="queue-tasks-due"
-            title="Complete or reschedule the task to clear this reminder. Conversation snoozing does not change its deadline."
+            title="Complete or reschedule the task to clear this reminder. Thread snoozing does not change its deadline."
           >
             {@item.due_task_count} {if @item.due_task_count == 1, do: "task due", else: "tasks due"}
           </span>
@@ -445,37 +445,37 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           <%!-- Channel the mail arrived on (spec-inbound-channels, "Attention
                queue"): the public address, never the ingress address. --%>
           <span
-            :if={@item.conversation.inbound_channel}
+            :if={@item.thread.inbound_channel}
             class="text-xs px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300 truncate max-w-[12rem]"
-            title={"Channel #{@item.conversation.inbound_channel.public_address}"}
+            title={"Channel #{@item.thread.inbound_channel.public_address}"}
             data-testid="staff-queue-channel"
           >
-            {@item.conversation.inbound_channel.public_address}
+            {@item.thread.inbound_channel.public_address}
           </span>
           <span
-            :if={@item.conversation.suspect}
+            :if={@item.thread.suspect}
             class="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
-            title="Triage flagged this conversation as suspect"
+            title="Triage flagged this thread as suspect"
             data-testid="staff-queue-suspect"
           >
             suspect
           </span>
           <span
-            :if={@item.conversation.language}
+            :if={@item.thread.language}
             class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300 uppercase"
-            title={"Detected language: #{Custyard.Email.LanguageDetector.name(@item.conversation.language)}"}
+            title={"Detected language: #{Custyard.Email.LanguageDetector.name(@item.thread.language)}"}
             data-testid="staff-queue-language"
           >
-            {@item.conversation.language}
+            {@item.thread.language}
           </span>
           <.intake_source_tag
-            :if={@item.conversation.intake_source_key}
-            source_key={@item.conversation.intake_source_key}
+            :if={@item.thread.intake_source_key}
+            source_key={@item.thread.intake_source_key}
           />
-          <%!-- Flag only public-intake conversations: email/portal conversations
+          <%!-- Flag only public-intake threads: email/portal threads
                derive their reply channel elsewhere. A badge, never a filter. --%>
           <.no_reply_channel_badge :if={
-            @item.conversation.source == :public_intake and @item.reply_channel == :none
+            @item.thread.source == :public_intake and @item.reply_channel == :none
           } />
           <span
             class="text-xs text-gray-400 dark:text-zinc-500 ml-auto"
@@ -484,7 +484,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             {@item.message_count} msg
           </span>
           <span class="text-xs text-gray-400 dark:text-zinc-500" data-testid="staff-queue-score">
-            score: {@item.conversation.cached_score}
+            score: {@item.thread.cached_score}
           </span>
         </div>
       </.link>
@@ -492,7 +492,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       <div class="flex items-center gap-2 mt-3">
         <button
           phx-click="toggle_score"
-          phx-value-id={@item.conversation.id}
+          phx-value-id={@item.thread.id}
           class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
           data-testid="staff-queue-score-toggle"
         >
@@ -502,20 +502,20 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         <%= if @item.is_snoozed do %>
           <button
             phx-click="unsnooze"
-            phx-value-id={@item.conversation.id}
+            phx-value-id={@item.thread.id}
             class="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 px-2 py-1 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
             data-testid="staff-queue-unsnooze-btn"
           >
             Un-snooze
           </button>
           <span class="text-xs text-gray-400 dark:text-zinc-500">
-            until {format_snooze_time(@item.conversation.snoozed_until)}
+            until {format_snooze_time(@item.thread.snoozed_until)}
           </span>
         <% else %>
           <div class="relative">
             <button
               phx-click="toggle_snooze"
-              phx-value-id={@item.conversation.id}
+              phx-value-id={@item.thread.id}
               aria-haspopup="menu"
               aria-expanded={to_string(@show_snooze)}
               class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
@@ -528,7 +528,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
                 phx-click-away="toggle_snooze"
                 phx-key="escape"
                 phx-keydown="toggle_snooze"
-                phx-value-id={@item.conversation.id}
+                phx-value-id={@item.thread.id}
                 role="menu"
                 aria-label="Snooze duration options"
                 class="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-10 p-1"
@@ -537,7 +537,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
                 <%= for opt <- ["1h", "4h", "1d", "3d"] do %>
                   <button
                     phx-click="snooze"
-                    phx-value-id={@item.conversation.id}
+                    phx-value-id={@item.thread.id}
                     phx-value-duration={opt}
                     role="menuitem"
                     class="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded focus:outline-none focus:bg-gray-100 dark:focus:bg-zinc-700"

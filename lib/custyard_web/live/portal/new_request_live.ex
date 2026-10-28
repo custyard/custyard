@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Portal.NewRequestLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Conversation, Message, Repo, Scoring}
+  alias Custyard.{Thread, Message, Repo, Scoring}
   alias Ecto.Multi
 
   @impl true
@@ -30,8 +30,8 @@ defmodule CustyardWeb.Portal.NewRequestLive do
     result =
       Multi.new()
       |> Multi.insert(
-        :conversation,
-        Conversation.changeset(%Conversation{}, %{
+        :thread,
+        Thread.changeset(%Thread{}, %{
           tenant_id: org.tenant_id,
           organization_id: org.id,
           contact_id: socket.assigns.portal_credential.contact_id,
@@ -41,10 +41,10 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           last_customer_action_at: DateTime.utc_now()
         })
       )
-      |> Multi.insert(:message, fn %{conversation: conv} ->
+      |> Multi.insert(:message, fn %{thread: conv} ->
         Message.changeset(%Message{}, %{
           tenant_id: org.tenant_id,
-          conversation_id: conv.id,
+          thread_id: conv.id,
           source: :portal,
           sender_email:
             socket.assigns.portal_credential.contact &&
@@ -56,16 +56,16 @@ defmodule CustyardWeb.Portal.NewRequestLive do
       |> Repo.transaction()
 
     case result do
-      {:ok, %{conversation: conv}} ->
+      {:ok, %{thread: conv}} ->
         Scoring.calculate_and_cache(conv.id)
 
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
-          "conversations",
-          {:conversation_created, conv.id}
+          "threads",
+          {:thread_created, conv.id}
         )
 
-        Custyard.Conversations.broadcast_to_org(org.id, {:conversation_created, conv.id})
+        Custyard.Threads.broadcast_to_org(org.id, {:thread_created, conv.id})
 
         {:noreply, push_navigate(socket, to: "#{portal_path}/request/#{conv.id}")}
 

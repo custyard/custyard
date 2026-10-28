@@ -161,13 +161,13 @@ from the newest message.
 ## Rejection log
 
 The Channels tab lists the last 14 days of mail that reached a route but did
-not become a conversation:
+not become a thread:
 
 | Label | Meaning |
 | --- | --- |
 | no matching channel | The recipient matched no channel: a wrong or expired token, or an unknown local part on a direct-MX domain |
 | channel paused / channel revoked | The channel was not accepting mail |
-| auto-reply, no thread | An auto-response or bounce that answered no conversation |
+| auto-reply, no thread | An auto-response or bounce that answered no thread |
 | provider notice | A provider forwarding notification outside setup |
 | copy of your own reply | The archive copy of a reply, recognised and dropped |
 | too large to import | IMAP: a message over 25 MB |

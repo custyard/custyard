@@ -6,10 +6,10 @@ defmodule Custyard.Email.ThreadMatcherTest do
   test "headers are matched only in the receiving tenant, including duplicate message ids" do
     a = insert_organization()
     b = insert_organization(tenant_id: insert_tenant().id)
-    thread_a = insert_conversation(organization_id: a.id)
-    thread_b = insert_conversation(organization_id: b.id)
-    insert_message(conversation_id: thread_a.id, message_id: "shared@example.com")
-    insert_message(conversation_id: thread_b.id, message_id: "shared@example.com")
+    thread_a = insert_thread(organization_id: a.id)
+    thread_b = insert_thread(organization_id: b.id)
+    insert_message(thread_id: thread_a.id, message_id: "shared@example.com")
+    insert_message(thread_id: thread_b.id, message_id: "shared@example.com")
     parsed = %{from: "alice@example.com", in_reply_to: "shared@example.com", references: nil}
     assert {:ok, %{id: id_a}} = ThreadMatcher.find_in_tenant(parsed, a.tenant_id)
     assert {:ok, %{id: id_b}} = ThreadMatcher.find_in_tenant(parsed, b.tenant_id)
@@ -20,10 +20,10 @@ defmodule Custyard.Email.ThreadMatcherTest do
 
   test "In-Reply-To precedes References and missing headers do not match" do
     org = insert_organization()
-    a = insert_conversation(organization_id: org.id)
-    b = insert_conversation(organization_id: org.id)
-    insert_message(conversation_id: a.id, message_id: "a@example.com")
-    insert_message(conversation_id: b.id, message_id: "b@example.com")
+    a = insert_thread(organization_id: org.id)
+    b = insert_thread(organization_id: org.id)
+    insert_message(thread_id: a.id, message_id: "a@example.com")
+    insert_message(thread_id: b.id, message_id: "b@example.com")
 
     assert {:ok, %{id: id}} =
              ThreadMatcher.find_in_tenant(
@@ -40,7 +40,7 @@ defmodule Custyard.Email.ThreadMatcherTest do
     contact = insert_contact(organization_id: org.id, email: "alice@example.com")
 
     thread =
-      insert_conversation(organization_id: org.id, contact_id: contact.id, subject: "Onboarding")
+      insert_thread(organization_id: org.id, contact_id: contact.id, subject: "Onboarding")
 
     assert {:ok, %{id: id}} =
              ThreadMatcher.find_by_subject(
@@ -68,10 +68,10 @@ defmodule Custyard.Email.ThreadMatcherTest do
 
   test "ambiguous references do not select an arbitrary customer" do
     org = insert_organization()
-    a = insert_conversation(organization_id: org.id)
-    b = insert_conversation(organization_id: org.id)
-    insert_message(conversation_id: a.id, message_id: "a@example.com")
-    insert_message(conversation_id: b.id, message_id: "b@example.com")
+    a = insert_thread(organization_id: org.id)
+    b = insert_thread(organization_id: org.id)
+    insert_message(thread_id: a.id, message_id: "a@example.com")
+    insert_message(thread_id: b.id, message_id: "b@example.com")
 
     assert :ambiguous =
              ThreadMatcher.find_in_tenant(

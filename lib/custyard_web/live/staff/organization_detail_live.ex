@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Staff.OrganizationDetailLive do
   @moduledoc "Customer contacts, threads, projects and independently revocable portal credentials."
   use CustyardWeb, :live_view
-  alias Custyard.{Acknowledgments, Conversations, Organizations, PortalCredentials, Projects}
+  alias Custyard.{Acknowledgments, Threads, Organizations, PortalCredentials, Projects}
 
   def mount(%{"id" => id}, _, socket) do
     case Organizations.get(socket.assigns.current_scope, id) do
@@ -17,8 +17,8 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
          |> assign(:portal_url, nil)
          |> assign(:contacts, Organizations.list_contacts(socket.assigns.current_scope, org.id))
          |> assign(
-           :conversations,
-           Conversations.list_for_organization(org.id, include_resolved: true)
+           :threads,
+           Threads.list_for_organization(org.id, include_resolved: true)
          )
          |> assign(
            :projects,
@@ -97,8 +97,8 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
         <:subtitle>{@organization.domain} · {@organization.tier}</:subtitle>
       </.header>
       <section>
-        <h2 class="font-semibold mb-3">Threads</h2><p :if={@conversations == []}>No threads yet.</p><p :for={
-          thread <- @conversations
+        <h2 class="font-semibold mb-3">Threads</h2><p :if={@threads == []}>No threads yet.</p><p :for={
+          thread <- @threads
         }>
           <.link navigate={~p"/app/threads/#{thread.id}"}>{thread.subject || "Untitled thread"}</.link>
           · {thread.state}

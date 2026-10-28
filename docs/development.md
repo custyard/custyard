@@ -106,7 +106,7 @@ In development, emails are captured by `Swoosh.Adapters.Local` and viewable at h
 In development, append `?as=<contact_id>` to any URL to view as that contact:
 
 ```
-http://localhost:4000/conversations?as=123
+http://localhost:4000/threads?as=123
 ```
 
 This bypasses authentication for testing. Controlled by `allow_contact_impersonation: true` in `config/dev.exs`.

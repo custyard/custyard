@@ -3,7 +3,7 @@ defmodule CustyardWeb.Staff.SlugsLive do
   Tenant administrator administration of the slug registry.
 
   Lists every registry row (slug, status, anchor email, expiry, linked
-  conversation) and releases claimed/confirmed rows back to available.
+  thread) and releases claimed/confirmed rows back to available.
   Provisioned rows are refused — a provisioned slug is an organization's
   portal identity and is released only by organization deletion.
 
@@ -90,7 +90,7 @@ defmodule CustyardWeb.Staff.SlugsLive do
              "staff_id" => staff.id,
              "staff_email" => staff.email
            },
-           conversation_id: slug.conversation_id
+           thread_id: slug.thread_id
          }) do
       {:ok, _event} ->
         :ok
@@ -146,12 +146,12 @@ defmodule CustyardWeb.Staff.SlugsLive do
                 expires {format_time(slug.expires_at)}
               </span>
               <.link
-                :if={slug.conversation_id}
-                navigate={~p"/app/threads/#{slug.conversation_id}"}
+                :if={slug.thread_id}
+                navigate={~p"/app/threads/#{slug.thread_id}"}
                 class="text-indigo-600 dark:text-indigo-400 hover:underline"
-                data-testid={"staff-slug-conversation-#{slug.id}"}
+                data-testid={"staff-slug-thread-#{slug.id}"}
               >
-                View conversation
+                View thread
               </.link>
             </div>
           </div>

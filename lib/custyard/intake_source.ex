@@ -4,8 +4,8 @@ defmodule Custyard.IntakeSource do
 
   Each row defines a public intake entry point identified by `key`, a public
   URL segment. The key format is locked to lowercase alphanumerics with
-  hyphens/underscores because it appears verbatim in URLs and as conversation
-  provenance (`conversations.intake_source_key`).
+  hyphens/underscores because it appears verbatim in URLs and as thread
+  provenance (`threads.intake_source_key`).
 
   Modes:
   - `:active` — form-first intake page
@@ -15,7 +15,7 @@ defmodule Custyard.IntakeSource do
   use Ecto.Schema
   import Ecto.Changeset
 
-  # Same format as conversations.intake_source_key: 1-50 chars, lowercase
+  # Same format as threads.intake_source_key: 1-50 chars, lowercase
   # alphanumeric start, then lowercase alphanumerics/underscore/hyphen.
   # \A/\z (not ^/$): Erlang's re lets $ match before a trailing newline, which
   # would admit "valid-key\n" into a public URL segment.
@@ -90,8 +90,8 @@ defmodule Custyard.IntakeSource do
 
   @doc """
   Changeset for updating an existing source. Does not cast `:key`: the key is
-  a public URL segment and conversation provenance
-  (`conversations.intake_source_key`), immutable after creation regardless of
+  a public URL segment and thread provenance
+  (`threads.intake_source_key`), immutable after creation regardless of
   caller.
   """
   def update_changeset(intake_source, attrs) do
