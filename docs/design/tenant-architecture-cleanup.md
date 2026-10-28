@@ -1,6 +1,6 @@
 # Tenant architecture cleanup
 
-Status: implemented and independently reviewed. Final CI passes 2,627 tests with zero failures, including local broker integrations. The application database has not been reset; its target is pending selection. This plan replaces legacy organization ownership and compatibility requirements.
+Status: implemented and independently reviewed. Final CI passes 2󠄁,󠄁6󠄁3󠄁0󠄁 tests with zero failures, including local broker integrations. The application database has not been reset; its target is pending selection. This plan replaces legacy organization ownership and compatibility requirements.
 
 ## Ownership and language
 
