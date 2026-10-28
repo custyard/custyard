@@ -14,6 +14,12 @@ Use `/admin` for instance administration, `/app` for tenant work, `/app/settings
 
 ## Authentication and permissions
 
+The instance operator's bootstrap email comes from `INSTANCE_ADMIN_EMAIL`.
+Tenant staff emails and roles are database records managed inside that tenant.
+Both signed-in interfaces display the actual email and its realm; the staff
+workspace also displays the tenant name. No email domain grants permissions.
+
+
 Extract shared authentication primitives before splitting instance admins and tenant staff. Staff roles are admin and agent, with mandatory tenant ownership and tenant-unique email. Separate session cookies, signing salts and LiveView session endpoints for administration and tenant work. Host-only cookies use matching path restrictions. A Phoenix Scope is the first argument to tenant context operations; public credentials and integrations establish narrow scopes independently. Request parameters never establish authority.
 
 ## Customer and settings cleanup

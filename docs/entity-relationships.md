@@ -1,33 +1,41 @@
-Based on the schemas:
+# Ownership and entity relationships
 
-Request = Conversation (same thing, "request" is portal-facing terminology)
+The instance operator runs Custyard. An instance administrator provisions
+and suspends tenants without gaining access to their customer records.
+Tenant staff work across that tenant's customers; customer organizations
+never own staff accounts, hosting, branding or provider credentials.
 
-Organization
-├── Contacts (customers)
-├── Conversations (support requests)
-│   ├── Messages
-│   ├── Tasks (can be attached to a conversation)
-│   └── belongs_to Project (optional)
-├── Projects (group related work)
-│   ├── Tasks (can be attached to a project)
-│   ├── Conversations (linked to this project)
-│   └── InboundRoutes
-└── Tasks (can exist at org level too)
+```mermaid
+graph TD
+  I[Custyard installation] --> A[Instance admins]
+  I --> T[Tenant]
+  T --> H[Registered hostnames]
+  T --> S[Staff accounts: admin or agent]
+  T --> C[Customer organizations]
+  T --> E[Email connection and channels]
+  T --> W[Workflow and intake settings]
+  T --> P[Projects and tasks]
+  C --> K[Contacts]
+  C --> R[Threads]
+  C --> G[Revocable portal credentials]
+  R --> M[Messages and tenant-scoped attachments]
+```
 
-Task ownership is flexible - a task needs at least one of:
-- organization_id (org-level task)
-- conversation_id (task tied to a support request)
-- project_id (task tied to a project)
+A tenant has many actual hostnames, each globally unique. The configured
+installation hostname can be explicitly registered to one tenant. A customer
+has a domain, email or manual identity unique within its tenant. Personal
+senders use their normalized email identity and display name.
 
-Project ↔ Conversation:
-- A project can have one "primary" conversation (e.g., the initial onboarding request)
-- A project has many conversations (all conversations linked to it)
-- A conversation optionally belongs_to a project
+Threads may be unassigned while an anonymous inquiry is unresolved. Messages
+carry explicit tenant ownership; RFC message IDs and provider delivery IDs
+are unique per tenant. Every related record must agree on its tenant through
+composite foreign keys. Installation audit events alone may have no tenant.
 
-Internal vs Customer projects:
-- Customer projects have an organization_id
-- Internal projects have project_type: :internal, no org, not portal-visible
+Projects belong to a tenant and may serve a customer or internal work. Tasks
+belong to the tenant and can attach to a customer, thread or project; they
+start private. Channel customer/project/label defaults are routing hints,
+with existing threads and known sender identity taking precedence.
 
-So tasks can live on conversations (created from conversation detail page) OR on projects (the new UI we just built). The
-conversation-based tasks are good for "reply to customer by Friday" while project-based tasks are better for milestone
-tracking.
+Portal credentials have hashed tokens, customer ownership, optional contact
+attribution and independent revocation. Thread credentials grant access to
+one thread. Claim slugs are tenant-local customer labels, never hosting keys.
