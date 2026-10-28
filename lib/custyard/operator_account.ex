@@ -37,26 +37,7 @@ defmodule Custyard.OperatorAccount do
   """
   def login_token_ttl_minutes, do: @login_token_ttl_minutes
 
-  @doc """
-  Normalizes an email address to the form it is stored in: trimmed,
-  lowercased with full Unicode case mapping, and in Unicode NFC.
-
-  The login form looks accounts up by the normalized address, so every
-  lookup and every write must go through this. NFC makes a precomposed
-  "é" and "e" followed by a combining accent the same address.
-
-  A binary that is not valid UTF-8 is returned unchanged; the changeset
-  rejects it.
-  """
-  def normalize_email(email) when is_binary(email) do
-    if String.valid?(email) do
-      email |> String.trim() |> String.downcase() |> :unicode.characters_to_nfc_binary()
-    else
-      email
-    end
-  end
-
-  def normalize_email(email), do: email
+  defdelegate normalize_email(email), to: Custyard.Auth.Account
 
   @doc false
   def changeset(operator_account, attrs) do
@@ -149,101 +130,19 @@ defmodule Custyard.OperatorAccount do
     end
   end
 
-  @doc """
-  Changeset for updating password only.
-  """
-  def password_changeset(operator_account, attrs) do
-    operator_account
-    |> cast(attrs, [:password])
-    |> validate_required([:password])
-    |> validate_length(:password, min: 8, max: 72, message: "must be between 8 and 72 characters")
-    |> hash_password()
-  end
-
-  @doc """
-  Generates a login token and sets its expiration.
-  Returns a changeset with the token set.
-  """
-  def login_token_changeset(operator_account) do
-    token = generate_login_token()
-
-    expires_at =
-      DateTime.utc_now()
-      |> DateTime.add(@login_token_ttl_minutes * 60, :second)
-      |> DateTime.truncate(:second)
-
-    operator_account
-    |> change(%{login_token: token, login_token_expires_at: expires_at})
-  end
-
-  @doc """
-  Whether the operator holds a login token that has not expired yet.
-  """
-  def login_token_valid?(%__MODULE__{login_token: token} = operator) when is_binary(token),
-    do: verify_login_token(operator, token)
-
-  def login_token_valid?(_operator), do: false
-
-  @doc """
-  Clears the login token after successful use.
-  """
-  def clear_login_token_changeset(operator_account) do
-    operator_account
-    |> change(%{login_token: nil, login_token_expires_at: nil})
-  end
-
-  @doc """
-  Verifies a login token is valid and not expired.
-  """
-  def verify_login_token(
-        %__MODULE__{login_token: token, login_token_expires_at: expires_at},
-        provided_token
-      )
-      when is_binary(token) and is_binary(provided_token) do
-    token_matches = Plug.Crypto.secure_compare(token, provided_token)
-
-    not_expired =
-      if is_struct(expires_at, DateTime) do
-        DateTime.compare(expires_at, DateTime.utc_now()) == :gt
-      else
-        false
-      end
-
-    token_matches and not_expired
-  end
-
-  def verify_login_token(_, _), do: false
-
-  defp generate_login_token do
-    :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
-  end
+  defdelegate password_changeset(account, attrs), to: Custyard.Auth.Account
+  defdelegate login_token_changeset(account), to: Custyard.Auth.Account
+  defdelegate login_token_valid?(account), to: Custyard.Auth.Account
+  defdelegate clear_login_token_changeset(account), to: Custyard.Auth.Account
+  defdelegate verify_login_token(account, token), to: Custyard.Auth.Account
+  defdelegate verify_password(account, password), to: Custyard.Auth.Account
 
   defp hash_password(changeset) do
     case get_change(changeset, :password) do
-      nil ->
-        changeset
-
-      password ->
-        hash = Argon2.hash_pwd_salt(password)
-        put_change(changeset, :password_hash, hash)
+      nil -> changeset
+      password -> put_change(changeset, :password_hash, Argon2.hash_pwd_salt(password))
     end
   end
-
-  @doc """
-  Verifies a password against the stored hash.
-  Uses constant-time comparison to prevent timing attacks.
-  """
-  def verify_password(%__MODULE__{password_hash: hash}, password) when is_binary(password) do
-    Argon2.verify_pass(password, hash)
-  end
-
-  def verify_password(nil, _password) do
-    # Prevent timing attacks by simulating password check for non-existent users
-    Argon2.no_user_verify()
-    false
-  end
-
-  def verify_password(_, _), do: false
 
   # --- Authorization helpers ---
 
@@ -288,7 +187,7 @@ defmodule Custyard.OperatorAccount do
   def session_claim(%__MODULE__{session_claim: claim}), do: claim
 
   @doc false
-  def generate_session_claim, do: Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+  defdelegate generate_session_claim(), to: Custyard.Auth.Account
 
   @doc """
   Whether `claim` (from the session) was issued for this account. A missing
