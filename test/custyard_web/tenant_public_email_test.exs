@@ -191,6 +191,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
   defp assert_branding(email, tenant) do
     assert {~s("Atlas, Support"), "support@atlas.example"} = email.from
+    assert is_nil(email.reply_to)
     assert_receive {:tenant_delivery_headers, headers}
     assert {"x-lettermint-token", "atlas-private-token"} in headers
     assert email.text_body =~ tenant.name

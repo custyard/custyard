@@ -364,9 +364,15 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert reply.id == first.id
   end
 
-  test "tenant public intake snapshots support identity and receives the captured sender's email reply" do
+  test "tenant public intake snapshots the sending domain and receives the captured sender's email reply" do
     tenant = tenant()
     channel = shared_channel(tenant)
+
+    {:ok, channel} =
+      Custyard.InboundChannels.update_channel(channel, %{sending_domain: "mail.service.example"},
+        operator: insert_operator_account(tenant_id: tenant.id, role: "admin")
+      )
+
     conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
 
     prospect =
@@ -381,7 +387,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
                operator_email: "private@operator.example"
              )
 
-    assert outgoing.sender_email == channel.public_address
+    assert outgoing.sender_email == "support@mail.service.example"
     assert outgoing.inbound_channel_id == channel.id
     assert outgoing.to_addresses == [prospect.email]
 

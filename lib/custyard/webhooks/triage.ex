@@ -269,6 +269,8 @@ defmodule Custyard.Webhooks.Triage do
 
   defp google_domain?(sender), do: String.ends_with?(sender, "@google.com")
 
+  # This address also sends ordinary account notifications. Only its forwarding
+  # invitations belong in the channel confirmation panel.
   defp proton_forwarding_notice?(@proton_notification_sender, subject),
     do: is_binary(subject) and subject =~ @proton_forwarding_subject
 
@@ -292,8 +294,8 @@ defmodule Custyard.Webhooks.Triage do
 
   defp verification_code(_provider, _subject), do: nil
 
-  # First https link whose host belongs to the provider, searching the text
-  # body and then the anchor hrefs the adapter lifted from an HTML body
+  # Find the provider's confirmation action, searching the text body and
+  # then the anchor hrefs the adapter lifted from an HTML body
   # (`metadata.links`): stripping HTML drops `href` attributes, so an
   # HTML-only confirmation would otherwise lose its link.
   defp verification_link(provider, normalized) do
@@ -321,6 +323,8 @@ defmodule Custyard.Webhooks.Triage do
     end)
   end
 
+  # Proton invitations include branding and decline links before/alongside the
+  # acceptance action. Preserve its fragment, which carries the confirmation.
   defp confirmation_action?(:proton, url) do
     case URI.parse(url) do
       %URI{host: "account.proton.me", path: path} when is_binary(path) ->

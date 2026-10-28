@@ -64,6 +64,18 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert_receive {:attempted_email, original_email}
     failed = Repo.get!(Message, context.message.id)
 
+    # An absent Reply-To uses the canonical envelope representation.
+    canonical_hash =
+      {original_email.from, original_email.to, original_email.cc, original_email.bcc,
+       original_email.subject, original_email.text_body, original_email.html_body,
+       original_email.headers}
+      |> :erlang.term_to_binary()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+
+    assert is_nil(original_email.reply_to)
+    assert failed.delivery_payload_hash == canonical_hash
+
     insert_message(
       conversation_id: context.conversation.id,
       source: :email,

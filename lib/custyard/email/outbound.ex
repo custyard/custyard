@@ -395,11 +395,14 @@ defmodule Custyard.Email.Outbound do
 
   defp put_cc(email, _message, _recipient), do: email
 
+  # A sending-only domain may have no receiving mailbox. Customer answers
+  # return through the public support address and its existing inbound channel.
   defp put_channel_reply_to(email, %{
          inbound_channel:
            %InboundChannel{reply_from: :public_address, sending_domain: domain} = channel
        })
-       when is_binary(domain), do: reply_to(email, channel.public_address)
+       when is_binary(domain),
+       do: reply_to(email, channel.public_address)
 
   defp put_channel_reply_to(email, _conversation), do: email
 

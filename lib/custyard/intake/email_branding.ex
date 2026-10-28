@@ -1,6 +1,6 @@
 defmodule Custyard.Intake.EmailBranding do
   @moduledoc false
-  alias Custyard.{Conversation, Repo, Tenants}
+  alias Custyard.{Conversation, InboundChannels, Repo, Tenants}
   alias Custyard.Email.Headers
 
   def tenant_id_for_claim(%{conversation_id: id}) do
@@ -14,7 +14,7 @@ defmodule Custyard.Intake.EmailBranding do
     with {:ok, channel} <- Custyard.EmailSetup.default_reply_channel(id),
          {:ok, config} <- Custyard.EmailSetup.sending_config(id),
          address when is_binary(address) and address != "" <-
-           Custyard.InboundChannels.from_address(channel) do
+           InboundChannels.from_address(channel) do
       reply_to =
         if channel.reply_from == :public_address and is_binary(channel.sending_domain),
           do: channel.public_address

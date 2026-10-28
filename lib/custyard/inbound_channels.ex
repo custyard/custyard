@@ -122,9 +122,9 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   The From address for operator replies on this channel (D3): the public
-  address, or the full ingress address when the channel falls back to the
-  ingress identity. nil when the fallback is selected but the route has no
-  domain yet (callers then use their own fallback).
+  local part at the selected sending domain, or the full ingress address
+  when the channel falls back to the ingress identity. nil when the fallback
+  is selected but the route has no domain yet (callers then use their own fallback).
   """
   def from_address(%InboundChannel{reply_from: :public_address} = channel),
     do: InboundChannel.sending_address(channel)
@@ -283,7 +283,7 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   Update operator-editable attributes (display name, provider, reply_from,
-  quiet window, attention bonus). A changed attention bonus rescores the
+  sending_domain, quiet window, attention bonus). A changed attention bonus rescores the
   channel's active conversations at once.
   """
   def update_channel(%InboundChannel{} = channel, attrs, opts \\ []) when is_map(attrs) do
@@ -317,7 +317,8 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   Operator confirmed the forwarding rule: `pending_verification` ->
-  `awaiting_first_message`. Consumes any captured verification.
+  `awaiting_first_message`. Consumes any captured verification, including a
+  confirmation received after the operator advanced to the first-message step.
   """
   def confirm_verification(channel, opts \\ [])
 
@@ -606,7 +607,7 @@ defmodule Custyard.InboundChannels do
   # --- Sending domain (D3) ---
 
   @doc """
-  Check whether the channel's public address domain is a Lettermint sending
+  Check whether the channel's selected sending domain is a Lettermint sending
   domain and record the result (`sending_domain_status`, one of
   `InboundChannel.sending_domain_statuses/0`; `"not_found"` when the team
   has no such domain). Matching is case-insensitive.
