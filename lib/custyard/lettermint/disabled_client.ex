@@ -15,5 +15,7 @@ defmodule Custyard.Lettermint.DisabledClient do
   @impl true
   def list_domains, do: {:error, :not_configured}
   @impl true
+  def get_sending_domain(_domain), do: {:error, :not_configured}
+  @impl true
   def get_webhook_delivery(_id, _delivery_id), do: {:error, :not_configured}
 end

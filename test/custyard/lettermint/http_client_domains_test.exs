@@ -15,10 +15,12 @@ defmodule Custyard.Lettermint.HttpClientDomainsTest do
       test_pid = :persistent_term.get({__MODULE__, :test_pid})
       send(test_pid, {:request, conn.request_path, conn.query_params, conn.req_headers})
 
+      response = :persistent_term.get({__MODULE__, :respond})
+
       {status, body} =
-        :persistent_term.get({__MODULE__, :respond}).(
-          get_in(conn.query_params, ["page", "cursor"])
-        )
+        if is_function(response, 2),
+          do: response.(conn.request_path, conn.query_params),
+          else: response.(get_in(conn.query_params, ["page", "cursor"]))
 
       conn
       |> put_resp_content_type("application/json")
@@ -137,6 +139,56 @@ defmodule Custyard.Lettermint.HttpClientDomainsTest do
       )
 
       assert {:error, {:request_failed, _reason}} = HttpClient.list_domains()
+    end
+  end
+
+  describe "get_sending_domain/2" do
+    test "unrestricted domains remain usable even when omitted by the project filter" do
+      selected = domain("mail")
+
+      respond_with(fn
+        "/domains", params ->
+          assert get_in(params, ["filter", "domain"]) == "mail.example.com"
+          refute Map.has_key?(params["filter"], "project")
+          {200, Jason.encode!(%{"data" => [selected]})}
+
+        "/domains/mail", params ->
+          assert params["include"] == ["projects"]
+          {200, Jason.encode!(%{"id" => "mail", "projects" => []})}
+      end)
+
+      config =
+        Application.get_env(:custyard, :lettermint) |> Keyword.put(:project_id, "project-1")
+
+      assert {:ok, ^selected} = HttpClient.get_sending_domain("mail.example.com", config)
+    end
+
+    test "explicit project restrictions are enforced and unknown access fails closed" do
+      config =
+        Application.get_env(:custyard, :lettermint) |> Keyword.put(:project_id, "project-1")
+
+      for {projects, expected} <- [
+            {[%{"id" => "project-1"}], {:ok, domain("mail")}},
+            {[%{"id" => "other-project"}], {:ok, nil}},
+            {nil, {:error, :domain_access_unknown}}
+          ] do
+        respond_with(fn
+          "/domains", _ -> {200, Jason.encode!(%{"data" => [domain("mail")]})}
+          "/domains/mail", _ -> {200, Jason.encode!(%{"projects" => projects})}
+        end)
+
+        assert HttpClient.get_sending_domain("mail.example.com", config) == expected
+      end
+    end
+
+    test "a partial domain match never verifies another domain" do
+      respond_with(fn _ -> {200, Jason.encode!(%{"data" => [domain("child.mail")]})} end)
+
+      config =
+        Application.get_env(:custyard, :lettermint) |> Keyword.put(:project_id, "project-1")
+
+      assert {:ok, nil} = HttpClient.get_sending_domain("mail.example.com", config)
+      refute_received {:request, "/domains/child.mail", _, _}
     end
   end
 

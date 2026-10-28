@@ -36,7 +36,7 @@ defmodule Custyard.Lettermint.Client do
   Lettermint statuses are `verified`, `partially_verified`,
   `pending_verification` and `failed_verification`. The channel
   sending-domain check (docs/design/spec-inbound-channels.md, D3) compares a
-  channel's public address domain against this list. Implementations follow
+  channel's selected sending domain against this list. Implementations follow
   pagination so callers always see the full list.
   """
 
@@ -87,6 +87,19 @@ defmodule Custyard.Lettermint.Client do
   """
   @callback list_domains() :: {:ok, [map()]} | {:error, term()}
 
+  @doc "Find an exact sending domain available to the selected project, including unrestricted domains."
+  @callback get_sending_domain(String.t()) :: {:ok, map() | nil} | {:error, term()}
+
+  @doc false
+  def find_domain(domains, domain) when is_list(domains) and is_binary(domain) do
+    wanted = String.downcase(domain)
+
+    Enum.find(domains, fn
+      %{"domain" => candidate} when is_binary(candidate) -> String.downcase(candidate) == wanted
+      _ -> false
+    end)
+  end
+
   @doc "Retrieve a retained webhook delivery; its payload is secret and must remain in memory."
   @callback get_webhook_delivery(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   @optional_callbacks get_webhook_delivery: 2
@@ -116,7 +129,7 @@ defmodule Custyard.Lettermint.Client do
 
       true ->
         with {:ok, config} <- Custyard.EmailSetup.management_config(tenant_id) do
-          if operation == :list_domains and is_nil(config[:project_id]),
+          if operation in [:list_domains, :get_sending_domain] and is_nil(config[:project_id]),
             do: {:error, :project_required},
             else: apply(Custyard.Lettermint.HttpClient, operation, args ++ [config])
         end

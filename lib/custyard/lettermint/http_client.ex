@@ -11,7 +11,8 @@ defmodule Custyard.Lettermint.HttpClient do
   pages.
   """
 
-  @behaviour Custyard.Lettermint.Client
+  alias Custyard.Lettermint.Client
+  @behaviour Client
 
   @impl true
   def create_route(params, opts \\ [])
@@ -167,6 +168,44 @@ defmodule Custyard.Lettermint.HttpClient do
     list_domains_page(nil, [], @domains_max_pages, opts)
   end
 
+  @impl true
+  # The project-filtered list omits unrestricted domains. Look up the exact
+  # team domain and inspect its project limits: an empty list allows every
+  # project, while explicit assignments must include the selected project.
+  def get_sending_domain(domain, opts \\ []) do
+    opts = config(opts)
+    project_id = opts[:project_id]
+
+    if is_binary(project_id) and project_id != "" do
+      lookup_opts = opts |> Keyword.delete(:project_id) |> Keyword.put(:domain_filter, domain)
+
+      with {:ok, domains} <- list_domains(lookup_opts),
+           %{"id" => id} = found when is_binary(id) <-
+             Client.find_domain(domains, domain),
+           {:ok, details} <-
+             get_resource("/domains/#{URI.encode_www_form(id)}?include%5B%5D=projects", opts) do
+        case details["projects"] do
+          [] ->
+            {:ok, found}
+
+          projects when is_list(projects) ->
+            if Enum.any?(projects, &(is_map(&1) and &1["id"] == project_id)),
+              do: {:ok, found},
+              else: {:ok, nil}
+
+          _ ->
+            {:error, :domain_access_unknown}
+        end
+      else
+        nil -> {:ok, nil}
+        {:error, _} = error -> error
+        _ -> {:error, :domain_access_unknown}
+      end
+    else
+      {:error, :project_required}
+    end
+  end
+
   # Cursor pagination over GET /domains, bounded so a misbehaving cursor can
   # never loop. Pages are concatenated in API order.
   defp list_domains_page(_cursor, acc, 0, _opts), do: {:ok, acc}
@@ -174,7 +213,8 @@ defmodule Custyard.Lettermint.HttpClient do
   defp list_domains_page(cursor, acc, pages_left, opts) do
     url =
       api_url(
-        "/domains?" <> URI.encode_query(domains_query(cursor) ++ project_filter(opts)),
+        "/domains?" <>
+          URI.encode_query(domains_query(cursor) ++ project_filter(opts) ++ domain_filter(opts)),
         opts
       )
 
@@ -274,6 +314,13 @@ defmodule Custyard.Lettermint.HttpClient do
     case Keyword.get(opts, :project_id) do
       nil -> []
       id -> [{"filter[project]", id}]
+    end
+  end
+
+  defp domain_filter(opts) do
+    case Keyword.get(opts, :domain_filter) do
+      nil -> []
+      domain -> [{"filter[domain]", domain}]
     end
   end
 

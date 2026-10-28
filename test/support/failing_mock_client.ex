@@ -13,7 +13,8 @@ defmodule Custyard.Lettermint.FailingMockClient do
       Process.put({:failing_mock_client, :delete_route}, {:error, {:api_error, 500, "Internal Server Error"}})
   """
 
-  @behaviour Custyard.Lettermint.Client
+  alias Custyard.Lettermint.Client
+  @behaviour Client
 
   @impl true
   def create_route(_params) do
@@ -61,5 +62,11 @@ defmodule Custyard.Lettermint.FailingMockClient do
       nil -> {:error, {:api_error, 503, "Service Unavailable"}}
       error -> error
     end
+  end
+
+  @impl true
+  def get_sending_domain(domain) do
+    with {:ok, domains} <- list_domains(),
+         do: {:ok, Client.find_domain(domains, domain)}
   end
 end

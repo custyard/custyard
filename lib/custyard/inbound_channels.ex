@@ -633,8 +633,8 @@ defmodule Custyard.InboundChannels do
 
     configuration = Custyard.EmailSetup.management_config(channel.tenant_id)
 
-    with {:ok, domains} <- Client.call(:list_domains, [], channel.tenant_id),
-         {:ok, status} <- domain_status(domains, domain) do
+    with {:ok, found} <- Client.call(:get_sending_domain, [domain], channel.tenant_id),
+         {:ok, status} <- domain_status(found) do
       persist_check(channel, opts, fn current ->
         if Custyard.EmailSetup.management_config(channel.tenant_id) != configuration,
           do: Repo.rollback(:stale_configuration)
@@ -669,32 +669,15 @@ defmodule Custyard.InboundChannels do
     end
   end
 
-  defp domain_status(_domains, nil), do: {:ok, "not_found"}
+  defp domain_status(nil), do: {:ok, "not_found"}
 
-  defp domain_status(domains, domain) when is_list(domains) do
-    wanted = String.downcase(domain)
-
-    found =
-      Enum.find(domains, fn
-        %{"domain" => candidate} when is_binary(candidate) -> String.downcase(candidate) == wanted
-        _ -> false
-      end)
-
-    case found do
-      nil ->
-        {:ok, "not_found"}
-
-      %{"status" => status} when is_binary(status) ->
-        if status in InboundChannel.sending_domain_statuses(),
-          do: {:ok, status},
-          else: {:error, {:unknown_domain_status, status}}
-
-      _ ->
-        {:error, {:unexpected_response, found}}
-    end
+  defp domain_status(%{"status" => status}) when is_binary(status) do
+    if status in InboundChannel.sending_domain_statuses(),
+      do: {:ok, status},
+      else: {:error, {:unknown_domain_status, status}}
   end
 
-  defp domain_status(domains, _domain), do: {:error, {:unexpected_response, domains}}
+  defp domain_status(other), do: {:error, {:unexpected_response, other}}
 
   # Network checks never hold a database transaction. Before recording results,
   # reject revoked sessions and channels whose routing/credentials changed.

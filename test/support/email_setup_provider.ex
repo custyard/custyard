@@ -1,6 +1,13 @@
 defmodule Custyard.EmailSetupTestProvider do
   @moduledoc false
+  alias Custyard.Lettermint.Client
   def list_domains, do: response(:domains, nil, [])
+
+  def get_sending_domain(domain) do
+    with {:ok, domains} <- list_domains(),
+         do: {:ok, Client.find_domain(domains, domain)}
+  end
+
   def verify_inbound_domain(id), do: response(:mx, id, [])
   def get_project(id, opts), do: response(:project, id, opts)
   def get_route(id, opts), do: response(:route, id, opts)
