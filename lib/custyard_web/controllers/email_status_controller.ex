@@ -3,11 +3,14 @@ defmodule CustyardWeb.EmailStatusController do
   Delivery-status webhook for outbound replies, separate from the inbound
   message pipeline (`WebhookController`).
 
-  Lettermint signs each webhook with its own `whsec_` secret, so the status
-  webhook is verified against `:webhook_secrets[:lettermint_status]` rather
-  than the inbound route secret. Without a configured secret, verification is
-  skipped with a warning in dev/test and fails closed (401) in production,
-  mirroring the inbound controller.
+  Each Lettermint webhook has its own signing secret. Tenant callback URLs
+  use the encrypted secret saved by Email setup, separately from the inbound
+  route secret. Until binding succeeds, these URLs deliberately return 401;
+  turning off provider Basic Auth does not bypass signature verification.
+
+  The legacy URL uses `:webhook_secrets[:lettermint_status]`. Missing legacy
+  configuration is allowed with a warning in dev/test and fails closed in
+  production.
 
   Responses never echo payload fields other than the event name's outcome.
   """

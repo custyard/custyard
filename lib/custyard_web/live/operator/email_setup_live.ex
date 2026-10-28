@@ -372,7 +372,10 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
       <section class="space-y-3" aria-labelledby="reply-title">
         <h2 id="reply-title" class="text-lg font-semibold">4. Verify replies and delivery events</h2>
         <p class="text-sm">
-          Create a project-scoped webhook in Lettermint for the selected sending project. Enable live deliveries, leave Basic Auth off, use this URL and select: {Enum.join(
+          In Lettermint Dashboard → Webhooks, create or edit a webhook. Set its scope to Projects and select this sending project. A webhook created for an outbound route may use Route scope; change it to Projects here so all sending routes are covered.
+        </p>
+        <p class="text-sm">
+          Enable live deliveries, leave Basic Auth off, use this URL and select: {Enum.join(
             EmailSetup.status_events(),
             ", "
           )}.
@@ -401,6 +404,9 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
         </form>
         <p id="status-secret-state" class="text-xs">
           {binding_secret_help(@connection.status_secret_ciphertext)}
+        </p>
+        <p class="text-xs">
+          Deliveries return 401 until the binding and this webhook's signing secret are saved successfully. Changing the scope keeps the same signing secret.
         </p>
         <p class="text-sm">
           Send a new message from an external mailbox to your support address. Open its conversation, send a reply, confirm it arrived, then reply back and confirm the same thread. A provider test event alone does not verify forwarding.
