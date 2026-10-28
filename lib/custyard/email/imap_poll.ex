@@ -47,6 +47,7 @@ defmodule Custyard.Email.ImapPoll do
   @max_messages_per_poll 50
   @max_message_bytes 25 * 1024 * 1024
   @session_timeout_ms 120_000
+  @cleanup_timeout_ms 1_000
   @auth_failures_before_suspend 3
   @max_message_attempts 5
   @retryable_dispatch_errors [:attachment_fetch_failed, :attachment_processing_failed]
@@ -168,9 +169,18 @@ defmodule Custyard.Email.ImapPoll do
     client = Keyword.get_lazy(opts, :client, &ImapClient.client/0)
     timeout = Keyword.get(opts, :timeout, @session_timeout_ms)
 
+    owner = self()
+
     task =
       Task.Supervisor.async_nolink(Custyard.TaskSupervisor, fn ->
-        session(client, channel, opts, fun)
+        worker = self()
+        guard = spawn(fn -> guard_session(owner, worker, client, nil) end)
+
+        try do
+          session(client, channel, opts, fun, guard)
+        after
+          send(guard, :done)
+        end
       end)
 
     case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
@@ -180,7 +190,60 @@ defmodule Custyard.Email.ImapPoll do
     end
   end
 
-  defp session(client, channel, opts, fun) do
+  # A supervised, unlinked session must still belong to its polling caller.
+  # The guard also closes an acquired connection if cancellation skips `after`.
+  defp guard_session(owner, worker, client, conn) do
+    owner_ref = Process.monitor(owner)
+    worker_ref = Process.monitor(worker)
+    guard_session_loop(owner_ref, worker_ref, worker, client, conn)
+  end
+
+  defp guard_session_loop(owner_ref, worker_ref, worker, client, conn) do
+    receive do
+      {:connection, connection} ->
+        guard_session_loop(owner_ref, worker_ref, worker, client, connection)
+
+      {:DOWN, ^owner_ref, :process, _owner, _reason} ->
+        Process.exit(worker, :kill)
+        close_cancelled_session(client, conn)
+
+      {:DOWN, ^worker_ref, :process, ^worker, _reason} ->
+        close_cancelled_session(client, conn)
+
+      :done ->
+        :ok
+    end
+  end
+
+  defp close_cancelled_session(_client, nil), do: :ok
+
+  defp close_cancelled_session(client, conn) do
+    {cleanup, ref} = spawn_monitor(fn -> safe_logout(client, conn) end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^cleanup, _reason} -> :ok
+    after
+      @cleanup_timeout_ms ->
+        Process.exit(cleanup, :kill)
+        Process.demonitor(ref, [:flush])
+    end
+
+    # Plover transfers SSL ownership to a connection linked to the session.
+    # Killing the session already closes that connection, including the gap
+    # between connect returning and the guard receiving its handle.
+    if is_pid(conn), do: Process.exit(conn, :kill)
+    :ok
+  end
+
+  defp safe_logout(client, conn) do
+    client.logout(conn)
+  rescue
+    _error -> :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp session(client, channel, opts, fun, guard) do
     with {:ok, channel} <- current_channel(channel),
          {:ok, password} <- password(channel),
          {:ok, address, server_name} <- ImapHost.resolve(channel.imap_host),
@@ -190,6 +253,8 @@ defmodule Custyard.Email.ImapPoll do
              channel.imap_port,
              [server_name: server_name] ++ Keyword.get(opts, :connect, [])
            ) do
+      send(guard, {:connection, conn})
+
       try do
         with :ok <- client.login(conn, channel.imap_username, password),
              {:ok, mailbox} <- client.examine(conn, channel.imap_folder),
@@ -279,7 +344,13 @@ defmodule Custyard.Email.ImapPoll do
       |> Enum.reduce_while(
         {:ok, %{imported: 0, ignored: 0, skipped: 0, failed: 0}, channel.imap_message_attempts},
         fn item, {:ok, counts, attempts} ->
-          case settle(import_one(client, conn, channel, route, item), channel, item, attempts) do
+          result =
+            case current_channel(channel) do
+              {:ok, current} -> import_one(client, conn, current, route, item)
+              {:error, reason} -> {:stop, reason}
+            end
+
+          case settle(result, channel, item, attempts) do
             {:advance, outcome} ->
               advance(channel, item.uid)
               {:cont, {:ok, Map.update!(counts, outcome, &(&1 + 1)), 0}}
@@ -324,8 +395,14 @@ defmodule Custyard.Email.ImapPoll do
 
   defp import_one(client, conn, channel, route, %{uid: uid}) do
     case client.fetch_message(conn, uid) do
-      {:ok, raw} -> dispatch(raw, channel, route, uid)
-      {:error, reason} -> {:stop, {:fetch_failed, reason}}
+      {:ok, raw} ->
+        case current_channel(channel) do
+          {:ok, current} -> dispatch(raw, current, route, uid)
+          {:error, reason} -> {:stop, reason}
+        end
+
+      {:error, reason} ->
+        {:stop, {:fetch_failed, reason}}
     end
   end
 

@@ -3,6 +3,9 @@ defmodule Custyard.Email.ImapPollTest do
   use Custyard.DataCase, async: true
 
   import Custyard.Factory
+  import ExUnit.CaptureLog
+
+  alias Ecto.Adapters.SQL.Sandbox
 
   alias Custyard.{Thread, InboundChannel, InboundChannelRejection, InboundChannels, Message}
   alias Custyard.Email.{ImapPoll, ImapPollers, Parser}
@@ -133,6 +136,91 @@ defmodule Custyard.Email.ImapPollTest do
     assert {:error, "tenant_suspended"} = ImapPoll.poll(channel)
     assert reload(channel) == before_poll
     refute {:list_after, 0} in Stub.calls(host)
+  end
+
+  test "suspension after the first fetch stops the batch and closes the session", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    before_poll = reload(channel)
+    tenant = Repo.get!(Custyard.Tenant, channel.tenant_id)
+    Stub.put_message(host, 1, email(1))
+    Stub.put_message(host, 2, email(2))
+
+    Stub.update(
+      host,
+      &Map.put(&1, :on_fetch, fn 1 ->
+        tenant |> Ecto.Changeset.change(status: "suspended") |> Repo.update!()
+      end)
+    )
+
+    assert {:error, "tenant_suspended"} = ImapPoll.poll(channel)
+    calls = Stub.calls(host)
+    assert {:fetch, 1} in calls
+    refute {:fetch, 2} in calls
+    assert List.last(calls) == :logout
+    assert reload(channel) == before_poll
+    assert Repo.aggregate(Thread, :count) == 0
+  end
+
+  test "terminating the caller cancels its live session and closes the connection", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    before_poll = reload(channel)
+    owner = self()
+    Stub.put_message(host, 1, email(1))
+    Stub.put_message(host, 2, email(2))
+
+    Stub.update(
+      host,
+      &Map.put(&1, :on_fetch, fn uid ->
+        send(owner, {:fetch_started, self(), uid})
+
+        receive do
+          :continue -> :ok
+        end
+      end)
+    )
+
+    caller =
+      spawn(fn ->
+        receive do
+          :poll -> ImapPoll.poll(channel)
+        end
+      end)
+
+    Sandbox.allow(Repo, self(), caller)
+    send(caller, :poll)
+    assert_receive {:fetch_started, worker, 1}
+    worker_ref = Process.monitor(worker)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}
+    send(worker, :continue)
+
+    # The guard's logout follows the worker termination asynchronously.
+    for _ <- 1..100, :logout != List.last(Stub.calls(host)), do: Process.sleep(5)
+    assert List.last(Stub.calls(host)) == :logout
+    refute {:fetch, 2} in Stub.calls(host)
+    assert reload(channel) == before_poll
+  end
+
+  test "a crashed session reports failure without crashing its caller", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    Stub.put_message(host, 1, email(1))
+    Stub.update(host, &Map.put(&1, :on_fetch, fn _uid -> raise "session client crashed" end))
+
+    capture_log(fn ->
+      assert {:error, "session_crashed"} = ImapPoll.poll(channel)
+    end)
+
+    assert List.last(Stub.calls(host)) == :logout
+    assert reload(channel).imap_last_uid == 0
   end
 
   describe "creating an IMAP channel" do
