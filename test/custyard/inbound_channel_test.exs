@@ -75,6 +75,42 @@ defmodule Custyard.InboundChannelTest do
       assert is_nil(get_change(changeset(%{display_name: "   "}), :display_name))
     end
 
+    test "normalizes an optional sending domain and rejects addresses, URLs and invalid hostnames" do
+      cs = changeset(%{sending_domain: "  MAIL.Acme.Example.COM  "})
+      assert cs.valid?
+      assert get_change(cs, :sending_domain) == "mail.acme.example.com"
+
+      for bad <- [
+            "https://mail.example.com",
+            "help@mail.example.com",
+            "*.example.com",
+            "mail..example.com",
+            "-mail.example.com",
+            "mail.example.com\r\nBcc: x@y.com",
+            String.duplicate("a", 64) <> ".example.com",
+            Enum.map_join([63, 63, 63, 61], ".", &String.duplicate("a", &1))
+          ] do
+        assert %{sending_domain: [_ | _]} = errors_on(changeset(%{sending_domain: bad}))
+      end
+    end
+
+    test "changing or clearing the sending domain resets its verification" do
+      existing =
+        channel(%{
+          inbound_route_id: 1,
+          sending_domain: "mail.acme.example.com",
+          sending_domain_status: "verified",
+          sending_domain_checked_at: @now
+        })
+
+      for domain <- ["other.acme.example.com", ""] do
+        cs = InboundChannel.changeset(existing, %{sending_domain: domain})
+        assert cs.valid?
+        assert fetch_change(cs, :sending_domain_status) == {:ok, nil}
+        assert fetch_change(cs, :sending_domain_checked_at) == {:ok, nil}
+      end
+    end
+
     test "bounds quiet_after_hours to 1..720" do
       assert changeset(%{quiet_after_hours: 1}).valid?
       assert changeset(%{quiet_after_hours: 720}).valid?

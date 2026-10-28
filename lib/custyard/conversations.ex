@@ -882,7 +882,8 @@ defmodule Custyard.Conversations do
   Returns `%{address, name, source}` where `source` is:
 
     * `:channel` - the conversation arrived on an inbound channel; `address`
-      is the channel's public address (or its ingress address when the
+      is the public mailbox local part at the channel's sending domain
+      (or its ingress address when the
       channel falls back to that identity) and `name` its display name when
       set, else the organization name
     * `:route` - the project or general inbound route's `from_address`

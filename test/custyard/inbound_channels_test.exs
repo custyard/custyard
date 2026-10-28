@@ -180,6 +180,26 @@ defmodule Custyard.InboundChannelsTest do
       assert is_nil(Repo.reload!(channel).sending_domain_status)
     end
 
+    test "a completed domain check cannot certify a newly selected sending domain" do
+      route = insert_route()
+      operator = insert_operator_account()
+      channel = insert_inbound_channel(inbound_route_id: route.id)
+
+      Application.put_env(:custyard, :email_setup_test_provider, %{
+        domains: fn ->
+          {:ok, _} =
+            InboundChannels.update_channel(channel, %{sending_domain: "mail.acme.example.com"})
+
+          {:ok, [%{"domain" => InboundChannel.public_domain(channel), "status" => "verified"}]}
+        end
+      })
+
+      assert {:error, :stale_configuration} =
+               InboundChannels.check_sending_domain(channel, operator: operator)
+
+      assert is_nil(Repo.reload!(channel).sending_domain_status)
+    end
+
     test "a late MX check cannot reactivate a paused channel or stamp its route" do
       route = insert_route(lettermint_custom_domain: "mx.example.com")
 
@@ -924,6 +944,58 @@ defmodule Custyard.InboundChannelsTest do
       assert updated.sending_domain_status == "not_found"
       refute InboundChannels.sending_domain_verified?(updated)
       assert InboundChannels.sending_domain_summary(updated) == :not_found
+    end
+
+    test "a separate sending domain preserves the public mailbox and checks that domain" do
+      channel = insert_inbound_channel(public_address: "support@acme.example.com")
+      ingress = InboundChannels.ingress_address(channel)
+
+      assert {:ok, changed} =
+               InboundChannels.update_channel(channel, %{sending_domain: "mail.acme.example.com"})
+
+      assert changed.public_address == channel.public_address
+      assert InboundChannels.ingress_address(changed) == ingress
+      assert InboundChannels.from_address(changed) == "support@mail.acme.example.com"
+
+      stage_domains([%{"domain" => "mail.acme.example.com", "status" => "verified"}])
+      assert {:ok, verified} = InboundChannels.check_sending_domain(changed)
+      assert verified.sending_domain_status == "verified"
+
+      assert {:ok, cleared} = InboundChannels.update_channel(verified, %{sending_domain: ""})
+      assert InboundChannels.from_address(cleared) == "support@acme.example.com"
+      assert is_nil(cleared.sending_domain_status)
+    end
+
+    test "changing the sending domain clears verification and roundtrip evidence" do
+      channel = insert_inbound_channel()
+      operator = insert_operator_account()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      {:ok, connection} = Custyard.EmailSetup.ensure_connection(operator, channel.tenant_id)
+
+      connection
+      |> Ecto.Changeset.change(
+        last_signed_inbound_at: now,
+        last_reply_accepted_at: now,
+        last_reply_delivered_at: now,
+        last_returning_reply_at: now
+      )
+      |> Repo.update!()
+
+      channel =
+        channel |> InboundChannel.sending_domain_changeset("verified", now) |> Repo.update!()
+
+      {:ok, changed} =
+        InboundChannels.update_channel(channel, %{sending_domain: "mail.acme.example.com"},
+          operator: operator
+        )
+
+      assert is_nil(changed.sending_domain_status)
+      assert is_nil(changed.sending_domain_checked_at)
+      fresh = Custyard.EmailSetup.connection(channel.tenant_id)
+      assert is_nil(fresh.last_signed_inbound_at)
+      assert is_nil(fresh.last_reply_accepted_at)
+      assert is_nil(fresh.last_reply_delivered_at)
+      assert is_nil(fresh.last_returning_reply_at)
     end
 
     test "summarises the intermediate statuses" do

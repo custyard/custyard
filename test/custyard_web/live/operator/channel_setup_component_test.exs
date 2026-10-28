@@ -352,6 +352,28 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       assert InboundChannels.get_channel!(c.channel.id).sending_domain_status == "verified"
     end
 
+    test "an administrator can save a sending subdomain and resume it", c do
+      Application.put_env(:custyard, :lettermint_mock_domains, [
+        %{"domain" => "mail.acme.example.com", "status" => "verified"}
+      ])
+
+      view = open_reply_step(c.conn, c.org, c.channel)
+
+      view
+      |> form("#sending-domain-form-#{c.channel.id}", sending_domain: "mail.acme.example.com")
+      |> render_submit()
+
+      assert InboundChannels.get_channel!(c.channel.id).sending_domain == "mail.acme.example.com"
+      assert render(view) =~ "support@mail.acme.example.com"
+      assert render(view) =~ "Replies return to support@acme.example.com"
+      view |> element("[data-testid=channel-setup-check-domain]") |> render_click()
+      render_async(view)
+      assert InboundChannels.get_channel!(c.channel.id).sending_domain_status == "verified"
+
+      reopened = open_reply_step(c.conn, c.org, InboundChannels.get_channel!(c.channel.id))
+      assert has_element?(reopened, "[name=sending_domain][value='mail.acme.example.com']")
+    end
+
     test "a missing domain explains the DNS records and offers the fallback", %{
       conn: conn,
       org: org,

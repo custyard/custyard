@@ -130,12 +130,12 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   The From address for operator replies on this channel (D3): the public
-  address, or the full ingress address when the channel falls back to the
-  ingress identity. nil when the fallback is selected but the route has no
-  domain yet (callers then use their own fallback).
+  local part at the selected sending domain, or the full ingress address
+  when the channel falls back to the ingress identity. nil when the fallback
+  is selected but the route has no domain yet (callers then use their own fallback).
   """
-  def from_address(%InboundChannel{reply_from: :public_address, public_address: address}),
-    do: address
+  def from_address(%InboundChannel{reply_from: :public_address} = channel),
+    do: InboundChannel.sending_address(channel)
 
   def from_address(%InboundChannel{reply_from: :ingress_address} = channel),
     do: ingress_address(channel)
@@ -293,7 +293,7 @@ defmodule Custyard.InboundChannels do
 
   @doc """
   Update operator-editable attributes (display name, provider, reply_from,
-  quiet window, attention bonus). A changed attention bonus rescores the
+  sending_domain, quiet window, attention bonus). A changed attention bonus rescores the
   channel's active conversations at once.
   """
   def update_channel(%InboundChannel{} = channel, attrs, opts \\ []) when is_map(attrs) do
@@ -314,7 +314,7 @@ defmodule Custyard.InboundChannels do
       audit(updated, :channel_updated, opts, %{changed: Map.keys(attrs)})
       if Map.has_key?(changeset.changes, :attention_bonus), do: rescore(updated)
 
-      if Map.has_key?(changeset.changes, :reply_from),
+      if Enum.any?([:reply_from, :sending_domain], &Map.has_key?(changeset.changes, &1)),
         do: Custyard.EmailSetup.invalidate_identity(updated.tenant_id)
 
       broadcast(updated)
@@ -618,7 +618,7 @@ defmodule Custyard.InboundChannels do
   # --- Sending domain (D3) ---
 
   @doc """
-  Check whether the channel's public address domain is a Lettermint sending
+  Check whether the channel's selected sending domain is a Lettermint sending
   domain and record the result (`sending_domain_status`, one of
   `InboundChannel.sending_domain_statuses/0`; `"not_found"` when the team
   has no such domain). Matching is case-insensitive.
@@ -629,7 +629,7 @@ defmodule Custyard.InboundChannels do
   recorded on the audit event.
   """
   def check_sending_domain(%InboundChannel{} = channel, opts \\ []) do
-    domain = InboundChannel.public_domain(channel)
+    domain = InboundChannel.sending_domain(channel)
 
     configuration = Custyard.EmailSetup.management_config(channel.tenant_id)
 
@@ -756,6 +756,7 @@ defmodule Custyard.InboundChannels do
         :state,
         :public_address,
         :reply_from,
+        :sending_domain,
         :imap_host,
         :imap_port,
         :imap_username,

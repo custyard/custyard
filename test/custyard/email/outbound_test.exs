@@ -16,7 +16,7 @@ defmodule Custyard.Email.OutboundTest do
   import Custyard.Factory
   import Swoosh.TestAssertions
 
-  alias Custyard.Email.Outbound
+  alias Custyard.Email.{Outbound, ThreadMatcher}
   alias Custyard.Email.OutboundTest.LettermintStub
   alias Custyard.{Conversations, Intake, Message, Repo, Settings}
 
@@ -863,6 +863,63 @@ defmodule Custyard.Email.OutboundTest do
 
       assert_email_sent(fn email ->
         assert email.from == {"Acme Help Desk", "help@acme.example.com"}
+      end)
+    end
+
+    test "a separate sending domain uses the public mailbox as Reply-To and keeps threading", %{
+      channel: channel,
+      channel_conversation: conv
+    } do
+      assert {:ok, _} =
+               Custyard.InboundChannels.update_channel(channel, %{
+                 sending_domain: "mail.acme.example.com"
+               })
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "alice@customer.com",
+        message_id: "<question@customer.com>"
+      )
+
+      assert {:ok, reply} = Conversations.send_reply(conv, "Reply from the sending subdomain")
+      assert reply.sender_email == "help@mail.acme.example.com"
+      assert {:ok, sent} = Outbound.deliver(reply)
+
+      assert_email_sent(fn email ->
+        assert email.from == {"Acme Help Desk", "help@mail.acme.example.com"}
+        assert email.reply_to == {"", "help@acme.example.com"}
+        assert Map.new(email.headers)["In-Reply-To"] == "<question@customer.com>"
+      end)
+
+      assert {:ok, matched} =
+               ThreadMatcher.find_thread(
+                 %{in_reply_to: sent.message_id, references: nil},
+                 conv.organization_id
+               )
+
+      assert matched.id == conv.id
+      assert matched.organization_id == conv.organization_id
+    end
+
+    test "the ingress fallback keeps its direct return path with a custom sending domain", %{
+      channel: channel,
+      channel_conversation: conv
+    } do
+      {:ok, channel} =
+        Custyard.InboundChannels.update_channel(
+          channel,
+          %{sending_domain: "mail.acme.example.com", reply_from: :ingress_address}
+        )
+
+      ingress = Custyard.InboundChannels.ingress_address(channel)
+      {:ok, reply} = Conversations.send_reply(conv, "Reply using the ingress fallback")
+      assert reply.sender_email == ingress
+      assert {:ok, _} = Outbound.deliver(reply)
+
+      assert_email_sent(fn email ->
+        assert elem(email.from, 1) == ingress
+        assert is_nil(email.reply_to)
       end)
     end
 

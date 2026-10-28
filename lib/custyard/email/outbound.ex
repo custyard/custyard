@@ -342,6 +342,7 @@ defmodule Custyard.Email.Outbound do
     )
     |> put_archive_bcc(conversation)
     |> from(from_address)
+    |> put_channel_reply_to(conversation)
     |> subject(compose_subject(conversation))
     |> text_body(message.body)
     |> html_body(wrap_html(message.body))
@@ -371,6 +372,17 @@ defmodule Custyard.Email.Outbound do
   end
 
   defp put_cc(email, _message, _recipient), do: email
+
+  # A sending-only domain may have no receiving mailbox. Customer answers
+  # return through the public support address and its existing inbound channel.
+  defp put_channel_reply_to(email, %{
+         inbound_channel:
+           %InboundChannel{reply_from: :public_address, sending_domain: domain} = channel
+       })
+       when is_binary(domain),
+       do: reply_to(email, channel.public_address)
+
+  defp put_channel_reply_to(email, _conversation), do: email
 
   # Archive copy (spec-inbound-channels D4): BCC the channel's public address
   # so the operator's mailbox keeps the reply. The copy is forwarded straight
