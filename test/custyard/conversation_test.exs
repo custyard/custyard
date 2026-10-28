@@ -42,7 +42,7 @@ defmodule Custyard.ConversationTest do
   end
 
   describe "intake_source_key" do
-    test "is not castable via the operator-facing changeset/2" do
+    test "is not castable via the staff-facing changeset/2" do
       attrs = build_conversation(organization_id: insert_organization().id)
       changeset = Conversation.changeset(%Conversation{}, Map.put(attrs, :intake_source_key, "x"))
 

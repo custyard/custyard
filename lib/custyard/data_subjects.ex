@@ -15,15 +15,15 @@ defmodule Custyard.DataSubjects do
       the body is somebody else's correspondence.
     * `erase_participation/2` removes the address from recipient lists and
       `Reply-To` on messages the person did not send. Messages they sent are
-      left alone; the counts tell the operator how many those are.
+      left alone; the counts tell the staff how many those are.
     * `erase_subject/2` is the contact-level erasure: the participation
       erasure, plus the person's own messages, their attachments, their
       contact record, the subjects of their conversations and their
-      rejection-log entries. Operator replies keep their text, without the
+      rejection-log entries. Staff replies keep their text, without the
       person's address.
 
   `bin/dsar` (`Custyard.Release.Dsar`; `mix custyard.dsar` in development)
-  wraps them for operators until a UI exists.
+  wraps them for staffs until a UI exists.
   Addresses are matched case-insensitively; the audit event written on
   erasure records counts only, never the address.
   """
@@ -138,7 +138,7 @@ defmodule Custyard.DataSubjects do
       owned lose the contact and their subject;
     * rejection-log entries from the address are deleted.
 
-  Operator replies keep their text. Returns `{:ok, counts}` and writes a
+  Staff replies keep their text. Returns `{:ok, counts}` and writes a
   `data_subject_erasure` audit event with the same counts and no address.
   """
   def erase_subject(scope, email, organization_id) when is_binary(email) do
@@ -193,7 +193,7 @@ defmodule Custyard.DataSubjects do
   end
 
   defp lock_authority!(%Custyard.Scope{} = scope) do
-    Custyard.OperatorAccess.lock_current(%Custyard.OperatorAccount{id: scope.staff_id})
+    Custyard.StaffAccess.lock_current(%Custyard.StaffAccount{id: scope.staff_id})
     lock_tenant(scope.tenant_id)
   end
 
@@ -223,8 +223,8 @@ defmodule Custyard.DataSubjects do
 
   defp authorize_scope!(%Custyard.Scope{} = scope, erase?) do
     case Custyard.Scope.current_staff(scope) do
-      %Custyard.OperatorAccount{role: "admin"} -> :ok
-      %Custyard.OperatorAccount{} when not erase? -> :ok
+      %Custyard.StaffAccount{role: "admin"} -> :ok
+      %Custyard.StaffAccount{} when not erase? -> :ok
       _ -> deny_scope!(erase?)
     end
   end

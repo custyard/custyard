@@ -11,7 +11,7 @@ defmodule Custyard.Tenant do
     field :primary_color, :string
     field :secondary_color, :string
     has_many :organizations, Custyard.Organization
-    has_many :operator_accounts, Custyard.OperatorAccount
+    has_many :staff_accounts, Custyard.StaffAccount
     has_many :inbound_routes, Custyard.InboundRoute
     has_many :inbound_channels, Custyard.InboundChannel
     timestamps(type: :utc_datetime)
@@ -25,7 +25,7 @@ defmodule Custyard.Tenant do
     |> validate_required([:name, :slug])
     |> validate_length(:name, max: 200)
     |> validate_format(:slug, ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/)
-    |> validate_exclusion(:slug, ~w(www api operator dev assets mail support),
+    |> validate_exclusion(:slug, ~w(www api staff dev assets mail support),
       message: "is reserved"
     )
     |> validate_inclusion(:status, ~w(active suspended))

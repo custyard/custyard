@@ -39,7 +39,7 @@ defmodule Custyard.EmailSetupTest do
         })
       )
 
-    admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
+    admin = insert_staff_account(role: "admin", tenant_id: tenant.id)
     %{tenant: tenant, admin: admin}
   end
 
@@ -92,7 +92,7 @@ defmodule Custyard.EmailSetupTest do
 
     {:ok, connection} =
       EmailSetup.ensure_connection(
-        insert_operator_account(role: "admin", tenant_id: other.id),
+        insert_staff_account(role: "admin", tenant_id: other.id),
         other.id
       )
 
@@ -197,7 +197,7 @@ defmodule Custyard.EmailSetupTest do
 
     assert Enum.sort(Enum.map(route.webhooks, & &1.purpose)) == [:notification, :sender_matching]
 
-    Phoenix.PubSub.subscribe(Custyard.PubSub, "operator:notifications")
+    Phoenix.PubSub.subscribe(Custyard.PubSub, "staff:notifications")
 
     normalized = %{
       from: "alice@customer.example",
@@ -302,7 +302,7 @@ defmodule Custyard.EmailSetupTest do
     old_reply =
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "old-legacy-reply"
       )
@@ -311,7 +311,7 @@ defmodule Custyard.EmailSetupTest do
 
     assert {:ok, _} =
              Custyard.InboundChannels.update_channel(channel, %{reply_from: :ingress_address},
-               operator: c.admin
+               staff: c.admin
              )
 
     assert EmailSetup.connection(c.tenant.id).reply_evidence_after_message_id >= old_reply.id
@@ -351,7 +351,7 @@ defmodule Custyard.EmailSetupTest do
     {:ok, connection} = save(c)
 
     fixture(:webhook, fn ->
-      Repo.update!(Custyard.OperatorAccount.role_changeset(c.admin, %{role: "agent"}))
+      Repo.update!(Custyard.StaffAccount.role_changeset(c.admin, %{role: "agent"}))
 
       {:ok,
        webhook(%{
@@ -374,7 +374,7 @@ defmodule Custyard.EmailSetupTest do
 
     Repo.update!(
       Ecto.Changeset.change(c.admin,
-        session_claim: Custyard.OperatorAccount.generate_session_claim()
+        session_claim: Custyard.StaffAccount.generate_session_claim()
       )
     )
 

@@ -127,9 +127,9 @@ defmodule Custyard.Turso.ProtocolTest do
     # character of SQLite's message.
     test "error messages lose sqld's prefix and nothing else" do
       assert Protocol.error_message(%{
-               "message" => "SQLite error: UNIQUE constraint failed: operator_accounts.email",
+               "message" => "SQLite error: UNIQUE constraint failed: staff_accounts.email",
                "code" => "SQLITE_CONSTRAINT"
-             }) == "UNIQUE constraint failed: operator_accounts.email"
+             }) == "UNIQUE constraint failed: staff_accounts.email"
 
       assert Protocol.error_message(%{"message" => "Transaction timed out"}) ==
                "Transaction timed out"

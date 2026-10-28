@@ -45,7 +45,7 @@ defmodule Custyard.Task do
     |> foreign_key_constraint(:project_id)
   end
 
-  # A datetime-local control carries no zone. The operator forms explicitly
+  # A datetime-local control carries no zone. The staff forms explicitly
   # label it UTC; preserve invalid input so Ecto reports it instead of silently
   # removing an existing due date.
   defp normalize_due_at(attrs) do

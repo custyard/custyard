@@ -23,7 +23,7 @@ defmodule Custyard.Conversation do
 
   # Valid state transitions: from_state => [allowed_to_states]
   # Transitions follow this logic:
-  # - :new -> :active (operator or customer action), :resolved (resolve without activity)
+  # - :new -> :active (staff or customer action), :resolved (resolve without activity)
   # Valid state transitions
   @valid_transitions %{
     new: [:active, :resolved],
@@ -47,7 +47,7 @@ defmodule Custyard.Conversation do
     # changeset/2 cast list; set via intake_changeset/2 at creation.
     field(:intake_source_key, :string)
 
-    field(:last_operator_action_at, :utc_datetime)
+    field(:last_staff_action_at, :utc_datetime)
     field(:last_customer_action_at, :utc_datetime)
     field(:snoozed_until, :utc_datetime)
 
@@ -89,7 +89,7 @@ defmodule Custyard.Conversation do
       :source,
       # Note: :cached_score is computed by Scoring.calculate_and_cache/1
       # Note: :last_neglect_notification is managed by NeglectChecker
-      :last_operator_action_at,
+      :last_staff_action_at,
       :last_customer_action_at,
       :snoozed_until,
       :organization_id,
@@ -116,7 +116,7 @@ defmodule Custyard.Conversation do
   @doc """
   Changeset for the triage suspect flag. Deliberately outside `changeset/2`
   so the flag is set only by triage at creation and cleared only by an
-  explicit operator action.
+  explicit staff action.
   """
   def suspect_changeset(conversation, suspect?) when is_boolean(suspect?) do
     change(conversation, suspect: suspect?)
@@ -127,7 +127,7 @@ defmodule Custyard.Conversation do
 
   Extends `changeset/2` with `:intake_source_key`, which is creation-only
   provenance: it is deliberately absent from the `changeset/2` cast list so
-  operator-facing update paths can never set or change it.
+  staff-facing update paths can never set or change it.
   """
   def intake_changeset(conversation, attrs) do
     conversation

@@ -1,12 +1,12 @@
 defmodule Custyard.AuthorizationTest do
   use Custyard.DataCase
-  alias Custyard.{Authorization, Factory, InstanceAdmin, OperatorAccount}
+  alias Custyard.{Authorization, Factory, InstanceAdmin, StaffAccount}
 
   test "staff permissions respect tenant ownership and admin role" do
     own = Factory.insert_organization()
     foreign = Factory.insert_organization(tenant_id: Factory.insert_tenant().id)
-    admin = Factory.insert_operator_account(tenant_id: own.tenant_id, role: "admin")
-    agent = Factory.insert_operator_account(tenant_id: own.tenant_id, role: "agent")
+    admin = Factory.insert_staff_account(tenant_id: own.tenant_id, role: "admin")
+    agent = Factory.insert_staff_account(tenant_id: own.tenant_id, role: "agent")
     assert Authorization.can_create_organization?(admin)
     refute Authorization.can_create_organization?(agent)
     assert Authorization.can_manage_organization?(admin, own.id)
@@ -17,7 +17,7 @@ defmodule Custyard.AuthorizationTest do
     refute Authorization.can_modify_settings?(agent)
     assert Authorization.can_access_conversation?(agent, %{tenant_id: own.tenant_id})
     refute Authorization.can_access_conversation?(agent, %{tenant_id: foreign.tenant_id})
-    refute OperatorAccount.can_access_organization?(agent, foreign.id)
+    refute StaffAccount.can_access_organization?(agent, foreign.id)
 
     for actor <- [%InstanceAdmin{}, nil, %{}] do
       refute Authorization.can_access_conversation?(actor, %{tenant_id: own.tenant_id})
@@ -27,9 +27,9 @@ defmodule Custyard.AuthorizationTest do
   end
 
   test "the staff role hierarchy has no installation role" do
-    assert Authorization.has_minimum_role?(%OperatorAccount{role: "admin"}, "agent")
-    assert Authorization.has_minimum_role?(%OperatorAccount{role: "admin"}, "admin")
-    refute Authorization.has_minimum_role?(%OperatorAccount{role: "agent"}, "admin")
-    refute Authorization.has_minimum_role?(%OperatorAccount{role: "admin"}, "super_admin")
+    assert Authorization.has_minimum_role?(%StaffAccount{role: "admin"}, "agent")
+    assert Authorization.has_minimum_role?(%StaffAccount{role: "admin"}, "admin")
+    refute Authorization.has_minimum_role?(%StaffAccount{role: "agent"}, "admin")
+    refute Authorization.has_minimum_role?(%StaffAccount{role: "admin"}, "super_admin")
   end
 end

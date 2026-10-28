@@ -3,54 +3,54 @@ defmodule Custyard.Projects do
   Context for project queries and operations.
   """
 
-  alias Custyard.{Authorization, OperatorAccess, OperatorAccount, Project, Repo, Task}
+  alias Custyard.{Authorization, StaffAccess, StaffAccount, Project, Repo, Task}
   import Ecto.Query
 
   def list(%Custyard.Scope{} = scope, opts \\ []) do
     case staff_for_scope(scope) do
       nil -> []
-      staff -> list_for_operator(staff, opts)
+      staff -> list_for_staff(staff, opts)
     end
   end
 
   def get(%Custyard.Scope{} = scope, id) do
     case staff_for_scope(scope) do
       nil -> nil
-      staff -> get_project_for_operator(id, staff)
+      staff -> get_project_for_staff(id, staff)
     end
   end
 
   def create(%Custyard.Scope{} = scope, attrs) do
     case staff_for_scope(scope) do
       nil -> {:error, :unauthorized}
-      staff -> create_project_for_operator(attrs, staff)
+      staff -> create_project_for_staff(attrs, staff)
     end
   end
 
   def update(%Custyard.Scope{} = scope, %Project{} = project, attrs) do
     case staff_for_scope(scope) do
       nil -> {:error, :unauthorized}
-      staff -> update_project_for_operator(project, attrs, staff)
+      staff -> update_project_for_staff(project, attrs, staff)
     end
   end
 
   def delete(%Custyard.Scope{} = scope, %Project{} = project) do
     case staff_for_scope(scope) do
       nil -> {:error, :unauthorized}
-      staff -> delete_project_for_operator(project, staff)
+      staff -> delete_project_for_staff(project, staff)
     end
   end
 
   def with_access(%Custyard.Scope{} = scope, id, fun, opts \\ []) do
     case staff_for_scope(scope) do
       nil -> {:error, :unauthorized}
-      staff -> with_operator_access(id, staff, fun, opts)
+      staff -> with_staff_access(id, staff, fun, opts)
     end
   end
 
   defp staff_for_scope(scope), do: Custyard.Scope.current_staff(scope)
 
-  defp list_for_operator(%OperatorAccount{} = operator, opts) do
+  defp list_for_staff(%StaffAccount{} = staff, opts) do
     requested_org_id = Keyword.get(opts, :organization_id)
 
     query =
@@ -59,7 +59,7 @@ defmodule Custyard.Projects do
         order_by: [desc: p.inserted_at],
         preload: [:tasks, :organization]
       )
-      |> scope_to_operator(operator)
+      |> scope_to_staff(staff)
 
     query =
       if is_integer(requested_org_id) do
@@ -71,14 +71,14 @@ defmodule Custyard.Projects do
     query |> Repo.all() |> Enum.map(&with_progress/1)
   end
 
-  defp scope_to_operator(query, %OperatorAccount{tenant_id: tenant_id})
+  defp scope_to_staff(query, %StaffAccount{tenant_id: tenant_id})
        when is_integer(tenant_id),
        do: from(p in query, where: p.tenant_id == ^tenant_id)
 
-  defp scope_to_operator(query, %OperatorAccount{}), do: from(p in query, where: false)
+  defp scope_to_staff(query, %StaffAccount{}), do: from(p in query, where: false)
 
   @doc """
-  List projects for a specific organization (operator view).
+  List projects for a specific organization (staff view).
   """
   def list_for_organization(%Custyard.Scope{tenant_id: tenant_id}, org_id) do
     from(p in Project,
@@ -137,15 +137,15 @@ defmodule Custyard.Projects do
     end
   end
 
-  defp get_project_for_operator(id, %OperatorAccount{} = operator) when is_binary(id) do
+  defp get_project_for_staff(id, %StaffAccount{} = staff) when is_binary(id) do
     case Integer.parse(id) do
-      {int_id, ""} -> get_project_for_operator(int_id, operator)
+      {int_id, ""} -> get_project_for_staff(int_id, staff)
       _ -> nil
     end
   end
 
-  defp get_project_for_operator(id, %OperatorAccount{} = operator) when is_integer(id) do
-    query = from(p in Project, where: p.id == ^id) |> scope_to_operator(operator)
+  defp get_project_for_staff(id, %StaffAccount{} = staff) when is_integer(id) do
+    query = from(p in Project, where: p.id == ^id) |> scope_to_staff(staff)
 
     case Repo.one(query) do
       nil -> nil
@@ -153,24 +153,24 @@ defmodule Custyard.Projects do
     end
   end
 
-  defp get_project_for_operator(_id, %OperatorAccount{}), do: nil
+  defp get_project_for_staff(_id, %StaffAccount{}), do: nil
 
   def get!(%Custyard.Scope{} = scope, id) do
     get(scope, id) || raise Ecto.NoResultsError, queryable: Project
   end
 
-  defp create_project_for_operator(attrs, %OperatorAccount{} = operator) do
+  defp create_project_for_staff(attrs, %StaffAccount{} = staff) do
     result =
       Repo.transaction(fn ->
-        current_operator = OperatorAccess.lock_current(operator)
+        current_staff = StaffAccess.lock_current(staff)
 
-        attrs = stamp_project_tenant(attrs, current_operator)
+        attrs = stamp_project_tenant(attrs, current_staff)
 
         changeset = Project.changeset(%Project{}, attrs)
 
         destination_id = Ecto.Changeset.get_field(changeset, :organization_id)
 
-        if authorized_project_creator?(current_operator, operator, destination_id) do
+        if authorized_project_creator?(current_staff, staff, destination_id) do
           case Repo.insert(changeset) do
             {:ok, project} -> project
             {:error, reason} -> Repo.rollback(reason)
@@ -190,28 +190,28 @@ defmodule Custyard.Projects do
     end
   end
 
-  defp stamp_project_tenant(attrs, %OperatorAccount{tenant_id: id}) do
+  defp stamp_project_tenant(attrs, %StaffAccount{tenant_id: id}) do
     Map.new(attrs, fn {key, value} -> {to_string(key), value} end) |> Map.put("tenant_id", id)
   end
 
   defp stamp_project_tenant(attrs, _), do: attrs
 
-  defp authorized_project_creator?(%OperatorAccount{} = current, original, destination_id) do
+  defp authorized_project_creator?(%StaffAccount{} = current, original, destination_id) do
     current.tenant_id == original.tenant_id && current.role == original.role &&
-      OperatorAccount.session_claim_matches?(current, original.session_claim) &&
+      StaffAccount.session_claim_matches?(current, original.session_claim) &&
       Custyard.Tenants.active?(current.tenant_id) &&
       Authorization.can_manage_project?(current, destination_id)
   end
 
   defp authorized_project_creator?(_, _, _), do: false
 
-  defp update_project_for_operator(%Project{} = project, attrs, %OperatorAccount{} = operator) do
-    case with_operator_access(project.id, operator, fn current, current_operator ->
+  defp update_project_for_staff(%Project{} = project, attrs, %StaffAccount{} = staff) do
+    case with_staff_access(project.id, staff, fn current, current_staff ->
            changeset = Project.changeset(current, attrs)
            destination_id = Ecto.Changeset.get_field(changeset, :organization_id)
 
-           if Authorization.can_manage_project?(current_operator, current.organization_id) and
-                Authorization.can_manage_project?(current_operator, destination_id) do
+           if Authorization.can_manage_project?(current_staff, current.organization_id) and
+                Authorization.can_manage_project?(current_staff, destination_id) do
              case update_project_and_tasks(current, attrs) do
                {:ok, updated} -> {:ok, {updated, current.organization_id}}
                error -> error
@@ -281,9 +281,9 @@ defmodule Custyard.Projects do
     end
   end
 
-  defp delete_project_for_operator(%Project{} = project, %OperatorAccount{} = operator) do
-    case with_operator_access(project.id, operator, fn current, current_operator ->
-           if Authorization.can_manage_project?(current_operator, current.organization_id) do
+  defp delete_project_for_staff(%Project{} = project, %StaffAccount{} = staff) do
+    case with_staff_access(project.id, staff, fn current, current_staff ->
+           if Authorization.can_manage_project?(current_staff, current.organization_id) do
              delete_project_records(current)
            else
              {:error, :unauthorized}
@@ -325,16 +325,16 @@ defmodule Custyard.Projects do
     end)
   end
 
-  defp with_operator_access(id, %OperatorAccount{} = operator, fun, opts \\ [])
+  defp with_staff_access(id, %StaffAccount{} = staff, fun, opts \\ [])
        when is_function(fun, 2) do
     result =
       Repo.transaction(fn ->
-        with %OperatorAccount{} = current_operator <- OperatorAccess.lock_current(operator),
+        with %StaffAccount{} = current_staff <- StaffAccess.lock_current(staff),
              true <-
-               OperatorAccount.session_claim_matches?(current_operator, operator.session_claim),
-             true <- Custyard.Tenants.active?(current_operator.tenant_id),
-             %Project{} = project <- lock_project_for_operator(id, current_operator) do
-          case fun.(project, current_operator) do
+               StaffAccount.session_claim_matches?(current_staff, staff.session_claim),
+             true <- Custyard.Tenants.active?(current_staff.tenant_id),
+             %Project{} = project <- lock_project_for_staff(id, current_staff) do
+          case fun.(project, current_staff) do
             {:ok, value} -> value
             {:error, reason} -> Repo.rollback(reason)
           end
@@ -350,8 +350,8 @@ defmodule Custyard.Projects do
     result
   end
 
-  defp lock_project_for_operator(id, operator) do
-    query = from(p in Project, where: p.id == ^id) |> scope_to_operator(operator)
+  defp lock_project_for_staff(id, staff) do
+    query = from(p in Project, where: p.id == ^id) |> scope_to_staff(staff)
 
     # A no-op UPDATE obtains the row's write lock. SQLite takes its write lock
     # here, while PostgreSQL locks this row; reassignment cannot slip between

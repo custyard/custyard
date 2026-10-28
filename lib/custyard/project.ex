@@ -16,7 +16,7 @@ defmodule Custyard.Project do
   - Have no organization_id
   - Are never visible in the client portal
   - Use tags for categorization (e.g., "oss-library", "experiment", "web-tool")
-  - Appear in operator attention queue based on task due dates
+  - Appear in staff attention queue based on task due dates
   """
   use Ecto.Schema
   import Ecto.Changeset

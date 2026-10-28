@@ -338,8 +338,8 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
     end
   end
 
-  describe "operator activity" do
-    test "a conversation the operator replied to within the threshold is not stale" do
+  describe "staff activity" do
+    test "a conversation the staff replied to within the threshold is not stale" do
       org = insert_organization(tier: :standard)
 
       past_threshold =
@@ -352,7 +352,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: past_threshold,
-          last_operator_action_at: recent
+          last_staff_action_at: recent
         )
 
       refute conv.id in Enum.map(DormancyChecker.stale_conversations(tenant_id()), & &1.id)
@@ -369,7 +369,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: past_threshold,
-          last_operator_action_at: past_threshold
+          last_staff_action_at: past_threshold
         )
 
       assert conv.id in Enum.map(DormancyChecker.stale_conversations(tenant_id()), & &1.id)

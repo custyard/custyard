@@ -114,7 +114,7 @@ defmodule Custyard.Email.ThreadMatcher do
       from(m in Message,
         where: m.conversation_id == ^conversation.id and m.source == :email,
         where: is_nil(m.deleted_at) and m.is_internal_note == false,
-        where: is_nil(m.triage_class) or m.triage_class in [:customer, :operator_forward],
+        where: is_nil(m.triage_class) or m.triage_class in [:customer, :staff_forward],
         select: m.sender_email
       )
       |> Repo.all()

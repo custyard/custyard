@@ -1,7 +1,7 @@
 defmodule CustyardWeb.AttachmentDownload do
   @moduledoc """
   Sends a stored inbound email attachment (spec-inbound-channels D9) for the
-  operator and portal download controllers, which each decide who may fetch
+  staff and portal download controllers, which each decide who may fetch
   which attachment.
 
   The file is served under the type sniffed from its bytes, always as a

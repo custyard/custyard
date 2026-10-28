@@ -80,7 +80,7 @@ defmodule Custyard.Email.ReplyRecipients do
     from(m in Message,
       where: m.conversation_id == ^conversation_id,
       where: m.source == :email and m.is_internal_note == false and is_nil(m.deleted_at),
-      where: is_nil(m.triage_class) or m.triage_class in [:customer, :operator_forward],
+      where: is_nil(m.triage_class) or m.triage_class in [:customer, :staff_forward],
       order_by: [desc: m.inserted_at, desc: m.id],
       limit: 1
     )
@@ -99,7 +99,7 @@ defmodule Custyard.Email.ReplyRecipients do
 
     [
       Conversations.reply_identity(conversation, opts).address,
-      Keyword.get(opts, :operator_email),
+      Keyword.get(opts, :staff_email),
       channel && channel.public_address,
       channel && InboundChannels.ingress_address(channel),
       channel && channel.inbound_route && channel.inbound_route.from_address,

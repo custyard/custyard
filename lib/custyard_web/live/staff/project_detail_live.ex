@@ -1,0 +1,460 @@
+defmodule CustyardWeb.Staff.ProjectDetailLive do
+  use CustyardWeb, :live_view
+
+  alias Custyard.{Projects, Task}
+
+  @impl true
+  def mount(%{"id" => id}, _session, socket) do
+    case Projects.get(socket.assigns.current_scope, id) do
+      nil ->
+        {:ok,
+         socket
+         |> put_flash(:error, "Project not found")
+         |> push_navigate(to: ~p"/app/projects")}
+
+      project ->
+        if connected?(socket) do
+          Phoenix.PubSub.subscribe(Custyard.PubSub, "project:#{project.id}")
+        end
+
+        {:ok,
+         socket
+         |> assign(:project, project)
+         |> assign(:page_title, project.title)
+         |> attach_hook(:authorize_project_events, :handle_event, &authorize_project_event/3)
+         |> assign(:show_task_form, false)
+         |> assign(:new_task_title, "")
+         |> assign(:new_task_due_at, "")
+         |> assign(:new_task_portal_visible, false)}
+    end
+  end
+
+  defp authorize_project_event(_event, _params, socket) do
+    case current_project(socket) do
+      nil -> {:halt, project_access_revoked(socket)}
+      project -> {:cont, assign(socket, :project, project)}
+    end
+  end
+
+  defp current_project(socket) do
+    Projects.get(socket.assigns.current_scope, socket.assigns.project.id)
+  end
+
+  defp project_access_revoked(socket) do
+    socket
+    |> put_flash(:error, "You no longer have access to this project")
+    |> push_navigate(to: ~p"/app/projects")
+  end
+
+  @impl true
+  def handle_info({:project_updated, _id}, socket) do
+    case current_project(socket) do
+      nil -> {:noreply, project_access_revoked(socket)}
+      project -> {:noreply, assign(socket, :project, project)}
+    end
+  end
+
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("toggle_task_form", _params, socket) do
+    {:noreply, assign(socket, :show_task_form, not socket.assigns.show_task_form)}
+  end
+
+  def handle_event("update_new_task", params, socket) do
+    {:noreply,
+     socket
+     |> assign(:new_task_title, params["title"] || socket.assigns.new_task_title)
+     |> assign(:new_task_due_at, params["due_at"] || socket.assigns.new_task_due_at)
+     |> assign(:new_task_portal_visible, params["portal_visible"] == "true")}
+  end
+
+  def handle_event("add_task", params, socket) do
+    attrs = %{
+      title: params["title"],
+      due_at: params["due_at"],
+      portal_visible: params["portal_visible"] == "true"
+    }
+
+    case project_mutation(socket, fn project, _staff ->
+           Projects.create_task(project, attrs, broadcast?: false)
+         end) do
+      {:ok, _task} ->
+        {:noreply,
+         socket
+         |> assign(:show_task_form, false)
+         |> assign(:new_task_title, "")
+         |> assign(:new_task_due_at, "")
+         |> assign(:new_task_portal_visible, false)
+         |> refresh_project()}
+
+      {:error, :unauthorized} ->
+        {:noreply, project_access_revoked(socket)}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Enter a task title and a valid UTC date and time")}
+    end
+  end
+
+  def handle_event("cycle_task_state", %{"id" => task_id}, socket) do
+    case project_mutation(socket, fn project, _staff ->
+           case get_project_task(project.id, task_id) do
+             nil ->
+               {:error, :not_found}
+
+             task ->
+               Projects.update_task_state(task, next_task_state(task.state), broadcast?: false)
+           end
+         end) do
+      {:ok, _} -> {:noreply, refresh_project(socket)}
+      {:error, :not_found} -> {:noreply, socket}
+      {:error, :unauthorized} -> {:noreply, project_access_revoked(socket)}
+      {:error, _} -> {:noreply, put_flash(socket, :error, "Failed to update task")}
+    end
+  end
+
+  def handle_event("delete_task", %{"id" => task_id}, socket) do
+    case project_mutation(socket, fn project, _staff ->
+           case get_project_task(project.id, task_id) do
+             nil -> {:error, :not_found}
+             task -> Projects.delete_task(task, broadcast?: false)
+           end
+         end) do
+      {:ok, _} -> {:noreply, refresh_project(socket)}
+      {:error, :not_found} -> {:noreply, socket}
+      {:error, :unauthorized} -> {:noreply, project_access_revoked(socket)}
+      {:error, _} -> {:noreply, put_flash(socket, :error, "Failed to delete task")}
+    end
+  end
+
+  # phx-value-id is client-controlled; only accept tasks that belong to the
+  # mounted project so crafted events can't mutate foreign tasks.
+  defp get_project_task(project_id, task_id) do
+    case Integer.parse(to_string(task_id)) do
+      {int_id, ""} -> Projects.get_project_task(project_id, int_id)
+      _ -> nil
+    end
+  end
+
+  defp project_mutation(socket, fun) do
+    Projects.with_access(
+      socket.assigns.current_scope,
+      socket.assigns.project.id,
+      fun,
+      broadcast_project?: true
+    )
+  end
+
+  defp refresh_project(socket) do
+    case current_project(socket) do
+      nil -> project_access_revoked(socket)
+      project -> assign(socket, :project, project)
+    end
+  end
+
+  defp next_task_state(:open), do: :in_progress
+  defp next_task_state(:in_progress), do: :done
+  defp next_task_state(:done), do: :open
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <div class="max-w-4xl mx-auto py-8 px-4" data-testid="staff-project-detail">
+      <.link
+        navigate={~p"/app/projects"}
+        class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"
+        data-testid="staff-back-link"
+      >
+        &larr; Back to projects
+      </.link>
+
+      <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-6 mb-6">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <h1
+              class="text-2xl font-semibold text-gray-900 dark:text-zinc-100"
+              data-testid="staff-project-title"
+            >
+              {@project.title}
+            </h1>
+            <.project_type_badge type={@project.project_type} />
+          </div>
+          <.link
+            navigate={~p"/app/projects"}
+            class="text-sm text-gray-500 hover:text-gray-700"
+          >
+            Edit
+          </.link>
+        </div>
+
+        <p
+          :if={@project.description}
+          class="text-gray-600 dark:text-zinc-400 mb-4"
+          data-testid="staff-project-description"
+        >
+          {@project.description}
+        </p>
+
+        <div class="flex items-center gap-6 text-sm text-gray-500 dark:text-zinc-400 mb-4">
+          <span :if={@project.start_date} data-testid="staff-project-start-date">
+            Started: {format_date(@project.start_date)}
+          </span>
+          <span :if={@project.target_completion_date} data-testid="staff-project-target-date">
+            Target: {format_date(@project.target_completion_date)}
+          </span>
+        </div>
+
+        <.progress_bar progress={@project.progress} />
+      </div>
+
+      <div class="flex items-center justify-between mb-3">
+        <h2
+          class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
+          data-testid="staff-tasks-heading"
+        >
+          Tasks ({@project.progress.total})
+        </h2>
+        <button
+          :if={not @show_task_form}
+          phx-click="toggle_task_form"
+          class="text-sm text-indigo-600 hover:text-indigo-800"
+          data-testid="staff-add-task-btn"
+        >
+          + Add task
+        </button>
+      </div>
+
+      <%= if @show_task_form do %>
+        <div class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4 mb-4">
+          <form
+            id="staff-project-task-form"
+            phx-submit="add_task"
+            phx-change="update_new_task"
+            class="space-y-3"
+            data-testid="staff-task-form"
+          >
+            <input
+              type="text"
+              name="title"
+              value={@new_task_title}
+              placeholder="Task title..."
+              aria-label="Task title"
+              class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2"
+              autofocus
+              data-testid="staff-task-title-input"
+            />
+            <div class="flex gap-4">
+              <div class="flex-1">
+                <label
+                  for="project-task-due"
+                  class="block text-sm text-gray-600 dark:text-zinc-400 mb-1"
+                >Due date and time (UTC)</label>
+                <input
+                  id="project-task-due"
+                  type="datetime-local"
+                  name="due_at"
+                  value={@new_task_due_at}
+                  class="w-full border border-gray-300 dark:border-zinc-600 rounded px-3 py-2"
+                  data-testid="staff-task-due-input"
+                />
+              </div>
+              <div class="flex items-end gap-2 pb-2">
+                <input type="hidden" name="portal_visible" value="false" />
+                <input
+                  type="checkbox"
+                  name="portal_visible"
+                  value="true"
+                  checked={@new_task_portal_visible}
+                  id="new_task_portal_visible"
+                  class="h-4 w-4"
+                  data-testid="staff-task-visible-checkbox"
+                />
+                <label for="new_task_portal_visible" class="text-sm text-gray-600 dark:text-zinc-400">
+                  Portal visible
+                </label>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button
+                type="submit"
+                class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
+                data-testid="staff-task-add-btn"
+              >
+                Add Task
+              </button>
+              <button
+                type="button"
+                phx-click="toggle_task_form"
+                class="text-gray-500 dark:text-zinc-400 hover:text-gray-700 px-4 py-2"
+                data-testid="staff-task-cancel-btn"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      <% end %>
+
+      <div
+        :if={@project.tasks != []}
+        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg divide-y dark:divide-zinc-700"
+        data-testid="staff-tasks-list"
+      >
+        <.task_item :for={task <- sorted_tasks(@project.tasks)} task={task} />
+      </div>
+
+      <div
+        :if={@project.tasks == []}
+        class="text-center py-12 bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg"
+        data-testid="staff-empty-state"
+      >
+        <div class="text-gray-400 dark:text-zinc-500 mb-4">
+          <.icon name="hero-clipboard-document-list" class="mx-auto h-12 w-12" />
+        </div>
+        <p class="text-gray-600 dark:text-zinc-400 text-sm">No tasks in this project yet.</p>
+        <button
+          phx-click="toggle_task_form"
+          class="mt-4 text-indigo-600 hover:text-indigo-800 text-sm"
+        >
+          Add the first task
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr :task, Task, required: true
+
+  defp task_item(assigns) do
+    ~H"""
+    <div
+      class="p-4 flex items-center gap-4 hover:bg-gray-50 dark:hover:bg-zinc-750"
+      data-testid={"staff-task-item-#{@task.id}"}
+    >
+      <button
+        phx-click="cycle_task_state"
+        phx-value-id={@task.id}
+        class="shrink-0"
+        title="Click to change state"
+        data-testid={"staff-task-state-btn-#{@task.id}"}
+      >
+        <.task_state_icon state={@task.state} />
+      </button>
+
+      <div class="flex-1 min-w-0">
+        <div
+          class={"text-gray-900 dark:text-zinc-100 #{if @task.state == :done, do: "line-through opacity-60"}"}
+          data-testid="staff-task-title"
+        >
+          {@task.title}
+        </div>
+        <div class="flex items-center gap-3 text-sm text-gray-500 dark:text-zinc-400">
+          <span :if={@task.due_at} data-testid="staff-task-due">
+            Due: {format_due_at(@task.due_at)}
+          </span>
+          <span
+            :if={not @task.portal_visible}
+            class="text-xs text-amber-600"
+            title="Not visible in portal"
+          >
+            <.icon name="hero-eye-slash" class="w-3 h-3 inline" /> Hidden
+          </span>
+        </div>
+      </div>
+
+      <.task_state_badge state={@task.state} />
+
+      <button
+        phx-click="delete_task"
+        phx-value-id={@task.id}
+        data-confirm="Delete this task?"
+        class="text-gray-400 hover:text-red-500 p-1"
+        data-testid={"staff-task-delete-#{@task.id}"}
+      >
+        <.icon name="hero-trash" class="w-4 h-4" />
+      </button>
+    </div>
+    """
+  end
+
+  attr :progress, :map, required: true
+
+  defp progress_bar(assigns) do
+    ~H"""
+    <div data-testid="staff-project-progress-bar">
+      <div class="flex justify-between text-sm text-gray-600 dark:text-zinc-400 mb-2">
+        <span>Progress: {@progress.done} of {@progress.total} tasks completed</span>
+        <span>{@progress.percentage}%</span>
+      </div>
+      <div class="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-3">
+        <div
+          class="bg-indigo-600 h-3 rounded-full transition-all duration-300"
+          style={"width: #{@progress.percentage}%"}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  attr :state, :atom, required: true
+
+  defp task_state_icon(assigns) do
+    ~H"""
+    <%= case @state do %>
+      <% :done -> %>
+        <span class="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center">
+          <.icon name="hero-check" class="w-4 h-4 text-green-600" />
+        </span>
+      <% :in_progress -> %>
+        <span class="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
+          <.icon name="hero-arrow-path" class="w-4 h-4 text-blue-600" />
+        </span>
+      <% _ -> %>
+        <span class="w-6 h-6 rounded-full bg-gray-100 dark:bg-zinc-700 flex items-center justify-center">
+          <span class="w-2 h-2 rounded-full bg-gray-400 dark:bg-zinc-500" />
+        </span>
+    <% end %>
+    """
+  end
+
+  attr :type, :atom, required: true
+
+  defp project_type_badge(assigns) do
+    {text, colors} =
+      case assigns.type do
+        :internal -> {"Internal", "text-purple-700 bg-purple-100"}
+        _ -> {"Customer", "text-blue-700 bg-blue-100"}
+      end
+
+    assigns = assign(assigns, text: text, colors: colors)
+
+    ~H"""
+    <span class={"text-xs px-2 py-0.5 rounded #{@colors} mt-1 inline-block"}>
+      {@text}
+    </span>
+    """
+  end
+
+  defp sorted_tasks(tasks) do
+    Enum.sort_by(tasks, fn task ->
+      state_order =
+        case task.state do
+          :in_progress -> 0
+          :open -> 1
+          :done -> 2
+        end
+
+      {state_order, task.inserted_at}
+    end)
+  end
+
+  defp format_date(date) do
+    Calendar.strftime(date, "%b %d, %Y")
+  end
+
+  defp format_due_at(datetime) do
+    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+  end
+end

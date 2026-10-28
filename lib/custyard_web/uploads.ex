@@ -1,13 +1,13 @@
 defmodule CustyardWeb.Uploads do
   @moduledoc """
-  Filesystem helpers for operator-uploaded logo files.
+  Filesystem helpers for staff-uploaded logo files.
 
   Files are stored under the configured `:upload_dir` (see `config :custyard,
   :upload_dir`) in a `logos/` subdirectory with unguessable UUID filenames,
   and are served publicly from `/uploads/` by `CustyardWeb.Plugs.UploadedFiles`.
 
   This mirrors the storage mechanism used for organization logos in
-  `CustyardWeb.Operator.OrganizationsLive` so instance and organization
+  `CustyardWeb.Staff.OrganizationsLive` so instance and organization
   branding share one storage location.
   """
 

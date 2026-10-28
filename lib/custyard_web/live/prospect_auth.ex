@@ -3,7 +3,7 @@ defmodule CustyardWeb.Live.ProspectAuth do
   LiveView on_mount hook for access-token authentication.
 
   The token comes from the URL params on EVERY mount — never from the
-  session, whose 24-hour max-age and shared operator/portal keys disqualify
+  session, whose 24-hour max-age and shared staff/portal keys disqualify
   it for a months-lived credential. The presented token is hashed via
   `Custyard.Auth.Token` and looked up through
   `Custyard.Intake.get_conversation_by_access_token/2`; invalid, revoked,

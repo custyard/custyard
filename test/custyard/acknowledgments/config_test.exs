@@ -42,7 +42,7 @@ defmodule Custyard.Acknowledgments.ConfigTest do
     assert {:ok, integration} =
              Acknowledgments.configure_integration(
                Custyard.Scope.for_staff(
-                 insert_operator_account(tenant_id: a.id, role: "admin"),
+                 insert_staff_account(tenant_id: a.id, role: "admin"),
                  a
                ),
                %{url: url, source: "ots.test", queue: "tenant-a", enabled: true}
@@ -72,7 +72,7 @@ defmodule Custyard.Acknowledgments.ConfigTest do
                }
              )
 
-    Repo.get!(Custyard.OperatorAccount, scope.staff_id)
+    Repo.get!(Custyard.StaffAccount, scope.staff_id)
     |> Ecto.Changeset.change(role: "agent")
     |> Repo.update!()
 

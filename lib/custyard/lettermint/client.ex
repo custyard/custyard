@@ -21,7 +21,7 @@ defmodule Custyard.Lettermint.Client do
       any local part and plus tag reaches the route. `nil` for non-inbound routes.
     * `"inbound_address"` — permanent compatibility address
       (`<uuid>@inbound.lettermint.co`, no plus addressing)
-    * `"inbound_domain"` — operator-configured custom domain, nullable
+    * `"inbound_domain"` — staff-configured custom domain, nullable
     * `"inbound_domain_verified_at"` — ISO8601 datetime string, nullable
 
   The HTTP API wraps the route in `{"data": ...}` on create (201) but returns

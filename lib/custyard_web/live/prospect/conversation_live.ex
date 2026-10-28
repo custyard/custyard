@@ -22,7 +22,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   context, which refuses it once the stored hash rotates, and the
   `{:conversation_access_changed, id}` broadcast from rotation/revocation makes
   the view re-authenticate — so an open tab on a rotated-away token stops
-  receiving operator replies instead of streaming them until disconnect.
+  receiving staff replies instead of streaming them until disconnect.
   """
 
   use CustyardWeb, :live_view
@@ -49,7 +49,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
      # Per-source branding link: provenance-keyed (intake_source_key stores
      # the key string, not an FK), so the source may be disabled or deleted
      # after creation — a deleted source yields nil and renders no link
-     # (IntakeSource.link?/1 handles nil). Operator-configured branding is
+     # (IntakeSource.link?/1 handles nil). Staff-configured branding is
      # identical for every prospect of the source, so enumeration neutrality
      # is unaffected.
      |> assign(
@@ -440,7 +440,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
      assign(socket, :messages, Conversations.list_public_messages(socket.assigns.conversation.id))}
   end
 
-  # Message-level change (operator soft delete, delivery status): refresh the
+  # Message-level change (staff soft delete, delivery status): refresh the
   # thread so tombstones replace deleted bodies in already-open tabs.
   @impl true
   def handle_info({:message_updated, _id}, socket) do
@@ -452,7 +452,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   # re-authenticate the mount-time hash against the stored one and shut the
   # view down unless it still holds the live credential. This closes the
   # read side — without it a tab opened before rotation keeps receiving
-  # operator replies over PubSub until it happens to disconnect.
+  # staff replies over PubSub until it happens to disconnect.
   @impl true
   def handle_info({:conversation_access_changed, _id}, socket) do
     prospect = Intake.get_prospect(socket.assigns.conversation)
@@ -578,7 +578,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
             <span data-testid="resume-message-time">{format_time(msg.inserted_at)}</span>
           </div>
           <%!-- Soft-deleted messages render ONLY the tombstone — the original
-          body must never reach this page again once an operator deletes it. --%>
+          body must never reach this page again once a staff deletes it. --%>
           <div
             :if={msg.deleted_at}
             class="italic text-zinc-500 dark:text-zinc-400"
@@ -852,20 +852,20 @@ defmodule CustyardWeb.Prospect.ConversationLive do
 
   # Sender labels never include an email address or a name — org/contact
   # linkage must be invisible on this page.
-  defp sender_label(%{source: :operator}), do: "Support Team"
+  defp sender_label(%{source: :staff}), do: "Support Team"
   defp sender_label(%{source: :prospect}), do: "You"
   defp sender_label(_msg), do: "Customer"
 
-  defp message_style(%{source: :operator}) do
+  defp message_style(%{source: :staff}) do
     "bg-indigo-50 dark:bg-indigo-950 border-l-4 border-indigo-400 dark:border-indigo-600"
   end
 
   defp message_style(_msg), do: "bg-gray-50 dark:bg-zinc-800"
 
-  defp metadata_text_style(%{source: :operator}), do: "text-indigo-700 dark:text-indigo-300"
+  defp metadata_text_style(%{source: :staff}), do: "text-indigo-700 dark:text-indigo-300"
   defp metadata_text_style(_msg), do: "text-gray-500 dark:text-zinc-400"
 
-  defp body_text_style(%{source: :operator}), do: "text-indigo-900 dark:text-indigo-100"
+  defp body_text_style(%{source: :staff}), do: "text-indigo-900 dark:text-indigo-100"
   defp body_text_style(_msg), do: "text-gray-900 dark:text-zinc-100"
 
   defp format_time(datetime), do: Calendar.strftime(datetime, "%b %d, %H:%M")

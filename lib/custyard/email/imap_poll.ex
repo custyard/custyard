@@ -4,7 +4,7 @@ defmodule Custyard.Email.ImapPoll do
 
   The folder is opened read-only. The channel remembers how far it has read
   as `imap_uid_validity` plus `imap_last_uid`; nothing in the mailbox is
-  marked, moved or deleted, so the operator's own mail client sees the
+  marked, moved or deleted, so the staff's own mail client sees the
   mailbox exactly as before.
 
     * `establish/2` checks the credentials and, for a mailbox without a
@@ -199,7 +199,7 @@ defmodule Custyard.Email.ImapPoll do
   end
 
   # A password sealed with a previous key is moved to the current one once
-  # it has been used successfully, unless the operator saved a new password
+  # it has been used successfully, unless the staff saved a new password
   # while this session was logging in.
   defp maybe_reencrypt(%InboundChannel{imap_password_ciphertext: read} = channel, password) do
     if Credentials.stale?(read) do
@@ -442,7 +442,7 @@ defmodule Custyard.Email.ImapPoll do
 
   @doc """
   Short code for a session failure, stored as `imap_last_error` and shown
-  to the operator. Never the server's own text.
+  to the staff. Never the server's own text.
   """
   def error_code(reason) when is_atom(reason), do: Map.get(@error_codes, reason, "connect_failed")
   def error_code({tag, _detail}) when tag in [:fetch_failed, :list_failed], do: "fetch_failed"

@@ -4,7 +4,7 @@ defmodule Custyard.Acknowledgments.Consumer do
   require Logger
   alias Custyard.Acknowledgments.{Broker, Config, Evidence, Topology}
 
-  # Failure headers, and so the operator UI, only ever carry one of these.
+  # Failure headers, and so the staff UI, only ever carry one of these.
   @failure_categories ~w(tenant_suspended message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error)
 
   # Published state, so status reads never wait behind message processing.

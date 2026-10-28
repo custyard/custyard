@@ -8,7 +8,7 @@ defmodule Custyard.MessageAttachment do
   signed URL is never stored. `filename` is display data only: the file on
   disk is named by its SHA-256, so a hostile filename can never become a
   path. `sniffed_type` is derived from the bytes and is what the download
-  endpoint serves; the declared `content_type` is kept for the operator.
+  endpoint serves; the declared `content_type` is kept for the staff.
 
   States: `fetched` (file on disk), `skipped` (listed but deliberately not
   fetched: over the cap, suspect mail, fetching disabled) and `failed`

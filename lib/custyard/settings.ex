@@ -8,7 +8,7 @@ defmodule Custyard.Settings do
   use Ecto.Schema
   import Ecto.Changeset
   import Ecto.Query, only: [from: 2]
-  alias Custyard.{OperatorAccess, OperatorAccount, Scope, Tenant}
+  alias Custyard.{StaffAccess, StaffAccount, Scope, Tenant}
 
   alias Custyard.Repo
 
@@ -251,7 +251,7 @@ defmodule Custyard.Settings do
 
   defp with_admin_scope(scope, fun) do
     Repo.transaction(fn ->
-      OperatorAccess.lock_current(%OperatorAccount{id: scope.staff_id})
+      StaffAccess.lock_current(%StaffAccount{id: scope.staff_id})
 
       Repo.update_all(from(t in Tenant, where: t.id == ^scope.tenant_id and t.status == "active"),
         set: [updated_at: DateTime.utc_now() |> DateTime.truncate(:second)]

@@ -1,7 +1,7 @@
 defmodule Custyard.Email.ForwardUnwrapper do
   @moduledoc """
   Extracts the original message from a manually forwarded email
-  (spec-inbound-channels D6, "operator manual forward").
+  (spec-inbound-channels D6, "staff manual forward").
 
   Mail clients wrap a forwarded message in a recognisable block: Gmail's
   `---------- Forwarded message ---------`, Apple Mail's
@@ -13,7 +13,7 @@ defmodule Custyard.Email.ForwardUnwrapper do
 
   `unwrap/2` returns the original sender (the only required field), the
   original subject (falling back to the outer subject without its `Fwd:`
-  prefix) and the original body. Anything the operator typed above the
+  prefix) and the original body. Anything the staff typed above the
   block is dropped: the customer's words are what becomes the message.
   """
 

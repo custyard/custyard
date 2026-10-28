@@ -1,7 +1,7 @@
 defmodule Custyard.TenantStaffAuthorizationTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.{OperatorAccount, Repo, Tenants}
+  alias Custyard.{StaffAccount, Repo, Tenants}
 
   setup do
     {:ok, tenant} =
@@ -40,10 +40,10 @@ defmodule Custyard.TenantStaffAuthorizationTest do
                })
     end
 
-    refute Repo.get_by(OperatorAccount, email: "forged@example.net")
+    refute Repo.get_by(StaffAccount, email: "forged@example.net")
 
     assert {:ok, updated} =
-             Tenants.update_tenant_for_operator(c.admin, c.tenant.id, %{name: "Updated"})
+             Tenants.update_tenant_for_staff(c.admin, c.tenant.id, %{name: "Updated"})
 
     assert updated.name == "Updated"
   end
@@ -54,13 +54,13 @@ defmodule Custyard.TenantStaffAuthorizationTest do
   end
 
   test "administrator demotion after an event refresh prevents both writes", c do
-    c.admin |> OperatorAccount.role_changeset(%{role: "agent"}) |> Repo.update!()
+    c.admin |> StaffAccount.role_changeset(%{role: "agent"}) |> Repo.update!()
     assert_unauthorized(c.admin, c.tenant)
   end
 
   test "session revocation after an event refresh prevents both writes", c do
     c.admin
-    |> Ecto.Changeset.change(session_claim: OperatorAccount.generate_session_claim())
+    |> Ecto.Changeset.change(session_claim: StaffAccount.generate_session_claim())
     |> Repo.update!()
 
     assert_unauthorized(c.admin, c.tenant)
@@ -88,7 +88,7 @@ defmodule Custyard.TenantStaffAuthorizationTest do
              })
 
     admin
-    |> Ecto.Changeset.change(session_claim: OperatorAccount.generate_session_claim())
+    |> Ecto.Changeset.change(session_claim: StaffAccount.generate_session_claim())
     |> Repo.update!()
 
     assert {:error, :unauthorized} =
@@ -101,23 +101,23 @@ defmodule Custyard.TenantStaffAuthorizationTest do
     refute Repo.get_by(Custyard.Tenant, slug: "revoked")
   end
 
-  defp assert_unauthorized(operator, tenant) do
+  defp assert_unauthorized(staff, tenant) do
     assert {:error, :unauthorized} =
-             Tenants.invite_staff(operator, tenant.id, %{
+             Tenants.invite_staff(staff, tenant.id, %{
                email: "unauthorized@example.net",
                role: "admin"
              })
 
     assert {:error, :unauthorized} =
-             Tenants.update_tenant_for_operator(operator, tenant.id, %{name: "Unauthorized"})
+             Tenants.update_tenant_for_staff(staff, tenant.id, %{name: "Unauthorized"})
 
-    refute Repo.get_by(OperatorAccount, email: "unauthorized@example.net")
+    refute Repo.get_by(StaffAccount, email: "unauthorized@example.net")
     assert Repo.reload!(tenant).name == tenant.name
   end
 
   defp staff(tenant, role) do
-    %OperatorAccount{}
-    |> OperatorAccount.changeset(%{
+    %StaffAccount{}
+    |> StaffAccount.changeset(%{
       email: "#{role}-#{System.unique_integer([:positive])}@staff.example",
       role: role,
       tenant_id: tenant.id

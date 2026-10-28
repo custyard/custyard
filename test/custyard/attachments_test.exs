@@ -379,8 +379,8 @@ defmodule Custyard.AttachmentsTest do
     end
 
     test "a tenant admin reaches its fetched attachments", %{fetched: fetched} do
-      operator = insert_operator_account(role: "admin")
-      assert %MessageAttachment{id: id} = Attachments.get(scope(operator), fetched.id)
+      staff = insert_staff_account(role: "admin")
+      assert %MessageAttachment{id: id} = Attachments.get(scope(staff), fetched.id)
       assert id == fetched.id
     end
 
@@ -388,11 +388,11 @@ defmodule Custyard.AttachmentsTest do
       fetched: fetched,
       org: org
     } do
-      agent = insert_operator_account(role: "agent", organization_id: org.id)
+      agent = insert_staff_account(role: "agent", organization_id: org.id)
       assert Attachments.get(scope(agent), fetched.id)
 
       other_tenant = insert_tenant()
-      stranger = insert_operator_account(role: "agent", tenant_id: other_tenant.id)
+      stranger = insert_staff_account(role: "agent", tenant_id: other_tenant.id)
       refute Attachments.get(scope(stranger), fetched.id)
     end
 
@@ -400,13 +400,13 @@ defmodule Custyard.AttachmentsTest do
       fetched: fetched,
       conv: conv
     } do
-      operator = insert_operator_account(role: "admin")
+      staff = insert_staff_account(role: "admin")
       conv |> Ecto.Changeset.change(suspect: true) |> Repo.update!()
-      refute Attachments.get(scope(operator), fetched.id)
+      refute Attachments.get(scope(staff), fetched.id)
     end
 
     test "stale, removed and suspended staff scopes cannot read attachments", %{fetched: fetched} do
-      staff = insert_operator_account(role: "admin")
+      staff = insert_staff_account(role: "admin")
       original_scope = scope(staff)
       assert Attachments.get(original_scope, fetched.id)
       Repo.update!(Ecto.Changeset.change(staff, role: "agent"))
@@ -415,7 +415,7 @@ defmodule Custyard.AttachmentsTest do
       current_scope = scope(current)
       Repo.delete!(current)
       refute Attachments.get(current_scope, fetched.id)
-      active = insert_operator_account(role: "agent")
+      active = insert_staff_account(role: "agent")
       active_scope = scope(active)
       tenant = Custyard.Tenants.get_tenant!(active.tenant_id)
       Repo.update!(Ecto.Changeset.change(tenant, status: "suspended"))
@@ -423,9 +423,9 @@ defmodule Custyard.AttachmentsTest do
     end
 
     test "unfetched and unknown attachments are nil", %{skipped: skipped} do
-      operator = insert_operator_account(role: "admin")
-      refute Attachments.get(scope(operator), skipped.id)
-      refute Attachments.get(scope(operator), skipped.id + 10_000)
+      staff = insert_staff_account(role: "admin")
+      refute Attachments.get(scope(staff), skipped.id)
+      refute Attachments.get(scope(staff), skipped.id + 10_000)
     end
   end
 

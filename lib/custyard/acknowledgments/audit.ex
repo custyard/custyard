@@ -1,16 +1,16 @@
 defmodule Custyard.Acknowledgments.Audit do
   @moduledoc """
-  Audit rows for acknowledgment operations. The actor is an operator account
+  Audit rows for acknowledgment operations. The actor is a staff account
   (the UI) or a channel name: `"cli"` (bin/acknowledgments), `"mix"` or
   `"console"` (a direct call).
   """
   require Logger
-  alias Custyard.{AuditEvent, OperatorAccount, Repo}
+  alias Custyard.{AuditEvent, StaffAccount, Repo}
 
   @channels ["cli", "mix", "console"]
 
   @doc "Whether `actor` can be recorded; checked before any work it would audit."
-  def actor?(%OperatorAccount{id: id}) when is_integer(id), do: true
+  def actor?(%StaffAccount{id: id}) when is_integer(id), do: true
   def actor?(channel), do: channel in @channels
 
   @doc "Inserts the row or raises, for use inside the transaction it audits."
@@ -44,8 +44,8 @@ defmodule Custyard.Acknowledgments.Audit do
       :error
   end
 
-  defp actor_fields(%OperatorAccount{id: id, email: email}),
-    do: {"operator", %{"actor" => "operator", "operator_id" => id, "operator_email" => email}}
+  defp actor_fields(%StaffAccount{id: id, email: email}),
+    do: {"staff", %{"actor" => "staff", "staff_id" => id, "staff_email" => email}}
 
   defp actor_fields(channel) when channel in @channels,
     do: {channel, %{"actor" => channel}}

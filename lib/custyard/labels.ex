@@ -1,5 +1,5 @@
 defmodule Custyard.Labels do
-  @moduledoc "Tenant-owned, operator-only conversation labels."
+  @moduledoc "Tenant-owned, staff-only conversation labels."
   import Ecto.Query
 
   alias Custyard.{
@@ -60,14 +60,14 @@ defmodule Custyard.Labels do
   end
 
   def create_and_assign(%Scope{} = scope, conversation, name) do
-    mutate(scope, conversation, fn current, current_operator ->
+    mutate(scope, conversation, fn current, current_staff ->
       tenant_id = tenant_id(current)
 
       cond do
         is_nil(tenant_id) ->
           {:error, :tenant_required}
 
-        current_operator.role not in ["admin"] ->
+        current_staff.role not in ["admin"] ->
           {:error, :unauthorized}
 
         true ->

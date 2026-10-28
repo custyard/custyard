@@ -25,7 +25,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
         })
       )
 
-    admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
+    admin = insert_staff_account(role: "admin", tenant_id: tenant.id)
     {:ok, _} = EmailSetup.ensure_connection(admin, tenant.id)
 
     route =
@@ -76,7 +76,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     assert EmailSetup.connection(c.tenant.id).latest_received_conversation_id == conversation.id
   end
 
-  test "completion requires a new customer reply referencing a preceding sent operator message",
+  test "completion requires a new customer reply referencing a preceding sent staff message",
        c do
     path = "/api/webhook/route/#{c.route.callback_token}"
 
@@ -88,8 +88,8 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     outgoing =
       insert_message(
         conversation_id: conversation_id,
-        source: :operator,
-        message_id: "<operator-reply@service.example>",
+        source: :staff,
+        message_id: "<staff-reply@service.example>",
         delivery_status: :sent,
         lettermint_message_id: "outbound-provider"
       )
@@ -151,7 +151,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     old_reply =
       insert_message(
         conversation_id: conversation_id,
-        source: :operator,
+        source: :staff,
         message_id: "<old-identity@service.example>",
         delivery_status: :delivered,
         lettermint_message_id: "old-provider-reply"
@@ -175,7 +175,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
              c.channel
              |> Repo.reload!()
              |> Custyard.InboundChannels.update_channel(%{reply_from: :ingress_address},
-               operator: c.admin
+               staff: c.admin
              )
 
     refute EmailSetup.summary(c.tenant.id).sending?
@@ -200,7 +200,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     new_reply =
       insert_message(
         conversation_id: conversation_id,
-        source: :operator,
+        source: :staff,
         message_id: "<new-identity@service.example>",
         delivery_status: :delivered,
         lettermint_message_id: "new-provider-reply"
@@ -226,7 +226,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     refute EmailSetup.summary(c.tenant.id).returning?
   end
 
-  test "referencing an unsent operator draft does not prove a successful roundtrip", c do
+  test "referencing an unsent staff draft does not prove a successful roundtrip", c do
     path = "/api/webhook/route/#{c.route.callback_token}"
 
     response =
@@ -235,7 +235,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     outgoing =
       insert_message(
         conversation_id: response["conversation_id"],
-        source: :operator,
+        source: :staff,
         message_id: "<draft@service.example>",
         delivery_status: :pending
       )

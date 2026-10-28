@@ -97,11 +97,11 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
           due_at: ~U[2026-11-20 16:45:00Z]
         )
 
-      operator = insert_operator_account(role: "admin")
+      staff = insert_staff_account(role: "admin")
 
       {:ok, _label} =
         Custyard.Labels.create_and_assign(
-          Custyard.Scope.for_staff(operator, Custyard.Tenants.get_tenant!(operator.tenant_id)),
+          Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id)),
           conversation,
           "Private label"
         )
@@ -175,14 +175,14 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       refute Custyard.Slugs.get_claim_for_conversation(conversation.id)
     end
 
-    test "a fresh session shows the thread including operator replies" do
+    test "a fresh session shows the thread including staff replies" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
-        body: "Operator here, happy to help",
-        sender_email: "operator-private@example.com"
+        source: :staff,
+        body: "Staff here, happy to help",
+        sender_email: "staff-private@example.com"
       )
 
       # Cookie-less fresh conn: the URL alone is the credential.
@@ -190,10 +190,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       assert html =~ ~s(data-testid="resume-conversation")
       assert html =~ "Hello, I need help with X"
-      assert html =~ "Operator here, happy to help"
+      assert html =~ "Staff here, happy to help"
       assert html =~ "Support Team"
-      # Sender identity never renders — not even the operator address.
-      refute html =~ "operator-private@example.com"
+      # Sender identity never renders — not even the staff address.
+      refute html =~ "staff-private@example.com"
     end
 
     test "the reply box is gated by who spoke last" do
@@ -209,7 +209,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       assert html =~ ~s(data-testid="resume-reply-form")
 
       # When the team spoke last, the form shows automatically as "Reply".
-      insert_message(conversation_id: conversation.id, source: :operator, body: "On it!")
+      insert_message(conversation_id: conversation.id, source: :staff, body: "On it!")
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-reply-form")
@@ -221,7 +221,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         body: "INTERNAL: lowball them",
         is_internal_note: true
       )
@@ -286,25 +286,25 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     end
   end
 
-  describe "deleted messages (operator soft delete)" do
+  describe "deleted messages (staff soft delete)" do
     test "a deleted message renders the tombstone, never the original body" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
       message =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
-          body: "Operator reply sent by mistake"
+          source: :staff,
+          body: "Staff reply sent by mistake"
         )
 
-      operator = insert_operator_account(role: "admin")
-      {:ok, _deleted} = Conversations.soft_delete_message(message, operator)
+      staff = insert_staff_account(role: "admin")
+      {:ok, _deleted} = Conversations.soft_delete_message(message, staff)
 
       {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(data-testid="resume-message-tombstone")
       assert html =~ "This message was deleted"
-      refute html =~ "Operator reply sent by mistake"
+      refute html =~ "Staff reply sent by mistake"
     end
 
     test "an already-open view swaps to the tombstone when the delete broadcasts" do
@@ -323,8 +323,8 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ "Accidentally pasted a password here"
 
-      operator = insert_operator_account(role: "admin")
-      {:ok, _deleted} = Conversations.soft_delete_message(message, operator)
+      staff = insert_staff_account(role: "admin")
+      {:ok, _deleted} = Conversations.soft_delete_message(message, staff)
 
       # The message_updated broadcast reloads the thread in place.
       html = render(view)
@@ -505,10 +505,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
-      # An operator rotating a leaked link must cut off already-open tabs:
+      # An staff rotating a leaked link must cut off already-open tabs:
       # the socket re-reads the prospect, sees its mount-time hash no longer
       # matches, and halts to the uniform page — it neither keeps write
-      # access nor keeps receiving operator replies over PubSub.
+      # access nor keeps receiving staff replies over PubSub.
       {:ok, %{access_token: _new_token}} = Intake.rotate_access_token(conversation)
 
       assert_redirect(view, @unavailable)

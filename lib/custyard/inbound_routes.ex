@@ -502,7 +502,7 @@ defmodule Custyard.InboundRoutes do
     end
   end
 
-  @doc "Initialize missing default consumers without re-enabling an operator-disabled purpose."
+  @doc "Initialize missing default consumers without re-enabling a staff-disabled purpose."
   def ensure_default_webhooks(%InboundRoute{} = route) do
     Repo.transaction(fn ->
       for purpose <- [:sender_matching, :notification] do

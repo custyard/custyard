@@ -41,7 +41,7 @@ iex -S mix phx.server
 
 ### Email Ingestion (Optional)
 
-The LMTP server is disabled by default. Enable it with environment variables. IMAP mailboxes are connected per channel in the operator UI (see below).
+The LMTP server is disabled by default. Enable it with environment variables. IMAP mailboxes are connected per channel in the staff UI (see below).
 
 #### LMTP Server
 

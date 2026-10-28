@@ -51,7 +51,7 @@ if config_env() == :prod do
   #
   # The old behaviour — unset or misspelled silently keeps Swoosh's
   # in-memory Local adapter — is the worst kind of failure this app has.
-  # Operator login is magic-link-only, so a discarded mail queue is not
+  # Staff login is magic-link-only, so a discarded mail queue is not
   # degraded service, it is total lockout: nobody can sign in, and every
   # claim confirmation, arrival notification, and prospect receipt is
   # accepted and thrown away with no error anywhere. Refusing to boot
@@ -59,7 +59,7 @@ if config_env() == :prod do
   #
   # This is deliberately stricter than the Lettermint route-provisioning
   # management configuration below, which can remain unavailable without
-  # preventing operators from opening existing conversations.
+  # preventing staffs from opening existing conversations.
   known_mail_adapters = ~w(mailgun sendgrid smtp postmark lettermint local)
 
   mail_adapter =
@@ -76,7 +76,7 @@ if config_env() == :prod do
 
       Set it to one of: #{Enum.join(known_mail_adapters, ", ")}
 
-      Operator login is magic-link-only, so an instance without working
+      Staff login is magic-link-only, so an instance without working
       mail cannot be signed into at all. Use MAIL_ADAPTER=local to run
       without outbound mail on purpose — it discards every message.
       """
@@ -89,7 +89,7 @@ if config_env() == :prod do
 
       An unrecognized value used to fall through to the in-memory Local
       adapter, which accepts and discards every message — including the
-      magic links operators sign in with.
+      magic links staffs sign in with.
       """
 
     true ->
@@ -100,7 +100,7 @@ if config_env() == :prod do
     IO.warn("""
     MAIL_ADAPTER=local: outbound mail is discarded.
 
-    Magic-link logins, prospect receipts, and operator notifications will
+    Magic-link logins, prospect receipts, and staff notifications will
     not be delivered. This is only appropriate for a smoke-test instance.
     """)
   end
@@ -275,8 +275,8 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  # Email-only auth: operators log in via magic link, no password needed.
-  # OPERATOR_PASSWORD is no longer required.
+  # Email-only auth: staffs log in via magic link, no password needed.
+  # Instance administrators use email-only authentication.
 
   host = System.get_env("PHX_HOST") || "localhost"
   port = parse_int.("PORT", 4000)
@@ -395,6 +395,6 @@ if config_env() == :prod do
   config :custyard,
     upload_dir: System.get_env("UPLOAD_DIR") || "/data/uploads",
     # Inbound email attachments, served only through the authenticated
-    # operator endpoint (never a static path).
+    # staff endpoint (never a static path).
     attachment_dir: System.get_env("ATTACHMENT_DIR") || "/data/attachments"
 end

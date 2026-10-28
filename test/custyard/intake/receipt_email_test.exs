@@ -103,7 +103,7 @@ defmodule Custyard.Intake.ReceiptEmailTest do
       refute email.subject =~ "buyer@example.com"
     end
 
-    test "escapes an operator-configured source name in the HTML body" do
+    test "escapes a staff-configured source name in the HTML body" do
       source = insert_intake_source(name: "A&B <Sales>")
 
       email = ReceiptEmail.compose("buyer@example.com", source, @conversation_url)

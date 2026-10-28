@@ -65,7 +65,7 @@ defmodule Custyard.Factory do
       cached_score: 0,
       organization_id: nil,
       contact_id: nil,
-      last_operator_action_at: nil,
+      last_staff_action_at: nil,
       last_customer_action_at: nil,
       snoozed_until: nil
     }
@@ -76,7 +76,7 @@ defmodule Custyard.Factory do
   @doc """
   Build message attributes.
 
-  Sources: :email, :portal, :operator
+  Sources: :email, :portal, :staff
 
   ## Examples
 
@@ -166,7 +166,7 @@ defmodule Custyard.Factory do
   end
 
   @doc """
-  Build operator account attributes.
+  Build staff account attributes.
 
   Roles: "super_admin", "admin", "agent"
   - super_admin: No organization_id (can access all)
@@ -174,14 +174,14 @@ defmodule Custyard.Factory do
 
   ## Examples
 
-      build_operator_account()
-      build_operator_account(role: "admin", organization_id: 1)
+      build_staff_account()
+      build_staff_account(role: "admin", organization_id: 1)
   """
-  def build_operator_account(overrides \\ []) do
+  def build_staff_account(overrides \\ []) do
     id = unique_id()
 
     defaults = %{
-      email: "operator-#{id}@example.com",
+      email: "staff-#{id}@example.com",
       password: "password123",
       role: "agent"
     }
@@ -232,11 +232,11 @@ defmodule Custyard.Factory do
 
     # Extract cached_score (not in changeset cast list for security)
     {cached_score, attrs} = Map.pop(attrs, :cached_score, 0)
-    # intake_source_key is creation-only (not in the operator changeset cast
+    # intake_source_key is creation-only (not in the staff changeset cast
     # list); apply it as a raw change like cached_score
     {intake_source_key, attrs} = Map.pop(attrs, :intake_source_key)
     # The triage suspect flag has its own changeset, deliberately outside
-    # changeset/2 (operators must not toggle it through the edit form).
+    # changeset/2 (staffs must not toggle it through the edit form).
     {suspect, attrs} = Map.pop(attrs, :suspect, false)
 
     %Custyard.Conversation{}
@@ -566,14 +566,14 @@ defmodule Custyard.Factory do
   end
 
   @doc """
-  Insert an operator account into the database.
+  Insert a staff account into the database.
   For admin/agent roles, requires organization_id or will create one.
   """
-  def insert_operator_account(overrides \\ []) do
-    attrs = build_operator_account(ensure_tenant(overrides))
+  def insert_staff_account(overrides \\ []) do
+    attrs = build_staff_account(ensure_tenant(overrides))
 
-    %Custyard.OperatorAccount{}
-    |> Custyard.OperatorAccount.changeset(attrs)
+    %Custyard.StaffAccount{}
+    |> Custyard.StaffAccount.changeset(attrs)
     |> Custyard.Repo.insert!()
   end
 
@@ -654,7 +654,7 @@ defmodule Custyard.Factory do
   def factory_tenant_id, do: test_tenant_id()
 
   def staff_scope(tenant_id \\ nil, role \\ "admin") do
-    staff = insert_operator_account(tenant_id: tenant_id || factory_tenant_id(), role: role)
+    staff = insert_staff_account(tenant_id: tenant_id || factory_tenant_id(), role: role)
     Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
   end
 

@@ -5,8 +5,8 @@ defmodule Custyard.PortalCredentials do
   alias Custyard.{
     Contact,
     Organization,
-    OperatorAccess,
-    OperatorAccount,
+    StaffAccess,
+    StaffAccount,
     PortalCredential,
     Repo,
     Scope,
@@ -82,10 +82,10 @@ defmodule Custyard.PortalCredentials do
 
   defp with_admin(scope, fun) do
     Repo.transaction(fn ->
-      staff = scope.staff_id && OperatorAccess.lock_current(%OperatorAccount{id: scope.staff_id})
+      staff = scope.staff_id && StaffAccess.lock_current(%StaffAccount{id: scope.staff_id})
 
       case {staff, Repo.get(Tenant, scope.tenant_id)} do
-        {%OperatorAccount{tenant_id: id, role: "admin", session_claim: claim},
+        {%StaffAccount{tenant_id: id, role: "admin", session_claim: claim},
          %Tenant{status: "active"}}
         when id == scope.tenant_id and claim == scope.session_claim ->
           case fun.() do

@@ -24,7 +24,7 @@ defmodule Custyard.ConversationsTest do
 
     case Process.get(key) do
       nil ->
-        scope = scope(insert_operator_account(role: "admin", tenant_id: tenant_id))
+        scope = scope(insert_staff_account(role: "admin", tenant_id: tenant_id))
         Process.put(key, scope)
         scope
 
@@ -36,33 +36,33 @@ defmodule Custyard.ConversationsTest do
   test "tenant staff can mutate only their workspace's unassigned threads" do
     own = insert_tenant()
     foreign = insert_tenant()
-    operator = insert_operator_account(role: "agent", tenant_id: own.id)
+    staff = insert_staff_account(role: "agent", tenant_id: own.id)
     thread = insert_conversation(tenant_id: own.id, organization_id: nil, source: :public_intake)
 
     other =
       insert_conversation(tenant_id: foreign.id, organization_id: nil, source: :public_intake)
 
     assert {:ok, :allowed} =
-             Conversations.with_access(scope(operator), thread.id, fn _, _ ->
+             Conversations.with_access(scope(staff), thread.id, fn _, _ ->
                {:ok, :allowed}
              end)
 
     assert {:error, :unauthorized} =
-             Conversations.with_access(scope(operator), other.id, fn _, _ ->
+             Conversations.with_access(scope(staff), other.id, fn _, _ ->
                flunk("foreign thread")
              end)
   end
 
   test "deleting a customer does not revoke tenant staff membership" do
     org = insert_organization()
-    operator = insert_operator_account(role: "agent", tenant_id: org.tenant_id)
+    staff = insert_staff_account(role: "agent", tenant_id: org.tenant_id)
     Repo.delete!(org)
 
     thread =
       insert_conversation(tenant_id: org.tenant_id, organization_id: nil, source: :public_intake)
 
     assert {:ok, :allowed} =
-             Conversations.with_access(scope(operator), thread.id, fn _, _ ->
+             Conversations.with_access(scope(staff), thread.id, fn _, _ ->
                {:ok, :allowed}
              end)
   end
@@ -80,12 +80,12 @@ defmodule Custyard.ConversationsTest do
   test "scoped writes use staff's current tenant assignment" do
     own = insert_tenant()
     foreign = insert_tenant()
-    operator = insert_operator_account(role: "admin", tenant_id: own.id)
+    staff = insert_staff_account(role: "admin", tenant_id: own.id)
     thread = insert_conversation(tenant_id: own.id)
-    operator |> Ecto.Changeset.change(tenant_id: foreign.id) |> Repo.update!()
+    staff |> Ecto.Changeset.change(tenant_id: foreign.id) |> Repo.update!()
 
     assert {:error, :unauthorized} =
-             Conversations.send_reply(thread, "Stale assignment", operator: operator)
+             Conversations.send_reply(thread, "Stale assignment", staff: staff)
   end
 
   describe "list_neglected" do
@@ -466,15 +466,15 @@ defmodule Custyard.ConversationsTest do
   end
 
   describe "soft_delete_message/2" do
-    test "stamps deleted_at and the deleting operator, keeping the original body" do
+    test "stamps deleted_at and the deleting staff, keeping the original body" do
       conv = insert_conversation()
       message = insert_message(conversation_id: conv.id, body: "Sensitive content")
-      operator = insert_operator_account()
+      staff = insert_staff_account()
 
-      assert {:ok, deleted} = Conversations.soft_delete_message(message, operator)
+      assert {:ok, deleted} = Conversations.soft_delete_message(message, staff)
 
       assert %DateTime{} = deleted.deleted_at
-      assert deleted.deleted_by_operator_id == operator.id
+      assert deleted.deleted_by_staff_id == staff.id
 
       # Soft delete only: the row and its original body stay in the database.
       reloaded = Repo.get!(Custyard.Message, message.id)
@@ -485,11 +485,11 @@ defmodule Custyard.ConversationsTest do
     test "broadcasts message_updated on the conversation topic" do
       conv = insert_conversation()
       message = insert_message(conversation_id: conv.id)
-      operator = insert_operator_account()
+      staff = insert_staff_account()
 
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv.id}")
 
-      assert {:ok, _deleted} = Conversations.soft_delete_message(message, operator)
+      assert {:ok, _deleted} = Conversations.soft_delete_message(message, staff)
 
       conv_id = conv.id
       assert_received {:message_updated, ^conv_id}
@@ -498,17 +498,17 @@ defmodule Custyard.ConversationsTest do
     test "is idempotent and preserves the original deletion attribution" do
       conv = insert_conversation()
       message = insert_message(conversation_id: conv.id)
-      first_operator = insert_operator_account()
-      second_operator = insert_operator_account()
+      first_staff = insert_staff_account()
+      second_staff = insert_staff_account()
 
-      {:ok, deleted} = Conversations.soft_delete_message(message, first_operator)
-      assert {:ok, unchanged} = Conversations.soft_delete_message(deleted, second_operator)
+      {:ok, deleted} = Conversations.soft_delete_message(message, first_staff)
+      assert {:ok, unchanged} = Conversations.soft_delete_message(deleted, second_staff)
 
       assert unchanged.deleted_at == deleted.deleted_at
-      assert unchanged.deleted_by_operator_id == first_operator.id
+      assert unchanged.deleted_by_staff_id == first_staff.id
 
       reloaded = Repo.get!(Custyard.Message, message.id)
-      assert reloaded.deleted_by_operator_id == first_operator.id
+      assert reloaded.deleted_by_staff_id == first_staff.id
     end
   end
 
@@ -609,14 +609,14 @@ defmodule Custyard.ConversationsTest do
       assert updated.subject == "Test"
     end
 
-    test "updates last_operator_action_at" do
+    test "updates last_staff_action_at" do
       conv = insert_conversation()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       assert {:ok, updated} =
-               Conversations.update_conversation(conv, %{last_operator_action_at: now})
+               Conversations.update_conversation(conv, %{last_staff_action_at: now})
 
-      assert updated.last_operator_action_at == now
+      assert updated.last_staff_action_at == now
     end
   end
 
@@ -768,7 +768,7 @@ defmodule Custyard.ConversationsTest do
         triage_class: :customer
       )
 
-      assert Conversations.default_reply_cc(conv, operator_email: "me@acme.example") ==
+      assert Conversations.default_reply_cc(conv, staff_email: "me@acme.example") ==
                ["boss@customer.example"]
     end
 
@@ -871,7 +871,7 @@ defmodule Custyard.ConversationsTest do
     test "creates a message with correct attributes", %{conversation: conv} do
       {:ok, message} = Conversations.send_reply(conv, "Here is your answer")
 
-      assert message.source == :operator
+      assert message.source == :staff
       assert message.body == "Here is your answer"
       assert message.is_internal_note == false
       assert message.conversation_id == conv.id
@@ -944,19 +944,19 @@ defmodule Custyard.ConversationsTest do
       assert reloaded.state == :active
     end
 
-    test "updates last_operator_action_at", %{conversation: conv} do
-      assert conv.last_operator_action_at == nil
+    test "updates last_staff_action_at", %{conversation: conv} do
+      assert conv.last_staff_action_at == nil
 
       {:ok, _message} = Conversations.send_reply(conv, "Done")
 
       reloaded = Repo.get!(Custyard.Conversation, conv.id)
-      assert reloaded.last_operator_action_at != nil
+      assert reloaded.last_staff_action_at != nil
     end
 
     test "does not use staff personal email when tenant sending is unconfigured", %{
       conversation: conv
     } do
-      {:ok, message} = Conversations.send_reply(conv, "Reply", operator_email: "agent@corp.com")
+      {:ok, message} = Conversations.send_reply(conv, "Reply", staff_email: "agent@corp.com")
 
       assert is_nil(message.sender_email)
     end
@@ -973,7 +973,7 @@ defmodule Custyard.ConversationsTest do
       )
 
       {:ok, message} =
-        Conversations.send_reply(conv, "Reply", operator_email: "agent@corp.com")
+        Conversations.send_reply(conv, "Reply", staff_email: "agent@corp.com")
 
       assert is_nil(message.sender_email)
     end
@@ -1139,7 +1139,7 @@ defmodule Custyard.ConversationsTest do
       assert_received {:conversation_updated, ^conv_id}
     end
 
-    test "sender_email is nil when no route and no operator_email", %{conversation: conv} do
+    test "sender_email is nil when no route and no staff_email", %{conversation: conv} do
       {:ok, message} = Conversations.send_reply(conv, "No sender")
 
       assert is_nil(message.sender_email)
@@ -1150,7 +1150,7 @@ defmodule Custyard.ConversationsTest do
       before_count =
         Repo.one(
           from m in Custyard.Message,
-            where: m.conversation_id == ^conv.id and m.source == :operator,
+            where: m.conversation_id == ^conv.id and m.source == :staff,
             select: count()
         )
 
@@ -1159,17 +1159,17 @@ defmodule Custyard.ConversationsTest do
       after_count =
         Repo.one(
           from m in Custyard.Message,
-            where: m.conversation_id == ^conv.id and m.source == :operator,
+            where: m.conversation_id == ^conv.id and m.source == :staff,
             select: count()
         )
 
-      # Exactly one operator message was created
+      # Exactly one staff message was created
       assert after_count == before_count + 1
 
       # Both the message and conversation update succeeded
       reloaded_conv = Repo.get!(Custyard.Conversation, conv.id)
       assert reloaded_conv.state == :active
-      assert reloaded_conv.last_operator_action_at != nil
+      assert reloaded_conv.last_staff_action_at != nil
       assert message.conversation_id == conv.id
     end
 
@@ -1188,7 +1188,7 @@ defmodule Custyard.ConversationsTest do
 
       {:ok, message} = Conversations.send_reply(conversation, "Reply to unlinked prospect")
 
-      assert message.source == :operator
+      assert message.source == :staff
       assert_received {:message_added, ^conv_id}
       assert_received {:conversation_updated, ^conv_id}
     end
@@ -1403,14 +1403,12 @@ defmodule Custyard.ConversationsTest do
       end)
     end
 
-    test "public-intake replies never carry the operator's personal address" do
+    test "public-intake replies never carry the staff's personal address" do
       {conversation, _prospect} =
         intake_fixture(email: "prospect@example.com", notify_on_reply: true)
 
       {:ok, message} =
-        Conversations.send_reply(conversation, "Reply",
-          operator_email: "operator-personal@example.com"
-        )
+        Conversations.send_reply(conversation, "Reply", staff_email: "staff-personal@example.com")
 
       assert message.sender_email == "support@custyard.local"
     end
@@ -1438,11 +1436,9 @@ defmodule Custyard.ConversationsTest do
       )
 
       {:ok, message} =
-        Conversations.send_reply(conversation, "Reply",
-          operator_email: "operator-personal@example.com"
-        )
+        Conversations.send_reply(conversation, "Reply", staff_email: "staff-personal@example.com")
 
-      # Source-keyed rule: neither the org route address nor the operator's
+      # Source-keyed rule: neither the org route address nor the staff's
       # personal address — nil selects Outbound's platform fallback.
       assert message.sender_email == "support@custyard.local"
     end
@@ -1716,11 +1712,11 @@ defmodule Custyard.ConversationsTest do
         )
 
       {:ok, message} =
-        Conversations.send_reply(conversation, "Reply", operator_email: "agent@corp.com")
+        Conversations.send_reply(conversation, "Reply", staff_email: "agent@corp.com")
 
       assert message.sender_email == "help@acme.example.com"
 
-      assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
+      assert Conversations.reply_identity(conversation, staff_email: "agent@corp.com") == %{
                address: "help@acme.example.com",
                name: "Acme Help",
                source: :channel
@@ -1777,7 +1773,7 @@ defmodule Custyard.ConversationsTest do
     test "without a channel tenant setup is required", %{org: org} do
       conversation = insert_conversation(organization_id: org.id)
 
-      assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
+      assert Conversations.reply_identity(conversation, staff_email: "agent@corp.com") == %{
                address: nil,
                name: "Tenant",
                source: :platform

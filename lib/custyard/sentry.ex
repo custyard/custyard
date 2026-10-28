@@ -4,13 +4,13 @@ defmodule Custyard.Sentry do
 
   Custyard's public surfaces carry bearer credentials **in the URL path**, not
   in headers — a conversation token (`/threads/:token`), a slug-claim token
-  (`/claims/:token`), an operator magic-link token
+  (`/claims/:token`), a staff magic-link token
   (`/app/login/verify/:token`), a routed-webhook callback token
   (`/api/webhook/route/:token`) and the unguessable portal org token
   (`/portal/:org_token/...`). Sentry's built-in `Sentry.PlugContext` url scrubber
   only redacts *query* parameters, so without this module those path tokens
   would ship to the error tracker verbatim and become a credential leak in the
-  one place operators look when something breaks.
+  one place staffs look when something breaks.
 
   This module is the single source of truth for that redaction. It is wired in
   two complementary places (defence in depth), both delegating to the same
@@ -108,7 +108,7 @@ defmodule Custyard.Sentry do
 
   Returns an empty map: Custyard's public-intake bodies carry prospect PII
   (name, email, message text) and portal replies, none of which belongs in an
-  error report. Sending no params is the secure default; operators who need a
+  error report. Sending no params is the secure default; staffs who need a
   specific field can opt it in later via a narrower scrubber.
   """
   @spec scrub_conn_body(Plug.Conn.t()) :: map()

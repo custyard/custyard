@@ -37,7 +37,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
     conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
-    operator = insert_operator_account(role: "admin")
+    staff = insert_staff_account(role: "admin")
 
     insert_message(
       conversation_id: conversation.id,
@@ -47,7 +47,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     )
 
     {:ok, message} = Conversations.send_reply(conversation, "Please try this fix.")
-    %{message: message, operator: operator, contact: contact, conversation: conversation}
+    %{message: message, staff: staff, contact: contact, conversation: conversation}
   end
 
   test "confirmed rejection retries with the same idempotency key and no raw error logging",
@@ -86,8 +86,8 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:ok, retried} =
              Outbound.retry(
                Custyard.Scope.for_staff(
-                 context.operator,
-                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+                 context.staff,
+                 Custyard.Tenants.get_tenant!(context.staff.tenant_id)
                ),
                failed
              )
@@ -114,8 +114,8 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:error, :reconciliation_required} =
              Outbound.retry(
                Custyard.Scope.for_staff(
-                 context.operator,
-                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+                 context.staff,
+                 Custyard.Tenants.get_tenant!(context.staff.tenant_id)
                ),
                failed
              )
@@ -140,8 +140,8 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:ok, retried} =
              Outbound.retry(
                Custyard.Scope.for_staff(
-                 context.operator,
-                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+                 context.staff,
+                 Custyard.Tenants.get_tenant!(context.staff.tenant_id)
                ),
                failed
              )
@@ -160,8 +160,8 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:error, :reconciliation_required} =
              Outbound.retry(
                Custyard.Scope.for_staff(
-                 context.operator,
-                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+                 context.staff,
+                 Custyard.Tenants.get_tenant!(context.staff.tenant_id)
                ),
                failed
              )
@@ -174,14 +174,14 @@ defmodule Custyard.Email.OutboundRecoveryTest do
       assert_receive {:attempted_email, original_email}
       assert original_email.reply_to == {"", channel.public_address}
 
-      assert {:ok, _} = InboundChannels.update_channel(channel, attrs, operator: context.operator)
+      assert {:ok, _} = InboundChannels.update_channel(channel, attrs, staff: context.staff)
       Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "retry-must-not-send"}})
 
       assert {:ok, retried} =
                Outbound.retry(
                  Custyard.Scope.for_staff(
-                   context.operator,
-                   Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+                   context.staff,
+                   Custyard.Tenants.get_tenant!(context.staff.tenant_id)
                  ),
                  failed
                )
@@ -206,9 +206,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     refute_receive {:attempted_email, _}
 
     assert {:ok, _} =
-             InboundChannels.update_channel(channel, %{sending_domain: ""},
-               operator: context.operator
-             )
+             InboundChannels.update_channel(channel, %{sending_domain: ""}, staff: context.staff)
 
     Application.put_env(:custyard, Custyard.Mailer, adapter: __MODULE__.Adapter)
     Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "retry-must-not-send"}})
@@ -216,8 +214,8 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:ok, retried} =
              Outbound.retry(
                Custyard.Scope.for_staff(
-                 context.operator,
-                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+                 context.staff,
+                 Custyard.Tenants.get_tenant!(context.staff.tenant_id)
                ),
                failed
              )
@@ -274,8 +272,8 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:ok, retried} =
              Outbound.retry(
                Custyard.Scope.for_staff(
-                 context.operator,
-                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+                 context.staff,
+                 Custyard.Tenants.get_tenant!(context.staff.tenant_id)
                ),
                failed
              )
@@ -296,7 +294,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
       })
       |> Repo.insert!()
 
-    operator = insert_operator_account(tenant_id: tenant.id, role: "admin")
+    staff = insert_staff_account(tenant_id: tenant.id, role: "admin")
     org = insert_organization(tenant_id: tenant.id)
     contact = insert_contact(organization_id: org.id)
     conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
@@ -308,9 +306,9 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     refute_receive {:attempted_email, _}
 
     assert {:ok, _} =
-             InboundChannels.update_channel(channel, %{sending_domain: ""}, operator: operator)
+             InboundChannels.update_channel(channel, %{sending_domain: ""}, staff: staff)
 
-    assert {:ok, retried} = Outbound.retry(Custyard.Scope.for_staff(operator, tenant), failed)
+    assert {:ok, retried} = Outbound.retry(Custyard.Scope.for_staff(staff, tenant), failed)
     assert {:error, :envelope_changed, _} = Outbound.deliver(retried)
     refute_receive {:attempted_email, _}
   end

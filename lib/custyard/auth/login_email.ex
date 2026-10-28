@@ -1,6 +1,6 @@
 defmodule Custyard.Auth.LoginEmail do
   @moduledoc """
-  Composes magic link login emails for operator authentication.
+  Composes magic link login emails for account authentication.
   """
 
   import Swoosh.Email
@@ -8,27 +8,27 @@ defmodule Custyard.Auth.LoginEmail do
 
   require Logger
 
-  def deliver_login_link(operator, login_url) do
+  def deliver_login_link(account, login_url) do
     email =
       new()
-      |> to(operator.email)
+      |> to(account.email)
       |> from({"Custyard", from_address()})
       |> subject("Your Custyard login link")
       |> html_body(login_html(login_url))
       |> text_body(login_text(login_url))
 
-    Logger.info("operator_login_delivery_started", operator_id: operator.id)
+    Logger.info("account_login_delivery_started", account_id: account.id)
 
     case Custyard.Mailer.deliver(email) do
       {:ok, _} = result ->
         # Provider acceptance does not establish inbox delivery.
-        Logger.info("operator_login_provider_accepted", operator_id: operator.id)
+        Logger.info("account_login_provider_accepted", account_id: account.id)
         result
 
       {:error, reason} = error ->
         Logger.info(
-          "operator_login_provider_rejected",
-          [operator_id: operator.id] ++ failure_metadata(reason)
+          "account_login_provider_rejected",
+          [account_id: account.id] ++ failure_metadata(reason)
         )
 
         error

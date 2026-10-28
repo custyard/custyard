@@ -130,7 +130,7 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     bodies = [
       "{invalid",
       Jason.encode!(evidence(%{"source" => "other.production"})),
-      Jason.encode!(evidence(%{"actor_id" => "different-operator"}))
+      Jason.encode!(evidence(%{"actor_id" => "different-staff"}))
     ]
 
     Enum.each(bodies, fn body ->

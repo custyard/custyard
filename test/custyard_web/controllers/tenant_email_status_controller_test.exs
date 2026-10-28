@@ -23,7 +23,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
 
     {:ok, connection} =
       EmailSetup.ensure_connection(
-        insert_operator_account(role: "admin", tenant_id: tenant.id),
+        insert_staff_account(role: "admin", tenant_id: tenant.id),
         tenant.id
       )
 
@@ -42,7 +42,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
     message =
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "tenant-provider-id"
       )
@@ -74,7 +74,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
        c do
     foreign =
       insert_message(
-        source: :operator,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "foreign-provider-id"
       )
@@ -112,7 +112,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
   test "a tenant's inbound provider ID cannot authorize a foreign outbound transition", c do
     foreign =
       insert_message(
-        source: :operator,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "foreign-duplicate-provider-id"
       )

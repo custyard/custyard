@@ -3,7 +3,7 @@ defmodule Custyard.TaskAttentionTest do
   import Custyard.Factory
 
   defp scope_for(org) do
-    staff = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    staff = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
     Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
   end
 

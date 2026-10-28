@@ -1,6 +1,6 @@
 defmodule Custyard.Acknowledgments.Operations do
   @moduledoc """
-  Broker recovery operations for the operator UI, release commands and Mix.
+  Broker recovery operations for the staff UI, release commands and Mix.
 
   Each operation opens its own connection and closes it when the operation
   ends, including when the calling process is killed. Results carry fixed
@@ -81,10 +81,10 @@ defmodule Custyard.Acknowledgments.Operations do
 
   `expected` guards the replay: `nil` replays whatever is oldest (release and
   Mix commands); a submission ID replays only while the oldest message has it;
-  `%{submission_id: id, body_sha256: hash}` (the operator page's inspected
+  `%{submission_id: id, body_sha256: hash}` (the staff page's inspected
   summary) also requires the identical body, since two retained failures can
   share a submission ID with different evidence. Otherwise the message stays
-  in place and the result is `{:error, :changed}`. `actor` is an operator
+  in place and the result is `{:error, :changed}`. `actor` is a staff
   account or `"cli"`, `"mix"` or `"console"`.
   """
   def replay(authority, expected) do

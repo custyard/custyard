@@ -1,0 +1,376 @@
+defmodule CustyardWeb.Staff.ProjectDetailLiveTest do
+  use CustyardWeb.ConnCase, async: true
+
+  import Phoenix.LiveViewTest
+  import Custyard.Factory
+
+  alias Custyard.{StaffAccount, Project, Repo, Task}
+
+  setup %{conn: conn} do
+    {:ok, staff} =
+      %StaffAccount{}
+      |> StaffAccount.changeset(%{
+        role: "admin",
+        tenant_id: Process.get(:factory_tenant_id),
+        email: "test@example.com",
+        password: "password123"
+      })
+      |> Repo.insert()
+
+    conn =
+      conn
+      |> Phoenix.ConnTest.init_test_session(%{})
+      |> put_staff_session(staff.id)
+
+    {:ok, conn: conn, staff: staff}
+  end
+
+  defp create_project(attrs) do
+    %Project{}
+    |> Project.changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  defp create_task(attrs) do
+    %Task{}
+    |> Task.changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  defp scoped_admin_conn(conn, org) do
+    staff =
+      %StaffAccount{}
+      |> StaffAccount.changeset(%{
+        tenant_id: Process.get(:factory_tenant_id),
+        email: "detail-admin-#{System.unique_integer([:positive])}@example.com",
+        role: "admin",
+        organization_id: org.id
+      })
+      |> Repo.insert!()
+
+    put_staff_session(conn, staff.id)
+  end
+
+  test "customer reassignment within a tenant retains staff access", %{conn: conn} do
+    own = insert_organization()
+    other = insert_organization()
+    project = create_project(%{title: "Customer project", organization_id: own.id})
+    {:ok, view, _} = live(conn, ~p"/app/projects/#{project.id}")
+    {:ok, _} = Custyard.Projects.update(portal_scope(own), project, %{organization_id: other.id})
+    assert render(view) =~ "Customer project"
+    render_click(view, "add_task", %{"title" => "Allowed task"})
+    assert Repo.get_by!(Task, title: "Allowed task").tenant_id == own.tenant_id
+  end
+
+  test "invalid project ID redirects without crashing", %{conn: conn} do
+    org = insert_organization()
+    conn = scoped_admin_conn(conn, org)
+
+    assert {:error, {:live_redirect, %{to: "/app/projects"}}} =
+             live(conn, "/app/projects/not-a-project-id")
+  end
+
+  describe "mount/3" do
+    test "renders project detail page", %{conn: conn} do
+      org = insert_organization(name: "Acme Corp")
+      project = create_project(%{title: "Website Redesign", organization_id: org.id})
+
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      assert html =~ "Website Redesign"
+      assert html =~ "Back to projects"
+    end
+
+    test "redirects when project not found", %{conn: conn} do
+      {:error, {:live_redirect, %{to: redirect_path}}} =
+        live(conn, ~p"/app/projects/999999")
+
+      assert redirect_path == "/app/projects"
+    end
+
+    test "shows project description", %{conn: conn} do
+      org = insert_organization()
+
+      project =
+        create_project(%{
+          title: "Test Project",
+          description: "A detailed project description",
+          organization_id: org.id
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      assert html =~ "A detailed project description"
+    end
+
+    test "shows project dates", %{conn: conn} do
+      org = insert_organization()
+
+      project =
+        create_project(%{
+          title: "Test Project",
+          organization_id: org.id,
+          start_date: ~D[2026-04-01],
+          target_completion_date: ~D[2026-05-01]
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      assert html =~ "Apr 01, 2026"
+      assert html =~ "May 01, 2026"
+    end
+  end
+
+  describe "task list" do
+    test "shows tasks for the project", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Test", organization_id: org.id})
+      create_task(%{title: "First task", project_id: project.id})
+      create_task(%{title: "Second task", project_id: project.id})
+
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      assert html =~ "First task"
+      assert html =~ "Second task"
+    end
+
+    test "shows empty state when no tasks", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Test", organization_id: org.id})
+
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      assert html =~ "No tasks in this project yet"
+    end
+
+    test "shows progress bar", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Test", organization_id: org.id})
+      create_task(%{title: "Done task", project_id: project.id, state: :done})
+      create_task(%{title: "Open task", project_id: project.id, state: :open})
+
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      assert html =~ "1 of 2 tasks completed"
+      assert html =~ "50%"
+    end
+  end
+
+  describe "add task" do
+    test "shows task form when clicking add", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Test", organization_id: org.id})
+
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      html = view |> element("[data-testid=staff-add-task-btn]") |> render_click()
+
+      assert html =~ "Task title"
+      assert html =~ "Add Task"
+      assert html =~ "Cancel"
+      assert html =~ "Due date and time (UTC)"
+      refute has_element?(view, "[data-testid=staff-task-visible-checkbox][checked]")
+    end
+
+    test "creates a task", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Test", organization_id: org.id})
+
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      view |> element("[data-testid=staff-add-task-btn]") |> render_click()
+
+      html =
+        view
+        |> form("[data-testid=staff-task-form]", %{title: "New task"})
+        |> render_submit()
+
+      assert html =~ "New task"
+      task = Repo.get_by!(Task, title: "New task", project_id: project.id)
+      refute task.portal_visible
+    end
+
+    test "creates task with portal visibility", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Test", organization_id: org.id})
+
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      view |> element("[data-testid=staff-add-task-btn]") |> render_click()
+
+      view
+      |> form("[data-testid=staff-task-form]", %{title: "Portal task", portal_visible: "true"})
+      |> render_submit()
+
+      task = Repo.get_by(Task, title: "Portal task")
+      assert task.portal_visible == true
+    end
+  end
+
+  describe "task state cycling" do
+    test "cycles task state on click", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Test", organization_id: org.id})
+      task = create_task(%{title: "Task", project_id: project.id, state: :open})
+
+      {:ok, view, html} = live(conn, ~p"/app/projects/#{project.id}")
+      assert html =~ "Open"
+
+      html =
+        view
+        |> element("[data-testid=staff-task-state-btn-#{task.id}]")
+        |> render_click()
+
+      assert html =~ "In Progress"
+
+      html =
+        view
+        |> element("[data-testid=staff-task-state-btn-#{task.id}]")
+        |> render_click()
+
+      assert html =~ "Done"
+    end
+  end
+
+  describe "delete task" do
+    test "deletes a task", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Test", organization_id: org.id})
+      task = create_task(%{title: "To delete", project_id: project.id})
+
+      {:ok, view, html} = live(conn, ~p"/app/projects/#{project.id}")
+      assert html =~ "To delete"
+
+      html =
+        view
+        |> element("[data-testid=staff-task-delete-#{task.id}]")
+        |> render_click()
+
+      refute html =~ "To delete"
+      assert Repo.get(Task, task.id) == nil
+    end
+  end
+
+  describe "navigation" do
+    test "links to project from projects list", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "My Project", organization_id: org.id})
+
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
+
+      {:ok, _view, html} =
+        view
+        |> element("[data-testid=staff-project-view-#{project.id}]")
+        |> render_click()
+        |> follow_redirect(conn)
+
+      assert html =~ "My Project"
+      assert html =~ "Back to projects"
+    end
+
+    test "edit link navigates to the projects list without pushing an event", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Nav Test", organization_id: org.id})
+
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      assert {:error, {:live_redirect, %{to: "/app/projects"}}} =
+               view |> element("a", "Edit") |> render_click()
+    end
+  end
+
+  describe "organization scoping" do
+    defp insert_scoped_staff(org) do
+      {:ok, staff} =
+        %StaffAccount{}
+        |> StaffAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
+          email: "agent-#{org.id}@example.com",
+          password: "password123",
+          role: "agent",
+          organization_id: org.id
+        })
+        |> Repo.insert()
+
+      staff
+    end
+
+    test "org-scoped staff can view a project in their own organization", %{conn: conn} do
+      org = insert_organization(name: "Own Org")
+      project = create_project(%{title: "Own Project", organization_id: org.id})
+      staff = insert_scoped_staff(org)
+
+      conn = put_staff_session(conn, staff.id)
+
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      assert html =~ "Own Project"
+    end
+
+    test "org-scoped staff cannot view another organization's project", %{conn: conn} do
+      org_a = insert_organization(name: "Org A")
+      org_b = insert_organization(name: "Org B", tenant_id: insert_tenant().id)
+      foreign_project = create_project(%{title: "Foreign Project", organization_id: org_b.id})
+      staff = insert_scoped_staff(org_a)
+
+      conn = put_staff_session(conn, staff.id)
+
+      {:error, {:live_redirect, %{to: redirect_path}}} =
+        live(conn, ~p"/app/projects/#{foreign_project.id}")
+
+      assert redirect_path == "/app/projects"
+    end
+
+    test "redirects for non-integer project ids", %{conn: conn} do
+      {:error, {:live_redirect, %{to: redirect_path}}} =
+        live(conn, ~p"/app/projects/abc")
+
+      assert redirect_path == "/app/projects"
+    end
+  end
+
+  describe "task id scoping" do
+    test "cycle_task_state ignores task ids from other projects", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Mine", organization_id: org.id})
+
+      other_org = insert_organization()
+      other_project = create_project(%{title: "Theirs", organization_id: other_org.id})
+
+      foreign_task =
+        create_task(%{title: "Foreign task", project_id: other_project.id, state: :open})
+
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      render_click(view, "cycle_task_state", %{"id" => to_string(foreign_task.id)})
+
+      assert Repo.get!(Task, foreign_task.id).state == :open
+    end
+
+    test "delete_task ignores task ids from other projects", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Mine", organization_id: org.id})
+
+      other_org = insert_organization()
+      other_project = create_project(%{title: "Theirs", organization_id: other_org.id})
+      foreign_task = create_task(%{title: "Foreign task", project_id: other_project.id})
+
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      render_click(view, "delete_task", %{"id" => to_string(foreign_task.id)})
+
+      assert Repo.get(Task, foreign_task.id) != nil
+    end
+
+    test "task mutations ignore non-integer ids", %{conn: conn} do
+      org = insert_organization()
+      project = create_project(%{title: "Mine", organization_id: org.id})
+
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
+
+      # Must not raise
+      render_click(view, "cycle_task_state", %{"id" => "not-a-number"})
+      render_click(view, "delete_task", %{"id" => "not-a-number"})
+    end
+  end
+end

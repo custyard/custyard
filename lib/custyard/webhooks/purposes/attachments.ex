@@ -7,7 +7,7 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
   Message-ID inside the conversation), resumes durable attachment slots on
   replay, applies the channel's per-message cap and
   records every attachment as fetched or skipped. Suspect mail is listed but
-  never fetched: the operator sees the filenames and can clear the flag
+  never fetched: the staff sees the filenames and can clear the flag
   before anything is downloaded.
   """
 

@@ -32,7 +32,7 @@ defmodule Custyard.RateLimit do
 
   ## Buckets
 
-  Limits and windows are application config (deliberately not operator
+  Limits and windows are application config (deliberately not staff
   `Settings` — see docs/design/design-decisions-public-intake.md), read
   from `config :custyard, :rate_limit_buckets` at call time via
   `bucket_config!/1`. Keys are caller-defined terms: client IPs for the

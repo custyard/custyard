@@ -2,7 +2,7 @@ defmodule Custyard.InboundChannelRejection do
   @moduledoc """
   A delivery that reached a route but did not become a customer message.
 
-  Written by the triage stage (spec-inbound-channels D6) so an operator can
+  Written by the triage stage (spec-inbound-channels D6) so a staff can
   answer "did my customer's mail get lost?". Holds the sender, recipient,
   subject and classification only; the body is never stored. Rows are swept
   after 14 days by `Custyard.InboundChannels.sweep_expired/1`.

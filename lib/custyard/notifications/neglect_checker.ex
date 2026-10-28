@@ -66,7 +66,7 @@ defmodule Custyard.Notifications.NeglectChecker do
   Excludes:
   - Resolved conversations (no longer need attention)
   - Currently snoozed conversations
-  - Suspect conversations (triage flagged, not yet cleared by an operator)
+  - Suspect conversations (triage flagged, not yet cleared by a staff)
   """
   def list_notification_candidates(tenant_id, thresholds \\ nil) do
     now = DateTime.utc_now()
@@ -80,7 +80,7 @@ defmodule Custyard.Notifications.NeglectChecker do
       where: c.tenant_id == ^tenant_id,
       where: c.state != :resolved,
       where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
-      # Suspect mail is excluded from operator notifications until an operator
+      # Suspect mail is excluded from staff notifications until a staff
       # clears the flag (spec-inbound-channels D6); unattended spam must not
       # page anyone.
       where: c.suspect == false,
@@ -102,7 +102,7 @@ defmodule Custyard.Notifications.NeglectChecker do
       dynamic(
         [c],
         is_nil(c.organization_id) and
-          coalesce(c.last_operator_action_at, c.inserted_at) <= ^unlinked_cutoff
+          coalesce(c.last_staff_action_at, c.inserted_at) <= ^unlinked_cutoff
       )
 
     Enum.reduce(@neglect_tiers, unlinked, fn tier, acc ->
@@ -112,13 +112,13 @@ defmodule Custyard.Notifications.NeglectChecker do
         [c, o],
         ^acc or
           (o.tier == ^tier and
-             coalesce(c.last_operator_action_at, c.inserted_at) <= ^cutoff)
+             coalesce(c.last_staff_action_at, c.inserted_at) <= ^cutoff)
       )
     end)
   end
 
   @doc """
-  Clear `last_neglect_notification` on conversations an operator has since
+  Clear `last_neglect_notification` on conversations a staff has since
   acted on, so the next time one of them is neglected a fresh alert goes out.
 
   Such conversations never reach `check_and_notify_single/2`: the candidate

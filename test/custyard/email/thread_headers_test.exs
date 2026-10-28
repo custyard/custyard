@@ -27,7 +27,7 @@ defmodule Custyard.Email.ThreadHeadersTest do
     test "returns empty map when messages have nil message_ids", %{conversation: conv} do
       # Portal messages may not have message_id
       insert_message(conversation_id: conv.id, source: :portal, message_id: nil)
-      insert_message(conversation_id: conv.id, source: :operator, message_id: nil)
+      insert_message(conversation_id: conv.id, source: :staff, message_id: nil)
 
       assert ThreadHeaders.for_conversation(conv.id) == %{}
     end
@@ -61,7 +61,7 @@ defmodule Custyard.Email.ThreadHeadersTest do
 
       insert_message(
         conversation_id: conv.id,
-        source: :operator,
+        source: :staff,
         message_id: "<msg2@custyard.local>"
       )
 
@@ -89,7 +89,7 @@ defmodule Custyard.Email.ThreadHeadersTest do
 
       insert_message(
         conversation_id: conv.id,
-        source: :operator,
+        source: :staff,
         message_id: "<reply@custyard.local>"
       )
 
@@ -121,7 +121,7 @@ defmodule Custyard.Email.ThreadHeadersTest do
 
       insert_message(
         conversation_id: conv.id,
-        source: :operator,
+        source: :staff,
         message_id: "<reply@custyard.local>"
       )
 

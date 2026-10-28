@@ -1,6 +1,6 @@
 defmodule Custyard.Notifications.Email do
   @moduledoc """
-  Operator email alerts for neglect, quiet channels, and delivery failures.
+  Staff email alerts for neglect, quiet channels, and delivery failures.
   Each tenant uses its staff recipients and sending credentials.
   """
 
@@ -11,7 +11,7 @@ defmodule Custyard.Notifications.Email do
   Deliver a neglect alert notification for a conversation.
 
   In production, this would compose and send an email to the configured
-  operator notification address.
+  staff notification address.
   """
   def deliver_neglect_alert(conversation, level) do
     if email_enabled?() do
@@ -38,7 +38,7 @@ defmodule Custyard.Notifications.Email do
   end
 
   @doc """
-  Tell the operator that a reply did not reach a recipient
+  Tell the staff that a reply did not reach a recipient
   (spec-conversation-loop, "Bounce and Suppression Handling"). `status` is
   `:bounced` or `:suppressed`; `recipient` is the address the provider
   named and `role` which list it was on (`:to`, the customer's copy, or
@@ -303,9 +303,9 @@ defmodule Custyard.Notifications.Email do
   defp format_datetime(nil), do: "Unknown"
   defp format_datetime(dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
 
-  # Returns the most recent activity timestamp (customer or operator action)
+  # Returns the most recent activity timestamp (customer or staff action)
   defp last_activity(conversation) do
-    [conversation.last_customer_action_at, conversation.last_operator_action_at]
+    [conversation.last_customer_action_at, conversation.last_staff_action_at]
     |> Enum.reject(&is_nil/1)
     |> Enum.max(DateTime, fn -> nil end)
   end

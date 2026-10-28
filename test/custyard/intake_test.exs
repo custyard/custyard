@@ -156,9 +156,9 @@ defmodule Custyard.IntakeTest do
     } do
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         is_internal_note: true,
-        body: "secret operator note"
+        body: "secret staff note"
       )
 
       assert {:ok, loaded} = lookup_token(token)
@@ -349,24 +349,24 @@ defmodule Custyard.IntakeTest do
       assert {:ok, _result} = Intake.add_prospect_reply(conversation, "First")
     end
 
-    test "an intervening operator message neither resets nor triggers the check", %{
+    test "an intervening staff message neither resets nor triggers the check", %{
       conversation: conversation
     } do
       assert {:ok, _result} = Intake.add_prospect_reply(conversation, "Any update?")
 
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
-        body: "Operator body, never compared"
+        source: :staff,
+        body: "Staff body, never compared"
       )
 
       # The latest PROSPECT message is still "Any update?" even though the
-      # operator spoke since — the duplicate stays refused.
+      # staff spoke since — the duplicate stays refused.
       assert {:error, :duplicate_message} = Intake.add_prospect_reply(conversation, "Any update?")
 
-      # And an operator body is never a duplicate trigger.
+      # And a staff body is never a duplicate trigger.
       assert {:ok, _result} =
-               Intake.add_prospect_reply(conversation, "Operator body, never compared")
+               Intake.add_prospect_reply(conversation, "Staff body, never compared")
     end
   end
 
@@ -529,7 +529,7 @@ defmodule Custyard.IntakeTest do
 
       assert {:ok, updated} = Intake.capture_email(conversation, "alice@acme.example.com")
 
-      # Operator linkage wins over capture-time resolution; the email is
+      # Staff linkage wins over capture-time resolution; the email is
       # still captured on the prospect.
       assert updated.organization_id == linked_org.id
       assert updated.contact_id == nil
@@ -542,7 +542,7 @@ defmodule Custyard.IntakeTest do
       conversation: conversation
     } do
       # Organization A: the conversation gets linked to this in the DB after
-      # the in-memory struct was loaded (e.g. an operator ran
+      # the in-memory struct was loaded (e.g. a staff ran
       # convert_prospect/3 against a socket still holding organization_id: nil).
       org_a = insert_organization(domain: "already.example.com")
 
@@ -727,7 +727,7 @@ defmodule Custyard.IntakeTest do
     do: Intake.get_enabled_source(key, Custyard.Factory.factory_tenant_id())
 
   defp source_scope do
-    staff = insert_operator_account(tenant_id: factory_tenant_id(), role: "admin")
+    staff = insert_staff_account(tenant_id: factory_tenant_id(), role: "admin")
     Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
   end
 

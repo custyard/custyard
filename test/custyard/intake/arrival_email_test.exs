@@ -11,14 +11,14 @@ defmodule Custyard.Intake.ArrivalEmailTest do
   setup do
     configure_tenant_email(factory_tenant_id())
     Custyard.Tenants.add_host(factory_tenant_id(), "intake.test")
-    insert_operator_account(tenant_id: factory_tenant_id(), email: "ops@example.com")
+    insert_staff_account(tenant_id: factory_tenant_id(), email: "ops@example.com")
     RateLimit.reset()
     original_buckets = Application.get_env(:custyard, :rate_limit_buckets)
     original_enabled = Application.get_env(:custyard, :email_enabled)
-    original_operator = Application.get_env(:custyard, :operator_email)
+    original_staff = Application.get_env(:custyard, :staff_email)
 
     Application.put_env(:custyard, :email_enabled, true)
-    Application.put_env(:custyard, :operator_email, "ops@example.com")
+    Application.put_env(:custyard, :staff_email, "ops@example.com")
 
     on_exit(fn ->
       Application.put_env(:custyard, :rate_limit_buckets, original_buckets)
@@ -29,10 +29,10 @@ defmodule Custyard.Intake.ArrivalEmailTest do
         Application.put_env(:custyard, :email_enabled, original_enabled)
       end
 
-      if original_operator == nil do
-        Application.delete_env(:custyard, :operator_email)
+      if original_staff == nil do
+        Application.delete_env(:custyard, :staff_email)
       else
-        Application.put_env(:custyard, :operator_email, original_operator)
+        Application.put_env(:custyard, :staff_email, original_staff)
       end
 
       RateLimit.reset()
@@ -48,7 +48,7 @@ defmodule Custyard.Intake.ArrivalEmailTest do
   end
 
   describe "send_arrival/3" do
-    test "delivers to the configured operator address" do
+    test "delivers to the configured staff address" do
       %{source: source, conversation: conversation} = fixture()
 
       assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "How much for 50 seats?")
@@ -62,7 +62,7 @@ defmodule Custyard.Intake.ArrivalEmailTest do
       end)
     end
 
-    test "carries a direct link to the operator conversation view" do
+    test "carries a direct link to the staff conversation view" do
       %{source: source, conversation: conversation} = fixture()
 
       assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "hello")
@@ -184,7 +184,7 @@ defmodule Custyard.Intake.ArrivalEmailTest do
   end
 
   describe "intake submission wiring" do
-    test "creating an intake conversation notifies the operator" do
+    test "creating an intake conversation notifies the staff" do
       source = insert_intake_source(name: "Pricing CTA")
 
       assert {:ok, %{conversation: conversation}} =

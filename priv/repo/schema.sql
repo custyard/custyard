@@ -38,7 +38,7 @@ CREATE TABLE "messages" (
   "updated_at" TEXT,
   "delivery_status" TEXT,
   "deleted_at" TEXT,
-  "deleted_by_operator_id" INTEGER ,
+  "deleted_by_staff_id" INTEGER ,
   "provider_delivery_id" TEXT,
   "inbound_channel_id" INTEGER ,
   "to_addresses" TEXT DEFAULT '[]',
@@ -48,7 +48,7 @@ CREATE TABLE "messages" (
   "spam_score" NUMERIC,
   "triage_class" TEXT,
   "html_body" TEXT,
-  "forwarded_by_operator_id" INTEGER ,
+  "forwarded_by_staff_id" INTEGER ,
   "forwarded_by_email" TEXT,
   "delivery_failure_kind" TEXT,
   "delivery_error_code" TEXT,
@@ -57,9 +57,9 @@ CREATE TABLE "messages" (
   "delivery_recipients_locked" INTEGER DEFAULT false NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   CONSTRAINT messages_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE CASCADE,
-  CONSTRAINT messages_deleted_by_operator_id_fkey FOREIGN KEY (tenant_id,deleted_by_operator_id) REFERENCES operator_accounts(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT messages_deleted_by_staff_id_fkey FOREIGN KEY (tenant_id,deleted_by_staff_id) REFERENCES staff_accounts(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT messages_inbound_channel_id_fkey FOREIGN KEY (tenant_id,inbound_channel_id) REFERENCES inbound_channels(tenant_id,id) ON DELETE RESTRICT,
-  CONSTRAINT messages_forwarded_by_operator_id_fkey FOREIGN KEY (tenant_id,forwarded_by_operator_id) REFERENCES operator_accounts(tenant_id,id) ON DELETE RESTRICT
+  CONSTRAINT messages_forwarded_by_staff_id_fkey FOREIGN KEY (tenant_id,forwarded_by_staff_id) REFERENCES staff_accounts(tenant_id,id) ON DELETE RESTRICT
 );
 
 CREATE TABLE "projects" (
@@ -114,7 +114,7 @@ CREATE TABLE "conversations" (
   urgency TEXT DEFAULT 'normal' NOT NULL,
   source TEXT DEFAULT 'email',
   cached_score INTEGER DEFAULT 0 NOT NULL,
-  last_operator_action_at TEXT,
+  last_staff_action_at TEXT,
   last_customer_action_at TEXT,
   snoozed_until TEXT,
   last_neglect_notification TEXT,
@@ -148,7 +148,7 @@ CREATE TABLE "audit_events" (
   CONSTRAINT audit_events_tenant_required CHECK(tenant_id IS NOT NULL OR (conversation_id IS NULL AND organization_id IS NULL AND project_id IS NULL AND event_type IN ('instance_admin_created','instance_admin_removed','installation_configured')))
 );
 
-CREATE TABLE "operator_accounts" (
+CREATE TABLE "staff_accounts" (
   id INTEGER PRIMARY KEY,
   email TEXT NOT NULL,
   password_hash TEXT,
@@ -492,7 +492,7 @@ CREATE UNIQUE INDEX conversations_tenant_id_id_index ON conversations(tenant_id,
 
 CREATE UNIQUE INDEX email_connections_tenant_id_id_index ON email_connections(tenant_id,id);
 
-CREATE UNIQUE INDEX operator_accounts_tenant_id_id_index ON operator_accounts(tenant_id,id);
+CREATE UNIQUE INDEX staff_accounts_tenant_id_id_index ON staff_accounts(tenant_id,id);
 
 CREATE UNIQUE INDEX portal_credentials_tenant_id_id_index ON portal_credentials(tenant_id,id);
 
@@ -556,9 +556,9 @@ CREATE INDEX "audit_events_message_id_index" ON "audit_events" ("message_id");
 
 CREATE INDEX "audit_events_inserted_at_index" ON "audit_events" ("inserted_at");
 
-CREATE INDEX "operator_accounts_role_index" ON "operator_accounts" ("role");
+CREATE INDEX "staff_accounts_role_index" ON "staff_accounts" ("role");
 
-CREATE UNIQUE INDEX "operator_accounts_login_token_index" ON "operator_accounts" ("login_token");
+CREATE UNIQUE INDEX "staff_accounts_login_token_index" ON "staff_accounts" ("login_token");
 
 CREATE INDEX "conversations_intake_source_key_index" ON "conversations" ("intake_source_key");
 
@@ -576,19 +576,19 @@ CREATE INDEX "slugs_email_index" ON "slugs" ("email");
 
 CREATE INDEX "slugs_status_expires_at_index" ON "slugs" ("status", "expires_at");
 
-CREATE INDEX "messages_deleted_by_operator_id_index" ON "messages" ("deleted_by_operator_id");
+CREATE INDEX "messages_deleted_by_staff_id_index" ON "messages" ("deleted_by_staff_id");
 
 CREATE INDEX "messages_message_id_index" ON "messages" ("message_id");
 
 CREATE INDEX "acknowledgments_organization_id_received_at_index" ON "acknowledgments" ("organization_id", "received_at");
 
-CREATE UNIQUE INDEX "operator_accounts_session_claim_index" ON "operator_accounts" ("session_claim");
+CREATE UNIQUE INDEX "staff_accounts_session_claim_index" ON "staff_accounts" ("session_claim");
 
 CREATE INDEX "messages_lettermint_message_id_index" ON "messages" ("lettermint_message_id") WHERE lettermint_message_id IS NOT NULL;
 
 CREATE INDEX "conversations_inbound_channel_id_index" ON "conversations" ("inbound_channel_id");
 
-CREATE INDEX "messages_forwarded_by_operator_id_index" ON "messages" ("forwarded_by_operator_id");
+CREATE INDEX "messages_forwarded_by_staff_id_index" ON "messages" ("forwarded_by_staff_id");
 
 CREATE INDEX "message_attachments_message_id_index" ON "message_attachments" ("message_id");
 
@@ -652,7 +652,7 @@ CREATE UNIQUE INDEX organizations_tenant_id_identity_kind_identity_value_index O
 
 CREATE UNIQUE INDEX settings_tenant_id_index ON settings(tenant_id);
 
-CREATE UNIQUE INDEX operator_accounts_tenant_id_email_index ON operator_accounts(tenant_id,email);
+CREATE UNIQUE INDEX staff_accounts_tenant_id_email_index ON staff_accounts(tenant_id,email);
 
 CREATE UNIQUE INDEX instance_admins_email_index ON instance_admins(email);
 

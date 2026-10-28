@@ -4,7 +4,7 @@ defmodule Custyard.Slugs do
 
   One `slugs` table owns the entire namespace (see
   docs/design/design-decisions-public-intake.md §Slug Registry). `available`
-  means no row exists: expiry and operator release DELETE rows, and the
+  means no row exists: expiry and staff release DELETE rows, and the
   unique index on `slug` arbitrates every race — two parties claiming the
   same name concurrently resolve to one insert and one changeset error,
   never a 500.
@@ -152,7 +152,7 @@ defmodule Custyard.Slugs do
   `WHERE confirmation_token_hash = hash AND status = 'claimed' AND
   expires_at > now` — sets status `confirmed`, stamps `confirmed_at`, and
   clears both the token hash (single-use) and `expires_at` (confirmed
-  claims do not expire; the operator releases them). Zero rows updated —
+  claims do not expire; the staff releases them). Zero rows updated —
   invalid, expired, already-used, or purged — is `{:error, :invalid}`:
   one failure shape, no validity oracle.
   """
@@ -185,7 +185,7 @@ defmodule Custyard.Slugs do
           )
 
         # Patch the already-fetched struct in memory instead of re-reading:
-        # a re-fetch could race with an operator release/1 in the window
+        # a re-fetch could race with a staff release/1 in the window
         # after the update_all succeeds, raising instead of erroring.
         if count == 1 do
           {:ok,
@@ -234,7 +234,7 @@ defmodule Custyard.Slugs do
       )
 
     # Patch the caller's own struct instead of re-reading: the caller
-    # already holds the row, and a re-fetch could race with an operator
+    # already holds the row, and a re-fetch could race with a staff
     # release/1 in the window after the update_all succeeds, raising
     # instead of erroring.
     if count == 1 do
@@ -245,7 +245,7 @@ defmodule Custyard.Slugs do
   end
 
   @doc """
-  Operator release: DELETE a claimed or confirmed row, returning the slug
+  Staff release: DELETE a claimed or confirmed row, returning the slug
   to `available`.
 
   Provisioned rows are refused (`{:error, :provisioned}`) — a provisioned
@@ -279,7 +279,7 @@ defmodule Custyard.Slugs do
   end
 
   defp authorize_release!(scope) do
-    Custyard.OperatorAccess.lock_current(%Custyard.OperatorAccount{id: scope.staff_id})
+    Custyard.StaffAccess.lock_current(%Custyard.StaffAccount{id: scope.staff_id})
 
     case Custyard.Scope.current_staff(scope) do
       %{role: "admin"} -> :ok
@@ -359,7 +359,7 @@ defmodule Custyard.Slugs do
   end
 
   @doc """
-  All registry rows for the operator view, newest first.
+  All registry rows for the staff view, newest first.
   """
   def list_slugs(%Custyard.Scope{tenant_id: tenant_id} = scope) do
     if Custyard.Scope.current_staff(scope),

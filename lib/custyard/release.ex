@@ -1,8 +1,8 @@
 defmodule Custyard.Release do
   @moduledoc """
-  Release tasks run with `bin/custyard eval`: migrations, the operator
+  Release tasks run with `bin/custyard eval`: migrations, the instance admin
   bootstrap the container entrypoint runs before the server, the
-  `bin/operator` and `bin/dsar` command lines (`rel/overlays/bin/operator`,
+  `bin/instance-admin` and `bin/dsar` command lines (`rel/overlays/bin/instance-admin`,
   `rel/overlays/bin/dsar`; the latter's commands are `Custyard.Release.Dsar`),
   and the SQLite export for moving the database to Turso.
 
@@ -20,7 +20,7 @@ defmodule Custyard.Release do
 
   @app :custyard
 
-  @operator_usage """
+  @instance_admin_usage """
   Usage: bin/instance-admin add EMAIL | list | remove EMAIL | help
   Instance administrators sign in at /admin/login and provision tenant staff
   through the instance console. Staff sign in separately on their tenant host.
@@ -116,7 +116,7 @@ defmodule Custyard.Release do
   def instance_admin_cli(argv), do: argv |> run_instance_admin_cli() |> System.halt()
 
   def run_instance_admin_cli(["help"]) do
-    IO.write(@operator_usage)
+    IO.write(@instance_admin_usage)
     0
   end
 
@@ -152,7 +152,7 @@ defmodule Custyard.Release do
     end
   end
 
-  defp admin_command(_), do: {:error, @operator_usage}
+  defp admin_command(_), do: {:error, @instance_admin_usage}
   def dsar_cli(argv), do: argv |> Dsar.run() |> System.halt()
 
   @doc false

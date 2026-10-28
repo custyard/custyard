@@ -3,7 +3,7 @@ defmodule CustyardWeb.IntakeController do
   Public intake pages — the anonymous, hammerable dead views.
 
   GET renders an active (form-first) or passive (informational) page per the
-  operator-configured intake source; unknown and disabled keys render the
+  staff-configured intake source; unknown and disabled keys render the
   standard 404. POST validates the message body *before* touching the
   context, creates the conversation through
   `Custyard.Intake.create_intake_conversation/3`, sets the signed conversation

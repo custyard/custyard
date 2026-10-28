@@ -136,7 +136,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
     {:noreply, socket |> load_messages() |> load_tasks()}
   end
 
-  # Message-level change (operator soft delete, delivery status): refresh the
+  # Message-level change (staff soft delete, delivery status): refresh the
   # thread so tombstones replace deleted bodies in already-open tabs.
   @impl true
   def handle_info({:message_updated, _}, socket) do
@@ -216,7 +216,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
             <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
           </div>
           <%!-- Soft-deleted messages render ONLY the tombstone — the original
-          body must never reach this page again once an operator deletes it. --%>
+          body must never reach this page again once a staff deletes it. --%>
           <div
             :if={msg.deleted_at}
             class="italic text-gray-500 dark:text-zinc-400"
@@ -321,7 +321,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
   end
 
   defp message_style(msg) do
-    if msg.source == :operator do
+    if msg.source == :staff do
       "bg-indigo-50 dark:bg-indigo-950 border-l-4 border-indigo-400 dark:border-indigo-600"
     else
       "bg-gray-50 dark:bg-zinc-800"
@@ -329,8 +329,8 @@ defmodule CustyardWeb.Portal.ConversationLive do
   end
 
   defp metadata_text_style(msg) do
-    if msg.source == :operator do
-      # Higher contrast for operator messages: indigo-700 on indigo-50 background
+    if msg.source == :staff do
+      # Higher contrast for staff messages: indigo-700 on indigo-50 background
       "text-indigo-700 dark:text-indigo-300"
     else
       "text-gray-500 dark:text-zinc-400"
@@ -338,7 +338,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
   end
 
   defp body_text_style(msg) do
-    if msg.source == :operator do
+    if msg.source == :staff do
       # Ensure good contrast for body text on indigo background
       "text-indigo-900 dark:text-indigo-100"
     else
@@ -348,7 +348,7 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
   defp sender_label(msg) do
     case msg.source do
-      :operator -> "Support Team"
+      :staff -> "Support Team"
       _ -> msg.sender_email || "Customer"
     end
   end

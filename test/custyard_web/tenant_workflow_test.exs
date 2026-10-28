@@ -7,7 +7,7 @@ defmodule CustyardWeb.TenantWorkflowTest do
     Authorization,
     Conversations,
     Intake,
-    OperatorAccount,
+    StaffAccount,
     Organizations,
     Repo,
     Tenants
@@ -77,7 +77,7 @@ defmodule CustyardWeb.TenantWorkflowTest do
              )
            ) == MapSet.new([c1.id, c2.id, public.id])
 
-    conn = conn |> init_test_session(%{}) |> put_operator_session(op)
+    conn = conn |> init_test_session(%{}) |> put_staff_session(op)
     {:ok, _view, html} = live(conn, "/app")
     assert html =~ "Acme visible"
     assert html =~ "Beta visible"
@@ -133,14 +133,14 @@ defmodule CustyardWeb.TenantWorkflowTest do
     atlas: a
   } do
     op = staff(a, "admin")
-    conn = conn |> init_test_session(%{}) |> put_operator_session(op)
+    conn = conn |> init_test_session(%{}) |> put_staff_session(op)
     {:ok, view, _} = live(conn, "/app/settings/workspace")
 
     render_submit(view, "invite", %{
       "staff" => %{"email" => "forged@example.net", "role" => "super_admin"}
     })
 
-    refute Repo.get_by(OperatorAccount, email: "forged@example.net")
+    refute Repo.get_by(StaffAccount, email: "forged@example.net")
   end
 
   test "capturing a public sender email cannot link to another tenant customer", %{
@@ -171,8 +171,8 @@ defmodule CustyardWeb.TenantWorkflowTest do
     do: Organizations.create(scope_for(Tenants.get_tenant!(attrs.tenant_id)), attrs)
 
   defp staff(tenant, role \\ "agent") do
-    %OperatorAccount{}
-    |> OperatorAccount.changeset(%{
+    %StaffAccount{}
+    |> StaffAccount.changeset(%{
       email: "#{role}-#{tenant.slug}-#{System.unique_integer([:positive])}@staff.example",
       role: role,
       tenant_id: tenant.id

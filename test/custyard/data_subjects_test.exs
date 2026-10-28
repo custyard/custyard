@@ -14,7 +14,7 @@ defmodule Custyard.DataSubjectsTest do
 
     case Process.get(key) do
       nil ->
-        staff = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+        staff = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
         scope = Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
         Process.put(key, scope)
         scope
@@ -64,7 +64,7 @@ defmodule Custyard.DataSubjectsTest do
 
   test "a foreign tenant scope cannot export or erase customer data", ctx do
     foreign = insert_tenant()
-    staff = insert_operator_account(role: "admin", tenant_id: foreign.id)
+    staff = insert_staff_account(role: "admin", tenant_id: foreign.id)
     scope = Custyard.Scope.for_staff(staff, foreign)
 
     assert_raise Ecto.NoResultsError, fn ->
@@ -95,8 +95,8 @@ defmodule Custyard.DataSubjectsTest do
   test "a rotated staff session cannot export or erase", ctx do
     stale_scope = scope(ctx.org)
 
-    Repo.get!(Custyard.OperatorAccount, stale_scope.staff_id)
-    |> Ecto.Changeset.change(session_claim: Custyard.OperatorAccount.generate_session_claim())
+    Repo.get!(Custyard.StaffAccount, stale_scope.staff_id)
+    |> Ecto.Changeset.change(session_claim: Custyard.StaffAccount.generate_session_claim())
     |> Repo.update!()
 
     assert_scope_denied(ctx, stale_scope)
@@ -105,8 +105,8 @@ defmodule Custyard.DataSubjectsTest do
   test "a demoted administrator cannot export or erase with an old scope", ctx do
     stale_scope = scope(ctx.org)
 
-    Repo.get!(Custyard.OperatorAccount, stale_scope.staff_id)
-    |> Custyard.OperatorAccount.role_changeset(%{role: "agent"})
+    Repo.get!(Custyard.StaffAccount, stale_scope.staff_id)
+    |> Custyard.StaffAccount.role_changeset(%{role: "agent"})
     |> Repo.update!()
 
     assert_scope_denied(ctx, stale_scope)
@@ -126,9 +126,9 @@ defmodule Custyard.DataSubjectsTest do
     stale_scope = scope(ctx.org)
 
     Repo.query!("""
-    CREATE TRIGGER demote_dsar_staff AFTER UPDATE OF updated_at ON operator_accounts
+    CREATE TRIGGER demote_dsar_staff AFTER UPDATE OF updated_at ON staff_accounts
     WHEN NEW.id = #{stale_scope.staff_id}
-    BEGIN UPDATE operator_accounts SET role = 'agent' WHERE id = NEW.id; END
+    BEGIN UPDATE staff_accounts SET role = 'agent' WHERE id = NEW.id; END
     """)
 
     assert {:error, :unauthorized} =
@@ -250,7 +250,7 @@ defmodule Custyard.DataSubjectsTest do
       insert_audit_event(
         conversation_id: ctx.sent.conversation_id,
         payload: %{
-          "from" => "operator@example.com",
+          "from" => "staff@example.com",
           "subject" => "Pat copied subject",
           "event_id" => "keep too"
         }
@@ -479,7 +479,7 @@ defmodule Custyard.DataSubjectsTest do
       reply =
         insert_message(
           conversation_id: own.id,
-          source: :operator,
+          source: :staff,
           sender_email: "help@acme.example",
           to_addresses: ["pat@example.com"],
           body: "Thanks Pat"
@@ -538,7 +538,7 @@ defmodule Custyard.DataSubjectsTest do
       assert {:ok, credential, token} =
                Custyard.PortalCredentials.issue(
                  Custyard.Scope.for_staff(
-                   insert_operator_account(tenant_id: ctx.org.tenant_id, role: "admin"),
+                   insert_staff_account(tenant_id: ctx.org.tenant_id, role: "admin"),
                    Custyard.Tenants.get_tenant!(ctx.org.tenant_id)
                  ),
                  ctx.org.id,
@@ -586,7 +586,7 @@ defmodule Custyard.DataSubjectsTest do
       assert Repo.aggregate(InboundChannelRejection, :count) == 0
     end
 
-    test "keeps operator replies, without the person's address", ctx do
+    test "keeps staff replies, without the person's address", ctx do
       DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
 
       reply = Repo.get!(Message, ctx.reply.id)

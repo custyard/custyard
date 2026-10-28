@@ -1,6 +1,6 @@
 defmodule Custyard.IntakeSource do
   @moduledoc """
-  Operator-configured public intake source (CTA).
+  Staff-configured public intake source (CTA).
 
   Each row defines a public intake entry point identified by `key`, a public
   URL segment. The key format is locked to lowercase alphanumerics with

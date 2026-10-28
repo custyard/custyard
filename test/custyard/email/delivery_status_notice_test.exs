@@ -1,6 +1,6 @@
 defmodule Custyard.Email.DeliveryStatusNoticeTest do
   @moduledoc """
-  The operator notice for a bounced or suppressed reply
+  The staff notice for a bounced or suppressed reply
   (spec-conversation-loop, "Bounce and Suppression Handling").
   """
   # async: false - turns on :email_enabled for the whole VM.
@@ -22,11 +22,11 @@ defmodule Custyard.Email.DeliveryStatusNoticeTest do
     on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
   end
 
-  describe "operator notice" do
+  describe "staff notice" do
     setup do
       org = insert_organization(name: "Acme Corp")
       configure_tenant_email(org.tenant_id)
-      insert_operator_account(tenant_id: org.tenant_id, email: "staff@tenant.example")
+      insert_staff_account(tenant_id: org.tenant_id, email: "staff@tenant.example")
       contact = insert_contact(organization_id: org.id, email: "alice@customer.com")
 
       conversation =
@@ -38,7 +38,7 @@ defmodule Custyard.Email.DeliveryStatusNoticeTest do
 
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         sender_email: "support@acme.com",
         body: "We can help with that.",
         delivery_status: :sent,
@@ -77,11 +77,11 @@ defmodule Custyard.Email.DeliveryStatusNoticeTest do
     end
   end
 
-  describe "operator notice per recipient" do
+  describe "staff notice per recipient" do
     setup do
       org = insert_organization(name: "Acme Corp")
       configure_tenant_email(org.tenant_id)
-      insert_operator_account(tenant_id: org.tenant_id, email: "staff@tenant.example")
+      insert_staff_account(tenant_id: org.tenant_id, email: "staff@tenant.example")
       contact = insert_contact(organization_id: org.id, email: "alice@customer.com")
 
       conversation =
@@ -93,7 +93,7 @@ defmodule Custyard.Email.DeliveryStatusNoticeTest do
 
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         sender_email: "support@acme.com",
         body: "We can help with that.",
         delivery_status: :sent,

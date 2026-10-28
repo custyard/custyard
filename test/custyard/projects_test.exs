@@ -1,7 +1,7 @@
 defmodule Custyard.ProjectsTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.{OperatorAccount, Project, Projects, Repo, Task}
+  alias Custyard.{StaffAccount, Project, Projects, Repo, Task}
 
   import Custyard.Factory
 
@@ -14,7 +14,7 @@ defmodule Custyard.ProjectsTest do
 
     Process.put(
       :project_scope,
-      scope(insert_operator_account(role: "admin", tenant_id: tenant.id))
+      scope(insert_staff_account(role: "admin", tenant_id: tenant.id))
     )
 
     :ok
@@ -25,19 +25,19 @@ defmodule Custyard.ProjectsTest do
   test "scoped project writes reject a stale foreign project" do
     own = insert_organization()
     foreign = insert_organization(tenant_id: insert_tenant().id)
-    operator = insert_admin(own)
+    staff = insert_admin(own)
     stale = create_project(%{title: "Foreign project", organization_id: foreign.id})
 
     assert {:error, :unauthorized} =
-             Projects.update(scope(operator), stale, %{
+             Projects.update(scope(staff), stale, %{
                title: "Taken over",
                organization_id: own.id
              })
 
-    assert {:error, :unauthorized} = Projects.delete(scope(operator), stale)
+    assert {:error, :unauthorized} = Projects.delete(scope(staff), stale)
 
     assert {:error, :unauthorized} =
-             Projects.with_access(scope(operator), stale.id, fn project, _operator ->
+             Projects.with_access(scope(staff), stale.id, fn project, _staff ->
                Projects.create_task(project, %{title: "Foreign task"})
              end)
 
@@ -48,17 +48,17 @@ defmodule Custyard.ProjectsTest do
   test "scoped project update checks the destination organization" do
     own = insert_organization()
     foreign = insert_organization(tenant_id: insert_tenant().id)
-    operator = insert_admin(own)
+    staff = insert_admin(own)
     project = create_project(%{title: "Own project", organization_id: own.id})
 
     assert {:error, :unauthorized} =
-             Projects.update(scope(operator), project, %{
+             Projects.update(scope(staff), project, %{
                title: "Moved",
                organization_id: foreign.id
              })
 
     assert {:error, :unauthorized} =
-             Projects.update(scope(operator), project, %{
+             Projects.update(scope(staff), project, %{
                "title" => "Moved",
                "organization_id" => foreign.id
              })
@@ -66,28 +66,28 @@ defmodule Custyard.ProjectsTest do
     assert Repo.get!(Project, project.id).organization_id == own.id
   end
 
-  test "scoped project mutation uses the operator's current assignment and role" do
+  test "scoped project mutation uses the staff's current assignment and role" do
     own = insert_organization()
     foreign = insert_organization(tenant_id: insert_tenant().id)
-    operator = insert_admin(own)
+    staff = insert_admin(own)
     project = create_project(%{title: "Own project", organization_id: own.id})
 
-    operator
+    staff
     |> Ecto.Changeset.change(tenant_id: foreign.tenant_id)
     |> Repo.update!()
 
     assert {:error, :unauthorized} =
-             Projects.update(scope(operator), project, %{title: "Stale edit"})
+             Projects.update(scope(staff), project, %{title: "Stale edit"})
 
     assert {:error, :unauthorized} =
-             Projects.create(scope(operator), %{title: "Stale creation", organization_id: own.id})
+             Projects.create(scope(staff), %{title: "Stale creation", organization_id: own.id})
 
     assert Repo.get!(Project, project.id).title == "Own project"
 
-    reassigned = Repo.get!(OperatorAccount, operator.id)
+    reassigned = Repo.get!(StaffAccount, staff.id)
 
     reassigned
-    |> OperatorAccount.role_changeset(%{role: "agent"})
+    |> StaffAccount.role_changeset(%{role: "agent"})
     |> Repo.update!()
 
     foreign_project = create_project(%{title: "Foreign project", organization_id: foreign.id})
@@ -98,15 +98,15 @@ defmodule Custyard.ProjectsTest do
 
   test "scoped task mutation broadcasts after its transaction commits" do
     own = insert_organization()
-    operator = insert_admin(own)
+    staff = insert_admin(own)
     project = create_project(%{title: "Task project", organization_id: own.id})
     Phoenix.PubSub.subscribe(Custyard.PubSub, "project:#{project.id}")
 
     assert {:ok, _task} =
              Projects.with_access(
-               scope(operator),
+               scope(staff),
                project.id,
-               fn current, _operator ->
+               fn current, _staff ->
                  result = Projects.create_task(current, %{title: "New task"}, broadcast?: false)
                  refute_received {:project_updated, _}
                  result
@@ -121,15 +121,15 @@ defmodule Custyard.ProjectsTest do
 
   test "rolled-back scoped task mutation emits no project update" do
     own = insert_organization()
-    operator = insert_admin(own)
+    staff = insert_admin(own)
     project = create_project(%{title: "Rollback project", organization_id: own.id})
     Phoenix.PubSub.subscribe(Custyard.PubSub, "project:#{project.id}")
 
     assert {:error, :forced_rollback} =
              Projects.with_access(
-               scope(operator),
+               scope(staff),
                project.id,
-               fn current, _operator ->
+               fn current, _staff ->
                  assert {:ok, _task} =
                           Projects.create_task(current, %{title: "Uncommitted task"},
                             broadcast?: false
@@ -146,8 +146,8 @@ defmodule Custyard.ProjectsTest do
 
   # Helper to create a project directly
   defp insert_admin(org) do
-    %OperatorAccount{}
-    |> OperatorAccount.changeset(%{
+    %StaffAccount{}
+    |> StaffAccount.changeset(%{
       email: "project-scope-#{System.unique_integer([:positive])}@example.com",
       role: "admin",
       tenant_id: org.tenant_id
@@ -176,7 +176,7 @@ defmodule Custyard.ProjectsTest do
     |> Repo.insert!()
   end
 
-  describe "list_for_operator/0" do
+  describe "list_for_staff/0" do
     test "returns all non-template projects with organization preloaded" do
       org = insert_organization(name: "Acme")
       create_project(%{title: "Project A", organization_id: org.id, is_template: false})
@@ -233,14 +233,14 @@ defmodule Custyard.ProjectsTest do
   end
 
   # -------------------------------------------------------------------
-  # Phase 1a: list_for_operator/1 with organization_id: keyword
+  # Phase 1a: list_for_staff/1 with organization_id: keyword
   # -------------------------------------------------------------------
-  # The existing list_for_operator/0 returns all non-template projects.
-  # Phase 1a adds an optional keyword argument so org-scoped operators
+  # The existing list_for_staff/0 returns all non-template projects.
+  # Phase 1a adds an optional keyword argument so org-scoped staffs
   # only see their own organization's projects:
-  #   list_for_operator(organization_id: org_id)
+  #   list_for_staff(organization_id: org_id)
 
-  describe "list_for_operator/1 with organization_id filter" do
+  describe "list_for_staff/1 with organization_id filter" do
     test "returns only projects for the specified organization" do
       org1 = insert_organization(name: "Org A")
       org2 = insert_organization(name: "Org B")
@@ -296,7 +296,7 @@ defmodule Custyard.ProjectsTest do
       assert result.organization.name == "Preload Check"
     end
 
-    test "calling with empty keyword list behaves like list_for_operator/0" do
+    test "calling with empty keyword list behaves like list_for_staff/0" do
       org = insert_organization()
       create_project(%{title: "Project 1", organization_id: org.id})
 

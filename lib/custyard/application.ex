@@ -105,7 +105,7 @@ defmodule Custyard.Application do
   end
 
   # Decided here rather than in config/runtime.exs, so release commands such as
-  # bin/operator still boot when acknowledgment configuration is incomplete.
+  # bin/staff still boot when acknowledgment configuration is incomplete.
   # Incomplete or invalid configuration raises (without values) and the
   # application refuses to start. The consumer loads its configuration itself:
   # a child spec carrying the URL would put the password in supervisor reports.

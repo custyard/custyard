@@ -64,7 +64,8 @@ config :logger, :console,
     :message_count,
     :messages_processed,
     :mode,
-    :operator_id,
+    :staff_id,
+    :account_id,
     :peer,
     :provider_status,
     :reason,
@@ -100,15 +101,15 @@ config :sentry,
   before_send: {Custyard.Sentry, :before_send}
 
 # Rate-limit buckets for the public intake surfaces (Custyard.RateLimit).
-# Deliberately app config, not operator Settings — see
+# Deliberately app config, not staff Settings — see
 # docs/design/design-decisions-public-intake.md. Keys per bucket:
 # client IP unless noted (conversation_reply: token hash; claim_email_send:
 # downcased email; intake_arrival_email: intake source key;
 # intake_receipt_email: downcased captured email).
 config :custyard, :rate_limit_buckets,
   public_instance_ip: [limit: 600, window_ms: 60_000],
-  operator_login_ip: [limit: 5, window_ms: 60_000],
-  operator_login_email: [limit: 5, window_ms: 3_600_000],
+  account_login_ip: [limit: 5, window_ms: 60_000],
+  account_login_email: [limit: 5, window_ms: 3_600_000],
   intake_get: [limit: 60, window_ms: 60_000],
   intake_post: [limit: 5, window_ms: 3_600_000],
   conversation_mount: [limit: 30, window_ms: 600_000],

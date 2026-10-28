@@ -862,7 +862,7 @@ The MVP is done when:
 
 1. **Outbound email timing** — *Resolved (v0.4).* Outbound email is load-bearing for the activation flow and is in the MVP: the operator replies from the platform and the platform sends the email, with delivery tracked. The prior CC/BCC-capture approach is a rejected alternative (portal-visible latency). See §5.2 and the [Prospect Conversation Loop](spec-conversation-loop.md).
 
-2. **Multi-operator support**: The MVP assumes a single operator. When does multi-operator become necessary? The data model supports it (operator_accounts table, assignment fields could be added to conversations), but the attention queue scoring changes significantly with multiple operators (whose idle time? who is assigned?).
+2. **Multi-operator support**: The MVP assumes a single operator. When does multi-operator become necessary? The data model supports it (staff_accounts table, assignment fields could be added to conversations), but the attention queue scoring changes significantly with multiple operators (whose idle time? who is assigned?).
 
 3. **Conversation merging**: Duplicate conversations from the same customer (new email thread about existing issue) are a known failure mode. The MVP handles this via In-Reply-To threading only. Manual merge (combine two Conversations into one) is a likely v1.1 requirement. How complex is the merge operation given the activity log architecture?
 

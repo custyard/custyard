@@ -9,7 +9,7 @@ defmodule CustyardWeb.Telemetry do
   > therefore inert: the underlying `:telemetry` events do fire, but nothing
   > aggregates or displays them.
   >
-  > Modules that need an operator to actually see something log alongside the
+  > Modules that need a staff to actually see something log alongside the
   > emit. Attaching a reporter is tracked in custyard/custyard#11; it predates
   > the intake work and affects the LMTP, webhook, scoring and sender-matching
   > metrics equally.

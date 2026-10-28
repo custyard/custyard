@@ -7,8 +7,8 @@ defmodule Custyard.Conversations do
     Conversation,
     EmailAddress,
     Message,
-    OperatorAccess,
-    OperatorAccount,
+    StaffAccess,
+    StaffAccount,
     Repo
   }
 
@@ -45,7 +45,7 @@ defmodule Custyard.Conversations do
   def with_access(%Custyard.Scope{} = scope, id, fun) do
     case Custyard.Scope.current_staff(scope) do
       nil -> {:error, :unauthorized}
-      staff -> with_operator_access(id, staff, fun)
+      staff -> with_staff_access(id, staff, fun)
     end
   end
 
@@ -141,7 +141,7 @@ defmodule Custyard.Conversations do
   defp apply_tenant_filter(query, id) when is_integer(id),
     do: from(c in query, where: c.tenant_id == ^id)
 
-  # Org-scoped operators also see conversations without an organization
+  # Org-scoped staffs also see conversations without an organization
   # (unlinked prospects); see list_for_attention_queue/1.
   defp apply_organization_filter(query, nil), do: query
 
@@ -248,7 +248,7 @@ defmodule Custyard.Conversations do
   end
 
   @doc """
-  Clear or set the triage suspect flag on a conversation (operator action).
+  Clear or set the triage suspect flag on a conversation (staff action).
   """
   def set_suspect(%Conversation{} = conversation, suspect?) when is_boolean(suspect?) do
     with {:ok, updated} <-
@@ -358,7 +358,7 @@ defmodule Custyard.Conversations do
   @doc """
   Atomically transition a conversation from one state to another.
 
-  Uses a conditional UPDATE to prevent race conditions when multiple operators
+  Uses a conditional UPDATE to prevent race conditions when multiple staffs
   access the same conversation simultaneously. Only updates if the conversation
   is still in the expected `from_state`.
 
@@ -369,8 +369,8 @@ defmodule Custyard.Conversations do
 
   ## Examples
 
-      # Transition from :new to :active when operator views
-      transition_state(conversation, :new, :active, last_operator_action_at: now)
+      # Transition from :new to :active when staff views
+      transition_state(conversation, :new, :active, last_staff_action_at: now)
 
   """
   def transition_state(conversation, from_state, to_state, additional_attrs \\ []) do
@@ -394,7 +394,7 @@ defmodule Custyard.Conversations do
           Repo.get!(Conversation, conversation.id) |> Repo.preload([:organization, :contact])
 
         if current.state == to_state do
-          # Already in target state - another operator transitioned it first
+          # Already in target state - another staff transitioned it first
           {:ok, :already_transitioned}
         else
           # In some other state - return the current conversation
@@ -453,7 +453,7 @@ defmodule Custyard.Conversations do
   defp prospect_email(_prospect), do: nil
 
   @doc """
-  Classify how an operator reply on this conversation would be delivered.
+  Classify how a staff reply on this conversation would be delivered.
 
   Returns one of:
 
@@ -466,7 +466,7 @@ defmodule Custyard.Conversations do
     * `:none` — no recipient at all (no email captured, or conversation access
       revoked)
 
-  The operator UI keys the consent advisory on `:prospect_no_consent`
+  The staff UI keys the consent advisory on `:prospect_no_consent`
   specifically — the `:none` states are conveyed by the reply-channel badge,
   not the opt-in wording.
 
@@ -494,7 +494,7 @@ defmodule Custyard.Conversations do
   end
 
   @doc """
-  Whether an operator reply on this conversation will be emailed.
+  Whether a staff reply on this conversation will be emailed.
 
   Contact recipients deliver unconditionally — the established-customer path,
   including when a captured prospect email matched an existing contact and the
@@ -550,15 +550,15 @@ defmodule Custyard.Conversations do
     end)
   end
 
-  defp with_operator_access(id, %OperatorAccount{} = operator, fun) when is_function(fun, 2) do
+  defp with_staff_access(id, %StaffAccount{} = staff, fun) when is_function(fun, 2) do
     Repo.transaction(fn ->
-      with %OperatorAccount{} = current_operator <- OperatorAccess.lock_current(operator),
+      with %StaffAccount{} = current_staff <- StaffAccess.lock_current(staff),
            true <-
-             OperatorAccount.session_claim_matches?(current_operator, operator.session_claim),
-           true <- Custyard.Tenants.active?(current_operator.tenant_id),
+             StaffAccount.session_claim_matches?(current_staff, staff.session_claim),
+           true <- Custyard.Tenants.active?(current_staff.tenant_id),
            %Conversation{} = conversation <-
-             lock_conversation_for_operator(id, current_operator) do
-        case fun.(conversation, current_operator) do
+             lock_conversation_for_staff(id, current_staff) do
+        case fun.(conversation, current_staff) do
           {:ok, value} -> value
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -568,10 +568,10 @@ defmodule Custyard.Conversations do
     end)
   end
 
-  defp lock_conversation_for_operator(id, operator) do
+  defp lock_conversation_for_staff(id, staff) do
     query =
       from(c in Conversation, where: c.id == ^id)
-      |> scope_conversation_to_operator(operator)
+      |> scope_conversation_to_staff(staff)
 
     # This UPDATE obtains the database write lock before checking and acting on
     # the row. A concurrent organization link must finish first or wait until
@@ -584,11 +584,11 @@ defmodule Custyard.Conversations do
     end
   end
 
-  defp scope_conversation_to_operator(query, %OperatorAccount{tenant_id: tenant_id})
+  defp scope_conversation_to_staff(query, %StaffAccount{tenant_id: tenant_id})
        when is_integer(tenant_id),
        do: where(query, [c], c.tenant_id == ^tenant_id)
 
-  defp scope_conversation_to_operator(query, %OperatorAccount{}), do: where(query, [c], false)
+  defp scope_conversation_to_staff(query, %StaffAccount{}), do: where(query, [c], false)
 
   @doc """
   Create a message for a conversation, raising on failure.
@@ -608,7 +608,7 @@ defmodule Custyard.Conversations do
   @doc """
   Soft-delete a message (GitHub-style tombstone).
 
-  Stamps `deleted_at` and the deleting operator; the original body stays in
+  Stamps `deleted_at` and the deleting staff; the original body stays in
   the database and rendering surfaces replace it with a tombstone. There is
   deliberately no hard-delete path.
 
@@ -617,15 +617,15 @@ defmodule Custyard.Conversations do
 
   Broadcasts `{:message_updated, conversation_id}` on the conversation topic
   (`"conversation:{id}"`) — the same message-level pattern
-  `Custyard.Email.Outbound` uses for delivery updates — so open operator,
+  `Custyard.Email.Outbound` uses for delivery updates — so open staff,
   prospect, and portal views swap in the tombstone without a remount.
   """
-  def soft_delete_message(%Message{deleted_at: %DateTime{}} = message, _operator) do
+  def soft_delete_message(%Message{deleted_at: %DateTime{}} = message, _staff) do
     {:ok, message}
   end
 
-  def soft_delete_message(%Message{} = message, %OperatorAccount{} = operator) do
-    case message |> Message.soft_delete_changeset(operator) |> Repo.update() do
+  def soft_delete_message(%Message{} = message, %StaffAccount{} = staff) do
+    case message |> Message.soft_delete_changeset(staff) |> Repo.update() do
       {:ok, deleted} ->
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
@@ -641,7 +641,7 @@ defmodule Custyard.Conversations do
   end
 
   @doc """
-  Send an operator reply to a conversation.
+  Send a staff reply to a conversation.
 
   Creates the outbound message with email metadata (sender_email, in_reply_to,
   message_id, delivery_status), updates conversation state and timestamps,
@@ -664,10 +664,10 @@ defmodule Custyard.Conversations do
 
   ## Options
 
-    * `:operator_email` - email of the operator sending the reply (optional;
+    * `:staff_email` - email of the staff sending the reply (optional;
       never used for public-intake conversations, which always send from the
       platform address)
-    * `:operator` - operator account whose current organization scope must be
+    * `:staff` - staff account whose current organization scope must be
       locked and authorized before the reply is inserted
     * `:cc` - CC addresses (list or comma-separated string); each must be a
       valid address, at most 20, or `{:error, {:invalid_cc, ...}}` is returned
@@ -681,7 +681,7 @@ defmodule Custyard.Conversations do
 
   ## Examples
 
-      send_reply(conversation, "Thanks for reaching out!", operator_email: "agent@co.com")
+      send_reply(conversation, "Thanks for reaching out!", staff_email: "agent@co.com")
 
   """
   def send_reply(conversation, body, opts \\ []) do
@@ -694,7 +694,7 @@ defmodule Custyard.Conversations do
 
   @max_cc 20
 
-  # CC addresses the operator typed or accepted: trimmed, lowercased, unique,
+  # CC addresses the staff typed or accepted: trimmed, lowercased, unique,
   # each a valid address. One bad address rejects the whole reply so nothing
   # goes out to a partial recipient list.
   defp normalize_cc(cc) when is_list(cc) do
@@ -724,7 +724,7 @@ defmodule Custyard.Conversations do
   customer-class email message, minus every address that is the
   conversation's own side of the exchange: the customer, the reply From
   identity, the channel's public and ingress addresses, the route sender
-  address and the replying operator (`:operator_email`).
+  address and the replying staff (`:staff_email`).
 
   Empty for public-intake and non-email conversations: prospects never get
   a CC, and chat or portal sources carry none.
@@ -752,17 +752,17 @@ defmodule Custyard.Conversations do
   end
 
   defp load_reply_conversation(id, opts) do
-    case Keyword.get(opts, :operator) do
-      %OperatorAccount{} = operator ->
-        current_operator = OperatorAccess.lock_current(operator)
+    case Keyword.get(opts, :staff) do
+      %StaffAccount{} = staff ->
+        current_staff = StaffAccess.lock_current(staff)
 
-        case current_operator && lock_conversation_for_operator(id, current_operator) do
+        case current_staff && lock_conversation_for_staff(id, current_staff) do
           nil ->
             Repo.rollback(:unauthorized)
 
           current ->
             {Repo.preload(current, [:contact, :organization, :prospect]),
-             Keyword.put(opts, :operator_email, current_operator.email)}
+             Keyword.put(opts, :staff_email, current_staff.email)}
         end
 
       nil ->
@@ -782,7 +782,7 @@ defmodule Custyard.Conversations do
     error
   end
 
-  # Build and insert the operator reply message with email metadata.
+  # Build and insert the staff reply message with email metadata.
   defp insert_reply_message(conversation, body, attempt_delivery?, opts) do
     last_customer_msg = find_last_customer_message(conversation.id)
     channel = reply_sending_channel(conversation)
@@ -799,7 +799,7 @@ defmodule Custyard.Conversations do
     end
 
     attrs = %{
-      source: :operator,
+      source: :staff,
       origin: resolve_outbound_origin(conversation),
       body: body,
       is_internal_note: false,
@@ -813,7 +813,7 @@ defmodule Custyard.Conversations do
       sender_email: resolve_sender_email(conversation, opts),
       inbound_channel_id: channel && channel.id,
       to_addresses: if(recipient, do: [recipient], else: []),
-      # Reply-all CC (D5): accepted or edited by the operator in the composer.
+      # Reply-all CC (D5): accepted or edited by the staff in the composer.
       cc_addresses: Keyword.get(opts, :cc, [])
     }
 
@@ -823,7 +823,7 @@ defmodule Custyard.Conversations do
     |> Repo.insert()
   end
 
-  # Update conversation state and timestamps after an operator reply.
+  # Update conversation state and timestamps after a staff reply.
   # Uses state_changeset/2 to respect the state machine:
   #   - Already :active -> no-op on state (just updates timestamps)
   #   - :new, :waiting, :dormant, :resolved -> transitions to :active
@@ -833,9 +833,9 @@ defmodule Custyard.Conversations do
     # First, build the state transition changeset (validates or no-ops)
     state_cs = Conversation.state_changeset(conversation, :active)
 
-    # Merge in the operator action timestamp via the regular changeset
+    # Merge in the staff action timestamp via the regular changeset
     state_cs
-    |> Ecto.Changeset.cast(%{last_operator_action_at: now}, [:last_operator_action_at])
+    |> Ecto.Changeset.cast(%{last_staff_action_at: now}, [:last_staff_action_at])
     |> Repo.update()
   end
 
@@ -861,16 +861,16 @@ defmodule Custyard.Conversations do
     :ok
   end
 
-  # Find the most recent non-operator message to thread In-Reply-To.
+  # Find the most recent non-staff message to thread In-Reply-To.
   # Queried directly rather than through the caller's (possibly stale,
   # possibly ascending-ordered) preloaded messages; the id ordering breaks
   # ties between rows sharing the same second-precision inserted_at.
   defp find_last_customer_message(conversation_id) do
     from(m in Message,
       where: m.conversation_id == ^conversation_id,
-      where: m.source != :operator,
+      where: m.source != :staff,
       where: m.is_internal_note == false and is_nil(m.deleted_at),
-      where: is_nil(m.triage_class) or m.triage_class in [:customer, :operator_forward],
+      where: is_nil(m.triage_class) or m.triage_class in [:customer, :staff_forward],
       order_by: [desc: m.inserted_at, desc: m.id],
       limit: 1
     )
@@ -878,7 +878,7 @@ defmodule Custyard.Conversations do
   end
 
   @doc """
-  The From identity an operator reply on `conversation` carries
+  The From identity a staff reply on `conversation` carries
   (spec-inbound-channels D3).
 
   Returns `%{address, name, source}` where `source` is:
@@ -889,7 +889,7 @@ defmodule Custyard.Conversations do
       channel falls back to that identity) and `name` its display name when
       set, else the organization name
     * `:route` - the project or general inbound route's `from_address`
-    * `:operator` - `opts[:operator_email]`, when no channel or route
+    * `:staff` - `opts[:staff_email]`, when no channel or route
       identity exists
     * `:platform` - nothing above applies; `address` is nil and the
       configured `:email_from_address` fallback is used at delivery. Always
@@ -898,13 +898,13 @@ defmodule Custyard.Conversations do
 
   ## Options
 
-    * `:operator_email` - the replying operator's address, used only for the
-      `:operator` source
+    * `:staff_email` - the replying staff's address, used only for the
+      `:staff` source
   """
   @spec reply_identity(struct(), keyword()) :: %{
           address: String.t() | nil,
           name: String.t() | nil,
-          source: :channel | :route | :operator | :platform
+          source: :channel | :route | :staff | :platform
         }
   def reply_identity(conversation, opts \\ [])
 

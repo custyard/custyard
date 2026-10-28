@@ -3,7 +3,7 @@ defmodule Custyard.Attachments.Recovery do
   Recover withheld attachments from the provider's retained delivery after trust
   is granted. Only provider identifiers are stored locally; the delivery payload
   and signed URLs remain in memory. Retention expiry or missing content permission
-  leaves the rows visible for an operator retry, never silently successful.
+  leaves the rows visible for a staff retry, never silently successful.
   """
   import Ecto.Query
 

@@ -2,7 +2,7 @@ defmodule Custyard.Email.ImapHost do
   @moduledoc """
   Resolve an IMAP channel's host to the address the poller connects to.
 
-  An operator types the host, so it must not reach the instance's own
+  An staff types the host, so it must not reach the instance's own
   network: the name is resolved here and the connection goes to the
   resolved public address, with the certificate checked against the name.
   A name with any private, loopback, link-local, shared or reserved address

@@ -12,7 +12,7 @@ defmodule Custyard.Release.Dsar do
   terminal output ends up in scrollback and logs.
   """
 
-  alias Custyard.{DataSubjects, OperatorAccounts, Release}
+  alias Custyard.{DataSubjects, StaffAccounts, Release}
 
   @usage """
   Usage: bin/dsar ACTION EMAIL --org ID [--yes]
@@ -33,7 +33,7 @@ defmodule Custyard.Release.Dsar do
     help
         Show this help.
 
-  ID is the organization's number, the one in /operator/organizations/ID.
+  ID is the organization's number, the one in /staff/organizations/ID.
   Erasures are irreversible and refuse to run without --yes. Each writes a
   data_subject_erasure audit event with counts only, never the address.
   """
@@ -80,7 +80,7 @@ defmodule Custyard.Release.Dsar do
            OptionParser.parse(argv, strict: @switches),
          true <- Keyword.keys(opts) == Enum.uniq(Keyword.keys(opts)),
          {:ok, organization_id} <- Keyword.fetch(opts, :org),
-         true <- OperatorAccounts.valid_id?(organization_id) do
+         true <- StaffAccounts.valid_id?(organization_id) do
       check(action, email, organization_id, Keyword.get(opts, :yes, false))
     else
       _ -> :usage

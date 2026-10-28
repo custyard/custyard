@@ -7,7 +7,7 @@ defmodule Custyard.Tenants do
     AuditEvent,
     InstanceAdmin,
     Message,
-    OperatorAccount,
+    StaffAccount,
     Repo,
     Tenant,
     TenantHost
@@ -73,7 +73,7 @@ defmodule Custyard.Tenants do
 
   def set_status(_, _, _), do: {:error, :invalid_status}
 
-  def can_manage?(%OperatorAccount{role: "admin", tenant_id: id}, %Tenant{
+  def can_manage?(%StaffAccount{role: "admin", tenant_id: id}, %Tenant{
         id: id,
         status: "active"
       }),
@@ -81,7 +81,7 @@ defmodule Custyard.Tenants do
 
   def can_manage?(_, _), do: false
 
-  def update_tenant_for_operator(%OperatorAccount{} = staff, tenant_id, attrs) do
+  def update_tenant_for_staff(%StaffAccount{} = staff, tenant_id, attrs) do
     Repo.transaction(fn ->
       lock_manager!(staff, tenant_id)
 
@@ -104,7 +104,7 @@ defmodule Custyard.Tenants do
     end)
   end
 
-  def invite_staff(%OperatorAccount{} = staff, tenant_id, attrs) do
+  def invite_staff(%StaffAccount{} = staff, tenant_id, attrs) do
     Repo.transaction(fn ->
       lock_manager!(staff, tenant_id)
       insert_staff!(tenant_id, attrs)
@@ -121,7 +121,7 @@ defmodule Custyard.Tenants do
 
   defp insert_staff!(tenant_id, attrs) do
     changeset =
-      OperatorAccount.changeset(%OperatorAccount{}, %{
+      StaffAccount.changeset(%StaffAccount{}, %{
         email: Map.get(attrs, "email", attrs[:email]),
         role: Map.get(attrs, "role", Map.get(attrs, :role, "admin")),
         tenant_id: tenant_id
@@ -133,35 +133,35 @@ defmodule Custyard.Tenants do
     end
   end
 
-  def remove_staff(%OperatorAccount{} = staff, tenant_id, staff_id) do
+  def remove_staff(%StaffAccount{} = staff, tenant_id, staff_id) do
     Repo.transaction(fn ->
       current = lock_manager!(staff, tenant_id)
       if current.id == staff_id, do: Repo.rollback(:self_removal)
 
       target =
-        Repo.get_by(OperatorAccount, id: staff_id, tenant_id: tenant_id) ||
+        Repo.get_by(StaffAccount, id: staff_id, tenant_id: tenant_id) ||
           Repo.rollback(:not_found)
 
       if target.role == "admin" and
            not Repo.exists?(
-             from a in OperatorAccount,
+             from a in StaffAccount,
                where: a.tenant_id == ^tenant_id and a.role == "admin" and a.id != ^staff_id
            ),
          do: Repo.rollback(:last_admin)
 
-      deleted_message_ids = detach_message_actor(tenant_id, target.id, :deleted_by_operator_id)
+      deleted_message_ids = detach_message_actor(tenant_id, target.id, :deleted_by_staff_id)
 
       forwarded_message_ids =
-        detach_message_actor(tenant_id, target.id, :forwarded_by_operator_id)
+        detach_message_actor(tenant_id, target.id, :forwarded_by_staff_id)
 
       deleted = Repo.delete!(target)
 
       case AuditEvent.create(%{
              tenant_id: tenant_id,
-             event_type: :operator_removed,
+             event_type: :staff_removed,
              source: "tenant:#{tenant_id}:staff:#{current.id}",
              payload: %{
-               operator_id: target.id,
+               staff_id: target.id,
                role: target.role,
                deleted_message_ids: deleted_message_ids,
                forwarded_message_ids: forwarded_message_ids
@@ -203,10 +203,10 @@ defmodule Custyard.Tenants do
     current
   end
 
-  def for_operator(%OperatorAccount{tenant_id: id}) when is_integer(id), do: get_tenant(id)
-  def for_operator(_), do: nil
-  def operator_on_host?(%OperatorAccount{tenant_id: id}, id) when is_integer(id), do: active?(id)
-  def operator_on_host?(_, _), do: false
+  def for_staff(%StaffAccount{tenant_id: id}) when is_integer(id), do: get_tenant(id)
+  def for_staff(_), do: nil
+  def staff_on_host?(%StaffAccount{tenant_id: id}, id) when is_integer(id), do: active?(id)
+  def staff_on_host?(_, _), do: false
   def active?(id), do: match?(%Tenant{status: "active"}, get_tenant(id))
 
   def add_host(tenant_id, hostname),

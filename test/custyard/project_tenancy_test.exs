@@ -7,14 +7,14 @@ defmodule Custyard.ProjectTenancyTest do
 
   alias Custyard.{Project, Projects, Tenants}
 
-  test "internal projects cannot be moved to another tenant through operator updates" do
+  test "internal projects cannot be moved to another tenant through staff updates" do
     {:ok, tenant} =
       Tenants.create_tenant(%{
         name: "Projects",
         slug: "projects-#{System.unique_integer([:positive])}"
       })
 
-    admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
+    admin = insert_staff_account(role: "admin", tenant_id: tenant.id)
 
     {:ok, project} =
       Projects.create(scope(admin), %{
@@ -51,7 +51,7 @@ defmodule Custyard.ProjectTenancyTest do
 
     refute changeset.valid?
     assert "must belong to the project's workspace" in errors_on(changeset).conversation_id
-    admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
+    admin = insert_staff_account(role: "admin", tenant_id: tenant.id)
 
     assert {:error, changeset} =
              Projects.create(scope(admin), %{
@@ -72,7 +72,7 @@ defmodule Custyard.ProjectTenancyTest do
   test "moving a project synchronizes its tasks and keeps them editable" do
     org = insert_organization()
     destination = insert_organization(tenant_id: org.tenant_id)
-    admin = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    admin = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
     project = insert_project(organization_id: org.id)
     {:ok, task} = Projects.create_task(project, %{title: "Follow up", portal_visible: true})
 
@@ -96,7 +96,7 @@ defmodule Custyard.ProjectTenancyTest do
   test "a project move cannot carry a task away from its conversation's customer" do
     org = insert_organization()
     destination = insert_organization(tenant_id: org.tenant_id)
-    admin = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    admin = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
     conversation = insert_conversation(organization_id: org.id)
     project = insert_project(organization_id: org.id)
 

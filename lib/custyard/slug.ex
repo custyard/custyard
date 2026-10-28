@@ -4,7 +4,7 @@ defmodule Custyard.Slug do
   organization-slug namespace.
 
   Lifecycle: `available → claimed (provisional) → confirmed → provisioned`,
-  where `available` means no row exists. Expiry and operator release DELETE
+  where `available` means no row exists. Expiry and staff release DELETE
   the row (no tombstones — a tombstone would block re-claim under the unique
   index). Promotion to `provisioned` arrives with prospect conversion
   (separate work); this module never builds provisioned rows.
@@ -14,7 +14,7 @@ defmodule Custyard.Slug do
   chars, lowercase alphanumerics, interior hyphens, no `xn--` punycode
   prefix). Reserved words live in code, not Settings — they encode router
   facts (every first path segment the application owns) and must not be
-  operator-mutable. `config :custyard, :additional_reserved_slugs` is the
+  staff-mutable. `config :custyard, :additional_reserved_slugs` is the
   deployment escape hatch.
   """
 
@@ -31,13 +31,13 @@ defmodule Custyard.Slug do
 
   # Reserved words are code, not settings: they encode router facts.
   # Covers every first path segment the application owns — router scopes
-  # (i, r, c, api, operator, p), endpoint paths (live, phoenix, dev,
+  # (i, r, c, api, staff, p), endpoint paths (live, phoenix, dev,
   # assets, fonts, images, uploads), the `_unmatched_` sentinel, and
   # infrastructure/mail names a slug-based host or address must never
   # shadow. Single-letter entries can never pass the 3-char format floor,
   # but stay listed so the intent survives a format change.
   @reserved_slugs ~w(
-    www mail api portal admin operator app assets static uploads webhook
+    www mail api portal admin staff app assets static uploads webhook
     webhooks login logout signup support help status docs blog p i r c
     claim intake resume confirm settings health smtp imap pop mx ns1 ns2
     ftp webmail email autodiscover autoconfig postmaster hostmaster abuse

@@ -25,17 +25,17 @@ fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_API_KEY="..."
 
 # Name the first super_admin; the entrypoint creates it on the next boot.
 # Login is magic-link-only, so without an operator nobody can sign in.
-fly secrets set OPERATOR_EMAIL=you@example.com
+fly secrets set INSTANCE_ADMIN_EMAIL=you@example.com
 
 # Deploy
 fly deploy
 
 # After your first login, stop recreating that account on every boot
-fly secrets unset OPERATOR_EMAIL
+fly secrets unset INSTANCE_ADMIN_EMAIL
 ```
 
-Instead of `OPERATOR_EMAIL` you can create the account on the running machine
-with `fly ssh console -a custyard -C "/app/bin/operator add you@example.com"`.
+Instead of `INSTANCE_ADMIN_EMAIL` you can create the account on the running machine
+with `fly ssh console -a custyard -C "/app/bin/instance-admin add you@example.com"`.
 See [Operator accounts](#operator-accounts).
 
 > **Mail is required, not optional.** Operator login is magic-link-only: the
@@ -155,7 +155,7 @@ fly ssh console -a custyard -C "/app/bin/acknowledgments status"
 
 Provision the broker queues and bind organizations before enabling publication.
 See [Operating Colonel acknowledgments](ops/acknowledgments.md) for credentials,
-TLS, the operator page at `/operator/acknowledgments`, and the full command set.
+TLS, the operator page at `/app/settings/integrations`, and the full command set.
 
 ## Health check
 
@@ -167,7 +167,7 @@ On every deploy, the container entrypoint (`entrypoint.sh`) runs:
 
 1. Validates `SECRET_KEY_BASE` is set (fails fast if missing)
 2. Runs Ecto migrations
-3. Bootstraps the operator account: with `OPERATOR_EMAIL` set, creates that
+3. Bootstraps the operator account: with `INSTANCE_ADMIN_EMAIL` set, creates that
    `super_admin` if it does not exist (an existing account is logged as "exists
    (role X), not modified") and logs a reminder to unset it; an invalid value
    fails the boot. Unset, it logs how to create the first operator. While a
@@ -215,41 +215,41 @@ https://custyard.fly.dev/
 See [fly deploy docs](https://fly.io/docs/launch/deploy/).
 
 Erlang distribution is off (`RELEASE_DISTRIBUTION=none` in `rel/env.sh.eex`), so
-`bin/custyard remote` and `bin/custyard rpc` do not work. Use `bin/operator` for
+`bin/custyard remote` and `bin/custyard rpc` do not work. Use `bin/instance-admin` for
 accounts, `bin/dsar` for data subject requests, or `bin/custyard eval` for
 one-off code: it runs in a separate VM with the app's configuration and does not
 start the app. Anything that writes the database must run as `custyard`
-(`bin/operator` and `bin/dsar` switch user themselves).
+(`bin/instance-admin` and `bin/dsar` switch user themselves).
 
 ## Operator accounts
 
 Operators log in with a link emailed to them; there are no passwords. Manage
-accounts with `bin/operator`, which starts only the database (never the app), so
+accounts with `bin/instance-admin`, which starts only the database (never the app), so
 it is safe while the server runs:
 
 ```bash
 # Create a super_admin (the default role)
-fly ssh console -a custyard -C "/app/bin/operator add you@example.com"
+fly ssh console -a custyard -C "/app/bin/instance-admin add you@example.com"
 
-# Create an admin or agent for one organization (the number in /operator/organizations/ID)
-fly ssh console -a custyard -C "/app/bin/operator add lead@example.com --role admin --organization 3"
-fly ssh console -a custyard -C "/app/bin/operator add helper@example.com --role agent --organization 3"
+# Create an admin or agent for one organization (the number in /app/customers/ID)
+fly ssh console -a custyard -C "/app/bin/instance-admin add lead@example.com --role admin --organization 3"
+fly ssh console -a custyard -C "/app/bin/instance-admin add helper@example.com --role agent --organization 3"
 
 # Show id, email, role, organization and creation time, flagging accounts that cannot log in
-fly ssh console -a custyard -C "/app/bin/operator list"
+fly ssh console -a custyard -C "/app/bin/instance-admin list"
 
 # Delete an account (refuses to remove the last super_admin who can log in)
-fly ssh console -a custyard -C "/app/bin/operator remove helper@example.com"
+fly ssh console -a custyard -C "/app/bin/instance-admin remove helper@example.com"
 
-fly ssh console -a custyard -C "/app/bin/operator help"
+fly ssh console -a custyard -C "/app/bin/instance-admin help"
 ```
 
 - `add` never modifies an existing account: it reports "exists (role X), not
   modified". To change a role, remove the account and add it again.
 - Emails are case-insensitive and stored lowercased.
 - The "check your email" page is identical for addresses without an account, so
-  a mistyped address looks like success. Check `bin/operator list`.
-- `OPERATOR_EMAIL` creates a `super_admin` on boot when it does not exist. Unset
+  a mistyped address looks like success. Check `bin/instance-admin list`.
+- `INSTANCE_ADMIN_EMAIL` creates a `super_admin` on boot when it does not exist. Unset
   it after the first login: while it is set, a removed operator with that address
   comes back on the next boot.
 - Every account created or removed outside the web UI is recorded as an
@@ -265,15 +265,15 @@ that address, so it can never log in. Boot logs a warning while it exists and
 `list` flags it. After your own `super_admin` can log in:
 
 ```bash
-fly ssh console -a custyard -C "/app/bin/operator remove admin@custyard.local"
+fly ssh console -a custyard -C "/app/bin/instance-admin remove admin@custyard.local"
 ```
 
 ## Data subject requests
 
 `bin/dsar` exports or erases what one email address appears on in one
-organization: as sender, To, CC or Reply-To. Like `bin/operator`, it starts only
+organization: as sender, To, CC or Reply-To. Like `bin/instance-admin`, it starts only
 the database (never the app), so it is safe while the server runs. `ID` is the
-organization's number, the one in `/operator/organizations/ID`.
+organization's number, the one in `/app/customers/ID`.
 
 ```bash
 # Every message the address appears on, as JSON on stdout; the body only for
@@ -412,12 +412,12 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 | `Turso: HTTP 401` in `fly logs` | `TURSO_AUTH_TOKEN` is wrong or expired. Create one with `turso db tokens create custyard` and `fly secrets set TURSO_AUTH_TOKEN=...` |
 | LiveView disconnects | Verify `PHX_HOST` matches your actual domain; Fly proxy handles WebSocket upgrade automatically |
 | Migration failures | Run manually as the app user: `fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.migrate()'"` |
-| Nobody can log in | `fly ssh console -a custyard -C "/app/bin/operator list"`; create an account with `/app/bin/operator add you@example.com` or `fly secrets set OPERATOR_EMAIL=you@example.com` and redeploy |
-| Login link never arrives | The "check your email" page is shown even for unknown addresses. Confirm the account with `/app/bin/operator list`, then check `MAIL_ADAPTER` and `fly logs` |
-| Boot fails with `OPERATOR_EMAIL: ...` | The value is not a valid address (or is `admin@custyard.local`). Fix or unset it: `fly secrets unset OPERATOR_EMAIL` |
-| "No organization assigned; ask a super admin" | The operator's organization was deleted. Remove the account with `/app/bin/operator remove EMAIL` and add it again with `--role` and `--organization` |
-| Database becomes read-only after an SSH session | Something wrote the database as root. Run app commands as `custyard` (`bin/operator` does). Assuming the default `DATABASE_PATH`, run `chown custyard:custyard /data/custyard.db*`, then restart the app (`fly apps restart custyard`) |
-| `bin/custyard remote` or `rpc` fails | Erlang distribution is off. Use `/app/bin/operator` or `bin/custyard eval` |
+| Nobody can log in | `fly ssh console -a custyard -C "/app/bin/instance-admin list"`; create an account with `/app/bin/instance-admin add you@example.com` or `fly secrets set INSTANCE_ADMIN_EMAIL=you@example.com` and redeploy |
+| Login link never arrives | The "check your email" page is shown even for unknown addresses. Confirm the account with `/app/bin/instance-admin list`, then check `MAIL_ADAPTER` and `fly logs` |
+| Boot fails with `INSTANCE_ADMIN_EMAIL: ...` | The value is not a valid address (or is `admin@custyard.local`). Fix or unset it: `fly secrets unset INSTANCE_ADMIN_EMAIL` |
+| "No organization assigned; ask a super admin" | The operator's organization was deleted. Remove the account with `/app/bin/instance-admin remove EMAIL` and add it again with `--role` and `--organization` |
+| Database becomes read-only after an SSH session | Something wrote the database as root. Run app commands as `custyard` (`bin/instance-admin` does). Assuming the default `DATABASE_PATH`, run `chown custyard:custyard /data/custyard.db*`, then restart the app (`fly apps restart custyard`) |
+| `bin/custyard remote` or `rpc` fails | Erlang distribution is off. Use `/app/bin/instance-admin` or `bin/custyard eval` |
 
 ## References
 

@@ -4,7 +4,7 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
   import Custyard.Factory
   import Phoenix.LiveViewTest
 
-  alias Custyard.{OperatorAccount, Projects, Repo, Task}
+  alias Custyard.{StaffAccount, Projects, Repo, Task}
 
   test "an open project list follows project and task changes", %{conn: conn} do
     org = insert_organization()
@@ -39,35 +39,35 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
     assert render(list_view) =~ "Fresh customer request"
   end
 
-  test "operator task changes reach an open portal list after commit", %{conn: conn} do
+  test "staff task changes reach an open portal list after commit", %{conn: conn} do
     org = insert_organization()
     {:ok, project} = Projects.create(portal_scope(org), build_project(organization_id: org.id))
     {:ok, portal_view, _} = live(conn, "/portal/#{portal_token(org)}/projects")
 
-    operator =
-      %OperatorAccount{}
-      |> OperatorAccount.changeset(%{
+    staff =
+      %StaffAccount{}
+      |> StaffAccount.changeset(%{
         role: "admin",
         tenant_id: Process.get(:factory_tenant_id),
-        email: "portal-task-operator@example.com"
+        email: "portal-task-staff@example.com"
       })
       |> Repo.insert!()
 
-    operator_conn =
+    staff_conn =
       Phoenix.ConnTest.build_conn()
       |> Phoenix.ConnTest.init_test_session(%{})
-      |> put_operator_session(operator.id)
+      |> put_staff_session(staff.id)
 
-    {:ok, operator_view, _} = live(operator_conn, "/app/projects/#{project.id}")
+    {:ok, staff_view, _} = live(staff_conn, "/app/projects/#{project.id}")
 
-    render_click(operator_view, "add_task", %{
+    render_click(staff_view, "add_task", %{
       "title" => "Portal task",
       "portal_visible" => "true"
     })
 
     task = Repo.get_by!(Task, project_id: project.id, title: "Portal task")
-    render_click(operator_view, "cycle_task_state", %{"id" => to_string(task.id)})
-    render_click(operator_view, "cycle_task_state", %{"id" => to_string(task.id)})
+    render_click(staff_view, "cycle_task_state", %{"id" => to_string(task.id)})
+    render_click(staff_view, "cycle_task_state", %{"id" => to_string(task.id)})
 
     assert render(portal_view) =~ "100%"
   end

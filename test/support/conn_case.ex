@@ -47,8 +47,8 @@ defmodule CustyardWeb.ConnCase do
 
   defp portal_staff_scope(tenant_id) do
     staff =
-      Custyard.Repo.get_by(Custyard.OperatorAccount, tenant_id: tenant_id, role: "admin") ||
-        Custyard.Factory.insert_operator_account(tenant_id: tenant_id, role: "admin")
+      Custyard.Repo.get_by(Custyard.StaffAccount, tenant_id: tenant_id, role: "admin") ||
+        Custyard.Factory.insert_staff_account(tenant_id: tenant_id, role: "admin")
 
     Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(tenant_id))
   end
@@ -76,14 +76,14 @@ defmodule CustyardWeb.ConnCase do
   end
 
   @doc """
-  Puts an operator session the way login does: the operator id plus the
+  Puts a staff session the way login does: the staff id plus the
   account's session claim (see
-  `CustyardWeb.Live.OperatorAuth.session_operator/2`). Takes an operator
+  `CustyardWeb.Live.StaffAuth.session_staff/2`). Takes a staff
   or an id; an id without a row gets no claim. The session must already
   be initialized (`init_test_session/2`).
   """
-  def put_operator_session(conn, %Custyard.OperatorAccount{} = operator) do
-    tenant = Custyard.Tenants.get_tenant!(operator.tenant_id)
+  def put_staff_session(conn, %Custyard.StaffAccount{} = staff) do
+    tenant = Custyard.Tenants.get_tenant!(staff.tenant_id)
     host = Custyard.Tenants.host(tenant)
 
     host =
@@ -101,14 +101,14 @@ defmodule CustyardWeb.ConnCase do
         else: conn
 
     conn
-    |> Plug.Conn.put_session(:operator_id, operator.id)
-    |> Plug.Conn.put_session(:operator_claim, Custyard.OperatorAccount.session_claim(operator))
+    |> Plug.Conn.put_session(:staff_id, staff.id)
+    |> Plug.Conn.put_session(:staff_claim, Custyard.StaffAccount.session_claim(staff))
   end
 
-  def put_operator_session(conn, operator_id) do
-    case Custyard.Repo.get(Custyard.OperatorAccount, operator_id) do
-      nil -> Plug.Conn.put_session(conn, :operator_id, operator_id)
-      operator -> put_operator_session(conn, operator)
+  def put_staff_session(conn, staff_id) do
+    case Custyard.Repo.get(Custyard.StaffAccount, staff_id) do
+      nil -> Plug.Conn.put_session(conn, :staff_id, staff_id)
+      staff -> put_staff_session(conn, staff)
     end
   end
 end

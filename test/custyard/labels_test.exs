@@ -18,8 +18,8 @@ defmodule Custyard.LabelsTest do
     org = insert_organization(tenant_id: tenant.id)
     other_org = insert_organization(tenant_id: other.id)
 
-    operator =
-      insert_operator_account(role: "admin", organization_id: org.id, tenant_id: tenant.id)
+    staff =
+      insert_staff_account(role: "admin", organization_id: org.id, tenant_id: tenant.id)
 
     conversation = insert_conversation(organization_id: org.id)
 
@@ -27,30 +27,30 @@ defmodule Custyard.LabelsTest do
       tenant: tenant,
       other_org: other_org,
       org: org,
-      operator: operator,
+      staff: staff,
       conversation: conversation
     }
   end
 
   test "labels are reusable within a tenant and assignments are idempotent", c do
-    assert {:ok, label} = Labels.create_and_assign(scope(c.operator), c.conversation, " Billing ")
+    assert {:ok, label} = Labels.create_and_assign(scope(c.staff), c.conversation, " Billing ")
     assert label.name == "Billing"
-    assert {:ok, _} = Labels.assign(scope(c.operator), c.conversation, label.id)
-    assert %{assigned: [^label]} = Labels.for_conversation(scope(c.operator), c.conversation)
+    assert {:ok, _} = Labels.assign(scope(c.staff), c.conversation, label.id)
+    assert %{assigned: [^label]} = Labels.for_conversation(scope(c.staff), c.conversation)
 
     assert {:error, changeset} =
-             Labels.create_and_assign(scope(c.operator), c.conversation, "billing")
+             Labels.create_and_assign(scope(c.staff), c.conversation, "billing")
 
     assert "has already been taken" in errors_on(changeset).tenant_id
-    assert {:ok, :removed} = Labels.remove(scope(c.operator), c.conversation, label.id)
+    assert {:ok, :removed} = Labels.remove(scope(c.staff), c.conversation, label.id)
 
     assert %{assigned: [], available: [^label]} =
-             Labels.for_conversation(scope(c.operator), c.conversation)
+             Labels.for_conversation(scope(c.staff), c.conversation)
   end
 
   test "foreign labels cannot be read, assigned or used to cross tenant boundaries", c do
-    foreign_operator =
-      insert_operator_account(
+    foreign_staff =
+      insert_staff_account(
         role: "admin",
         organization_id: c.other_org.id,
         tenant_id: c.other_org.tenant_id
@@ -59,28 +59,28 @@ defmodule Custyard.LabelsTest do
     foreign_conversation = insert_conversation(organization_id: c.other_org.id)
 
     {:ok, label} =
-      Labels.create_and_assign(scope(foreign_operator), foreign_conversation, "Private")
+      Labels.create_and_assign(scope(foreign_staff), foreign_conversation, "Private")
 
-    refute label in Labels.list(scope(c.operator))
+    refute label in Labels.list(scope(c.staff))
 
     assert %{available: [], assigned: []} =
-             Labels.for_conversation(scope(c.operator), foreign_conversation)
+             Labels.for_conversation(scope(c.staff), foreign_conversation)
 
-    assert {:error, :not_found} = Labels.assign(scope(c.operator), c.conversation, label.id)
+    assert {:error, :not_found} = Labels.assign(scope(c.staff), c.conversation, label.id)
 
     assert {:error, :unauthorized} =
-             Labels.assign(scope(c.operator), foreign_conversation, label.id)
+             Labels.assign(scope(c.staff), foreign_conversation, label.id)
 
-    assert Conversations.list(scope(c.operator), organization_id: c.org.id, label_id: label.id) ==
+    assert Conversations.list(scope(c.staff), organization_id: c.org.id, label_id: label.id) ==
              []
   end
 
   test "agents can apply existing labels but cannot define labels", c do
-    {:ok, label} = Labels.create_and_assign(scope(c.operator), c.conversation, "Bug")
-    {:ok, _} = Labels.remove(scope(c.operator), c.conversation, label.id)
+    {:ok, label} = Labels.create_and_assign(scope(c.staff), c.conversation, "Bug")
+    {:ok, _} = Labels.remove(scope(c.staff), c.conversation, label.id)
 
     agent =
-      insert_operator_account(role: "agent", organization_id: c.org.id, tenant_id: c.tenant.id)
+      insert_staff_account(role: "agent", organization_id: c.org.id, tenant_id: c.tenant.id)
 
     assert {:ok, _} = Labels.assign(scope(agent), c.conversation, label.id)
     assert {:error, :unauthorized} = Labels.create_and_assign(scope(agent), c.conversation, "New")
@@ -91,21 +91,21 @@ defmodule Custyard.LabelsTest do
     assert is_nil(conversation.organization_id)
 
     assert {:ok, label} =
-             Labels.create_and_assign(scope(c.operator), conversation, "Public question")
+             Labels.create_and_assign(scope(c.staff), conversation, "Public question")
 
-    assert %{assigned: [^label]} = Labels.for_conversation(scope(c.operator), conversation)
+    assert %{assigned: [^label]} = Labels.for_conversation(scope(c.staff), conversation)
     id = conversation.id
     assert %{^id => [^label]} = Labels.for_conversations([conversation])
 
     assert [%{conversation: %{id: ^id}}] =
-             Conversations.list(scope(c.operator), label_id: label.id)
+             Conversations.list(scope(c.staff), label_id: label.id)
   end
 
   test "tenant staff can filter with their workspace labels only", c do
-    {:ok, label} = Labels.create_and_assign(scope(c.operator), c.conversation, "Customer request")
+    {:ok, label} = Labels.create_and_assign(scope(c.staff), c.conversation, "Customer request")
 
     for role <- ["admin", "agent"] do
-      staff = insert_operator_account(role: role, tenant_id: c.tenant.id)
+      staff = insert_staff_account(role: role, tenant_id: c.tenant.id)
       assert Labels.list(scope(staff)) == [label]
       assert Labels.list(scope(staff)) == [label]
       assert Labels.list(%{scope(staff) | tenant_id: c.other_org.tenant_id}) == []

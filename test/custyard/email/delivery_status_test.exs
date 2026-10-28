@@ -112,7 +112,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       outbound =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
+          source: :staff,
           sender_email: "support@acme.com",
           message_id: "<reply-001@custyard.local>",
           body: "We can help with that.",
@@ -322,7 +322,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
     test "withheld messages are not advanced", %{conversation: conversation} do
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         body: "Recorded but not emailed",
         delivery_status: :withheld,
         lettermint_message_id: "lm-withheld"
@@ -373,7 +373,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
 
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         sender_email: "support@acme.com",
         message_id: "<reply-002@custyard.local>",
         body: "We can help with that.",
@@ -512,7 +512,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       outbound =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
+          source: :staff,
           sender_email: "support@acme.com",
           message_id: "<reply-003@custyard.local>",
           body: "We can help with that.",
@@ -703,7 +703,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       legacy =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
+          source: :staff,
           body: "Sent before recipient lists existed",
           delivery_status: :sent,
           lettermint_message_id: "lm-legacy"

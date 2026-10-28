@@ -26,7 +26,7 @@ defmodule Custyard.Webhooks.Dispatcher do
   executes them in order:
   1. `sender_matching` — identity resolution, conversation creation (blocking)
   2. `enrichment` — urgency scoring, keyword extraction (async)
-  3. `notification` — operator notifications (async)
+  3. `notification` — staff notifications (async)
   4. `audit` — activity log (async)
   5. `disambiguation` — ambiguous sender resolution (conditional)
 
@@ -46,7 +46,7 @@ defmodule Custyard.Webhooks.Dispatcher do
   `sender_matching` executes unconditionally regardless of its enabled flag
   in the webhook_purposes table. It is the step that resolves sender identity
   and creates the conversation record — without it, no downstream purpose
-  has anything to operate on. The toggle exposed in the operator UI for
+  has anything to operate on. The toggle exposed in the staff UI for
   sender_matching is cosmetic: it controls audit visibility and reporting,
   not execution. This is intentional and must not be changed without
   reworking the entire dispatch pipeline.
@@ -221,11 +221,11 @@ defmodule Custyard.Webhooks.Dispatcher do
         {:own_echo, message} ->
           handle_own_echo(route, normalized, channel, message)
 
-        {:operator_sent, info} ->
-          handle_operator_sent(route, normalized, channel, info)
+        {:staff_sent, info} ->
+          handle_staff_sent(route, normalized, channel, info)
 
-        {:operator_forward, info} ->
-          handle_operator_forward(route, normalized, channel, info)
+        {:staff_forward, info} ->
+          handle_staff_forward(route, normalized, channel, info)
 
         {:verification, capture} ->
           handle_verification(route, normalized, channel, capture)
@@ -243,7 +243,7 @@ defmodule Custyard.Webhooks.Dispatcher do
     {result, elem(classification, 0)}
   end
 
-  # Custyard's own reply forwarded back by the operator's mailbox (D4): the
+  # Custyard's own reply forwarded back by the staff's mailbox (D4): the
   # message is already stored, so nothing is inserted, no contact is
   # resolved, nobody is notified and the channel health is untouched.
   defp handle_own_echo(route, normalized, channel, %Message{} = message) do
@@ -251,26 +251,26 @@ defmodule Custyard.Webhooks.Dispatcher do
     {:ignored, :own_echo}
   end
 
-  # A reply the operator sent from their own mailbox (D6 "operator-sent
-  # capture"): appended as an operator message so the thread is complete,
-  # with the operator's action stamped on the conversation. No reactivation,
-  # no contact resolution, no notification; the operator already knows.
-  defp handle_operator_sent(route, normalized, channel, %{conversation: conversation} = info) do
+  # A reply the staff sent from their own mailbox (D6 "staff-sent
+  # capture"): appended as a staff message so the thread is complete,
+  # with the staff's action stamped on the conversation. No reactivation,
+  # no contact resolution, no notification; the staff already knows.
+  defp handle_staff_sent(route, normalized, channel, %{conversation: conversation} = info) do
     route_context =
       route
-      |> route_context(channel, :operator_sent)
+      |> route_context(channel, :staff_sent)
       |> Map.merge(forwarder_context(info))
 
     attrs =
       conversation
       |> Purposes.SenderMatching.inbound_message_attrs(normalized, route_context)
-      |> Map.put(:source, :operator)
+      |> Map.put(:source, :staff)
       |> Map.put(:sender_email, info.email)
-      |> Map.put(:triage_class, :operator_sent)
+      |> Map.put(:triage_class, :staff_sent)
 
     case Message.insert_idempotent(attrs) do
       {:ok, message} ->
-        conversation = stamp_operator_action(Repo.get!(Conversation, message.conversation_id))
+        conversation = stamp_staff_action(Repo.get!(Conversation, message.conversation_id))
 
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
@@ -279,7 +279,7 @@ defmodule Custyard.Webhooks.Dispatcher do
         )
 
         mark_received(channel)
-        audit_triaged(route, normalized, channel, "operator_sent", conversation.id)
+        audit_triaged(route, normalized, channel, "staff_sent", conversation.id)
         {:ok, conversation}
 
       {:error, changeset} ->
@@ -287,12 +287,12 @@ defmodule Custyard.Webhooks.Dispatcher do
     end
   end
 
-  # Customer mail forwarded in by an operator (D6 "operator manual forward",
+  # Customer mail forwarded in by a staff (D6 "staff manual forward",
   # the backlog-import path): the unwrapped original runs through the
   # customer pipeline with the original sender as the contact, stamped with
   # who forwarded it. The forward's own authentication, spam score and HTML
-  # describe the operator's copy, not the customer's mail, and are dropped.
-  defp handle_operator_forward(route, normalized, channel, %{original: original} = info) do
+  # describe the staff's copy, not the customer's mail, and are dropped.
+  defp handle_staff_forward(route, normalized, channel, %{original: original} = info) do
     unwrapped =
       normalized
       |> Map.put(:from, original.from)
@@ -311,21 +311,21 @@ defmodule Custyard.Webhooks.Dispatcher do
         })
       end)
 
-    process_customer(route, unwrapped, channel, :operator_forward, forwarder_context(info))
+    process_customer(route, unwrapped, channel, :staff_forward, forwarder_context(info))
   end
 
-  defp forwarder_context(%{operator: operator, email: email}) do
+  defp forwarder_context(%{staff: staff, email: email}) do
     %{
-      forwarded_by_operator_id: operator && operator.id,
+      forwarded_by_staff_id: staff && staff.id,
       forwarded_by_email: email
     }
   end
 
-  defp stamp_operator_action(%Conversation{} = conversation) do
+  defp stamp_staff_action(%Conversation{} = conversation) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     conversation
-    |> Ecto.Changeset.change(last_operator_action_at: now)
+    |> Ecto.Changeset.change(last_staff_action_at: now)
     |> Repo.update!()
   end
 
@@ -352,7 +352,7 @@ defmodule Custyard.Webhooks.Dispatcher do
   end
 
   # A channel that is no longer being set up: the
-  # notice is kept in the rejection log so the operator can find it.
+  # notice is kept in the rejection log so the staff can find it.
   defp handle_verification(route, normalized, channel, _capture) do
     log_rejection(route, channel, :provider_notice, normalized)
     {:ignored, :provider_notice}
@@ -478,15 +478,15 @@ defmodule Custyard.Webhooks.Dispatcher do
     :ok
   end
 
-  # D6: suspect mail and auto-responses never reach operator notifications.
+  # D6: suspect mail and auto-responses never reach staff notifications.
   # The stored flag is checked too: a replayed or follow-up delivery into a
-  # conversation an operator has not yet cleared stays quiet even when this
+  # conversation a staff has not yet cleared stays quiet even when this
   # delivery on its own classified as customer mail.
   defp notify?(%Conversation{suspect: true}, _route_context), do: false
 
-  # A manual forward is the operator importing mail they have already read.
+  # A manual forward is the staff importing mail they have already read.
   defp notify?(_conversation, %{triage_class: class})
-       when class in [:suspect, :auto_response, :operator_forward],
+       when class in [:suspect, :auto_response, :staff_forward],
        do: false
 
   defp notify?(_conversation, _route_context), do: true

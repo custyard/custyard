@@ -28,8 +28,8 @@ defmodule CustyardWeb.Router do
     plug :accepts, ["json"]
   end
 
-  pipeline :require_operator do
-    plug CustyardWeb.Plugs.RequireOperator
+  pipeline :require_staff do
+    plug CustyardWeb.Plugs.RequireStaff
   end
 
   pipeline :portal_auth do
@@ -41,7 +41,7 @@ defmodule CustyardWeb.Router do
   # Public prospect surfaces (/i intake, /c conversation, /claim slug-claim):
   # anonymous, hammerable, and carrying bearer tokens in the path. The
   # conversation URL must never leak via the Referer header, and the pages render
-  # the sparse operator-branded :intake layout instead of the app chrome.
+  # the sparse staff-branded :intake layout instead of the app chrome.
   pipeline :public_intake do
     plug CustyardWeb.Plugs.NoReferrer
     plug :put_root_layout, html: {CustyardWeb.Layouts, :intake_root}
@@ -57,10 +57,10 @@ defmodule CustyardWeb.Router do
     live "/", HomeLive, :index
   end
 
-  # Public intake pages — anonymous dead views, one per operator-configured
+  # Public intake pages — anonymous dead views, one per staff-configured
   # intake source key. Served on the application host only: on a custom
   # domain the CustomDomain plug rewrites /i/* into the portal scope, where
-  # it 404s (intake is an operator surface, never a customer-portal one).
+  # it 404s (intake is a staff surface, never a customer-portal one).
   scope "/intake", CustyardWeb do
     pipe_through [:browser, :public_intake]
 
@@ -108,7 +108,7 @@ defmodule CustyardWeb.Router do
     post "/webhook/email-status/lettermint/:callback_token", EmailStatusController, :lettermint
   end
 
-  scope "/app", CustyardWeb.Operator do
+  scope "/app", CustyardWeb.Staff do
     pipe_through [:browser]
     get "/login", SessionController, :new
     post "/login", SessionController, :create
@@ -118,14 +118,14 @@ defmodule CustyardWeb.Router do
     delete "/logout", SessionController, :delete
   end
 
-  scope "/app", CustyardWeb.Operator do
-    pipe_through [:browser, :require_operator]
+  scope "/app", CustyardWeb.Staff do
+    pipe_through [:browser, :require_staff]
     get "/attachments/:id", AttachmentController, :show
     get "/attachments/:id/inline", AttachmentController, :inline
 
     live_session :staff,
-      on_mount: [{CustyardWeb.Live.OperatorAuth, :default}],
-      layout: {CustyardWeb.Layouts, :operator} do
+      on_mount: [{CustyardWeb.Live.StaffAuth, :default}],
+      layout: {CustyardWeb.Layouts, :staff} do
       live "/", AttentionQueueLive, :index
       live "/threads", AttentionQueueLive, :index
       live "/threads/:id", ConversationLive, :show
@@ -137,8 +137,8 @@ defmodule CustyardWeb.Router do
     end
 
     live_session :staff_admin,
-      on_mount: [{CustyardWeb.Live.OperatorAuth, :require_admin}],
-      layout: {CustyardWeb.Layouts, :operator} do
+      on_mount: [{CustyardWeb.Live.StaffAuth, :require_admin}],
+      layout: {CustyardWeb.Layouts, :staff} do
       live "/settings/email", EmailSetupLive, :index
       live "/settings/workspace", TenantSettingsLive, :index
       live "/settings/staff", TenantSettingsLive, :index

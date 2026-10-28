@@ -50,7 +50,7 @@ defmodule Custyard.TenantMigrationTest do
       assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
 
       for table <-
-            ~w(organizations operator_accounts contacts projects intake_sources inbound_routes inbound_channels conversations messages message_attachments tasks prospects portal_credentials) do
+            ~w(organizations staff_accounts contacts projects intake_sources inbound_routes inbound_channels conversations messages message_attachments tasks prospects portal_credentials) do
         %{rows: columns} = Repo.query!("PRAGMA table_info(#{table})")
         tenant = Enum.find(columns, &(Enum.at(&1, 1) == "tenant_id"))
         assert tenant, "#{table} must have explicit tenant ownership"
@@ -68,7 +68,7 @@ defmodule Custyard.TenantMigrationTest do
 
       assert "identity_kind" in names
       assert "identity_value" in names
-      %{rows: staff_columns} = Repo.query!("PRAGMA table_info(operator_accounts)")
+      %{rows: staff_columns} = Repo.query!("PRAGMA table_info(staff_accounts)")
       refute Enum.any?(staff_columns, &(Enum.at(&1, 1) == "organization_id"))
       assert %{rows: []} = Repo.query!("SELECT * FROM tenants")
       assert %{rows: []} = Repo.query!("SELECT * FROM instance_admins")

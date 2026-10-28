@@ -5,7 +5,7 @@ defmodule Custyard.TenantIdentityTest do
     Auth.Account,
     InstanceAdmin,
     InstanceAdmins,
-    OperatorAccount,
+    StaffAccount,
     Scope,
     Tenant,
     Tenants
@@ -16,8 +16,8 @@ defmodule Custyard.TenantIdentityTest do
     {:ok, second} = Tenants.create_tenant(%{name: "Second", slug: "second"})
 
     {:ok, staff} =
-      %OperatorAccount{}
-      |> OperatorAccount.changeset(%{
+      %StaffAccount{}
+      |> StaffAccount.changeset(%{
         tenant_id: first.id,
         email: "PERSON@EXAMPLE.COM",
         role: "admin"
@@ -25,8 +25,8 @@ defmodule Custyard.TenantIdentityTest do
       |> Repo.insert()
 
     assert {:ok, _} =
-             %OperatorAccount{}
-             |> OperatorAccount.changeset(%{
+             %StaffAccount{}
+             |> StaffAccount.changeset(%{
                tenant_id: second.id,
                email: "person@example.com",
                role: "agent"
@@ -38,7 +38,7 @@ defmodule Custyard.TenantIdentityTest do
     assert is_nil(Scope.for_staff(staff, second))
     assert is_nil(Scope.for_staff(%InstanceAdmin{}, first))
 
-    refute OperatorAccount.changeset(%OperatorAccount{}, %{
+    refute StaffAccount.changeset(%StaffAccount{}, %{
              email: "staff@example.com",
              role: "super_admin"
            }).valid?
@@ -66,12 +66,12 @@ defmodule Custyard.TenantIdentityTest do
     assert {:ok, %Tenant{status: "suspended"} = suspended} =
              Tenants.set_status(admin, tenant.id, "suspended")
 
-    refute Tenants.operator_on_host?(staff, tenant.id)
+    refute Tenants.staff_on_host?(staff, tenant.id)
     assert is_nil(Scope.for_staff(staff, suspended))
     assert Tenant.changeset(tenant, %{status: "active"}).valid?
     refute Tenant.changeset(tenant, %{status: "unknown"}).valid?
     assert {:ok, _} = Tenants.set_status(admin, tenant.id, "active")
-    assert Tenants.operator_on_host?(staff, tenant.id)
+    assert Tenants.staff_on_host?(staff, tenant.id)
   end
 
   test "shared login primitive consumes a link only once and claims distinguish accounts" do

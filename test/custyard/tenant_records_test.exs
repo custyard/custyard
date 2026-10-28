@@ -8,7 +8,7 @@ defmodule Custyard.TenantRecordsTest do
   end
 
   defp admin_scope(tenant) do
-    staff = insert_operator_account(tenant_id: tenant.id, role: "admin")
+    staff = insert_staff_account(tenant_id: tenant.id, role: "admin")
     Custyard.Scope.for_staff(staff, tenant)
   end
 
@@ -80,7 +80,7 @@ defmodule Custyard.TenantRecordsTest do
     org = customer(tenant)
     scope = admin_scope(tenant)
     assert {:ok, credential, token} = PortalCredentials.issue(scope, org.id)
-    staff = Repo.get!(Custyard.OperatorAccount, scope.staff_id)
+    staff = Repo.get!(Custyard.StaffAccount, scope.staff_id)
     staff |> Ecto.Changeset.change(role: "agent") |> Repo.update!()
     assert {:error, :unauthorized} = PortalCredentials.issue(scope, org.id)
     assert {:error, :unauthorized} = PortalCredentials.revoke(scope, credential)

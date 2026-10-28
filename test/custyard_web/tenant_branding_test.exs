@@ -31,8 +31,8 @@ defmodule CustyardWeb.TenantBrandingTest do
         primary_color: "#123456"
       })
 
-    operator = insert_operator_account(role: "admin", organization_id: nil, tenant_id: tenant.id)
-    conn = conn |> init_test_session(%{}) |> put_operator_session(operator)
+    staff = insert_staff_account(role: "admin", organization_id: nil, tenant_id: tenant.id)
+    conn = conn |> init_test_session(%{}) |> put_staff_session(staff)
     %{conn: conn, tenant: tenant, dir: dir}
   end
 
@@ -94,7 +94,7 @@ defmodule CustyardWeb.TenantBrandingTest do
     anonymous = %{build_conn() | host: Tenants.host(tenant)}
     {:ok, view, html} = live(anonymous, "/")
     assert has_element?(view, "[data-testid=home-container]", "Welcome to Atlas Support")
-    assert has_element?(view, "[data-testid=home-operator-login-link]", "Staff sign in")
+    assert has_element?(view, "[data-testid=home-staff-login-link]", "Staff sign in")
     assert html =~ ~s(content="Atlas Support")
     assert html =~ ~s(content="#123456")
     assert html =~ ~s(href="/uploads/logos/atlas.png")

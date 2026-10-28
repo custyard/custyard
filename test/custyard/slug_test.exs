@@ -37,7 +37,7 @@ defmodule Custyard.SlugTest do
     end
 
     test "a slug differing only in case validates against the reserved list" do
-      cs = changeset(slug: "OPERATOR")
+      cs = changeset(slug: "STAFF")
 
       refute cs.valid?
       assert "is reserved" in errors_on(cs).slug
@@ -96,10 +96,10 @@ defmodule Custyard.SlugTest do
 
   describe "reserved words" do
     test "every router first-path-segment is unclaimable" do
-      # Router scopes: /i, /r, /c, /api, /operator, /p. Endpoint paths:
+      # Router scopes: /i, /r, /c, /api, /staff, /p. Endpoint paths:
       # /live, /phoenix, /dev, plus the static roots. The short ones also
       # fail the 3-char format floor; either way they must not validate.
-      for segment <- ~w(i r c p api operator live phoenix dev assets fonts images uploads) do
+      for segment <- ~w(i r c p api staff live phoenix dev assets fonts images uploads) do
         cs = changeset(slug: segment)
         refute cs.valid?, "expected router segment #{inspect(segment)} to be unclaimable"
         assert Keyword.has_key?(cs.errors, :slug)

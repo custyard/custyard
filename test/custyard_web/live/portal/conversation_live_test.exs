@@ -84,33 +84,33 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       refute html =~ "Internal note"
     end
 
-    test "styles operator messages differently", %{conn: conn} do
+    test "styles staff messages differently", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
-      insert_message(conversation_id: conv.id, body: "Operator reply", source: :operator)
+      insert_message(conversation_id: conv.id, body: "Staff reply", source: :staff)
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
-      assert html =~ "Operator reply"
+      assert html =~ "Staff reply"
       assert html =~ "border-indigo"
     end
 
-    test "shows 'Support Team' label for operator messages", %{conn: conn} do
+    test "shows 'Support Team' label for staff messages", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
       insert_message(
         conversation_id: conv.id,
         body: "Hello from support",
-        source: :operator,
-        sender_email: "operator@internal.example.com"
+        source: :staff,
+        sender_email: "staff@internal.example.com"
       )
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "Support Team"
-      refute html =~ "operator@internal.example.com"
+      refute html =~ "staff@internal.example.com"
     end
 
     test "shows sender email for customer messages", %{conn: conn} do
@@ -132,28 +132,28 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
     test "soft-deleted messages render the tombstone, never the original body", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, body: "Deleted operator slip")
-      operator = insert_operator_account(role: "admin")
+      message = insert_message(conversation_id: conv.id, body: "Deleted staff slip")
+      staff = insert_staff_account(role: "admin")
 
-      {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, operator)
+      {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, staff)
 
       {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ ~s(data-testid="portal-message-tombstone")
       assert html =~ "This message was deleted"
-      refute html =~ "Deleted operator slip"
+      refute html =~ "Deleted staff slip"
     end
 
     test "an already-open view swaps to the tombstone when the delete broadcasts", %{conn: conn} do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
       message = insert_message(conversation_id: conv.id, body: "Regretted message")
-      operator = insert_operator_account(role: "admin")
+      staff = insert_staff_account(role: "admin")
 
       {:ok, view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
       assert html =~ "Regretted message"
 
-      {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, operator)
+      {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, staff)
 
       # The message_updated broadcast reloads the thread in place.
       html = render(view)

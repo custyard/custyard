@@ -5,7 +5,7 @@ defmodule Custyard.InboundRouteWebhook do
   Each route can have multiple webhooks with different purposes:
   - `:sender_matching` — identity resolution, conversation creation
   - `:enrichment` — urgency scoring, keyword extraction
-  - `:notification` — operator notifications (Slack, push, email)
+  - `:notification` — staff notifications (Slack, push, email)
   - `:audit` — append-only activity log
   - `:disambiguation` — sends disambiguation DM to ambiguous sender
   """

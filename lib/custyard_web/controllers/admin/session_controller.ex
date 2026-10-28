@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Admin.SessionController do
   use CustyardWeb, :controller
   alias Custyard.{Auth.Account, Auth.LoginEmail, InstanceAdmin, InstanceAdmins, Repo, Tenants}
-  plug CustyardWeb.Plugs.PublicRateLimit, [bucket: :operator_login_ip] when action == :create
+  plug CustyardWeb.Plugs.PublicRateLimit, [bucket: :account_login_ip] when action == :create
   plug :installation_host
 
   defp installation_host(conn, _) do
@@ -14,7 +14,7 @@ defmodule CustyardWeb.Admin.SessionController do
 
   def create(conn, %{"email" => email}) when is_binary(email) do
     case Custyard.RateLimit.check_rate(
-           :operator_login_email,
+           :account_login_email,
            {:instance_admin, Account.normalize_email(email)}
          ) do
       {:allow, _} ->
@@ -28,7 +28,7 @@ defmodule CustyardWeb.Admin.SessionController do
         end
 
         conn
-        |> put_view(CustyardWeb.Operator.SessionHTML)
+        |> put_view(CustyardWeb.Staff.SessionHTML)
         |> render(:sent,
           email: email,
           auth_base: "/admin",
@@ -47,7 +47,7 @@ defmodule CustyardWeb.Admin.SessionController do
     with %InstanceAdmin{} = admin <- lookup(token),
          true <- Account.verify_login_token(admin, token) do
       conn
-      |> put_view(CustyardWeb.Operator.SessionHTML)
+      |> put_view(CustyardWeb.Staff.SessionHTML)
       |> render(:verify,
         token: token,
         auth_base: "/admin",
@@ -83,7 +83,7 @@ defmodule CustyardWeb.Admin.SessionController do
 
   defp login_form(conn, error) do
     conn
-    |> put_view(CustyardWeb.Operator.SessionHTML)
+    |> put_view(CustyardWeb.Staff.SessionHTML)
     |> render(:new,
       error: error,
       email: nil,

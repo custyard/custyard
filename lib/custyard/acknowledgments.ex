@@ -1,11 +1,11 @@
 defmodule Custyard.Acknowledgments do
-  @moduledoc "Stores immutable Colonel evidence and explicit organization mappings. Callers authorize operator reads."
+  @moduledoc "Stores immutable Colonel evidence and explicit organization mappings. Callers authorize staff reads."
   import Ecto.Query
 
   alias Custyard.{
-    OperatorAccess,
-    OperatorAccount,
-    OperatorAccounts,
+    StaffAccess,
+    StaffAccount,
+    StaffAccounts,
     Organization,
     Repo,
     Scope,
@@ -43,7 +43,7 @@ defmodule Custyard.Acknowledgments do
   end
 
   @doc """
-  What the operator UI may show about the subscription. Deliberately excludes
+  What the staff UI may show about the subscription. Deliberately excludes
   the URL: the map is assigned to LiveView sockets.
   """
   def subscription_overview(%Scope{tenant_id: tenant_id} = scope) do
@@ -72,7 +72,7 @@ defmodule Custyard.Acknowledgments do
   end
 
   defp administrator?(scope),
-    do: match?(%OperatorAccount{role: "admin"}, Scope.current_staff(scope))
+    do: match?(%StaffAccount{role: "admin"}, Scope.current_staff(scope))
 
   def configure_integration(%Scope{tenant_id: tenant_id} = scope, attrs) do
     case with_administrator(scope, fn -> do_configure_integration(tenant_id, attrs) end) do
@@ -154,7 +154,7 @@ defmodule Custyard.Acknowledgments do
   @doc false
   def authorize(%Scope{tenant_id: tenant_id} = scope) do
     case Scope.current_staff(scope) do
-      %OperatorAccount{role: "admin"} = staff -> {:ok, tenant_id, staff}
+      %StaffAccount{role: "admin"} = staff -> {:ok, tenant_id, staff}
       _ -> {:error, :unauthorized}
     end
   end
@@ -171,10 +171,10 @@ defmodule Custyard.Acknowledgments do
 
   defp with_administrator(%Scope{} = scope, fun) do
     Repo.transaction(fn ->
-      OperatorAccess.lock_current(%OperatorAccount{id: scope.staff_id})
+      StaffAccess.lock_current(%StaffAccount{id: scope.staff_id})
 
       case Scope.current_staff(scope) do
-        %OperatorAccount{role: "admin"} ->
+        %StaffAccount{role: "admin"} ->
           case fun.() do
             {:error, reason} -> Repo.rollback(reason)
             result -> result
@@ -263,7 +263,7 @@ defmodule Custyard.Acknowledgments do
 
   # An id beyond signed 64 bits would make the SQLite driver raise.
   defp organization_exists?(tenant_id, id) do
-    OperatorAccounts.valid_id?(id) and
+    StaffAccounts.valid_id?(id) and
       Repo.exists?(from o in Organization, where: o.id == ^id and o.tenant_id == ^tenant_id)
   end
 

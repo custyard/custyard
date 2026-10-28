@@ -22,7 +22,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -36,7 +36,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -7, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -7, :hour)
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -51,22 +51,22 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -100, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -100, :hour)
         )
 
       breakdown = Scoring.breakdown(conversation)
       assert breakdown.idle == 40
     end
 
-    test "falls back to inserted_at when last_operator_action_at is nil" do
+    test "falls back to inserted_at when last_staff_action_at is nil" do
       org = insert_organization(tier: :standard)
 
-      # Create conversation with no operator action (nil)
+      # Create conversation with no staff action (nil)
       # The conversation was just inserted, so idle time ~= 0
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: nil
+          last_staff_action_at: nil
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -85,7 +85,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -99,7 +99,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -113,7 +113,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :waiting,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -127,7 +127,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :dormant,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -141,7 +141,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :resolved,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -159,7 +159,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -173,7 +173,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -187,7 +187,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -205,7 +205,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           urgency: :urgent,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -219,7 +219,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           urgency: :elevated,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -233,7 +233,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           urgency: :normal,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -250,7 +250,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conversation)
@@ -264,7 +264,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       # Insert 5 messages in last 24h
@@ -283,7 +283,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       # Insert 50 messages to exceed cap
@@ -302,7 +302,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       for _ <- 1..5 do
@@ -327,7 +327,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -9, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -9, :hour)
         )
 
       assert Scoring.neglect_status(conversation) == :critical
@@ -342,7 +342,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -5, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -5, :hour)
         )
 
       assert Scoring.neglect_status(conversation) == :warning
@@ -357,7 +357,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -3, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -3, :hour)
         )
 
       assert Scoring.neglect_status(conversation) == :ok
@@ -372,7 +372,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -49, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -49, :hour)
         )
 
       assert Scoring.neglect_status(conversation) == :critical
@@ -387,7 +387,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -25, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -25, :hour)
         )
 
       assert Scoring.neglect_status(conversation) == :warning
@@ -402,7 +402,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -73, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -73, :hour)
         )
 
       assert Scoring.neglect_status(conversation) == :critical
@@ -417,7 +417,7 @@ defmodule Custyard.ScoringTest do
       conversation =
         insert_conversation(
           organization_id: org.id,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -49, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -49, :hour)
         )
 
       assert Scoring.neglect_status(conversation) == :warning
@@ -437,7 +437,7 @@ defmodule Custyard.ScoringTest do
           organization_id: org.id,
           state: :new,
           urgency: :urgent,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -7, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -7, :hour)
         )
 
       # Add 3 messages for velocity
@@ -481,7 +481,7 @@ defmodule Custyard.ScoringTest do
           organization_id: enterprise_org.id,
           state: :new,
           urgency: :normal,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       basic_conversation =
@@ -489,7 +489,7 @@ defmodule Custyard.ScoringTest do
           organization_id: basic_org.id,
           state: :new,
           urgency: :normal,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       enterprise_score = Scoring.calculate(enterprise_conversation)
@@ -510,7 +510,7 @@ defmodule Custyard.ScoringTest do
           organization_id: org.id,
           state: :dormant,
           urgency: :urgent,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       normal_conversation =
@@ -518,7 +518,7 @@ defmodule Custyard.ScoringTest do
           organization_id: org.id,
           state: :new,
           urgency: :normal,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       urgent_score = Scoring.calculate(urgent_conversation)
@@ -541,7 +541,7 @@ defmodule Custyard.ScoringTest do
           organization_id: org.id,
           state: :new,
           urgency: :normal,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       assert conversation.cached_score == 0
@@ -575,7 +575,7 @@ defmodule Custyard.ScoringTest do
           organization_id: org.id,
           state: :new,
           urgency: :normal,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       # Verify the function returns the expected success tuple format
@@ -601,14 +601,14 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       conv2 =
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       # Add 5 messages to conv1 (velocity should be higher)
@@ -667,7 +667,7 @@ defmodule Custyard.ScoringTest do
           insert_conversation(
             organization_id: org.id,
             state: :active,
-            last_operator_action_at: DateTime.utc_now()
+            last_staff_action_at: DateTime.utc_now()
           )
         end
 
@@ -693,14 +693,14 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       conv2 =
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       # Delete conv2 to simulate race condition where conversation
@@ -725,7 +725,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       # Insert a message, then manually backdate it to 25 hours ago
@@ -768,7 +768,7 @@ defmodule Custyard.ScoringTest do
             source: source,
             state: state,
             urgency: urgency,
-            last_operator_action_at: DateTime.add(DateTime.utc_now(), -hours_idle, :hour)
+            last_staff_action_at: DateTime.add(DateTime.utc_now(), -hours_idle, :hour)
           )
 
         for _ <- 1..msg_count//1, do: insert_message(conversation_id: conv.id)
@@ -797,7 +797,7 @@ defmodule Custyard.ScoringTest do
           organization_id: nil,
           source: :disambiguation,
           state: :new,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       assert {:ok, score} = Scoring.calculate_and_cache(conv.id)
@@ -809,14 +809,14 @@ defmodule Custyard.ScoringTest do
 
     test "nil-organization conversation scores identically to a standard-tier org conversation" do
       org = insert_organization(tier: :standard)
-      last_operator_action_at = DateTime.add(DateTime.utc_now(), -10, :hour)
+      last_staff_action_at = DateTime.add(DateTime.utc_now(), -10, :hour)
 
       linked =
         insert_conversation(
           organization_id: org.id,
           state: :new,
           urgency: :elevated,
-          last_operator_action_at: last_operator_action_at
+          last_staff_action_at: last_staff_action_at
         )
 
       unlinked =
@@ -825,7 +825,7 @@ defmodule Custyard.ScoringTest do
           source: :disambiguation,
           state: :new,
           urgency: :elevated,
-          last_operator_action_at: last_operator_action_at
+          last_staff_action_at: last_staff_action_at
         )
 
       assert Scoring.calculate(unlinked) == Scoring.calculate(linked)
@@ -842,7 +842,7 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: nil,
           source: :disambiguation,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       breakdown = Scoring.breakdown(conv)
@@ -854,21 +854,21 @@ defmodule Custyard.ScoringTest do
         insert_conversation(
           organization_id: nil,
           source: :disambiguation,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       warning =
         insert_conversation(
           organization_id: nil,
           source: :disambiguation,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -25, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -25, :hour)
         )
 
       critical =
         insert_conversation(
           organization_id: nil,
           source: :disambiguation,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -49, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -49, :hour)
         )
 
       # Standard-tier thresholds are {24, 48} hours
@@ -900,7 +900,7 @@ defmodule Custyard.ScoringTest do
           organization_id: org.id,
           urgency: :urgent,
           state: :new,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -30, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -30, :hour)
         )
 
       assert Scoring.breakdown(conversation) ==
@@ -976,7 +976,7 @@ defmodule Custyard.ScoringTest do
           organization_id: org.id,
           inbound_channel_id: channel.id,
           state: :active,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       %{channel: channel, conversation: conversation}

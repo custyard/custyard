@@ -36,7 +36,7 @@ Core Implementation:
 - lib/custyard/notifications/neglect_checker.ex - Threshold breach detection, transition-based notifications
 - lib/custyard/notifications/email.ex - Neglect alert email delivery (Swoosh)
 - lib/custyard/conversations/dormancy_checker.ex - Automatic waiting → dormant transitions
-- lib/custyard_web/live/operator/\*.ex - Attention queue, neglect report, org/project management, conversation detail
+- lib/custyard_web/live/staff/\*.ex - Attention queue, neglect report, org/project management, conversation detail
 - lib/custyard_web/live/portal/\*.ex - Customer portal with requests, projects, conversations
 
 Security:

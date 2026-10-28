@@ -11,7 +11,7 @@ defmodule Custyard.OrganizationsTest do
 
     Process.put(
       :customer_scope,
-      scope(insert_operator_account(role: "admin", tenant_id: tenant.id))
+      scope(insert_staff_account(role: "admin", tenant_id: tenant.id))
     )
 
     :ok
@@ -145,23 +145,23 @@ defmodule Custyard.OrganizationsTest do
 
   describe "convert_prospect/3" do
     setup do
-      %{operator: insert_operator_account(role: "admin")}
+      %{staff: insert_staff_account(role: "admin")}
     end
 
     test "links the conversation to a new organization, keeping :public_intake provenance", %{
-      operator: operator
+      staff: staff
     } do
       conversation = insert_conversation(source: :public_intake)
       insert_prospect(conversation_id: conversation.id)
 
       assert {:ok, converted} =
-               Organizations.convert(scope(operator), conversation, %{name: "Acme Corp"})
+               Organizations.convert(scope(staff), conversation, %{name: "Acme Corp"})
 
       assert converted.source == :public_intake
       assert %{name: "Acme Corp"} = converted.organization
     end
 
-    test "creates a contact from the prospect's captured email", %{operator: operator} do
+    test "creates a contact from the prospect's captured email", %{staff: staff} do
       conversation = insert_conversation(source: :public_intake)
 
       insert_prospect(
@@ -171,32 +171,32 @@ defmodule Custyard.OrganizationsTest do
       )
 
       assert {:ok, converted} =
-               Organizations.convert(scope(operator), conversation, %{name: "Acme Corp"})
+               Organizations.convert(scope(staff), conversation, %{name: "Acme Corp"})
 
       assert converted.contact_id
       contact = Repo.get_by!(Contact, organization_id: converted.organization_id)
       assert contact.email == "buyer@acme.com"
     end
 
-    test "no captured email means no contact is created", %{operator: operator} do
+    test "no captured email means no contact is created", %{staff: staff} do
       conversation = insert_conversation(source: :public_intake)
       insert_prospect(conversation_id: conversation.id)
 
       assert {:ok, converted} =
-               Organizations.convert(scope(operator), conversation, %{name: "Acme Corp"})
+               Organizations.convert(scope(staff), conversation, %{name: "Acme Corp"})
 
       assert is_nil(converted.contact_id)
       assert Repo.aggregate(Contact, :count) == 0
     end
 
-    test "promotes the conversation's confirmed slug claim to provisioned", %{operator: operator} do
+    test "promotes the conversation's confirmed slug claim to provisioned", %{staff: staff} do
       conversation = insert_conversation(source: :public_intake)
       insert_prospect(conversation_id: conversation.id)
       {:ok, _slug, token} = Slugs.claim("acme-hq", "buyer@example.com", conversation)
       {:ok, _confirmed} = Slugs.confirm(token, Process.get(:factory_tenant_id))
 
       assert {:ok, converted} =
-               Organizations.convert(scope(operator), conversation, %{name: "Acme Corp"})
+               Organizations.convert(scope(staff), conversation, %{name: "Acme Corp"})
 
       slug = Repo.get_by!(Custyard.Slug, conversation_id: conversation.id)
       assert slug.status == :provisioned
@@ -204,39 +204,39 @@ defmodule Custyard.OrganizationsTest do
     end
 
     test "an unconfirmed claim is not promoted, but conversion still succeeds", %{
-      operator: operator
+      staff: staff
     } do
       conversation = insert_conversation(source: :public_intake)
       insert_prospect(conversation_id: conversation.id)
       {:ok, _slug, _token} = Slugs.claim("still-pending", "buyer@example.com", conversation)
 
       assert {:ok, _converted} =
-               Organizations.convert(scope(operator), conversation, %{name: "Acme"})
+               Organizations.convert(scope(staff), conversation, %{name: "Acme"})
 
       slug = Repo.get_by!(Custyard.Slug, conversation_id: conversation.id)
       assert slug.status == :claimed
     end
 
-    test "does not revoke or rotate conversation access", %{operator: operator} do
+    test "does not revoke or rotate conversation access", %{staff: staff} do
       conversation = insert_conversation(source: :public_intake)
       prospect = insert_prospect(conversation_id: conversation.id)
 
       assert {:ok, _converted} =
-               Organizations.convert(scope(operator), conversation, %{name: "Acme"})
+               Organizations.convert(scope(staff), conversation, %{name: "Acme"})
 
       reloaded = Repo.get!(Prospect, prospect.id)
       assert reloaded.access_token_hash == prospect.access_token_hash
       assert is_nil(reloaded.revoked_at)
     end
 
-    test "records a :prospect_converted audit event attributed to the operator", %{
-      operator: operator
+    test "records a :prospect_converted audit event attributed to the staff", %{
+      staff: staff
     } do
       conversation = insert_conversation(source: :public_intake)
       insert_prospect(conversation_id: conversation.id)
 
       assert {:ok, converted} =
-               Organizations.convert(scope(operator), conversation, %{name: "Acme"})
+               Organizations.convert(scope(staff), conversation, %{name: "Acme"})
 
       event =
         Repo.get_by!(AuditEvent,
@@ -245,27 +245,27 @@ defmodule Custyard.OrganizationsTest do
         )
 
       assert event.organization_id == converted.organization_id
-      assert event.payload["operator_id"] == operator.id
-      assert event.payload["operator_email"] == operator.email
+      assert event.payload["staff_id"] == staff.id
+      assert event.payload["staff_email"] == staff.email
     end
 
-    test "refuses a conversation already linked to an organization", %{operator: operator} do
+    test "refuses a conversation already linked to an organization", %{staff: staff} do
       org = insert_organization()
       conversation = insert_conversation(organization_id: org.id, source: :public_intake)
 
       assert {:error, :not_convertible} =
-               Organizations.convert(scope(operator), conversation, %{name: "Someone Else"})
+               Organizations.convert(scope(staff), conversation, %{name: "Someone Else"})
     end
 
-    test "refuses a non-public-intake conversation", %{operator: operator} do
+    test "refuses a non-public-intake conversation", %{staff: staff} do
       conversation = insert_conversation(organization_id: nil, source: :disambiguation)
 
       assert {:error, :not_convertible} =
-               Organizations.convert(scope(operator), conversation, %{name: "Someone Else"})
+               Organizations.convert(scope(staff), conversation, %{name: "Someone Else"})
     end
 
     test "a genuine step-2 failure compensates the organization, conversation stays unlinked", %{
-      operator: operator
+      staff: staff
     } do
       conversation = insert_conversation(source: :public_intake)
 
@@ -278,25 +278,25 @@ defmodule Custyard.OrganizationsTest do
       )
 
       assert {:error, %Ecto.Changeset{}} =
-               Organizations.convert(scope(operator), conversation, %{name: "Bad Email Co"})
+               Organizations.convert(scope(staff), conversation, %{name: "Bad Email Co"})
 
       assert Organizations.list(default_scope()) == []
       refute Repo.get!(Conversation, conversation.id).organization_id
     end
 
     test "a concurrent conversion attempt loses the race and compensates its organization", %{
-      operator: operator
+      staff: staff
     } do
       conversation = insert_conversation(source: :public_intake)
       insert_prospect(conversation_id: conversation.id)
 
       assert {:ok, _first} =
-               Organizations.convert(scope(operator), conversation, %{name: "First Corp"})
+               Organizations.convert(scope(staff), conversation, %{name: "First Corp"})
 
-      # Simulates a second operator whose in-memory conversation struct was
+      # Simulates a second staff whose in-memory conversation struct was
       # loaded before the first conversion committed (organization_id still nil).
       assert {:error, :already_converted} =
-               Organizations.convert(scope(operator), conversation, %{name: "Second Corp"})
+               Organizations.convert(scope(staff), conversation, %{name: "Second Corp"})
 
       assert [remaining] = Organizations.list(default_scope())
       assert remaining.name == "First Corp"

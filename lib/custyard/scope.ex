@@ -1,12 +1,12 @@
 defmodule Custyard.Scope do
   @moduledoc "An authenticated tenant and staff boundary supplied to resource contexts."
-  alias Custyard.{OperatorAccount, Tenant}
+  alias Custyard.{StaffAccount, Tenant}
   @type t :: %__MODULE__{tenant_id: integer(), staff_id: integer() | nil, role: String.t()}
   @enforce_keys [:tenant_id, :role]
   defstruct [:tenant_id, :staff_id, :role, :session_claim]
 
   def for_staff(
-        %OperatorAccount{tenant_id: id, id: staff_id, role: role, session_claim: claim},
+        %StaffAccount{tenant_id: id, id: staff_id, role: role, session_claim: claim},
         %Tenant{
           id: id,
           status: "active"
@@ -24,11 +24,11 @@ defmodule Custyard.Scope do
 
   @doc "Resolve a scope only while its staff membership and session remain current."
   def current_staff(%__MODULE__{staff_id: id} = scope) when is_integer(id) do
-    staff = Custyard.Repo.get(OperatorAccount, id)
+    staff = Custyard.Repo.get(StaffAccount, id)
     tenant = Custyard.Repo.get(Tenant, scope.tenant_id)
 
     if staff && staff.tenant_id == scope.tenant_id && staff.role == scope.role &&
-         OperatorAccount.session_claim_matches?(staff, scope.session_claim) &&
+         StaffAccount.session_claim_matches?(staff, scope.session_claim) &&
          match?(%Tenant{status: "active"}, tenant),
        do: staff
   end

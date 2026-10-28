@@ -34,7 +34,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
 
     scope =
       Scope.for_staff(
-        insert_operator_account(role: "admin", tenant_id: a.tenant_id),
+        insert_staff_account(role: "admin", tenant_id: a.tenant_id),
         Custyard.Tenants.get_tenant!(a.tenant_id)
       )
 
@@ -52,11 +52,11 @@ defmodule Custyard.TenantCustomerBoundariesTest do
     org = insert_organization()
     thread = insert_conversation(organization_id: org.id)
     project = insert_project(organization_id: org.id)
-    staff = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    staff = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
     scope = Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
 
     staff
-    |> Ecto.Changeset.change(session_claim: Custyard.OperatorAccount.generate_session_claim())
+    |> Ecto.Changeset.change(session_claim: Custyard.StaffAccount.generate_session_claim())
     |> Repo.update!()
 
     assert Organizations.list(scope) == []
@@ -72,7 +72,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
 
     fresh = Repo.reload!(staff)
     scope = Scope.for_staff(fresh, Custyard.Tenants.get_tenant!(org.tenant_id))
-    fresh |> Custyard.OperatorAccount.role_changeset(%{role: "agent"}) |> Repo.update!()
+    fresh |> Custyard.StaffAccount.role_changeset(%{role: "agent"}) |> Repo.update!()
     assert Organizations.list(scope) == []
 
     assert {:error, :unauthorized} =
@@ -127,7 +127,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
   test "customer deletion removes owned work and keeps tenant infrastructure and audit" do
     org = insert_organization()
     other = insert_organization()
-    staff = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    staff = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
     scope = Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
     contact = insert_contact(organization_id: org.id)
     thread = insert_conversation(organization_id: org.id, contact_id: contact.id)
@@ -177,7 +177,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
 
   test "retained acknowledgment evidence prevents customer deletion" do
     org = insert_organization()
-    staff = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    staff = insert_staff_account(role: "admin", tenant_id: org.tenant_id)
     scope = Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
 
     assert {:ok, _} =
@@ -197,7 +197,7 @@ defmodule Custyard.TenantCustomerBoundariesTest do
       "organization_id" => "customer",
       "actor_id" => "actor",
       "actor_role" => "admin",
-      "actor_type" => "internal_operator",
+      "actor_type" => "internal_staff",
       "statement_key" => "consent",
       "statement_version" => "1",
       "statement_text" => text,

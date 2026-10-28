@@ -48,11 +48,11 @@ defmodule Custyard.Email.OutboundTest do
         body: "I need help with my bill"
       )
 
-    # Insert an operator reply message (pending delivery)
-    operator_msg =
+    # Insert a staff reply message (pending delivery)
+    staff_msg =
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         sender_email: "support@acme.com",
         message_id: "<reply-001@custyard.local>",
         in_reply_to: "<abc123@customer.com>",
@@ -65,11 +65,11 @@ defmodule Custyard.Email.OutboundTest do
      contact: contact,
      conversation: conversation,
      customer_msg: customer_msg,
-     operator_msg: operator_msg}
+     staff_msg: staff_msg}
   end
 
   describe "deliver/1" do
-    test "delivers email and marks status as :sent", %{operator_msg: msg} do
+    test "delivers email and marks status as :sent", %{staff_msg: msg} do
       assert {:ok, updated} = Outbound.deliver(msg)
       assert updated.delivery_status == :sent
 
@@ -85,7 +85,7 @@ defmodule Custyard.Email.OutboundTest do
       end)
     end
 
-    test "stale queued message cannot restore a DSAR-erased CC", %{operator_msg: msg, org: org} do
+    test "stale queued message cannot restore a DSAR-erased CC", %{staff_msg: msg, org: org} do
       stale =
         msg |> Message.changeset(%{cc_addresses: ["bystander@example.com"]}) |> Repo.update!()
 
@@ -103,7 +103,7 @@ defmodule Custyard.Email.OutboundTest do
     end
 
     test "stores the actual Reply-To target for later redaction", %{
-      operator_msg: msg,
+      staff_msg: msg,
       customer_msg: incoming
     } do
       incoming |> Message.changeset(%{reply_to: "delegate@example.com"}) |> Repo.update!()
@@ -112,7 +112,7 @@ defmodule Custyard.Email.OutboundTest do
       assert Repo.get!(Message, msg.id).to_addresses == ["delegate@example.com"]
     end
 
-    test "captures the provider message id from the delivery response", %{operator_msg: msg} do
+    test "captures the provider message id from the delivery response", %{staff_msg: msg} do
       original = Application.get_env(:custyard, Custyard.Mailer)
       Application.put_env(:custyard, Custyard.Mailer, adapter: LettermintStub)
       on_exit(fn -> Application.put_env(:custyard, Custyard.Mailer, original) end)
@@ -125,7 +125,7 @@ defmodule Custyard.Email.OutboundTest do
       assert reloaded.delivery_status == :sent
     end
 
-    test "broadcasts message_updated on successful delivery", %{operator_msg: msg} do
+    test "broadcasts message_updated on successful delivery", %{staff_msg: msg} do
       conv_id = msg.conversation_id
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{conv_id}")
 
@@ -143,7 +143,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: conv_id,
-          source: :operator,
+          source: :staff,
           body: "Will fail",
           delivery_status: :pending
         )
@@ -155,7 +155,7 @@ defmodule Custyard.Email.OutboundTest do
       assert_received {:message_updated, ^conv_id}
     end
 
-    test "sends email to the contact's address", %{operator_msg: msg} do
+    test "sends email to the contact's address", %{staff_msg: msg} do
       {:ok, _} = Outbound.deliver(msg)
 
       assert_email_sent(fn email ->
@@ -163,7 +163,7 @@ defmodule Custyard.Email.OutboundTest do
       end)
     end
 
-    test "sets from address using sender_email and org name", %{operator_msg: msg} do
+    test "sets from address using sender_email and org name", %{staff_msg: msg} do
       {:ok, _} = Outbound.deliver(msg)
 
       assert_email_sent(fn email ->
@@ -171,7 +171,7 @@ defmodule Custyard.Email.OutboundTest do
       end)
     end
 
-    test "sets subject with Re: prefix", %{operator_msg: msg} do
+    test "sets subject with Re: prefix", %{staff_msg: msg} do
       {:ok, _} = Outbound.deliver(msg)
 
       assert_email_sent(fn email ->
@@ -179,7 +179,7 @@ defmodule Custyard.Email.OutboundTest do
       end)
     end
 
-    test "includes text and html body", %{operator_msg: msg} do
+    test "includes text and html body", %{staff_msg: msg} do
       {:ok, _} = Outbound.deliver(msg)
 
       assert_email_sent(fn email ->
@@ -189,7 +189,7 @@ defmodule Custyard.Email.OutboundTest do
       end)
     end
 
-    test "includes threading headers when in_reply_to is set", %{operator_msg: msg} do
+    test "includes threading headers when in_reply_to is set", %{staff_msg: msg} do
       {:ok, _} = Outbound.deliver(msg)
 
       assert_email_sent(fn email ->
@@ -208,7 +208,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: no_contact_conv.id,
-          source: :operator,
+          source: :staff,
           body: "Test reply",
           delivery_status: :pending
         )
@@ -221,7 +221,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: conv.id,
-          source: :operator,
+          source: :staff,
           sender_email: nil,
           body: "Reply without sender",
           delivery_status: :pending
@@ -239,7 +239,7 @@ defmodule Custyard.Email.OutboundTest do
   describe "compose/4" do
     test "public intake ignores CC even on legacy pending messages", %{
       conversation: conv,
-      operator_msg: msg
+      staff_msg: msg
     } do
       email =
         Outbound.compose(
@@ -256,7 +256,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: conv.id,
-          source: :operator,
+          source: :staff,
           body: "Reply all",
           delivery_status: :pending,
           cc_addresses: ["boss@customer.com", "Alice@customer.com"]
@@ -268,7 +268,7 @@ defmodule Custyard.Email.OutboundTest do
 
     test "BCCs the channel's public address when the archive copy is on (D4)", %{
       org: org,
-      operator_msg: msg,
+      staff_msg: msg,
       conversation: conv
     } do
       route = insert_inbound_route(organization_id: org.id, source: :lettermint)
@@ -293,12 +293,12 @@ defmodule Custyard.Email.OutboundTest do
                []
     end
 
-    test "has no CC header when the reply carries none", %{operator_msg: msg, conversation: conv} do
+    test "has no CC header when the reply carries none", %{staff_msg: msg, conversation: conv} do
       email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
       assert email.cc == []
     end
 
-    test "builds email struct without delivering", %{operator_msg: msg, conversation: conv} do
+    test "builds email struct without delivering", %{staff_msg: msg, conversation: conv} do
       email = Outbound.compose(msg, conv, "alice@customer.com", {"Acme", "support@acme.com"})
 
       assert email.to == [{"", "alice@customer.com"}]
@@ -311,7 +311,7 @@ defmodule Custyard.Email.OutboundTest do
     test "does not add Re: prefix when already present", %{
       org: org,
       contact: contact,
-      operator_msg: msg
+      staff_msg: msg
     } do
       re_conv =
         insert_conversation(
@@ -329,7 +329,7 @@ defmodule Custyard.Email.OutboundTest do
     test "does not add Re: prefix when present with different casing", %{
       org: org,
       contact: contact,
-      operator_msg: msg
+      staff_msg: msg
     } do
       re_conv =
         insert_conversation(
@@ -348,7 +348,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: conv.id,
-          source: :operator,
+          source: :staff,
           body: "First outbound message",
           in_reply_to: nil,
           message_id: "<first@custyard.local>",
@@ -367,7 +367,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: conv.id,
-          source: :operator,
+          source: :staff,
           body: "Use <script>alert('xss')</script> safely",
           delivery_status: :pending
         )
@@ -396,7 +396,7 @@ defmodule Custyard.Email.OutboundTest do
 
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         message_id: "<b@custyard.local>",
         in_reply_to: "<a@customer.com>",
         body: "First answer",
@@ -413,7 +413,7 @@ defmodule Custyard.Email.OutboundTest do
       reply =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
+          source: :staff,
           message_id: "<d@custyard.local>",
           in_reply_to: "<c@customer.com>",
           body: "Second answer",
@@ -447,7 +447,7 @@ defmodule Custyard.Email.OutboundTest do
       reply =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
+          source: :staff,
           message_id: "<r1@custyard.local>",
           in_reply_to: "zendesk-123@zendesk.webhook",
           body: "Reply",
@@ -477,7 +477,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
+          source: :staff,
           body: "Reply",
           message_id: "<ok@custyard.local>\r\nX-Injected: 1",
           in_reply_to: "<parent@customer.com>\r\nX-Injected: 2",
@@ -502,7 +502,7 @@ defmodule Custyard.Email.OutboundTest do
   end
 
   describe "from_name resolution" do
-    test "uses tenant name", %{operator_msg: msg} do
+    test "uses tenant name", %{staff_msg: msg} do
       {:ok, _} = Outbound.deliver(msg)
 
       assert_email_sent(fn email ->
@@ -527,7 +527,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
+          source: :staff,
           sender_email: "support@acme.com",
           body: "Reply",
           delivery_status: :pending
@@ -544,7 +544,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: conv.id,
-          source: :operator,
+          source: :staff,
           sender_email: "support@test.com",
           body: "Fallback name test",
           delivery_status: :pending
@@ -614,7 +614,7 @@ defmodule Custyard.Email.OutboundTest do
       end)
     end
 
-    test "a second operator reply threads off the prospect's web reply" do
+    test "a second staff reply threads off the prospect's web reply" do
       conversation = insert_conversation(source: :public_intake, subject: "Thread check")
 
       insert_prospect(
@@ -623,16 +623,16 @@ defmodule Custyard.Email.OutboundTest do
         notify_on_reply: true
       )
 
-      {:ok, first} = Conversations.send_reply(conversation, "First operator reply")
+      {:ok, first} = Conversations.send_reply(conversation, "First staff reply")
 
       {:ok, %{message: prospect_msg}} =
         Intake.add_prospect_reply(conversation, "Prospect web reply")
 
       # Prospect web messages get a synthetic RFC 5322 Message-ID at insert
-      # so operator replies can thread off them.
+      # so staff replies can thread off them.
       assert prospect_msg.message_id =~ ~r/^<.+@.+>$/
 
-      {:ok, second} = Conversations.send_reply(conversation, "Second operator reply")
+      {:ok, second} = Conversations.send_reply(conversation, "Second staff reply")
       assert second.in_reply_to == prospect_msg.message_id
 
       {:ok, _delivered} = Outbound.deliver(second)
@@ -681,7 +681,7 @@ defmodule Custyard.Email.OutboundTest do
   end
 
   describe "public-intake From identity (leak regression)" do
-    test "From is the platform address and branding name, never the operator's personal email, even after org linking" do
+    test "From is the platform address and branding name, never the staff's personal email, even after org linking" do
       org = insert_organization(name: "Acme Support")
 
       insert_inbound_route(
@@ -704,9 +704,7 @@ defmodule Custyard.Email.OutboundTest do
       )
 
       {:ok, message} =
-        Conversations.send_reply(conversation, "Reply",
-          operator_email: "operator-personal@example.com"
-        )
+        Conversations.send_reply(conversation, "Reply", staff_email: "staff-personal@example.com")
 
       assert message.sender_email == "support@custyard.local"
 
@@ -715,7 +713,7 @@ defmodule Custyard.Email.OutboundTest do
       assert_email_sent(fn email ->
         # Source-keyed rule: branding display name + platform fallback
         # address — not the org name, the org route address, or the
-        # replying operator's personal address.
+        # replying staff's personal address.
         assert email.from == {"Acme Support", "support@custyard.local"}
       end)
     end
@@ -738,7 +736,7 @@ defmodule Custyard.Email.OutboundTest do
       message =
         insert_message(
           conversation_id: conversation.id,
-          source: :operator,
+          source: :staff,
           sender_email: nil,
           body: "Reply",
           message_id: "<pi-inject@custyard.local>",
@@ -771,7 +769,7 @@ defmodule Custyard.Email.OutboundTest do
   end
 
   describe "delivery_status transitions" do
-    test "pending -> sent on successful delivery", %{operator_msg: msg} do
+    test "pending -> sent on successful delivery", %{staff_msg: msg} do
       assert msg.delivery_status == :pending
       {:ok, updated} = Outbound.deliver(msg)
       assert updated.delivery_status == :sent
@@ -785,7 +783,7 @@ defmodule Custyard.Email.OutboundTest do
       msg =
         insert_message(
           conversation_id: no_contact_conv.id,
-          source: :operator,
+          source: :staff,
           body: "Will fail",
           delivery_status: :pending
         )
@@ -801,7 +799,7 @@ defmodule Custyard.Email.OutboundTest do
 
   # --- helpers ---
 
-  # Public-intake conversation with a prospect row and a pending operator
+  # Public-intake conversation with a prospect row and a pending staff
   # reply carrying no sender_email (the shape send_reply/3 produces for
   # public-intake conversations).
   defp intake_message_fixture(prospect_overrides) do
@@ -813,7 +811,7 @@ defmodule Custyard.Email.OutboundTest do
     message =
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         sender_email: nil,
         body: "Reply to prospect",
         message_id: "<intake-reply-#{System.unique_integer([:positive])}@custyard.local>",
@@ -824,7 +822,7 @@ defmodule Custyard.Email.OutboundTest do
   end
 
   describe "delivery claim" do
-    test "a message that is not pending is not delivered", %{operator_msg: msg} do
+    test "a message that is not pending is not delivered", %{staff_msg: msg} do
       {:ok, sent} = msg |> Message.delivery_status_changeset(:sent) |> Repo.update()
 
       assert {:error, :not_pending, reloaded} = Outbound.deliver(sent)
@@ -833,7 +831,7 @@ defmodule Custyard.Email.OutboundTest do
     end
 
     test "a message already claimed by another attempt is not delivered again",
-         %{operator_msg: msg} do
+         %{staff_msg: msg} do
       {:ok, claimed} = msg |> Message.delivery_status_changeset(:sending) |> Repo.update()
 
       assert {:error, :not_pending, _} = Outbound.deliver(claimed)
@@ -874,7 +872,7 @@ defmodule Custyard.Email.OutboundTest do
     defp pending_reply(conversation, in_reply_to \\ nil) do
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         sender_email: "help@acme.example.com",
         message_id: "<reply-#{System.unique_integer([:positive])}@custyard.local>",
         in_reply_to: in_reply_to,

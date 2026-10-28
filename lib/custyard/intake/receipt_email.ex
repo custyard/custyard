@@ -6,19 +6,19 @@ defmodule Custyard.Intake.ReceiptEmail do
   Without it, the `/c/:token` link exists only in a cookie. A prospect who
   submits from a phone and follows up from a laptop, or who clears cookies,
   loses the thread permanently: the token *is* the credential and only its
-  hash is stored, so nothing can reconstruct the link. Operator replies
+  hash is stored, so nothing can reconstruct the link. Staff replies
   then sit `:withheld` forever with no way to reach the person who asked.
 
   Follows the `Custyard.Intake.ClaimEmail` content rule strictly, because
   this mail goes *to* a prospect at an address that is attacker-chosen at
-  submit time: the body carries ONLY operator-configured tenant branding and source name,
+  submit time: the body carries ONLY staff-configured tenant branding and source name,
   the platform resume URL, and fixed copy — never the submitted message,
   never its derived subject. This mail must be useless as a spam relay.
   The caller owns URL construction, matching ClaimEmail and LoginEmail.
 
   Sent whenever an email was captured, independent of `notify_on_reply`.
-  That flag is consent for *operator replies* (spec-public-intake.md,
-  "Prospect notification on operator reply"); the receipt is transactional
+  That flag is consent for *staff replies* (spec-public-intake.md,
+  "Prospect notification on staff reply"); the receipt is transactional
   — it is the delivery mechanism for the prospect's own access link, the
   same footing as the claim confirmation. Gating it on the checkbox would
   withhold the link from exactly the people most likely to lose it.
@@ -114,7 +114,7 @@ defmodule Custyard.Intake.ReceiptEmail do
     Application.get_env(:custyard, :email_enabled, false)
   end
 
-  # Operator-configured source name only — no submitted content.
+  # Staff-configured source name only — no submitted content.
   defp receipt_text(source, conversation_url) do
     """
     Thanks for contacting us through #{source.name}. Your message is with

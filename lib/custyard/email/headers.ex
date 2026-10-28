@@ -2,7 +2,7 @@ defmodule Custyard.Email.Headers do
   @moduledoc """
   Shared header-discipline helpers for anything email-bound.
 
-  Extracted from `Custyard.Email.Outbound`'s privates so operator-reply
+  Extracted from `Custyard.Email.Outbound`'s privates so staff-reply
   mail and prospect-facing mail (slug-claim confirmations) can never
   diverge on header injection handling. `Outbound` delegates here;
   behavior is byte-identical.

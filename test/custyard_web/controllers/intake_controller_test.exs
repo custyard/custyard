@@ -6,7 +6,7 @@ defmodule CustyardWeb.IntakeControllerTest do
   import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias Custyard.{Conversation, Message, OperatorAccount, Prospect, RateLimit, Repo}
+  alias Custyard.{Conversation, Message, StaffAccount, Prospect, RateLimit, Repo}
 
   # The exact CSP the :browser pipeline ships today — the public surface must
   # not weaken or change it (bundled app.js/app.css only, no inline scripts).
@@ -46,17 +46,17 @@ defmodule CustyardWeb.IntakeControllerTest do
     Application.put_env(:custyard, :rate_limit_buckets, Keyword.merge(base, overrides))
   end
 
-  # Both intake emails — the operator arrival notification and the prospect
+  # Both intake emails — the staff arrival notification and the prospect
   # receipt — are gated by :email_enabled, which is off by default in test.
   defp enable_email! do
     original_enabled = Application.get_env(:custyard, :email_enabled)
-    original_operator = Application.get_env(:custyard, :operator_email)
+    original_staff = Application.get_env(:custyard, :staff_email)
 
     Application.put_env(:custyard, :email_enabled, true)
     configure_tenant_email(factory_tenant_id())
 
-    unless Repo.get_by(OperatorAccount, tenant_id: factory_tenant_id(), email: "ops@example.com") do
-      insert_operator_account(
+    unless Repo.get_by(StaffAccount, tenant_id: factory_tenant_id(), email: "ops@example.com") do
+      insert_staff_account(
         tenant_id: factory_tenant_id(),
         email: "ops@example.com",
         role: "admin"
@@ -65,7 +65,7 @@ defmodule CustyardWeb.IntakeControllerTest do
 
     on_exit(fn ->
       restore_env(:email_enabled, original_enabled)
-      restore_env(:operator_email, original_operator)
+      restore_env(:staff_email, original_staff)
     end)
   end
 
@@ -127,7 +127,7 @@ defmodule CustyardWeb.IntakeControllerTest do
 
       assert html =~ ~s(data-testid="intake-instance-name")
       assert html =~ "Tenant"
-      # No operator or portal chrome on the intake layout
+      # No staff or portal chrome on the intake layout
       refute html =~ ~s(data-testid="layout-header")
       refute html =~ ~s(data-testid="portal-layout")
     end
@@ -281,7 +281,7 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert prospect.email == nil
     end
 
-    test "the submission appears in the operator queue with intake tag and no-reply badge", %{
+    test "the submission appears in the staff queue with intake tag and no-reply badge", %{
       conn: conn
     } do
       source = insert_intake_source(mode: :active)
@@ -290,9 +290,9 @@ defmodule CustyardWeb.IntakeControllerTest do
         "submission" => %{"body" => "Queue me up please"}
       })
 
-      operator =
-        %OperatorAccount{}
-        |> OperatorAccount.changeset(%{
+      staff =
+        %StaffAccount{}
+        |> StaffAccount.changeset(%{
           role: "admin",
           tenant_id: Process.get(:factory_tenant_id),
           email: "queue-op@example.com",
@@ -300,12 +300,12 @@ defmodule CustyardWeb.IntakeControllerTest do
         })
         |> Repo.insert!()
 
-      operator_conn =
+      staff_conn =
         Phoenix.ConnTest.build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> put_operator_session(operator.id)
+        |> put_staff_session(staff.id)
 
-      {:ok, _view, html} = live(operator_conn, ~p"/app")
+      {:ok, _view, html} = live(staff_conn, ~p"/app")
 
       assert html =~ "Queue me up please"
       assert html =~ ~s(data-testid="intake-source-tag")
@@ -471,7 +471,7 @@ defmodule CustyardWeb.IntakeControllerTest do
       refute receipt.text_body =~ "Pricing please"
     end
 
-    # notify_on_reply is consent for operator replies. The receipt is the
+    # notify_on_reply is consent for staff replies. The receipt is the
     # delivery mechanism for the prospect's own access link.
     test "the resume URL is sent even when reply notifications are declined", %{conn: conn} do
       enable_email!()
@@ -501,7 +501,7 @@ defmodule CustyardWeb.IntakeControllerTest do
 
       assert "/threads/" <> _token = redirected_to(conn)
 
-      # The operator still gets the arrival notification; nobody else does.
+      # The staff still gets the arrival notification; nobody else does.
       assert recipients() == ["ops@example.com"]
     end
 

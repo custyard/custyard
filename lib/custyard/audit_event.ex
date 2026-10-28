@@ -1,7 +1,7 @@
 defmodule Custyard.AuditEvent do
   @moduledoc """
-  Schema for persisting audit events (webhook processing, operator actions
-  such as slug release, operator accounts created or removed outside the UI,
+  Schema for persisting audit events (webhook processing, staff actions
+  such as slug release, staff accounts created or removed outside the UI,
   and acknowledgment replays and bindings).
 
   Provides an append-only audit log for compliance and debugging.
@@ -20,8 +20,8 @@ defmodule Custyard.AuditEvent do
                    :webhook_error,
                    :slug_released,
                    :prospect_converted,
-                   :operator_created,
-                   :operator_removed,
+                   :staff_created,
+                   :staff_removed,
                    :tenant_status_changed,
                    :acknowledgment_replayed,
                    :acknowledgment_binding_created,

@@ -1,6 +1,6 @@
 defmodule Custyard.Email.OutboundQueue do
   @moduledoc """
-  Drains persisted operator replies awaiting email delivery.
+  Drains persisted staff replies awaiting email delivery.
 
   `Conversations.send_reply/3` commits a pending message before notifying this
   worker. A periodic scan also finds messages left pending by a process crash,
@@ -40,7 +40,7 @@ defmodule Custyard.Email.OutboundQueue do
 
     pending =
       from(m in Message,
-        where: m.source == :operator and m.delivery_status == :pending,
+        where: m.source == :staff and m.delivery_status == :pending,
         order_by: [asc: m.inserted_at, asc: m.id],
         limit: @batch_size
       )
@@ -61,7 +61,7 @@ defmodule Custyard.Email.OutboundQueue do
 
   A row is `:sending` only between `Outbound.deliver/1` claiming it and the
   mailer reporting back; one left there was interrupted by a crash. Whether
-  the provider accepted the email is unknown, so the operator decides on a
+  the provider accepted the email is unknown, so the staff decides on a
   resend rather than the queue delivering it again automatically.
   """
   def fail_stale_sending(grace_seconds \\ @stale_sending_seconds) do
@@ -70,7 +70,7 @@ defmodule Custyard.Email.OutboundQueue do
 
     stale =
       from(m in Message,
-        where: m.source == :operator and m.delivery_status == :sending,
+        where: m.source == :staff and m.delivery_status == :sending,
         where: m.updated_at < ^cutoff
       )
       |> Repo.all()

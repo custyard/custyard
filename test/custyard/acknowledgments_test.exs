@@ -31,7 +31,7 @@ defmodule Custyard.AcknowledgmentsTest do
         "organization_id" => "org-1",
         "actor_id" => "colonel-1",
         "actor_role" => "colonel",
-        "actor_type" => "internal_operator",
+        "actor_type" => "internal_staff",
         "statement_key" => "example",
         "statement_version" => "v1",
         "statement_text" => text,
@@ -185,14 +185,14 @@ defmodule Custyard.AcknowledgmentsTest do
       )
     end
 
-    test "only a real insert is audited, with the operator who made it", %{organization: org} do
-      operator = Custyard.Factory.insert_operator_account(tenant_id: tenant_id(), role: "admin")
+    test "only a real insert is audited, with the staff who made it", %{organization: org} do
+      staff = Custyard.Factory.insert_staff_account(tenant_id: tenant_id(), role: "admin")
 
       assert {:ok, :created, binding} =
                Acknowledgments.bind(
                  Custyard.Scope.for_staff(
-                   operator,
-                   Custyard.Tenants.get_tenant!(operator.tenant_id)
+                   staff,
+                   Custyard.Tenants.get_tenant!(staff.tenant_id)
                  ),
                  "ots.test",
                  "org-audited",
@@ -218,13 +218,13 @@ defmodule Custyard.AcknowledgmentsTest do
                )
 
       assert [event] = binding_audits()
-      assert event.source == "operator"
+      assert event.source == "staff"
       assert event.organization_id == org.id
 
       assert event.payload == %{
-               "actor" => "operator",
-               "operator_id" => operator.id,
-               "operator_email" => operator.email,
+               "actor" => "staff",
+               "staff_id" => staff.id,
+               "staff_email" => staff.email,
                "source" => "ots.test",
                "source_organization_id" => "org-audited",
                "organization_id" => binding.organization_id
@@ -241,7 +241,7 @@ defmodule Custyard.AcknowledgmentsTest do
                )
 
       assert [%{source: "cli", payload: %{"actor" => "cli"} = payload}] = binding_audits()
-      refute Map.has_key?(payload, "operator_id")
+      refute Map.has_key?(payload, "staff_id")
     end
 
     test "a missing organization is reported before any insert" do

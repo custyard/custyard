@@ -113,7 +113,7 @@ defmodule Custyard.Scoring do
       |> Repo.all()
       |> Map.new()
 
-    # Operator settings are identical for every conversation in the batch;
+    # Staff settings are identical for every conversation in the batch;
     # read them once rather than four times per row (see preload_settings/0).
     settings =
       conversations
@@ -173,7 +173,7 @@ defmodule Custyard.Scoring do
   end
 
   @doc """
-  Read every operator setting the per-conversation scoring functions need,
+  Read every staff setting the per-conversation scoring functions need,
   in one pass.
 
   `Settings.get/0` is an uncached `Repo.one`, and scoring a single
@@ -200,7 +200,7 @@ defmodule Custyard.Scoring do
   Options:
 
   - `:settings` — a `preload_settings/0` bundle, to avoid re-reading
-    operator settings per conversation.
+    staff settings per conversation.
   - `:message_count` — the conversation's 24h message count when the caller
     already has it, which skips a per-conversation `COUNT` query.
   """
@@ -276,7 +276,7 @@ defmodule Custyard.Scoring do
   def neglect_status(conversation, thresholds) do
     conversation = ensure_preloaded(conversation, :organization)
 
-    hours_idle = hours_since_operator_action(conversation)
+    hours_idle = hours_since_staff_action(conversation)
     thresholds = thresholds || get_neglect_thresholds(conversation.tenant_id)
     {warning, critical} = Map.get(thresholds, neglect_tier(conversation), {24, 48})
 
@@ -293,7 +293,7 @@ defmodule Custyard.Scoring do
   # Private functions
 
   defp idle_score(conversation) do
-    hours = hours_since_operator_action(conversation)
+    hours = hours_since_staff_action(conversation)
     # Log scale: ln(hours + 1) * 10, capped at 40
     min(40, :math.log(hours + 1) * 10)
   end
@@ -331,8 +331,8 @@ defmodule Custyard.Scoring do
     end
   end
 
-  defp hours_since_operator_action(conversation) do
-    case conversation.last_operator_action_at do
+  defp hours_since_staff_action(conversation) do
+    case conversation.last_staff_action_at do
       nil -> hours_since(conversation.inserted_at)
       dt -> hours_since(dt)
     end

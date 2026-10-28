@@ -53,7 +53,7 @@ defmodule Custyard.AcknowledgmentsBroker do
     {:ok, _} =
       Custyard.Acknowledgments.configure_integration(
         Custyard.Scope.for_staff(
-          Custyard.Factory.insert_operator_account(tenant_id: tenant.id, role: "admin"),
+          Custyard.Factory.insert_staff_account(tenant_id: tenant.id, role: "admin"),
           tenant
         ),
         Map.new(config)
@@ -92,9 +92,9 @@ defmodule Custyard.AcknowledgmentsBroker do
         "source" => "ots.integration",
         "submission_id" => "stable",
         "organization_id" => "ots-org",
-        "actor_id" => "operator",
+        "actor_id" => "staff",
         "actor_role" => "colonel",
-        "actor_type" => "internal_operator",
+        "actor_type" => "internal_staff",
         "statement_key" => "pilot",
         "statement_version" => "v1",
         "statement_text" => text,

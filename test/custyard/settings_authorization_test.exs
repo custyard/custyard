@@ -1,23 +1,23 @@
 defmodule Custyard.SettingsAuthorizationTest do
   use Custyard.DataCase, async: true
   import Custyard.Factory
-  alias Custyard.{OperatorAccount, Repo, Scope, Settings, Tenants}
+  alias Custyard.{StaffAccount, Repo, Scope, Settings, Tenants}
 
   setup do
     tenant = insert_tenant()
-    staff = insert_operator_account(tenant_id: tenant.id, role: "admin")
+    staff = insert_staff_account(tenant_id: tenant.id, role: "admin")
     %{tenant: tenant, staff: staff, scope: Scope.for_staff(staff, tenant)}
   end
 
   test "all settings mutations reject a stale demoted administrator", c do
-    c.staff |> OperatorAccount.role_changeset(%{role: "agent"}) |> Repo.update!()
+    c.staff |> StaffAccount.role_changeset(%{role: "agent"}) |> Repo.update!()
     assert_denied(c.scope)
     assert Settings.get_intake_config(c.tenant.id).unlinked_tier_score == 10
   end
 
   test "all settings mutations reject a revoked session", c do
     c.staff
-    |> Ecto.Changeset.change(session_claim: OperatorAccount.generate_session_claim())
+    |> Ecto.Changeset.change(session_claim: StaffAccount.generate_session_claim())
     |> Repo.update!()
 
     assert_denied(c.scope)

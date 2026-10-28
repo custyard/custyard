@@ -38,7 +38,7 @@ defmodule Custyard.SentryTest do
       assert Scrub.scrub_path("/claims/tok987/confirm") == "/claims/#{@redacted}/confirm"
     end
 
-    test "operator magic-link verify token" do
+    test "staff magic-link verify token" do
       assert Scrub.scrub_path("/app/login/verify/magiclink") ==
                "/app/login/verify/#{@redacted}"
     end
@@ -53,8 +53,8 @@ defmodule Custyard.SentryTest do
     end
 
     test "leaves non-sensitive paths untouched" do
-      # /i/:source_key is an operator-published identifier, not a credential.
-      for path <- ["/", "/i/eu-otshosted", "/operator", "/operator/projects", "/api/health"] do
+      # /i/:source_key is a staff-published identifier, not a credential.
+      for path <- ["/", "/i/eu-otshosted", "/staff", "/staff/projects", "/api/health"] do
         assert Scrub.scrub_path(path) == path
       end
     end
@@ -212,7 +212,7 @@ defmodule Custyard.SentryTest do
     end
 
     test "leaves a benign URL untouched" do
-      url = "https://custyard.fly.dev/operator/projects?page=2"
+      url = "https://custyard.fly.dev/staff/projects?page=2"
       assert Scrub.scrub_url(url) == url
     end
 
@@ -328,7 +328,7 @@ defmodule Custyard.SentryTest do
     end
 
     test "keeps a normal event" do
-      event = event(request: %Request{url: "https://custyard.fly.dev/operator"})
+      event = event(request: %Request{url: "https://custyard.fly.dev/staff"})
       assert %Sentry.Event{} = Scrub.before_send(event)
     end
 
@@ -405,7 +405,7 @@ defmodule Custyard.SentryTest do
       assert Scrub.token_path?("/portal/orgtoken/request/5")
 
       refute Scrub.token_path?("/")
-      refute Scrub.token_path?("/operator/login")
+      refute Scrub.token_path?("/staff/login")
       refute Scrub.token_path?("/i/quote")
       refute Scrub.token_path?(nil)
     end

@@ -9,11 +9,11 @@ defmodule Custyard.Release.Acknowledgments do
   credentials come from tenant integration settings and are never accepted as arguments
   or printed.
   """
-  alias Custyard.{Acknowledgments, OperatorAccounts}
+  alias Custyard.{Acknowledgments, StaffAccounts}
   alias Custyard.Acknowledgments.{Config, Evidence, LocalAuthority, Operations}
 
   @app :custyard
-  # The largest id OperatorAccounts.valid_id?/1 accepts (signed 64 bits).
+  # The largest id StaffAccounts.valid_id?/1 accepts (signed 64 bits).
   @max_id 9_223_372_036_854_775_807
 
   @usage """
@@ -136,7 +136,7 @@ defmodule Custyard.Release.Acknowledgments do
   defp execute({"bind", _, [source, external_id, organization_id]}, opts) do
     # Bounded to signed 64 bits: anything larger makes the SQLite driver raise.
     with {id, ""} <- Integer.parse(organization_id),
-         true <- OperatorAccounts.valid_id?(id) do
+         true <- StaffAccounts.valid_id?(id) do
       with_repo(opts, fn -> bind(source, external_id, id, opts) end)
     else
       _ -> fail("CUSTYARD_ORG_ID must be an integer from 1 to #{@max_id}")

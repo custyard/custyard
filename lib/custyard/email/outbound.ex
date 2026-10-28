@@ -1,6 +1,6 @@
 defmodule Custyard.Email.Outbound do
   @moduledoc """
-  Composes and delivers outbound emails for operator replies.
+  Composes and delivers outbound emails for staff replies.
 
   Builds a `Swoosh.Email` struct from a persisted Message (with preloaded
   conversation, contact, and organization), delivers it via
@@ -78,7 +78,7 @@ defmodule Custyard.Email.Outbound do
 
   @doc "Unattempted configuration failures can retry; provider attempts retain the 24-hour deduplication window."
   def retryable?(%Message{} = message) do
-    message.source == :operator and message.delivery_status == :failed and
+    message.source == :staff and message.delivery_status == :failed and
       message.delivery_failure_kind in [:rejected, :configuration] and
       message.delivery_error_code != "envelope_changed" and
       retry_window_open?(message) and
@@ -96,10 +96,10 @@ defmodule Custyard.Email.Outbound do
 
   defp retry_window_open?(_message), do: false
 
-  @doc "Requeue a confirmed failed reply under current operator authorization. Unknown sends never retry blindly."
+  @doc "Requeue a confirmed failed reply under current staff authorization. Unknown sends never retry blindly."
   def retry(%Custyard.Scope{} = scope, %Message{} = message) do
     result =
-      Conversations.with_access(scope, message.conversation_id, fn conversation, _operator ->
+      Conversations.with_access(scope, message.conversation_id, fn conversation, _staff ->
         case Repo.get_by(Message, id: message.id, conversation_id: conversation.id) do
           %Message{} = current ->
             if retryable?(current) do
@@ -381,7 +381,7 @@ defmodule Custyard.Email.Outbound do
 
   # --- Private ---
 
-  # Reply-all CC (spec-inbound-channels D5): the operator-approved list, never
+  # Reply-all CC (spec-inbound-channels D5): the staff-approved list, never
   # the recipient twice. Prospect conversations carry no CC by construction
   # (Conversations.default_reply_cc/2 returns [] and the composer hides it).
   defp put_cc(email, %Message{cc_addresses: cc}, recipient) when is_list(cc) and cc != [] do
@@ -407,7 +407,7 @@ defmodule Custyard.Email.Outbound do
   defp put_channel_reply_to(email, _conversation), do: email
 
   # Archive copy (spec-inbound-channels D4): BCC the channel's public address
-  # so the operator's mailbox keeps the reply. The copy is forwarded straight
+  # so the staff's mailbox keeps the reply. The copy is forwarded straight
   # back and recognised by triage as an own echo, never a new conversation.
   defp put_archive_bcc(email, %{inbound_channel: %InboundChannel{archive_copy: true} = channel}),
     do: bcc(email, channel.public_address)
@@ -418,7 +418,7 @@ defmodule Custyard.Email.Outbound do
   The address the next reply on `conversation` is sent to: the customer's
   Reply-To when it overrides the contact address (D5), else the contact's
   email, else an opted-in prospect's. The composer shows this so the
-  operator sees the address delivery will use.
+  staff sees the address delivery will use.
 
   The contact channel delivers unconditionally (established-customer path).
   `Conversations.reply_channel/1` already excludes revoked prospects and

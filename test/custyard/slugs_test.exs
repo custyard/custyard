@@ -167,7 +167,7 @@ defmodule Custyard.SlugsTest do
       conversation = intake_conversation()
 
       assert {:error, %Ecto.Changeset{} = changeset} =
-               Slugs.claim("operator", "buyer@example.com", conversation)
+               Slugs.claim("staff", "buyer@example.com", conversation)
 
       assert "is reserved" in errors_on(changeset).slug
       assert Repo.aggregate(Slug, :count) == 0
@@ -483,7 +483,7 @@ defmodule Custyard.SlugsTest do
   defp available?(text), do: Slugs.available?(text, Custyard.Factory.factory_tenant_id())
 
   defp admin_scope do
-    staff = insert_operator_account(tenant_id: factory_tenant_id(), role: "admin")
+    staff = insert_staff_account(tenant_id: factory_tenant_id(), role: "admin")
     Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
   end
 

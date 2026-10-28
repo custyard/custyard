@@ -33,7 +33,7 @@ defmodule Custyard.Email.DeliveryStatus do
   and its status before and after. The payload deliberately omits recipient
   addresses, subjects, metadata, spam symbols and raw SMTP response text.
 
-  A recipient whose status becomes bounced or suppressed sends the operator a
+  A recipient whose status becomes bounced or suppressed sends the staff a
   notice, once per recipient, naming it and its role. A bounced or suppressed
   recipient that is a contact of the conversation's organization is also
   flagged (`contacts.email_status`), and a later delivery to it clears the
@@ -273,7 +273,7 @@ defmodule Custyard.Email.DeliveryStatus do
   # one transaction, so a change is never recorded without its history entry.
   # Each write is conditional on the state we read; a loser sees 0 rows and
   # `apply_status/3` re-evaluates the event. The LiveView nudge and the
-  # operator notice go out only after commit.
+  # staff notice go out only after commit.
   defp transition(%Message{} = message, plan, incoming) do
     message
     |> transition_transaction(plan, incoming)
@@ -450,7 +450,7 @@ defmodule Custyard.Email.DeliveryStatus do
   # --- After commit ---
 
   defp after_commit(%Message{} = message, recipient, incoming) do
-    notify_operator(message, recipient, incoming)
+    notify_staff(message, recipient, incoming)
     Outbound.broadcast_delivery_update(message)
   end
 
@@ -460,17 +460,17 @@ defmodule Custyard.Email.DeliveryStatus do
   # committed, and a retried event would not advance. The notifier logs an
   # error result; a raise is logged here by type only, since its message may
   # name the recipient.
-  defp notify_operator(%Message{} = message, %{to: status, role: role}, incoming)
+  defp notify_staff(%Message{} = message, %{to: status, role: role}, incoming)
        when status in @notified_statuses do
     send_notice(message, status, incoming.recipient, role)
   end
 
-  defp notify_operator(%Message{delivery_status: status} = message, nil, %{recipient: nil})
+  defp notify_staff(%Message{delivery_status: status} = message, nil, %{recipient: nil})
        when status in @notified_statuses do
     send_notice(message, status, nil, :to)
   end
 
-  defp notify_operator(_message, _recipient, _incoming), do: :ok
+  defp notify_staff(_message, _recipient, _incoming), do: :ok
 
   defp send_notice(%Message{} = message, status, recipient, role) do
     %Message{conversation: conversation} =

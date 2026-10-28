@@ -191,36 +191,36 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
     defp replay_audits,
       do: Repo.all(from e in AuditEvent, where: e.event_type == :acknowledgment_replayed)
 
-    test "records operator, sanitized identity, body digest and outcome", ctx do
-      operator = Custyard.Factory.insert_operator_account(tenant_id: tenant_id(), role: "admin")
+    test "records staff, sanitized identity, body digest and outcome", ctx do
+      staff = Custyard.Factory.insert_staff_account(tenant_id: tenant_id(), role: "admin")
       put_failure(ctx, body("audited"))
       await_failures(ctx, 1)
 
       assert Operations.replay(
                Custyard.Scope.for_staff(
-                 operator,
-                 Custyard.Tenants.get_tenant!(operator.tenant_id)
+                 staff,
+                 Custyard.Tenants.get_tenant!(staff.tenant_id)
                ),
                "other"
              ) == {:error, :changed}
 
       assert Operations.replay(
                Custyard.Scope.for_staff(
-                 operator,
-                 Custyard.Tenants.get_tenant!(operator.tenant_id)
+                 staff,
+                 Custyard.Tenants.get_tenant!(staff.tenant_id)
                ),
                "audited"
              ) == :ok
 
       assert [changed, started, replayed] = Enum.sort_by(replay_audits(), & &1.id)
       assert changed.payload["outcome"] == "changed"
-      assert replayed.source == "operator"
+      assert replayed.source == "staff"
       assert started.payload == %{replayed.payload | "outcome" => "started"}
 
       assert replayed.payload == %{
-               "actor" => "operator",
-               "operator_id" => operator.id,
-               "operator_email" => operator.email,
+               "actor" => "staff",
+               "staff_id" => staff.id,
+               "staff_email" => staff.email,
                "source" => "ots.integration",
                "submission_id" => "audited",
                "body_sha256" => sha256(body("audited")),

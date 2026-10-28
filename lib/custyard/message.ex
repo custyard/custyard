@@ -6,7 +6,7 @@ defmodule Custyard.Message do
 
   # Message types: how the message was sent
   # :prospect — anonymous public-intake submission or conversation-link reply
-  @sources [:email, :portal, :operator, :prospect]
+  @sources [:email, :portal, :staff, :prospect]
 
   # Origins: which adapter/integration the message came from (for audit/reporting)
   # Aligns with Conversation.@sources for consistent tracking
@@ -37,10 +37,10 @@ defmodule Custyard.Message do
   # Ranking (spec-conversation-loop, Delivery Tracking): pending < sending <
   # sent < delivered; bounced, suppressed and failed are terminal. A status
   # event only advances a message when its rank is higher or it is terminal.
-  # :operator_sent — a reply the operator sent from their own mailbox, outside
-  # Custyard, captured by triage (D6). :operator_forward — customer mail an
-  # operator manually forwarded in; the message carries the original sender.
-  @triage_classes [:customer, :auto_response, :suspect, :operator_sent, :operator_forward]
+  # :staff_sent — a reply the staff sent from their own mailbox, outside
+  # Custyard, captured by triage (D6). :staff_forward — customer mail an
+  # staff manually forwarded in; the message carries the original sender.
+  @triage_classes [:customer, :auto_response, :suspect, :staff_sent, :staff_forward]
 
   @delivery_statuses [
     :pending,
@@ -88,16 +88,16 @@ defmodule Custyard.Message do
     field :spam_score, :float
     # Triage class (D6): :customer, :auto_response (system message appended
     # to a thread), :suspect (spam-flagged or unauthenticated unknown sender).
-    # nil for operator, portal and legacy rows.
+    # nil for staff, portal and legacy rows.
     field :triage_class, Ecto.Enum, values: @triage_classes
     belongs_to :inbound_channel, Custyard.InboundChannel
 
     # Allowlist-sanitised HTML body (D9), stored alongside the text body.
     # nil when the mail was text-only or the HTML was too large to keep.
     field :html_body, :string
-    # Manual-forward provenance (D6): the operator who forwarded a customer
-    # thread in, and the operator-owned address it came from.
-    belongs_to :forwarded_by_operator, Custyard.OperatorAccount
+    # Manual-forward provenance (D6): the staff who forwarded a customer
+    # thread in, and the staff-owned address it came from.
+    belongs_to :forwarded_by_staff, Custyard.StaffAccount
     field :forwarded_by_email, :string
     has_many :attachments, Custyard.MessageAttachment
     # Per-recipient delivery outcome (spec-conversation-loop, "Delivery Tracking")
@@ -107,7 +107,7 @@ defmodule Custyard.Message do
     # rendering surfaces show "This message was deleted" instead. There is no
     # hard-delete path. Set only via soft_delete_changeset/2.
     field :deleted_at, :utc_datetime
-    belongs_to :deleted_by_operator, Custyard.OperatorAccount
+    belongs_to :deleted_by_staff, Custyard.StaffAccount
 
     belongs_to :tenant, Custyard.Tenant
     belongs_to :conversation, Custyard.Conversation
@@ -143,7 +143,7 @@ defmodule Custyard.Message do
       :triage_class,
       :inbound_channel_id,
       :html_body,
-      :forwarded_by_operator_id,
+      :forwarded_by_staff_id,
       :forwarded_by_email,
       :conversation_id
     ])
@@ -159,7 +159,7 @@ defmodule Custyard.Message do
     # Note: :source and :origin use Ecto.Enum which validates values automatically
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:inbound_channel_id)
-    |> foreign_key_constraint(:forwarded_by_operator_id)
+    |> foreign_key_constraint(:forwarded_by_staff_id)
     |> foreign_key_constraint(:tenant_id)
     |> unique_constraint([:tenant_id, :message_id],
       name: :messages_tenant_id_message_id_index,
@@ -179,17 +179,17 @@ defmodule Custyard.Message do
   @doc """
   Changeset for soft-deleting a message (GitHub-style tombstone).
 
-  Stamps `deleted_at` and the deleting operator. The body column is left
+  Stamps `deleted_at` and the deleting staff. The body column is left
   untouched — the original content stays in the database and only rendering
   changes. Deliberately not part of `changeset/2` so external attrs can never
   set or clear the deletion fields.
   """
-  def soft_delete_changeset(message, %Custyard.OperatorAccount{} = operator) do
+  def soft_delete_changeset(message, %Custyard.StaffAccount{} = staff) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     message
-    |> change(deleted_at: now, deleted_by_operator_id: operator.id)
-    |> foreign_key_constraint(:deleted_by_operator_id)
+    |> change(deleted_at: now, deleted_by_staff_id: staff.id)
+    |> foreign_key_constraint(:deleted_by_staff_id)
   end
 
   @doc """

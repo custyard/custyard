@@ -2,12 +2,12 @@ defmodule Custyard.Notifications.TenantDelivery do
   @moduledoc false
   import Ecto.Query
   require Logger
-  alias Custyard.{OperatorAccount, Repo}
+  alias Custyard.{StaffAccount, Repo}
   alias Custyard.Intake.EmailBranding
 
   def recipients(id) do
     Repo.all(
-      from o in OperatorAccount,
+      from o in StaffAccount,
         where: o.tenant_id == ^id and o.role in ["admin", "agent"],
         select: o.email,
         order_by: o.id

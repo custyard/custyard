@@ -51,7 +51,7 @@ Hooks.ResetOnSubmit = {
 }
 
 // Submit form on Ctrl+Enter or Cmd+Enter
-// Useful for quick message sending in operator interfaces
+// Useful for quick message sending in staff interfaces
 Hooks.CtrlEnterSubmit = {
   mounted() {
     this.el.addEventListener("keydown", (e) => {

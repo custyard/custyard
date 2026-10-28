@@ -11,14 +11,14 @@ Search(pattern: "String\.to_existing_atom|String\.to_atom", path: "/Users/d/Proj
   ⎿ Found 11 lines
     lib/custyard/settings.ex:59:    |> Enum.map(fn {k, v} -> {String.to_existing_atom(k), v} end)
     lib/custyard/settings.ex:75:      {String.to_existing_atom(tier), {warning, critical}}
-    lib/custyard_web/live/operator/projects_live.ex:75:    field_atom = String.to_existing_atom(field)
-    lib/custyard_web/live/operator/settings_live.ex:87:      |> Enum.map(fn {tier, [w, c]} -> {String.to_atom(tier), {w, c}} end)
-    lib/custyard_web/live/operator/organizations_live.ex:73:    field_atom = String.to_existing_atom(field)
-    lib/custyard_web/live/operator/organizations_live.ex:111:      tier: String.to_existing_atom(form_data.tier),
+    lib/custyard_web/live/staff/projects_live.ex:75:    field_atom = String.to_existing_atom(field)
+    lib/custyard_web/live/staff/settings_live.ex:87:      |> Enum.map(fn {tier, [w, c]} -> {String.to_atom(tier), {w, c}} end)
+    lib/custyard_web/live/staff/organizations_live.ex:73:    field_atom = String.to_existing_atom(field)
+    lib/custyard_web/live/staff/organizations_live.ex:111:      tier: String.to_existing_atom(form_data.tier),
     lib/custyard/email/sieve_header_mapper.ex:97:      {:ok, atom_value} -> {String.to_existing_atom(property), atom_value}
     lib/custyard/email/sieve_header_mapper.ex:111:    {:ok, String.to_existing_atom(value)}
     lib/custyard/email/sieve_header_mapper.ex:115:    {:ok, String.to_existing_atom(value)}
-    lib/custyard_web/live/operator/conversation_live.ex:133:    new_state = String.to_existing_atom(state)
+    lib/custyard_web/live/staff/conversation_live.ex:133:    new_state = String.to_existing_atom(state)
     lib/custyard_web/live/portal/new_request_live.ex:30:        urgency: String.to_existing_atom(params["urgency"]),
 ```
 

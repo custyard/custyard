@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 
-# bin/release-smoke-test - Boot the built release and provision operators
-# against it the way the entrypoint and operators do.
+# bin/release-smoke-test - Boot the built release and provision instance administrators
+# against it the way the entrypoint and administrators do.
 #
 # USAGE:
 #   $ MIX_ENV=prod mix release
 #   $ bin/release-smoke-test [path/to/bin/custyard]
 #
-# Guards the Custyard.Release tasks (the OPERATOR_EMAIL bootstrap,
-# setup_operator and bin/operator): they must start only the Repo. If one
+# Guards the Custyard.Release tasks (the INSTANCE_ADMIN_EMAIL bootstrap,
+# setup_instance_admin and bin/instance-admin): they must start only the Repo. If one
 # starts the application, running it on a live machine (the documented
 # `fly ssh console` commands) brings up a second Endpoint, which fails to
 # bind the port the server holds.
@@ -20,9 +20,9 @@
 set -euo pipefail
 
 rel=${1:-_build/prod/rel/custyard/bin/custyard}
-operator="$(dirname "$rel")/operator"
+instance_admin="$(dirname "$rel")/instance-admin"
 
-if [ ! -x "$rel" ] || [ ! -x "$operator" ]; then
+if [ ! -x "$rel" ] || [ ! -x "$instance_admin" ]; then
   echo "release not found at $rel (build it with: MIX_ENV=prod mix release)" >&2
   exit 1
 fi
@@ -57,9 +57,9 @@ curl_opts=(--connect-timeout 2 --max-time 5)
 
 step() { echo "==> $*"; }
 
-step "migrate and bootstrap OPERATOR_EMAIL before the server starts (entrypoint.sh)"
-OPERATOR_EMAIL=" Boot@Example.COM " \
-  "$rel" eval 'Custyard.Release.migrate(); Custyard.Release.bootstrap_operator()'
+step "migrate and bootstrap INSTANCE_ADMIN_EMAIL before the server starts (entrypoint.sh)"
+INSTANCE_ADMIN_EMAIL=" Boot@Example.COM " \
+  "$rel" eval 'Custyard.Release.migrate(); Custyard.Release.bootstrap_instance_admin()'
 
 # curl exits 7 only when the connection is refused. Anything else, a reply or
 # a listener that accepts and never answers, means the port is taken, and the
@@ -88,16 +88,16 @@ if ! curl -fsS "${curl_opts[@]}" "$health" >/dev/null 2>&1 || ! kill -0 "$server
 fi
 
 step "provision while the server holds the port"
-"$rel" eval 'Custyard.Release.setup_operator(" Ops@Example.COM ")'
-"$rel" eval 'Custyard.Release.setup_operator("OPS@example.com")'
-"$operator" add Second@Example.COM
-listing=$("$operator" list)
+"$rel" eval 'Custyard.Release.setup_instance_admin(" Ops@Example.COM ")'
+"$rel" eval 'Custyard.Release.setup_instance_admin("OPS@example.com")'
+"$instance_admin" add Second@Example.COM
+listing=$("$instance_admin" list)
 grep -q 'second@example.com' <<<"$listing" || {
-  echo "bin/operator list did not show second@example.com:" >&2
+  echo "bin/instance-admin list did not show second@example.com:" >&2
   echo "$listing" >&2
   exit 1
 }
-"$operator" remove second@example.com
+"$instance_admin" remove second@example.com
 
 step "check the stored accounts"
 "$rel" eval '
@@ -105,7 +105,7 @@ step "check the stored accounts"
 
   {:ok, emails, _} =
     Ecto.Migrator.with_repo(Custyard.Repo, fn repo ->
-      repo.all(from o in "operator_accounts", select: o.email, order_by: o.email)
+      repo.all(from o in "instance_admins", select: o.email, order_by: o.email)
     end)
 
   expected = ["boot@example.com", "ops@example.com"]

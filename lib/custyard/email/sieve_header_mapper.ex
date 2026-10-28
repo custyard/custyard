@@ -2,7 +2,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
   @moduledoc """
   Maps Sieve-injected email headers to conversation properties.
 
-  Operators can configure Sieve rules on their MTA to inject custom headers
+  Staffs can configure Sieve rules on their MTA to inject custom headers
   before forwarding email to the platform. This module reads those headers
   and maps their values to conversation properties.
 

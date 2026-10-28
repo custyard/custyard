@@ -1,6 +1,6 @@
 defmodule Custyard.UploadPath do
   @moduledoc """
-  Shared validation for operator-supplied upload paths (logo URLs).
+  Shared validation for staff-supplied upload paths (logo URLs).
 
   Only same-origin `/uploads/` paths are accepted - external URLs are
   rejected to prevent tracking/SSRF, and path traversal (literal and

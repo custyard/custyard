@@ -11,7 +11,7 @@ defmodule Custyard.Organizations do
     Conversation,
     Conversations,
     Organization,
-    OperatorAccount,
+    StaffAccount,
     Prospect,
     Repo,
     Scoring,
@@ -76,10 +76,10 @@ defmodule Custyard.Organizations do
 
   defp with_scope(%Custyard.Scope{} = scope, fun) do
     Repo.transaction(fn ->
-      staff = Custyard.OperatorAccess.lock_current(%OperatorAccount{id: scope.staff_id})
+      staff = Custyard.StaffAccess.lock_current(%StaffAccount{id: scope.staff_id})
 
       if staff && staff.tenant_id == scope.tenant_id && staff.role == "admin" &&
-           OperatorAccount.session_claim_matches?(staff, scope.session_claim) &&
+           StaffAccount.session_claim_matches?(staff, scope.session_claim) &&
            Custyard.Tenants.active?(scope.tenant_id) do
         case fun.(staff) do
           {:ok, value} -> value
@@ -316,7 +316,7 @@ defmodule Custyard.Organizations do
   defp convert_prospect(
          %Conversation{organization_id: nil, source: :public_intake} = conversation,
          org_attrs,
-         %OperatorAccount{} = operator
+         %StaffAccount{} = staff
        ) do
     org_attrs =
       Map.new(org_attrs, fn {key, value} -> {to_string(key), value} end)
@@ -325,7 +325,7 @@ defmodule Custyard.Organizations do
     case create_organization(org_attrs) do
       {:ok, organization} ->
         case do_convert_or_compensate(conversation, organization) do
-          {:ok, converted} -> {:ok, {converted, organization, operator}}
+          {:ok, converted} -> {:ok, {converted, organization, staff}}
           {:error, reason} -> Repo.rollback(reason)
         end
 
@@ -334,7 +334,7 @@ defmodule Custyard.Organizations do
     end
   end
 
-  defp convert_prospect(%Conversation{}, _org_attrs, %OperatorAccount{}),
+  defp convert_prospect(%Conversation{}, _org_attrs, %StaffAccount{}),
     do: {:error, :not_convertible}
 
   # The organization (and its provisioned inbound route) is already committed
@@ -398,7 +398,7 @@ defmodule Custyard.Organizations do
   defp maybe_put_contact(set, nil), do: set
   defp maybe_put_contact(set, %Contact{id: id}), do: Keyword.put(set, :contact_id, id)
 
-  defp handle_convert_result({:ok, conversation}, organization, operator) do
+  defp handle_convert_result({:ok, conversation}, organization, staff) do
     Scoring.calculate_and_cache(conversation.id)
 
     Phoenix.PubSub.broadcast(
@@ -412,24 +412,24 @@ defmodule Custyard.Organizations do
       {:conversation_updated, conversation.id}
     )
 
-    record_conversion_audit(conversation, organization, operator)
+    record_conversion_audit(conversation, organization, staff)
 
     {:ok, conversation}
   end
 
   # Append-only audit trail for the conversion (AuditEvent.create pattern,
-  # same as the slug-release audit write, including operator attribution).
+  # same as the slug-release audit write, including staff attribution).
   # A logging failure never blocks the conversion — it already committed.
   # organization_id is deliberately omitted from the payload: it is already
   # the row's schema column.
-  defp record_conversion_audit(conversation, organization, operator) do
+  defp record_conversion_audit(conversation, organization, staff) do
     case AuditEvent.create(%{
            event_type: :prospect_converted,
-           source: "operator",
+           source: "staff",
            payload: %{
              "organization_name" => organization.name,
-             "operator_id" => operator.id,
-             "operator_email" => operator.email
+             "staff_id" => staff.id,
+             "staff_email" => staff.email
            },
            conversation_id: conversation.id,
            organization_id: organization.id

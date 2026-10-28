@@ -47,7 +47,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     {:ok, _} = Tenants.add_host(tenant.id, "help.atlas.example")
     source = insert_intake_source(tenant_id: tenant.id, name: "Atlas pricing")
-    admin = insert_operator_account(role: "admin", tenant_id: tenant.id, organization_id: nil)
+    admin = insert_staff_account(role: "admin", tenant_id: tenant.id, organization_id: nil)
 
     {:ok, _} =
       EmailSetup.save_credentials(admin, tenant.id, %{
@@ -136,7 +136,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   test "tenant receipts and claims keep the public return address with a sending subdomain", c do
     assert {:ok, _} =
              InboundChannels.update_channel(c.channel, %{sending_domain: "mail.atlas.example"},
-               operator: c.admin
+               staff: c.admin
              )
 
     conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
@@ -166,7 +166,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
              InboundChannels.update_channel(
                c.channel,
                %{sending_domain: "mail.atlas.example", reply_from: :ingress_address},
-               operator: c.admin
+               staff: c.admin
              )
 
     assert {:ok, _} =
@@ -289,8 +289,8 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   test "tenant arrival and operational alerts reach only tenant staff with tenant credentials",
        c do
     {:ok, other} = Tenants.create_tenant(%{name: "Foreign", slug: "foreign-mail"})
-    foreign = insert_operator_account(role: "agent", tenant_id: other.id, organization_id: nil)
-    local = insert_operator_account(role: "agent", tenant_id: c.tenant.id, organization_id: nil)
+    foreign = insert_staff_account(role: "agent", tenant_id: other.id, organization_id: nil)
+    local = insert_staff_account(role: "agent", tenant_id: c.tenant.id, organization_id: nil)
 
     conversation =
       insert_conversation(

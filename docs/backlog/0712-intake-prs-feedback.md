@@ -60,14 +60,14 @@ Show a summary per file
 | test/custyard/scoring_test.exs | Updates nil-org scoring semantics and adds path-equivalence + unlinked scoring/neglect tests. |
 | test/custyard/notifications/neglect_checker_test.exs | Pins current behavior that nil-org conversations don’t enter notification sweep (join boundary) and don’t crash. |
 | test/custyard/notifications/email_test.exs | Verifies email rendering/logging doesn’t crash for nil-org conversations and uses a neutral label. |
-| test/custyard_web/live/operator/settings_live_test.exs | Adds LiveView tests for viewing/editing intake config and authorization handling. |
-| test/custyard_web/live/operator/neglect_report_live_test.exs | Ensures neglect report renders nil-org conversations safely and labels them appropriately. |
+| test/custyard_web/live/staff/settings_live_test.exs | Adds LiveView tests for viewing/editing intake config and authorization handling. |
+| test/custyard_web/live/staff/neglect_report_live_test.exs | Ensures neglect report renders nil-org conversations safely and labels them appropriately. |
 | priv/repo/migrations/20260705131000_add_intake_config_to_settings.exs | Adds `intake_config` map column to settings. |
 | lib/custyard/settings.ex | Implements intake config defaults, parsing, validation, and update API. |
 | lib/custyard/scoring.ex | Removes nil-org=0 behavior, unifies calculation via shared components, and applies standard-tier thresholds for nil-org neglect. |
 | lib/custyard/notifications/email.ex | Uses safe organization display helper to avoid nil dereferences. |
-| lib/custyard_web/live/operator/settings_live.ex | Adds Intake settings card with edit/save flow and numeric parsing/validation. |
-| lib/custyard_web/live/operator/neglect_report_live.ex | Renders and sorts nil-org groups safely and hides tier badge when org is nil. |
+| lib/custyard_web/live/staff/settings_live.ex | Adds Intake settings card with edit/save flow and numeric parsing/validation. |
+| lib/custyard_web/live/staff/neglect_report_live.ex | Renders and sorts nil-org groups safely and hides tier badge when org is nil. |
 
 ---
 
@@ -118,15 +118,15 @@ Show a summary per file
 | ---- | ----------- |
 | `lib/custyard/conversations.ex` | Expands org scoping to include nil-org conversations and adds `broadcast_to_org/2` to prevent malformed org-topic broadcasts. |
 | `lib/custyard/authorization.ex` | Updates access policy so all operator roles can access nil-org conversations. |
-| `lib/custyard_web/live/operator/conversation_live.ex` | Subscribes nil-org conversations to the global topic, renders “Unlinked prospect” safely, and shows the source badge. |
-| `lib/custyard_web/live/operator/attention_queue_live.ex` | Renders nil-org rows safely (no org/tier deref) and shows source badges on queue cards. |
+| `lib/custyard_web/live/staff/conversation_live.ex` | Subscribes nil-org conversations to the global topic, renders “Unlinked prospect” safely, and shows the source badge. |
+| `lib/custyard_web/live/staff/attention_queue_live.ex` | Renders nil-org rows safely (no org/tier deref) and shows source badges on queue cards. |
 | `lib/custyard_web/components/operator_components.ex` | Enhances `source_badge/1` with curated labels/colors and a humanized fallback label. |
 | `lib/custyard/webhooks/purposes/sender_matching.ex` | Routes org-topic publishes through `Conversations.broadcast_to_org/2` to skip nil org IDs. |
 | `lib/custyard/conversations/dormancy_checker.ex` | Routes org-topic publishes through `Conversations.broadcast_to_org/2` to skip nil org IDs. |
 | `test/custyard/conversations_test.exs` | Adds coverage for nil-org inclusion in scoped queries and for org-topic broadcast skipping. |
 | `test/custyard/authorization_test.exs` | Updates expectations for nil-org access across operator roles and adds a non-operator denial test. |
-| `test/custyard_web/live/operator/conversation_live_test.exs` | Adds nil-org rendering/access/reply tests and source badge assertions. |
-| `test/custyard_web/live/operator/attention_queue_live_test.exs` | Adds nil-org queue visibility and source badge rendering tests. |
+| `test/custyard_web/live/staff/conversation_live_test.exs` | Adds nil-org rendering/access/reply tests and source badge assertions. |
+| `test/custyard_web/live/staff/attention_queue_live_test.exs` | Adds nil-org queue visibility and source badge rendering tests. |
 | `test/custyard_web/components/operator_components_test.exs` | Adds focused tests for source badge labels and fallback behavior. |
 
 ---
@@ -141,22 +141,22 @@ The broadcast hygiene, render guards, and auth changes are solid, but one gap in
 
 When a nil-org conversation is open, conversation_live.ex subscribes to the global "conversations" topic. sender_matching.ex broadcasts {:conversation_created, id} on that topic every time a new inbound email creates a conversation — which is routine. conversation_live.ex has no handle_info clause for :conversation_created, and no catch-all. attention_queue_live.ex has an explicit catch-all with the comment "to prevent LiveView crashes," which is direct evidence that the missing guard causes real crashes. Any new inbound email while an operator is viewing an unlinked conversation will disconnect that LiveView session.
 
-lib/custyard_web/live/operator/conversation_live.ex — needs a catch-all handle_info (or an explicit {:conversation_created, _id} clause) to match what attention_queue_live.ex already does.
+lib/custyard_web/live/staff/conversation_live.ex — needs a catch-all handle_info (or an explicit {:conversation_created, _id} clause) to match what attention_queue_live.ex already does.
 
 Important Files Changed
 
 | Filename | Overview |
 |----------|----------|
-| lib/custyard_web/live/operator/conversation_live.ex | Adds nil-org rendering, global topic fallback subscription, and broadcast_to_org migration — but the global topic subscription introduces a crash risk from unhandled {:conversation_created, id} messages |
-| lib/custyard/authorization.ex | Adds nil-org conversation access for all OperatorAccount roles; clause ordering is correct (super_admin first, nil-org second, org-match last, catch-all deny at bottom); documented and tested |
+| lib/custyard_web/live/staff/conversation_live.ex | Adds nil-org rendering, global topic fallback subscription, and broadcast_to_org migration — but the global topic subscription introduces a crash risk from unhandled {:conversation_created, id} messages |
+| lib/custyard/authorization.ex | Adds nil-org conversation access for all StaffAccount roles; clause ordering is correct (super_admin first, nil-org second, org-match last, catch-all deny at bottom); documented and tested |
 | lib/custyard/conversations.ex | Adds broadcast_to_org/2 with nil guard, updates apply_organization_filter to OR-include nil-org rows for org-scoped queries; logic is sound and the new nil-org skip in broadcast is a strict improvement over interpolating a bare topic |
 | lib/custyard/conversations/dormancy_checker.ex | Migrates to broadcast_to_org; the inner join on organization in stale_conversations/0 already excludes nil-org conversations so the nil guard in broadcast_to_org is unreachable here but harmlessly defensive. **Superseded 2026-07-25**: the inner join was a bug, not a design choice — see the correction under Minor Observations below. The nil guard is now reachable. |
 | lib/custyard_web/components/operator_components.ex | Adds human labels for source atoms and a humanized fallback; String.capitalize gives "Public intake" for :public_intake as expected; unknown sources render neutrally without requiring a code change |
-| lib/custyard_web/live/operator/attention_queue_live.ex | Migrates raw broadcasts to broadcast_to_org, adds source_badge to queue card, and guards org-name/tier display for nil-org conversations; has a catch-all handle_info that conversation_live.ex is missing |
+| lib/custyard_web/live/staff/attention_queue_live.ex | Migrates raw broadcasts to broadcast_to_org, adds source_badge to queue card, and guards org-name/tier display for nil-org conversations; has a catch-all handle_info that conversation_live.ex is missing |
 
 Comments Outside Diff (1)
 
-1. `lib/custyard_web/live/operator/conversation_live.ex`, line 361-377 ([link](https://github.com/onetimesecret/custyard/blob/06ec6a19edec3a60ea1f7826dda57fd67f96d14c/lib/custyard_web/live/operator/conversation_live.ex#L361-L377))
+1. `lib/custyard_web/live/staff/conversation_live.ex`, line 361-377 ([link](https://github.com/onetimesecret/custyard/blob/06ec6a19edec3a60ea1f7826dda57fd67f96d14c/lib/custyard_web/live/staff/conversation_live.ex#L361-L377))
 
    [P1]  **Missing catch-all causes crashes when viewing nil-org conversations**
 
@@ -181,7 +181,7 @@ Comments Outside Diff (1)
 
 **Authorization changes** (`lib/custyard/authorization.ex:74-88`): The clause ordering is correct - super_admin first, nil-org second, org-match third, catch-all deny last. The docstring clearly explains the rationale.
 
-**LiveView crash prevention** (`lib/custyard_web/live/operator/conversation_live.ex:361-367`): The explicit `handle_info({:conversation_created, _id}, socket)` clause plus catch-all addresses the Greptile finding. Both LiveViews now have matching defensive patterns.
+**LiveView crash prevention** (`lib/custyard_web/live/staff/conversation_live.ex:361-367`): The explicit `handle_info({:conversation_created, _id}, socket)` clause plus catch-all addresses the Greptile finding. Both LiveViews now have matching defensive patterns.
 
 **Test coverage**: 22 new tests with good coverage of edge cases - org scoping, nil-org visibility, broadcast isolation, and the malformed topic refutation test.
 
@@ -303,7 +303,7 @@ Show a summary per file
 | test/custyard/conversations_test.exs | Adds tests for derived `reply_channel/1` and queue preloads. |
 | test/custyard/conversation_test.exs | Adds tests for org requirement exemptions + creation-only intake_source_key behavior. |
 | test/custyard/auth/token_test.exs | Adds tests for token generation + SHA-256 hashing primitive. |
-| test/custyard_web/live/operator/attention_queue_live_test.exs | Adds LiveView tests for intake badges (source tag + no-reply-channel). |
+| test/custyard_web/live/staff/attention_queue_live_test.exs | Adds LiveView tests for intake badges (source tag + no-reply-channel). |
 | test/custyard_web/components/operator_components_test.exs | Adds component tests for public-intake styling and new badges/tags. |
 | priv/repo/migrations/20260705150002_create_intake_sources.exs | Creates `intake_sources` table + unique key index. |
 | priv/repo/migrations/20260705150001_create_prospects.exs | Creates `prospects` table + unique constraints for 1:1 conversation + token hash. |
@@ -319,7 +319,7 @@ Show a summary per file
 | lib/custyard/conversation.ex | Adds `:public_intake` source, org-exempt validation, intake_source_key, and `intake_changeset/2`. |
 | lib/custyard/contact.ex | Switches Contact email validation to delegate to `Custyard.EmailAddress`. |
 | lib/custyard/auth/token.ex | Adds shared token generation + SHA-256 hash primitive for hashed-at-rest bearer tokens. |
-| lib/custyard_web/live/operator/attention_queue_live.ex | Wires reply-channel derivation and renders intake-related badges/tags. |
+| lib/custyard_web/live/staff/attention_queue_live.ex | Wires reply-channel derivation and renders intake-related badges/tags. |
 | lib/custyard_web/components/operator_components.ex | Refactors source badge styling and adds intake tag + no-reply-channel badge components. |
 
 ---
@@ -599,19 +599,19 @@ Merged: 2026-07-12T02:09:16Z
 
 ### Inline comments
 
-#### [Copilot] `lib/custyard_web/live/operator/intake_sources_live.ex:71`
+#### [Copilot] `lib/custyard_web/live/staff/intake_sources_live.ex:71`
 
 `id` arrives from the client as a string and is passed directly into `Intake.get_source/1`. Other operator LiveViews defensively `Integer.parse/1` IDs to avoid crashes on forged/non-integer params; this should do the same to prevent an `Ecto.Query.CastError` from taking down the LiveView.
 
-#### [Copilot] `lib/custyard_web/live/operator/intake_sources_live.ex:125`
+#### [Copilot] `lib/custyard_web/live/staff/intake_sources_live.ex:125`
 
 `toggle_enabled` forwards the raw string `id` into `toggle_enabled/2`, which then calls `Intake.get_source/1`. For consistency with other operator LiveViews and to avoid crashes on forged/non-integer IDs, parse/validate the id before calling into the context.
 
-#### [Copilot] `lib/custyard_web/live/operator/intake_sources_live.ex:137`
+#### [Copilot] `lib/custyard_web/live/staff/intake_sources_live.ex:137`
 
 `delete` forwards the raw string `id` into `delete_source/2`, which then calls `Intake.get_source/1`. A forged non-integer id can raise and crash the LiveView; parse/validate the id first (matching the defensive pattern used elsewhere in operator LiveViews).
 
-#### [greptile-apps[bot]] `lib/custyard_web/live/operator/intake_sources_live.ex:236`
+#### [greptile-apps[bot]] `lib/custyard_web/live/staff/intake_sources_live.ex:236`
 
 [P2]  The edit path in `rebuild_form` calls `IntakeSource.changeset/2` (the creation changeset) rather than `update_changeset/2`. Today this is harmless — `maybe_strip_key` strips `:key` from attrs before either changeset runs, and the struct's stored key is always valid — but it means the form's live-validation profile includes `validate_required(:key)`, `validate_format(:key, …)`, and `unique_constraint(:key)` that `update_changeset/2` deliberately omits. Any future divergence between the two changesets (e.g. adding a field only valid at creation) would silently show phantom errors in the edit form without affecting the save path, which would be confusing to debug.
 
@@ -656,8 +656,8 @@ Show a summary per file
 | test/custyard/settings_test.exs | Adds branding read/update/validation tests, including key dropping and format enforcement. |
 | test/custyard/intake_test.exs | Verifies `Intake.update_source/2` ignores attempted key changes. |
 | test/custyard/intake_source_test.exs | Tests `IntakeSource.update_changeset/2` never casts `:key` and still validates content. |
-| test/custyard_web/live/operator/settings_live_test.exs | Exercises Branding card UX and the settings double-gate behavior. |
-| test/custyard_web/live/operator/intake_sources_live_test.exs | Adds end-to-end tests for intake source listing/create/edit/questions/toggle/delete + auth gates. |
+| test/custyard_web/live/staff/settings_live_test.exs | Exercises Branding card UX and the settings double-gate behavior. |
+| test/custyard_web/live/staff/intake_sources_live_test.exs | Adds end-to-end tests for intake source listing/create/edit/questions/toggle/delete + auth gates. |
 | priv/repo/migrations/20260705160000_add_branding_to_settings.exs | Adds `branding` map column to `settings`. |
 | lib/custyard/upload_path.ex | Introduces shared uploads-only path validator to prevent traversal/null-byte/external URL usage. |
 | lib/custyard/settings.ex | Implements branding storage/validation and exposes `get_branding/0` + `update_branding/1`. |
@@ -665,8 +665,8 @@ Show a summary per file
 | lib/custyard/intake.ex | Adds `get_source/1` and switches updates to use `IntakeSource.update_changeset/2`. |
 | lib/custyard/intake_source.ex | Adds `max_questions/0`, splits create vs update changesets, and enforces key immutability on update. |
 | lib/custyard_web/router.ex | Registers `/operator/intake-sources` under the super-admin live_session. |
-| lib/custyard_web/live/operator/settings_live.ex | Adds Branding card UI and save handler wired to `Settings.update_branding/1`. |
-| lib/custyard_web/live/operator/intake_sources_live.ex | Adds super-admin LiveView CRUD for intake sources with Q&A row management. |
+| lib/custyard_web/live/staff/settings_live.ex | Adds Branding card UI and save handler wired to `Settings.update_branding/1`. |
+| lib/custyard_web/live/staff/intake_sources_live.ex | Adds super-admin LiveView CRUD for intake sources with Q&A row management. |
 | lib/custyard_web/components/layouts/operator.html.heex | Adds “Intake Sources” navigation entry. |
 
 ---
@@ -681,27 +681,27 @@ Safe to merge. All security-relevant paths (key immutability, upload path traver
 
 The edit form rebuilds its changeset with `IntakeSource.changeset/2` (creation changeset) instead of `update_changeset/2`, so the live validation profile in edit mode includes key-format and key-required rules that the actual save path does not enforce. `maybe_strip_key` keeps this from surfacing now, but the two code paths are out of sync. Everything else — branding validation, upload-path extraction, auth gating, key immutability — is correct and thoroughly tested.
 
-`lib/custyard_web/live/operator/intake_sources_live.ex` — the `rebuild_form` changeset choice for edit mode.
+`lib/custyard_web/live/staff/intake_sources_live.ex` — the `rebuild_form` changeset choice for edit mode.
 
 Important Files Changed
 
 | Filename | Overview |
 |----------|----------|
-| lib/custyard_web/live/operator/intake_sources_live.ex | 596-line CRUD LiveView for intake sources; double-gate auth, two-layer key-immutability enforcement, and question-row management are all correct. One minor design mismatch: `rebuild_form` uses the creation changeset for edit-mode validation (see comment). |
+| lib/custyard_web/live/staff/intake_sources_live.ex | 596-line CRUD LiveView for intake sources; double-gate auth, two-layer key-immutability enforcement, and question-row management are all correct. One minor design mismatch: `rebuild_form` uses the creation changeset for edit-mode validation (see comment). |
 | lib/custyard/settings.ex | Adds `branding` map field with whitelist validation matching the intake_config pattern. `get_branding/0` silently drops malformed DB entries before `String.to_existing_atom` — safe because the whitelist guarantees only the three known atoms reach that call. |
 | lib/custyard/upload_path.ex | New shared module for upload-path validation; covers external URLs, `..`, `%2e`-encoded traversal, and null bytes. Organization.logo_url now delegates here, ensuring the two callers can't drift. |
 | lib/custyard/intake_source.ex | Adds `update_changeset/2` that intentionally omits `:key` cast (immutability enforcement at the schema layer), and extracts shared content validations into `validate_content/1`. Clean and correct. |
 | lib/custyard/intake.ex | Adds `get_source/1` for operator lookup and switches `update_source/2` to `update_changeset/2`. Minimal and correct. |
 | lib/custyard/organization.ex | Logo URL validation refactored to delegate to `UploadPath.validate/1`; behavior is identical to the inline logic it replaces. |
-| lib/custyard_web/live/operator/settings_live.ex | Adds branding card with edit/save/cancel flow matching the existing intake_config card pattern. Blank-field filtering before save correctly implements the whole-map-replace clear semantics. |
+| lib/custyard_web/live/staff/settings_live.ex | Adds branding card with edit/save/cancel flow matching the existing intake_config card pattern. Blank-field filtering before save correctly implements the whole-map-replace clear semantics. |
 | lib/custyard_web/router.ex | Single new route inside the existing `operator_super_admin` live_session — correctly scoped. |
 | priv/repo/migrations/20260705160000_add_branding_to_settings.exs | Additive migration; adds `:map` (jsonb) column with `%{}` default. Consistent with `intake_config` treatment. |
-| test/custyard_web/live/operator/intake_sources_live_test.exs | 374-line test file covering listing, create, edit (including forged-key direct invocation), Q&A row management, toggle, delete, and auth double-gate. Comprehensive. |
+| test/custyard_web/live/staff/intake_sources_live_test.exs | 374-line test file covering listing, create, edit (including forged-key direct invocation), Q&A row management, toggle, delete, and auth double-gate. Comprehensive. |
 | test/custyard/upload_path_test.exs | Covers valid paths, all traversal/encoding variants, external URLs, and non-binary inputs. |
 | test/custyard/settings_test.exs | Tests cover get_branding defaults, malformed-entry filtering, round-trips, clear-on-omit semantics, traversal paths, hex format, length bounds, and blank-name rejection. |
 | test/custyard/intake_source_test.exs | Adds tests for `update_changeset/2`: key is never cast (both atom and string key shapes), and content validations still fire. |
 | test/custyard/intake_test.exs | Adds context-layer proof that `update_source/2` ignores `:key` in both atom and string param shapes, and verifies via `Repo.reload!`. |
-| test/custyard_web/live/operator/settings_live_test.exs | Adds branding card tests: defaults render, valid save round-trips, blank/whitespace fields clear values, traversal and bad-color paths show flash errors, non-super-admin double-gate verified by direct invocation. |
+| test/custyard_web/live/staff/settings_live_test.exs | Adds branding card tests: defaults render, valid save round-trips, blank/whitespace fields clear values, traversal and bad-color paths show flash errors, non-super-admin double-gate verified by direct invocation. |
 | lib/custyard_web/components/layouts/operator.html.heex | Adds "Intake Sources" nav entry in both desktop and mobile sections, matching the existing Projects/Settings pattern including active-class logic and data-testid on desktop only. |
 
 ### Claude review bot
@@ -975,7 +975,7 @@ Show a summary per file
 | test/custyard/email/headers_test.exs | Tests for shared email header sanitization/quoting helpers. |
 | test/custyard/audit_event_test.exs | Extends event type coverage to include `:slug_released`. |
 | test/custyard_web/live/resume_live_test.exs | LiveView tests for the Resume slug-claim panel behavior and rate limiting. |
-| test/custyard_web/live/operator/slugs_live_test.exs | Tests for operator listing/release and authorization double-gate. |
+| test/custyard_web/live/staff/slugs_live_test.exs | Tests for operator listing/release and authorization double-gate. |
 | test/custyard_web/controllers/claim_confirmation_controller_test.exs | Tests for scanner-safe `/c` GET peek, POST consume, oracle neutrality, and rate limiting. |
 | priv/repo/migrations/20260705170000_create_slugs.exs | Raw-SQL CREATE TABLE with CHECK constraints + indexes for registry invariants. |
 | lib/custyard/slugs/claim_expiry.ex | Hourly GenServer sweep to delete expired claimed rows. |
@@ -990,7 +990,7 @@ Show a summary per file
 | lib/custyard_web/plugs/no_referrer.ex | Updates docs and scope listing to include `/c`. |
 | lib/custyard_web/live/resume_live.ex | Adds claim form/panel, claim+email capture sequencing, resend flow, and UI. |
 | lib/custyard_web/live/resume_auth.ex | Updates docs around plaintext token handling vs hash-based auth. |
-| lib/custyard_web/live/operator/slugs_live.ex | New operator LiveView to list/release slugs with audit logging. |
+| lib/custyard_web/live/staff/slugs_live.ex | New operator LiveView to list/release slugs with audit logging. |
 | lib/custyard_web/controllers/claim_confirmation_html/unavailable.html.heex | Unavailable confirmation template (uniform failure page). |
 | lib/custyard_web/controllers/claim_confirmation_html/show.html.heex | GET peek template with confirm form. |
 | lib/custyard_web/controllers/claim_confirmation_html/confirmed.html.heex | POST success template (no resume URL leakage). |
@@ -1023,7 +1023,7 @@ Important Files Changed
 | priv/repo/migrations/20260705170000_create_slugs.exs | Raw-SQL CREATE TABLE with both DB CHECK constraints (status enum + provisioned↔org_id pairing), partial unique indexes on conversation_id/org_id/token_hash, and supporting indexes — all appropriate for SQLite's constraint model. |
 | lib/custyard/intake/claim_email.ex | Confirmation email composer: follows the LoginEmail pattern, applies Headers discipline, body contains only server-controlled values (slug, platform URLs) with no prospect content — XSS and spam-relay risks correctly mitigated. |
 | lib/custyard_web/controllers/claim_confirmation_controller.ex | Scanner-safe GET peek / POST confirm controller; all four failure classes (invalid/expired/used/purged) render one identical page with no validity oracle — correct. |
-| lib/custyard_web/live/operator/slugs_live.ex | Operator slug list + release: double-gated (live_session + event re-check), conditional delete prevents stale-click promotion races, audit event on release — all correct. |
+| lib/custyard_web/live/staff/slugs_live.ex | Operator slug list + release: double-gated (live_session + event re-check), conditional delete prevents stale-click promotion races, audit event on release — all correct. |
 | lib/custyard/slugs/claim_expiry.ex | Hourly sweep GenServer with injectable clock, rescue-wrapped sweep, off in test — follows the existing scheduler pattern correctly. |
 | lib/custyard_web/router.ex | Adds `/c/:token` (GET peek) and `/c/:token/confirm` (POST consume) under `:public_intake` pipeline, and `/operator/slugs` live view — all under correct pipe_through and auth gates. |
 | lib/custyard/email/headers.ex | Extracted shared header-discipline helpers (sanitize_header_text, quote_display_name); behavior is byte-identical to the Outbound privates it replaces. |
@@ -1090,7 +1090,7 @@ Merged: 2026-07-12T02:19:25Z
 
 ### Inline comments
 
-#### [Copilot] `lib/custyard_web/live/operator/conversation_live.ex:138`
+#### [Copilot] `lib/custyard_web/live/staff/conversation_live.ex:138`
 
 This branch checks `conversation.source` from the pre-reload snapshot, but the socket has just been reloaded. Using the stale local `conversation` can lead to inconsistent behavior if the conversation source ever changes (or if this pattern is copied to other fields). Prefer reading from `socket.assigns.conversation` after `reload_conversation/1`.
 
@@ -1110,7 +1110,7 @@ The retention split query doesn't account for `conversations.source` being NULL.
 
 Before this PR, the nil-org fallback in `from_name/1` returned `"Custyard"` — a constant. Now it calls `branding_name()` → `Settings.get_branding()`, which is a DB round-trip on every email composition. The public-intake clause (`defp from_name(%{source: :public_intake})`) is intentional. The catch-all clause is the unintended wider scope. If `Settings.get_branding/0` is uncached this adds a query per outbound email for every non-intake conversation that lacks an organization. The PR description acknowledges the scope creep ("unpinned in the non-intake direction") but the code has no comment to that effect, so the next developer won't know this is a carry-forward rather than deliberate design.
 
-#### [greptile-apps[bot]] `lib/custyard_web/live/operator/conversation_live.ex:143`
+#### [greptile-apps[bot]] `lib/custyard_web/live/staff/conversation_live.ex:143`
 
 [P2]  **Flash suppression uses current deliverability, not the delivery status of the message just sent**
 
@@ -1139,12 +1139,12 @@ Show a summary per file
 | test/custyard/email/outbound_test.exs | Adds public-intake prospect delivery matrix tests (consent, From identity, threading, header discipline). |
 | test/custyard/conversations_test.exs | Adds send-reply consent-gate tests and retention split tests (including purge cascade to prospect). |
 | test/custyard_web/live/resume_live_test.exs | Verifies purged resume tokens land on the uniform unavailable page. |
-| test/custyard_web/live/operator/conversation_live_test.exs | Validates operator UI behavior for `:withheld` and consent advisory visibility. |
+| test/custyard_web/live/staff/conversation_live_test.exs | Validates operator UI behavior for `:withheld` and consent advisory visibility. |
 | lib/custyard/message.ex | Introduces `:withheld` and documents its intent vs provider-side suppression. |
 | lib/custyard/intake.ex | Generates synthetic RFC 5322 Message-IDs for prospect web messages and broadcasts on consent flips. |
 | lib/custyard/email/outbound.ex | Adds defense-in-depth consent re-check, recipient fallback to prospect email, and From-name branding behavior. |
 | lib/custyard/conversations.ex | Implements reply deliverability classification, primary consent gate, and retention split for `:public_intake`. |
-| lib/custyard_web/live/operator/conversation_live.ex | Adds consent advisory, `:withheld` delivery indicator, and deliverability assigns used by the UI. |
+| lib/custyard_web/live/staff/conversation_live.ex | Adds consent advisory, `:withheld` delivery indicator, and deliverability assigns used by the UI. |
 
 ---
 
@@ -1158,7 +1158,7 @@ Safe to merge. The consent gate is correct at both layers, the force-preload dis
 
 Three non-blocking findings: the public reply_delivery/1 API has no freshness contract in its docstring (a footgun for future callers), branding_name() quietly added a DB read to all nil-org email composition (not just intake, as intended), and the post-send flash uses recomputed deliverability rather than the actual delivery status of the message just sent. None of these affect correctness of the consent gate or data integrity.
 
-lib/custyard/conversations.ex (reply_delivery/1 docstring), lib/custyard/email/outbound.ex (from_name fallback scope), and lib/custyard_web/live/operator/conversation_live.ex (flash suppression logic) are the three spots worth a second look before the next developer touches them.
+lib/custyard/conversations.ex (reply_delivery/1 docstring), lib/custyard/email/outbound.ex (from_name fallback scope), and lib/custyard_web/live/staff/conversation_live.ex (flash suppression logic) are the three spots worth a second look before the next developer touches them.
 
 Important Files Changed
 
@@ -1168,7 +1168,7 @@ Important Files Changed
 | lib/custyard/email/outbound.ex | Secondary consent gate via resolve_recipient, from_name public-intake clause, and branding_name fallback. The from_name non-intake fallback now calls branding_name() (DB read) for all nil-org mail, broadening scope beyond intake. Current behavior is reasonable, but the change is undocumented in the code. |
 | lib/custyard/intake.ex | Adds synthetic Message-IDs to prospect web messages and broadcasts {:conversation_updated} on set_notification. Both changes are correct and well-scoped. broadcast_notification_change correctly gates on {:ok, _}. |
 | lib/custyard/message.ex | Adds :withheld to @delivery_statuses. No migration needed (Ecto.Enum stored as string in SQLite). Change is minimal and correct. |
-| lib/custyard_web/live/operator/conversation_live.ex | Adds assign_reply_delivery, the :withheld delivery indicator, and the consent advisory. The post-send flash logic uses reply_will_email? (current consent state after reload, not delivery status of the just-sent message) — a minor category mismatch, but the withheld delivery indicator in the thread is authoritative. |
+| lib/custyard_web/live/staff/conversation_live.ex | Adds assign_reply_delivery, the :withheld delivery indicator, and the consent advisory. The post-send flash logic uses reply_will_email? (current consent state after reload, not delivery status of the just-sent message) — a minor category mismatch, but the withheld delivery indicator in the thread is authoritative. |
 | test/custyard/conversations_test.exs | New describe blocks cover both consent gate layers, delivery matrix, retention split, cascade, and From-identity leak. The fresh/1 helper correctly re-reads from DB. Coverage is thorough. |
 | test/custyard/email/outbound_test.exs | Adds prospect-channel, From-identity leak regression, and header-discipline tests. intake_message_fixture correctly bypasses send_reply/3 to exercise the secondary gate directly. |
 | test/custyard_web/live/resume_live_test.exs | Adds retention purge test: verifies prospect cascade, token resolution failure, and uniform unavailable page. Correct end-to-end coverage. |
@@ -1225,7 +1225,7 @@ The catch-all `from_name/1` clause now calls `branding_name()` for all nil-org c
 *Recommendation:* Add a comment at line 162 explaining the scope creep is known and deferred.
 
 **Issue 3: Flash uses recomputed deliverability (P3)**
-`lib/custyard_web/live/operator/conversation_live.ex:121-143`
+`lib/custyard_web/live/staff/conversation_live.ex:121-143`
 
 The `cond` at line 121 now correctly checks `message.delivery_status == :withheld` first (line 125), which is ground truth. This addresses the race condition concern. The remaining branches that check `socket.assigns.reply_will_email?` are secondary fallbacks.
 
@@ -1317,7 +1317,7 @@ The `case count do 1 -> ...; 0 -> ...` only handles two values. If a conversatio
 
 [P2]  **Doc arity mismatch**
 
-Line 230 says `convert_prospect/2` but the actual function is `convert_prospect/3` — the third argument is `%OperatorAccount{}`. Easy to confuse when someone later searches for callers.
+Line 230 says `convert_prospect/2` but the actual function is `convert_prospect/3` — the third argument is `%StaffAccount{}`. Easy to confuse when someone later searches for callers.
 
 ### Copilot PR overview
 
@@ -1341,12 +1341,12 @@ Show a summary per file
 | test/custyard/slugs_test.exs | Adds coverage for `Slugs.promote/2` behavior across confirmed/unconfirmed/absent/already-provisioned cases. |
 | test/custyard/organizations_test.exs | Adds coverage for `Organizations.convert_prospect/3` happy path, contact creation, slug promotion, compensation paths, and concurrency race outcome. |
 | test/custyard/audit_event_test.exs | Extends audit event type coverage to include `:prospect_converted`. |
-| test/custyard_web/live/operator/conversation_live_test.exs | Adds LiveView coverage for convert UI visibility, prefill, authorization gating, and refusal messaging. |
+| test/custyard_web/live/staff/conversation_live_test.exs | Adds LiveView coverage for convert UI visibility, prefill, authorization gating, and refusal messaging. |
 | lib/custyard/slugs.ex | Adds `promote/2` implementation and documents slug promotion semantics. |
 | lib/custyard/organizations.ex | Adds `convert_prospect/3` implementation, including transactional linking and audit recording. |
 | lib/custyard/audit_event.ex | Adds `:prospect_converted` to allowed `AuditEvent` enum values. |
-| lib/custyard_web/live/operator/organizations_live.ex | Removes local `empty_to_nil/1` in favor of shared helper import. |
-| lib/custyard_web/live/operator/conversation_live.ex | Adds convert UI, prefill logic, and event handling to invoke conversion. |
+| lib/custyard_web/live/staff/organizations_live.ex | Removes local `empty_to_nil/1` in favor of shared helper import. |
+| lib/custyard_web/live/staff/conversation_live.ex | Adds convert UI, prefill logic, and event handling to invoke conversion. |
 | lib/custyard_web/form_helpers.ex | Adds shared `empty_to_nil/1` helper for optional text inputs. |
 
 ---
@@ -1361,26 +1361,26 @@ The core conversion logic and compensation path are correct, but the LiveView st
 
 The transaction logic, race guards, and test coverage are thorough. The subscription issue in ConversationLive is a present behavioral gap — after conversion the socket is subscribed to `"conversations"` (global) while the conversation is now linked and will receive state-change broadcasts on `"conversations:org:{id}"`. The operator who just converted a prospect won't see subsequent real-time updates without a page refresh. The non-exhaustive `case count` in `Slugs.promote/2` is a latent crash path if the one-confirmed-slug-per-conversation invariant is ever violated.
 
-lib/custyard_web/live/operator/conversation_live.ex (subscription not re-established after conversion), lib/custyard/slugs.ex (non-exhaustive case count)
+lib/custyard_web/live/staff/conversation_live.ex (subscription not re-established after conversion), lib/custyard/slugs.ex (non-exhaustive case count)
 
 Important Files Changed
 
 | Filename | Overview |
 |----------|----------|
-| lib/custyard_web/live/operator/conversation_live.ex | Adds convert prospect UI with double authorization checks and correct error handling, but PubSub subscription is not updated after conversion leaves the socket subscribed to the wrong topic. |
+| lib/custyard_web/live/staff/conversation_live.ex | Adds convert prospect UI with double authorization checks and correct error handling, but PubSub subscription is not updated after conversion leaves the socket subscribed to the wrong topic. |
 | lib/custyard/organizations.ex | Adds `convert_prospect/3`: two-step flow (create org, then a single transaction for slug promotion, contact creation, and conditional link). Race and compensation logic is correct; post-commit broadcasts and audit trail look solid. |
 | lib/custyard/slugs.ex | Adds `promote/2`: race-safe conditional UPDATE (WHERE status = confirmed). Non-exhaustive `case count` and doc arity mismatch noted. |
 | lib/custyard_web/form_helpers.ex | Extracts `empty_to_nil/2` from `OrganizationsLive` into shared helper; straightforward deduplication. |
 | lib/custyard/audit_event.ex | Adds `:prospect_converted` to the `@event_types` enum list; minimal, correct change. |
 | test/custyard/organizations_test.exs | Comprehensive tests for `convert_prospect/3`: happy path, contact creation, slug promotion states, resume-token untouched, audit event attribution, not-convertible guards, step-2 compensation, concurrent-conversion race, and Lettermint failure. |
-| test/custyard_web/live/operator/conversation_live_test.exs | LiveView tests cover happy path, hidden button for already-linked conversations, role gating for admin operators, and direct unauthorized event submission. |
+| test/custyard_web/live/staff/conversation_live_test.exs | LiveView tests cover happy path, hidden button for already-linked conversations, role gating for admin operators, and direct unauthorized event submission. |
 | test/custyard/slugs_test.exs | Tests for `promote/2` cover confirmed, unconfirmed, no-claim, and already-provisioned cases — all expected states. |
-| lib/custyard_web/live/operator/organizations_live.ex | Removes now-duplicated `empty_to_nil/2` private function; no other changes. |
+| lib/custyard_web/live/staff/organizations_live.ex | Removes now-duplicated `empty_to_nil/2` private function; no other changes. |
 | test/custyard/audit_event_test.exs | Adds `:prospect_converted` to the expected event types assertion; correct. |
 
 Comments Outside Diff (1)
 
-1. `lib/custyard_web/live/operator/conversation_live.ex`, line 49-66 ([link](https://github.com/onetimesecret/custyard/blob/3f1d6e169b984479982d352243fb48aebb0b7976/lib/custyard_web/live/operator/conversation_live.ex#L49-L66))
+1. `lib/custyard_web/live/staff/conversation_live.ex`, line 49-66 ([link](https://github.com/onetimesecret/custyard/blob/3f1d6e169b984479982d352243fb48aebb0b7976/lib/custyard_web/live/staff/conversation_live.ex#L49-L66))
 
    [P1]  **PubSub subscription not updated after conversion**
 
@@ -1404,7 +1404,7 @@ This is a well-structured PR that implements the final piece of the public-intak
 ### Issues Requiring Attention
 
 #### 1. PubSub Subscription Not Updated After Conversion (P1)
-**File:** `lib/custyard_web/live/operator/conversation_live.ex:49-66`
+**File:** `lib/custyard_web/live/staff/conversation_live.ex:49-66`
 
 The `mount_conversation/3` subscribes to topics based on `organization_id`:
 - Nil-org conversations subscribe to global `"conversations"` topic
@@ -1458,7 +1458,7 @@ Alternatively, add a database constraint to enforce the invariant.
 #### 3. Doc Arity Mismatch (P2)
 **File:** `lib/custyard/slugs.ex:21-22, 253`
 
-The moduledoc at line 21 and the `@doc` at line 253 reference `convert_prospect/2`, but the actual function is `Organizations.convert_prospect/3` (the third argument is `%OperatorAccount{}`).
+The moduledoc at line 21 and the `@doc` at line 253 reference `convert_prospect/2`, but the actual function is `Organizations.convert_prospect/3` (the third argument is `%StaffAccount{}`).
 
 ---
 

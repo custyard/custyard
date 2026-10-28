@@ -115,7 +115,7 @@ defmodule Custyard.InboundRoute do
   end
 
   # Same hostname rule as Custyard.Organization domains. Hostnames are
-  # case-insensitive and the operator UI copies these verbatim, so store
+  # case-insensitive and the staff UI copies these verbatim, so store
   # them lowercased.
   @hostname_regex ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
 

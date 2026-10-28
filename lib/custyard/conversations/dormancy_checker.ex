@@ -102,14 +102,14 @@ defmodule Custyard.Conversations.DormancyChecker do
 
   # Dormant means no activity from either side for the whole period
   # (sdd.md, US-3). Measuring only the customer side turned a conversation
-  # dormant minutes after the operator replied and marked it waiting, before
-  # the customer had any chance to answer. An operator who never acted does
+  # dormant minutes after the staff replied and marked it waiting, before
+  # the customer had any chance to answer. An staff who never acted does
   # not hold the conversation back.
   defp quiet_since(cutoff) do
     dynamic(
       [c],
       coalesce(c.last_customer_action_at, c.inserted_at) <= ^cutoff and
-        (is_nil(c.last_operator_action_at) or c.last_operator_action_at <= ^cutoff)
+        (is_nil(c.last_staff_action_at) or c.last_staff_action_at <= ^cutoff)
     )
   end
 
@@ -123,7 +123,7 @@ defmodule Custyard.Conversations.DormancyChecker do
   end
 
   # Guarded by the whole stale condition, re-evaluated by the UPDATE itself:
-  # a customer reply that reactivated the conversation, or an operator reply
+  # a customer reply that reactivated the conversation, or a staff reply
   # that left it :waiting, between the SELECT above and this UPDATE must win,
   # not be overwritten with :dormant from a stale struct.
   defp transition_to_dormant(%Conversation{id: id} = conversation, thresholds) do

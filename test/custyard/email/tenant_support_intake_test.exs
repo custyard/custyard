@@ -111,9 +111,9 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert continued.organization_id == conversation.organization_id
     assert {:ok, "bob@partner.example"} = Outbound.reply_recipient(continued)
 
-    # Without a channel, pass the operator identity so the service's support
+    # Without a channel, pass the staff identity so the service's support
     # address remains our side of the reply-all envelope.
-    assert Conversations.default_reply_cc(continued, operator_email: "support@service.example") ==
+    assert Conversations.default_reply_cc(continued, staff_email: "support@service.example") ==
              ["alice@acme.example"]
 
     assert {:ok, no_headers} =
@@ -370,7 +370,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
 
     {:ok, channel} =
       Custyard.InboundChannels.update_channel(channel, %{sending_domain: "mail.service.example"},
-        operator: insert_operator_account(tenant_id: tenant.id, role: "admin")
+        staff: insert_staff_account(tenant_id: tenant.id, role: "admin")
       )
 
     conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
@@ -384,7 +384,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
 
     assert {:ok, outgoing} =
              Conversations.send_reply(conversation, "Here is how to get started.",
-               operator_email: "private@operator.example"
+               staff_email: "private@staff.example"
              )
 
     assert outgoing.sender_email == "support@mail.service.example"
@@ -474,7 +474,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert other_conversation.id != conversation.id
   end
 
-  test "a tenant without a sending identity never falls back to the instance or operator address" do
+  test "a tenant without a sending identity never falls back to the instance or staff address" do
     tenant = tenant()
     conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
 
@@ -486,7 +486,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
 
     assert {:ok, outgoing} =
              Conversations.send_reply(conversation, "An answer",
-               operator_email: "private@operator.example"
+               staff_email: "private@staff.example"
              )
 
     assert outgoing.sender_email == nil
@@ -494,8 +494,8 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert failed.delivery_failure_kind == :configuration
 
     channel = shared_channel(tenant)
-    operator = insert_operator_account(role: "admin", tenant_id: tenant.id)
-    assert {:ok, pending} = Outbound.retry(Custyard.Scope.for_staff(operator, tenant), failed)
+    staff = insert_staff_account(role: "admin", tenant_id: tenant.id)
+    assert {:ok, pending} = Outbound.retry(Custyard.Scope.for_staff(staff, tenant), failed)
     assert pending.sender_email == channel.public_address
     assert pending.inbound_channel_id == channel.id
     assert pending.to_addresses == outgoing.to_addresses

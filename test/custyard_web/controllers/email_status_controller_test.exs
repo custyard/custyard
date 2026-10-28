@@ -16,7 +16,7 @@ defmodule CustyardWeb.EmailStatusControllerTest do
     outbound =
       insert_message(
         conversation_id: conversation.id,
-        source: :operator,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: @provider_id
       )

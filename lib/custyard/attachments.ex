@@ -6,13 +6,13 @@ defmodule Custyard.Attachments do
   stored, `fetch_for_message/3` walks the descriptors in order, fetches each
   within the channel's per-message cap into a content-addressed file under
   the attachment directory and records a `Custyard.MessageAttachment` row.
-  Attachments past the cap are listed as skipped so the operator knows they
+  Attachments past the cap are listed as skipped so the staff knows they
   existed. The signed URL is never persisted and never logged.
 
   Files are tenant scoped and named by SHA-256 (`<dir>/<tenant>/<ab>/<sha256>`), so a declared
   filename can never become a path and identical content is stored once.
-  Serving goes through `CustyardWeb.Operator.AttachmentController`, which
-  checks the operator's access to the conversation; the directory is never
+  Serving goes through `CustyardWeb.Staff.AttachmentController`, which
+  checks the staff's access to the conversation; the directory is never
   a static path.
   """
 
@@ -50,7 +50,7 @@ defmodule Custyard.Attachments do
     * `:limit_bytes` - per-message cap; `0` records every attachment as
       skipped with reason `disabled` (default: `default_limit_bytes/0`)
     * `:skip` - a skip reason (`"suspect"`) that records every attachment
-      without fetching, for mail the operator has not yet trusted
+      without fetching, for mail the staff has not yet trusted
 
   Returns `{:ok, rows}`. Failed and unfinished slots resume on delivery replay;
   fetched slots are reused. URLs are never retained. The dispatcher withholds
@@ -426,8 +426,8 @@ defmodule Custyard.Attachments do
   def file_path(%MessageAttachment{}), do: nil
 
   @doc """
-  An attachment the operator may download: fetched, on a message the
-  operator's role and organization give access to. `nil` otherwise, so the
+  An attachment the staff may download: fetched, on a message the
+  staff's role and organization give access to. `nil` otherwise, so the
   caller answers 404 for missing and foreign attachments alike.
   """
   def get(%Scope{tenant_id: tenant_id} = scope, id) when is_integer(id) do

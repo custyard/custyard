@@ -1,15 +1,15 @@
 defmodule Custyard.Intake.ArrivalEmail do
   @moduledoc """
-  Composes and delivers the operator "a prospect arrived" notification.
+  Composes and delivers the staff "a prospect arrived" notification.
 
   Public-intake submissions previously produced only a PubSub broadcast,
-  which reaches nothing unless an operator already has the attention queue
+  which reaches nothing unless a staff already has the attention queue
   open in a browser. This is the out-of-band arrival signal.
 
   Direction matters for the content rules. `Intake.ClaimEmail` goes *to* a
   prospect, so it may carry no prospect-supplied content — it must be
-  useless as a spam relay. This one goes *to the operator* at the
-  tenant's staff (or the default instance's configured `:operator_email`), so it does
+  useless as a spam relay. This one goes *to the staff* at the
+  tenant's staff (or the default instance's configured `:staff_email`), so it does
   carry the submission excerpt: without it the alert can't be triaged.
   Prospect text is HTML-escaped in the body and run through the shared
   `Custyard.Email.Headers` discipline in the subject, where a bare newline
@@ -39,7 +39,7 @@ defmodule Custyard.Intake.ArrivalEmail do
   @excerpt_max_length 500
 
   @doc """
-  Notify the operator that a public-intake submission arrived.
+  Notify the staff that a public-intake submission arrived.
 
   `conversation` is the committed conversation, `source` the intake source
   it came through, and `body` the (already normalized and truncated)
@@ -85,7 +85,7 @@ defmodule Custyard.Intake.ArrivalEmail do
   """
   def compose(%Conversation{} = conversation, %IntakeSource{} = source, body) do
     excerpt = excerpt(body)
-    conversation_url = operator_conversation_url(conversation)
+    conversation_url = staff_conversation_url(conversation)
 
     new()
     |> to(TenantDelivery.recipients(source.tenant_id))
@@ -144,7 +144,7 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   defp excerpt(_body), do: ""
 
-  defp operator_conversation_url(conversation) do
+  defp staff_conversation_url(conversation) do
     Tenants.url(Tenants.get_tenant!(conversation.tenant_id)) <>
       "/app/threads/#{conversation.id}"
   end

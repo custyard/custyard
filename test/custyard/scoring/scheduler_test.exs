@@ -23,7 +23,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :new,
           cached_score: 0,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       assert conversation.cached_score == 0
@@ -43,7 +43,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :active,
           cached_score: 0,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       Recalculator.recalculate_all()
@@ -61,7 +61,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :waiting,
           cached_score: 0,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       Recalculator.recalculate_all()
@@ -79,7 +79,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :dormant,
           cached_score: 0,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       Recalculator.recalculate_all()
@@ -97,7 +97,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :resolved,
           cached_score: 0,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       Recalculator.recalculate_all()
@@ -116,7 +116,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           state: :new,
           cached_score: 0,
           snoozed_until: DateTime.add(DateTime.utc_now(), 1, :hour),
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       Recalculator.recalculate_all()
@@ -135,7 +135,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           state: :new,
           cached_score: 0,
           snoozed_until: DateTime.add(DateTime.utc_now(), -1, :hour),
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       Recalculator.recalculate_all()
@@ -155,7 +155,7 @@ defmodule Custyard.Scoring.SchedulerTest do
             organization_id: org.id,
             state: :new,
             cached_score: 0,
-            last_operator_action_at: DateTime.utc_now()
+            last_staff_action_at: DateTime.utc_now()
           )
         end
 
@@ -176,7 +176,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :new,
           cached_score: 0,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -10, :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -10, :hour)
         )
 
       Recalculator.recalculate_all()
@@ -203,7 +203,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: idle_since,
-          last_operator_action_at: idle_since
+          last_staff_action_at: idle_since
         )
 
       count = DormancyChecker.transition_stale_conversations()
@@ -223,7 +223,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: DateTime.add(DateTime.utc_now(), -1, :hour),
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       count = DormancyChecker.transition_stale_conversations()
@@ -245,7 +245,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: idle_since,
-          last_operator_action_at: idle_since
+          last_staff_action_at: idle_since
         )
 
       count = DormancyChecker.transition_stale_conversations()
@@ -267,7 +267,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :waiting,
           last_customer_action_at: idle_since,
-          last_operator_action_at: idle_since
+          last_staff_action_at: idle_since
         )
 
       count = DormancyChecker.transition_stale_conversations()
@@ -283,7 +283,7 @@ defmodule Custyard.Scoring.SchedulerTest do
       Repo.update!(
         Ecto.Changeset.change(updated,
           last_customer_action_at: idle_since,
-          last_operator_action_at: idle_since
+          last_staff_action_at: idle_since
         )
       )
 
@@ -375,7 +375,7 @@ defmodule Custyard.Scoring.SchedulerTest do
           organization_id: org.id,
           state: :new,
           cached_score: 0,
-          last_operator_action_at: DateTime.utc_now()
+          last_staff_action_at: DateTime.utc_now()
         )
 
       # First recalculation - no idle time
@@ -387,7 +387,7 @@ defmodule Custyard.Scoring.SchedulerTest do
 
       Repo.update!(
         Ecto.Changeset.change(conv,
-          last_operator_action_at:
+          last_staff_action_at:
             DateTime.utc_now() |> DateTime.add(-5, :hour) |> DateTime.truncate(:second)
         )
       )

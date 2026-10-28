@@ -4,7 +4,7 @@ Customer onboarding platform with email ingestion via LMTP/IMAP.
 
 ## Background
 
-Custyard is a self-hosted, relationship-centric service platform for the **ante-CRM period**: the interval between a prospect's first pricing-page inquiry ("Join the Waitlist", "Contact Us") and a stable, everyday client relationship. It ingests customer communication with zero friction (routed webhooks, LMTP/IMAP, portal filings), resolves every message to an organization/contact/conversation automatically, and replaces the operator's queue discipline with a transparent, configurable attention-scoring engine plus neglect detection — while a white-label-capable portal makes the white-glove relationship legible to the customer.
+Custyard is a self-hosted, relationship-centric service platform for the **ante-CRM period**: the interval between a prospect's first pricing-page inquiry ("Join the Waitlist", "Contact Us") and a stable, everyday client relationship. It ingests customer communication with zero friction (routed webhooks, LMTP/IMAP, portal filings), resolves every message to an organization/contact/conversation automatically, and replaces the staff's queue discipline with a transparent, configurable attention-scoring engine plus neglect detection — while a white-label-capable portal makes the white-glove relationship legible to the customer.
 
 The full framing lives in the design docs:
 
@@ -68,9 +68,9 @@ fly secrets unset INSTANCE_ADMIN_EMAIL
 The database-only release CLI manages installation administrators:
 
 ```bash
-bin/operator add installer@example.com
-bin/operator list
-bin/operator remove installer@example.com
+bin/instance-admin add installer@example.com
+bin/instance-admin list
+bin/instance-admin remove installer@example.com
 ```
 
 It refuses to remove the last installation administrator. Tenant staff are

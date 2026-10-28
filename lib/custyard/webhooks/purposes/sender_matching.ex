@@ -304,7 +304,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     |> put_present(:spam_score, spam_score(metadata[:spam_score]))
     |> put_present(:html_body, html_body(metadata[:html_body]))
     # Manual-forward provenance (D6): who brought this message in.
-    |> put_present(:forwarded_by_operator_id, route_context[:forwarded_by_operator_id])
+    |> put_present(:forwarded_by_staff_id, route_context[:forwarded_by_staff_id])
     |> put_present(:forwarded_by_email, route_context[:forwarded_by_email])
   end
 
@@ -406,7 +406,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   end
 
   # Map adapter source to message source enum
-  # Source = message type (email, portal, operator)
+  # Source = message type (email, portal, staff)
   # Origin = original adapter (tracked separately for audit/reporting)
   defp message_source(:lettermint), do: :email
   defp message_source(:zendesk), do: :portal
@@ -414,7 +414,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp message_source(:slack), do: :portal
   defp message_source(:disambiguation), do: :email
   defp message_source(:public_intake), do: :prospect
-  defp message_source(source) when source in [:email, :portal, :operator], do: source
+  defp message_source(source) when source in [:email, :portal, :staff], do: source
 
   defp message_source(other) do
     Logger.warning("Unknown message source #{inspect(other)}, defaulting to :email")

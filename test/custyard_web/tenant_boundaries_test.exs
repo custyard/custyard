@@ -2,28 +2,28 @@ defmodule CustyardWeb.TenantBoundariesTest do
   use CustyardWeb.ConnCase
   @moduletag :explicit_tenant_hosts
   import Phoenix.LiveViewTest
-  alias Custyard.{Auth.Account, InstanceAdmins, OperatorAccount, Repo, Tenants}
+  alias Custyard.{Auth.Account, InstanceAdmins, StaffAccount, Repo, Tenants}
 
   setup do
     {:ok, tenant} = Tenants.create_tenant(%{name: "Workspace", slug: "workspace"})
     {:ok, _} = Tenants.add_host(tenant.id, Tenants.app_host())
 
     {:ok, staff} =
-      %OperatorAccount{}
-      |> OperatorAccount.changeset(%{
+      %StaffAccount{}
+      |> StaffAccount.changeset(%{
         email: "staff@onetimesecret.com",
         role: "admin",
         tenant_id: tenant.id
       })
       |> Repo.insert()
 
-    {:created, admin} = InstanceAdmins.create_admin("operator@custyard.com")
+    {:created, admin} = InstanceAdmins.create_admin("staff@custyard.com")
     %{tenant: tenant, staff: staff, admin: admin}
   end
 
   test "staff email setup is accessible before support email exists", %{conn: conn, staff: staff} do
     conn =
-      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_operator_session(staff)
+      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_staff_session(staff)
 
     assert {:ok, _, html} = live(conn, "/app/settings/email")
     assert html =~ "Connect your support address"
@@ -42,7 +42,7 @@ defmodule CustyardWeb.TenantBoundariesTest do
 
   test "staff identity does not authenticate installation console", %{conn: conn, staff: staff} do
     conn =
-      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_operator_session(staff)
+      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_staff_session(staff)
 
     assert {:error, {:redirect, %{to: "/admin/login"}}} = live(conn, "/admin")
   end
@@ -98,7 +98,7 @@ defmodule CustyardWeb.TenantBoundariesTest do
       get(%{conn | host: "other.example.com"}, "/app/login/verify/#{tokenized.login_token}")
 
     assert html_response(response, 200) =~ "Invalid or expired login link"
-    assert Account.login_token_valid?(Repo.get!(OperatorAccount, staff.id))
+    assert Account.login_token_valid?(Repo.get!(StaffAccount, staff.id))
   end
 
   test "connected authentication uses transport host instead of the client navigation URL", %{
@@ -111,7 +111,7 @@ defmodule CustyardWeb.TenantBoundariesTest do
     conn =
       %{conn | host: Tenants.app_host()}
       |> init_test_session(%{host_tenant_id: staff.tenant_id})
-      |> put_operator_session(staff)
+      |> put_staff_session(staff)
 
     conn = put_private(conn, :live_view_connect_info, %{uri: %URI{host: "foreign.example.com"}})
     assert {:error, {:redirect, %{to: "/app/login"}}} = live(conn, "/app")
@@ -124,7 +124,7 @@ defmodule CustyardWeb.TenantBoundariesTest do
     tenant: tenant
   } do
     staff_conn =
-      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_operator_session(staff)
+      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_staff_session(staff)
 
     {:ok, staff_view, staff_html} = live(staff_conn, "/app")
     assert has_element?(staff_view, "[data-testid=staff-identity]", "Staff · #{staff.email}")
@@ -153,8 +153,8 @@ defmodule CustyardWeb.TenantBoundariesTest do
 
   test "email domains do not grant installation authority", %{tenant: tenant, admin: admin} do
     assert {:ok, staff} =
-             %OperatorAccount{}
-             |> OperatorAccount.changeset(%{
+             %StaffAccount{}
+             |> StaffAccount.changeset(%{
                tenant_id: tenant.id,
                email: admin.email,
                role: "agent"

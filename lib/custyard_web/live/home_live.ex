@@ -30,7 +30,7 @@ defmodule CustyardWeb.HomeLive do
         <.link
           navigate={~p"/app/login"}
           class="inline-block px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded hover:bg-indigo-700"
-          data-testid="home-operator-login-link"
+          data-testid="home-staff-login-link"
         >
           {if @current_tenant, do: "Staff sign in", else: "Staff sign in"}
         </.link>

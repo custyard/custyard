@@ -137,10 +137,10 @@ defmodule Custyard.Intake do
     Repo.transaction(fn ->
       staff =
         scope.staff_id &&
-          Custyard.OperatorAccess.lock_current(%Custyard.OperatorAccount{id: scope.staff_id})
+          Custyard.StaffAccess.lock_current(%Custyard.StaffAccount{id: scope.staff_id})
 
       if staff && staff.tenant_id == scope.tenant_id && staff.role == "admin" &&
-           Custyard.OperatorAccount.session_claim_matches?(staff, scope.session_claim) &&
+           Custyard.StaffAccount.session_claim_matches?(staff, scope.session_claim) &&
            Custyard.Tenants.active?(scope.tenant_id) do
         case fun.() do
           {:ok, result} -> result
@@ -433,7 +433,7 @@ defmodule Custyard.Intake do
 
   # Double-submit guard: whether `body` (trimmed) matches the prospect's most
   # recent message in the conversation. Deliberately compares only the single
-  # latest prospect-authored message — operator messages never participate,
+  # latest prospect-authored message — staff messages never participate,
   # and content older than the latest prospect message may be resent. Runs
   # inside the reply transaction so it serializes with the insert.
   defp duplicate_of_last_prospect_message?(conversation_id, body) do
@@ -462,7 +462,7 @@ defmodule Custyard.Intake do
   end
 
   # Synthetic RFC 5322 Message-ID for prospect web messages. The intake
-  # surface has no real email Message-ID, but operator replies thread
+  # surface has no real email Message-ID, but staff replies thread
   # In-Reply-To/References off the last customer message's message_id
   # (Email.Outbound), so a nil id here would break threading in the
   # prospect's inbox. Mirrors Conversations.generate_outbound_message_id/1.
@@ -562,7 +562,7 @@ defmodule Custyard.Intake do
   end
 
   @doc """
-  Revoke conversation access for a conversation. Operator-initiated; the access
+  Revoke conversation access for a conversation. Staff-initiated; the access
   token stops resolving once `revoked_at` is set.
 
   Broadcasts the same `{:conversation_access_changed, id}` as rotation so mounted
@@ -604,7 +604,7 @@ defmodule Custyard.Intake do
 
   # Conversation views subscribe to "conversation:{id}"; this tells them the
   # credential state changed (rotation or revocation) so the read side —
-  # an already-mounted socket receiving operator replies over PubSub —
+  # an already-mounted socket receiving staff replies over PubSub —
   # gets closed off, not just the writes.
   defp broadcast_conversation_access_changed(conversation_id) do
     Phoenix.PubSub.broadcast(
@@ -627,7 +627,7 @@ defmodule Custyard.Intake do
   caller's handle still blocks the write.
 
   A successful flip broadcasts `{:conversation_updated, id}` on the
-  conversation topic so already-mounted operator views recompute reply
+  conversation topic so already-mounted staff views recompute reply
   deliverability (consent advisory, delivery expectations) without a manual
   refresh.
   """
@@ -654,7 +654,7 @@ defmodule Custyard.Intake do
     result
   end
 
-  # A consent flip must reach already-mounted operator views: ConversationLive
+  # A consent flip must reach already-mounted staff views: ConversationLive
   # handles {:conversation_updated, id} on the conversation topic by reloading,
   # which recomputes the reply-deliverability assigns. The consent gates in
   # Conversations.send_reply/3 and Email.Outbound.deliver/1 re-read the DB
@@ -684,7 +684,7 @@ defmodule Custyard.Intake do
   BOTH `contact_id` and `organization_id` in one changeset (nothing else
   validates the pair), a domain match sets the organization only, and `:none`
   touches nothing. A conversation already linked to an organization is never
-  re-linked: existing (operator) linkage wins, though the email is still
+  re-linked: existing (staff) linkage wins, though the email is still
   captured.
 
   Post-commit: rescore plus `"conversations"` and `"conversation:{id}"`
@@ -772,7 +772,7 @@ defmodule Custyard.Intake do
     end
   end
 
-  # Existing linkage wins: an operator (or earlier flow) that already linked
+  # Existing linkage wins: a staff (or earlier flow) that already linked
   # the conversation to an organization must not be silently overridden by
   # identity derived from anonymous public input.
   defp link_conversation(%Conversation{organization_id: org_id} = conversation, _resolution)
@@ -783,7 +783,7 @@ defmodule Custyard.Intake do
   # Contact match: both FKs set in ONE write — nothing else validates that
   # the contact/organization pair is consistent. Conditional on
   # `organization_id IS NULL` at the DB, not just the in-memory struct: a
-  # socket mounted before an operator ran Organizations.convert_prospect/3
+  # socket mounted before a staff ran Organizations.convert_prospect/3
   # still carries organization_id: nil, so a plain update-by-PK could clobber
   # the just-converted link and orphan the new org. The DB guard means a
   # concurrent link wins (0 rows) and this write is a no-op.

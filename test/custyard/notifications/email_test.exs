@@ -15,7 +15,7 @@ defmodule Custyard.Notifications.EmailTest do
     |> Repo.update!()
 
     configure_tenant_email(org.tenant_id)
-    insert_operator_account(tenant_id: org.tenant_id, email: "ops@custyard.test")
+    insert_staff_account(tenant_id: org.tenant_id, email: "ops@custyard.test")
     contact = insert_contact(organization_id: org.id, name: "Alice", email: "alice@acme.com")
 
     conv =
@@ -78,11 +78,11 @@ defmodule Custyard.Notifications.EmailTest do
 
     test "uses tenant staff recipients", %{conversation: conv} do
       Application.put_env(:custyard, :email_enabled, true)
-      Application.put_env(:custyard, :operator_email, "ops@custyard.test")
+      Application.put_env(:custyard, :staff_email, "ops@custyard.test")
 
       on_exit(fn ->
         Application.delete_env(:custyard, :email_enabled)
-        Application.delete_env(:custyard, :operator_email)
+        Application.delete_env(:custyard, :staff_email)
       end)
 
       assert Email.deliver_neglect_alert(conv, :warning) == :ok
@@ -196,11 +196,11 @@ defmodule Custyard.Notifications.EmailTest do
 
     test "sends the notice when email is enabled", %{channel: channel} do
       Application.put_env(:custyard, :email_enabled, true)
-      Application.put_env(:custyard, :operator_email, "ops@custyard.test")
+      Application.put_env(:custyard, :staff_email, "ops@custyard.test")
 
       on_exit(fn ->
         Application.delete_env(:custyard, :email_enabled)
-        Application.delete_env(:custyard, :operator_email)
+        Application.delete_env(:custyard, :staff_email)
       end)
 
       assert Email.deliver_channel_quiet(channel) == :ok

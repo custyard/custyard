@@ -8,7 +8,7 @@ defmodule Custyard.Intake.ClaimEmail do
   address. The tenant or instance display name is run through the
   shared `Custyard.Email.Headers` discipline.
 
-  The body contains ONLY operator-configured branding, the claimed slug and tenant links (the `/c`
+  The body contains ONLY staff-configured branding, the claimed slug and tenant links (the `/c`
   confirmation URL and the `/c` conversation URL) — NEVER prospect-supplied
   content: this mail must be useless as a spam relay.
 

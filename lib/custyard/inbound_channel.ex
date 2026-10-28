@@ -3,11 +3,11 @@ defmodule Custyard.InboundChannel do
   One public support address bound to an inbound route.
 
   A route is the Lettermint-backed ingress with organization and project
-  scope; a channel is the operator-visible object on top of it: the public
+  scope; a channel is the staff-visible object on top of it: the public
   address customers write to (`support@companyname.com`), the ingress address
-  the operator's mail service forwards to
+  the staff's mail service forwards to
   (`support+<token>@<route domain>`), the From identity for replies, and
-  the lifecycle that tells the operator whether mail is flowing. See
+  the lifecycle that tells the staff whether mail is flowing. See
   docs/design/spec-inbound-channels.md, decisions D1 to D4 and D7.
 
   ## States
@@ -20,7 +20,7 @@ defmodule Custyard.InboundChannel do
 
   ## Ingress kinds (D8)
 
-    * `forward`: the operator's mail service forwards to the ingress
+    * `forward`: the staff's mail service forwards to the ingress
       address; routed by token
     * `mx`: mail arrives at the public address on the route's custom
       domain. The local part has no `+`: `support+tag@` reaches `support@`
@@ -97,7 +97,7 @@ defmodule Custyard.InboundChannel do
 
     field(:reply_from, Ecto.Enum, values: @reply_from_options, default: :public_address)
     field(:sending_domain, :string)
-    # D4: BCC every outbound reply to the public address so the operator's
+    # D4: BCC every outbound reply to the public address so the staff's
     # mailbox keeps a copy. Off by default; the copy is forwarded back and
     # recognised by triage as an own echo.
     field(:archive_copy, :boolean, default: false)
@@ -157,7 +157,7 @@ defmodule Custyard.InboundChannel do
   def imap_password_context, do: @imap_password_context
 
   @doc """
-  Changeset for operator-editable attributes at creation and update.
+  Changeset for staff-editable attributes at creation and update.
 
   The ingress token is generated here when absent and is never cast from
   attrs; rotation goes through `rotate_token_changeset/2`.

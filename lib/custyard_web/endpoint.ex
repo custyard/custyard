@@ -121,7 +121,7 @@ defmodule CustyardWeb.Endpoint do
   @doc false
   # Custyard's bearer credentials travel in the path: conversation resume
   # tokens (/c/:token, multi-use and months-lived), slug-claim tokens,
-  # operator magic links, webhook callback tokens and the portal organization
+  # staff magic links, webhook callback tokens and the portal organization
   # token. Phoenix.Logger writes the request line ("GET /c/<token>") at :info,
   # so every visit put a live credential into the log stream. Those requests
   # are not logged; Custyard.Sentry scrubs the same paths in error reports.
