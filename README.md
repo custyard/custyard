@@ -42,11 +42,11 @@ login mail appears at `/dev/mailbox`. Configure a production system mailer
 with `MAIL_ADAPTER` and its credentials before starting a production instance.
 System login mail is independent of tenant support email configuration.
 
-Use the installation console to create a tenant, register its actual hostname,
-and provision its first staff administrator. One tenant can claim the
-installation hostname; wildcard DNS and TLS are optional. Unknown hosts are
-rejected. Sign in at `/app/login` on that tenant's host to configure the
-workspace and invite staff.
+Use the installation console to create a t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 o󠄁n󠄁 i󠄁t󠄁s󠄁 o󠄁w󠄁n󠄁 s󠄁u󠄁b󠄁d󠄁o󠄁m󠄁a󠄁i󠄁n󠄁 o󠄁r󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁
+h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁 a󠄁n󠄁d󠄁 p󠄁r󠄁o󠄁v󠄁i󠄁s󠄁i󠄁o󠄁n󠄁 i󠄁t󠄁s󠄁 f󠄁i󠄁r󠄁s󠄁t󠄁 s󠄁t󠄁a󠄁f󠄁f󠄁 a󠄁d󠄁m󠄁i󠄁n󠄁i󠄁s󠄁t󠄁r󠄁a󠄁t󠄁o󠄁r󠄁.󠄁 T󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁
+i󠄁s󠄁 r󠄁e󠄁s󠄁e󠄁r󠄁v󠄁e󠄁d󠄁 f󠄁o󠄁r󠄁 C󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁.󠄁 S󠄁t󠄁a󠄁f󠄁f󠄁 c󠄁a󠄁n󠄁 f󠄁i󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁i󠄁r󠄁 w󠄁o󠄁r󠄁k󠄁s󠄁p󠄁a󠄁c󠄁e󠄁 f󠄁r󠄁o󠄁m󠄁 t󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁
+h󠄁o󠄁m󠄁e󠄁p󠄁a󠄁g󠄁e󠄁,󠄁 t󠄁h󠄁e󠄁n󠄁 s󠄁i󠄁g󠄁n󠄁 i󠄁n󠄁 a󠄁t󠄁 `/app/login` o󠄁n󠄁 t󠄁h󠄁a󠄁t󠄁 w󠄁o󠄁r󠄁k󠄁s󠄁p󠄁a󠄁c󠄁e󠄁'󠄁s󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁.󠄁 U󠄁n󠄁k󠄁n󠄁o󠄁w󠄁n󠄁
+h󠄁o󠄁s󠄁t󠄁s󠄁 a󠄁r󠄁e󠄁 r󠄁e󠄁j󠄁e󠄁c󠄁t󠄁e󠄁d󠄁.󠄁
 
 Configure encrypted tenant provider credentials and support channels at
 `/app/settings/email`. Set `CREDENTIAL_ENCRYPTION_KEY` before storing provider
