@@ -1,15 +1,9 @@
 defmodule Custyard.Authorization do
   @moduledoc """
-  Pure authorization module for RBAC enforcement.
-
-  Operates entirely on in-memory `%OperatorAccount{}` structs -- zero DB calls.
-  All permission checks are based on the operator's role and organization_id.
-
-  ## Role Hierarchy
-
-  - `super_admin` (3): Full access to all resources across all organizations
-  - `admin` (2): Manage own organization's resources
-  - `agent` (1): View/reply within own organization only
+  Role and tenant authorization. Tenant staff work across customer organizations;
+  legacy organization assignments retain their narrower scope. Instance
+  administrators can manage all tenants. Resource contexts recheck ownership
+  while holding their mutation locks.
   """
 
   alias Custyard.OperatorAccount
@@ -32,12 +26,23 @@ defmodule Custyard.Authorization do
   Only super_admin can create organizations.
   """
   def can_create_organization?(%OperatorAccount{role: "super_admin"}), do: true
+
+  def can_create_organization?(%OperatorAccount{role: "admin", tenant_id: id})
+      when is_integer(id) do
+    true
+  end
+
   def can_create_organization?(_), do: false
 
   @doc """
   super_admin can manage any org; admin can manage their own org.
   """
   def can_manage_organization?(%OperatorAccount{role: "super_admin"}, _org_id), do: true
+
+  def can_manage_organization?(%OperatorAccount{role: "admin", tenant_id: id} = op, org_id)
+      when is_integer(id) do
+    OperatorAccount.can_access_organization?(op, org_id)
+  end
 
   def can_manage_organization?(%OperatorAccount{role: "admin", organization_id: org_id}, org_id)
       when is_integer(org_id),
@@ -56,6 +61,16 @@ defmodule Custyard.Authorization do
   """
   def can_manage_project?(%OperatorAccount{role: "super_admin"}, _org_id), do: true
 
+  def can_manage_project?(%OperatorAccount{role: "admin", tenant_id: id}, nil)
+      when is_integer(id) do
+    true
+  end
+
+  def can_manage_project?(%OperatorAccount{role: "admin", tenant_id: id} = op, org_id)
+      when is_integer(id) do
+    OperatorAccount.can_access_organization?(op, org_id)
+  end
+
   def can_manage_project?(%OperatorAccount{role: "admin", organization_id: org_id}, org_id)
       when is_integer(org_id),
       do: true
@@ -71,17 +86,28 @@ defmodule Custyard.Authorization do
   def can_set_conversation_state?(_), do: false
 
   @doc """
-  super_admin can access any conversation; others must be in the same org.
-
-  Conversations without an organization (unlinked prospects) are accessible
-  to all operator roles: organization scoping is workload scoping, not
-  tenancy, and unlinked intake must never be invisible to every operator.
-  This mirrors the queue visibility rule in
-  `Custyard.Conversations.list_for_attention_queue/1`.
+  Tenant staff can access conversations in their tenant, including unlinked
+  public intake. Customer portal credentials remain scoped to one customer.
   """
   def can_access_conversation?(%OperatorAccount{role: "super_admin"}, _conversation), do: true
 
-  def can_access_conversation?(%OperatorAccount{}, %{organization_id: nil}), do: true
+  def can_access_conversation?(%OperatorAccount{tenant_id: id}, %{tenant_id: id})
+      when is_integer(id) do
+    true
+  end
+
+  def can_access_conversation?(%OperatorAccount{tenant_id: id}, _) when is_integer(id), do: false
+
+  def can_access_conversation?(%OperatorAccount{organization_id: id}, %{
+        organization_id: nil,
+        tenant_id: tenant_id
+      })
+      when is_integer(id) do
+    case Custyard.Repo.get(Custyard.Organization, id) do
+      %{tenant_id: ^tenant_id} -> true
+      _ -> false
+    end
+  end
 
   def can_access_conversation?(%OperatorAccount{organization_id: org_id}, conversation),
     do: conversation.organization_id == org_id

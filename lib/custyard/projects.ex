@@ -55,6 +55,10 @@ defmodule Custyard.Projects do
 
   defp scope_to_operator(query, %OperatorAccount{role: "super_admin"}), do: query
 
+  defp scope_to_operator(query, %OperatorAccount{tenant_id: tenant_id})
+       when is_integer(tenant_id),
+       do: from(p in query, where: p.tenant_id == ^tenant_id)
+
   defp scope_to_operator(query, %OperatorAccount{organization_id: org_id})
        when is_integer(org_id),
        do: from(p in query, where: p.organization_id == ^org_id)
@@ -180,7 +184,17 @@ defmodule Custyard.Projects do
     result =
       Repo.transaction(fn ->
         current_operator = OperatorAccess.lock_current(operator)
+
+        attrs =
+          if current_operator && current_operator.tenant_id do
+            Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+            |> Map.put("tenant_id", current_operator.tenant_id)
+          else
+            attrs
+          end
+
         changeset = Project.changeset(%Project{}, attrs)
+
         destination_id = Ecto.Changeset.get_field(changeset, :organization_id)
 
         if current_operator && Authorization.can_manage_project?(current_operator, destination_id) do
@@ -207,15 +221,29 @@ defmodule Custyard.Projects do
   Update a project.
   """
   def update_project(project, attrs) do
-    case project |> Project.changeset(attrs) |> Repo.update() do
-      {:ok, updated} = result ->
+    result =
+      Repo.transaction(fn ->
+        query =
+          from p in Project, where: p.id == ^project.id, update: [set: [updated_at: p.updated_at]]
+
+        Repo.update_all(query, [])
+        current = Repo.get!(Project, project.id)
+
+        case update_project_and_tasks(current, attrs) do
+          {:ok, updated} -> {updated, current.organization_id}
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, {updated, old_org_id}} ->
         broadcast_project_update(updated.id)
 
-        if project.organization_id != updated.organization_id do
-          broadcast_org_project(project.organization_id, {:project_updated, updated.id})
+        if old_org_id != updated.organization_id do
+          broadcast_org_project(old_org_id, {:project_updated, updated.id})
         end
 
-        result
+        {:ok, updated}
 
       error ->
         error
@@ -230,7 +258,7 @@ defmodule Custyard.Projects do
 
            if Authorization.can_manage_project?(current_operator, current.organization_id) and
                 Authorization.can_manage_project?(current_operator, destination_id) do
-             case Repo.update(changeset) do
+             case update_project_and_tasks(current, attrs) do
                {:ok, updated} -> {:ok, {updated, current.organization_id}}
                error -> error
              end
@@ -249,6 +277,52 @@ defmodule Custyard.Projects do
 
       error ->
         error
+    end
+  end
+
+  defp update_project_and_tasks(project, attrs) do
+    changeset = project |> Project.changeset(attrs) |> validate_task_move()
+
+    with {:ok, updated} <- Repo.update(changeset) do
+      if updated.organization_id != project.organization_id do
+        Repo.update_all(from(t in Task, where: t.project_id == ^project.id),
+          set: [
+            organization_id: updated.organization_id,
+            updated_at: DateTime.utc_now() |> DateTime.truncate(:second)
+          ]
+        )
+
+        {:ok, Repo.preload(updated, :tasks, force: true)}
+      else
+        {:ok, updated}
+      end
+    end
+  end
+
+  defp validate_task_move(changeset) do
+    if changeset.valid? and Ecto.Changeset.changed?(changeset, :organization_id) do
+      organization_id = Ecto.Changeset.get_field(changeset, :organization_id)
+
+      conversation_orgs =
+        Repo.all(
+          from t in Task,
+            join: c in Custyard.Conversation,
+            on: c.id == t.conversation_id,
+            where: t.project_id == ^changeset.data.id,
+            select: c.organization_id
+        )
+
+      if Enum.any?(conversation_orgs, &(&1 != organization_id)) do
+        Ecto.Changeset.add_error(
+          changeset,
+          :organization_id,
+          "cannot move tasks linked to another customer's conversation"
+        )
+      else
+        changeset
+      end
+    else
+      changeset
     end
   end
 
@@ -489,6 +563,7 @@ defmodule Custyard.Projects do
 
     case result do
       {:ok, task} ->
+        Custyard.Conversations.broadcast_task_change(task)
         if Keyword.get(opts, :broadcast?, true), do: broadcast_project_update(project.id)
         {:ok, task}
 
@@ -509,6 +584,8 @@ defmodule Custyard.Projects do
 
     case result do
       {:ok, task} ->
+        Custyard.Conversations.broadcast_task_change(task)
+
         if task.project_id && Keyword.get(opts, :broadcast?, true),
           do: broadcast_project_update(task.project_id)
 
@@ -528,6 +605,8 @@ defmodule Custyard.Projects do
 
     case Repo.delete(task) do
       {:ok, _} = result ->
+        Custyard.Conversations.broadcast_task_change(task)
+
         if project_id && Keyword.get(opts, :broadcast?, true),
           do: broadcast_project_update(project_id)
 

@@ -3,7 +3,7 @@ defmodule Custyard.Lettermint.HttpClient do
   Production HTTP client for the Lettermint API.
 
   Uses Finch to make HTTP requests. Requires `LETTERMINT_API_URL` and
-  `LETTERMINT_API_KEY` to be configured at runtime.
+  `LETTERMINT_TEAM_TOKEN` to be configured at runtime.
 
   Routes and sending domains are both read from the Team API at the
   configured base URL with the same bearer token; `list_domains/0` pages
@@ -14,9 +14,14 @@ defmodule Custyard.Lettermint.HttpClient do
   @behaviour Custyard.Lettermint.Client
 
   @impl true
-  def create_route(params) do
+  def create_route(params, opts \\ [])
+
+  def create_route(%{lettermint_project_id: project_id}, _opts) when project_id in [nil, ""],
+    do: {:error, :project_required}
+
+  def create_route(params, opts) do
     project_id = Map.fetch!(params, :lettermint_project_id)
-    url = api_url("/projects/#{project_id}/routes")
+    url = api_url("/projects/#{URI.encode_www_form(to_string(project_id))}/routes", opts)
 
     # attachment_delivery "url": signed URLs rather than inline Base64
     # (docs/design/spec-inbound-channels.md, D9).
@@ -27,7 +32,7 @@ defmodule Custyard.Lettermint.HttpClient do
         attachment_delivery: "url"
       })
 
-    case request(:post, url, body) do
+    case request(:post, url, body, opts) do
       {:ok, %Finch.Response{status: status, body: response_body}}
       when status in [200, 201] ->
         decode_route(response_body)
@@ -41,10 +46,10 @@ defmodule Custyard.Lettermint.HttpClient do
   end
 
   @impl true
-  def get_route(lettermint_route_id) do
-    url = api_url("/routes/#{lettermint_route_id}")
+  def get_route(lettermint_route_id, opts \\ []) do
+    url = api_url("/routes/#{URI.encode_www_form(lettermint_route_id)}", opts)
 
-    case request(:get, url, nil) do
+    case request(:get, url, nil, opts) do
       {:ok, %Finch.Response{status: 200, body: response_body}} ->
         decode_route(response_body)
 
@@ -57,10 +62,10 @@ defmodule Custyard.Lettermint.HttpClient do
   end
 
   @impl true
-  def delete_route(lettermint_route_id) do
-    url = api_url("/routes/#{lettermint_route_id}")
+  def delete_route(lettermint_route_id, opts \\ []) do
+    url = api_url("/routes/#{URI.encode_www_form(lettermint_route_id)}", opts)
 
-    case request(:delete, url, nil) do
+    case request(:delete, url, nil, opts) do
       {:ok, %Finch.Response{status: status}} when status in [200, 204] ->
         :ok
 
@@ -76,11 +81,11 @@ defmodule Custyard.Lettermint.HttpClient do
   end
 
   @impl true
-  def set_inbound_domain(lettermint_route_id, domain) do
-    url = api_url("/routes/#{URI.encode_www_form(lettermint_route_id)}")
+  def set_inbound_domain(lettermint_route_id, domain, opts \\ []) do
+    url = api_url("/routes/#{URI.encode_www_form(lettermint_route_id)}", opts)
     body = Jason.encode!(%{inbound_settings: %{inbound_domain: domain}})
 
-    case request(:put, url, body) do
+    case request(:put, url, body, opts) do
       {:ok, %Finch.Response{status: 200, body: response_body}} ->
         decode_route(response_body)
 
@@ -93,10 +98,11 @@ defmodule Custyard.Lettermint.HttpClient do
   end
 
   @impl true
-  def verify_inbound_domain(lettermint_route_id) do
-    url = api_url("/routes/#{URI.encode_www_form(lettermint_route_id)}/verify-inbound-domain")
+  def verify_inbound_domain(lettermint_route_id, opts \\ []) do
+    url =
+      api_url("/routes/#{URI.encode_www_form(lettermint_route_id)}/verify-inbound-domain", opts)
 
-    case request(:post, url, nil) do
+    case request(:post, url, nil, opts) do
       {:ok, %Finch.Response{status: status, body: response_body}} when status in 200..299 ->
         decode_verification(response_body)
 
@@ -128,12 +134,12 @@ defmodule Custyard.Lettermint.HttpClient do
   end
 
   @impl true
-  def get_webhook_delivery(webhook_id, delivery_id) do
+  def get_webhook_delivery(webhook_id, delivery_id, opts \\ []) do
     # Provider IDs are opaque path segments, never URLs supplied by a message.
     path =
       "/webhooks/#{URI.encode_www_form(webhook_id)}/deliveries/#{URI.encode_www_form(delivery_id)}"
 
-    case request(:get, api_url(path), nil) do
+    case request(:get, api_url(path, opts), nil, opts) do
       {:ok, %Finch.Response{status: 200, body: body}} -> decode_delivery(body)
       {:ok, %Finch.Response{status: status}} -> {:error, {:provider_status, status}}
       {:error, _reason} -> {:error, :provider_unavailable}
@@ -157,24 +163,28 @@ defmodule Custyard.Lettermint.HttpClient do
   @domains_max_pages 5
 
   @impl true
-  def list_domains do
-    list_domains_page(nil, [], @domains_max_pages)
+  def list_domains(opts \\ []) do
+    list_domains_page(nil, [], @domains_max_pages, opts)
   end
 
   # Cursor pagination over GET /domains, bounded so a misbehaving cursor can
   # never loop. Pages are concatenated in API order.
-  defp list_domains_page(_cursor, acc, 0), do: {:ok, acc}
+  defp list_domains_page(_cursor, acc, 0, _opts), do: {:ok, acc}
 
-  defp list_domains_page(cursor, acc, pages_left) do
-    url = api_url("/domains?" <> URI.encode_query(domains_query(cursor)))
+  defp list_domains_page(cursor, acc, pages_left, opts) do
+    url =
+      api_url(
+        "/domains?" <> URI.encode_query(domains_query(cursor) ++ project_filter(opts)),
+        opts
+      )
 
-    case request(:get, url, nil) do
+    case request(:get, url, nil, opts) do
       {:ok, %Finch.Response{status: status, body: response_body}} when status in 200..299 ->
         with {:ok, {domains, next_cursor}} <- decode_domains_page(response_body) do
           acc = acc ++ domains
 
           if is_binary(next_cursor) and next_cursor != "" do
-            list_domains_page(next_cursor, acc, pages_left - 1)
+            list_domains_page(next_cursor, acc, pages_left - 1, opts)
           else
             {:ok, acc}
           end
@@ -234,27 +244,62 @@ defmodule Custyard.Lettermint.HttpClient do
     end
   end
 
-  defp request(method, url, body) do
+  @doc "Fetch a provider project without modifying it."
+  def get_project(project_id, opts \\ []),
+    do: get_resource("/projects/#{URI.encode_www_form(project_id)}", opts)
+
+  @doc "Fetch a webhook so a manually created endpoint can be bound safely."
+  def get_webhook(webhook_id, opts \\ []),
+    do: get_resource("/webhooks/#{URI.encode_www_form(webhook_id)}", opts)
+
+  def ping_sending(token, opts \\ []) do
+    Finch.build(:get, api_url("/ping", opts), [{"x-lettermint-token", token}])
+    |> Finch.request(Custyard.Finch, receive_timeout: 10_000)
+    |> case do
+      {:ok, %{status: status}} when status in 200..299 -> :ok
+      {:ok, %{status: status}} -> {:error, {:provider_status, status}}
+      {:error, _} -> {:error, :provider_unavailable}
+    end
+  end
+
+  defp get_resource(path, opts) do
+    case request(:get, api_url(path, opts), nil, opts) do
+      {:ok, %{status: 200, body: body}} -> decode_route(body)
+      {:ok, %{status: status}} -> {:error, {:provider_status, status}}
+      {:error, _} -> {:error, :provider_unavailable}
+    end
+  end
+
+  defp project_filter(opts) do
+    case Keyword.get(opts, :project_id) do
+      nil -> []
+      id -> [{"filter[project]", id}]
+    end
+  end
+
+  defp request(method, url, body, opts) do
     headers = [
-      {"authorization", "Bearer #{api_key()}"},
+      {"authorization", "Bearer #{api_key(opts)}"},
       {"content-type", "application/json"},
       {"accept", "application/json"}
     ]
 
     Finch.build(method, url, headers, body)
-    |> Finch.request(Custyard.Finch)
+    |> Finch.request(Custyard.Finch, receive_timeout: 10_000)
   end
 
-  defp config do
-    Application.get_env(:custyard, :lettermint)
-  end
+  defp config(opts),
+    do: if(opts == [], do: Application.get_env(:custyard, :lettermint, []), else: opts)
 
-  defp api_url(path) do
-    base = config()[:api_url] || raise "LETTERMINT_API_URL not configured"
+  defp api_url(path, opts) do
+    base = config(opts)[:api_url] || "https://api.lettermint.co/v1"
     String.trim_trailing(base, "/") <> path
   end
 
-  defp api_key do
-    config()[:api_key] || raise "LETTERMINT_API_KEY not configured"
+  defp api_key(opts) do
+    # api_key remains an internal test-client compatibility option. Runtime
+    # never maps a project sending token into it.
+    config(opts)[:team_token] || config(opts)[:api_key] ||
+      raise "LETTERMINT_TEAM_TOKEN not configured"
   end
 end

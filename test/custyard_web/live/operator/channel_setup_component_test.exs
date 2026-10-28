@@ -63,6 +63,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
     )
     |> render_submit()
 
+    render_async(view)
     [channel] = InboundChannels.list_for_organization(route.organization_id)
     channel
   end
@@ -156,6 +157,11 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       assert html =~ "must be a valid email address"
       assert has_element?(view, "[data-testid=channel-error-public_address]")
       assert InboundChannels.list_for_organization(org.id) == []
+
+      input = Floki.parse_fragment!(html) |> Floki.find("[data-testid=channel-public-address]")
+      assert Floki.attribute(input, "aria-invalid") == ["true"]
+      [error_id] = Floki.attribute(input, "aria-describedby")
+      assert has_element?(view, "##{error_id}[role=alert]")
     end
 
     test "closing the wizard returns to the list", %{conn: conn, org: org} do
@@ -296,6 +302,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
              )
 
       view |> element("[data-testid=channel-setup-check-domain]") |> render_click()
+      render_async(view)
 
       assert has_element?(
                view,
@@ -308,6 +315,43 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       assert InboundChannels.get_channel(channel.id).sending_domain_status == "verified"
     end
 
+    test "a slow domain check leaves the wizard responsive and announces progress", c do
+      previous = Application.get_env(:custyard, :lettermint)
+      previous_fixture = Application.get_env(:custyard, :email_setup_test_provider)
+      owner = self()
+      Application.put_env(:custyard, :lettermint, client: Custyard.EmailSetupTestProvider)
+
+      Application.put_env(:custyard, :email_setup_test_provider, %{
+        domains: fn ->
+          send(owner, {:check_waiting, self()})
+
+          receive do
+            :complete_check -> {:ok, [%{"domain" => "acme.example.com", "status" => "verified"}]}
+          end
+        end
+      })
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, previous)
+
+        if previous_fixture,
+          do: Application.put_env(:custyard, :email_setup_test_provider, previous_fixture),
+          else: Application.delete_env(:custyard, :email_setup_test_provider)
+      end)
+
+      view = open_reply_step(c.conn, c.org, c.channel)
+      view |> element("[data-testid=channel-setup-check-domain]") |> render_click()
+      assert_receive {:check_waiting, worker}
+      assert has_element?(view, "[data-testid=channel-check-progress][role=status]")
+      assert has_element?(view, "[data-testid=channel-setup-check-domain][disabled]")
+      view |> element("[data-testid=channel-setup-step-3]") |> render_click()
+      assert has_element?(view, "[data-testid=channel-test-step]")
+      send(worker, :complete_check)
+      render_async(view)
+      refute has_element?(view, "[data-testid=channel-check-progress]")
+      assert InboundChannels.get_channel!(c.channel.id).sending_domain_status == "verified"
+    end
+
     test "a missing domain explains the DNS records and offers the fallback", %{
       conn: conn,
       org: org,
@@ -317,6 +361,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
 
       view = open_reply_step(conn, org, channel)
       view |> element("[data-testid=channel-setup-check-domain]") |> render_click()
+      render_async(view)
 
       assert has_element?(
                view,
@@ -398,7 +443,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       text = view |> element("[data-testid=channel-data-path]") |> render()
       assert text =~ "Lettermint B.V., Zwolle"
       assert text =~ "Art. 28"
-      assert text =~ "this Custyard instance"
+      assert text =~ "this service"
       assert text =~ "support@acme.example.com"
       assert has_element?(view, "[data-testid=channel-copy-data-path][data-clipboard-text]")
     end
@@ -463,6 +508,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       )
 
       view |> element("[data-testid=channel-check-mx]") |> render_click()
+      render_async(view)
 
       assert view |> element("[data-testid=channel-setup-flash]") |> render() =~
                "Lettermint found 10 mx.other.net"
@@ -474,6 +520,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       {view, channel} = create_mx_channel(conn, org, route)
 
       view |> element("[data-testid=channel-check-mx]") |> render_click()
+      render_async(view)
 
       assert has_element?(view, "[data-testid=channel-setup-step-3][aria-current=step]")
       assert InboundChannels.get_channel!(channel.id).state == :awaiting_first_message
@@ -565,6 +612,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       view
       |> form("#channel-imap-form-#{channel.id}", channel: %{"imap_password" => @imap_password})
       |> render_submit()
+
+      render_async(view)
 
       assert InboundChannels.get_channel!(channel.id).state == :awaiting_first_message
       assert has_element?(view, "[data-testid=channel-setup-step-3][aria-current=step]")

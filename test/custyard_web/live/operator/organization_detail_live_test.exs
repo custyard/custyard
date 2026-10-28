@@ -442,13 +442,23 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       assert project_routes != []
     end
 
-    test "agent cannot access organization detail page", %{conn: conn, org: org} do
+    test "agent can read customer context but cannot create routes", %{conn: conn, org: org} do
       agent = create_agent(org)
       conn = authenticate_conn(conn, agent)
 
-      # Agents are redirected by the :operator_admin live_session (require_admin)
-      assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/organizations/#{org.id}")
+      {:ok, view, html} = live(conn, ~p"/operator/organizations/#{org.id}")
+      assert html =~ org.name
+      view |> element("a", "Channels") |> render_click()
+      refute has_element?(view, "[data-testid=create-route-btn]")
+      assert render_click(view, "show_create_route_form") =~ "You do not have permission"
+
+      assert render_click(view, "toggle_webhook", %{
+               "route-id" => "1",
+               "purpose" => "notification",
+               "enabled" => "true"
+             }) =~ "You do not have permission"
+
+      assert render_click(view, "delete_route", %{"id" => "1"}) =~ "You do not have permission"
     end
   end
 
@@ -553,16 +563,26 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       refute has_element?(view, "[data-testid=webhook-toggle-btn-notification][disabled]")
     end
 
-    test "agent cannot access organization detail page for webhook toggles", %{
+    test "agent can read customer context but cannot toggle processing", %{
       conn: conn,
       org: org
     } do
       agent = create_agent(org)
       conn = authenticate_conn(conn, agent)
 
-      # Agents are redirected by the :operator_admin live_session (require_admin)
-      assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/organizations/#{org.id}")
+      {:ok, view, html} = live(conn, ~p"/operator/organizations/#{org.id}")
+      assert html =~ org.name
+      view |> element("a", "Channels") |> render_click()
+      refute has_element?(view, "[data-testid=create-route-btn]")
+      assert render_click(view, "show_create_route_form") =~ "You do not have permission"
+
+      assert render_click(view, "toggle_webhook", %{
+               "route-id" => "1",
+               "purpose" => "notification",
+               "enabled" => "true"
+             }) =~ "You do not have permission"
+
+      assert render_click(view, "delete_route", %{"id" => "1"}) =~ "You do not have permission"
     end
   end
 
@@ -655,16 +675,26 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       assert has_element?(view, "[data-testid=delete-route-#{general_route.id}]")
     end
 
-    test "agent cannot access organization detail page for deletion", %{
+    test "agent can read customer context but cannot delete routes", %{
       conn: conn,
       org: org
     } do
       agent = create_agent(org)
       conn = authenticate_conn(conn, agent)
 
-      # Agents are redirected by the :operator_admin live_session (require_admin)
-      assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/organizations/#{org.id}")
+      {:ok, view, html} = live(conn, ~p"/operator/organizations/#{org.id}")
+      assert html =~ org.name
+      view |> element("a", "Channels") |> render_click()
+      refute has_element?(view, "[data-testid=create-route-btn]")
+      assert render_click(view, "show_create_route_form") =~ "You do not have permission"
+
+      assert render_click(view, "toggle_webhook", %{
+               "route-id" => "1",
+               "purpose" => "notification",
+               "enabled" => "true"
+             }) =~ "You do not have permission"
+
+      assert render_click(view, "delete_route", %{"id" => "1"}) =~ "You do not have permission"
     end
   end
 
@@ -803,16 +833,26 @@ defmodule CustyardWeb.Operator.OrganizationDetailLiveTest do
       assert has_element?(view, "[data-testid=create-route-btn]")
     end
 
-    test "agent is redirected from organization detail", %{
+    test "agent has read-only organization details", %{
       conn: conn,
       org: org
     } do
       agent = create_agent(org)
       conn = authenticate_conn(conn, agent)
 
-      # Agents are redirected by the :operator_admin live_session (require_admin)
-      assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/organizations/#{org.id}")
+      {:ok, view, html} = live(conn, ~p"/operator/organizations/#{org.id}")
+      assert html =~ org.name
+      view |> element("a", "Channels") |> render_click()
+      refute has_element?(view, "[data-testid=create-route-btn]")
+      assert render_click(view, "show_create_route_form") =~ "You do not have permission"
+
+      assert render_click(view, "toggle_webhook", %{
+               "route-id" => "1",
+               "purpose" => "notification",
+               "enabled" => "true"
+             }) =~ "You do not have permission"
+
+      assert render_click(view, "delete_route", %{"id" => "1"}) =~ "You do not have permission"
     end
   end
 

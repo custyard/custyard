@@ -45,6 +45,7 @@ defmodule Custyard.Webhooks.Triage do
     InboundChannel,
     InboundRoute,
     Message,
+    Organization,
     OperatorAccount,
     Repo
   }
@@ -89,18 +90,18 @@ defmodule Custyard.Webhooks.Triage do
   def classify(normalized, %InboundRoute{} = route, channel) do
     sender = SenderMatcher.extract_email(normalized[:from])
 
-    with nil <- own_echo(normalized, route.organization_id),
+    with nil <- own_echo(normalized, route),
          nil <- operator_mail(normalized, sender, route, channel),
          nil <- verification(normalized, sender),
          nil <- auto_response(normalized),
-         nil <- suspect(normalized, sender, route.organization_id) do
+         nil <- suspect(normalized, sender, route) do
       {:customer, nil}
     end
   end
 
   # --- own echo (D4) ---
 
-  defp own_echo(normalized, organization_id) do
+  defp own_echo(normalized, route) do
     case echo_candidates(normalized[:message_id]) do
       [] ->
         nil
@@ -113,15 +114,22 @@ defmodule Custyard.Webhooks.Triage do
             where: m.source == :operator,
             where: is_nil(m.triage_class) or m.triage_class != :operator_sent,
             where: m.message_id in ^candidates,
-            where: c.organization_id == ^organization_id,
             order_by: [asc: m.id],
             limit: 1
 
-        case Repo.one(query) do
+        case query |> scope_messages(route) |> Repo.one() do
           nil -> nil
           message -> {:own_echo, message}
         end
     end
+  end
+
+  defp scope_messages(query, %{organization_id: organization_id})
+       when is_integer(organization_id),
+       do: where(query, [_m, c], c.organization_id == ^organization_id)
+
+  defp scope_messages(query, %{tenant_id: tenant_id}) when is_integer(tenant_id) do
+    where(query, [_m, c], c.tenant_id == ^tenant_id)
   end
 
   defp echo_candidates(message_id) when is_binary(message_id) do
@@ -137,16 +145,21 @@ defmodule Custyard.Webhooks.Triage do
   defp operator_mail(_normalized, nil, _route, _channel), do: nil
 
   defp operator_mail(normalized, sender, route, channel) do
-    case operator_identity(normalized, sender, route.organization_id, channel) do
+    case operator_identity(normalized, sender, route, channel) do
       nil ->
         nil
 
       identity ->
-        case ThreadMatcher.find_thread(normalized, route.organization_id) do
+        match =
+          if route.organization_id,
+            do: ThreadMatcher.find_thread(normalized, route.organization_id),
+            else: ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
+
+        case match do
           {:ok, conversation} ->
             {:operator_sent, Map.put(identity, :conversation, conversation)}
 
-          :not_found ->
+          no_match when no_match in [:not_found, :ambiguous] ->
             operator_forward(normalized, identity)
         end
     end
@@ -167,33 +180,50 @@ defmodule Custyard.Webhooks.Triage do
   # The sender is operator-owned (an operator account of this organization,
   # or the channel's public address) and the DKIM signature on the forwarded
   # copy is from the sender's own domain.
-  defp operator_identity(normalized, sender, organization_id, channel) do
+  defp operator_identity(normalized, sender, route, channel) do
     sender = String.downcase(sender)
 
     with true <- dkim_aligned?(normalized, sender),
-         {:ok, operator} <- operator_owned(sender, organization_id, channel) do
+         {:ok, operator} <- operator_owned(sender, route, channel) do
       %{operator: operator, email: sender}
     else
       _not_operator -> nil
     end
   end
 
-  defp operator_owned(sender, organization_id, channel) do
+  defp operator_owned(sender, route, channel) do
     case Repo.get_by(OperatorAccount, email: OperatorAccount.normalize_email(sender)) do
       %OperatorAccount{role: "super_admin"} = operator ->
         {:ok, operator}
 
-      %OperatorAccount{organization_id: ^organization_id} = operator ->
-        {:ok, operator}
+      %OperatorAccount{} = operator ->
+        if legacy_customer_operator?(operator, route) or tenant_staff?(operator, route),
+          do: {:ok, operator},
+          else: channel_owned(sender, channel)
 
       _other ->
-        case channel do
-          %InboundChannel{public_address: address} when is_binary(address) ->
-            if String.downcase(address) == sender, do: {:ok, nil}, else: :error
+        channel_owned(sender, channel)
+    end
+  end
 
-          _no_channel ->
-            :error
-        end
+  defp legacy_customer_operator?(operator, route) do
+    not is_nil(route.organization_id) and
+      operator.organization_id == route.organization_id and
+      (is_nil(operator.tenant_id) or operator.tenant_id == route.tenant_id)
+  end
+
+  defp tenant_staff?(operator, route) do
+    not is_nil(route.tenant_id) and operator.tenant_id == route.tenant_id and
+      (is_nil(route.organization_id) or is_nil(operator.organization_id))
+  end
+
+  defp channel_owned(sender, channel) do
+    case channel do
+      %InboundChannel{public_address: address} when is_binary(address) ->
+        if String.downcase(address) == sender, do: {:ok, nil}, else: :error
+
+      _no_channel ->
+        :error
     end
   end
 
@@ -357,7 +387,7 @@ defmodule Custyard.Webhooks.Triage do
 
   # --- suspect (spam-flagged or unauthenticated unknown sender) ---
 
-  defp suspect(normalized, sender, organization_id) do
+  defp suspect(normalized, sender, route) do
     metadata = normalized[:metadata] || %{}
 
     reason =
@@ -367,7 +397,7 @@ defmodule Custyard.Webhooks.Triage do
         true -> nil
       end
 
-    if reason && not known_contact?(sender, organization_id), do: {:suspect, reason}
+    if reason && not known_contact?(sender, route), do: {:suspect, reason}
   end
 
   # SPF is deliberately not a signal: it cannot pass through a forwarder
@@ -388,7 +418,7 @@ defmodule Custyard.Webhooks.Triage do
   # contact with no conversations at all (operator-created or imported) is
   # known, as is one with at least one conversation an operator accepted or
   # cleared.
-  defp known_contact?(email, organization_id) do
+  defp known_contact?(email, route) do
     suspect_only =
       from v in Conversation,
         where: v.contact_id == parent_as(:contact).id and v.suspect == true
@@ -397,11 +427,19 @@ defmodule Custyard.Webhooks.Triage do
       from v in Conversation,
         where: v.contact_id == parent_as(:contact).id and v.suspect == false
 
-    Repo.exists?(
+    query =
       from c in Contact,
         as: :contact,
-        where: c.email == ^email and c.organization_id == ^organization_id,
+        join: o in Organization,
+        on: o.id == c.organization_id,
+        where: c.email == ^email,
         where: not exists(suspect_only) or exists(accepted)
-    )
+
+    query =
+      if route.organization_id,
+        do: where(query, [c], c.organization_id == ^route.organization_id),
+        else: where(query, [_c, o], o.tenant_id == ^route.tenant_id)
+
+    Repo.exists?(query)
   end
 end

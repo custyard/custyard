@@ -186,6 +186,10 @@ defmodule Custyard.Organizations do
 
   defp scope_to_operator(query, %OperatorAccount{role: "super_admin"}), do: query
 
+  defp scope_to_operator(query, %OperatorAccount{tenant_id: tenant_id})
+       when is_integer(tenant_id),
+       do: where(query, [o], o.tenant_id == ^tenant_id)
+
   defp scope_to_operator(query, %OperatorAccount{organization_id: org_id})
        when is_integer(org_id),
        do: where(query, [o], o.id == ^org_id)
@@ -253,7 +257,19 @@ defmodule Custyard.Organizations do
   def update_organization(%Organization{} = org, attrs) do
     org
     |> Organization.changeset(attrs)
+    |> reject_tenant_move()
     |> Repo.update()
+  end
+
+  defp reject_tenant_move(changeset) do
+    if Ecto.Changeset.changed?(changeset, :tenant_id),
+      do:
+        Ecto.Changeset.add_error(
+          changeset,
+          :tenant_id,
+          "cannot be changed for an existing customer"
+        ),
+      else: changeset
   end
 
   @doc """
@@ -377,6 +393,10 @@ defmodule Custyard.Organizations do
         org_attrs,
         %OperatorAccount{} = operator
       ) do
+    org_attrs =
+      Map.new(org_attrs, fn {key, value} -> {to_string(key), value} end)
+      |> Map.put("tenant_id", conversation.tenant_id)
+
     case create_organization(org_attrs) do
       {:ok, organization} ->
         conversation

@@ -29,6 +29,8 @@ defmodule Custyard.InboundChannelRejection do
   ]
 
   schema "inbound_channel_rejections" do
+    field :tenant_id, :id, default: 1
+    belongs_to :tenant, Custyard.Tenant, define_field: false
     field :sender_email, :string
     field :recipient, :string
     field :subject, :string
@@ -55,9 +57,10 @@ defmodule Custyard.InboundChannelRejection do
       :provider_delivery_id,
       :inbound_route_id,
       :inbound_channel_id,
-      :organization_id
+      :organization_id,
+      :tenant_id
     ])
-    |> validate_required([:classification, :inbound_route_id, :organization_id])
+    |> validate_required([:classification, :inbound_route_id, :tenant_id])
     |> validate_length(:sender_email, max: 255)
     |> validate_length(:recipient, max: 255)
     |> validate_length(:subject, max: 500)

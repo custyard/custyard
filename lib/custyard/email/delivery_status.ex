@@ -135,13 +135,15 @@ defmodule Custyard.Email.DeliveryStatus do
   `{:error, :concurrent_update}` when an advancing event kept losing to
   overlapping writes; the caller answers non-2xx so the provider retries).
   """
-  def apply_event(%{"event" => event} = envelope) when is_binary(event) do
+  def apply_event(envelope, opts \\ [])
+
+  def apply_event(%{"event" => event} = envelope, opts) when is_binary(event) do
     data = map_or_empty(envelope["data"])
 
     result =
       with {:ok, status} <- resolve_status(event),
            {:ok, provider_id} <- provider_message_id(data),
-           {:ok, message} <- find_message(provider_id) do
+           {:ok, message} <- find_message(provider_id, opts) do
         incoming = %{
           status: status,
           event: event,
@@ -161,7 +163,7 @@ defmodule Custyard.Email.DeliveryStatus do
     result
   end
 
-  def apply_event(_envelope), do: {:error, :invalid_payload}
+  def apply_event(_envelope, _opts), do: {:error, :invalid_payload}
 
   # A conditional write that touched 0 rows means another webhook moved the
   # state between our read and our write. The event may still apply (a hard
@@ -199,12 +201,24 @@ defmodule Custyard.Email.DeliveryStatus do
 
   # Outbound only: inbound messages have a nil delivery_status and must never
   # be touched, even when they carry the same provider id.
-  defp find_message(provider_id) do
+  defp find_message(provider_id, opts) do
     query =
       from(m in Message,
         where: m.lettermint_message_id == ^provider_id and not is_nil(m.delivery_status),
         limit: 1
       )
+
+    query =
+      case Keyword.get(opts, :tenant_id) do
+        nil ->
+          query
+
+        tenant_id ->
+          from(m in query,
+            join: c in assoc(m, :conversation),
+            where: c.tenant_id == ^tenant_id
+          )
+      end
 
     case Repo.one(query) do
       nil -> {:ignored, :unknown_message}

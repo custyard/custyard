@@ -212,15 +212,36 @@ defmodule CustyardWeb.Operator.ConversationLiveTest do
       %{conv: conv}
     end
 
-    test "shows the contact's address", %{conn: conn, conv: conv} do
-      insert_message(conversation_id: conv.id, source: :email, triage_class: :customer)
-
+    test "shows the contact's address before a customer message arrives", %{
+      conn: conn,
+      conv: conv
+    } do
       {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
 
       assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
                "alice@customer.example"
 
       refute has_element?(view, ~s([data-testid="operator-reply-to-override"]))
+    end
+
+    test "shows the latest participant instead of the original contact", %{conn: conn, conv: conv} do
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        triage_class: :customer,
+        sender_email: "bob@customer.example"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/operator/conversation/#{conv.id}")
+
+      assert view |> element(~s([data-testid="operator-reply-to"])) |> render() =~
+               "bob@customer.example"
+
+      assert has_element?(
+               view,
+               ~s([data-testid="operator-reply-to-override"]),
+               "latest customer message"
+             )
     end
 
     test "shows the customer's Reply-To when it overrides the contact", %{

@@ -21,11 +21,10 @@ defmodule Custyard.Email.Outbound do
 
   require Logger
 
-  alias Custyard.Email.{Headers, ThreadHeaders}
+  alias Custyard.Email.{Headers, OutboundQueue, ReplyRecipients, ThreadHeaders}
 
   alias Custyard.{
     Conversations,
-    EmailAddress,
     InboundChannel,
     InboundChannels,
     Message,
@@ -77,6 +76,74 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
+  @doc "Unattempted configuration failures can retry; provider attempts retain the 24-hour deduplication window."
+  def retryable?(%Message{} = message) do
+    message.source == :operator and message.delivery_status == :failed and
+      message.delivery_failure_kind in [:rejected, :configuration] and
+      message.delivery_error_code != "envelope_changed" and
+      retry_window_open?(message) and
+      is_nil(message.deleted_at)
+  end
+
+  defp retry_window_open?(%Message{
+         delivery_failure_kind: :configuration,
+         delivery_attempted_at: nil
+       }),
+       do: true
+
+  defp retry_window_open?(%Message{delivery_attempted_at: %DateTime{} = attempted_at}),
+    do: DateTime.diff(DateTime.utc_now(), attempted_at) < 86_400
+
+  defp retry_window_open?(_message), do: false
+
+  @doc "Requeue a confirmed failed reply under current operator authorization. Unknown sends never retry blindly."
+  def retry(%Message{} = message, operator) do
+    result =
+      Conversations.with_operator_access(message.conversation_id, operator, fn conversation,
+                                                                               _operator ->
+        case Repo.get_by(Message, id: message.id, conversation_id: conversation.id) do
+          %Message{} = current ->
+            if retryable?(current) do
+              current
+              |> refresh_unattempted_identity(conversation)
+              |> Message.delivery_status_changeset(:pending, %{
+                delivery_failure_kind: nil,
+                delivery_error_code: nil
+              })
+              |> Repo.update()
+            else
+              {:error, :reconciliation_required}
+            end
+
+          nil ->
+            {:error, :not_found}
+        end
+      end)
+
+    case result do
+      {:ok, updated} ->
+        OutboundQueue.wake()
+        {:ok, broadcast_delivery_update(updated)}
+
+      error ->
+        error
+    end
+  end
+
+  defp refresh_unattempted_identity(
+         %Message{delivery_payload_hash: nil, sender_email: nil} = message,
+         conversation
+       ) do
+    channel = Conversations.reply_sending_channel(conversation)
+
+    Message.changeset(message, %{
+      sender_email: Conversations.reply_identity(conversation).address,
+      inbound_channel_id: channel && channel.id
+    })
+  end
+
+  defp refresh_unattempted_identity(message, _conversation), do: message
+
   # Claim, reload current recipients and save the envelope under one write
   # transaction. A stale queue snapshot must not restore recipients erased
   # by a DSAR. The provider call happens only after this transaction commits.
@@ -98,25 +165,81 @@ defmodule Custyard.Email.Outbound do
 
   defp prepare_delivery(message) do
     message =
-      Repo.preload(message, conversation: [:contact, :organization, :prospect, :inbound_channel])
+      Repo.preload(message, [
+        :inbound_channel,
+        conversation: [:contact, :organization, :prospect, :inbound_channel]
+      ])
 
-    conversation = message.conversation
+    conversation =
+      if message.inbound_channel &&
+           message.inbound_channel.tenant_id == message.conversation.tenant_id,
+         do: %{message.conversation | inbound_channel: message.inbound_channel},
+         else: message.conversation
 
-    with {:ok, recipient} <- reply_recipient(conversation),
+    with {:ok, recipient} <- delivery_recipient(message, conversation),
          {:ok, from_addr} <- resolve_from_address(message, conversation),
          email <- compose(message, conversation, recipient, from_addr),
-         {:ok, message} <- persist_recipients(message, email) do
+         {:ok, message} <- persist_delivery_facts(message, email) do
       {:ok, message, email}
     else
       {:error, reason} -> {:error, reason, message}
     end
   end
 
+  # Recheck consent and whether the relationship still exists, but never let a
+  # later participant redirect an already reviewed reply. Erasure can clear the
+  # locked list, in which case delivery stops instead of restoring an address.
+  defp delivery_recipient(%Message{delivery_recipients_locked: true} = message, conversation) do
+    with {:ok, _current} <- reply_recipient(conversation) do
+      case message.to_addresses do
+        [address] -> {:ok, address}
+        _ -> {:error, :no_recipient_email}
+      end
+    end
+  end
+
+  defp delivery_recipient(_message, conversation), do: reply_recipient(conversation)
+
   defp deliver_claimed(message, email) do
-    case Custyard.Mailer.deliver(email) do
+    with {:ok, config} <- Custyard.EmailSetup.sending_config(message.conversation.tenant_id),
+         :ok <- validate_delivery_config(config),
+         {:ok, attempted} <- record_attempt(message) do
+      deliver_attempted(attempted, email, config)
+    else
+      {:error, reason} -> delivery_error(message, reason)
+    end
+  end
+
+  defp validate_delivery_config(config) do
+    config |> Keyword.fetch!(:adapter) |> then(& &1.validate_config(config))
+  rescue
+    _error -> {:error, :sending_not_configured}
+  end
+
+  defp record_attempt(message) do
+    message
+    |> Ecto.Changeset.change(
+      delivery_attempted_at:
+        message.delivery_attempted_at || DateTime.utc_now() |> DateTime.truncate(:second)
+    )
+    |> Repo.update()
+  end
+
+  defp deliver_attempted(message, email, config) do
+    case deliver_with_config(email, config) do
       {:ok, metadata} ->
         updated =
-          message |> mark_status(:sent, provider_attrs(metadata)) |> broadcast_delivery_update()
+          message
+          |> mark_status(
+            :sent,
+            Map.merge(provider_attrs(metadata), %{
+              delivery_failure_kind: nil,
+              delivery_error_code: nil
+            })
+          )
+          |> broadcast_delivery_update()
+
+        Custyard.EmailSetup.record_reply_accepted(updated)
 
         {:ok, updated}
 
@@ -125,25 +248,82 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
+  defp deliver_with_config(email, config) do
+    Custyard.Mailer.deliver(email, config)
+  rescue
+    # Adapter exceptions can contain request bodies and credentials. Treat
+    # acceptance as unknown and retain only a bounded diagnostic code.
+    _error -> {:error, :delivery_exception}
+  end
+
   defp delivery_error(message, :no_consent) do
     Logger.info("Outbound email withheld for message #{message.id}: prospect has not opted in")
     {:error, :no_consent, message |> mark_status(:withheld) |> broadcast_delivery_update()}
   end
 
   defp delivery_error(message, reason) do
-    Logger.error("Outbound email delivery failed for message #{message.id}: #{inspect(reason)}")
-    {:error, reason, message |> mark_status(:failed) |> broadcast_delivery_update()}
+    {kind, code} = failure_category(reason)
+
+    Logger.warning("outbound_delivery_failed",
+      message_id: message.id,
+      failure_kind: kind,
+      error_code: code
+    )
+
+    attrs = %{
+      delivery_failure_kind: kind,
+      delivery_error_code: code
+    }
+
+    {:error, reason, message |> mark_status(:failed, attrs) |> broadcast_delivery_update()}
   end
+
+  defp failure_category({status, _body}) when status in 400..499 and status not in [408, 409],
+    do: {:rejected, "http_#{status}"}
+
+  defp failure_category({status, _body}) when is_integer(status),
+    do: {:unknown, "provider_response"}
+
+  defp failure_category(reason)
+       when reason in [
+              :no_recipient_email,
+              :from_not_set,
+              :not_configured,
+              :sending_not_configured,
+              :project_token_missing,
+              :connection_not_found,
+              :envelope_changed
+            ],
+       do: {:configuration, Atom.to_string(reason)}
+
+  defp failure_category(reason) when reason in [:timeout, :closed, :econnrefused, :nxdomain],
+    do: {:unknown, Atom.to_string(reason)}
+
+  defp failure_category(_reason), do: {:unknown, "delivery_error"}
 
   # Store actual participants before contacting the provider. The message was
   # read under the claim's write lock, so this cannot restore stale CC data.
-  defp persist_recipients(message, email) do
-    message
-    |> Message.changeset(%{
-      to_addresses: Enum.map(email.to, &elem(&1, 1)),
-      cc_addresses: Enum.map(email.cc, &elem(&1, 1))
-    })
-    |> Repo.update()
+  defp persist_delivery_facts(message, email) do
+    fingerprint =
+      {email.from, email.to, email.cc, email.bcc, email.subject, email.text_body, email.html_body,
+       email.headers}
+      |> :erlang.term_to_binary()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+
+    if message.delivery_payload_hash && message.delivery_payload_hash != fingerprint do
+      {:error, :envelope_changed}
+    else
+      message
+      |> Message.changeset(%{
+        to_addresses: Enum.map(email.to, &elem(&1, 1)),
+        cc_addresses: Enum.map(email.cc, &elem(&1, 1))
+      })
+      |> Ecto.Changeset.change(%{
+        delivery_payload_hash: fingerprint
+      })
+      |> Repo.update()
+    end
   end
 
   @doc """
@@ -167,6 +347,13 @@ defmodule Custyard.Email.Outbound do
     |> html_body(wrap_html(message.body))
     |> put_threading_headers(message)
     |> put_message_id_header(message)
+    |> put_provider_option(:idempotency_key, idempotency_key(message))
+  end
+
+  defp idempotency_key(message) do
+    "custyard-" <>
+      (:crypto.hash(:sha256, "#{message.id}:#{message.message_id}")
+       |> Base.encode16(case: :lower))
   end
 
   # --- Private ---
@@ -203,54 +390,28 @@ defmodule Custyard.Email.Outbound do
   `Conversations.reply_channel/1` already excludes revoked prospects and
   empty emails, so the prospect channel only needs the consent check here.
   """
-  def reply_recipient(conversation) do
-    conversation = Repo.preload(conversation, [:contact, :prospect])
-
-    case Conversations.reply_channel(conversation) do
-      {:contact, email} -> {:ok, reply_to_override(conversation, email) || email}
-      {:prospect, email} -> prospect_recipient(conversation.prospect, email)
-      :none -> {:error, :no_recipient_email}
-    end
-  end
-
-  # D5: the customer's Reply-To wins over the contact address when it is a
-  # valid, different address. Only the latest customer-class message counts
-  # (triage_class nil for legacy rows or :customer); an auto-response or a
-  # suspect message must never steer a reply elsewhere.
-  defp reply_to_override(conversation, contact_email) do
-    query =
-      Ecto.Query.from(m in Message,
-        where: m.conversation_id == ^conversation.id,
-        where: m.source != :operator,
-        where: m.is_internal_note == false,
-        where: is_nil(m.triage_class) or m.triage_class == :customer,
-        order_by: [desc: m.inserted_at, desc: m.id],
-        limit: 1,
-        select: m.reply_to
-      )
-
-    case Repo.one(query) do
-      reply_to when is_binary(reply_to) ->
-        reply_to = reply_to |> String.trim() |> String.downcase()
-
-        if reply_to != String.downcase(contact_email) and EmailAddress.valid?(reply_to),
-          do: reply_to
-
-      _other ->
-        nil
-    end
-  end
-
-  defp prospect_recipient(%{notify_on_reply: true}, email), do: {:ok, email}
-  defp prospect_recipient(_prospect, _email), do: {:error, :no_consent}
+  def reply_recipient(conversation),
+    do: ReplyRecipients.recipient(conversation)
 
   defp resolve_from_address(message, conversation) do
     # Priority: message sender_email > app config fallback
     if is_binary(message.sender_email) and message.sender_email != "" do
       {:ok, {from_name(conversation), message.sender_email}}
     else
-      fallback = Application.get_env(:custyard, :email_from_address, "support@custyard.local")
-      {:ok, {from_name(conversation), fallback}}
+      fallback_from_address(conversation)
+    end
+  end
+
+  defp fallback_from_address(%{tenant_id: tenant_id}) when tenant_id != 1,
+    do: {:error, :from_not_set}
+
+  defp fallback_from_address(conversation) do
+    case Application.get_env(:custyard, :email_from_address, "support@custyard.local") do
+      fallback when is_binary(fallback) and fallback != "" ->
+        {:ok, {from_name(conversation), fallback}}
+
+      _ ->
+        {:error, :from_not_set}
     end
   end
 
@@ -282,7 +443,10 @@ defmodule Custyard.Email.Outbound do
   # parent id alone when no other stored ids qualify.
   defp build_references(message, in_reply_to) do
     message.conversation_id
-    |> ThreadHeaders.for_conversation(exclude_message_id: message.message_id)
+    |> ThreadHeaders.for_conversation(
+      exclude_message_id: message.message_id,
+      before_id: message.id
+    )
     |> Map.get("References", in_reply_to)
   end
 
@@ -290,7 +454,7 @@ defmodule Custyard.Email.Outbound do
   # keyed on the conversation's source — linking the conversation to an
   # organization later must not change the From identity (source-keyed rule
   # in the public intake spec).
-  defp from_name(%{source: :public_intake}), do: header_safe_name(branding_name())
+  defp from_name(%{source: :public_intake, tenant_id: 1}), do: header_safe_name(branding_name())
 
   # Channel display name (D3) when the conversation arrived on a channel that
   # has one, else the organization name.
@@ -299,8 +463,15 @@ defmodule Custyard.Email.Outbound do
     header_safe_name(name)
   end
 
-  defp channel_display_name(%{inbound_channel: %InboundChannel{} = channel}),
-    do: InboundChannels.from_name(channel)
+  defp channel_display_name(%{inbound_channel: %InboundChannel{} = channel}) do
+    InboundChannels.from_name(channel) ||
+      if is_nil(channel.organization_id) do
+        case Repo.get(Custyard.Tenant, channel.tenant_id) do
+          %{name: name} -> name
+          _ -> nil
+        end
+      end
+  end
 
   defp channel_display_name(_conversation), do: nil
 

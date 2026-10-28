@@ -713,7 +713,7 @@ defmodule Custyard.InboundRoutesTest do
 
       # Should be a changeset error (validation failed), not an API error
       assert %Ecto.Changeset{} = changeset
-      assert %{organization_id: ["can't be blank"]} = errors_on(changeset)
+      assert %{tenant_id: ["must be selected"]} = errors_on(changeset)
 
       # Verify no route was created
       assert [] = InboundRoutes.list_for_organization(org.id)

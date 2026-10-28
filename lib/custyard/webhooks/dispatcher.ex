@@ -59,7 +59,6 @@ defmodule Custyard.Webhooks.Dispatcher do
     AuditEvent,
     Conversation,
     InboundChannel,
-    InboundChannel,
     InboundChannels,
     InboundRoute,
     Message,
@@ -345,11 +344,16 @@ defmodule Custyard.Webhooks.Dispatcher do
   # message: no reactivation, no contact resolution, no notification and no
   # enrichment. One that threads to nothing is logged and dropped.
   defp handle_auto_response(route, normalized, channel, _reason) do
-    case ThreadMatcher.find_thread(normalized, route.organization_id) do
+    match =
+      if route.organization_id,
+        do: ThreadMatcher.find_thread(normalized, route.organization_id),
+        else: ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
+
+    case match do
       {:ok, conversation} ->
         append_auto_response(route, normalized, channel, conversation)
 
-      :not_found ->
+      no_match when no_match in [:not_found, :ambiguous] ->
         log_rejection(route, channel, :auto_response, normalized)
         {:ignored, :auto_response}
     end
@@ -399,6 +403,7 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   defp route_context(route, channel, triage_class) do
     %{
+      tenant_id: route.tenant_id,
       organization_id: route.organization_id,
       project_id: route.project_id,
       route_type: route.route_type,

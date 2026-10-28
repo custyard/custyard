@@ -77,8 +77,25 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp resolve_sender(normalized, route_context) do
     case route_context do
       %{organization_id: org_id} when not is_nil(org_id) ->
-        # Route context provides org — use it as primary signal
+        # An explicit customer route retains its existing customer boundary.
         SenderMatcher.match_within_org(normalized.from, org_id)
+
+      %{tenant_id: tenant_id}
+      when is_integer(tenant_id) and normalized.source in [:email, :lettermint] ->
+        # The receiving tenant is trusted routing context. Sender domains only
+        # choose a customer inside it; they never choose an authorization scope.
+        # Headers take precedence so another participant joins the same customer
+        # conversation instead of moving it to their own organization.
+        case ThreadMatcher.find_in_tenant(normalized, tenant_id) do
+          {:ok, %Conversation{organization_id: nil}} ->
+            SenderMatcher.match_within_tenant(normalized.from, tenant_id)
+
+          {:ok, conversation} ->
+            SenderMatcher.match_within_org(normalized.from, conversation.organization_id)
+
+          no_match when no_match in [:not_found, :ambiguous] ->
+            SenderMatcher.match_within_tenant(normalized.from, tenant_id)
+        end
 
       _ ->
         # No route context — fall back to domain-based matching
@@ -95,7 +112,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     # conversation instead of creating a duplicate.
     with :not_found <- find_by_provider_delivery_id(provider_delivery_id(normalized), org.id),
          :not_found <- find_by_message_id(normalized.message_id, org.id, dedup_scope),
-         :not_found <- find_thread(normalized, org.id, dedup_scope) do
+         :not_found <- find_thread(normalized, org.id, dedup_scope, route_context) do
       case create_conversation(normalized, org, contact, route_context) do
         {:ok, conversation} -> {:ok, conversation, true}
         error -> error
@@ -107,10 +124,40 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
         {:ok, conversation, false}
 
       {:ok, conversation} ->
+        conversation = maybe_link_customer(conversation, org, contact)
         conversation = maybe_reactivate(conversation)
         {:ok, conversation, false}
     end
   end
+
+  defp maybe_link_customer(
+         %Conversation{organization_id: nil, source: :public_intake} = conversation,
+         org,
+         contact
+       ) do
+    conversation
+    |> Conversation.changeset(%{organization_id: org.id, contact_id: contact && contact.id})
+    |> Repo.update!()
+  end
+
+  defp maybe_link_customer(conversation, _org, _contact), do: conversation
+
+  defp find_thread(normalized, org_id, _dedup_scope, %{tenant_id: tenant_id, organization_id: nil})
+       when is_integer(tenant_id) and normalized.source in [:email, :lettermint] do
+    case ThreadMatcher.find_in_tenant(normalized, tenant_id) do
+      :not_found ->
+        ThreadMatcher.find_by_subject(normalized, org_id, tenant_id)
+
+      :ambiguous ->
+        :not_found
+
+      found ->
+        found
+    end
+  end
+
+  defp find_thread(normalized, org_id, dedup_scope, _route_context),
+    do: find_thread(normalized, org_id, dedup_scope)
 
   defp provider_delivery_id(normalized) do
     case get_in(normalized, [:metadata, :provider_delivery_id]) do
@@ -229,6 +276,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     suspect? = route_context[:triage_class] == :suspect
 
     base_attrs = %{
+      tenant_id: Map.get(org, :tenant_id),
       organization_id: org.id,
       contact_id: contact && contact.id,
       subject: Normalizer.presence(normalized.subject) || "(no subject)",

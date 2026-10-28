@@ -9,7 +9,7 @@ defmodule Custyard.Intake.ArrivalEmail do
   Direction matters for the content rules. `Intake.ClaimEmail` goes *to* a
   prospect, so it may carry no prospect-supplied content — it must be
   useless as a spam relay. This one goes *to the operator* at the
-  configured `:operator_email`, an address the operator chose, so it does
+  tenant's staff (or the default instance's configured `:operator_email`), so it does
   carry the submission excerpt: without it the alert can't be triaged.
   Prospect text is HTML-escaped in the body and run through the shared
   `Custyard.Email.Headers` discipline in the subject, where a bare newline
@@ -31,7 +31,9 @@ defmodule Custyard.Intake.ArrivalEmail do
   require Logger
 
   alias Custyard.Email.Headers
-  alias Custyard.{Conversation, IntakeSource, RateLimit, Settings}
+  alias Custyard.{Conversation, IntakeSource, RateLimit, Tenants}
+  alias Custyard.Intake.EmailBranding
+  alias Custyard.Notifications.TenantDelivery
 
   # Enough to triage without turning the alert into a full mail client.
   @excerpt_max_length 500
@@ -50,21 +52,28 @@ defmodule Custyard.Intake.ArrivalEmail do
   `{:error, :disabled}` when email notifications are switched off. Callers
   are expected to ignore the result — see the moduledoc.
   """
+  def send_arrival(%Conversation{tenant_id: id}, %IntakeSource{tenant_id: source_id}, _body)
+      when id != source_id do
+    {:error, :tenant_mismatch}
+  end
+
   def send_arrival(%Conversation{} = conversation, %IntakeSource{} = source, body) do
     if email_enabled?() do
-      case RateLimit.check_rate(:intake_arrival_email, source.key) do
-        {:deny, _retry_after_ms} ->
-          Logger.warning(
-            "Intake arrival notification rate-limited for source #{source.key}; " <>
-              "conversation #{conversation.id} is in the queue but unannounced"
-          )
+      with :ok <- TenantDelivery.ready?(source.tenant_id) do
+        case RateLimit.check_rate(:intake_arrival_email, source.key) do
+          {:deny, _retry_after_ms} ->
+            Logger.warning(
+              "Intake arrival notification rate-limited for source #{source.key}; " <>
+                "conversation #{conversation.id} is in the queue but unannounced"
+            )
 
-          {:error, :rate_limited}
+            {:error, :rate_limited}
 
-        {:allow, _count} ->
-          conversation
-          |> compose(source, body)
-          |> deliver(conversation)
+          {:allow, _count} ->
+            conversation
+            |> compose(source, body)
+            |> deliver(conversation)
+        end
       end
     else
       {:error, :disabled}
@@ -79,8 +88,8 @@ defmodule Custyard.Intake.ArrivalEmail do
     conversation_url = operator_conversation_url(conversation)
 
     new()
-    |> to(operator_email())
-    |> from({from_display_name(), from_address()})
+    |> to(TenantDelivery.recipients(source.tenant_id))
+    |> EmailBranding.put_sender(EmailBranding.for_tenant(source.tenant_id), source.tenant_id)
     |> subject(arrival_subject(conversation, source))
     |> text_body(arrival_text(conversation, source, excerpt, conversation_url))
     |> html_body(arrival_html(conversation, source, excerpt, conversation_url))
@@ -100,17 +109,17 @@ defmodule Custyard.Intake.ArrivalEmail do
   end
 
   defp do_deliver(email, conversation) do
-    case Custyard.Mailer.deliver(email) do
+    case TenantDelivery.deliver(email, conversation.tenant_id) do
       {:ok, _metadata} = result ->
         Logger.info("Intake arrival notification sent for conversation #{conversation.id}")
         result
 
-      {:error, reason} = error ->
+      {:error, _reason} = error ->
         # The conversation is committed and already in the queue; a failed
         # alert costs triage latency, not data.
         Logger.error(
           "Failed to send intake arrival notification for conversation " <>
-            "#{conversation.id}: #{inspect(reason)}"
+            "#{conversation.id}"
         )
 
         error
@@ -136,25 +145,12 @@ defmodule Custyard.Intake.ArrivalEmail do
   defp excerpt(_body), do: ""
 
   defp operator_conversation_url(conversation) do
-    CustyardWeb.Endpoint.url() <> "/operator/conversation/#{conversation.id}"
+    Tenants.url(Tenants.get_tenant!(conversation.tenant_id)) <>
+      "/operator/conversation/#{conversation.id}"
   end
 
   defp email_enabled? do
     Application.get_env(:custyard, :email_enabled, false)
-  end
-
-  defp operator_email do
-    Application.get_env(:custyard, :operator_email, "operator@example.com")
-  end
-
-  defp from_display_name do
-    (Settings.get_branding().name || "Custyard")
-    |> Headers.sanitize_header_text()
-    |> Headers.quote_display_name()
-  end
-
-  defp from_address do
-    Application.get_env(:custyard, :email_from_address, "noreply@custyard.local")
   end
 
   defp arrival_text(conversation, source, excerpt, conversation_url) do

@@ -20,6 +20,44 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
   end
 
   describe "listing" do
+    test "tenant administrators see only their own sources and cannot forge another tenant's IDs",
+         c do
+      {:ok, tenant} =
+        Custyard.Tenants.create_tenant(%{
+          name: "Scoped intake",
+          slug: "intake-#{System.unique_integer([:positive])}"
+        })
+
+      admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
+      own = insert_intake_source(tenant_id: tenant.id, name: "Own workspace CTA")
+      foreign = insert_intake_source(tenant_id: 1, name: "Foreign workspace CTA")
+      conn = put_operator_session(c.conn, admin)
+      {:ok, view, html} = live(conn, ~p"/operator/intake-sources")
+      assert html =~ own.name
+      refute html =~ foreign.name
+
+      for event <- ["edit", "toggle_enabled", "delete"] do
+        assert render_click(view, event, %{"id" => to_string(foreign.id)}) =~
+                 "Intake source not found"
+
+        assert Repo.reload!(foreign).enabled == foreign.enabled
+      end
+
+      render_click(view, "new")
+
+      render_submit(view, "save", %{
+        "intake_source" => %{
+          "key" => "scoped-#{tenant.id}",
+          "name" => "Created in workspace",
+          "tenant_id" => "1",
+          "mode" => "active",
+          "enabled" => "true"
+        }
+      })
+
+      assert Repo.get_by!(IntakeSource, key: "scoped-#{tenant.id}").tenant_id == tenant.id
+    end
+
     test "renders existing sources", %{conn: conn} do
       insert_intake_source(key: "landing-page", name: "Landing Page", mode: :active)
 
@@ -164,6 +202,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
           flash: %{},
           current_operator: operator,
           editing_source: source,
+          current_tenant: Custyard.Tenants.default_tenant(),
           form_params: %{},
           questions: [],
           sources: []
@@ -447,7 +486,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
         )
 
       assert after_save.assigns.flash["error"] ==
-               "Only super admins can modify intake sources"
+               "Only tenant administrators can modify intake sources"
 
       refute Repo.get_by(IntakeSource, key: "sneaky")
 
@@ -455,7 +494,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
         IntakeSourcesLive.handle_event("delete", %{"id" => to_string(source.id)}, socket)
 
       assert after_delete.assigns.flash["error"] ==
-               "Only super admins can modify intake sources"
+               "Only tenant administrators can modify intake sources"
 
       assert Repo.get(IntakeSource, source.id)
 
@@ -463,7 +502,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
         IntakeSourcesLive.handle_event("toggle_enabled", %{"id" => to_string(source.id)}, socket)
 
       assert after_toggle.assigns.flash["error"] ==
-               "Only super admins can modify intake sources"
+               "Only tenant administrators can modify intake sources"
 
       assert Repo.get!(IntakeSource, source.id).enabled == true
     end

@@ -14,6 +14,7 @@ defmodule Custyard.Attachments.Recovery do
     InboundRouteWebhook,
     Message,
     MessageAttachment,
+    InboundRoute,
     Repo
   }
 
@@ -48,7 +49,7 @@ defmodule Custyard.Attachments.Recovery do
     client = Keyword.get_lazy(opts, :client, &Client.client/0)
 
     with %InboundChannel{} = channel <- Repo.get(InboundChannel, message.inbound_channel_id),
-         true <- channel.organization_id == conversation.organization_id,
+         true <- channel.tenant_id == conversation.tenant_id,
          true <- is_binary(message.provider_delivery_id),
          true <-
            Code.ensure_loaded?(client) and function_exported?(client, :get_webhook_delivery, 2) do
@@ -59,6 +60,13 @@ defmodule Custyard.Attachments.Recovery do
               w.inbound_route_id == ^channel.inbound_route_id and
                 not is_nil(w.lettermint_webhook_id)
         )
+
+      route = Repo.get(InboundRoute, channel.inbound_route_id)
+
+      webhooks =
+        if route && route.lettermint_webhook_id,
+          do: [%{lettermint_webhook_id: route.lettermint_webhook_id} | webhooks],
+          else: webhooks
 
       Enum.reduce_while(webhooks, {:error, :delivery_unavailable}, fn webhook, _acc ->
         case recover_delivery(client, webhook, message, channel) do
@@ -73,7 +81,9 @@ defmodule Custyard.Attachments.Recovery do
 
   defp recover_delivery(client, webhook, message, channel) do
     with {:ok, %{"payload" => payload}} <-
-           client.get_webhook_delivery(
+           get_delivery(
+             client,
+             channel,
              webhook.lettermint_webhook_id,
              message.provider_delivery_id
            ),
@@ -96,4 +106,13 @@ defmodule Custyard.Attachments.Recovery do
       _ -> {:error, :delivery_unavailable}
     end
   end
+
+  defp get_delivery(Custyard.Lettermint.HttpClient, channel, webhook_id, delivery_id),
+    do: Client.call(:get_webhook_delivery, [webhook_id, delivery_id], channel.tenant_id)
+
+  defp get_delivery(Custyard.Lettermint.DisabledClient, channel, webhook_id, delivery_id),
+    do: Client.call(:get_webhook_delivery, [webhook_id, delivery_id], channel.tenant_id)
+
+  defp get_delivery(client, _channel, webhook_id, delivery_id),
+    do: client.get_webhook_delivery(webhook_id, delivery_id)
 end

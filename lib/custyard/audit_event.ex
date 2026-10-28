@@ -19,6 +19,7 @@ defmodule Custyard.AuditEvent do
     :prospect_converted,
     :operator_created,
     :operator_removed,
+    :operator_tenant_access_granted,
     :acknowledgment_replayed,
     :acknowledgment_binding_created,
     # Provider delivery-status webhook advanced an outbound message's status

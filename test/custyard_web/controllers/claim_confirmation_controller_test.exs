@@ -5,7 +5,7 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
   import Custyard.Factory
   import Ecto.Query
 
-  alias Custyard.{RateLimit, Repo, Slug, Slugs}
+  alias Custyard.{RateLimit, Repo, Slug, Slugs, Tenants}
 
   @generous [limit: 1000, window_ms: 60_000]
 
@@ -116,6 +116,42 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       assert reloaded.status == :confirmed
       assert is_nil(reloaded.confirmation_token_hash)
       assert is_nil(reloaded.expires_at)
+    end
+  end
+
+  describe "tenant host boundaries" do
+    setup do
+      {:ok, tenant} = Tenants.create_tenant(%{name: "Atlas", slug: "atlas-claims"})
+      {:ok, other} = Tenants.create_tenant(%{name: "Beacon", slug: "beacon-claims"})
+      conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
+      {:ok, slug, token} = Slugs.claim("atlas-claim", "buyer@example.com", conversation)
+
+      %{tenant: tenant, other: other, slug: slug, token: token}
+    end
+
+    test "a foreign host renders unavailable without exposing the claim", c do
+      conn = get(%{build_conn() | host: Tenants.host(c.other)}, "/claim/#{c.token}")
+      html = html_response(conn, 200)
+
+      assert html =~ "claim-unavailable"
+      refute html =~ "atlas-claim"
+      assert Repo.reload!(c.slug).status == :claimed
+
+      own = get(%{build_conn() | host: Tenants.host(c.tenant)}, "/claim/#{c.token}")
+      assert html_response(own, 200) =~ "atlas-claim"
+      assert Repo.reload!(c.slug).status == :claimed
+    end
+
+    test "a foreign host cannot consume a token that still works on its own tenant", c do
+      conn = post(%{build_conn() | host: Tenants.host(c.other)}, "/claim/#{c.token}/confirm")
+
+      assert html_response(conn, 200) =~ "claim-unavailable"
+      assert Repo.reload!(c.slug).status == :claimed
+      assert Repo.reload!(c.slug).confirmation_token_hash == c.slug.confirmation_token_hash
+
+      own = post(%{build_conn() | host: Tenants.host(c.tenant)}, "/claim/#{c.token}/confirm")
+      assert html_response(own, 200) =~ "claim-confirmed-page"
+      assert Repo.reload!(c.slug).status == :confirmed
     end
   end
 

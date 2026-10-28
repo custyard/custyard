@@ -3,12 +3,12 @@ defmodule Custyard.Intake.ClaimEmail do
   Composes and delivers the slug-claim confirmation email.
 
   Follows the `Custyard.Auth.LoginEmail` pattern: direct Swoosh composition
-  delivered via `Custyard.Mailer`. From is the platform address
-  (`:email_from_address` config) with the instance branding name as the
-  display name — never an operator's personal address — run through the
+  delivered via `Custyard.Mailer`. Nondefault tenants use their selected support
+  sender and project credentials; the default instance keeps its configured platform
+  address. The tenant or instance display name is run through the
   shared `Custyard.Email.Headers` discipline.
 
-  The body contains ONLY the claimed slug and platform links (the `/c`
+  The body contains ONLY operator-configured branding, the claimed slug and tenant links (the `/c`
   confirmation URL and the `/c` conversation URL) — NEVER prospect-supplied
   content: this mail must be useless as a spam relay.
 
@@ -24,8 +24,8 @@ defmodule Custyard.Intake.ClaimEmail do
 
   require Logger
 
-  alias Custyard.Email.Headers
-  alias Custyard.{RateLimit, Settings, Slug}
+  alias Custyard.{RateLimit, Slug}
+  alias Custyard.Intake.EmailBranding
 
   @doc """
   Send the confirmation email for a freshly claimed (or token-rotated)
@@ -43,67 +43,62 @@ defmodule Custyard.Intake.ClaimEmail do
     confirm_url = Keyword.fetch!(opts, :confirm_url)
     conversation_url = Keyword.fetch!(opts, :conversation_url)
 
-    case RateLimit.check_rate(:claim_email_send, slug.email) do
-      {:deny, _retry_after_ms} ->
-        {:error, :rate_limited}
+    with {:ok, delivery} <-
+           EmailBranding.delivery_settings(EmailBranding.tenant_id_for_claim(slug)) do
+      case RateLimit.check_rate(:claim_email_send, slug.email) do
+        {:deny, _retry_after_ms} ->
+          {:error, :rate_limited}
 
-      {:allow, _count} ->
-        slug
-        |> compose(confirm_url, conversation_url)
-        |> deliver(slug)
+        {:allow, _count} ->
+          slug
+          |> compose(confirm_url, conversation_url, delivery)
+          |> deliver(slug, delivery.config)
+      end
     end
   end
 
   @doc """
   Compose the confirmation email without delivering (testable seam).
   """
-  def compose(%Slug{} = slug, confirm_url, conversation_url) do
+  def compose(%Slug{} = slug, confirm_url, conversation_url, delivery \\ nil) do
+    branding = EmailBranding.for_claim(slug)
+
     new()
     |> to(slug.email)
-    |> from({from_display_name(), from_address()})
+    |> EmailBranding.put_sender(branding, delivery || EmailBranding.tenant_id_for_claim(slug))
     |> subject("Confirm your claim: #{slug.slug}")
-    |> text_body(confirmation_text(slug.slug, confirm_url, conversation_url))
-    |> html_body(confirmation_html(slug.slug, confirm_url, conversation_url))
+    |> text_body(
+      EmailBranding.text_header(branding) <>
+        confirmation_text(slug.slug, confirm_url, conversation_url)
+    )
+    |> html_body(confirmation_html(slug.slug, confirm_url, conversation_url, branding))
   end
 
-  defp deliver(email, slug) do
+  defp deliver(email, slug, config) do
     if Application.get_env(:custyard, :deliver_replies_async?, true) do
-      case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn -> do_deliver(email, slug) end) do
+      case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn ->
+             do_deliver(email, slug, config)
+           end) do
         {:ok, _pid} -> {:ok, :queued}
         {:error, _reason} -> {:error, :queue_failed}
       end
     else
-      do_deliver(email, slug)
+      do_deliver(email, slug, config)
     end
   end
 
-  defp do_deliver(email, slug) do
-    case Custyard.Mailer.deliver(email) do
+  defp do_deliver(email, slug, config) do
+    case Custyard.Mailer.deliver(email, config) do
       {:ok, _metadata} = result ->
         Logger.info("Slug claim confirmation sent for #{slug.slug}")
         result
 
-      {:error, reason} = error ->
+      {:error, _reason} = error ->
         # The claim row is untouched: it stays intact and re-sendable.
-        Logger.error(
-          "Failed to send slug claim confirmation for #{slug.slug}: #{inspect(reason)}"
-        )
+        Logger.error("Failed to send slug claim confirmation for #{slug.slug}")
 
         error
     end
-  end
-
-  # Instance branding name (operator-configured, "Custyard" fallback) under
-  # the shared header discipline — sanitized and quoted like every other
-  # display name this codebase emits.
-  defp from_display_name do
-    (Settings.get_branding().name || "Custyard")
-    |> Headers.sanitize_header_text()
-    |> Headers.quote_display_name()
-  end
-
-  defp from_address do
-    Application.get_env(:custyard, :email_from_address, "noreply@custyard.local")
   end
 
   defp confirmation_text(slug, confirm_url, conversation_url) do
@@ -122,16 +117,21 @@ defmodule Custyard.Intake.ClaimEmail do
     """
   end
 
-  defp confirmation_html(slug, confirm_url, conversation_url) do
+  defp confirmation_html(slug, confirm_url, conversation_url, branding) do
+    slug = EmailBranding.escape(slug)
+    confirm_url = EmailBranding.escape(confirm_url)
+    conversation_url = EmailBranding.escape(conversation_url)
+
     """
     <html>
     <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
       <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 24px;">
+        #{EmailBranding.html_header(branding)}
         <p style="color: #374151; font-size: 16px; margin-top: 0;">
           You claimed the name: <strong>#{slug}</strong>
         </p>
         <div style="text-align: center; margin: 24px 0;">
-          <a href="#{confirm_url}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 16px;">
+          <a href="#{confirm_url}" style="display: inline-block; background: #{branding.color}; color: white; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 16px;">
             Confirm your claim
           </a>
         </div>

@@ -135,15 +135,24 @@ defmodule Custyard.InboundRoutes do
   end
 
   defp create_lettermint_route(changeset) do
-    org_id = Changeset.get_field(changeset, :organization_id)
+    org = optional_record(Custyard.Organization, Changeset.get_field(changeset, :organization_id))
+    tenant_id = Changeset.get_field(changeset, :tenant_id) || field(org, :tenant_id)
+    tenant = optional_record(Custyard.Tenant, tenant_id)
+    project_id = configured_project(tenant_id) || field(org, :lettermint_project_id)
+    name = field(tenant, :name) || field(org, :name) || "Support"
     route_type = Changeset.get_field(changeset, :route_type)
-    org = Repo.get!(Custyard.Organization, org_id)
 
-    case Client.client().create_route(%{
-           lettermint_project_id: org.lettermint_project_id,
-           name: "#{org.name} #{route_type}",
-           route_type: "inbound"
-         }) do
+    case Client.call(
+           :create_route,
+           [
+             %{
+               lettermint_project_id: project_id,
+               name: "#{name} #{route_type}",
+               route_type: "inbound"
+             }
+           ],
+           tenant_id
+         ) do
       {:ok, remote} ->
         changeset
         |> Changeset.put_change(:lettermint_route_id, remote["id"])
@@ -155,6 +164,13 @@ defmodule Custyard.InboundRoutes do
     end
   end
 
+  defp optional_record(_, nil), do: nil
+  defp optional_record(schema, id), do: Repo.get(schema, id)
+  defp field(nil, _), do: nil
+  defp field(record, key), do: Map.get(record, key)
+  defp configured_project(nil), do: nil
+  defp configured_project(id), do: Custyard.EmailSetup.project_id(id)
+
   @doc """
   Refresh a Lettermint route's domain fields from the Lettermint API.
 
@@ -165,7 +181,7 @@ defmodule Custyard.InboundRoutes do
     do: {:error, :not_a_lettermint_route}
 
   def sync_remote_route(%InboundRoute{lettermint_route_id: route_id} = route) do
-    with {:ok, remote} <- Client.client().get_route(route_id) do
+    with {:ok, remote} <- Client.call(:get_route, [route_id], route.tenant_id) do
       route
       |> InboundRoute.changeset(remote_domain_attrs(remote))
       |> Repo.update()
@@ -237,7 +253,11 @@ defmodule Custyard.InboundRoutes do
 
       true ->
         with {:ok, remote} <-
-               Client.client().set_inbound_domain(route.lettermint_route_id, new_domain) do
+               Client.call(
+                 :set_inbound_domain,
+                 [route.lettermint_route_id, new_domain],
+                 route.tenant_id
+               ) do
           route
           |> InboundRoute.changeset(%{
             lettermint_custom_domain: presence(remote["inbound_domain"]) || new_domain,
@@ -268,16 +288,22 @@ defmodule Custyard.InboundRoutes do
   record better than one DNS lookup. Returns `{:error, :no_custom_domain}`
   when the route has none.
   """
-  def verify_custom_domain(%InboundRoute{lettermint_route_id: nil}),
+  def verify_custom_domain(route, opts \\ [])
+
+  def verify_custom_domain(%InboundRoute{lettermint_route_id: nil}, _opts),
     do: {:error, :not_a_lettermint_route}
 
-  def verify_custom_domain(%InboundRoute{lettermint_custom_domain: nil}),
+  def verify_custom_domain(%InboundRoute{lettermint_custom_domain: nil}, _opts),
     do: {:error, :no_custom_domain}
 
-  def verify_custom_domain(%InboundRoute{lettermint_route_id: remote_id} = route) do
-    with {:ok, result} <- Client.client().verify_inbound_domain(remote_id),
-         {:ok, route} <- stamp_custom_domain_verified(route, result) do
-      {:ok, route, result}
+  def verify_custom_domain(%InboundRoute{lettermint_route_id: remote_id} = route, opts) do
+    with {:ok, result} <- Client.call(:verify_inbound_domain, [remote_id], route.tenant_id) do
+      persist = Keyword.get(opts, :persist, fn fun -> fun.() end)
+
+      persist.(fn ->
+        with {:ok, route} <- stamp_custom_domain_verified(route, result),
+             do: {:ok, route, result}
+      end)
     end
   end
 
@@ -353,13 +379,16 @@ defmodule Custyard.InboundRoutes do
 
   defp delete_remote_route(%InboundRoute{lettermint_route_id: nil}), do: :ok
 
-  defp delete_remote_route(%InboundRoute{lettermint_route_id: route_id}) do
-    case Client.client().delete_route(route_id) do
+  defp delete_remote_route(%InboundRoute{lettermint_route_id: route_id} = route) do
+    case Client.call(:delete_route, [route_id], route.tenant_id) do
       :ok ->
         :ok
 
       {:error, reason} = error ->
-        Logger.error("Failed to delete Lettermint route #{route_id}: #{inspect(reason)}")
+        Logger.error(
+          "Failed to delete Lettermint route #{route.id}: #{inspect(error_summary(reason))}"
+        )
+
         error
     end
   end
@@ -528,8 +557,7 @@ defmodule Custyard.InboundRoutes do
                  route_type: :general,
                  source: source
                }) do
-          seed_default_webhooks(route)
-          {:ok, Repo.preload(route, :webhooks, force: true)}
+          ensure_default_webhooks(route)
         end
 
       route ->
@@ -537,26 +565,25 @@ defmodule Custyard.InboundRoutes do
     end
   end
 
-  # Seed the minimum webhook purpose records so Dispatcher's async purposes
-  # fire correctly. Without these, Dispatcher.get_enabled_purposes/1 returns
-  # an empty MapSet and skips notification/enrichment.
-  defp seed_default_webhooks(%InboundRoute{} = route) do
-    results =
+  @doc "Initialize missing default consumers without re-enabling an operator-disabled purpose."
+  def ensure_default_webhooks(%InboundRoute{} = route) do
+    Repo.transaction(fn ->
       for purpose <- [:sender_matching, :notification] do
-        # Use enable_webhook/2 which has upsert semantics — safe if records
-        # already exist (e.g., from a concurrent call).
-        enable_webhook(route, purpose)
+        %InboundRouteWebhook{}
+        |> InboundRouteWebhook.changeset(%{
+          inbound_route_id: route.id,
+          purpose: purpose,
+          enabled: true
+        })
+        |> Repo.insert(on_conflict: :nothing, conflict_target: [:inbound_route_id, :purpose])
+        |> case do
+          {:ok, _webhook} -> :ok
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
       end
 
-    failures = Enum.filter(results, &match?({:error, _}, &1))
-
-    if failures != [] do
-      Logger.warning(
-        "Failed to seed #{length(failures)} default webhook(s) for route #{route.id}: #{inspect(failures)}"
-      )
-    end
-
-    results
+      Repo.preload(route, :webhooks, force: true)
+    end)
   end
 
   @doc """

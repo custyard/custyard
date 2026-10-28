@@ -5,6 +5,11 @@ defmodule CustyardWeb.HomeLive do
 
   @impl true
   def mount(_params, session, socket) do
+    tenant =
+      if session["host_tenant_id"], do: Custyard.Tenants.get_tenant(session["host_tenant_id"])
+
+    tenant = if tenant && tenant.id != 1, do: tenant
+    socket = assign(socket, :current_tenant, tenant)
     # An authenticated operator landing on "/" goes straight to the
     # dashboard (attention queue). Same session discipline as
     # CustyardWeb.Live.OperatorAuth: the id and its session claim
@@ -30,9 +35,17 @@ defmodule CustyardWeb.HomeLive do
     ~H"""
     <div class="mx-auto max-w-xl py-12" data-testid="home-container">
       <.header class="text-center">
-        Welcome to Custyard
+        <img
+          :if={@current_tenant && @current_tenant.logo_url}
+          src={@current_tenant.logo_url}
+          alt=""
+          class="h-16 w-auto mx-auto mb-4"
+        />
+        {if @current_tenant, do: "Welcome to #{@current_tenant.name}", else: "Welcome to Custyard"}
         <:subtitle>
-          Customer management system
+          {if @current_tenant,
+            do: "Support conversations, shared updates and follow-up tasks",
+            else: "Customer management system"}
         </:subtitle>
       </.header>
 
@@ -42,10 +55,12 @@ defmodule CustyardWeb.HomeLive do
           class="inline-block px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded hover:bg-indigo-700"
           data-testid="home-operator-login-link"
         >
-          Operator Login
+          {if @current_tenant, do: "Staff sign in", else: "Operator Login"}
         </.link>
         <p class="text-sm text-gray-500 dark:text-zinc-400" data-testid="home-portal-info">
-          Customer portals are accessed via your organization's dedicated URL.
+          {if @current_tenant,
+            do: "Customers: open the private conversation or portal link shared with you.",
+            else: "Customer portals are accessed via your organization's dedicated URL."}
         </p>
       </div>
     </div>

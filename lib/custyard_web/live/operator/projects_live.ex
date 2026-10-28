@@ -7,7 +7,9 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    organizations = Organizations.list_organizations_for_operator(socket.assigns.current_operator)
+    organizations =
+      Organizations.list_organizations_for_operator(socket.assigns.current_operator)
+      |> Enum.filter(&(&1.tenant_id == socket.assigns.current_tenant.id))
 
     socket =
       socket
@@ -103,7 +105,11 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
   def handle_event("save_project", _params, socket) do
     operator = socket.assigns.current_operator
-    attrs = build_project_attrs(socket.assigns.form_data)
+
+    attrs =
+      build_project_attrs(socket.assigns.form_data)
+      |> Map.put(:tenant_id, socket.assigns.current_tenant.id)
+
     result = save_project(socket.assigns.editing_project, attrs, operator)
     handle_save_result(result, socket)
   end
@@ -197,6 +203,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
     projects =
       Projects.list_for_operator(socket.assigns.current_operator, organization_id: filter_org_id)
+      |> Enum.filter(&(&1.tenant_id == socket.assigns.current_tenant.id))
 
     assign(socket, :projects, projects)
   end

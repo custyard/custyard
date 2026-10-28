@@ -136,7 +136,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
       result =
         case socket.assigns.editing_org do
           nil -> Organizations.create_organization(attrs)
-          org -> Organizations.update_organization(org, attrs)
+          org -> Organizations.update_organization(org, Map.delete(attrs, :tenant_id))
         end
 
       cleanup_logo_files(result, old_logo_url, new_logo_url)
@@ -152,6 +152,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
     form_data = socket.assigns.form_data
 
     %{
+      tenant_id: socket.assigns.current_tenant.id,
       name: form_data.name,
       domain: empty_to_nil(form_data.domain),
       tier: parse_tier(form_data.tier),
@@ -256,7 +257,10 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
   end
 
   defp load_organizations(socket) do
-    orgs = Organizations.list_organizations_with_counts(socket.assigns.current_operator)
+    orgs =
+      Organizations.list_organizations_with_counts(socket.assigns.current_operator)
+      |> Enum.filter(&(&1.org.tenant_id == socket.assigns.current_tenant.id))
+
     assign(socket, :organizations, orgs)
   end
 
@@ -272,6 +276,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           Organizations
         </h1>
         <button
+          :if={Authorization.can_create_organization?(@current_operator)}
           phx-click="show_form"
           class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
           data-testid="operator-orgs-add-btn"
@@ -314,6 +319,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
         <.org_card
           :for={item <- @organizations}
           org={item.org}
+          can_manage={Authorization.can_manage_organization?(@current_operator, item.org.id)}
           conversation_count={item.conversation_count}
         />
       </div>
@@ -621,6 +627,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
   attr :org, Organization, required: true
   attr :conversation_count, :integer, required: true
+  attr :can_manage, :boolean, default: true
 
   defp org_card(assigns) do
     ~H"""
@@ -656,16 +663,14 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
           </button>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2 mb-1">
-              <button
-                type="button"
-                phx-click="edit_org"
-                phx-value-id={@org.id}
+              <.link
+                navigate={~p"/operator/organizations/#{@org.id}"}
                 class="font-semibold text-gray-900 dark:text-zinc-100 truncate hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer text-left"
                 data-testid="operator-org-name"
-                title="Click to view and edit organization details"
+                title="View customer organization"
               >
                 {@org.name}
-              </button>
+              </.link>
               <.tier_badge tier={@org.tier} />
             </div>
             <div
@@ -688,6 +693,7 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
 
         <div class="flex items-center gap-2">
           <button
+            :if={@can_manage}
             phx-click="edit_org"
             phx-value-id={@org.id}
             class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-zinc-700"
@@ -704,12 +710,12 @@ defmodule CustyardWeb.Operator.OrganizationsLive do
       >
         <div class="text-xs text-gray-400 dark:text-zinc-500 mb-1">Portal link</div>
         <a
-          href={"#{CustyardWeb.Endpoint.url()}/p/#{@org.token}"}
+          href={Custyard.Tenants.portal_url(@org)}
           target="_blank"
           rel="noopener noreferrer"
           class="text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded break-all inline-block"
         >
-          {CustyardWeb.Endpoint.url()}/p/{@org.token}
+          {Custyard.Tenants.portal_url(@org)}
         </a>
       </div>
     </div>

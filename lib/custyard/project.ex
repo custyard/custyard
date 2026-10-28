@@ -24,6 +24,8 @@ defmodule Custyard.Project do
   @project_types [:customer, :internal]
 
   schema "projects" do
+    field :tenant_id, :id, default: 1
+    belongs_to :tenant, Custyard.Tenant, define_field: false
     field :title, :string
     field :description, :string
     field :start_date, :date
@@ -59,6 +61,7 @@ defmodule Custyard.Project do
   def changeset(project, attrs) do
     project
     |> cast(attrs, [
+      :tenant_id,
       :title,
       :description,
       :start_date,
@@ -71,6 +74,11 @@ defmodule Custyard.Project do
       :conversation_id
     ])
     |> validate_required([:title])
+    |> put_tenant()
+    |> validate_required([:tenant_id])
+    |> validate_tenant_unchanged()
+    |> validate_conversation_tenant()
+    |> foreign_key_constraint(:tenant_id)
     |> validate_inclusion(:project_type, @project_types)
     |> validate_completion_after_start()
     |> validate_internal_project_constraints()
@@ -113,6 +121,44 @@ defmodule Custyard.Project do
       add_error(changeset, :target_completion_date, "must be on or after start date")
     else
       changeset
+    end
+  end
+
+  defp put_tenant(changeset) do
+    case get_field(changeset, :organization_id) do
+      id when is_integer(id) ->
+        case Custyard.Repo.get(Custyard.Organization, id) do
+          %{tenant_id: tenant_id} -> put_change(changeset, :tenant_id, tenant_id)
+          _ -> changeset
+        end
+
+      _ ->
+        changeset
+    end
+  end
+
+  defp validate_tenant_unchanged(changeset) do
+    if changeset.data.id && changed?(changeset, :tenant_id),
+      do: add_error(changeset, :tenant_id, "cannot be changed for an existing project"),
+      else: changeset
+  end
+
+  defp validate_conversation_tenant(changeset) do
+    case get_field(changeset, :conversation_id) do
+      id when is_integer(id) ->
+        case Custyard.Repo.get(Custyard.Conversation, id) do
+          %{tenant_id: tenant_id} ->
+            if tenant_id == get_field(changeset, :tenant_id),
+              do: changeset,
+              else:
+                add_error(changeset, :conversation_id, "must belong to the project's workspace")
+
+          _ ->
+            changeset
+        end
+
+      _ ->
+        changeset
     end
   end
 

@@ -80,6 +80,7 @@ config :logger, :console,
   ]
 
 config :phoenix, :json_library, Jason
+config :phoenix, :filter_parameters, ["password", "token", "secret", "api_key", "authorization"]
 
 # Error tracking (self-hosted Sentry at catch.onetimesecret.com).
 #

@@ -298,7 +298,11 @@ defmodule Custyard.Factory do
   Requires project_id or will create one.
   """
   def insert_task(overrides \\ []) do
-    overrides = ensure_project(overrides)
+    overrides =
+      if Keyword.has_key?(overrides, :organization_id) or
+           Keyword.has_key?(overrides, :conversation_id),
+         do: overrides,
+         else: ensure_project(overrides)
 
     %Custyard.Task{}
     |> Custyard.Task.changeset(build_task(overrides))

@@ -32,6 +32,8 @@ defmodule Custyard.Email.ThreadHeaders do
 
     * `:exclude_message_id` - a Message-ID to omit from the chain (e.g. the
       outbound reply being composed, which must not reference itself)
+    * `:before_id` - include only messages inserted before this database row,
+      keeping a queued reply's References stable when newer mail arrives
 
   ## Returns
 
@@ -55,6 +57,7 @@ defmodule Custyard.Email.ThreadHeaders do
     message_ids =
       conversation_id
       |> message_ids_query(Keyword.get(opts, :exclude_message_id))
+      |> before_message(Keyword.get(opts, :before_id))
       |> Repo.all()
       |> Enum.map(&normalize_msg_id/1)
       |> Enum.reject(&is_nil/1)
@@ -70,6 +73,9 @@ defmodule Custyard.Email.ThreadHeaders do
         }
     end
   end
+
+  defp before_message(query, id) when is_integer(id), do: where(query, [m], m.id < ^id)
+  defp before_message(query, _id), do: query
 
   # id breaks ties between rows sharing the same second-precision inserted_at
   defp message_ids_query(conversation_id, nil) do

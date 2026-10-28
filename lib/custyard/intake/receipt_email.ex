@@ -11,7 +11,7 @@ defmodule Custyard.Intake.ReceiptEmail do
 
   Follows the `Custyard.Intake.ClaimEmail` content rule strictly, because
   this mail goes *to* a prospect at an address that is attacker-chosen at
-  submit time: the body carries ONLY the operator-configured source name,
+  submit time: the body carries ONLY operator-configured tenant branding and source name,
   the platform resume URL, and fixed copy — never the submitted message,
   never its derived subject. This mail must be useless as a spam relay.
   The caller owns URL construction, matching ClaimEmail and LoginEmail.
@@ -35,7 +35,8 @@ defmodule Custyard.Intake.ReceiptEmail do
   require Logger
 
   alias Custyard.Email.Headers
-  alias Custyard.{IntakeSource, RateLimit, Settings}
+  alias Custyard.{IntakeSource, RateLimit}
+  alias Custyard.Intake.EmailBranding
 
   @doc """
   Send the submission receipt to a captured prospect address.
@@ -51,14 +52,16 @@ defmodule Custyard.Intake.ReceiptEmail do
     conversation_url = Keyword.fetch!(opts, :conversation_url)
 
     if email_enabled?() do
-      case RateLimit.check_rate(:intake_receipt_email, email) do
-        {:deny, _retry_after_ms} ->
-          {:error, :rate_limited}
+      with {:ok, delivery} <- EmailBranding.delivery_settings(source.tenant_id) do
+        case RateLimit.check_rate(:intake_receipt_email, email) do
+          {:deny, _retry_after_ms} ->
+            {:error, :rate_limited}
 
-        {:allow, _count} ->
-          email
-          |> compose(source, conversation_url)
-          |> deliver()
+          {:allow, _count} ->
+            email
+            |> compose(source, conversation_url, delivery)
+            |> deliver(delivery.config)
+        end
       end
     else
       {:error, :disabled}
@@ -68,54 +71,47 @@ defmodule Custyard.Intake.ReceiptEmail do
   @doc """
   Compose the receipt without delivering (testable seam).
   """
-  def compose(email, %IntakeSource{} = source, conversation_url) when is_binary(email) do
+  def compose(email, %IntakeSource{} = source, conversation_url, delivery \\ nil)
+      when is_binary(email) do
+    branding = EmailBranding.for_tenant(source.tenant_id)
+
     new()
     |> to(email)
-    |> from({from_display_name(), from_address()})
+    |> EmailBranding.put_sender(branding, delivery || source.tenant_id)
     |> subject(Headers.sanitize_header_text("We received your message"))
-    |> text_body(receipt_text(source, conversation_url))
-    |> html_body(receipt_html(source, conversation_url))
+    |> text_body(EmailBranding.text_header(branding) <> receipt_text(source, conversation_url))
+    |> html_body(receipt_html(source, conversation_url, branding))
   end
 
-  defp deliver(email_struct) do
+  defp deliver(email_struct, config) do
     if Application.get_env(:custyard, :deliver_replies_async?, true) do
       case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn ->
-             do_deliver(email_struct)
+             do_deliver(email_struct, config)
            end) do
         {:ok, _pid} -> {:ok, :queued}
         {:error, _reason} -> {:error, :queue_failed}
       end
     else
-      do_deliver(email_struct)
+      do_deliver(email_struct, config)
     end
   end
 
   # The recipient address is deliberately absent from both log lines: it is
   # prospect PII, and the conversation is durable without it.
-  defp do_deliver(email_struct) do
-    case Custyard.Mailer.deliver(email_struct) do
+  defp do_deliver(email_struct, config) do
+    case Custyard.Mailer.deliver(email_struct, config) do
       {:ok, _metadata} = result ->
         Logger.info("Intake receipt sent")
         result
 
-      {:error, reason} = error ->
-        Logger.error("Failed to send intake receipt: #{inspect(reason)}")
+      {:error, _reason} = error ->
+        Logger.error("Failed to send intake receipt")
         error
     end
   end
 
   defp email_enabled? do
     Application.get_env(:custyard, :email_enabled, false)
-  end
-
-  defp from_display_name do
-    (Settings.get_branding().name || "Custyard")
-    |> Headers.sanitize_header_text()
-    |> Headers.quote_display_name()
-  end
-
-  defp from_address do
-    Application.get_env(:custyard, :email_from_address, "noreply@custyard.local")
   end
 
   # Operator-configured source name only — no submitted content.
@@ -133,19 +129,21 @@ defmodule Custyard.Intake.ReceiptEmail do
     """
   end
 
-  defp receipt_html(source, conversation_url) do
+  defp receipt_html(source, conversation_url, branding) do
     safe_source = html_escape(source.name)
+    conversation_url = html_escape(conversation_url)
 
     """
     <html>
     <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
       <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 24px;">
+        #{EmailBranding.html_header(branding)}
         <p style="color: #374151; font-size: 16px; margin-top: 0;">
           Thanks for contacting us through <strong>#{safe_source}</strong>. Your
           message is with our team and we will reply on this thread.
         </p>
         <div style="text-align: center; margin: 24px 0;">
-          <a href="#{conversation_url}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 16px;">
+          <a href="#{conversation_url}" style="display: inline-block; background: #{branding.color}; color: white; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 16px;">
             Return to your conversation
           </a>
         </div>

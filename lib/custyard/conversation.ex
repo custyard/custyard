@@ -35,6 +35,8 @@ defmodule Custyard.Conversation do
   }
 
   schema "conversations" do
+    field :tenant_id, :id, default: 1
+    belongs_to :tenant, Custyard.Tenant, define_field: false
     field :subject, :string
     field :state, Ecto.Enum, values: @states, default: :new
     field :urgency, Ecto.Enum, values: @urgencies, default: :normal
@@ -81,6 +83,7 @@ defmodule Custyard.Conversation do
   def changeset(conversation, attrs) do
     conversation
     |> cast(attrs, [
+      :tenant_id,
       :subject,
       :state,
       :urgency,
@@ -96,7 +99,10 @@ defmodule Custyard.Conversation do
       :inbound_channel_id,
       :language
     ])
+    |> put_organization_tenant()
+    |> validate_tenant_ownership()
     |> validate_required_organization()
+    |> foreign_key_constraint(:tenant_id)
     |> validate_required([:subject])
     |> validate_length(:subject, max: 500)
     |> validate_length(:language, max: 8)
@@ -213,6 +219,67 @@ defmodule Custyard.Conversation do
     conversation
     |> cast(attrs, [:cached_score, :last_neglect_notification])
   end
+
+  defp put_organization_tenant(changeset) do
+    case get_field(changeset, :organization_id) do
+      id when is_integer(id) ->
+        case Custyard.Repo.get(Custyard.Organization, id) do
+          %{tenant_id: tenant_id} -> put_change(changeset, :tenant_id, tenant_id)
+          _ -> changeset
+        end
+
+      _ ->
+        changeset
+    end
+  end
+
+  defp validate_tenant_ownership(changeset) do
+    tenant_id = get_field(changeset, :tenant_id)
+    changeset = immutable_tenant(changeset, tenant_id)
+
+    Enum.reduce(
+      [
+        contact_id: Custyard.Contact,
+        project_id: Custyard.Project,
+        inbound_channel_id: Custyard.InboundChannel
+      ],
+      changeset,
+      fn {field, schema}, acc ->
+        validate_reference_tenant(acc, field, schema, tenant_id)
+      end
+    )
+  end
+
+  defp immutable_tenant(changeset, tenant_id) do
+    if changeset.data.__meta__.state == :loaded and changeset.data.tenant_id != tenant_id,
+      do: add_error(changeset, :tenant_id, "cannot move a conversation between tenants"),
+      else: changeset
+  end
+
+  defp validate_reference_tenant(changeset, field, schema, tenant_id) do
+    case get_field(changeset, field) do
+      id when is_integer(id) ->
+        case reference_tenant(Custyard.Repo.get(schema, id)) do
+          nil -> changeset
+          ^tenant_id -> changeset
+          _ -> add_error(changeset, field, "must belong to the same tenant")
+        end
+
+      _ ->
+        changeset
+    end
+  end
+
+  defp reference_tenant(nil), do: nil
+
+  defp reference_tenant(%Custyard.Contact{organization_id: id}) do
+    case Custyard.Repo.get(Custyard.Organization, id) do
+      %{tenant_id: tenant_id} -> tenant_id
+      _ -> nil
+    end
+  end
+
+  defp reference_tenant(%{tenant_id: tenant_id}), do: tenant_id
 
   # Disambiguation and public-intake conversations can have nil organization_id
   defp validate_required_organization(changeset) do

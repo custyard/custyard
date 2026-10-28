@@ -906,6 +906,7 @@ defmodule Custyard.Email.OutboundTest do
         conversation_id: conv.id,
         source: :email,
         message_id: "<q2@customer.com>",
+        sender_email: "alice@customer.com",
         reply_to: "Alice@Customer.com",
         body: "Same address"
       )
@@ -917,6 +918,7 @@ defmodule Custyard.Email.OutboundTest do
         conversation_id: conv.id,
         source: :email,
         message_id: "<q3@customer.com>",
+        sender_email: "alice@customer.com",
         reply_to: "not-an-address",
         body: "Broken header"
       )

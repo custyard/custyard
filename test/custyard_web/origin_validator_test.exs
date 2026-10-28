@@ -6,6 +6,26 @@ defmodule CustyardWeb.OriginValidatorTest do
   import Custyard.Factory
 
   describe "check_origin/1" do
+    test "accepts configured tenant subdomains and custom domains, but not lookalike hosts" do
+      slug = "origin-#{System.unique_integer([:positive])}"
+      custom_domain = "#{slug}.tenant.example"
+
+      {:ok, tenant} =
+        Custyard.Tenants.create_tenant(%{
+          name: "Tenant origins",
+          slug: slug,
+          custom_domain: custom_domain
+        })
+
+      subdomain = tenant.slug <> "." <> Custyard.Tenants.app_host()
+      assert OriginValidator.check_origin("https://#{subdomain}")
+      assert OriginValidator.check_origin("https://#{String.upcase(custom_domain)}")
+      refute OriginValidator.check_origin("https://unknown-#{subdomain}")
+      refute OriginValidator.check_origin("https://#{subdomain}.#{Custyard.Tenants.app_host()}")
+      refute OriginValidator.check_origin("https://nested.#{subdomain}")
+      refute OriginValidator.check_origin("https://#{custom_domain}.attacker.example")
+    end
+
     test "accepts localhost in dev/test environment" do
       # Application env is :test by default in tests
       assert OriginValidator.check_origin("http://localhost:4000")
@@ -77,6 +97,22 @@ defmodule CustyardWeb.OriginValidatorTest do
   end
 
   describe "list_valid_origins/0" do
+    test "includes both configured hosts of a tenant" do
+      slug = "listed-origin-#{System.unique_integer([:positive])}"
+      custom_domain = "#{slug}.tenant.example"
+
+      {:ok, tenant} =
+        Custyard.Tenants.create_tenant(%{
+          name: "Tenant origins",
+          slug: slug,
+          custom_domain: custom_domain
+        })
+
+      origins = OriginValidator.list_valid_origins()
+      assert "//#{tenant.slug}.#{Custyard.Tenants.app_host()}" in origins
+      assert "//#{custom_domain}" in origins
+    end
+
     test "includes localhost in dev/test" do
       origins = OriginValidator.list_valid_origins()
       assert "//localhost" in origins

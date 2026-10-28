@@ -7,7 +7,7 @@ defmodule Custyard.Task do
   schema "tasks" do
     field :title, :string
     field :state, Ecto.Enum, values: @states, default: :open
-    field :portal_visible, :boolean, default: true
+    field :portal_visible, :boolean, default: false
     field :due_at, :utc_datetime
 
     belongs_to :organization, Custyard.Organization
@@ -22,7 +22,7 @@ defmodule Custyard.Task do
   @doc false
   def changeset(task, attrs) do
     task
-    |> cast(attrs, [
+    |> cast(normalize_due_at(attrs), [
       :title,
       :state,
       :portal_visible,
@@ -32,12 +32,65 @@ defmodule Custyard.Task do
       :project_id
     ])
     |> validate_required([:title])
+    |> validate_length(:title, max: 300)
     |> validate_inclusion(:state, @states)
     |> validate_has_parent_or_org()
+    |> validate_parent_scope()
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:project_id)
   end
+
+  # A datetime-local control carries no zone. The operator forms explicitly
+  # label it UTC; preserve invalid input so Ecto reports it instead of silently
+  # removing an existing due date.
+  defp normalize_due_at(attrs) do
+    key = if Map.has_key?(attrs, :due_at), do: :due_at, else: "due_at"
+
+    case Map.get(attrs, key) do
+      "" ->
+        Map.put(attrs, key, nil)
+
+      value when is_binary(value) ->
+        value = if byte_size(value) == 16, do: value <> ":00", else: value
+
+        case NaiveDateTime.from_iso8601(value) do
+          {:ok, datetime} -> Map.put(attrs, key, DateTime.from_naive!(datetime, "Etc/UTC"))
+          _ -> attrs
+        end
+
+      _ ->
+        attrs
+    end
+  end
+
+  defp validate_parent_scope(changeset) do
+    conversation = parent(Custyard.Conversation, get_field(changeset, :conversation_id))
+    project = parent(Custyard.Project, get_field(changeset, :project_id))
+    org_id = get_field(changeset, :organization_id)
+    parent_orgs = Enum.map(Enum.reject([conversation, project], &is_nil/1), & &1.organization_id)
+    parent_tenants = Enum.map(Enum.reject([conversation, project], &is_nil/1), & &1.tenant_id)
+
+    cond do
+      length(Enum.uniq(parent_tenants)) > 1 ->
+        add_error(changeset, :project_id, "must belong to the conversation's workspace")
+
+      length(Enum.uniq(parent_orgs)) > 1 ->
+        add_error(changeset, :project_id, "must belong to the conversation's organization")
+
+      org_id && Enum.any?(parent_orgs, &(&1 != org_id)) ->
+        add_error(changeset, :organization_id, "must match the task's parent organization")
+
+      is_nil(org_id) && parent_orgs != [] ->
+        put_change(changeset, :organization_id, hd(parent_orgs))
+
+      true ->
+        changeset
+    end
+  end
+
+  defp parent(_schema, nil), do: nil
+  defp parent(schema, id), do: Custyard.Repo.get(schema, id)
 
   @doc """
   Changeset for transitioning task state.

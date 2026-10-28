@@ -25,6 +25,13 @@ defmodule Custyard.Lettermint.HttpClientTest do
     assert {:error, :delivery_content_unavailable} = HttpClient.decode_delivery("{}")
   end
 
+  test "route creation rejects a missing project before building a provider request" do
+    for project_id <- [nil, ""] do
+      assert {:error, :project_required} =
+               HttpClient.create_route(%{lettermint_project_id: project_id})
+    end
+  end
+
   describe "normalize_route_response/1" do
     test "unwraps the data envelope returned by POST /projects/:id/routes" do
       assert HttpClient.normalize_route_response(%{"data" => @route, "message" => "Created"}) ==

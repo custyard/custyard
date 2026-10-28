@@ -1,3 +1,4 @@
+<% branding = CustyardWeb.Layouts.root_branding(assigns) %>
 <div
   class="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-zinc-900"
   data-testid="auth-page"
@@ -5,8 +6,11 @@
   <div class="max-w-md w-full">
     <div class="bg-white dark:bg-zinc-800 rounded-lg shadow-md p-8">
       <div class="text-center mb-8">
-        <h1 class="text-xl font-bold text-gray-900 dark:text-zinc-100">Custyard</h1>
-        <p class="text-sm text-gray-500 dark:text-zinc-400 mt-1">Operator Login</p>
+        <img :if={branding.logo} src={branding.logo} alt="" class="h-12 w-auto mx-auto mb-3" />
+        <h1 class="text-xl font-bold text-gray-900 dark:text-zinc-100">{branding.name}</h1>
+        <p class="text-sm text-gray-500 dark:text-zinc-400 mt-1">
+          {if branding.tenant?, do: "Staff sign in", else: "Operator Login"}
+        </p>
       </div>
 
       <%= if @error do %>

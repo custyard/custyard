@@ -72,6 +72,13 @@ defmodule Custyard.Message do
     field :provider_delivery_id, :string
     # Delivery status tracks outbound message lifecycle (nil for inbound messages)
     field :delivery_status, Ecto.Enum, values: @delivery_statuses
+    field :delivery_failure_kind, Ecto.Enum, values: [:rejected, :unknown, :configuration]
+    field :delivery_error_code, :string
+    field :delivery_attempted_at, :utc_datetime
+    field :delivery_payload_hash, :string
+    # New replies retain the recipient reviewed at enqueue. An empty locked
+    # recipient list (for example after erasure) must never be repopulated.
+    field :delivery_recipients_locked, :boolean, default: false
 
     # Email facts for inbound messages (spec-inbound-channels D5). Recipients
     # as bare addresses; CC'd parties are participants, not contacts.
@@ -190,7 +197,11 @@ defmodule Custyard.Message do
     message
     |> cast(Map.put(extra_attrs, :delivery_status, status), [
       :delivery_status,
-      :lettermint_message_id
+      :lettermint_message_id,
+      :delivery_failure_kind,
+      :delivery_error_code,
+      :delivery_attempted_at,
+      :delivery_payload_hash
     ])
     |> validate_required([:delivery_status])
   end

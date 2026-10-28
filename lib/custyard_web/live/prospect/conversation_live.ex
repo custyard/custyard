@@ -55,6 +55,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
      |> assign(:intake_source, Intake.get_source_by_key(conversation.intake_source_key))
      |> assign(:prospect, conversation.prospect)
      |> assign(:messages, conversation.messages)
+     |> assign(:tasks, Conversations.list_portal_visible_tasks(conversation.id))
      |> assign(:reply_form, empty_reply_form())
      |> assign(:email_form, empty_email_form())
      # The plaintext access token, kept ONLY so the claim-confirmation
@@ -249,7 +250,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
     case socket.assigns.intake_source do
       %IntakeSource{} = source ->
         ReceiptEmail.send_receipt(email, source,
-          conversation_url: CustyardWeb.Endpoint.url() <> ~p"/c/#{socket.assigns.access_token}"
+          conversation_url: conversation_origin(socket) <> ~p"/c/#{socket.assigns.access_token}"
         )
 
       _no_source ->
@@ -320,12 +321,18 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   # committed before this call; async mailer failures surface as
   # {:ok, :queued} and stay fire-and-forget.
   defp send_confirmation_email(socket, slug, confirmation_token) do
-    base = CustyardWeb.Endpoint.url()
+    base = conversation_origin(socket)
 
     ClaimEmail.send_confirmation(slug,
       confirm_url: base <> ~p"/claim/#{confirmation_token}",
       conversation_url: base <> ~p"/c/#{socket.assigns.access_token}"
     )
+  end
+
+  defp conversation_origin(socket) do
+    socket.assigns.conversation.tenant_id
+    |> Custyard.Tenants.get_tenant!()
+    |> Custyard.Tenants.url()
   end
 
   # The claim itself committed either way — only the flash differs. A
@@ -454,6 +461,22 @@ defmodule CustyardWeb.Prospect.ConversationLive do
     end
   end
 
+  def handle_info({:conversation_updated, _id}, socket) do
+    prospect = Intake.get_prospect(socket.assigns.conversation)
+
+    if prospect && is_nil(prospect.revoked_at) &&
+         prospect.access_token_hash == socket.assigns.access_token_hash do
+      {:noreply,
+       assign(
+         socket,
+         :tasks,
+         Conversations.list_portal_visible_tasks(socket.assigns.conversation.id)
+       )}
+    else
+      {:noreply, redirect(socket, to: @unavailable_path)}
+    end
+  end
+
   # Catch-all so unexpected PubSub messages never crash the view.
   @impl true
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -567,6 +590,37 @@ defmodule CustyardWeb.Prospect.ConversationLive do
           </div>
         </div>
       </div>
+
+      <section
+        :if={@tasks != []}
+        class="mb-8"
+        aria-labelledby="shared-tasks-title"
+        data-testid="resume-tasks"
+      >
+        <h2
+          id="shared-tasks-title"
+          class="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-3"
+        >
+          Tasks
+        </h2>
+        <ul class="space-y-3">
+          <li
+            :for={task <- @tasks}
+            class="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4"
+            data-testid={"resume-task-#{task.id}"}
+          >
+            <div class="flex justify-between gap-4">
+              <span class="text-zinc-900 dark:text-zinc-100">{task.title}</span>
+              <span class="shrink-0 text-sm text-zinc-600 dark:text-zinc-400">{task_state_label(
+                task.state
+              )}</span>
+            </div>
+            <p :if={task.due_at} class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              Due: {Calendar.strftime(task.due_at, "%Y-%m-%d %H:%M UTC")}
+            </p>
+          </li>
+        </ul>
+      </section>
 
       <%= if reply_form_open?(@messages, @reply_open) do %>
         <.form
@@ -838,4 +892,8 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   defp state_label(:dormant), do: "On Hold"
   defp state_label(:resolved), do: "Closed"
   defp state_label(_state), do: "Unknown"
+
+  defp task_state_label(:open), do: "Open"
+  defp task_state_label(:in_progress), do: "In progress"
+  defp task_state_label(:done), do: "Done"
 end

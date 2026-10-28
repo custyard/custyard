@@ -48,6 +48,167 @@ defmodule Custyard.InboundChannelsTest do
     channel |> Ecto.Changeset.change(changes) |> Repo.update!()
   end
 
+  describe "operator mutation boundaries" do
+    test "confirmation consumes verification captured after the channel was loaded" do
+      channel = insert_inbound_channel(state: :pending_verification)
+      operator = insert_operator_account()
+      {:ok, _} = InboundChannels.capture_verification(channel, %{code: "new-code"})
+
+      assert {:ok, confirmed} =
+               InboundChannels.confirm_verification(channel, operator: operator)
+
+      assert is_nil(confirmed.verification_code)
+      assert is_nil(Repo.reload!(channel).verification_captured_at)
+    end
+
+    test "revocation retires a previous token rotated after the channel was loaded" do
+      channel = insert_inbound_channel(state: :active)
+      operator = insert_operator_account()
+      {:ok, _} = InboundChannels.rotate_token(channel, operator: operator)
+
+      assert {:ok, revoked} = InboundChannels.revoke(channel, operator: operator)
+      assert is_nil(revoked.previous_ingress_token)
+      assert is_nil(Repo.reload!(channel).previous_token_expires_at)
+    end
+
+    test "a rotated session cannot create, edit, transition, rotate or delete a channel" do
+      route = insert_route()
+      operator = insert_operator_account(role: "admin", organization_id: route.organization_id)
+
+      {:ok, channel} =
+        InboundChannels.create_channel(route, %{public_address: "support@acme.example.com"})
+
+      Repo.update!(
+        Ecto.Changeset.change(operator,
+          session_claim: Custyard.OperatorAccount.generate_session_claim()
+        )
+      )
+
+      assert {:error, :unauthorized} =
+               InboundChannels.create_channel(route, %{public_address: "other@acme.example.com"},
+                 operator: operator
+               )
+
+      assert {:error, :unauthorized} =
+               InboundChannels.update_channel(channel, %{archive_copy: true}, operator: operator)
+
+      for action <- [:confirm_verification, :pause, :revoke, :rotate_token, :delete_channel] do
+        assert {:error, :unauthorized} =
+                 apply(InboundChannels, action, [channel, [operator: operator]])
+      end
+
+      assert Repo.reload!(channel).state == :pending_verification
+      refute Repo.reload!(channel).archive_copy
+      assert length(InboundChannels.list_for_route(route.id)) == 1
+    end
+
+    test "a tenant administrator cannot edit another tenant's channel" do
+      route = insert_route()
+
+      tenant =
+        Repo.insert!(%Custyard.Tenant{
+          name: "Other channel tenant",
+          slug: "other-channel-#{System.unique_integer([:positive])}"
+        })
+
+      operator = insert_operator_account(role: "admin", tenant_id: tenant.id)
+
+      {:ok, channel} =
+        InboundChannels.create_channel(route, %{public_address: "support@acme.example.com"})
+
+      assert {:error, :unauthorized} =
+               InboundChannels.update_channel(channel, %{archive_copy: true}, operator: operator)
+
+      refute Repo.reload!(channel).archive_copy
+    end
+  end
+
+  describe "delayed check boundaries" do
+    setup do
+      previous = Application.get_env(:custyard, :lettermint)
+      fixture = Application.get_env(:custyard, :email_setup_test_provider)
+      Application.put_env(:custyard, :lettermint, client: Custyard.EmailSetupTestProvider)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :lettermint, previous)
+
+        if fixture,
+          do: Application.put_env(:custyard, :email_setup_test_provider, fixture),
+          else: Application.delete_env(:custyard, :email_setup_test_provider)
+      end)
+
+      :ok
+    end
+
+    test "a revoked administrator cannot persist a completed domain check" do
+      route = insert_route()
+      operator = insert_operator_account(role: "admin", organization_id: route.organization_id)
+
+      {:ok, channel} =
+        InboundChannels.create_channel(route, %{public_address: "support@acme.example.com"})
+
+      Application.put_env(:custyard, :email_setup_test_provider, %{
+        domains: fn ->
+          operator |> Custyard.OperatorAccount.role_changeset(%{role: "agent"}) |> Repo.update!()
+          {:ok, [%{"domain" => "acme.example.com", "status" => "verified"}]}
+        end
+      })
+
+      assert {:error, :unauthorized} =
+               InboundChannels.check_sending_domain(channel, operator: operator)
+
+      assert is_nil(Repo.reload!(channel).sending_domain_status)
+    end
+
+    test "a completed domain check cannot certify changed channel configuration" do
+      route = insert_route()
+      operator = insert_operator_account()
+
+      {:ok, channel} =
+        InboundChannels.create_channel(route, %{public_address: "support@acme.example.com"})
+
+      Application.put_env(:custyard, :email_setup_test_provider, %{
+        domains: fn ->
+          {:ok, _} = InboundChannels.update_channel(channel, %{reply_from: :ingress_address})
+          {:ok, [%{"domain" => "acme.example.com", "status" => "verified"}]}
+        end
+      })
+
+      assert {:error, :stale_configuration} =
+               InboundChannels.check_sending_domain(channel, operator: operator)
+
+      assert is_nil(Repo.reload!(channel).sending_domain_status)
+    end
+
+    test "a late MX check cannot reactivate a paused channel or stamp its route" do
+      route = insert_route(lettermint_custom_domain: "mx.example.com")
+
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          organization_id: route.organization_id,
+          public_address: "support@mx.example.com",
+          ingress_kind: :mx,
+          state: :pending_verification
+        )
+
+      operator = insert_operator_account()
+
+      Application.put_env(:custyard, :email_setup_test_provider, %{
+        mx: fn ->
+          {:ok, _} = InboundChannels.pause(channel)
+          {:ok, %{"verified" => true}}
+        end
+      })
+
+      assert {:error, :stale_configuration} =
+               InboundChannels.check_mx(channel, operator: operator)
+
+      assert Repo.reload!(channel).state == :paused
+      assert is_nil(Repo.reload!(route).lettermint_custom_domain_verified_at)
+    end
+  end
+
   describe "create_channel/3" do
     test "starts pending_verification with route scope, preloads and an audit event" do
       route = insert_route()

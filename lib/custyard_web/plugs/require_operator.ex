@@ -28,7 +28,11 @@ defmodule CustyardWeb.Plugs.RequireOperator do
             |> redirect_to_login("Session expired")
 
           operator ->
-            if OperatorAccount.orphaned?(operator) do
+            if OperatorAccount.orphaned?(operator) or
+                 not Custyard.Tenants.operator_on_host?(
+                   operator,
+                   conn.assigns[:host_tenant] && conn.assigns.host_tenant.id
+                 ) do
               conn
               |> clear_operator_session()
               |> redirect_to_login(OperatorAuth.no_organization_message())

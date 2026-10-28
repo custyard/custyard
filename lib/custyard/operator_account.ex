@@ -22,6 +22,7 @@ defmodule Custyard.OperatorAccount do
 
     # Nullable: super_admin operators have no organization_id (can access all)
     belongs_to :organization, Custyard.Organization
+    belongs_to :tenant, Custyard.Tenant
 
     timestamps(type: :utc_datetime)
   end
@@ -60,7 +61,7 @@ defmodule Custyard.OperatorAccount do
   @doc false
   def changeset(operator_account, attrs) do
     operator_account
-    |> cast(attrs, [:email, :password, :role, :organization_id])
+    |> cast(attrs, [:email, :password, :role, :organization_id, :tenant_id])
     |> update_change(:email, &normalize_email/1)
     |> validate_required([:email])
     |> validate_email_format()
@@ -68,6 +69,7 @@ defmodule Custyard.OperatorAccount do
     |> validate_inclusion(:role, @roles, message: "must be one of: #{Enum.join(@roles, ", ")}")
     |> validate_org_for_role()
     |> unique_constraint(:email)
+    |> foreign_key_constraint(:tenant_id)
     |> foreign_key_constraint(:organization_id)
     |> hash_password()
   end
@@ -107,9 +109,10 @@ defmodule Custyard.OperatorAccount do
   """
   def role_changeset(operator_account, attrs) do
     operator_account
-    |> cast(attrs, [:role, :organization_id])
+    |> cast(attrs, [:role, :organization_id, :tenant_id])
     |> validate_inclusion(:role, @roles, message: "must be one of: #{Enum.join(@roles, ", ")}")
     |> validate_org_for_role()
+    |> foreign_key_constraint(:tenant_id)
     |> foreign_key_constraint(:organization_id)
   end
 
@@ -117,8 +120,16 @@ defmodule Custyard.OperatorAccount do
   defp validate_org_for_role(changeset) do
     role = get_field(changeset, :role)
     org_id = get_field(changeset, :organization_id)
+    tenant_id = get_field(changeset, :tenant_id)
 
     cond do
+      role == "super_admin" && tenant_id != nil ->
+        add_error(
+          changeset,
+          :tenant_id,
+          "instance administrators cannot be assigned to one tenant"
+        )
+
       role == "super_admin" && org_id != nil ->
         add_error(
           changeset,
@@ -126,7 +137,7 @@ defmodule Custyard.OperatorAccount do
           "super_admin operators cannot be scoped to an organization"
         )
 
-      role in ["admin", "agent"] && is_nil(org_id) ->
+      role in ["admin", "agent"] && is_nil(org_id) && is_nil(tenant_id) ->
         add_error(
           changeset,
           :organization_id,
@@ -248,6 +259,14 @@ defmodule Custyard.OperatorAccount do
   """
   def can_access_organization?(%__MODULE__{role: "super_admin"}, _org_id), do: true
 
+  def can_access_organization?(%__MODULE__{tenant_id: tenant_id}, org_id)
+      when is_integer(tenant_id) and is_integer(org_id) do
+    case Custyard.Repo.get(Custyard.Organization, org_id) do
+      %{tenant_id: ^tenant_id} -> true
+      _ -> false
+    end
+  end
+
   def can_access_organization?(%__MODULE__{organization_id: op_org_id}, org_id)
       when is_integer(org_id) do
     op_org_id == org_id
@@ -292,8 +311,9 @@ defmodule Custyard.OperatorAccount do
   account must never be authorized. Login, the `:require_operator` plug and
   the LiveView auth hooks all refuse it.
   """
-  def orphaned?(%__MODULE__{role: role, organization_id: nil}) when role != "super_admin",
-    do: true
+  def orphaned?(%__MODULE__{role: role, organization_id: nil, tenant_id: nil})
+      when role != "super_admin",
+      do: true
 
   def orphaned?(_), do: false
 
@@ -303,6 +323,7 @@ defmodule Custyard.OperatorAccount do
   callers must have refused it first (the auth layer does).
   """
   def scoped_organization_id(%__MODULE__{role: "super_admin"}), do: nil
+  def scoped_organization_id(%__MODULE__{tenant_id: id}) when is_integer(id), do: nil
   def scoped_organization_id(%__MODULE__{organization_id: org_id}), do: org_id
   def scoped_organization_id(_), do: nil
 end

@@ -754,7 +754,8 @@ defmodule Custyard.Email.LMTPServer do
     end
   end
 
-  # Look up organization by domain (matches domain or custom_domain).
+  # A legacy listener has no trusted tenant context. Only a unique domain
+  # match is routable; selecting one of several tenants would leak email.
   # Returns {:ok, org} or :not_found.
   defp find_org_by_domain(domain) do
     import Ecto.Query
@@ -762,12 +763,12 @@ defmodule Custyard.Email.LMTPServer do
     query =
       from(o in Custyard.Organization,
         where: o.domain == ^domain or o.custom_domain == ^domain,
-        limit: 1
+        limit: 2
       )
 
-    case Custyard.Repo.one(query) do
-      nil -> :not_found
-      org -> {:ok, org}
+    case Custyard.Repo.all(query) do
+      [org] -> {:ok, org}
+      _ -> :not_found
     end
   end
 

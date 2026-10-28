@@ -46,11 +46,30 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   def mount(socket) do
     {:ok,
      socket
+     |> attach_hook(:authorize_channel_event, :handle_event, &authorize_event/3)
+     |> assign(:checking, false)
      |> assign(:step, 1)
      |> assign(:revealed_for, nil)
      |> assign(:previous_state, nil)
      |> assign(:form, to_form(InboundChannels.change_channel(%InboundChannel{}), as: :channel))
      |> assign(:local_flash, nil)}
+  end
+
+  defp authorize_event(_event, _params, socket) do
+    resource = socket.assigns.channel || List.first(socket.assigns.routes)
+
+    if InboundChannels.authorized_operator?(socket.assigns.current_operator, resource) do
+      {:cont, socket}
+    else
+      send(self(), :channel_setup_closed)
+
+      {:halt,
+       put_flash_local(
+         socket,
+         :error,
+         "Your channel-management access changed. Reopen this page."
+       )}
+    end
   end
 
   @impl true
@@ -151,6 +170,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
 
           {:error, %Ecto.Changeset{} = changeset} ->
             {:noreply, assign(socket, :form, to_form(changeset, as: :channel, action: :insert))}
+
+          {:error, reason} ->
+            {:noreply, put_flash_local(socket, :error, Custyard.EmailSetup.error_message(reason))}
         end
     end
   end
@@ -162,8 +184,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   end
 
   def handle_event("check_mx", _params, socket) do
-    with_channel(socket, fn channel ->
-      case InboundChannels.check_mx(channel, operator: socket.assigns.current_operator) do
+    with_channel_async(socket, fn channel, operator ->
+      case InboundChannels.check_mx(channel, operator: operator) do
         {:ok, %InboundChannel{state: :pending_verification}, result} ->
           {:error, mx_failure_message(result)}
 
@@ -174,23 +196,23 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           error
 
         {:error, reason} ->
-          {:error, "MX check failed: #{inspect(reason)}"}
+          {:error, Custyard.EmailSetup.error_message({:error, reason})}
       end
     end)
   end
 
-  # The connection test runs in the LiveView process: a short deadline keeps
-  # an unreachable server from freezing the wizard for the poller's two
-  # minutes.
+  # Async checks leave navigation responsive and end with the owning component.
+  # Keep a shorter connection deadline than the background poller.
   def handle_event("connect_imap", _params, socket) do
-    with_channel(socket, fn channel ->
+    with_channel_async(socket, fn channel, operator ->
       case InboundChannels.connect_imap(channel,
-             operator: socket.assigns.current_operator,
+             operator: operator,
              timeout: @interactive_imap_timeout_ms
            ) do
         {:ok, _channel} = ok -> ok
         {:error, code} when is_binary(code) -> {:error, imap_error_text(code)}
         {:error, %Ecto.Changeset{}} = error -> error
+        {:error, reason} -> {:error, Custyard.EmailSetup.error_message(reason)}
       end
     end)
   end
@@ -213,12 +235,12 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   end
 
   def handle_event("check_domain", _params, socket) do
-    with_channel(socket, fn channel ->
+    with_channel_async(socket, fn channel, operator ->
       case InboundChannels.check_sending_domain(channel,
-             operator: socket.assigns.current_operator
+             operator: operator
            ) do
         {:ok, _} = ok -> ok
-        {:error, reason} -> {:error, "Domain check failed: #{inspect(reason)}"}
+        {:error, reason} -> {:error, Custyard.EmailSetup.error_message({:error, reason})}
       end
     end)
   end
@@ -285,15 +307,49 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
 
   defp with_channel(%{assigns: %{channel: nil}} = socket, _fun), do: {:noreply, socket}
 
-  defp with_channel(socket, fun) do
-    case fun.(socket.assigns.channel) do
+  defp with_channel(socket, fun), do: apply_channel_result(socket, fun.(socket.assigns.channel))
+
+  defp with_channel_async(%{assigns: %{checking: true}} = socket, _fun), do: {:noreply, socket}
+  defp with_channel_async(%{assigns: %{channel: nil}} = socket, _fun), do: {:noreply, socket}
+
+  defp with_channel_async(socket, fun) do
+    channel = socket.assigns.channel
+    operator = socket.assigns.current_operator
+
+    {:noreply,
+     socket
+     |> assign(:checking, true)
+     |> assign(:local_flash, nil)
+     |> start_async({:channel_check, channel.id}, fn -> fun.(channel, operator) end)}
+  end
+
+  @impl true
+  def handle_async({:channel_check, id}, {:ok, result}, socket) do
+    socket = assign(socket, :checking, false)
+
+    if socket.assigns.channel && socket.assigns.channel.id == id do
+      apply_channel_result(socket, result)
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_async({:channel_check, _}, {:exit, _}, socket) do
+    {:noreply,
+     socket
+     |> assign(:checking, false)
+     |> put_flash_local(:error, "The check could not finish. Try again.")}
+  end
+
+  defp apply_channel_result(socket, result) do
+    case result do
       {:ok, %InboundChannel{} = channel} ->
         channel = Custyard.Repo.preload(channel, [:inbound_route, :project])
 
         socket =
           socket
           |> assign(:channel, channel)
-          |> assign(:local_flash, nil)
+          |> put_flash_local(:info, "Saved. Review the channel status below.")
           |> sync_step(channel)
 
         {:noreply, socket}
@@ -303,6 +359,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
 
       {:error, message} when is_binary(message) ->
         {:noreply, put_flash_local(socket, :error, message)}
+
+      {:error, reason} ->
+        {:noreply, put_flash_local(socket, :error, Custyard.EmailSetup.error_message(reason))}
     end
   end
 
@@ -353,7 +412,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             {if @channel, do: "Channel setup: #{@channel.public_address}", else: "New channel"}
           </h3>
           <p class="text-xs text-gray-500 dark:text-zinc-400 mt-0.5">
-            Connect a support address to Custyard. Each step picks up where the channel left off.
+            Connect a support address to this inbox. Each step picks up where the channel left off.
           </p>
         </div>
         <button
@@ -368,6 +427,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
       </div>
 
       <.progress steps={@steps} step={@step} channel={@channel} myself={@myself} />
+      <p :if={@checking} role="status" data-testid="channel-check-progress" class="text-sm">
+        Checking connection. You can keep using this page.
+      </p>
 
       <p
         :if={@local_flash}
@@ -396,16 +458,16 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         <% 2 -> %>
           <%= case @channel.ingress_kind do %>
             <% :mx -> %>
-              <.dns_step channel={@channel} myself={@myself} />
+              <.dns_step channel={@channel} myself={@myself} checking={@checking} />
             <% :imap -> %>
-              <.imap_step channel={@channel} myself={@myself} />
+              <.imap_step channel={@channel} myself={@myself} checking={@checking} />
             <% _forward -> %>
               <.forward_step channel={@channel} myself={@myself} />
           <% end %>
         <% 3 -> %>
           <.test_step channel={@channel} />
         <% 4 -> %>
-          <.reply_step channel={@channel} myself={@myself} />
+          <.reply_step channel={@channel} myself={@myself} checking={@checking} />
       <% end %>
     </div>
     """
@@ -516,6 +578,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             type="email"
             id={@form[:public_address].id}
             name={@form[:public_address].name}
+            aria-describedby={field_error_id(@form[:public_address])}
+            aria-invalid={if field_error_id(@form[:public_address]), do: "true"}
             value={@form[:public_address].value}
             placeholder="support@companyname.com"
             required
@@ -535,6 +599,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             type="text"
             id={@form[:display_name].id}
             name={@form[:display_name].name}
+            aria-describedby={field_error_id(@form[:display_name])}
+            aria-invalid={if field_error_id(@form[:display_name]), do: "true"}
             value={@form[:display_name].value}
             placeholder="Acme Support"
             maxlength="100"
@@ -550,6 +616,11 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           >
             Route
           </label>
+          <p :if={@routes == []} role="status" class="text-sm mb-2">
+            Connect a receiving route in
+            <.link navigate={~p"/operator/email-setup"} class="underline">Email setup</.link>
+            before adding a support address.
+          </p>
           <select
             id="channel-route-select"
             name="channel[inbound_route_id]"
@@ -567,7 +638,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             </option>
           </select>
           <p class="mt-1 text-xs text-gray-500 dark:text-zinc-400">
-            Organization-wide channels use the general route; project channels use that project's route.
+            Shared support addresses use a general receiving route; project channels use that project's route.
           </p>
         </div>
         <div>
@@ -580,6 +651,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           <select
             id={@form[:ingress_kind].id}
             name={@form[:ingress_kind].name}
+            aria-describedby={field_error_id(@form[:ingress_kind])}
+            aria-invalid={if field_error_id(@form[:ingress_kind]), do: "true"}
             class="w-full text-sm rounded-md border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
             data-testid="channel-ingress-kind-select"
           >
@@ -607,6 +680,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           <select
             id={@form[:provider].id}
             name={@form[:provider].name}
+            aria-describedby={field_error_id(@form[:provider])}
+            aria-invalid={if field_error_id(@form[:provider]), do: "true"}
             class="w-full text-sm rounded-md border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
             data-testid="channel-provider-select"
           >
@@ -642,7 +717,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     ~H"""
     <fieldset class="space-y-2" data-testid="channel-imap-fields">
       <p :if={@heading} class="text-xs text-gray-500 dark:text-zinc-400">
-        Custyard reads one folder read-only over TLS: it never marks, moves or deletes mail, and
+        This service reads one folder read-only over TLS: it never marks, moves or deletes mail, and
         starts with mail that arrives after it connects. Use an app password. Microsoft 365 and
         Outlook.com only allow OAuth and Proton only offers IMAP through the local Bridge; use
         forwarding for those.
@@ -698,6 +773,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         type={@type}
         id={@f.id}
         name={@f.name}
+        aria-describedby={field_error_id(@f)}
+        aria-invalid={if field_error_id(@f), do: "true"}
         value={if @type == "password", do: "", else: @f.value}
         placeholder={@placeholder}
         autocomplete={if @type == "password", do: "new-password", else: "off"}
@@ -720,19 +797,26 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     assigns = assign(assigns, :errors, errors)
 
     ~H"""
-    <p
-      :for={{msg, _opts} <- @errors}
-      class="mt-1 text-xs text-red-600 dark:text-red-400"
-      data-testid={"channel-error-#{@field.field}"}
-    >
-      {msg}
-    </p>
+    <div :if={@errors != []} id={@field.id <> "-errors"} role="alert">
+      <p
+        :for={error <- @errors}
+        class="mt-1 text-xs text-red-600 dark:text-red-400"
+        data-testid={"channel-error-#{@field.field}"}
+      >
+        {translate_error(error)}
+      </p>
+    </div>
     """
+  end
+
+  defp field_error_id(field) do
+    if Phoenix.Component.used_input?(field) and field.errors != [], do: field.id <> "-errors"
   end
 
   defp route_label(route, kind) do
     scope =
       case route do
+        %{route_type: :general, organization_id: nil} -> "Shared inbox"
         %{route_type: :general} -> "Organization-wide"
         %{project: %{title: title}} -> title
         %{route_type: type} -> to_string(type)
@@ -870,6 +954,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   attr :channel, :any, required: true
   attr :myself, :any, required: true
 
+  attr :checking, :boolean, default: false
+
   defp imap_step(assigns) do
     channel = assigns.channel
 
@@ -925,6 +1011,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             phx-target={@myself}
             class="px-3 py-1.5 text-sm text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 rounded-md hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
             data-testid="channel-imap-test"
+            disabled={@checking}
           >
             Test connection
           </button>
@@ -932,6 +1019,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             type="submit"
             class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
             data-testid="channel-imap-save"
+            disabled={@checking}
           >
             Save and connect
           </button>
@@ -974,6 +1062,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   attr :channel, :any, required: true
   attr :myself, :any, required: true
 
+  attr :checking, :boolean, default: false
+
   defp dns_step(assigns) do
     assigns = assign(assigns, :domain, InboundChannel.public_domain(assigns.channel))
 
@@ -1005,7 +1095,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         </div>
         <p class="text-xs text-gray-500 dark:text-zinc-400">
           Some DNS providers want only the host part. Add no other MX records for {@domain}: every
-          message to that domain then arrives in Custyard, so it must not be a domain a mailbox uses.
+          message to that domain then arrives in this inbox, so it must not be a domain a mailbox uses.
         </p>
       </section>
 
@@ -1021,6 +1111,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             phx-target={@myself}
             class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
             data-testid="channel-check-mx"
+            disabled={@checking}
           >
             Check MX record
           </button>
@@ -1045,7 +1136,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         <li>Settings &rsaquo; See all settings &rsaquo; Forwarding and POP/IMAP.</li>
         <li>Add a forwarding address and paste the ingress address above.</li>
         <li>
-          Google emails a confirmation code to that address. It lands in Custyard and appears below;
+          Google emails a confirmation code to that address. It lands in this inbox and appears below;
           enter the code back in Gmail, then choose "Forward a copy" and keep the original in your inbox.
         </li>
       </ol>
@@ -1085,8 +1176,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         </li>
       </ol>
       <p class="text-xs text-gray-500 dark:text-zinc-400">
-        The mailbox keeps its copy and Custyard receives a second one. If a test message does not
-        arrive, check the organization's rejection log: a copy delivered without the + part of the
+        The mailbox keeps its copy and this inbox receives a second one. If a test message does not
+        arrive, check the receiving rejection log: a copy delivered without the + part of the
         ingress address is logged there as "no matching channel".
       </p>
     </section>
@@ -1106,7 +1197,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         <li>Settings &rsaquo; Auto forward &rsaquo; Add forwarding rule.</li>
         <li>Enter the ingress address above and save.</li>
         <li>
-          Proton sends an "Accept forwarding" email to that address. It lands in Custyard and appears
+          Proton sends an "Accept forwarding" email to that address. It lands in this inbox and appears
           below; open the link to accept.
         </li>
       </ol>
@@ -1177,6 +1268,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   attr :channel, :any, required: true
   attr :myself, :any, required: true
 
+  attr :checking, :boolean, default: false
+
   defp reply_step(assigns) do
     channel = assigns.channel
 
@@ -1202,6 +1295,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
               phx-target={@myself}
               class="text-xs px-2 py-1 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-colors"
               data-testid="channel-setup-check-domain"
+              disabled={@checking}
             >
               Check domain
             </button>
@@ -1247,7 +1341,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
             Reply from the ingress address instead.
             <span class="text-xs text-gray-500 dark:text-zinc-400">
               Customers will then see {@ingress_address || "the ingress address"} as the sender and their
-              replies go straight to Custyard, bypassing your mailbox.
+              replies go straight to this inbox, bypassing your mailbox.
             </span>
           </span>
         </label>
@@ -1359,8 +1453,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     """
     Inbound mail for #{channel.public_address}
     1. Customer -> Lettermint B.V., Zwolle, Netherlands (EU; GDPR Art. 28 processor, public DPA): the MX record for #{domain} delivers the message directly. Lettermint keeps the raw message for 28 days.
-    2. Lettermint -> this Custyard instance: #{stored_text(channel)}
-    Replies: this Custyard instance -> Lettermint -> customer. No other mailbox holds a copy.
+    2. Lettermint -> this service: #{stored_text(channel)}
+    Replies: this service -> Lettermint -> customer. No other mailbox holds a copy.
     """
   end
 
@@ -1370,8 +1464,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     """
     Inbound mail for #{channel.public_address}
     1. Customer -> #{domain} (operator's mail provider): the public mailbox receives the message.
-    2. #{channel.imap_host} -> this Custyard instance: Custyard reads the #{channel.imap_folder} folder over IMAP with TLS, using credentials stored encrypted, and changes nothing in the mailbox. Stored: #{stored_text(channel)}
-    Replies: this Custyard instance -> Lettermint B.V., Zwolle, Netherlands (EU; GDPR Art. 28 processor, public DPA) -> customer.#{archive_copy_line(channel)}
+    2. #{channel.imap_host} -> this service: it reads the #{channel.imap_folder} folder over IMAP with TLS, using credentials stored encrypted, and changes nothing in the mailbox. Stored: #{stored_text(channel)}
+    Replies: this service -> Lettermint B.V., Zwolle, Netherlands (EU; GDPR Art. 28 processor, public DPA) -> customer.#{archive_copy_line(channel)}
     """
   end
 
@@ -1383,8 +1477,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     Inbound mail for #{channel.public_address}
     1. Customer -> #{domain} (#{provider}): the public mailbox receives the message.
     2. #{provider} -> Lettermint B.V., Zwolle, Netherlands (EU; GDPR Art. 28 processor, public DPA): the forwarding rule delivers a copy to the ingress address. Lettermint keeps the raw message for 28 days.
-    3. Lettermint -> this Custyard instance: #{stored_text(channel)}
-    Replies: this Custyard instance -> Lettermint -> customer.#{archive_copy_line(channel)}
+    3. Lettermint -> this service: #{stored_text(channel)}
+    Replies: this service -> Lettermint -> customer.#{archive_copy_line(channel)}
     """
   end
 

@@ -84,8 +84,8 @@ if config_env() == :prod do
   # surfaces it at deploy time, while Fly still has the previous machine.
   #
   # This is deliberately stricter than the Lettermint route-provisioning
-  # warning below, which degrades to a MockClient that provisions nothing
-  # but breaks nothing.
+  # management configuration below, which can remain unavailable without
+  # preventing operators from opening existing conversations.
   known_mail_adapters = ~w(mailgun sendgrid smtp postmark lettermint local)
 
   mail_adapter =
@@ -164,8 +164,11 @@ if config_env() == :prod do
         # Swoosh.Adapters.Lettermint available since swoosh 1.17+
         config :custyard, Custyard.Mailer,
           adapter: Swoosh.Adapters.Lettermint,
-          api_token: blank_to_nil.(System.get_env("LETTERMINT_API_KEY")),
-          base_url: blank_to_nil.(System.get_env("LETTERMINT_API_URL"))
+          api_token:
+            blank_to_nil.(System.get_env("LETTERMINT_PROJECT_TOKEN")) ||
+              blank_to_nil.(System.get_env("LETTERMINT_API_KEY")),
+          base_url:
+            blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
 
       "local" ->
         # Explicitly opted into the in-memory adapter; warned about above.
@@ -173,13 +176,9 @@ if config_env() == :prod do
         :ok
     end
 
-    # API-based adapters need a real Swoosh API client. config.exs disables it
-    # globally (:api_client, false) since dev/test use the Local adapter, so we
-    # re-enable it here and point it at the Finch instance from the supervision tree.
-    if mail_adapter in ~w(mailgun sendgrid postmark lettermint) do
-      config :swoosh, :api_client, Swoosh.ApiClient.Finch
-      config :swoosh, :finch_name, Custyard.Finch
-    end
+    # Tenant credentials may select Lettermint independently of the installation
+    # adapter, including SMTP or Local, and can be saved after the app boots.
+    config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: Custyard.Finch
   end
 end
 
@@ -281,35 +280,24 @@ case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY")) do
       previous: previous
 end
 
-# Lettermint API configuration (route management).
-#
-# Blank is treated as unset: a key that synced with an empty value would
-# otherwise wire up the real HttpClient with no credential, so every
-# provisioning call fails at the API instead of falling back to the MockClient,
-# which at least announces itself at boot.
-lettermint_api_url = blank_to_nil.(System.get_env("LETTERMINT_API_URL"))
-lettermint_api_key = blank_to_nil.(System.get_env("LETTERMINT_API_KEY"))
+# Sending tokens never authenticate management requests. These environment
+# credentials belong only to the default tenant; other tenants save their own
+# encrypted connection in Email setup.
+lettermint_api_url =
+  blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
 
-if lettermint_api_url && lettermint_api_key do
+lettermint_team_token = blank_to_nil.(System.get_env("LETTERMINT_TEAM_TOKEN"))
+
+if lettermint_team_token do
   config :custyard, :lettermint,
     client: Custyard.Lettermint.HttpClient,
     api_url: lettermint_api_url,
-    api_key: lettermint_api_key
+    team_token: lettermint_team_token
 
   config :custyard, :lettermint_configured, true
 else
   if config_env() == :prod do
-    IO.warn("""
-    Lettermint is not configured. Route provisioning will be disabled.
-
-    To enable, set these environment variables:
-      - LETTERMINT_API_URL
-      - LETTERMINT_API_KEY
-
-    Falling back to MockClient.
-    """)
-
-    config :custyard, :lettermint, client: Custyard.Lettermint.MockClient
+    config :custyard, :lettermint, client: Custyard.Lettermint.DisabledClient
     config :custyard, :lettermint_configured, false
   end
 end

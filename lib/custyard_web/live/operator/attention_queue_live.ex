@@ -3,7 +3,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   import CustyardWeb.OperatorComponents
 
-  alias Custyard.{Conversations, Scoring}
+  alias Custyard.{Conversations, EmailSetup, Labels, Scoring}
 
   # Debounce delay for PubSub-triggered reloads (milliseconds)
   # This prevents N+1 query storms when multiple conversations update rapidly
@@ -13,12 +13,21 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
+      Process.send_after(self(), :refresh_deadlines, 60_000)
     end
 
     socket =
       socket
       |> assign(:page_title, "Attention Queue")
       |> assign(:filter, "all")
+      |> assign(:label_id, nil)
+      |> assign(
+        :labels,
+        Labels.list_for_operator(
+          socket.assigns.current_operator,
+          socket.assigns.current_tenant.id
+        )
+      )
       |> assign(:show_score_breakdown, nil)
       |> assign(:show_snooze_menu, nil)
       |> assign(:reload_timer, nil)
@@ -31,9 +40,16 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   def handle_params(params, _uri, socket) do
     filter = params["filter"] || "all"
 
+    labels =
+      Labels.list_for_operator(socket.assigns.current_operator, socket.assigns.current_tenant.id)
+
+    label = Enum.find(labels, &(to_string(&1.id) == params["label"]))
+
     socket =
       socket
       |> assign(:filter, filter)
+      |> assign(:labels, labels)
+      |> assign(:label_id, label && label.id)
       |> load_conversations()
 
     {:noreply, socket}
@@ -41,7 +57,13 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   @impl true
   def handle_event("filter", %{"filter" => filter}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/operator?filter=#{filter}")}
+    {:noreply,
+     push_patch(socket, to: ~p"/operator?#{[filter: filter, label: socket.assigns.label_id]}")}
+  end
+
+  def handle_event("filter_label", %{"label" => label}, socket) do
+    {:noreply,
+     push_patch(socket, to: ~p"/operator?#{[filter: socket.assigns.filter, label: label]}")}
   end
 
   def handle_event("toggle_score", %{"id" => id}, socket) do
@@ -132,6 +154,11 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
      |> load_conversations()}
   end
 
+  def handle_info(:refresh_deadlines, socket) do
+    Process.send_after(self(), :refresh_deadlines, 60_000)
+    {:noreply, load_conversations(socket)}
+  end
+
   # Catch-all for unexpected PubSub messages to prevent LiveView crashes
   def handle_info(_msg, socket) do
     {:noreply, socket}
@@ -162,8 +189,17 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     settings = Scoring.preload_settings()
 
     conversations =
-      Conversations.list_for_attention_queue(filter: filter, organization_id: org_id)
-      |> Enum.map(fn %{conversation: conv, message_count: message_count} ->
+      Conversations.list_for_attention_queue(
+        filter: filter,
+        organization_id: org_id,
+        tenant_id: socket.assigns.current_tenant.id,
+        label_id: socket.assigns.label_id
+      )
+
+    labels_by_conversation = Labels.for_conversations(Enum.map(conversations, & &1.conversation))
+
+    conversations =
+      Enum.map(conversations, fn %{conversation: conv, message_count: message_count} = item ->
         neglect_status = Scoring.neglect_status(conv, settings.thresholds)
 
         breakdown =
@@ -178,13 +214,25 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           breakdown: breakdown,
           hours_idle: hours_idle,
           message_count: message_count,
+          due_task_count: item.due_task_count,
+          labels: Map.get(labels_by_conversation, conv.id, []),
           is_snoozed: is_snoozed,
           # Derived from preloaded contact/prospect — no extra queries
           reply_channel: Conversations.reply_channel(conv)
         }
       end)
 
-    assign(socket, :conversations, conversations)
+    socket
+    |> assign(:conversations, conversations)
+    |> assign(:email_setup, EmailSetup.summary(socket.assigns.current_tenant.id))
+    |> assign(
+      :can_setup_email,
+      EmailSetup.authorized?(socket.assigns.current_operator, socket.assigns.current_tenant.id)
+    )
+    |> assign(
+      :labels,
+      Labels.list_for_operator(socket.assigns.current_operator, socket.assigns.current_tenant.id)
+    )
   end
 
   defp queue_contains_conversation?(socket, id) do
@@ -225,6 +273,22 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   def render(assigns) do
     ~H"""
     <div class="max-w-3xl mx-auto p-4" data-testid="operator-queue-page">
+      <section
+        :if={@can_setup_email and not @email_setup.complete?}
+        class="mb-5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-zinc-800 p-4"
+        data-testid="email-setup-prompt"
+      >
+        <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">
+          {if @email_setup.configured?, do: "Finish email setup", else: "Connect support email"}
+        </h2>
+        <p class="mt-1 text-sm text-gray-600 dark:text-zinc-300">
+          Forward your support mailbox, verify the sending address and test a reply.
+        </p>
+        <.link
+          navigate={~p"/operator/email-setup"}
+          class="mt-2 inline-block text-sm font-medium text-indigo-600 dark:text-indigo-300"
+        >{if @email_setup.configured?, do: "Continue setup", else: "Set up email"}</.link>
+      </section>
       <div class="flex items-center justify-between mb-4">
         <h1
           class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
@@ -238,7 +302,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       </div>
 
       <div
-        class="flex gap-2 mb-4"
+        class="flex flex-wrap gap-2 mb-4"
         role="group"
         aria-label="Filter by status"
         data-testid="operator-queue-filters"
@@ -249,7 +313,23 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
         <.filter_button filter={@filter} value="waiting" label="waiting" />
         <.filter_button filter={@filter} value="dormant" label="dormant" />
         <.filter_button filter={@filter} value="snoozed" label="snoozed" />
+        <.filter_button filter={@filter} value="due_tasks" label="tasks due" />
       </div>
+
+      <form
+        :if={@labels != []}
+        id="queue-label-filter"
+        phx-change="filter_label"
+        class="mb-4 flex items-center gap-2 text-sm"
+      >
+        <label for="queue-label">Label</label>
+        <select id="queue-label" name="label" class="rounded text-sm dark:bg-zinc-800">
+          <option value="">All labels</option>
+          <option :for={label <- @labels} value={label.id} selected={@label_id == label.id}>
+            {label.name}
+          </option>
+        </select>
+      </form>
 
       <div class="space-y-2">
         <%= if Enum.empty?(@conversations) do %>
@@ -357,6 +437,19 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           <.state_badge state={@item.conversation.state} />
           <.urgency_badge urgency={@item.conversation.urgency} />
           <.source_badge source={@item.conversation.source} />
+          <span
+            :if={@item.due_task_count > 0}
+            class="text-xs rounded px-2 py-0.5 bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
+            data-testid="queue-tasks-due"
+            title="Complete or reschedule the task to clear this reminder. Conversation snoozing does not change its deadline."
+          >
+            {@item.due_task_count} {if @item.due_task_count == 1, do: "task due", else: "tasks due"}
+          </span>
+          <span
+            :for={label <- @item.labels}
+            class="text-xs rounded px-2 py-0.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
+            data-testid={"queue-label-#{label.id}"}
+          >{label.name}</span>
           <%!-- Channel the mail arrived on (spec-inbound-channels, "Attention
                queue"): the public address, never the ingress address. --%>
           <span

@@ -4,7 +4,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
-  alias Custyard.{Conversation, OperatorAccount, Repo, Scoring}
+  alias Custyard.{Conversation, OperatorAccount, Repo, Scoring, Tenants}
   alias CustyardWeb.Live.OperatorAuth
 
   # Helpers for creating operators and authenticated connections
@@ -70,6 +70,78 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
   end
 
   describe "on_mount/4 - scoping" do
+    test "connected tenant staff mounts enforce the host independently of the HTTP plug" do
+      {:ok, own} = Tenants.create_tenant(%{name: "Own host", slug: "hook-own"})
+      {:ok, foreign} = Tenants.create_tenant(%{name: "Foreign host", slug: "hook-foreign"})
+      organization = insert_organization(tenant_id: own.id)
+
+      operators = [
+        create_operator(%{email: "tenant-hook@example.net", role: "agent", tenant_id: own.id}),
+        create_operator(%{
+          email: "legacy-hook@example.net",
+          role: "agent",
+          organization_id: organization.id
+        })
+      ]
+
+      for operator <- operators do
+        session = %{
+          "operator_id" => operator.id,
+          "operator_claim" => OperatorAccount.session_claim(operator)
+        }
+
+        for host_tenant_id <- [nil, own.id] do
+          assert {:cont, authenticated} =
+                   OperatorAuth.on_mount(
+                     :default,
+                     %{},
+                     Map.put(session, "host_tenant_id", host_tenant_id),
+                     socket()
+                   )
+
+          assert authenticated.assigns.current_tenant.id == own.id
+        end
+
+        assert {:halt, denied} =
+                 OperatorAuth.on_mount(
+                   :default,
+                   %{},
+                   Map.put(session, "host_tenant_id", foreign.id),
+                   socket()
+                 )
+
+        assert {:redirect, %{to: "/operator/login"}} = denied.redirected
+      end
+    end
+
+    test "instance administrators select workspaces on the instance host while tenant hosts remain authoritative" do
+      {:ok, own} = Tenants.create_tenant(%{name: "Host workspace", slug: "hook-host"})
+
+      {:ok, selected} =
+        Tenants.create_tenant(%{name: "Selected workspace", slug: "hook-selected"})
+
+      operator = create_operator(%{email: "instance-hook@example.net", role: "super_admin"})
+
+      session = %{
+        "operator_id" => operator.id,
+        "operator_claim" => OperatorAccount.session_claim(operator),
+        "selected_tenant_id" => selected.id
+      }
+
+      assert {:cont, instance_socket} = OperatorAuth.on_mount(:default, %{}, session, socket())
+      assert instance_socket.assigns.current_tenant.id == selected.id
+
+      assert {:cont, tenant_socket} =
+               OperatorAuth.on_mount(
+                 :default,
+                 %{},
+                 Map.put(session, "host_tenant_id", own.id),
+                 socket()
+               )
+
+      assert tenant_socket.assigns.current_tenant.id == own.id
+    end
+
     test "super_admin sees all organizations' conversations", %{conn: conn} do
       # Create conversations for different orgs
       org1 = insert_organization(name: "Org One")
@@ -153,25 +225,23 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
       conn = login(conn, agent)
 
-      # Organizations is an admin-only route
+      # Email setup remains an admin-only route
       assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/organizations")
+               live(conn, ~p"/operator/email-setup")
     end
 
     test "allows admin to access admin-only routes", %{conn: conn} do
-      org = insert_organization()
-
       admin =
         create_operator(%{
           email: "admin-access-test@example.com",
           password: "password123",
           role: "admin",
-          organization_id: org.id
+          tenant_id: Tenants.default_tenant().id
         })
 
       conn = login(conn, admin)
 
-      {:ok, _view, _html} = live(conn, ~p"/operator/organizations")
+      {:ok, _view, _html} = live(conn, ~p"/operator/email-setup")
     end
 
     test "allows super_admin to access admin-only routes", %{conn: conn} do
@@ -184,7 +254,7 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
 
       conn = login(conn, super_admin)
 
-      {:ok, _view, _html} = live(conn, ~p"/operator/organizations")
+      {:ok, _view, _html} = live(conn, ~p"/operator/email-setup")
     end
   end
 
@@ -315,23 +385,25 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
     end
 
     test "demotion removes admin page access before the next event", %{conn: conn} do
-      org = insert_organization()
-
       operator =
         create_operator(%{
           email: "demoted-admin@example.com",
           role: "admin",
-          organization_id: org.id
+          tenant_id: Tenants.default_tenant().id
         })
 
-      {:ok, view, _html} = live(login(conn, operator), ~p"/operator/organizations")
+      {:ok, view, _html} = live(login(conn, operator), ~p"/operator/tenant")
 
       operator
       |> OperatorAccount.role_changeset(%{role: "agent"})
       |> Repo.update!()
 
-      render_click(view, "show_form", %{})
+      render_submit(view, "invite", %{
+        "staff" => %{"email" => "blocked@example.net", "role" => "admin"}
+      })
+
       assert_redirect(view, "/operator")
+      refute Repo.get_by(OperatorAccount, email: "blocked@example.net")
     end
 
     test "reassignment removes access before a project broadcast reload", %{conn: conn} do
@@ -538,8 +610,9 @@ defmodule CustyardWeb.Live.OperatorAuthTest do
     defp socket do
       %Phoenix.LiveView.Socket{
         endpoint: CustyardWeb.Endpoint,
+        router: CustyardWeb.Router,
         assigns: %{__changed__: %{}, flash: %{}},
-        private: %{live_temp: %{}}
+        private: %{live_temp: %{}, lifecycle: %Phoenix.LiveView.Lifecycle{}}
       }
     end
 

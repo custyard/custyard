@@ -19,10 +19,27 @@ defmodule CustyardWeb.EmailStatusController do
   alias Custyard.Email.DeliveryStatus
   alias Custyard.Webhooks.Adapters.Lettermint
 
+  def lettermint(conn, %{"callback_token" => callback_token} = params) do
+    with %Custyard.EmailConnection{} = connection <-
+           Custyard.EmailSetup.status_connection(callback_token),
+         {:ok, secret} <- Custyard.EmailSetup.status_secret(connection),
+         :ok <- verify_with_secret(conn, secret) do
+      if Custyard.EmailSetup.status_message_belongs?(connection, params) do
+        conn |> assign(:email_connection, connection) |> handle_event(params)
+      else
+        json(conn, %{status: "ignored", reason: "unknown_message"})
+      end
+    else
+      _ -> conn |> put_status(401) |> json(%{status: "error", reason: "unauthorized"})
+    end
+  end
+
   def lettermint(conn, params) do
     case verify(conn) do
       :ok ->
-        handle_event(conn, params)
+        if Custyard.EmailSetup.legacy_status_allowed?(params),
+          do: handle_event(conn, params),
+          else: json(conn, %{status: "ignored", reason: "unknown_message"})
 
       {:error, reason} ->
         Logger.warning(
@@ -33,9 +50,21 @@ defmodule CustyardWeb.EmailStatusController do
     end
   end
 
+  defp handle_event(conn, %{"sandbox" => true}),
+    do: json(conn, %{status: "ignored", reason: "sandbox"})
+
   defp handle_event(conn, %{"event" => event} = params) when is_binary(event) do
-    case DeliveryStatus.apply_event(params) do
-      {:ok, :updated, _message} ->
+    tenant_id =
+      case conn.assigns[:email_connection] do
+        %{tenant_id: tenant_id} -> tenant_id
+        nil -> Custyard.Tenants.default_tenant().id
+      end
+
+    case DeliveryStatus.apply_event(params, tenant_id: tenant_id) do
+      {:ok, :updated, message} ->
+        if connection = conn.assigns[:email_connection],
+          do: Custyard.EmailSetup.record_status_event(connection, params, message)
+
         json(conn, %{status: "ok"})
 
       {:ok, :ignored, reason} ->

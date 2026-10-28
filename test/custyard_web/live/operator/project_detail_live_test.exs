@@ -180,6 +180,8 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       assert html =~ "Task title"
       assert html =~ "Add Task"
       assert html =~ "Cancel"
+      assert html =~ "Due date and time (UTC)"
+      refute has_element?(view, "[data-testid=operator-task-visible-checkbox][checked]")
     end
 
     test "creates a task", %{conn: conn} do
@@ -196,7 +198,8 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
         |> render_submit()
 
       assert html =~ "New task"
-      assert Repo.get_by(Task, title: "New task", project_id: project.id)
+      task = Repo.get_by!(Task, title: "New task", project_id: project.id)
+      refute task.portal_visible
     end
 
     test "creates task with portal visibility", %{conn: conn} do

@@ -89,12 +89,93 @@ defmodule Custyard.TaskTest do
       assert task.state == :open
     end
 
-    test "defaults portal_visible to true" do
+    test "new tasks are private unless explicitly shared" do
       org = insert_organization()
       attrs = build_task(organization_id: org.id) |> Map.delete(:portal_visible)
       {:ok, task} = %Task{} |> Task.changeset(attrs) |> Repo.insert()
 
-      assert task.portal_visible == true
+      assert task.portal_visible == false
+    end
+
+    test "the database default is private for inserts outside the task schema" do
+      org = insert_organization()
+
+      {1, [%{id: id}]} =
+        Repo.insert_all(
+          "tasks",
+          [
+            %{
+              title: "Direct insert",
+              organization_id: org.id,
+              inserted_at: "2026-10-27 00:00:00",
+              updated_at: "2026-10-27 00:00:00"
+            }
+          ],
+          returning: [:id]
+        )
+
+      refute Repo.get!(Task, id).portal_visible
+    end
+
+    test "UTC input round trips and invalid input does not clear a deadline" do
+      org = insert_organization()
+
+      {:ok, task} =
+        %Task{}
+        |> Task.changeset(%{
+          title: "Follow up",
+          organization_id: org.id,
+          due_at: "2026-10-28T15:30"
+        })
+        |> Repo.insert()
+
+      assert task.due_at == ~U[2026-10-28 15:30:00Z]
+      invalid = Task.changeset(task, %{due_at: "not-a-date"})
+      refute invalid.valid?
+      assert "is invalid" in errors_on(invalid).due_at
+      assert Repo.get!(Task, task.id).due_at == task.due_at
+    end
+
+    test "rejects conflicting parent organizations" do
+      org = insert_organization()
+      other = insert_organization()
+      conversation = insert_conversation(organization_id: org.id)
+      project = insert_project(organization_id: other.id)
+
+      changeset =
+        Task.changeset(%Task{}, %{
+          title: "Cross scope",
+          conversation_id: conversation.id,
+          project_id: project.id
+        })
+
+      refute changeset.valid?
+      assert "must belong to the conversation's organization" in errors_on(changeset).project_id
+    end
+
+    test "unlinked tasks cannot connect parents from different workspaces" do
+      {:ok, tenant} =
+        Custyard.Tenants.create_tenant(%{
+          name: "Other",
+          slug: "task-#{System.unique_integer([:positive])}"
+        })
+
+      conversation = insert_conversation(source: :public_intake)
+
+      project =
+        %Custyard.Project{}
+        |> Custyard.Project.internal_project_changeset(%{title: "Other", tenant_id: tenant.id})
+        |> Repo.insert!()
+
+      changeset =
+        Task.changeset(%Task{}, %{
+          title: "Cross workspace",
+          conversation_id: conversation.id,
+          project_id: project.id
+        })
+
+      refute changeset.valid?
+      assert "must belong to the conversation's workspace" in errors_on(changeset).project_id
     end
   end
 

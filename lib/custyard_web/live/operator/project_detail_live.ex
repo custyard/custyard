@@ -25,7 +25,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
          |> assign(:show_task_form, false)
          |> assign(:new_task_title, "")
          |> assign(:new_task_due_at, "")
-         |> assign(:new_task_portal_visible, true)}
+         |> assign(:new_task_portal_visible, false)}
     end
   end
 
@@ -75,11 +75,9 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   def handle_event("add_task", params, socket) do
-    due_at = parse_datetime(params["due_at"])
-
     attrs = %{
       title: params["title"],
-      due_at: due_at,
+      due_at: params["due_at"],
       portal_visible: params["portal_visible"] == "true"
     }
 
@@ -92,14 +90,14 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
          |> assign(:show_task_form, false)
          |> assign(:new_task_title, "")
          |> assign(:new_task_due_at, "")
-         |> assign(:new_task_portal_visible, true)
+         |> assign(:new_task_portal_visible, false)
          |> refresh_project()}
 
       {:error, :unauthorized} ->
         {:noreply, project_access_revoked(socket)}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Failed to create task")}
+        {:noreply, put_flash(socket, :error, "Enter a task title and a valid UTC date and time")}
     end
   end
 
@@ -162,16 +160,6 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   defp next_task_state(:open), do: :in_progress
   defp next_task_state(:in_progress), do: :done
   defp next_task_state(:done), do: :open
-
-  defp parse_datetime(""), do: nil
-  defp parse_datetime(nil), do: nil
-
-  defp parse_datetime(str) do
-    case NaiveDateTime.from_iso8601(str <> ":00") do
-      {:ok, ndt} -> DateTime.from_naive!(ndt, "Etc/UTC")
-      _ -> nil
-    end
-  end
 
   @impl true
   def render(assigns) do
@@ -262,8 +250,12 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
             />
             <div class="flex gap-4">
               <div class="flex-1">
-                <label class="block text-sm text-gray-600 dark:text-zinc-400 mb-1">Due date</label>
+                <label
+                  for="project-task-due"
+                  class="block text-sm text-gray-600 dark:text-zinc-400 mb-1"
+                >Due date and time (UTC)</label>
                 <input
+                  id="project-task-due"
                   type="datetime-local"
                   name="due_at"
                   value={@new_task_due_at}
@@ -466,15 +458,6 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   defp format_due_at(datetime) do
-    now = DateTime.utc_now()
-    diff_days = Date.diff(DateTime.to_date(datetime), DateTime.to_date(now))
-
-    cond do
-      diff_days < 0 -> "overdue"
-      diff_days == 0 -> "today"
-      diff_days == 1 -> "tomorrow"
-      diff_days < 7 -> Calendar.strftime(datetime, "%A")
-      true -> Calendar.strftime(datetime, "%b %d")
-    end
+    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
   end
 end

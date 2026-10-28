@@ -1,11 +1,10 @@
 defmodule CustyardWeb.Operator.IntakeSourcesLive do
   @moduledoc """
-  Super-admin CRUD for public intake sources (CTAs).
+  Tenant-administrator CRUD for public intake sources (CTAs).
 
   Stays thin: all validation lives in `Custyard.IntakeSource.changeset/2`.
-  Mount is gated to super admins by the router live_session, and every
-  mutating event re-checks `Authorization.can_modify_settings?/1`
-  (settings double-gate pattern).
+  Mount and each mutating event require management access to the current
+  tenant. Record lookups and new source ownership use that tenant's scope.
 
   The key is a public URL segment: it is set once at creation and never
   cast on update (`IntakeSource.update_changeset/2` enforces this at the
@@ -16,23 +15,27 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
 
   import CustyardWeb.FormHelpers, only: [format_error: 1]
 
-  alias Custyard.{Authorization, Intake, IntakeSource}
+  alias Custyard.{Intake, IntakeSource, Tenants}
 
-  @permission_error "Only super admins can modify intake sources"
+  @permission_error "Only tenant administrators can modify intake sources"
 
   @impl true
   def mount(_params, _session, socket) do
-    socket =
-      socket
-      |> assign(:page_title, "Intake Sources")
-      |> assign(:show_form, false)
-      |> assign(:editing_source, nil)
-      |> assign(:form, nil)
-      |> assign(:form_params, %{})
-      |> assign(:questions, [])
-      |> load_sources()
+    if Tenants.can_manage?(socket.assigns.current_operator, socket.assigns[:current_tenant]) do
+      socket =
+        socket
+        |> assign(:page_title, "Intake Sources")
+        |> assign(:show_form, false)
+        |> assign(:editing_source, nil)
+        |> assign(:form, nil)
+        |> assign(:form_params, %{})
+        |> assign(:questions, [])
+        |> load_sources()
 
-    {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
+      {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
+    else
+      {:ok, redirect(socket, to: ~p"/operator")}
+    end
   end
 
   @impl true
@@ -49,7 +52,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   def handle_event("edit", %{"id" => id}, socket) do
     case parse_id_or_flash(id, socket) do
       {:ok, int_id} ->
-        case Intake.get_source(int_id) do
+        case scoped_source(socket, int_id) do
           nil ->
             {:noreply,
              socket
@@ -105,7 +108,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
 
   @impl true
   def handle_event("save", %{"intake_source" => params}, socket) do
-    if Authorization.can_modify_settings?(socket.assigns.current_operator) do
+    if Tenants.can_manage?(socket.assigns.current_operator, socket.assigns[:current_tenant]) do
       save_source(socket, params)
     else
       {:noreply, put_flash(socket, :error, @permission_error)}
@@ -114,7 +117,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
 
   @impl true
   def handle_event("toggle_enabled", %{"id" => id}, socket) do
-    if Authorization.can_modify_settings?(socket.assigns.current_operator) do
+    if Tenants.can_manage?(socket.assigns.current_operator, socket.assigns[:current_tenant]) do
       case parse_id_or_flash(id, socket) do
         {:ok, int_id} -> toggle_enabled(socket, int_id)
         {:error, socket} -> {:noreply, socket}
@@ -126,7 +129,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
 
   @impl true
   def handle_event("delete", %{"id" => id}, socket) do
-    if Authorization.can_modify_settings?(socket.assigns.current_operator) do
+    if Tenants.can_manage?(socket.assigns.current_operator, socket.assigns[:current_tenant]) do
       case parse_id_or_flash(id, socket) do
         {:ok, int_id} -> delete_source(socket, int_id)
         {:error, socket} -> {:noreply, socket}
@@ -156,7 +159,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
     result =
       case socket.assigns.editing_source do
         nil ->
-          Intake.create_source(attrs)
+          Intake.create_source(Map.put(attrs, "tenant_id", socket.assigns.current_tenant.id))
 
         source ->
           # The key is immutable after creation (public URL segment).
@@ -188,7 +191,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   end
 
   defp toggle_enabled(socket, id) do
-    case Intake.get_source(id) do
+    case scoped_source(socket, id) do
       nil ->
         {:noreply,
          socket
@@ -207,7 +210,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   end
 
   defp delete_source(socket, id) do
-    case Intake.get_source(id) do
+    case scoped_source(socket, id) do
       nil ->
         {:noreply,
          socket
@@ -263,7 +266,10 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
         IntakeSource.changeset(base, attrs)
       end
 
-    changeset = Map.put(base_changeset, :action, :validate)
+    changeset =
+      if socket.assigns.form_params == %{},
+        do: base_changeset,
+        else: Map.put(base_changeset, :action, :validate)
 
     socket
     |> assign(:questions, questions)
@@ -701,7 +707,10 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   end
 
   # The absolute public intake URL (application host, /i/:key scope).
-  defp intake_url(source), do: url(~p"/i/#{source.key}")
+  defp intake_url(%{tenant_id: 1} = source), do: url(~p"/i/#{source.key}")
+
+  defp intake_url(source),
+    do: Tenants.url(Tenants.get_tenant!(source.tenant_id)) <> "/i/" <> source.key
 
   # A ready-to-paste anchor tag. Link text prefers the headline, falling
   # back to the source name; both are operator-authored.
@@ -719,7 +728,10 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   defp mode_colors(:passive), do: "text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950"
   defp mode_colors(_other), do: "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
 
+  defp scoped_source(socket, id),
+    do: Enum.find(Intake.list_sources(socket.assigns.current_tenant.id), &(&1.id == id))
+
   defp load_sources(socket) do
-    assign(socket, :sources, Intake.list_sources())
+    assign(socket, :sources, Intake.list_sources(socket.assigns.current_tenant.id))
   end
 end

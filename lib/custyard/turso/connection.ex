@@ -228,18 +228,41 @@ defmodule Custyard.Turso.Connection do
   def handle_begin(opts, %{transaction_status: status} = state) do
     case Keyword.get(opts, :mode, state.default_transaction_mode) do
       mode when mode in [:deferred, :transaction] and status == :idle ->
-        transaction(:begin, ["BEGIN TRANSACTION"], :keep, state, opts)
+        transaction(:begin, begin_statements("BEGIN TRANSACTION", opts), :keep, state, opts)
 
       :immediate when status == :idle ->
-        transaction(:begin, ["BEGIN IMMEDIATE TRANSACTION"], :keep, state, opts)
+        transaction(
+          :begin,
+          begin_statements("BEGIN IMMEDIATE TRANSACTION", opts),
+          :keep,
+          state,
+          opts
+        )
 
       :exclusive when status == :idle ->
-        transaction(:begin, ["BEGIN EXCLUSIVE TRANSACTION"], :keep, state, opts)
+        transaction(
+          :begin,
+          begin_statements("BEGIN EXCLUSIVE TRANSACTION", opts),
+          :keep,
+          state,
+          opts
+        )
 
       mode
       when mode in [:deferred, :immediate, :exclusive, :savepoint] and status == :transaction ->
         transaction(:begin, ["SAVEPOINT exqlite_savepoint"], :keep, state, opts)
     end
+  end
+
+  # A standalone PRAGMA runs on a short-lived Hrana stream. Schema rebuilds
+  # must disable foreign keys on the very stream that starts BEGIN, before
+  # the transaction opens; issuing the PRAGMA inside BEGIN has no effect.
+  # The migration checks foreign_key_check before committing. The stream
+  # closes after COMMIT/ROLLBACK, so ordinary queries keep enforcement on.
+  defp begin_statements(statement, opts) do
+    if Keyword.get(opts, :migration_foreign_keys) == :off,
+      do: ["PRAGMA foreign_keys = OFF", statement],
+      else: [statement]
   end
 
   @impl true
