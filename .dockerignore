@@ -31,6 +31,10 @@ Procfile*
 .claude/
 .serena/
 .remember/
+.agent-telemetry/
+.codex/
+.agents/
+tmp/
 
 # Design/reference material
 resources/
