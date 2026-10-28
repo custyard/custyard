@@ -290,7 +290,7 @@ if config_env() == :prod do
 
   # Derive session and LiveView salts from SECRET_KEY_BASE
   # This ensures unique salts per deployment without requiring additional env vars.
-  # Falls back to env vars if explicitly set (for backward compatibility or rotation).
+  # Explicit salt variables support installation-specific configuration and rotation.
   session_signing_salt =
     System.get_env("SESSION_SIGNING_SALT") ||
       Base.encode64(:crypto.hash(:sha256, "session_signing:" <> secret_key_base), padding: false)

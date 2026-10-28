@@ -2,7 +2,9 @@
 
 Deploy Custyard to [Fly.io](https://fly.io), with its SQLite database on a persistent volume or on [Turso](#turso-libsql).
 
-> **Port restrictions:** Fly.io [blocks mail server ports](https://community.fly.io/t/allow-mailserver-ports/3215) (143, 465, 587, 993). Inbound email uses the webhook endpoint at `/api/webhook/inbound` instead. See [issue #10](https://github.com/onetimesecret/custyard/issues/10) for the full email architecture.
+Use tenant-authenticated provider callbacks at `/api/webhook/route/:callback_token`
+for hosted inbound email. Configure LMTP or IMAP channels where the installation's
+network supports those transports.
 
 ## Prerequisites
 
@@ -21,10 +23,10 @@ fly volumes create custyard_data --region <your-region> --size 1
 
 # Set required secrets (deployment fails without these)
 fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
-fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_API_KEY="..."
+fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_PROJECT_TOKEN="..."
 
-# Name the first super_admin; the entrypoint creates it on the next boot.
-# Login is magic-link-only, so without an operator nobody can sign in.
+# Name the first installation administrator; the entrypoint creates it on boot.
+# Tenant staff are provisioned separately as tenant database memberships.
 fly secrets set INSTANCE_ADMIN_EMAIL=you@example.com
 
 # Deploy
@@ -36,9 +38,9 @@ fly secrets unset INSTANCE_ADMIN_EMAIL
 
 Instead of `INSTANCE_ADMIN_EMAIL` you can create the account on the running machine
 with `fly ssh console -a custyard -C "/app/bin/instance-admin add you@example.com"`.
-See [Operator accounts](#operator-accounts).
+See [Instance administrators and tenant staff](#instance-administrators-and-tenant-staff).
 
-> **Mail is required, not optional.** Operator login is magic-link-only: the
+> **System authentication mail:** Instance administrators and staff use magic links: the
 > app emails a single-use token and there is no password path. `config/runtime.exs`
 > refuses to boot if `MAIL_ADAPTER` is unset or unrecognized, which surfaces the
 > problem at deploy time while Fly still has the previous machine running. Use
@@ -72,7 +74,7 @@ fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
 
 # Required — outbound email (pick one adapter; the app refuses to boot
 # without MAIL_ADAPTER, because operator login is magic-link-only)
-fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_API_KEY="..." LETTERMINT_API_URL="..."
+fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_PROJECT_TOKEN="..." LETTERMINT_API_URL="..."
 # or
 fly secrets set MAIL_ADAPTER=postmark POSTMARK_API_KEY="..."
 # or
@@ -129,33 +131,19 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 
 ## Colonel acknowledgments
 
-Production subscribes to Colonel acknowledgments by default. The consumer
-starts once both secrets are set; until then the app boots without it and logs
-which variables are missing. Setting only one of them stops the app from
-starting, and the machine restarts in a loop until the other is set or the
-first is unset with `fly secrets unset`. Each secrets change restarts the app,
-so set both in one import as below. The URL carries the broker password, so
-keep it off the command line: in bash, `read -rs` takes it without echo or
-shell history, and `printf` (a builtin) hands it to `fly secrets import` on
-stdin, out of the process list. The URL has the form
-`amqps://USER:PASSWORD@BROKER:5671/VHOST?cacertfile=/etc/ssl/certs/ca-certificates.crt&verify=verify_peer`.
+Each tenant configures its own encrypted broker credential, source and queue
+at `/app/settings/integrations`. `CREDENTIAL_ENCRYPTION_KEY` must be set before
+storing the credential. Enabled active tenants have independent consumers;
+suspension stops their consumers. `ACKNOWLEDGMENTS_PREFETCH` controls process
+concurrency, while subscription identity and credentials remain database settings.
 
 ```bash
-read -rs amqp_url   # paste the URL; nothing is echoed
-printf 'ACKNOWLEDGMENTS_AMQP_URL=%s\nACKNOWLEDGMENTS_SOURCE=ots.eu.production\n' "$amqp_url" |
-  fly secrets import -a custyard
-unset amqp_url
-
-# Explicitly off, for an instance that does not take acknowledgments
-fly secrets set ACKNOWLEDGMENTS_ENABLED=false
-
-# Status, queue counts and recovery from the machine
-fly ssh console -a custyard -C "/app/bin/acknowledgments status"
+fly ssh console -a custyard -C "/app/bin/acknowledgments status --tenant 7"
 ```
 
-Provision the broker queues and bind organizations before enabling publication.
-See [Operating Colonel acknowledgments](ops/acknowledgments.md) for credentials,
-TLS, the operator page at `/app/settings/integrations`, and the full command set.
+Provision the broker queues and bind source organizations to customers before
+enabling publication. See [Operating Colonel acknowledgments](ops/acknowledgments.md)
+for tenant configuration, TLS, permissions and the command set.
 
 ## Health check
 
@@ -167,12 +155,11 @@ On every deploy, the container entrypoint (`entrypoint.sh`) runs:
 
 1. Validates `SECRET_KEY_BASE` is set (fails fast if missing)
 2. Runs Ecto migrations
-3. Bootstraps the operator account: with `INSTANCE_ADMIN_EMAIL` set, creates that
-   `super_admin` if it does not exist (an existing account is logged as "exists
-   (role X), not modified") and logs a reminder to unset it; an invalid value
-   fails the boot. Unset, it logs how to create the first operator. While a
-   `super_admin` `admin@custyard.local` exists, it logs a warning. Steps 2 and 3
-   run in one `bin/custyard eval` that does not start the app.
+3. With `INSTANCE_ADMIN_EMAIL` set, creates that installation administrator if
+   absent and logs a reminder to unset the variable. Existing accounts remain
+   unchanged. Invalid email input fails bootstrap. No implicit administrator,
+   tenant, staff membership or support connection is created. Migration and
+   bootstrap run in one database-only `bin/custyard eval`.
 4. Starts the Phoenix server
 
 With `MAINTENANCE_MODE=true` it does none of this and keeps the machine running
@@ -221,52 +208,35 @@ one-off code: it runs in a separate VM with the app's configuration and does not
 start the app. Anything that writes the database must run as `custyard`
 (`bin/instance-admin` and `bin/dsar` switch user themselves).
 
-## Operator accounts
+## Instance administrators and tenant staff
 
-Operators log in with a link emailed to them; there are no passwords. Manage
-accounts with `bin/instance-admin`, which starts only the database (never the app), so
-it is safe while the server runs:
+The installation console uses `/admin/login` on the configured installation
+host. Its header shows **Instance admin** and the signed-in email. The
+database-only CLI manages these installation identities:
 
 ```bash
-# Create a super_admin (the default role)
-fly ssh console -a custyard -C "/app/bin/instance-admin add you@example.com"
-
-# Create an admin or agent for one organization (the number in /app/customers/ID)
-fly ssh console -a custyard -C "/app/bin/instance-admin add lead@example.com --role admin --organization 3"
-fly ssh console -a custyard -C "/app/bin/instance-admin add helper@example.com --role agent --organization 3"
-
-# Show id, email, role, organization and creation time, flagging accounts that cannot log in
+fly ssh console -a custyard -C "/app/bin/instance-admin add installer@example.com"
 fly ssh console -a custyard -C "/app/bin/instance-admin list"
-
-# Delete an account (refuses to remove the last super_admin who can log in)
-fly ssh console -a custyard -C "/app/bin/instance-admin remove helper@example.com"
-
+fly ssh console -a custyard -C "/app/bin/instance-admin remove installer@example.com"
 fly ssh console -a custyard -C "/app/bin/instance-admin help"
 ```
 
-- `add` never modifies an existing account: it reports "exists (role X), not
-  modified". To change a role, remove the account and add it again.
-- Emails are case-insensitive and stored lowercased.
-- The "check your email" page is identical for addresses without an account, so
-  a mistyped address looks like success. Check `bin/instance-admin list`.
-- `INSTANCE_ADMIN_EMAIL` creates a `super_admin` on boot when it does not exist. Unset
-  it after the first login: while it is set, a removed operator with that address
-  comes back on the next boot.
-- Every account created or removed outside the web UI is recorded as an
-  `operator_created` or `operator_removed` audit event.
-- A login session is tied to the account, not only to its id, so removing an
-  operator ends their sessions even if a later account reuses the id. Sessions
-  issued before this was introduced are signed out once; log in again.
+The CLI refuses to remove the last installation administrator. Bootstrap
+identity comes from `INSTANCE_ADMIN_EMAIL`, never an email-domain rule. Unset
+the variable after bootstrap to stop recreating that identity on future boots.
+Account creation/removal is audited and session claims prevent removed
+identities from retaining access when IDs are reused.
 
-### Removing the old admin@custyard.local
+Create tenants, register hostnames and provision their first staff admin through
+`/admin`. A tenant can explicitly claim the installation hostname; wildcard DNS
+is optional. Staff sign in at `/app/login` on their tenant's hostname. The header
+shows the tenant name, **Staff** and the signed-in email. Staff roles are admin
+or agent; memberships are tenant database records. Instance administration does
+not grant membership or access to customer data.
 
-Older images seeded `admin@custyard.local` as a `super_admin`. No mail reaches
-that address, so it can never log in. Boot logs a warning while it exists and
-`list` flags it. After your own `super_admin` can log in:
-
-```bash
-fly ssh console -a custyard -C "/app/bin/instance-admin remove admin@custyard.local"
-```
+Tenant admins manage staff at `/app/settings/workspace` and configure support
+mail at `/app/settings/email`. Installation mail configuration handles login
+mail independently of these tenant provider credentials.
 
 ## Data subject requests
 
@@ -296,8 +266,9 @@ fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/dsar help"
   exits 1 before the database is opened.
 - Every erasure writes a `data_subject_erasure` audit event with counts only.
   Neither the audit event nor an error message contains the address.
-- Erasure is scoped to one organization: unlinked public-intake threads
-  and prospect records are not covered (spec-inbound-channels, Follow-ups).
+- Erasure is scoped to the selected customer and tenant. Linked prospect
+  credentials, personal customer identities and claim-email data are scrubbed;
+  unrelated customers and tenants remain intact.
 - In development the same actions are `mix custyard.dsar ...`.
 
 ## Custom domain
@@ -414,8 +385,7 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 | Migration failures | Run manually as the app user: `fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.migrate()'"` |
 | Nobody can log in | `fly ssh console -a custyard -C "/app/bin/instance-admin list"`; create an account with `/app/bin/instance-admin add you@example.com` or `fly secrets set INSTANCE_ADMIN_EMAIL=you@example.com` and redeploy |
 | Login link never arrives | The "check your email" page is shown even for unknown addresses. Confirm the account with `/app/bin/instance-admin list`, then check `MAIL_ADAPTER` and `fly logs` |
-| Boot fails with `INSTANCE_ADMIN_EMAIL: ...` | The value is not a valid address (or is `admin@custyard.local`). Fix or unset it: `fly secrets unset INSTANCE_ADMIN_EMAIL` |
-| "No organization assigned; ask a super admin" | The operator's organization was deleted. Remove the account with `/app/bin/instance-admin remove EMAIL` and add it again with `--role` and `--organization` |
+| Boot fails with `INSTANCE_ADMIN_EMAIL: ...` | The value is not a valid address. Fix or unset it: `fly secrets unset INSTANCE_ADMIN_EMAIL` |
 | Database becomes read-only after an SSH session | Something wrote the database as root. Run app commands as `custyard` (`bin/instance-admin` does). Assuming the default `DATABASE_PATH`, run `chown custyard:custyard /data/custyard.db*`, then restart the app (`fly apps restart custyard`) |
 | `bin/custyard remote` or `rpc` fails | Erlang distribution is off. Use `/app/bin/instance-admin` or `bin/custyard eval` |
 

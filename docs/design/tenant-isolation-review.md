@@ -1,8 +1,8 @@
 # Integrated tenant isolation review
 
 Review date: 2026-10-28. The team reviewed the integrated implementation
-before the application database reset. Findings below are resolved in source;
-final validation is recorded after the mechanical rename commits.
+before the application database reset. All actionable findings below are resolved. Final validation covers the separate
+StaffAccount, Thread and WorkItem mechanical rename commits.
 
 ## Ownership and authority
 
@@ -76,6 +76,16 @@ people known to another customer. Adding a participant grants no portal
 credential. Invalid references do not match; ambiguous references create a fresh
 sender-associated thread. Cross-tenant references never match.
 
+## IMAP lifecycle follow-up
+
+The final job review found that a suspended tenant could still establish an
+IMAP session or advance its mailbox cursor before dispatch rejected a message.
+The separate lifecycle fix resolves persisted channel/tenant authority before
+network access, rechecks suspension during the session and before writes, and
+blocks UID/error-counter changes while suspended. Tenant lifecycle events stop
+or restart pollers immediately. Focused coverage passes 33 tests, including
+stale input, suspension during login, unchanged cursor/counters and resumption.
+
 ## Validation and reset gate
 
 Required gates are compilation with warnings as errors, formatting, strict
@@ -83,3 +93,16 @@ Credo, the complete test suite including local RabbitMQ integrations, asset
 build, and clean diff checks. Mechanical renames remain separate commits and
 receive the same final checks. The application database reset follows these
 gates; the live pilot database is outside the local reset target.
+
+Final checks on 2026-10-28:
+
+- `ACKNOWLEDGMENTS_TEST_AMQP_URL=amqp://guest:guest@127.0.0.1:5672 MIX_TEST_PARTITION=_ci_final_names mix ci`: **2,627 tests, zero failures, zero skipped**, with compile warnings treated as errors, formatter and strict Credo passing.
+- `mix assets.build`: passed.
+- `MIX_ENV=prod mix release --overwrite`: passed.
+- `bin/release-smoke-test`: passed against a temporary local SQLite database and local mail capture. Verified migration, explicit instance-admin bootstrap, CLI add/list/remove beside the running server, and health before/after provisioning.
+- `git diff --check`: passed.
+
+No application or pilot database reset has been executed. The reset target is
+pending selection; no remote deployment or Git push was performed by this task.
+The live provider round trip after deployment remains separate from these local
+checks and from the earlier release-82 pilot handoff.

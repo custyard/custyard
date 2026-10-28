@@ -1,11 +1,11 @@
 defmodule Custyard.Email.ThreadMatcher do
   @moduledoc """
-  Match inbound email to existing thread via threading headers.
+  Match inbound email to an existing thread inside the receiving tenant.
 
-  Thread matching is scoped by organization to prevent cross-organization
-  information boundary violations. Without organization scoping, mailing list
-  cross-posts or forwarded threads could cause messages to thread into the
-  wrong organization's threads.
+  An unambiguous header reference preserves the thread's customer identity and
+  permits multiparty participants without granting portal credentials. Ambiguous
+  references do not merge threads. Subject fallback additionally requires the
+  same customer and a sender who already participated.
   """
 
   alias Custyard.{Thread, Message, Organization, Prospect, Repo}

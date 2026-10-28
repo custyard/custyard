@@ -2,7 +2,7 @@ defmodule Custyard.Email.Parser do
   require Logger
 
   @moduledoc """
-  Parse RFC 5322 raw email into normalized map for Processor.
+  Parse RFC 5322 raw email into normalized map for direct-mail ingestion.
 
   Handles:
   - MIME multipart (text/plain + text/html)
@@ -12,19 +12,18 @@ defmodule Custyard.Email.Parser do
 
   ## Output Format
 
-  Returns a map with BOTH atom keys and string keys for compatibility with
-  multiple consumers:
+  Returns atom keys for direct transport processing and string keys for
+  serialized payload inspection:
 
   - **Atom keys** (e.g., `:from`, `:subject`): For direct pattern matching and
     struct-like access in Elixir code (LMTP/IMAP flow).
 
   - **String keys** (e.g., `"from"`, `"subject"`): For JSON webhook payloads
-    and external API compatibility (Processor.process/1 expects these).
+    and integration diagnostics.
 
   Threading headers (`message_id`, `in_reply_to`, `references`) appear at the
   top level for convenience and are also accessible in the `headers` map with
-  their original casing (e.g., `"message-id"`). The Processor re-extracts these
-  from headers for normalization.
+  their original casing (e.g., `"message-id"`). The direct-email adapter normalizes these fields before dispatch.
   """
 
   # Maximum raw email size: 25 MB (matches common provider limits)
@@ -104,7 +103,7 @@ defmodule Custyard.Email.Parser do
   @doc """
   Parse raw RFC 5322 email binary into normalized map.
 
-  Returns map compatible with Processor.process/1. Fields have BOTH atom and
+  Returns a normalized direct-email map. Fields have BOTH atom and
   string keys for compatibility (see moduledoc for rationale).
 
   ## Example Output

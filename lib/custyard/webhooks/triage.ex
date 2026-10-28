@@ -4,7 +4,7 @@ defmodule Custyard.Webhooks.Triage do
   (docs/design/spec-inbound-channels.md, D6).
 
   `classify/3` is a pure decision: it reads the normalized payload, the
-  route and the resolved channel (nil on a legacy route), queries the
+  route and the resolved channel (nil for a non-email source), queries the
   database only to look up existing rows, and never writes. The dispatcher
   acts on the result.
 
@@ -84,7 +84,7 @@ defmodule Custyard.Webhooks.Triage do
   @auto_reply_headers ["X-Autoreply", "X-Autorespond"]
 
   @doc """
-  Classify `normalized` delivered on `route` to `channel` (nil for a legacy
+  Classify `normalized` delivered on `route` to `channel` (nil for a non-email
   route without channels).
   """
   @spec classify(map(), struct(), struct() | nil) :: classification()

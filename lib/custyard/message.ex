@@ -88,7 +88,7 @@ defmodule Custyard.Message do
     field :spam_score, :float
     # Triage class (D6): :customer, :auto_response (system message appended
     # to a thread), :suspect (spam-flagged or unauthenticated unknown sender).
-    # nil for staff, portal and legacy rows.
+    # nil for staff and portal messages.
     field :triage_class, Ecto.Enum, values: @triage_classes
     belongs_to :inbound_channel, Custyard.InboundChannel
 

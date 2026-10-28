@@ -67,8 +67,8 @@ controllers/plugs (not LiveView):
 
 - **Bearer tokens in the URL path** are redacted to `[REDACTED]` — Custyard's
   credentials live in the path, which Sentry's built-in scrubber does *not*
-  cover: `/c/:token`, `/claim/:token`, `/operator/login/verify/:token`
-  (magic link), `/api/webhook/route/:token` (webhook), `/p/:org_token/...`.
+  cover: `/threads/:token`, `/claims/:token`, `/app/login/verify/:token`, `/admin/login/verify/:token`
+  (magic link), `/api/webhook/route/:token` (webhook), `/portal/:token/...`.
 - **Sensitive query params** (`token`, `key`, `secret`, `passphrase`,
   `password`, `callback_token`, `org_token`, `as`) have their values redacted.
 - **Request bodies** are dropped entirely — public-intake bodies carry prospect

@@ -33,7 +33,7 @@ defmodule Custyard.Release.Dsar do
     help
         Show this help.
 
-  ID is the organization's number, the one in /staff/organizations/ID.
+  ID is the organization's number, the one in /app/customers/ID.
   Erasures are irreversible and refuse to run without --yes. Each writes a
   data_subject_erasure audit event with counts only, never the address.
   """
