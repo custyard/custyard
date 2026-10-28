@@ -32,6 +32,20 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
   end
 
   @impl true
+  def handle_params(params, _uri, socket) do
+    selection = params["channel"]
+    channel = Enum.find(socket.assigns.channels, &(to_string(&1.id) == selection))
+
+    {:noreply,
+     socket
+     |> assign(
+       show_channel: selection == "new" or not is_nil(channel),
+       setup_channel_id: channel && channel.id
+     )
+     |> reload()}
+  end
+
+  @impl true
   def handle_event("save_credentials", %{"connection" => params}, socket) do
     result =
       EmailSetup.save_credentials(
@@ -82,7 +96,7 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
       end)
 
   def handle_event("new_channel", _, socket),
-    do: {:noreply, socket |> assign(show_channel: true, setup_channel_id: nil) |> reload()}
+    do: {:noreply, push_patch(socket, to: ~p"/operator/email-setup?#{[channel: "new"]}")}
 
   def handle_event("set_default_channel", %{"default_channel_id" => id}, socket) do
     result =
@@ -98,10 +112,9 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
   def handle_event("resume_channel", %{"id" => id}, socket) do
     channel = Enum.find(socket.assigns.channels, &(to_string(&1.id) == id))
 
-    {:noreply,
-     socket
-     |> assign(show_channel: not is_nil(channel), setup_channel_id: channel && channel.id)
-     |> reload()}
+    if channel,
+      do: {:noreply, push_patch(socket, to: ~p"/operator/email-setup?#{[channel: channel.id]}")},
+      else: {:noreply, socket}
   end
 
   defp async(%{assigns: %{busy: true}} = socket, _fun), do: {:noreply, socket}
@@ -134,10 +147,14 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
   def handle_info({:channel_updated, _}, socket), do: {:noreply, reload(socket)}
 
   def handle_info({:channel_setup_created, id}, socket),
-    do: {:noreply, socket |> assign(:setup_channel_id, id) |> reload()}
+    do:
+      {:noreply,
+       socket
+       |> reload()
+       |> push_patch(to: ~p"/operator/email-setup?#{[channel: id]}")}
 
   def handle_info(:channel_setup_closed, socket),
-    do: {:noreply, assign(socket, show_channel: false)}
+    do: {:noreply, push_patch(socket, to: ~p"/operator/email-setup")}
 
   defp finish(socket, {:ok, _}, message), do: socket |> reload() |> put_flash(:info, message)
 
@@ -198,13 +215,21 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
             label="Project API token (sending)"
             type="password"
             autocomplete="new-password"
+            placeholder={credential_placeholder(@project_credential_status)}
+            aria-describedby="project-token-state"
           />
+          <p id="project-token-state" class="text-xs">
+            {credential_help(@project_credential_status)}
+          </p>
           <.input
             field={@credential_form[:team_token]}
             label="Team API token (management)"
             type="password"
             autocomplete="new-password"
+            placeholder={credential_placeholder(@team_credential_status)}
+            aria-describedby="team-token-state"
           />
+          <p id="team-token-state" class="text-xs">{credential_help(@team_credential_status)}</p>
           <p class="text-xs">
             Blank token fields keep the saved value. Tokens are encrypted and never shown again. Project tokens send email; Team tokens read projects, routes, domains and webhook configuration. Grant only the required abilities.
           </p>
@@ -253,6 +278,9 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
         >
           <p class="font-medium">{route.lettermint_route_domain}</p>
           <p class="text-sm">
+            Imported route ID: <code class="break-all">{route.lettermint_route_id}</code>
+          </p>
+          <p class="text-sm">
             Open this inbound route's Webhooks screen in Lettermint. Create a route-scoped webhook using this complete URL and subscribe to message.inbound. Enable live deliveries and leave Basic Auth off.
           </p>
           <code class="block break-all text-xs">{Custyard.InboundRoutes.callback_url(route)}</code>
@@ -272,14 +300,19 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
               type="password"
               label="This webhook's signing secret"
               autocomplete="new-password"
+              placeholder={
+                if route.webhook_secret_ciphertext, do: "Saved securely", else: "Not saved yet"
+              }
+              aria-describedby={"inbound-secret-state-#{route.id}"}
               required
             />
             <.button disabled={@busy}>Verify binding and save secret</.button>
           </form>
+          <p id={"inbound-secret-state-#{route.id}"} class="text-xs">
+            {binding_secret_help(route.webhook_secret_ciphertext)}
+          </p>
           <p class="text-sm">
-            Signing secret: {if route.webhook_secret_ciphertext, do: "saved", else: "missing"}. Signed message: {observed(
-              route.webhook_verified_at
-            )}.
+            Signed message: {observed(route.webhook_verified_at)}.
           </p>
         </div>
         <p :if={@routes == []} class="text-sm" role="status">
@@ -358,10 +391,17 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
             type="password"
             label="Status webhook signing secret"
             autocomplete="new-password"
+            placeholder={
+              if @connection.status_secret_ciphertext, do: "Saved securely", else: "Not saved yet"
+            }
+            aria-describedby="status-secret-state"
             required
           />
           <.button disabled={@busy}>Verify status binding and save secret</.button>
         </form>
+        <p id="status-secret-state" class="text-xs">
+          {binding_secret_help(@connection.status_secret_ciphertext)}
+        </p>
         <p class="text-sm">
           Send a new message from an external mailbox to your support address. Open its conversation, send a reply, confirm it arrived, then reply back and confirm the same thread. A provider test event alone does not verify forwarding.
         </p>
@@ -399,6 +439,19 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
     </main>
     """
   end
+
+  defp credential_placeholder(:missing), do: "Not saved yet"
+  defp credential_placeholder(:installation), do: "Using installation token"
+  defp credential_placeholder(:saved), do: "Saved securely"
+
+  defp credential_help(:missing), do: "No token saved yet."
+  defp credential_help(:installation), do: "Using the installation token. Leave blank to keep it."
+  defp credential_help(:saved), do: "Saved securely. Leave blank to keep it."
+
+  defp binding_secret_help(nil), do: "No signing secret saved yet."
+
+  defp binding_secret_help(_ciphertext),
+    do: "Saved securely. Enter the signing secret again only to recheck or change this binding."
 
   defp checked(nil), do: "(not checked)"
   defp checked(at), do: "(#{Calendar.strftime(at, "%Y-%m-%d %H:%M UTC")})"

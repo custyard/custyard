@@ -40,9 +40,71 @@ defmodule CustyardWeb.Operator.EmailSetupLiveTest do
     refute html =~ "private-team-token"
     assert has_element?(view, "input[name='connection[project_token]'][value='']")
     assert EmailSetup.connection(c.tenant.id).project_id == "project-1"
-    {:ok, _reopened, html} = live(c.conn, ~p"/operator/email-setup")
+    {:ok, reopened, html} = live(c.conn, ~p"/operator/email-setup")
     assert html =~ "project-1"
     refute html =~ "private-project-token"
+    assert has_element?(reopened, "#project-token-state", "Saved securely")
+    assert has_element?(reopened, "#team-token-state", "Saved securely")
+    assert has_element?(reopened, "input[name='connection[team_token]'][value='']")
+  end
+
+  test "a saved inbound binding identifies its route and explains the empty secret field", c do
+    route =
+      insert_inbound_route(
+        tenant_id: c.tenant.id,
+        organization_id: nil,
+        lettermint_route_id: "saved-provider-route"
+      )
+
+    route =
+      route
+      |> Ecto.Changeset.change(
+        lettermint_webhook_id: "saved-provider-webhook",
+        webhook_secret_ciphertext: "private-encrypted-signing-secret"
+      )
+      |> Repo.update!()
+
+    {:ok, view, html} = live(c.conn, ~p"/operator/email-setup")
+    assert html =~ "saved-provider-route"
+    assert has_element?(view, "#inbound-secret-state-#{route.id}", "Saved securely")
+    assert has_element?(view, "#inbound-webhook-secret-#{route.id}[value='']")
+    refute html =~ "private-encrypted-signing-secret"
+  end
+
+  test "the selected channel survives refresh without exposing another tenant's channel", c do
+    route = insert_inbound_route(tenant_id: c.tenant.id, organization_id: nil)
+
+    channel =
+      insert_inbound_channel(
+        tenant_id: c.tenant.id,
+        organization_id: nil,
+        inbound_route_id: route.id,
+        state: :pending_verification,
+        provider: :proton
+      )
+
+    {:ok, view, _} = live(c.conn, ~p"/operator/email-setup")
+    render_click(view, "resume_channel", %{"id" => to_string(channel.id)})
+    path = ~p"/operator/email-setup?#{[channel: channel.id]}"
+    assert_patch(view, path)
+
+    {:ok, reopened, _} = live(c.conn, path)
+    assert has_element?(reopened, "[data-testid=channel-forward-step]")
+    assert has_element?(reopened, "[data-testid=channel-verification-waiting]")
+
+    foreign_route = insert_inbound_route(tenant_id: 1, organization_id: nil)
+
+    foreign =
+      insert_inbound_channel(
+        tenant_id: 1,
+        organization_id: nil,
+        inbound_route_id: foreign_route.id
+      )
+
+    {:ok, isolated, _} =
+      live(c.conn, ~p"/operator/email-setup?#{[channel: foreign.id]}")
+
+    refute has_element?(isolated, "[data-testid=channel-setup]")
   end
 
   test "an agent cannot open setup or mutate credentials", c do
