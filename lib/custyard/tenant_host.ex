@@ -19,7 +19,15 @@ defmodule Custyard.TenantHost do
       ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\z/
     )
     |> validate_length(:hostname, max: 253)
+    |> reject_installation_host()
     |> unique_constraint(:hostname)
     |> foreign_key_constraint(:tenant_id)
+  end
+
+  defp reject_installation_host(changeset) do
+    if get_field(changeset, :hostname) ==
+         Custyard.Tenants.normalize_host(Custyard.Tenants.app_host()),
+       do: add_error(changeset, :hostname, "is reserved for the installation"),
+       else: changeset
   end
 end

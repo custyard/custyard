@@ -147,7 +147,7 @@ defmodule CustyardWeb.Admin.TenantsLive do
       <.input field={@form[:slug]} label="Tenant identifier" required />
       <label>Hostname<input name="tenant[hostname]" required class="block" /></label>
       <p>
-        Use {Tenants.app_host()} for a single workspace installation, or register a subdomain or custom domain. Configure DNS and TLS for the hostname.
+        Register a workspace subdomain or custom domain with DNS and TLS configured. {Tenants.app_host()} is reserved for this installation.
       </p>
       <:actions><.button>Create tenant</.button></:actions>
     </.simple_form>

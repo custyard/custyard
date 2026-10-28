@@ -6,7 +6,7 @@ defmodule CustyardWeb.TenantBoundariesTest do
 
   setup do
     {:ok, tenant} = Tenants.create_tenant(%{name: "Workspace", slug: "workspace"})
-    {:ok, _} = Tenants.add_host(tenant.id, Tenants.app_host())
+    {:ok, _} = Tenants.add_host(tenant.id, "workspace.example.com")
 
     {:ok, staff} =
       %StaffAccount{}
@@ -23,7 +23,9 @@ defmodule CustyardWeb.TenantBoundariesTest do
 
   test "staff email setup is accessible before support email exists", %{conn: conn, staff: staff} do
     conn =
-      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_staff_session(staff)
+      %{conn | host: "workspace.example.com"}
+      |> init_test_session(%{})
+      |> put_staff_session(staff)
 
     assert {:ok, _, html} = live(conn, "/app/settings/email")
     assert html =~ "Connect your support address"
@@ -31,7 +33,7 @@ defmodule CustyardWeb.TenantBoundariesTest do
 
   test "instance identity does not authenticate tenant staff", %{conn: conn, admin: admin} do
     conn =
-      %{conn | host: Tenants.app_host()}
+      %{conn | host: "workspace.example.com"}
       |> init_test_session(%{
         instance_admin_id: admin.id,
         instance_admin_claim: admin.session_claim
@@ -42,9 +44,11 @@ defmodule CustyardWeb.TenantBoundariesTest do
 
   test "staff identity does not authenticate installation console", %{conn: conn, staff: staff} do
     conn =
-      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_staff_session(staff)
+      %{conn | host: "workspace.example.com"}
+      |> init_test_session(%{})
+      |> put_staff_session(staff)
 
-    assert {:error, {:redirect, %{to: "/admin/login"}}} = live(conn, "/admin")
+    assert %{status: 404} = get(conn, "/admin")
   end
 
   test "revoked instance admin cannot load tenant settings through a connected patch", %{
@@ -73,7 +77,7 @@ defmodule CustyardWeb.TenantBoundariesTest do
   } do
     assert %{status: 404} = get(%{conn | host: "unknown.example.com"}, "/app/login")
     assert {:ok, _} = Tenants.set_status(admin, tenant.id, "suspended")
-    assert %{status: 403} = get(%{conn | host: Tenants.app_host()}, "/app/login")
+    assert %{status: 403} = get(%{conn | host: "workspace.example.com"}, "/app/login")
     assert %{status: 200} = get(%{conn | host: Tenants.app_host()}, "/admin/login")
   end
 
@@ -109,12 +113,30 @@ defmodule CustyardWeb.TenantBoundariesTest do
     {:ok, _} = Tenants.add_host(foreign.id, "foreign.example.com")
 
     conn =
-      %{conn | host: Tenants.app_host()}
+      %{conn | host: "workspace.example.com"}
       |> init_test_session(%{host_tenant_id: staff.tenant_id})
       |> put_staff_session(staff)
 
     conn = put_private(conn, :live_view_connect_info, %{uri: %URI{host: "foreign.example.com"}})
     assert {:error, {:redirect, %{to: "/app/login"}}} = live(conn, "/app")
+  end
+
+  test "an installation transport cannot authenticate staff through a stale tenant host mapping",
+       %{
+         conn: conn,
+         staff: staff,
+         tenant: tenant
+       } do
+    Repo.insert!(%Custyard.TenantHost{tenant_id: tenant.id, hostname: Tenants.app_host()})
+
+    conn =
+      %{conn | host: "workspace.example.com"}
+      |> init_test_session(%{})
+      |> put_staff_session(staff)
+      |> put_private(:live_view_connect_info, %{uri: %URI{host: Tenants.app_host()}})
+
+    assert {:error, {:redirect, %{to: "/app/login"}}} = live(conn, "/app")
+    assert %{status: 404} = get(%{conn | host: Tenants.app_host()}, "/app")
   end
 
   test "logged-in headers distinguish installation identity and tenant staff", %{
@@ -124,7 +146,9 @@ defmodule CustyardWeb.TenantBoundariesTest do
     tenant: tenant
   } do
     staff_conn =
-      %{conn | host: Tenants.app_host()} |> init_test_session(%{}) |> put_staff_session(staff)
+      %{conn | host: "workspace.example.com"}
+      |> init_test_session(%{})
+      |> put_staff_session(staff)
 
     {:ok, staff_view, staff_html} = live(staff_conn, "/app")
     assert has_element?(staff_view, "[data-testid=staff-identity]", "Staff · #{staff.email}")

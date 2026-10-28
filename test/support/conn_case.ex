@@ -33,17 +33,21 @@ defmodule CustyardWeb.ConnCase do
 
   setup tags do
     Custyard.DataCase.setup_sandbox(tags)
-    host = Custyard.Tenants.app_host()
+
+    host =
+      if tags[:explicit_tenant_hosts], do: Custyard.Tenants.app_host(), else: tenant_test_host()
 
     unless tags[:explicit_tenant_hosts] do
       tenant = Custyard.Factory.insert_tenant()
       Process.put(:factory_tenant_id, tenant.id)
       Custyard.Tenants.add_host(tenant.id, host)
-      if host != "www.example.com", do: Custyard.Tenants.add_host(tenant.id, "www.example.com")
+      Custyard.Tenants.add_host(tenant.id, "www.example.com")
     end
 
     {:ok, conn: %{Phoenix.ConnTest.build_conn() | host: host}}
   end
+
+  def tenant_test_host, do: "workspace.example.com"
 
   defp portal_staff_scope(tenant_id) do
     staff =
@@ -96,7 +100,7 @@ defmodule CustyardWeb.ConnCase do
       end
 
     conn =
-      if conn.host in [Custyard.Tenants.app_host(), "www.example.com"],
+      if conn.host in [Custyard.Tenants.app_host(), "www.example.com", tenant_test_host()],
         do: %{conn | host: host},
         else: conn
 

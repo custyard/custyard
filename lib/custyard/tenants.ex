@@ -250,25 +250,31 @@ defmodule Custyard.Tenants do
     do: host |> String.trim() |> String.downcase() |> String.trim_trailing(".")
 
   def resolve_host(host) when is_binary(host) do
-    Repo.one(
-      from h in TenantHost,
-        join: t in assoc(h, :tenant),
-        where: h.hostname == ^normalize_host(host),
-        select: t
-    )
+    hostname = normalize_host(host)
+
+    if hostname != normalize_host(app_host()) do
+      Repo.one(
+        from h in TenantHost,
+          join: t in assoc(h, :tenant),
+          where: h.hostname == ^hostname,
+          select: t
+      )
+    end
   end
 
   def resolve_host(_), do: nil
 
-  def host(%Tenant{id: id}),
-    do:
-      Repo.one(
-        from h in TenantHost,
-          where: h.tenant_id == ^id,
-          order_by: h.id,
-          limit: 1,
-          select: h.hostname
-      )
+  def host(%Tenant{id: id}) do
+    installation_host = normalize_host(app_host())
+
+    Repo.one(
+      from h in TenantHost,
+        where: h.tenant_id == ^id and h.hostname != ^installation_host,
+        order_by: h.id,
+        limit: 1,
+        select: h.hostname
+    )
+  end
 
   def url(%Tenant{} = tenant) do
     case host(tenant) do

@@ -3,6 +3,8 @@ defmodule CustyardWeb.Admin.TenantAdministrationTest do
   import Phoenix.LiveViewTest
   alias Custyard.{InstanceAdmins, StaffAccount, Repo, Tenants}
 
+  @moduletag :explicit_tenant_hosts
+
   test "installation admin provisions tenant with explicit host and first staff", %{conn: conn} do
     {:created, admin} = InstanceAdmins.create_admin("instance@example.com")
 

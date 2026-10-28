@@ -460,13 +460,15 @@ defmodule CustyardWeb.IntakeControllerTest do
         })
 
       "/threads/" <> token = redirected_to(conn)
-      resume_url = CustyardWeb.Endpoint.url() <> "/threads/#{token}"
+      tenant = Custyard.Tenants.get_tenant!(source.tenant_id)
+      resume_url = Custyard.Tenants.url(tenant) <> "/threads/#{token}"
 
       receipt = email_to("buyer@example.com")
 
       assert receipt
       assert receipt.text_body =~ resume_url
       assert receipt.html_body =~ resume_url
+      refute receipt.text_body =~ CustyardWeb.Endpoint.url() <> "/threads/"
       # The receipt must carry no submitted content.
       refute receipt.text_body =~ "Pricing please"
     end

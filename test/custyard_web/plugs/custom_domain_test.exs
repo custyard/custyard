@@ -23,6 +23,33 @@ defmodule CustyardWeb.Plugs.CustomDomainTest do
     refute result.halted
   end
 
+  test "installation pages never inherit a tenant even with a stale hostname mapping" do
+    tenant = insert_tenant()
+    Repo.insert!(%Custyard.TenantHost{tenant_id: tenant.id, hostname: Tenants.app_host()})
+
+    for path <- ["/", "/admin/login", "/api/health", "/api/webhook/route/token"] do
+      result = CustomDomain.call(%{conn(:get, path) | host: Tenants.app_host()}, [])
+      assert result.assigns.installation_host
+      refute Map.has_key?(result.assigns, :host_tenant)
+      refute Map.has_key?(result.assigns, :current_tenant)
+      refute result.halted
+    end
+
+    for path <- [
+          "/app",
+          "/app/login",
+          "/intake/source",
+          "/threads/token",
+          "/portal/token",
+          "/claims/token"
+        ] do
+      result = CustomDomain.call(%{conn(:get, path) | host: Tenants.app_host()}, [])
+      assert result.status == 404
+      assert result.halted
+      refute Map.has_key?(result.assigns, :host_tenant)
+    end
+  end
+
   test "suspended hosts block tenant pages but accept authenticated callback processing" do
     tenant = insert_tenant()
     {:ok, _} = Tenants.add_host(tenant.id, "support.example.com")
