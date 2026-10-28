@@ -1,6 +1,14 @@
 defmodule Custyard.Conversations.DormancyCheckerTest do
   use Custyard.DataCase, async: true
 
+  setup do
+    tenant = Custyard.Factory.insert_tenant()
+    Process.put(:factory_tenant_id, tenant.id)
+    :ok
+  end
+
+  defp tenant_id, do: Process.get(:factory_tenant_id)
+
   alias Custyard.Conversations.DormancyChecker
   alias Custyard.Repo
 
@@ -22,7 +30,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_customer_action_at: past_threshold
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
       ids = Enum.map(results, & &1.id)
 
       assert stale_conv.id in ids
@@ -43,7 +51,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_customer_action_at: within_threshold
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
 
       assert results == []
     end
@@ -63,7 +71,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_customer_action_at: past_threshold
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
 
       assert results == []
     end
@@ -83,7 +91,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_customer_action_at: past_enterprise_threshold
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
       ids = Enum.map(results, & &1.id)
 
       assert stale_conv.id in ids
@@ -104,7 +112,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_customer_action_at: within_basic_threshold
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
 
       assert results == []
     end
@@ -131,7 +139,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           set: [inserted_at: past_threshold]
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
       ids = Enum.map(results, & &1.id)
 
       assert conv.id in ids
@@ -153,7 +161,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_customer_action_at: past_threshold
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
       ids = Enum.map(results, & &1.id)
 
       assert stale_conv.id in ids
@@ -173,7 +181,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_customer_action_at: within_threshold
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
 
       assert results == []
     end
@@ -198,7 +206,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           set: [inserted_at: past_threshold]
         )
 
-      results = DormancyChecker.stale_conversations()
+      results = DormancyChecker.stale_conversations(tenant_id())
       ids = Enum.map(results, & &1.id)
 
       assert conv.id in ids
@@ -347,7 +355,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_operator_action_at: recent
         )
 
-      refute conv.id in Enum.map(DormancyChecker.stale_conversations(), & &1.id)
+      refute conv.id in Enum.map(DormancyChecker.stale_conversations(tenant_id()), & &1.id)
     end
 
     test "a conversation quiet on both sides past the threshold is stale" do
@@ -364,7 +372,7 @@ defmodule Custyard.Conversations.DormancyCheckerTest do
           last_operator_action_at: past_threshold
         )
 
-      assert conv.id in Enum.map(DormancyChecker.stale_conversations(), & &1.id)
+      assert conv.id in Enum.map(DormancyChecker.stale_conversations(tenant_id()), & &1.id)
     end
 
     test "transition only applies to rows still waiting" do

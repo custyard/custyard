@@ -9,7 +9,12 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
   setup %{conn: conn} do
     {:ok, operator} =
       %OperatorAccount{}
-      |> OperatorAccount.changeset(%{email: "test@example.com", password: "password123"})
+      |> OperatorAccount.changeset(%{
+        role: "admin",
+        tenant_id: Process.get(:factory_tenant_id),
+        email: "test@example.com",
+        password: "password123"
+      })
       |> Repo.insert()
 
     conn =
@@ -36,6 +41,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
     operator =
       %OperatorAccount{}
       |> OperatorAccount.changeset(%{
+        tenant_id: Process.get(:factory_tenant_id),
         email: "detail-admin-#{System.unique_integer([:positive])}@example.com",
         role: "admin",
         organization_id: org.id
@@ -45,41 +51,23 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
     put_operator_session(conn, operator.id)
   end
 
-  test "open project detail rejects task mutations after reassignment", %{conn: conn} do
+  test "customer reassignment within a tenant retains staff access", %{conn: conn} do
     own = insert_organization()
-    foreign = insert_organization()
-    project = create_project(%{title: "Moved project", organization_id: own.id})
-    conn = scoped_admin_conn(conn, own)
-    {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
-
-    project
-    |> Ecto.Changeset.change(organization_id: foreign.id)
-    |> Repo.update!()
-
-    render_click(view, "add_task", %{"title" => "Unauthorized task"})
-
-    assert_redirect(view, "/operator/projects")
-    assert Repo.aggregate(Task, :count) == 0
-  end
-
-  test "project detail redirects when a project moves out of scope", %{conn: conn} do
-    own = insert_organization()
-    foreign = insert_organization()
-    project = create_project(%{title: "Moved project", organization_id: own.id})
-    conn = scoped_admin_conn(conn, own)
-    {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
-
-    {:ok, _updated} = Custyard.Projects.update_project(project, %{organization_id: foreign.id})
-
-    assert_redirect(view, "/operator/projects")
+    other = insert_organization()
+    project = create_project(%{title: "Customer project", organization_id: own.id})
+    {:ok, view, _} = live(conn, ~p"/app/projects/#{project.id}")
+    {:ok, _} = Custyard.Projects.update(portal_scope(own), project, %{organization_id: other.id})
+    assert render(view) =~ "Customer project"
+    render_click(view, "add_task", %{"title" => "Allowed task"})
+    assert Repo.get_by!(Task, title: "Allowed task").tenant_id == own.tenant_id
   end
 
   test "invalid project ID redirects without crashing", %{conn: conn} do
     org = insert_organization()
     conn = scoped_admin_conn(conn, org)
 
-    assert {:error, {:live_redirect, %{to: "/operator/projects"}}} =
-             live(conn, "/operator/projects/not-a-project-id")
+    assert {:error, {:live_redirect, %{to: "/app/projects"}}} =
+             live(conn, "/app/projects/not-a-project-id")
   end
 
   describe "mount/3" do
@@ -87,7 +75,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       org = insert_organization(name: "Acme Corp")
       project = create_project(%{title: "Website Redesign", organization_id: org.id})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
 
       assert html =~ "Website Redesign"
       assert html =~ "Back to projects"
@@ -95,9 +83,9 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
 
     test "redirects when project not found", %{conn: conn} do
       {:error, {:live_redirect, %{to: redirect_path}}} =
-        live(conn, ~p"/operator/projects/999999")
+        live(conn, ~p"/app/projects/999999")
 
-      assert redirect_path == "/operator/projects"
+      assert redirect_path == "/app/projects"
     end
 
     test "shows project description", %{conn: conn} do
@@ -110,7 +98,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
           organization_id: org.id
         })
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
 
       assert html =~ "A detailed project description"
     end
@@ -126,7 +114,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
           target_completion_date: ~D[2026-05-01]
         })
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
 
       assert html =~ "Apr 01, 2026"
       assert html =~ "May 01, 2026"
@@ -140,7 +128,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       create_task(%{title: "First task", project_id: project.id})
       create_task(%{title: "Second task", project_id: project.id})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
 
       assert html =~ "First task"
       assert html =~ "Second task"
@@ -150,7 +138,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       org = insert_organization()
       project = create_project(%{title: "Test", organization_id: org.id})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
 
       assert html =~ "No tasks in this project yet"
     end
@@ -161,7 +149,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       create_task(%{title: "Done task", project_id: project.id, state: :done})
       create_task(%{title: "Open task", project_id: project.id, state: :open})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
 
       assert html =~ "1 of 2 tasks completed"
       assert html =~ "50%"
@@ -173,7 +161,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       org = insert_organization()
       project = create_project(%{title: "Test", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
 
       html = view |> element("[data-testid=operator-add-task-btn]") |> render_click()
 
@@ -188,7 +176,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       org = insert_organization()
       project = create_project(%{title: "Test", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
 
       view |> element("[data-testid=operator-add-task-btn]") |> render_click()
 
@@ -206,7 +194,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       org = insert_organization()
       project = create_project(%{title: "Test", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
 
       view |> element("[data-testid=operator-add-task-btn]") |> render_click()
 
@@ -225,7 +213,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       project = create_project(%{title: "Test", organization_id: org.id})
       task = create_task(%{title: "Task", project_id: project.id, state: :open})
 
-      {:ok, view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, html} = live(conn, ~p"/app/projects/#{project.id}")
       assert html =~ "Open"
 
       html =
@@ -250,7 +238,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       project = create_project(%{title: "Test", organization_id: org.id})
       task = create_task(%{title: "To delete", project_id: project.id})
 
-      {:ok, view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, html} = live(conn, ~p"/app/projects/#{project.id}")
       assert html =~ "To delete"
 
       html =
@@ -268,7 +256,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       org = insert_organization()
       project = create_project(%{title: "My Project", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       {:ok, _view, html} =
         view
@@ -284,9 +272,9 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       org = insert_organization()
       project = create_project(%{title: "Nav Test", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
 
-      assert {:error, {:live_redirect, %{to: "/operator/projects"}}} =
+      assert {:error, {:live_redirect, %{to: "/app/projects"}}} =
                view |> element("a", "Edit") |> render_click()
     end
   end
@@ -296,6 +284,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       {:ok, operator} =
         %OperatorAccount{}
         |> OperatorAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
           email: "agent-#{org.id}@example.com",
           password: "password123",
           role: "agent",
@@ -313,30 +302,30 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
 
       conn = put_operator_session(conn, operator.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, _view, html} = live(conn, ~p"/app/projects/#{project.id}")
 
       assert html =~ "Own Project"
     end
 
     test "org-scoped operator cannot view another organization's project", %{conn: conn} do
       org_a = insert_organization(name: "Org A")
-      org_b = insert_organization(name: "Org B")
+      org_b = insert_organization(name: "Org B", tenant_id: insert_tenant().id)
       foreign_project = create_project(%{title: "Foreign Project", organization_id: org_b.id})
       operator = insert_scoped_operator(org_a)
 
       conn = put_operator_session(conn, operator.id)
 
       {:error, {:live_redirect, %{to: redirect_path}}} =
-        live(conn, ~p"/operator/projects/#{foreign_project.id}")
+        live(conn, ~p"/app/projects/#{foreign_project.id}")
 
-      assert redirect_path == "/operator/projects"
+      assert redirect_path == "/app/projects"
     end
 
     test "redirects for non-integer project ids", %{conn: conn} do
       {:error, {:live_redirect, %{to: redirect_path}}} =
-        live(conn, ~p"/operator/projects/abc")
+        live(conn, ~p"/app/projects/abc")
 
-      assert redirect_path == "/operator/projects"
+      assert redirect_path == "/app/projects"
     end
   end
 
@@ -351,7 +340,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       foreign_task =
         create_task(%{title: "Foreign task", project_id: other_project.id, state: :open})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
 
       render_click(view, "cycle_task_state", %{"id" => to_string(foreign_task.id)})
 
@@ -366,7 +355,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       other_project = create_project(%{title: "Theirs", organization_id: other_org.id})
       foreign_task = create_task(%{title: "Foreign task", project_id: other_project.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
 
       render_click(view, "delete_task", %{"id" => to_string(foreign_task.id)})
 
@@ -377,7 +366,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLiveTest do
       org = insert_organization()
       project = create_project(%{title: "Mine", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects/#{project.id}")
+      {:ok, view, _html} = live(conn, ~p"/app/projects/#{project.id}")
 
       # Must not raise
       render_click(view, "cycle_task_state", %{"id" => "not-a-number"})

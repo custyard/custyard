@@ -1,13 +1,13 @@
 defmodule CustyardWeb.Operator.SlugsLive do
   @moduledoc """
-  Super-admin administration of the slug registry.
+  Tenant administrator administration of the slug registry.
 
   Lists every registry row (slug, status, anchor email, expiry, linked
   conversation) and releases claimed/confirmed rows back to available.
   Provisioned rows are refused — a provisioned slug is an organization's
   portal identity and is released only by organization deletion.
 
-  Mount is gated to super admins by the router live_session, and the
+  Mount is gated to tenant administrators by the router live_session, and the
   mutating event re-checks `Authorization.can_modify_settings?/1`
   (settings double-gate pattern). Every release writes a `:slug_released`
   audit event.
@@ -19,7 +19,7 @@ defmodule CustyardWeb.Operator.SlugsLive do
 
   alias Custyard.{AuditEvent, Authorization, Slug, Slugs}
 
-  @permission_error "Only super admins can release slugs"
+  @permission_error "Only tenant administrators can release slugs"
 
   @impl true
   def mount(_params, _session, socket) do
@@ -41,7 +41,7 @@ defmodule CustyardWeb.Operator.SlugsLive do
   end
 
   defp release_slug(socket, id) do
-    case Slugs.get_slug(id) do
+    case Slugs.get_slug(socket.assigns.current_scope, id) do
       nil ->
         {:noreply,
          socket
@@ -49,7 +49,7 @@ defmodule CustyardWeb.Operator.SlugsLive do
          |> load_slugs()}
 
       %Slug{} = slug ->
-        handle_release_result(socket, slug, Slugs.release(slug))
+        handle_release_result(socket, slug, Slugs.release(socket.assigns.current_scope, slug))
     end
   end
 
@@ -102,7 +102,7 @@ defmodule CustyardWeb.Operator.SlugsLive do
   end
 
   defp load_slugs(socket) do
-    assign(socket, :slugs, Slugs.list_slugs())
+    assign(socket, :slugs, Slugs.list_slugs(socket.assigns.current_scope))
   end
 
   @impl true
@@ -147,7 +147,7 @@ defmodule CustyardWeb.Operator.SlugsLive do
               </span>
               <.link
                 :if={slug.conversation_id}
-                navigate={~p"/operator/conversation/#{slug.conversation_id}"}
+                navigate={~p"/app/threads/#{slug.conversation_id}"}
                 class="text-indigo-600 dark:text-indigo-400 hover:underline"
                 data-testid={"operator-slug-conversation-#{slug.id}"}
               >

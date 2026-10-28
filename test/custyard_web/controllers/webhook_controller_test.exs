@@ -1,11 +1,14 @@
 defmodule CustyardWeb.WebhookControllerTest do
-  use CustyardWeb.ConnCase, async: true
+  use CustyardWeb.ConnCase, async: false
 
+  alias Custyard.Fixtures.EmailPayloads
   alias Custyard.InboundRoute
   alias Custyard.Repo
 
   import Custyard.Factory
-  import Custyard.Fixtures.EmailPayloads
+
+  import Custyard.Fixtures.EmailPayloads,
+    except: [standard_payload: 0, standard_payload: 1, reply_payload: 1]
 
   describe "routed/2 (token-based routing)" do
     setup do
@@ -36,14 +39,14 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       params = %{
         "from" => "alice@test.example.com",
-        "to" => "support@example.com",
+        "to" => "support+controller-test-token@inbound.test",
         "subject" => "Routed webhook test",
         "text" => "Test body via routed webhook",
         "headers" => %{
@@ -66,10 +69,10 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :slack
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       params = %{
         "type" => "url_verification",
@@ -84,7 +87,7 @@ defmodule CustyardWeb.WebhookControllerTest do
       assert response["challenge"] == "test-challenge-token"
     end
 
-    test "associates conversation with route's project when set", %{conn: conn} do
+    test "assigns a compatible channel project hint on new threads", %{conn: conn} do
       org = insert_organization()
       project = insert_project(organization_id: org.id)
       _contact = insert_contact(organization_id: org.id, email: "alice@test.example.com")
@@ -92,16 +95,20 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           project_id: project.id,
           route_type: :project,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
+
+      Repo.get_by!(Custyard.InboundChannel, inbound_route_id: route.id)
+      |> Ecto.Changeset.change(default_organization_id: org.id, default_project_id: project.id)
+      |> Repo.update!()
 
       params = %{
         "from" => "alice@test.example.com",
-        "to" => "support@example.com",
+        "to" => "support+controller-test-token@inbound.test",
         "subject" => "Project webhook test",
         "text" => "Test body for project routing",
         "headers" => %{
@@ -136,10 +143,10 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       {:ok, org: org, route: route}
     end
@@ -192,7 +199,10 @@ defmodule CustyardWeb.WebhookControllerTest do
     } do
       response =
         conn
-        |> post(~p"/api/webhook/route/#{route.callback_token}", html_only_payload())
+        |> post(
+          ~p"/api/webhook/route/#{route.callback_token}",
+          html_only_payload(%{"to" => "support+controller-test-token@inbound.test"})
+        )
         |> json_response(200)
 
       assert response["status"] == "ok"
@@ -225,14 +235,14 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       params = %{
         "from" => "alice@test.example.com",
-        "to" => "support@example.com",
+        "to" => "support+controller-test-token@inbound.test",
         "subject" => "No signature test",
         "text" => "Test body without signature",
         "headers" => %{
@@ -257,10 +267,10 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       response =
         conn
@@ -283,14 +293,14 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       params = %{
         "from" => "alice@test.example.com",
-        "to" => "support@example.com",
+        "to" => "support+controller-test-token@inbound.test",
         "subject" => "Signed test",
         "text" => "Test body with signature",
         "headers" => %{
@@ -323,14 +333,12 @@ defmodule CustyardWeb.WebhookControllerTest do
 
       {:ok, route} =
         %InboundRoute{}
-        |> InboundRoute.changeset(%{organization_id: org.id, source: :zendesk})
-        |> Repo.insert()
+        |> InboundRoute.changeset(%{tenant_id: org.tenant_id, source: :zendesk})
+        |> insert_configured_route()
 
       secret = "zendesk-route-secret"
 
-      Application.put_env(:custyard, :webhook_secrets, %{
-        zendesk: %{route.callback_token => secret}
-      })
+      route = put_route_secret(route, secret)
 
       params = %{
         "ticket" => %{
@@ -366,10 +374,10 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       params = %{"from" => "alice@test.example.com"}
       raw_body = Jason.encode!(params)
@@ -404,10 +412,10 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       # Payload with required from field but will fail on message creation
       # due to missing conversation data
@@ -433,14 +441,15 @@ defmodule CustyardWeb.WebhookControllerTest do
       {:ok, route} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           source: :lettermint
         })
-        |> Repo.insert()
+        |> insert_configured_route()
 
       # Valid from but empty subject (should succeed and create conversation)
       params = %{
         "from" => "test@example.com",
+        "to" => "support+controller-test-token@inbound.test",
         "subject" => "Test subject",
         "text" => "Test body",
         "headers" => %{
@@ -471,8 +480,8 @@ defmodule CustyardWeb.WebhookControllerTest do
 
       {:ok, route} =
         %InboundRoute{}
-        |> InboundRoute.changeset(%{organization_id: org.id, source: source})
-        |> Repo.insert()
+        |> InboundRoute.changeset(%{tenant_id: org.tenant_id, source: source})
+        |> insert_configured_route()
 
       route
     end
@@ -515,6 +524,7 @@ defmodule CustyardWeb.WebhookControllerTest do
       route = authenticated_route(:lettermint)
 
       params = %{
+        "to" => "support+controller-test-token@inbound.test",
         "subject" => "No sender",
         "text" => "hello",
         "headers" => %{
@@ -536,6 +546,7 @@ defmodule CustyardWeb.WebhookControllerTest do
 
       params = %{
         "from" => "alice@example.com",
+        "to" => "support+controller-test-token@inbound.test",
         "subject" => ["not", "a", "string"],
         "text" => "",
         "html" => "<p>Only HTML</p>",
@@ -565,8 +576,8 @@ defmodule CustyardWeb.WebhookControllerTest do
 
       {:ok, route} =
         %InboundRoute{}
-        |> InboundRoute.changeset(%{organization_id: org.id, source: :lettermint})
-        |> Repo.insert()
+        |> InboundRoute.changeset(%{tenant_id: org.tenant_id, source: :lettermint})
+        |> insert_configured_route()
 
       %{org: org, route: route}
     end
@@ -580,9 +591,9 @@ defmodule CustyardWeb.WebhookControllerTest do
           "route" => "support-inbox",
           "message_id" => "f47ac10b-#{System.unique_integer([:positive])}",
           "from" => %{"email" => "customer@example.com", "name" => "John Doe"},
-          "to" => [%{"email" => "support@acme.com", "name" => nil}],
+          "to" => [%{"email" => "support+controller-test-token@inbound.test", "name" => nil}],
           "cc" => [],
-          "recipient" => "support@acme.com",
+          "recipient" => "support+controller-test-token@inbound.test",
           "subject" => "Question about my order",
           "body" => %{"text" => "Hi, where is my order?", "html" => nil},
           "headers" => [
@@ -657,7 +668,7 @@ defmodule CustyardWeb.WebhookControllerTest do
       assert Repo.reload!(channel).last_received_at == nil
     end
 
-    test "a verification notice on a legacy route is acknowledged as a provider notice", %{
+    test "a verification notice on a configured route is acknowledged as a provider notice", %{
       conn: conn,
       route: route
     } do
@@ -676,5 +687,56 @@ defmodule CustyardWeb.WebhookControllerTest do
       assert response == %{"status" => "ignored", "reason" => "provider_notice"}
       assert Repo.aggregate(Custyard.Conversation, :count) == 0
     end
+  end
+
+  test "direct email routes cannot use the unsigned internal adapter over HTTP", %{conn: conn} do
+    route = insert_inbound_route(tenant_id: factory_tenant_id(), source: :email)
+    route = put_route_secret(route, "stored-secret")
+
+    assert conn
+           |> post("/api/webhook/route/#{route.callback_token}", standard_payload())
+           |> json_response(401) ==
+             %{"status" => "error", "reason" => "unauthorized"}
+
+    assert Repo.aggregate(Custyard.Conversation, :count) == 0
+  end
+
+  defp insert_configured_route(changeset) do
+    with {:ok, route} <- Repo.insert(changeset) do
+      secret = Application.get_env(:custyard, :webhook_secrets, %{})[route.source]
+      route = if is_binary(secret), do: put_route_secret(route, secret), else: route
+
+      if route.source in [:lettermint, :email] do
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          tenant_id: route.tenant_id,
+          public_address: "support@example.test",
+          ingress_token: "controller-test-token",
+          state: :active
+        )
+      end
+
+      {:ok, route}
+    end
+  end
+
+  defp standard_payload(overrides \\ %{}) do
+    EmailPayloads.standard_payload(overrides)
+    |> Map.put("to", "support+controller-test-token@inbound.test")
+  end
+
+  defp reply_payload(id) do
+    EmailPayloads.reply_payload(id)
+    |> Map.put("to", "support+controller-test-token@inbound.test")
+  end
+
+  defp put_route_secret(route, secret) do
+    {:ok, encrypted} =
+      Custyard.Credentials.encrypt(
+        secret,
+        "inbound_route:#{route.tenant_id}:#{route.id}:webhook_secret"
+      )
+
+    route |> Ecto.Changeset.change(webhook_secret_ciphertext: encrypted) |> Repo.update!()
   end
 end

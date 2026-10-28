@@ -43,7 +43,7 @@ defmodule CustyardWeb.TenantBrandingTest do
     old_url = Uploads.save_logo(source, "old.png")
     {:ok, _} = Tenants.update_tenant(c.tenant, %{logo_url: old_url})
     old_path = disk_path(c.dir, old_url)
-    {:ok, view, html} = live(c.conn, "/operator/tenant")
+    {:ok, view, html} = live(c.conn, "/app/settings/workspace")
     assert html =~ ~s(content="Atlas Support")
     refute html =~ "/favicon.svg"
     refute has_element?(view, "input[name='tenant[logo_url]']")
@@ -77,7 +77,7 @@ defmodule CustyardWeb.TenantBrandingTest do
   end
 
   test "logo upload rejects unsupported files and shows actionable help", c do
-    {:ok, view, _} = live(c.conn, "/operator/tenant")
+    {:ok, view, _} = live(c.conn, "/app/settings/workspace")
 
     upload =
       file_input(view, "#tenant-settings", :logo, [
@@ -103,25 +103,25 @@ defmodule CustyardWeb.TenantBrandingTest do
     refute html =~ "site.webmanifest"
     refute html =~ ">Custyard<"
 
-    html = anonymous |> get("/operator/login") |> html_response(200)
+    html = anonymous |> get("/app/login") |> html_response(200)
     assert html =~ "Atlas Support"
     assert html =~ "Staff sign in"
     assert html =~ ~s(src="/uploads/logos/atlas.png")
     refute html =~ "/images/og-image.png"
   end
 
-  test "a tenant without a logo stays neutral while the default home keeps its assets", c do
+  test "every tenant without a logo uses neutral workspace branding", c do
     html =
       %{build_conn() | host: Tenants.host(c.tenant)}
-      |> get("/operator/login")
+      |> get("/app/login")
       |> html_response(200)
 
     assert html =~ ~s(href="data:,")
     refute html =~ "og:image"
     {:ok, _, html} = live(build_conn(), "/")
-    assert html =~ "Welcome to Custyard"
-    assert html =~ "/favicon.svg"
-    assert html =~ "/images/og-image.png"
+    assert html =~ "Welcome to Tenant"
+    refute html =~ "/favicon.svg"
+    refute html =~ "/images/og-image.png"
   end
 
   defp upload_logo(view, filename) do

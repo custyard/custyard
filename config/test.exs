@@ -86,3 +86,7 @@ config :custyard,
   start_imap_pollers: false,
   imap_client: Custyard.Email.ImapClient.Stub,
   imap_allow_private_hosts: true
+
+# Exercise tenant credentials through the real provider adapter while keeping
+# delivery inside Swoosh's test transport.
+config :swoosh, :api_client, Custyard.TestTenantMailClient

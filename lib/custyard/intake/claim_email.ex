@@ -45,7 +45,7 @@ defmodule Custyard.Intake.ClaimEmail do
 
     with {:ok, delivery} <-
            EmailBranding.delivery_settings(EmailBranding.tenant_id_for_claim(slug)) do
-      case RateLimit.check_rate(:claim_email_send, slug.email) do
+      case RateLimit.check_rate(:claim_email_send, {slug.tenant_id, slug.email}) do
         {:deny, _retry_after_ms} ->
           {:error, :rate_limited}
 

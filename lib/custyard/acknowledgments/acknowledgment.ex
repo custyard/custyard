@@ -18,15 +18,16 @@ defmodule Custyard.Acknowledgments.Acknowledgment do
     # Keep the exact serialized source time as evidence.
     field :acknowledged_at, :string
     field :received_at, :utc_datetime_usec
+    belongs_to :tenant, Custyard.Tenant
     belongs_to :organization, Custyard.Organization
   end
 
-  @fields ~w(schema_version source submission_id source_organization_id actor_id actor_role actor_type statement_key statement_version statement_text statement_hash acknowledged_at received_at organization_id)a
+  @fields ~w(tenant_id schema_version source submission_id source_organization_id actor_id actor_role actor_type statement_key statement_version statement_text statement_hash acknowledged_at received_at organization_id)a
   def changeset(record, attrs) do
     record
     |> cast(attrs, @fields, empty_values: [])
     |> validate_required(@fields)
-    |> unique_constraint([:source, :submission_id])
+    |> unique_constraint([:tenant_id, :source, :submission_id])
     |> foreign_key_constraint(:organization_id)
   end
 end

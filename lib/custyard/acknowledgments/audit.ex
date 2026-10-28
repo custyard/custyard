@@ -14,11 +14,12 @@ defmodule Custyard.Acknowledgments.Audit do
   def actor?(channel), do: channel in @channels
 
   @doc "Inserts the row or raises, for use inside the transaction it audits."
-  def record!(event_type, actor, organization_id, payload) do
+  def record!(tenant_id, event_type, actor, organization_id, payload) do
     {channel, actor_fields} = actor_fields(actor)
 
     %AuditEvent{}
     |> AuditEvent.changeset(%{
+      tenant_id: tenant_id,
       event_type: event_type,
       source: channel,
       organization_id: organization_id,
@@ -31,8 +32,8 @@ defmodule Custyard.Acknowledgments.Audit do
   Inserts the row after a broker outcome that has already happened (or not),
   so a failed write is logged rather than turned into an error.
   """
-  def record(event_type, actor, organization_id, payload) do
-    record!(event_type, actor, organization_id, payload)
+  def record(tenant_id, event_type, actor, organization_id, payload) do
+    record!(tenant_id, event_type, actor, organization_id, payload)
   rescue
     error ->
       Logger.error("Failed to record #{event_type} audit event: #{Exception.message(error)}")

@@ -47,6 +47,7 @@ defmodule Custyard.Release.DsarTest do
       )
 
     Repo.insert!(%MessageAttachment{
+      tenant_id: sent.tenant_id,
       message_id: sent.id,
       position: 0,
       descriptor_hash: String.duplicate("a", 64),
@@ -65,6 +66,7 @@ defmodule Custyard.Release.DsarTest do
     route = insert_inbound_route(organization_id: org.id)
 
     Repo.insert!(%InboundChannelRejection{
+      tenant_id: org.tenant_id,
       organization_id: org.id,
       inbound_route_id: route.id,
       classification: :no_channel,

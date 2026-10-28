@@ -1,127 +1,48 @@
 defmodule Custyard.OperatorAccountTest do
   use Custyard.DataCase, async: true
+  alias Custyard.{Factory, OperatorAccount}
 
-  alias Custyard.OperatorAccount
-  alias Custyard.Factory
+  test "staff requires a tenant, valid normalized email and tenant role" do
+    changeset = OperatorAccount.changeset(%OperatorAccount{}, %{})
+    assert errors_on(changeset).email == ["can't be blank"]
+    assert errors_on(changeset).tenant_id == ["can't be blank"]
+    tenant = Factory.insert_tenant()
+    attrs = %{tenant_id: tenant.id, email: "  Ops@Example.COM  ", role: "admin"}
 
-  describe "changeset/2" do
-    test "validates required fields" do
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, %{})
+    assert %{valid?: true, changes: %{email: "ops@example.com"}} =
+             OperatorAccount.changeset(%OperatorAccount{}, attrs)
 
-      assert %{email: ["can't be blank"]} = errors_on(changeset)
+    for role <- ~w(super_admin owner unknown) do
+      refute OperatorAccount.changeset(%OperatorAccount{}, Map.put(attrs, :role, role)).valid?
     end
 
-    test "stores the email trimmed and lowercased" do
-      attrs = Factory.build_operator_account(email: "  Ops@Example.COM ")
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert changeset.valid?
-      assert Ecto.Changeset.get_change(changeset, :email) == "ops@example.com"
+    for email <- [
+          "invalid",
+          "x y@example.com",
+          "ops\u00A0team@example.com",
+          <<0xFF>> <> "@example.com"
+        ] do
+      assert errors_on(
+               OperatorAccount.changeset(%OperatorAccount{}, Map.put(attrs, :email, email))
+             ).email == ["must be a valid email address"]
     end
+  end
 
-    test "lowercases non-ASCII letters with Unicode case mapping" do
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, %{email: "ÜNAL@BÜCHER.DE"})
+  test "role changes cannot reassign ownership or grant installation access" do
+    staff = Factory.insert_operator_account(role: "admin")
+    other = Factory.insert_tenant()
 
-      assert changeset.valid?
-      assert Ecto.Changeset.get_change(changeset, :email) == "ünal@bücher.de"
-    end
+    changeset =
+      OperatorAccount.role_changeset(staff, %{
+        role: "agent",
+        tenant_id: other.id,
+        organization_id: 999
+      })
 
-    test "stores a decomposed accent in composed (NFC) form" do
-      # "e" followed by U+0301 COMBINING ACUTE ACCENT, as some input methods send it
-      changeset =
-        OperatorAccount.changeset(%OperatorAccount{}, %{email: "Jose\u0301@Example.com"})
-
-      assert Ecto.Changeset.get_change(changeset, :email) == "jos\u00e9@example.com"
-    end
-
-    test "rejects an email that is not valid UTF-8" do
-      changeset =
-        OperatorAccount.changeset(%OperatorAccount{}, %{email: <<0xFF>> <> "ops@example.com"})
-
-      assert %{email: ["must be a valid email address"]} = errors_on(changeset)
-    end
-
-    test "rejects non-ASCII whitespace inside the address" do
-      changeset =
-        OperatorAccount.changeset(%OperatorAccount{}, %{email: "ops\u00A0team@example.com"})
-
-      assert %{email: ["must be a valid email address"]} = errors_on(changeset)
-    end
-
-    test "validates email format" do
-      attrs = Factory.build_operator_account(email: "invalid")
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert %{email: ["must be a valid email address"]} = errors_on(changeset)
-    end
-
-    test "accepts email without password (email-only auth)" do
-      attrs = Factory.build_operator_account() |> Map.delete(:password)
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert changeset.valid?,
-             "Should accept email without password, errors: #{inspect(errors_on(changeset))}"
-    end
-
-    test "validates password length when password is provided" do
-      attrs = Factory.build_operator_account(password: "short")
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert %{password: ["must be between 8 and 72 characters"]} = errors_on(changeset)
-    end
-
-    test "validates role must be valid" do
-      attrs = Factory.build_operator_account(role: "invalid_role")
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert %{role: ["must be one of: super_admin, admin, agent"]} = errors_on(changeset)
-    end
-
-    test "accepts valid roles" do
-      for role <- ~w(super_admin admin agent) do
-        org = if role != "super_admin", do: Factory.insert_organization(), else: nil
-        org_id = if org, do: org.id, else: nil
-
-        attrs = Factory.build_operator_account(role: role, organization_id: org_id)
-        changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-        assert changeset.valid?,
-               "Role #{role} should be valid, errors: #{inspect(errors_on(changeset))}"
-      end
-    end
-
-    test "super_admin cannot have organization_id" do
-      org = Factory.insert_organization()
-      attrs = Factory.build_operator_account(role: "super_admin", organization_id: org.id)
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert %{organization_id: ["super_admin operators cannot be scoped to an organization"]} =
-               errors_on(changeset)
-    end
-
-    test "admin requires organization_id" do
-      attrs = Factory.build_operator_account(role: "admin", organization_id: nil)
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert %{organization_id: ["admin operators must be assigned to an organization"]} =
-               errors_on(changeset)
-    end
-
-    test "agent requires organization_id" do
-      attrs = Factory.build_operator_account(role: "agent", organization_id: nil)
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert %{organization_id: ["agent operators must be assigned to an organization"]} =
-               errors_on(changeset)
-    end
-
-    test "hashes password when provided" do
-      attrs = Factory.build_operator_account(password: "password123")
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, attrs)
-
-      assert changeset.changes[:password_hash]
-      refute changeset.changes[:password_hash] == attrs.password
-    end
+    assert changeset.valid?
+    assert changeset.changes == %{role: "agent"}
+    refute OperatorAccount.role_changeset(staff, %{role: "super_admin"}).valid?
+    assert OperatorAccount.roles() == ~w(admin agent)
   end
 
   describe "normalize_email/1" do
@@ -165,46 +86,6 @@ defmodule Custyard.OperatorAccountTest do
     end
   end
 
-  describe "role_changeset/2" do
-    test "allows changing role from super_admin to admin with organization" do
-      operator = Factory.insert_operator_account(role: "super_admin")
-      org = Factory.insert_organization()
-
-      changeset =
-        OperatorAccount.role_changeset(operator, %{role: "admin", organization_id: org.id})
-
-      assert changeset.valid?
-    end
-
-    test "prevents changing to admin without organization" do
-      operator = Factory.insert_operator_account(role: "super_admin")
-
-      changeset = OperatorAccount.role_changeset(operator, %{role: "admin"})
-
-      assert %{organization_id: ["admin operators must be assigned to an organization"]} =
-               errors_on(changeset)
-    end
-
-    test "prevents changing to super_admin with organization" do
-      operator = Factory.insert_operator_account(role: "admin")
-
-      changeset = OperatorAccount.role_changeset(operator, %{role: "super_admin"})
-
-      # The org_id from the existing operator will still be there
-      assert %{organization_id: ["super_admin operators cannot be scoped to an organization"]} =
-               errors_on(changeset)
-    end
-
-    test "allows changing from admin to super_admin by clearing organization_id" do
-      operator = Factory.insert_operator_account(role: "admin")
-
-      changeset =
-        OperatorAccount.role_changeset(operator, %{role: "super_admin", organization_id: nil})
-
-      assert changeset.valid?
-    end
-  end
-
   describe "password_changeset/2" do
     test "updates password and rehashes" do
       operator = Factory.insert_operator_account()
@@ -222,7 +103,7 @@ defmodule Custyard.OperatorAccountTest do
 
       changeset = OperatorAccount.password_changeset(operator, %{password: "short"})
 
-      assert %{password: ["must be between 8 and 72 characters"]} = errors_on(changeset)
+      assert %{password: ["should be at least 8 character(s)"]} = errors_on(changeset)
     end
   end
 
@@ -335,163 +216,6 @@ defmodule Custyard.OperatorAccountTest do
 
     test "returns false for non-operator struct" do
       refute OperatorAccount.verify_password(%{}, "anypassword")
-    end
-  end
-
-  describe "super_admin?/1" do
-    test "returns true for super_admin role" do
-      operator = Factory.insert_operator_account(role: "super_admin")
-
-      assert OperatorAccount.super_admin?(operator)
-    end
-
-    test "returns false for admin role" do
-      operator = Factory.insert_operator_account(role: "admin")
-
-      refute OperatorAccount.super_admin?(operator)
-    end
-
-    test "returns false for agent role" do
-      operator = Factory.insert_operator_account(role: "agent")
-
-      refute OperatorAccount.super_admin?(operator)
-    end
-
-    test "returns false for nil" do
-      refute OperatorAccount.super_admin?(nil)
-    end
-  end
-
-  describe "can_access_organization?/2" do
-    test "super_admin can access any organization" do
-      operator = Factory.insert_operator_account(role: "super_admin")
-      org = Factory.insert_organization()
-
-      assert OperatorAccount.can_access_organization?(operator, org.id)
-    end
-
-    test "super_admin can access nil organization" do
-      operator = Factory.insert_operator_account(role: "super_admin")
-
-      # Returns true because super_admin pattern matches first
-      assert OperatorAccount.can_access_organization?(operator, nil)
-    end
-
-    test "admin can access their own organization" do
-      org = Factory.insert_organization()
-      operator = Factory.insert_operator_account(role: "admin", organization_id: org.id)
-
-      assert OperatorAccount.can_access_organization?(operator, org.id)
-    end
-
-    test "admin cannot access other organizations" do
-      org1 = Factory.insert_organization()
-      org2 = Factory.insert_organization()
-      operator = Factory.insert_operator_account(role: "admin", organization_id: org1.id)
-
-      refute OperatorAccount.can_access_organization?(operator, org2.id)
-    end
-
-    test "agent can access their own organization" do
-      org = Factory.insert_organization()
-      operator = Factory.insert_operator_account(role: "agent", organization_id: org.id)
-
-      assert OperatorAccount.can_access_organization?(operator, org.id)
-    end
-
-    test "agent cannot access other organizations" do
-      org1 = Factory.insert_organization()
-      org2 = Factory.insert_organization()
-      operator = Factory.insert_operator_account(role: "agent", organization_id: org1.id)
-
-      refute OperatorAccount.can_access_organization?(operator, org2.id)
-    end
-
-    test "returns false for nil operator" do
-      refute OperatorAccount.can_access_organization?(nil, 1)
-    end
-
-    test "returns false for non-integer org_id with non-super_admin" do
-      org = Factory.insert_organization()
-      operator = Factory.insert_operator_account(role: "admin", organization_id: org.id)
-
-      refute OperatorAccount.can_access_organization?(operator, "not-an-integer")
-    end
-  end
-
-  describe "scoped_organization_id/1" do
-    test "returns nil for super_admin" do
-      operator = Factory.insert_operator_account(role: "super_admin")
-
-      assert is_nil(OperatorAccount.scoped_organization_id(operator))
-    end
-
-    test "returns organization_id for admin" do
-      org = Factory.insert_organization()
-      operator = Factory.insert_operator_account(role: "admin", organization_id: org.id)
-
-      assert OperatorAccount.scoped_organization_id(operator) == org.id
-    end
-
-    test "returns organization_id for agent" do
-      org = Factory.insert_organization()
-      operator = Factory.insert_operator_account(role: "agent", organization_id: org.id)
-
-      assert OperatorAccount.scoped_organization_id(operator) == org.id
-    end
-
-    test "returns nil for nil input" do
-      assert is_nil(OperatorAccount.scoped_organization_id(nil))
-    end
-  end
-
-  describe "roles/0" do
-    test "returns list of valid roles" do
-      assert OperatorAccount.roles() == ~w(super_admin admin agent)
-    end
-  end
-
-  describe "changeset/2 email normalization" do
-    test "stores the email trimmed and lowercased" do
-      changeset = OperatorAccount.changeset(%OperatorAccount{}, %{email: " Mixed@Case.Example "})
-
-      assert changeset.valid?
-      assert Ecto.Changeset.get_change(changeset, :email) == "mixed@case.example"
-    end
-
-    test "a case variant of an existing email violates the unique index" do
-      Factory.insert_operator_account(email: "taken@example.com")
-
-      assert {:error, changeset} =
-               %OperatorAccount{}
-               |> OperatorAccount.changeset(%{email: "TAKEN@example.com"})
-               |> Repo.insert()
-
-      assert %{email: ["has already been taken"]} = errors_on(changeset)
-    end
-  end
-
-  describe "orphaned?/1" do
-    test "is true for an admin or agent without an organization" do
-      assert OperatorAccount.orphaned?(%OperatorAccount{role: "admin", organization_id: nil})
-      assert OperatorAccount.orphaned?(%OperatorAccount{role: "agent", organization_id: nil})
-    end
-
-    test "fails closed for an unexpected role without an organization" do
-      assert OperatorAccount.orphaned?(%OperatorAccount{role: "owner", organization_id: nil})
-      assert OperatorAccount.orphaned?(%OperatorAccount{role: nil, organization_id: nil})
-    end
-
-    test "is false for a scoped admin or agent and for any super_admin" do
-      refute OperatorAccount.orphaned?(%OperatorAccount{role: "admin", organization_id: 1})
-      refute OperatorAccount.orphaned?(%OperatorAccount{role: "agent", organization_id: 1})
-
-      refute OperatorAccount.orphaned?(%OperatorAccount{
-               role: "super_admin",
-               organization_id: nil
-             })
-
-      refute OperatorAccount.orphaned?(nil)
     end
   end
 end

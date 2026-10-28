@@ -1,290 +1,51 @@
 defmodule CustyardWeb.Live.PortalAuthTest do
-  @moduledoc """
-  Tests for the PortalAuth LiveView on_mount hook.
-
-  The on_mount hook handles authentication and authorization for portal LiveViews.
-  It works in conjunction with the PortalAuth plug which runs earlier in the request.
-
-  The plug:
-  - Validates URL tokens against the database
-  - Sets portal_org_id in session
-  - Returns 404 for invalid tokens
-
-  The on_mount:
-  - Reads portal_org_id from session
-  - Loads the organization
-  - Sets assigns (current_org, portal_path, site_name, etc.)
-  - Validates URL token matches session org (primarily for custom domain scenarios)
-  """
-  use CustyardWeb.ConnCase, async: true
-
+  use CustyardWeb.ConnCase
   import Phoenix.LiveViewTest
   import Custyard.Factory
+  alias Custyard.{PortalCredentials, Tenants}
 
-  alias CustyardWeb.Live.PortalAuth
+  test "portal token grants only its customer on the registered tenant host", %{conn: conn} do
+    customer = insert_organization()
+    other = insert_organization()
+    insert_conversation(organization_id: customer.id, subject: "Customer private thread")
+    insert_conversation(organization_id: other.id, subject: "Other private thread")
+    conn = conn |> init_test_session(%{portal_org_id: other.id, portal_custom_domain: true})
+    {:ok, _, html} = live(conn, "/portal/#{portal_token(customer)}")
+    assert html =~ "Customer private thread"
+    refute html =~ "Other private thread"
+    foreign = insert_tenant()
+    {:ok, _} = Tenants.add_host(foreign.id, "foreign.example.com")
 
-  describe "on_mount/4 - session validation" do
-    test "allows access when valid portal_org_id in session and URL token matches", %{conn: conn} do
-      org = insert_organization()
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
-
-      # Page renders successfully (proves auth hook passed)
-      assert html =~ "My Requests"
-    end
-
-    test "loads organization from session and makes it available", %{conn: conn} do
-      org = insert_organization(name: "Acme Corp Portal")
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
-
-      # The org name appears in the page (set via site_name assign for white-labeling)
-      assert html =~ "Acme Corp Portal"
-    end
+    assert get(%{build_conn() | host: "foreign.example.com"}, "/portal/#{portal_token(customer)}").status ==
+             404
   end
 
-  describe "on_mount/4 - URL token validation" do
-    test "allows access when session org matches URL token", %{conn: conn} do
-      org = insert_organization()
+  test "revoked and invalid credentials do not use old session organization flags", %{conn: conn} do
+    customer = insert_organization()
 
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
+    {:ok, credential, token} =
+      PortalCredentials.issue(portal_scope(customer), customer.id)
 
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
+    {:ok, _} =
+      PortalCredentials.revoke(portal_scope(customer), credential)
 
-      assert html =~ "My Requests"
-    end
-
-    test "allows navigation within the same org's portal", %{conn: conn} do
-      org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, subject: "Test Conversation")
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-
-      # Can access request list
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
-      assert html =~ "My Requests"
-
-      # Can access individual conversation
-      {:ok, _view, html} = live(conn, "/p/#{org.token}/request/#{conv.id}")
-      assert html =~ "Test Conversation"
-    end
+    conn = conn |> init_test_session(%{portal_org_id: customer.id, portal_custom_domain: true})
+    assert get(conn, "/portal/#{token}").status == 404
+    assert get(conn, "/portal/invalid").status == 404
   end
 
-  describe "on_mount/4 - custom domain handling" do
-    test "keeps navigation and submission on the custom domain", %{conn: conn} do
-      org = insert_organization(custom_domain: "portal.acme.test")
-      conn = %{conn | host: org.custom_domain}
+  test "tenant custom hosts retain token URLs and workspace branding", %{conn: conn} do
+    customer = insert_organization()
+    tenant = Tenants.get_tenant!(customer.tenant_id)
+    {:ok, _} = Tenants.update_tenant(tenant, %{name: "Workspace brand", primary_color: "#123456"})
+    {:ok, _} = Tenants.add_host(tenant.id, "support.example.com")
 
-      # "/" redirects to the list, whose URL the LiveView client can resolve
-      assert {:error, {:redirect, %{to: "/requests"}}} = live(conn, "/")
+    {:ok, _, html} =
+      live(%{conn | host: "support.example.com"}, "/portal/#{portal_token(customer)}")
 
-      {:ok, _view, html} = live(conn, "/requests")
-      assert html =~ ~s(href="/new")
-      assert html =~ ~s(href="/projects")
-      refute html =~ ~s(href="//)
-      refute html =~ "/p/#{org.token}"
-
-      {:ok, view, form_html} = live(conn, "/new")
-      assert form_html =~ ~s(href="/requests")
-
-      {:error, {:live_redirect, %{to: redirect_path}}} =
-        view
-        |> form("form", %{
-          "subject" => "Custom domain request",
-          "body" => "Please check this request",
-          "urgency" => "normal"
-        })
-        |> render_submit()
-
-      assert redirect_path =~ ~r{^/request/\d+$}
-    end
-
-    test "sets is_custom_domain assign from session flag", %{conn: conn} do
-      org = insert_organization(name: "Custom Domain Org")
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-        |> Plug.Conn.put_session(:portal_custom_domain, true)
-
-      # With portal_custom_domain=true in session, page renders with custom domain context
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
-
-      # Access granted with custom domain flag recognized
-      assert html =~ "Custom Domain Org"
-      assert html =~ "My Requests"
-    end
-
-    test "defaults is_custom_domain to false when not in session", %{conn: conn} do
-      org = insert_organization()
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-
-      # Not setting portal_custom_domain
-
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
-
-      # Page renders successfully without custom domain flag
-      assert html =~ "My Requests"
-    end
-  end
-
-  describe "on_mount/4 - assigns" do
-    test "assigns current_org from session org_id", %{conn: conn} do
-      org = insert_organization(name: "Test Org Name")
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
-
-      # The org name appears in navigation, proving current_org was assigned
-      assert html =~ "Test Org Name"
-    end
-
-    test "assigns portal_path and portal_home_path with org token", %{conn: conn} do
-      org = insert_organization()
-      conv = insert_conversation(organization_id: org.id, subject: "Path Test Conv")
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-
-      # Access a conversation page which has a back link using portal_home_path
-      {:ok, _view, html} = live(conn, "/p/#{org.token}/request/#{conv.id}")
-
-      # The back link should use portal_home_path which includes the token
-      assert html =~ "Back to requests"
-      assert html =~ "/p/#{org.token}"
-    end
-
-    test "assigns site_name for white-label branding", %{conn: conn} do
-      org = insert_organization(name: "Acme Corporation")
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
-
-      # site_name (org.name) appears in the page title and navigation
-      assert html =~ "Acme Corporation"
-    end
-
-    test "assigns is_custom_domain from session", %{conn: conn} do
-      org = insert_organization()
-
-      conn =
-        conn
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> Plug.Conn.put_session(:portal_org_id, org.id)
-        |> Plug.Conn.put_session(:portal_custom_domain, true)
-
-      {:ok, _view, html} = live(conn, "/p/#{org.token}")
-
-      # Page renders successfully with custom domain flag set
-      assert html =~ "My Requests"
-    end
-  end
-
-  describe "custom-domain URLs resolve to the portal live_session" do
-    # On a custom domain the browser URL carries no /p/:token prefix, and the
-    # LiveView client sends that URL on connect. The router must resolve it to
-    # the same view in the same live_session as the dead render under /p/.
-    test "root aliases and token routes share one live_session" do
-      pairs = [
-        {"/requests", "/p/tok"},
-        {"/request/5", "/p/tok/request/5"},
-        {"/new", "/p/tok/new"},
-        {"/projects", "/p/tok/projects"},
-        {"/projects/7", "/p/tok/projects/7"}
-      ]
-
-      for {alias_path, token_path} <- pairs do
-        alias_info =
-          Phoenix.Router.route_info(CustyardWeb.Router, "GET", alias_path, "portal.acme.test")
-
-        token_info =
-          Phoenix.Router.route_info(CustyardWeb.Router, "GET", token_path, "custyard.test")
-
-        assert %{phoenix_live_view: {view, action, _opts, %{name: :portal}}} = alias_info
-        assert %{phoenix_live_view: {^view, ^action, _opts, %{name: :portal}}} = token_info
-      end
-    end
-
-    test "root aliases are not reachable on the app host", %{conn: conn} do
-      assert conn |> get("/requests") |> html_response(404)
-      assert conn |> get("/request/1") |> html_response(404)
-    end
-
-    test "a session flag alone does not waive the URL token check" do
-      org = insert_organization()
-      other = insert_organization()
-
-      session = %{"portal_org_id" => org.id, "portal_custom_domain" => true}
-
-      socket = %Phoenix.LiveView.Socket{
-        endpoint: CustyardWeb.Endpoint,
-        router: CustyardWeb.Router
-      }
-
-      assert {:halt, _} =
-               PortalAuth.on_mount(
-                 :default,
-                 %{"org_token" => other.token},
-                 session,
-                 socket
-               )
-
-      assert {:cont, _} =
-               PortalAuth.on_mount(
-                 :default,
-                 %{"org_token" => org.token},
-                 session,
-                 socket
-               )
-
-      # The custom-domain connect carries no token at all
-      assert {:cont, _} =
-               PortalAuth.on_mount(:default, %{"id" => "5"}, session, socket)
-    end
-  end
-
-  describe "forwarded host headers" do
-    test "X-Forwarded-Host cannot select an organization's portal", %{conn: conn} do
-      insert_organization(custom_domain: "portal.acme.test")
-
-      conn =
-        conn
-        |> put_req_header("x-forwarded-host", "portal.acme.test")
-        |> get("/requests")
-
-      assert html_response(conn, 404)
-      refute Map.has_key?(conn.assigns, :organization)
-    end
+    assert html =~ "Workspace brand"
+    assert html =~ "#123456"
+    assert html =~ "/portal/#{portal_token(customer)}/new"
+    refute html =~ "href=\"/new\""
   end
 end

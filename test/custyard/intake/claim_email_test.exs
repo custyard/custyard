@@ -7,12 +7,13 @@ defmodule Custyard.Intake.ClaimEmailTest do
 
   alias Custyard.Auth.Token
   alias Custyard.Intake.ClaimEmail
-  alias Custyard.{RateLimit, Settings, Slug, Slugs}
+  alias Custyard.{RateLimit, Slug, Slugs}
 
-  @confirm_url "http://localhost/claim/test-confirmation-token"
-  @conversation_url "http://localhost/c/test-access-token"
+  @confirm_url "http://localhost/claims/test-confirmation-token"
+  @conversation_url "http://localhost/threads/test-access-token"
 
   setup do
+    configure_tenant_email(factory_tenant_id())
     RateLimit.reset()
     original = Application.get_env(:custyard, :rate_limit_buckets)
 
@@ -53,10 +54,10 @@ defmodule Custyard.Intake.ClaimEmailTest do
         assert email.to == [{"", "buyer@example.com"}]
 
         {from_name, from_address} = email.from
-        assert from_name == "Custyard"
+        assert from_name == "Tenant"
 
         assert from_address ==
-                 Application.get_env(:custyard, :email_from_address, "noreply@custyard.local")
+                 "support@custyard.local"
 
         assert email.subject == "Confirm your claim: acme-corp"
 
@@ -96,7 +97,10 @@ defmodule Custyard.Intake.ClaimEmailTest do
     end
 
     test "uses the branding name as From display name, header-disciplined" do
-      {:ok, _} = Settings.update_branding(%{name: "Acme, Inc."})
+      Custyard.Tenants.get_tenant!(factory_tenant_id())
+      |> Ecto.Changeset.change(name: "Acme, Inc.")
+      |> Repo.update!()
+
       %{slug: slug} = claim!()
 
       assert {:ok, _} = send!(slug)
@@ -150,7 +154,7 @@ defmodule Custyard.Intake.ClaimEmailTest do
       assert_email_sent(fn email -> assert email.text_body =~ @confirm_url end)
 
       # And the rotated token still confirms.
-      assert {:ok, _} = Slugs.confirm(new_token)
+      assert {:ok, _} = Slugs.confirm(new_token, Custyard.Factory.factory_tenant_id())
     end
   end
 end

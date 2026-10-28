@@ -8,9 +8,9 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
 
   test "an open project list follows project and task changes", %{conn: conn} do
     org = insert_organization()
-    {:ok, view, _} = live(conn, "/p/#{org.token}/projects")
+    {:ok, view, _} = live(conn, "/portal/#{portal_token(org)}/projects")
 
-    {:ok, project} = Projects.create_project(build_project(organization_id: org.id))
+    {:ok, project} = Projects.create(portal_scope(org), build_project(organization_id: org.id))
     assert render(view) =~ project.title
 
     {:ok, task} = Projects.create_task(project, build_task(portal_visible: true))
@@ -19,14 +19,14 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
     {:ok, _} = Projects.update_task_state(task, :done)
     assert render(view) =~ "100%"
 
-    {:ok, _} = Projects.delete_project(project)
+    {:ok, _} = Projects.delete(portal_scope(org), project)
     refute render(view) =~ project.title
   end
 
   test "a new request appears in another open portal list", %{conn: conn} do
     org = insert_organization()
-    {:ok, list_view, _} = live(conn, "/p/#{org.token}")
-    {:ok, new_view, _} = live(conn, "/p/#{org.token}/new")
+    {:ok, list_view, _} = live(conn, "/portal/#{portal_token(org)}")
+    {:ok, new_view, _} = live(conn, "/portal/#{portal_token(org)}/new")
 
     new_view
     |> form("form", %{
@@ -41,12 +41,16 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
 
   test "operator task changes reach an open portal list after commit", %{conn: conn} do
     org = insert_organization()
-    {:ok, project} = Projects.create_project(build_project(organization_id: org.id))
-    {:ok, portal_view, _} = live(conn, "/p/#{org.token}/projects")
+    {:ok, project} = Projects.create(portal_scope(org), build_project(organization_id: org.id))
+    {:ok, portal_view, _} = live(conn, "/portal/#{portal_token(org)}/projects")
 
     operator =
       %OperatorAccount{}
-      |> OperatorAccount.changeset(%{email: "portal-task-operator@example.com"})
+      |> OperatorAccount.changeset(%{
+        role: "admin",
+        tenant_id: Process.get(:factory_tenant_id),
+        email: "portal-task-operator@example.com"
+      })
       |> Repo.insert!()
 
     operator_conn =
@@ -54,7 +58,7 @@ defmodule CustyardWeb.Portal.RealtimeTopicsTest do
       |> Phoenix.ConnTest.init_test_session(%{})
       |> put_operator_session(operator.id)
 
-    {:ok, operator_view, _} = live(operator_conn, "/operator/projects/#{project.id}")
+    {:ok, operator_view, _} = live(operator_conn, "/app/projects/#{project.id}")
 
     render_click(operator_view, "add_task", %{
       "title" => "Portal task",

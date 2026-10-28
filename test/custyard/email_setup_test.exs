@@ -136,7 +136,7 @@ defmodule Custyard.EmailSetupTest do
     fixture(:route, {:ok, remote_route("project-1")})
     assert {:ok, route} = EmailSetup.import_route(c.admin, c.tenant.id, "route-1")
     assert route.tenant_id == c.tenant.id
-    assert is_nil(route.organization_id)
+    refute Map.has_key?(route, :organization_id)
     assert {:ok, repeated} = EmailSetup.import_route(c.admin, c.tenant.id, "route-1")
     assert repeated.id == route.id
 
@@ -212,7 +212,10 @@ defmodule Custyard.EmailSetupTest do
       metadata: %{authentication: %{"dkim" => "pass", "dmarc" => "pass"}}
     }
 
-    assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+    channel =
+      insert_inbound_channel(tenant_id: c.tenant.id, inbound_route_id: route.id, state: :active)
+
+    assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
     assert_receive {:new_message, id}, 1_000
     assert id == conversation.id
 
@@ -243,6 +246,16 @@ defmodule Custyard.EmailSetupTest do
     assert {:error, :webhook_mismatch} =
              EmailSetup.bind_status_webhook(c.admin, c.tenant.id, "webhook-1", "status-secret")
 
+    for scope <- ["route", "team"] do
+      fixture(:webhook, {:ok, Map.put(remote, "scope", scope)})
+
+      assert {:error, :status_webhook_scope} =
+               EmailSetup.bind_status_webhook(c.admin, c.tenant.id, "webhook-1", "status-secret")
+
+      refute EmailSetup.connection(c.tenant.id).status_secret_ciphertext
+      assert EmailSetup.error_message(:status_webhook_scope) =~ "choose Projects"
+    end
+
     fixture(:webhook, {:ok, remote})
 
     assert {:ok, connection} =
@@ -263,7 +276,8 @@ defmodule Custyard.EmailSetupTest do
     assert {:ok, _} = EmailSetup.set_default_channel(c.admin, c.tenant.id, to_string(second.id))
     assert {:ok, %{id: id}} = EmailSetup.default_reply_channel(c.tenant.id)
     assert id == second.id
-    foreign = reply_channel(1, "foreign@example.com")
+    other_tenant = insert_tenant()
+    foreign = reply_channel(other_tenant.id, "foreign@example.com")
 
     assert {:error, :no_default_channel} =
              EmailSetup.set_default_channel(c.admin, c.tenant.id, foreign.id)

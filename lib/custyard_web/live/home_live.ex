@@ -1,34 +1,11 @@
 defmodule CustyardWeb.HomeLive do
   use CustyardWeb, :live_view
 
-  alias CustyardWeb.Live.OperatorAuth
-
   @impl true
-  def mount(_params, session, socket) do
-    tenant =
-      if session["host_tenant_id"], do: Custyard.Tenants.get_tenant(session["host_tenant_id"])
-
-    tenant = if tenant && tenant.id != 1, do: tenant
-    socket = assign(socket, :current_tenant, tenant)
-    # An authenticated operator landing on "/" goes straight to the
-    # dashboard (attention queue). Same session discipline as
-    # CustyardWeb.Live.OperatorAuth: the id and its session claim
-    # must resolve to a live operator row. A stale session keeps the
-    # public landing page instead of bouncing through /operator's login
-    # redirect.
-    if operator_session?(session) do
-      {:ok, redirect(socket, to: ~p"/operator")}
-    else
-      {:ok, socket}
-    end
+  def mount(_params, _session, socket) do
+    tenant = socket.host_uri && Custyard.Tenants.resolve_host(socket.host_uri.host)
+    {:ok, assign(socket, :current_tenant, tenant)}
   end
-
-  defp operator_session?(%{"operator_id" => operator_id} = session)
-       when not is_nil(operator_id) do
-    OperatorAuth.session_operator(operator_id, session["operator_claim"]) != nil
-  end
-
-  defp operator_session?(_session), do: false
 
   @impl true
   def render(assigns) do
@@ -51,11 +28,11 @@ defmodule CustyardWeb.HomeLive do
 
       <div class="mt-8 text-center space-y-4">
         <.link
-          navigate={~p"/operator/login"}
+          navigate={~p"/app/login"}
           class="inline-block px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded hover:bg-indigo-700"
           data-testid="home-operator-login-link"
         >
-          {if @current_tenant, do: "Staff sign in", else: "Operator Login"}
+          {if @current_tenant, do: "Staff sign in", else: "Staff sign in"}
         </.link>
         <p class="text-sm text-gray-500 dark:text-zinc-400" data-testid="home-portal-info">
           {if @current_tenant,

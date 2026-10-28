@@ -25,6 +25,7 @@ defmodule Custyard.Prospect do
     field :email_captured_at, :utc_datetime
     field :revoked_at, :utc_datetime
 
+    belongs_to :tenant, Custyard.Tenant
     belongs_to :conversation, Custyard.Conversation
 
     timestamps(type: :utc_datetime)
@@ -38,11 +39,32 @@ defmodule Custyard.Prospect do
   """
   def create_changeset(prospect, attrs) do
     prospect
-    |> cast(attrs, [:conversation_id, :access_token_hash])
-    |> validate_required([:conversation_id, :access_token_hash])
+    |> cast(attrs, [:tenant_id, :conversation_id, :access_token_hash])
+    |> put_tenant()
+    |> validate_required([:tenant_id, :conversation_id, :access_token_hash])
     |> unique_constraint(:conversation_id)
     |> unique_constraint(:access_token_hash)
     |> foreign_key_constraint(:conversation_id)
+  end
+
+  defp put_tenant(changeset) do
+    case get_field(changeset, :conversation_id) do
+      id when is_integer(id) ->
+        case Custyard.Repo.get(Custyard.Conversation, id) do
+          %{tenant_id: tenant_id} ->
+            case get_field(changeset, :tenant_id) do
+              nil -> put_change(changeset, :tenant_id, tenant_id)
+              ^tenant_id -> changeset
+              _ -> add_error(changeset, :tenant_id, "does not match the parent")
+            end
+
+          _ ->
+            changeset
+        end
+
+      _ ->
+        changeset
+    end
   end
 
   @doc """

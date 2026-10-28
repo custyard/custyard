@@ -9,7 +9,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
 
   setup %{conn: conn} do
     # Default factory role is super_admin - the route's live_session requires it
-    operator = insert_operator_account()
+    operator = insert_operator_account(role: "admin")
 
     conn =
       conn
@@ -32,7 +32,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
       own = insert_intake_source(tenant_id: tenant.id, name: "Own workspace CTA")
       foreign = insert_intake_source(tenant_id: 1, name: "Foreign workspace CTA")
       conn = put_operator_session(c.conn, admin)
-      {:ok, view, html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, html} = live(conn, ~p"/app/settings/intake")
       assert html =~ own.name
       refute html =~ foreign.name
 
@@ -68,7 +68,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
         enabled: false
       )
 
-      {:ok, _view, html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, _view, html} = live(conn, ~p"/app/settings/intake")
 
       assert html =~ "operator-intake-sources-page"
       assert html =~ "landing-page"
@@ -78,7 +78,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     end
 
     test "renders empty state when there are no sources", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, _view, html} = live(conn, ~p"/app/settings/intake")
 
       assert html =~ "operator-intake-sources-empty"
     end
@@ -87,11 +87,11 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
       source =
         insert_intake_source(key: "landing-page", name: "Landing Page", headline: "Need help?")
 
-      {:ok, _view, html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, _view, html} = live(conn, ~p"/app/settings/intake")
 
       assert html =~ "operator-intake-source-url-#{source.id}"
       # The absolute /i/:key intake URL is surfaced for copy/paste.
-      assert html =~ "/i/landing-page"
+      assert html =~ "/intake/landing-page"
       # The embed snippet is a ready anchor whose text prefers the headline
       # (HEEx escapes the angle brackets when rendering the literal markup).
       assert html =~ "operator-intake-source-snippet-#{source.id}"
@@ -104,7 +104,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
 
   describe "create" do
     test "creates a source with a valid key", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
 
@@ -133,7 +133,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     end
 
     test "rejects an invalid key with a changeset error", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
 
@@ -150,7 +150,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     test "surfaces a key uniqueness violation as a changeset error, not a crash", %{conn: conn} do
       insert_intake_source(key: "dupe")
 
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
 
@@ -169,7 +169,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     test "the key is not editable in the form and survives an update", %{conn: conn} do
       source = insert_intake_source(key: "locked-key", name: "Before")
 
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-source-edit-#{source.id}]") |> render_click()
 
@@ -201,8 +201,10 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
           __changed__: %{},
           flash: %{},
           current_operator: operator,
+          current_scope:
+            Custyard.Scope.for_staff(operator, Custyard.Tenants.get_tenant!(operator.tenant_id)),
           editing_source: source,
-          current_tenant: Custyard.Tenants.default_tenant(),
+          current_tenant: Custyard.Tenants.get_tenant!(Process.get(:factory_tenant_id)),
           form_params: %{},
           questions: [],
           sources: []
@@ -224,7 +226,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
 
   describe "link fields" do
     test "create persists link_title and link_url through the form", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
 
@@ -254,7 +256,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     test "edit round-trips the link fields", %{conn: conn} do
       source = insert_intake_source(link_title: "Before", link_url: "https://before.example")
 
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-source-edit-#{source.id}]") |> render_click()
 
@@ -281,7 +283,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     end
 
     test "a non-http(s) link_url is rejected with a changeset error", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
 
@@ -303,7 +305,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
 
   describe "questions" do
     test "rows can be added, filled in, and persisted", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
       view |> element("[data-testid=operator-intake-source-add-question]") |> render_click()
@@ -343,7 +345,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
           ]
         )
 
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-source-edit-#{source.id}]") |> render_click()
 
@@ -369,7 +371,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     end
 
     test "the add button stops at the validated cap", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
 
@@ -387,7 +389,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     end
 
     test "blank rows are dropped on save", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view |> element("[data-testid=operator-intake-sources-add-btn]") |> render_click()
       view |> element("[data-testid=operator-intake-source-add-question]") |> render_click()
@@ -410,7 +412,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     test "flips the enabled flag from the list", %{conn: conn} do
       source = insert_intake_source(enabled: true)
 
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view
       |> element("[data-testid=operator-intake-source-toggle-#{source.id}]")
@@ -431,7 +433,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
     test "removes the source", %{conn: conn} do
       source = insert_intake_source(key: "doomed")
 
-      {:ok, view, _html} = live(conn, ~p"/operator/intake-sources")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/intake")
 
       view
       |> element("[data-testid=operator-intake-source-delete-#{source.id}]")
@@ -443,16 +445,9 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
   end
 
   describe "authorization" do
-    test "admin is redirected at route mount" do
-      operator = insert_operator_account(role: "admin")
-
-      conn =
-        build_conn()
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> put_operator_session(operator.id)
-
-      assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/intake-sources")
+    test "tenant administrator can configure intake", %{conn: conn} do
+      assert {:ok, _, html} = live(conn, ~p"/app/settings/intake")
+      assert html =~ "Intake Sources"
     end
 
     test "agent is redirected at route mount" do
@@ -463,8 +458,8 @@ defmodule CustyardWeb.Operator.IntakeSourcesLiveTest do
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_operator_session(operator.id)
 
-      assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(conn, ~p"/operator/intake-sources")
+      assert {:error, {:redirect, %{to: "/app"}}} =
+               live(conn, ~p"/app/settings/intake")
     end
 
     test "non-super-admin cannot mutate via direct handle_event invocation" do

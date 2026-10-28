@@ -29,20 +29,8 @@ blank_to_nil = fn
   value -> value
 end
 
-# Colonel acknowledgments are on by default in production only. Unset means
-# disabled in dev and test, so a shell holding production broker secrets never
-# consumes the production queue (the same reasoning as the prod-only Sentry
-# block below). Whether URL and source are complete is decided at application
-# start (Custyard.Acknowledgments.Config.startup/2), not here, so release
-# commands such as bin/operator still run when that configuration is broken.
-acknowledgments_enabled =
-  case System.get_env("ACKNOWLEDGMENTS_ENABLED") do
-    value when value in [nil, ""] -> config_env() == :prod
-    "true" -> true
-    "false" -> false
-    _ -> raise "ACKNOWLEDGMENTS_ENABLED must be true or false"
-  end
-
+# Tenant integration records own subscription credentials, queues and enabled state.
+# Consumption limits remain deployment settings.
 acknowledgments_prefetch =
   case System.get_env("ACKNOWLEDGMENTS_PREFETCH") do
     value when value in [nil, ""] ->
@@ -55,21 +43,7 @@ acknowledgments_prefetch =
       end
   end
 
-config :custyard, :acknowledgments,
-  enabled: acknowledgments_enabled,
-  url: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_AMQP_URL")),
-  source: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_SOURCE")),
-  queue: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_QUEUE")) || "custyard.acknowledgments",
-  prefetch: acknowledgments_prefetch
-
-# Helper to add webhook secret from env var if set
-maybe_put_env_secret = fn map, key, env_var ->
-  case System.get_env(env_var) do
-    nil -> map
-    "" -> map
-    value -> Map.put(map, key, value)
-  end
-end
+config :custyard, :acknowledgments, prefetch: acknowledgments_prefetch
 
 # Configure Swoosh mailer for production
 if config_env() == :prod do
@@ -164,9 +138,7 @@ if config_env() == :prod do
         # Swoosh.Adapters.Lettermint available since swoosh 1.17+
         config :custyard, Custyard.Mailer,
           adapter: Swoosh.Adapters.Lettermint,
-          api_token:
-            blank_to_nil.(System.get_env("LETTERMINT_PROJECT_TOKEN")) ||
-              blank_to_nil.(System.get_env("LETTERMINT_API_KEY")),
+          api_token: blank_to_nil.(System.get_env("LETTERMINT_PROJECT_TOKEN")),
           base_url:
             blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
 
@@ -248,12 +220,6 @@ if lmtp_enabled do
     num_acceptors: parse_int.("LMTP_NUM_ACCEPTORS", 5)
 end
 
-# IMAP channels (spec-inbound-channels D8) replaced the single global IMAP
-# poller. A leftover IMAP_ENABLED is reported at application start
-# (Custyard.Application), not raised here, so release commands still run.
-config :custyard,
-  legacy_imap_enabled: blank_to_nil.(System.get_env("IMAP_ENABLED")) not in [nil, "false"]
-
 # Encryption key for stored third-party credentials such as IMAP channel
 # passwords (Custyard.Credentials). Base64 of 32 bytes. A malformed key fails
 # here; a missing one only blocks storing a credential.
@@ -280,27 +246,15 @@ case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY")) do
       previous: previous
 end
 
-# Sending tokens never authenticate management requests. These environment
-# credentials belong only to the default tenant; other tenants save their own
-# encrypted connection in Email setup.
-lettermint_api_url =
-  blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
-
-lettermint_team_token = blank_to_nil.(System.get_env("LETTERMINT_TEAM_TOKEN"))
-
-if lettermint_team_token do
-  config :custyard, :lettermint,
-    client: Custyard.Lettermint.HttpClient,
-    api_url: lettermint_api_url,
-    team_token: lettermint_team_token
-
-  config :custyard, :lettermint_configured, true
-else
-  if config_env() == :prod do
-    config :custyard, :lettermint, client: Custyard.Lettermint.DisabledClient
-    config :custyard, :lettermint_configured, false
-  end
-end
+# Support provider credentials are encrypted tenant records. Only the API
+# endpoint and implementation are installation configuration.
+config :custyard, :lettermint,
+  client:
+    if(config_env() == :test,
+      do: Custyard.Lettermint.MockClient,
+      else: Custyard.Lettermint.HttpClient
+    ),
+  api_url: blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
 
 # Rate limiting keys on the client IP. Behind Fly's edge proxy every
 # request arrives from the proxy address, so without header trust all
@@ -327,28 +281,10 @@ if config_env() == :prod do
   host = System.get_env("PHX_HOST") || "localhost"
   port = parse_int.("PORT", 4000)
 
-  # Per-source webhook HMAC secrets for routed webhooks (POST /api/webhook/route/:token)
-  # These enable signature verification on incoming webhook requests.
-  # If not configured, routed webhooks will reject requests in production.
-  webhook_secrets =
-    %{}
-    |> maybe_put_env_secret.(:lettermint, "WEBHOOK_SECRET_LETTERMINT")
-    # Lettermint issues one whsec_ secret per webhook, so the delivery-status
-    # webhook (POST /api/webhook/email-status/lettermint) has its own.
-    |> maybe_put_env_secret.(:lettermint_status, "WEBHOOK_SECRET_LETTERMINT_STATUS")
-    |> maybe_put_env_secret.(:zendesk, "WEBHOOK_SECRET_ZENDESK")
-    |> maybe_put_env_secret.(:intercom, "WEBHOOK_SECRET_INTERCOM")
-    |> maybe_put_env_secret.(:slack, "WEBHOOK_SECRET_SLACK")
-
-  if map_size(webhook_secrets) > 0 do
-    config :custyard, :webhook_secrets, webhook_secrets
-  end
-
   # Email notifications for neglect alerts and system events
   # These configure the Notifications.Email module for sending alert emails
   config :custyard,
     email_enabled: System.get_env("EMAIL_NOTIFICATIONS_ENABLED") == "true",
-    operator_email: System.get_env("OPERATOR_NOTIFICATION_EMAIL") || "operator@example.com",
     email_from_name: System.get_env("EMAIL_FROM_NAME") || "Custyard Alerts",
     email_from_address: System.get_env("EMAIL_FROM_ADDRESS") || "alerts@custyard.local"
 

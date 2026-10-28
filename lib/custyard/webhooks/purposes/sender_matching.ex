@@ -5,13 +5,12 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   This is the first webhook purpose to fire and is synchronous — it creates
   the conversation record that all other purposes reference.
 
-  When route context is available, uses it as the primary routing signal
-  (organization_id and project_id from the inbound route). Falls back to
-  sender matching when no route context is provided.
+  The receiving tenant is required routing context. Existing threads and
+  sender identities take precedence over channel customer and project hints.
 
   Route context may also carry the triage outcome
   (docs/design/spec-inbound-channels.md, D5/D6): `channel_id` (nil on a
-  legacy route) is stamped on the conversation and every message as
+  route without a channel) is stamped on the conversation and every message as
   `inbound_channel_id`; `triage_class` `:suspect` creates the conversation
   with `suspect: true` and urgency pinned to `:normal`. Email facts (To, CC,
   Reply-To, authentication summary, spam score) are copied from the
@@ -26,9 +25,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   @doc """
   Process an incoming normalized payload and create/update a conversation.
 
-  Route context (from InboundRoute) provides org/project when available.
+  Verified route context supplies the tenant and optional channel hints.
   """
-  def process(normalized, route_context \\ %{}) do
+  def process(normalized, route_context) do
     with {:ok, org, contact} <- resolve_sender(normalized, route_context),
          {:ok, {conversation, is_new}} <-
            transact_conversation(normalized, org, contact, route_context) do
@@ -74,79 +73,72 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     )
   end
 
-  defp resolve_sender(normalized, route_context) do
-    case route_context do
-      %{organization_id: org_id} when not is_nil(org_id) ->
-        # An explicit customer route retains its existing customer boundary.
+  defp resolve_sender(normalized, %{tenant_id: tenant_id} = context) when is_integer(tenant_id) do
+    case ThreadMatcher.find_in_tenant(normalized, tenant_id) do
+      {:ok, %Conversation{organization_id: org_id}} when is_integer(org_id) ->
         SenderMatcher.match_within_org(normalized.from, org_id)
 
-      %{tenant_id: tenant_id}
-      when is_integer(tenant_id) and normalized.source in [:email, :lettermint] ->
-        # The receiving tenant is trusted routing context. Sender domains only
-        # choose a customer inside it; they never choose an authorization scope.
-        # Headers take precedence so another participant joins the same customer
-        # conversation instead of moving it to their own organization.
-        case ThreadMatcher.find_in_tenant(normalized, tenant_id) do
-          {:ok, %Conversation{organization_id: nil}} ->
-            SenderMatcher.match_within_tenant(normalized.from, tenant_id)
-
-          {:ok, conversation} ->
-            SenderMatcher.match_within_org(normalized.from, conversation.organization_id)
-
-          no_match when no_match in [:not_found, :ambiguous] ->
-            SenderMatcher.match_within_tenant(normalized.from, tenant_id)
-        end
-
       _ ->
-        # No route context — fall back to domain-based matching
-        SenderMatcher.match(normalized.from)
+        SenderMatcher.match_within_tenant(normalized.from, tenant_id,
+          organization_id: context[:default_organization_id]
+        )
     end
   end
 
-  defp find_or_create_conversation(normalized, org, contact, route_context) do
-    dedup_scope = delivery_scope(org.id, normalized, route_context)
-    # A retried provider delivery (same provider_delivery_id) is a replay of a
-    # message already stored, with or without a Message-ID header. Then check
-    # for a duplicate message_id to prevent a race condition: if this exact
-    # message was already processed (perhaps concurrently), return its existing
-    # conversation instead of creating a duplicate.
-    with :not_found <- find_by_provider_delivery_id(provider_delivery_id(normalized), org.id),
-         :not_found <- find_by_message_id(normalized.message_id, org.id, dedup_scope),
-         :not_found <- find_thread(normalized, org.id, dedup_scope, route_context) do
-      case create_conversation(normalized, org, contact, route_context) do
+  defp resolve_sender(_normalized, _context), do: {:error, :tenant_required}
+
+  defp find_or_create_conversation(normalized, org, contact, %{tenant_id: tenant_id} = context) do
+    with :not_found <- find_delivery(normalized, tenant_id),
+         :not_found <- find_thread(normalized, org, tenant_id) do
+      case create_conversation(normalized, org, contact, context) do
         {:ok, conversation} -> {:ok, conversation, true}
         error -> error
       end
     else
-      # A replayed delivery changes nothing: the first delivery already
-      # reactivated the conversation if that was warranted.
       {:replay, conversation} ->
         {:ok, conversation, false}
 
       {:ok, conversation} ->
         conversation = maybe_link_customer(conversation, org, contact)
-        conversation = maybe_reactivate(conversation)
-        {:ok, conversation, false}
+        {:ok, maybe_reactivate(conversation), false}
     end
   end
 
   defp maybe_link_customer(
          %Conversation{organization_id: nil, source: :public_intake} = conversation,
-         org,
+         %{id: org_id},
          contact
        ) do
     conversation
-    |> Conversation.changeset(%{organization_id: org.id, contact_id: contact && contact.id})
+    |> Conversation.changeset(%{organization_id: org_id, contact_id: contact && contact.id})
     |> Repo.update!()
   end
 
   defp maybe_link_customer(conversation, _org, _contact), do: conversation
 
-  defp find_thread(normalized, org_id, _dedup_scope, %{tenant_id: tenant_id, organization_id: nil})
-       when is_integer(tenant_id) and normalized.source in [:email, :lettermint] do
+  defp find_thread(%{source: source, in_reply_to: marker}, _org, tenant_id)
+       when source in [:zendesk, :intercom, :slack] and is_binary(marker) do
+    import Ecto.Query
+
+    Repo.one(
+      from m in Message,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where: m.tenant_id == ^tenant_id and c.source == ^source,
+        where: m.message_id == ^marker or m.in_reply_to == ^marker,
+        select: c,
+        limit: 1
+    )
+    |> case do
+      nil -> :not_found
+      conversation -> {:ok, conversation}
+    end
+  end
+
+  defp find_thread(normalized, org, tenant_id) do
     case ThreadMatcher.find_in_tenant(normalized, tenant_id) do
-      :not_found ->
-        ThreadMatcher.find_by_subject(normalized, org_id, tenant_id)
+      :not_found when not is_nil(org) ->
+        ThreadMatcher.find_by_subject(normalized, org.id, tenant_id)
 
       :ambiguous ->
         :not_found
@@ -156,118 +148,40 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     end
   end
 
-  defp find_thread(normalized, org_id, dedup_scope, _route_context),
-    do: find_thread(normalized, org_id, dedup_scope)
+  defp provider_delivery_id(normalized),
+    do: get_in(normalized, [:metadata, :provider_delivery_id])
 
-  defp provider_delivery_id(normalized) do
-    case get_in(normalized, [:metadata, :provider_delivery_id]) do
-      id when is_binary(id) -> id
-      _other -> nil
-    end
-  end
+  defp lettermint_message_id(normalized),
+    do: get_in(normalized, [:metadata, :lettermint_message_id])
 
-  defp lettermint_message_id(normalized) do
-    case get_in(normalized, [:metadata, :lettermint_message_id]) do
-      id when is_binary(id) -> id
-      _other -> nil
-    end
-  end
-
-  # Find the conversation that already holds this provider delivery. Delivery
-  # ids are global, so the match is only honoured inside the resolved org; a
-  # cross-org hit is a provider or routing fault and is processed normally
-  # (the unique index then rejects the second copy).
-  defp find_by_provider_delivery_id(nil, _org_id), do: :not_found
-
-  defp find_by_provider_delivery_id(delivery_id, org_id) do
+  defp find_delivery(normalized, tenant_id) do
     import Ecto.Query
+    provider_id = provider_delivery_id(normalized)
+    message_id = normalized[:message_id]
 
-    query =
-      from m in Message,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
-        where: m.provider_delivery_id == ^delivery_id,
-        select: c,
-        limit: 1
+    delivery =
+      if is_binary(provider_id),
+        do: dynamic([m], m.provider_delivery_id == ^provider_id),
+        else: dynamic(false)
 
-    case Repo.one(query) do
-      nil ->
-        :not_found
+    mail =
+      if is_binary(message_id),
+        do: dynamic([m], m.message_id == ^message_id),
+        else: dynamic(false)
 
-      %Conversation{organization_id: ^org_id} = conversation ->
-        {:replay, conversation}
-
-      %Conversation{organization_id: other_org_id} ->
-        Logger.warning(
-          "Provider delivery id already stored for organization #{other_org_id}, " <>
-            "resolved to organization #{org_id}; processing as a new message"
-        )
-
-        :not_found
-    end
-  end
-
-  # Find conversation by existing message_id (for race condition prevention)
-  defp find_by_message_id(nil, _org_id, _dedup_scope), do: :not_found
-
-  defp find_by_message_id(message_id, org_id, dedup_scope) do
-    import Ecto.Query
-
-    query =
-      from m in Message,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
-        where: m.message_id == ^message_id,
-        # NULL covers messages created before the scoped index migration and
-        # direct imports that do not use insert_idempotent/1.
-        where: m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope),
-        where: c.organization_id == ^org_id,
-        select: c,
-        limit: 1
-
-    case Repo.one(query) do
+    from(m in Message,
+      join: c in Conversation,
+      on: c.id == m.conversation_id,
+      where: m.tenant_id == ^tenant_id,
+      where: ^dynamic([m], ^delivery or ^mail),
+      select: c,
+      limit: 1
+    )
+    |> Repo.one()
+    |> case do
       nil -> :not_found
-      conversation -> {:ok, conversation}
+      conversation -> {:replay, conversation}
     end
-  end
-
-  # Ticket and chat providers reference the thread they belong to (ticket id,
-  # Intercom conversation id, Slack thread_ts) rather than the previous
-  # message, so match on either side of that marker: the root event carries
-  # it as message_id, every reply carries it as in_reply_to. Matching
-  # in_reply_to is what keeps replies together when the root was never
-  # stored (subscription added mid-thread, root event rejected or lost).
-  defp find_thread(%{source: source, in_reply_to: marker}, org_id, dedup_scope)
-       when source in [:zendesk, :intercom, :slack] and is_binary(marker) do
-    import Ecto.Query
-
-    query =
-      from m in Message,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
-        where: c.organization_id == ^org_id,
-        where: c.source == ^source,
-        where: m.message_id == ^marker or m.in_reply_to == ^marker,
-        where: m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope),
-        order_by: [asc: c.id],
-        select: c,
-        limit: 1
-
-    case Repo.one(query) do
-      nil -> :not_found
-      conversation -> {:ok, conversation}
-    end
-  end
-
-  defp find_thread(%{source: source} = normalized, org_id, dedup_scope)
-       when source in [:intercom, :slack],
-       do: ThreadMatcher.find_thread(normalized, org_id, dedup_scope)
-
-  defp find_thread(normalized, org_id, _dedup_scope),
-    do: ThreadMatcher.find_thread(normalized, org_id)
-
-  defp delivery_scope(org_id, normalized, route_context) do
-    Message.dedup_scope(org_id, normalized[:source], route_context[:route_id])
   end
 
   defp create_conversation(normalized, org, contact, route_context) do
@@ -276,8 +190,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     suspect? = route_context[:triage_class] == :suspect
 
     base_attrs = %{
-      tenant_id: Map.get(org, :tenant_id),
-      organization_id: org.id,
+      tenant_id: route_context.tenant_id,
+      organization_id: org && org.id,
       contact_id: contact && contact.id,
       subject: Normalizer.presence(normalized.subject) || "(no subject)",
       state: :new,
@@ -288,14 +202,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     }
 
     # Set project_id from route context if available
-    base_attrs =
-      case route_context do
-        %{project_id: pid} when not is_nil(pid) -> Map.put(base_attrs, :project_id, pid)
-        _ -> base_attrs
-      end
+    base_attrs = maybe_project_hint(base_attrs, route_context[:default_project_id])
 
     # Apply Sieve header overrides for email sources
-    attrs = SieveHeaderMapper.merge_overrides(base_attrs, normalized.headers)
+    attrs =
+      SieveHeaderMapper.merge_overrides(base_attrs, normalized.headers, route_context.tenant_id)
 
     # A suspect delivery never earns an urgency bump, neither from its own
     # words nor from a priority header it chose to send (D6). Pinned after
@@ -306,52 +217,52 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
     |> Conversation.changeset(attrs)
     |> Conversation.suspect_changeset(suspect?)
     |> Repo.insert()
+    |> case do
+      {:ok, conversation} ->
+        maybe_label_hint(conversation, route_context[:default_label_id])
+        {:ok, conversation}
+
+      error ->
+        error
+    end
+  end
+
+  defp maybe_label_hint(_conversation, nil), do: :ok
+
+  defp maybe_label_hint(conversation, id) do
+    case Repo.get_by(Custyard.Label, id: id, tenant_id: conversation.tenant_id) do
+      nil ->
+        :ok
+
+      label ->
+        Repo.insert!(
+          %Custyard.ConversationLabel{
+            tenant_id: conversation.tenant_id,
+            conversation_id: conversation.id,
+            label_id: label.id
+          },
+          on_conflict: :nothing
+        )
+    end
   end
 
   # Create message and handle race condition where duplicate message_id means
   # a concurrent request already processed this email
-  defp create_message_with_dedup(conversation, normalized, is_new, route_context) do
-    dedup_scope = delivery_scope(conversation.organization_id, normalized, route_context)
+  defp maybe_project_hint(attrs, nil), do: attrs
 
-    # A previously imported message may have no dedup_scope. Its conversation
-    # was found above; do not insert a second copy under the new scoped index.
-    # Likewise a retried provider delivery already has its message stored.
-    if already_delivered?(normalized, conversation.id, dedup_scope) do
-      {:ok, conversation, false}
-    else
-      insert_message(conversation, normalized, is_new, route_context)
+  defp maybe_project_hint(attrs, id) do
+    case Repo.get(Custyard.Project, id) do
+      %{tenant_id: tenant_id, organization_id: org_id}
+      when tenant_id == attrs.tenant_id and org_id == attrs.organization_id ->
+        Map.put(attrs, :project_id, id)
+
+      _ ->
+        attrs
     end
   end
 
-  defp already_delivered?(normalized, conversation_id, dedup_scope) do
-    delivery_recorded?(provider_delivery_id(normalized), conversation_id) or
-      message_recorded?(normalized.message_id, conversation_id, dedup_scope)
-  end
-
-  defp delivery_recorded?(nil, _conversation_id), do: false
-
-  defp delivery_recorded?(delivery_id, conversation_id) do
-    import Ecto.Query
-
-    Repo.exists?(
-      from m in Message,
-        where: m.conversation_id == ^conversation_id,
-        where: m.provider_delivery_id == ^delivery_id
-    )
-  end
-
-  defp message_recorded?(nil, _conversation_id, _dedup_scope), do: false
-
-  defp message_recorded?(message_id, conversation_id, dedup_scope) do
-    import Ecto.Query
-
-    Repo.exists?(
-      from m in Message,
-        where: m.conversation_id == ^conversation_id,
-        where: m.message_id == ^message_id,
-        where: m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope)
-    )
-  end
+  defp create_message_with_dedup(conversation, normalized, is_new, route_context),
+    do: insert_message(conversation, normalized, is_new, route_context)
 
   @doc """
   Attributes for an inbound message in `conversation` built from the
@@ -367,7 +278,6 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   def inbound_message_attrs(conversation, normalized, route_context) do
     origin = normalized[:source]
     source = message_source(origin)
-    dedup_scope = delivery_scope(conversation.organization_id, normalized, route_context)
     metadata = normalized[:metadata] || %{}
 
     %{
@@ -381,7 +291,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
       message_id: normalized.message_id,
       in_reply_to: normalized.in_reply_to,
       is_internal_note: false,
-      dedup_scope: dedup_scope,
+      tenant_id: conversation.tenant_id,
       to_addresses: to_addresses(normalized, metadata, route_context),
       cc_addresses: cc_addresses(metadata)
     }

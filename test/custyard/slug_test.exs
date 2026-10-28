@@ -8,6 +8,7 @@ defmodule Custyard.SlugTest do
     attrs =
       Map.merge(
         %{
+          tenant_id: Custyard.Factory.factory_tenant_id(),
           slug: "acme-corp",
           email: "claimant@example.com",
           conversation_id: 1,

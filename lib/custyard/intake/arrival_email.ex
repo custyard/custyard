@@ -60,7 +60,7 @@ defmodule Custyard.Intake.ArrivalEmail do
   def send_arrival(%Conversation{} = conversation, %IntakeSource{} = source, body) do
     if email_enabled?() do
       with :ok <- TenantDelivery.ready?(source.tenant_id) do
-        case RateLimit.check_rate(:intake_arrival_email, source.key) do
+        case RateLimit.check_rate(:intake_arrival_email, {source.tenant_id, source.key}) do
           {:deny, _retry_after_ms} ->
             Logger.warning(
               "Intake arrival notification rate-limited for source #{source.key}; " <>
@@ -146,7 +146,7 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   defp operator_conversation_url(conversation) do
     Tenants.url(Tenants.get_tenant!(conversation.tenant_id)) <>
-      "/operator/conversation/#{conversation.id}"
+      "/app/threads/#{conversation.id}"
   end
 
   defp email_enabled? do

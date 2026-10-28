@@ -35,13 +35,16 @@ defmodule Custyard.Conversations.DormancyChecker do
   Returns the count of transitioned conversations.
   """
   def transition_stale_conversations do
-    thresholds = Settings.get_neglect_thresholds()
+    Custyard.Tenants.list_tenants()
+    |> Enum.filter(&(&1.status == "active"))
+    |> Enum.map(fn tenant ->
+      thresholds = Settings.get_neglect_thresholds(tenant.id)
 
-    thresholds
-    |> stale_query()
-    |> Repo.all()
-    |> Enum.map(&transition_to_dormant(&1, thresholds))
-    |> Enum.count(& &1)
+      stale_query(thresholds, tenant.id)
+      |> Repo.all()
+      |> Enum.count(&transition_to_dormant(&1, thresholds))
+    end)
+    |> Enum.sum()
   end
 
   @doc """
@@ -58,17 +61,18 @@ defmodule Custyard.Conversations.DormancyChecker do
   changes nothing, because every tier comparison is NULL for them and
   `NULL OR NULL OR NULL` is not TRUE.
   """
-  def stale_conversations do
+  def stale_conversations(tenant_id) do
     # Thresholds are database-configurable; the critical threshold doubles as
     # the dormancy cutoff.
-    Settings.get_neglect_thresholds()
-    |> stale_query()
+    Settings.get_neglect_thresholds(tenant_id)
+    |> stale_query(tenant_id)
     |> Repo.all()
   end
 
-  defp stale_query(thresholds) do
+  defp stale_query(thresholds, tenant_id) do
     from(c in Conversation,
       left_join: o in assoc(c, :organization),
+      where: c.tenant_id == ^tenant_id,
       where: c.state == :waiting,
       where: ^past_dormancy_cutoff(thresholds)
     )
@@ -124,7 +128,9 @@ defmodule Custyard.Conversations.DormancyChecker do
   # not be overwritten with :dormant from a stale struct.
   defp transition_to_dormant(%Conversation{id: id} = conversation, thresholds) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    still_stale = from(c in stale_query(thresholds), where: c.id == ^id, select: c.id)
+
+    still_stale =
+      from(c in stale_query(thresholds, conversation.tenant_id), where: c.id == ^id, select: c.id)
 
     {count, _} =
       from(c in Conversation, where: c.id in subquery(still_stale))

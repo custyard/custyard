@@ -59,9 +59,9 @@ defmodule Custyard.Email.SieveHeaderMapper do
   Takes a map of headers and returns a map of property atoms to their values.
   Only returns properties that have valid mappings configured and valid values.
   """
-  @spec extract_properties(map()) :: map()
-  def extract_properties(headers) when is_map(headers) do
-    mappings = Settings.get_sieve_header_mappings()
+  @spec extract_properties(map(), integer()) :: map()
+  def extract_properties(headers, tenant_id) when is_map(headers) do
+    mappings = Settings.get_sieve_header_mappings(tenant_id)
 
     mappings
     |> Enum.map(fn {header_name, config} ->
@@ -72,7 +72,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
     |> Map.new()
   end
 
-  def extract_properties(_), do: %{}
+  def extract_properties(_, _), do: %{}
 
   defp get_header(headers, name), do: Normalizer.get_header(headers, name)
 
@@ -128,9 +128,9 @@ defmodule Custyard.Email.SieveHeaderMapper do
   Takes existing attrs and applies property overrides from headers.
   Sieve-injected properties take precedence over auto-detected values.
   """
-  @spec merge_overrides(map(), map()) :: map()
-  def merge_overrides(attrs, headers) do
-    overrides = extract_properties(headers)
+  @spec merge_overrides(map(), map(), integer()) :: map()
+  def merge_overrides(attrs, headers, tenant_id) do
+    overrides = extract_properties(headers, tenant_id)
 
     # Override urgency if provided
     attrs =

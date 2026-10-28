@@ -9,6 +9,9 @@ defmodule Custyard.Intake.ArrivalEmailTest do
   alias Custyard.{Intake, RateLimit}
 
   setup do
+    configure_tenant_email(factory_tenant_id())
+    Custyard.Tenants.add_host(factory_tenant_id(), "intake.test")
+    insert_operator_account(tenant_id: factory_tenant_id(), email: "ops@example.com")
     RateLimit.reset()
     original_buckets = Application.get_env(:custyard, :rate_limit_buckets)
     original_enabled = Application.get_env(:custyard, :email_enabled)
@@ -64,7 +67,9 @@ defmodule Custyard.Intake.ArrivalEmailTest do
 
       assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "hello")
 
-      expected = CustyardWeb.Endpoint.url() <> "/operator/conversation/#{conversation.id}"
+      expected =
+        Custyard.Tenants.url(Custyard.Tenants.get_tenant!(factory_tenant_id())) <>
+          "/app/threads/#{conversation.id}"
 
       assert_email_sent(fn email ->
         assert email.text_body =~ expected
@@ -164,7 +169,13 @@ defmodule Custyard.Intake.ArrivalEmailTest do
     # has a nil one. compose/3 is a public seam, so it still guards.
     test "tolerates a conversation with no derived subject" do
       %{source: source, conversation: _} = fixture()
-      conversation = %Custyard.Conversation{id: 1, subject: nil, source: :public_intake}
+
+      conversation = %Custyard.Conversation{
+        tenant_id: factory_tenant_id(),
+        id: 1,
+        subject: nil,
+        source: :public_intake
+      }
 
       email = ArrivalEmail.compose(conversation, source, "body")
 
@@ -177,13 +188,13 @@ defmodule Custyard.Intake.ArrivalEmailTest do
       source = insert_intake_source(name: "Pricing CTA")
 
       assert {:ok, %{conversation: conversation}} =
-               Intake.create_intake_conversation(source.key, "We need SSO for 200 users")
+               create_intake(source.key, "We need SSO for 200 users")
 
       assert_email_sent(fn email ->
         assert {_name, "ops@example.com"} = hd(email.to)
         assert email.subject =~ "Pricing CTA"
         assert email.text_body =~ "We need SSO for 200 users"
-        assert email.text_body =~ "/operator/conversation/#{conversation.id}"
+        assert email.text_body =~ "/app/threads/#{conversation.id}"
       end)
     end
 
@@ -192,7 +203,7 @@ defmodule Custyard.Intake.ArrivalEmailTest do
       source = insert_intake_source()
 
       assert {:ok, %{conversation: _, prospect: _, access_token: _}} =
-               Intake.create_intake_conversation(source.key, "hello")
+               create_intake(source.key, "hello")
 
       assert_no_email_sent()
     end
@@ -209,9 +220,17 @@ defmodule Custyard.Intake.ArrivalEmailTest do
       source = insert_intake_source()
 
       assert {:ok, %{conversation: _, prospect: _, access_token: _}} =
-               Intake.create_intake_conversation(source.key, "hello")
+               create_intake(source.key, "hello")
 
       assert_no_email_sent()
     end
   end
+
+  defp create_intake(key, body, opts \\ []),
+    do:
+      Intake.create_intake_conversation(
+        key,
+        body,
+        Keyword.put(opts, :tenant_id, Custyard.Factory.factory_tenant_id())
+      )
 end

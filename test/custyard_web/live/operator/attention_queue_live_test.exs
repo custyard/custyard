@@ -10,7 +10,12 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
     # Create and authenticate an operator
     {:ok, operator} =
       %OperatorAccount{}
-      |> OperatorAccount.changeset(%{email: "test@example.com", password: "password123"})
+      |> OperatorAccount.changeset(%{
+        role: "admin",
+        tenant_id: Process.get(:factory_tenant_id),
+        email: "test@example.com",
+        password: "password123"
+      })
       |> Repo.insert()
 
     conn =
@@ -27,7 +32,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conv = insert_conversation(organization_id: org.id, state: :new)
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ "Attention Queue"
       assert html =~ conv.subject
@@ -56,7 +61,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
 
       Scoring.calculate_and_cache(low.id)
 
-      {:ok, view, _html} = live(conn, ~p"/operator")
+      {:ok, view, _html} = live(conn, ~p"/app")
 
       # High score should appear before low score
       html = render(view)
@@ -78,14 +83,14 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       Scoring.calculate_and_cache(snoozed.id)
       Scoring.calculate_and_cache(active.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ active.subject
       refute html =~ snoozed.subject
     end
 
     test "shows empty state when no conversations", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ "Nothing needs attention right now"
     end
@@ -97,7 +102,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conv = insert_conversation(organization_id: org.id)
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, view, _html} = live(conn, ~p"/operator")
+      {:ok, view, _html} = live(conn, ~p"/app")
 
       # First toggle the snooze menu to show it
       view
@@ -124,7 +129,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       Scoring.calculate_and_cache(new_conv.id)
       Scoring.calculate_and_cache(active_conv.id)
 
-      {:ok, view, _html} = live(conn, ~p"/operator")
+      {:ok, view, _html} = live(conn, ~p"/app")
 
       # Filter to new only
       view
@@ -143,7 +148,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conv = insert_conversation(organization_id: org.id, state: :new)
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, view, html} = live(conn, ~p"/operator")
+      {:ok, view, html} = live(conn, ~p"/app")
       assert html =~ conv.subject
 
       # Update the conversation state
@@ -177,7 +182,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       Scoring.calculate_and_cache(conv1.id)
       Scoring.calculate_and_cache(conv2.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       # Super admin should see both conversations
       assert html =~ conv1.subject
@@ -189,11 +194,12 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
     test "admin only sees conversations from their organization" do
       # Create an organization and an admin operator for that org
       org = insert_organization(name: "Admin's Org")
-      other_org = insert_organization(name: "Other Org")
+      other_org = insert_organization(name: "Other Org", tenant_id: insert_tenant().id)
 
       {:ok, admin_operator} =
         %OperatorAccount{}
         |> OperatorAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
           email: "admin@example.com",
           password: "password123",
           role: "admin",
@@ -220,7 +226,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_operator_session(admin_operator.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       # Debug: check what the view is showing
       refute html =~ "Nothing needs attention", "Should have conversations to show"
@@ -234,11 +240,12 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
     test "agent only sees conversations from their organization" do
       # Create an organization and an agent operator for that org
       org = insert_organization(name: "Agent Org")
-      other_org = insert_organization(name: "Different Org")
+      other_org = insert_organization(name: "Different Org", tenant_id: insert_tenant().id)
 
       {:ok, agent_operator} =
         %OperatorAccount{}
         |> OperatorAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
           email: "agent@example.com",
           password: "password123",
           role: "agent",
@@ -267,7 +274,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_operator_session(agent_operator.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       # Agent should only see their org's conversation
       assert html =~ "Agent Own Conv", "Agent should see their org's conversation"
@@ -280,6 +287,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       {:ok, admin_operator} =
         %OperatorAccount{}
         |> OperatorAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
           email: "admin2@example.com",
           password: "password123",
           role: "admin",
@@ -295,7 +303,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_operator_session(admin_operator.id)
 
-      {:ok, view, _html} = live(conn, ~p"/operator")
+      {:ok, view, _html} = live(conn, ~p"/app")
 
       # Toggle snooze menu
       view
@@ -318,6 +326,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       {:ok, agent_operator} =
         %OperatorAccount{}
         |> OperatorAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
           email: "agent2@example.com",
           password: "password123",
           role: "agent",
@@ -326,7 +335,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
         |> Repo.insert()
 
       # Create conversation in a different org
-      other_org = insert_organization()
+      other_org = insert_organization(tenant_id: insert_tenant().id)
       conv = insert_conversation(organization_id: other_org.id, state: :new)
       Scoring.calculate_and_cache(conv.id)
 
@@ -335,7 +344,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_operator_session(agent_operator.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       # Should see empty state, not the other org's conversation
       assert html =~ "Nothing needs attention right now"
@@ -355,7 +364,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
 
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ "Anonymous inquiry"
       assert html =~ "Unlinked prospect"
@@ -365,11 +374,12 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
 
     test "org-scoped operator sees own-org and nil-org rows but not other orgs" do
       org = insert_organization(name: "Scoped Org")
-      other_org = insert_organization(name: "Foreign Org")
+      other_org = insert_organization(name: "Foreign Org", tenant_id: insert_tenant().id)
 
       {:ok, agent_operator} =
         %OperatorAccount{}
         |> OperatorAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
           email: "scoped-agent@example.com",
           password: "password123",
           role: "agent",
@@ -404,7 +414,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_operator_session(agent_operator.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ "Scoped Own Conv"
       assert html =~ "Unlinked Intake Conv"
@@ -421,7 +431,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       Scoring.calculate_and_cache(org_conv.id)
       Scoring.calculate_and_cache(unlinked_conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ org_conv.subject
       assert html =~ unlinked_conv.subject
@@ -434,7 +444,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conv = insert_conversation(organization_id: org.id, source: :portal, state: :new)
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ ~s(data-testid="source-badge-portal")
       assert html =~ "Portal"
@@ -444,7 +454,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conv = insert_conversation(organization_id: nil, source: :disambiguation, state: :new)
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ ~s(data-testid="source-badge-disambiguation")
       assert html =~ "Needs routing"
@@ -462,7 +472,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
 
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ ~s(data-testid="source-badge-public_intake")
       assert html =~ ~s(data-testid="intake-source-tag")
@@ -475,7 +485,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       insert_prospect(conversation_id: conv.id)
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       assert html =~ ~s(data-testid="no-reply-channel-badge")
       assert html =~ "No reply channel"
@@ -486,7 +496,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       refute html =~ ~s(data-testid="no-reply-channel-badge")
     end
@@ -496,7 +506,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       conv = insert_conversation(organization_id: org.id, source: :email, state: :new)
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator")
+      {:ok, _view, html} = live(conn, ~p"/app")
 
       refute html =~ ~s(data-testid="no-reply-channel-badge")
     end
@@ -509,7 +519,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       insert_prospect(conversation_id: conv.id)
       Scoring.calculate_and_cache(conv.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator?filter=new")
+      {:ok, _view, html} = live(conn, ~p"/app?filter=new")
 
       assert html =~ "Flagged intake conv"
       assert html =~ ~s(data-testid="no-reply-channel-badge")
@@ -536,7 +546,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLiveTest do
       plain = insert_conversation(organization_id: org.id, state: :new)
       Scoring.calculate_and_cache(plain.id)
 
-      {:ok, view, html} = live(conn, ~p"/operator")
+      {:ok, view, html} = live(conn, ~p"/app")
 
       flagged_card =
         view |> element("[data-testid=operator-queue-card-#{flagged.id}]") |> render()

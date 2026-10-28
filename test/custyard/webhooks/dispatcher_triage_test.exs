@@ -418,21 +418,17 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
   defp triage_audits(org) do
     Repo.all(
       from a in AuditEvent,
-        where: a.organization_id == ^org.id and a.event_type == :inbound_triaged
+        where: a.tenant_id == ^org.tenant_id and a.event_type == :inbound_triaged
     )
   end
 
-  describe "legacy routes" do
-    test "a route without channels behaves as before", %{route: route} do
-      assert {:ok, conversation} =
+  describe "routes without channels" do
+    test "an unconfigured route rejects delivery", %{route: route} do
+      assert {:ignored, :no_channel} =
                Dispatcher.dispatch(route, delivery("support@acme.example.com"))
 
-      assert conversation.inbound_channel_id == nil
-
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
-      assert message.inbound_channel_id == nil
-      assert message.triage_class == :customer
-      assert rejections(route) == []
+      assert Repo.aggregate(Message, :count) == 0
+      assert [%{classification: :no_channel}] = rejections(route)
     end
   end
 
@@ -602,6 +598,31 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert rejections(route) == []
     end
 
+    test "a Proton confirmation arriving after the operator advances is still captured", %{
+      route: route
+    } do
+      channel = channel!(route, state: :awaiting_first_message, provider: :proton)
+
+      payload =
+        delivery(InboundChannels.ingress_address(channel), %{
+          from: "Proton <no-reply@mail.proton.me>",
+          subject: "Confirm forwarding request",
+          body: "https://account.proton.me/email-forwarding/accept#confirmation-token",
+          headers: %{"Precedence" => "bulk"}
+        })
+
+      assert {:ignored, :verification_captured} = Dispatcher.dispatch(route, payload)
+      channel = Repo.reload!(channel)
+
+      assert channel.verification_link ==
+               "https://account.proton.me/email-forwarding/accept#confirmation-token"
+
+      assert channel.state == :awaiting_first_message
+      assert is_nil(channel.last_received_at)
+      assert Repo.aggregate(Conversation, :count) == 0
+      assert rejections(route) == []
+    end
+
     test "on a channel that is not pending it is logged as a provider notice", %{route: route} do
       channel = channel!(route, state: :active)
 
@@ -619,7 +640,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert Repo.aggregate(Conversation, :count) == 0
     end
 
-    test "on a legacy route it is logged as a provider notice", %{route: route} do
+    test "an unconfigured route is rejected before provider triage", %{route: route} do
       payload =
         delivery("support@acme.example.com", %{
           from: "no-reply@notify.proton.me",
@@ -627,8 +648,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           body: "https://account.proton.me/confirm/x"
         })
 
-      assert {:ignored, :provider_notice} = Dispatcher.dispatch(route, payload)
-      assert [%{classification: :provider_notice, inbound_channel_id: nil}] = rejections(route)
+      assert {:ignored, :no_channel} = Dispatcher.dispatch(route, payload)
+      assert [%{classification: :no_channel, inbound_channel_id: nil}] = rejections(route)
       assert Repo.aggregate(Conversation, :count) == 0
     end
   end
@@ -857,6 +878,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
 
     test "omits the authentication map when nothing was learned and ignores a bad reply_to",
          %{route: route} do
+      channel = channel!(route)
+
       payload =
         delivery("support@acme.example.com")
         |> put_metadata(%{
@@ -865,7 +888,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           spam_score: nil
         })
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload, channel: channel)
       message = Repo.get_by!(Message, conversation_id: conversation.id)
       assert message.authentication == nil
       assert message.reply_to == nil
@@ -873,9 +896,10 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
     end
 
     test "falls back to the To address when the envelope recipient is absent", %{route: route} do
+      channel = channel!(route)
       payload = delivery("support@acme.example.com") |> put_metadata(%{recipient: nil})
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, payload, channel: channel)
       message = Repo.get_by!(Message, conversation_id: conversation.id)
       assert message.to_addresses == ["support@acme.example.com"]
     end

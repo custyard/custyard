@@ -1,5 +1,5 @@
 defmodule Custyard.Notifications.EmailTest do
-  use Custyard.DataCase, async: true
+  use Custyard.DataCase, async: false
 
   import Custyard.Factory
   import Swoosh.TestAssertions
@@ -9,6 +9,13 @@ defmodule Custyard.Notifications.EmailTest do
   setup do
     # Create test data with preloaded associations
     org = insert_organization(name: "Acme Corp")
+
+    Repo.get!(Custyard.Tenant, org.tenant_id)
+    |> Ecto.Changeset.change(name: "Acme Workspace")
+    |> Repo.update!()
+
+    configure_tenant_email(org.tenant_id)
+    insert_operator_account(tenant_id: org.tenant_id, email: "ops@custyard.test")
     contact = insert_contact(organization_id: org.id, name: "Alice", email: "alice@acme.com")
 
     conv =
@@ -69,7 +76,7 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
-    test "uses configured operator email", %{conversation: conv} do
+    test "uses tenant staff recipients", %{conversation: conv} do
       Application.put_env(:custyard, :email_enabled, true)
       Application.put_env(:custyard, :operator_email, "ops@custyard.test")
 
@@ -169,7 +176,7 @@ defmodule Custyard.Notifications.EmailTest do
           public_address: "support@acme.example.com",
           last_received_at: last_received_at
         )
-        |> Repo.preload(:organization)
+        |> Repo.preload(:tenant)
 
       {:ok, channel: channel}
     end
@@ -204,7 +211,7 @@ defmodule Custyard.Notifications.EmailTest do
 
         for body <- [email.html_body, email.text_body] do
           assert body =~ "support@acme.example.com"
-          assert body =~ "Acme Corp"
+          assert body =~ "Acme Workspace"
           assert body =~ "2026-10-10 08:30 UTC"
           assert body =~ "72 hours"
           assert body =~ "silently disabled"
@@ -226,15 +233,15 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
-    test "copes with an organization that is not preloaded", %{channel: channel} do
+    test "uses workspace identity without preloading a customer", %{channel: channel} do
       Application.put_env(:custyard, :email_enabled, true)
       on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
 
-      channel = %{channel | organization: %Ecto.Association.NotLoaded{}}
+      channel = %{channel | tenant: %Ecto.Association.NotLoaded{}}
       assert Email.deliver_channel_quiet(channel) == :ok
 
       assert_email_sent(fn email ->
-        assert email.text_body =~ "Unlinked prospect"
+        assert email.text_body =~ "Acme Workspace"
       end)
     end
   end

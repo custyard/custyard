@@ -11,7 +11,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
     test "renders new request form", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       assert html =~ "New Request"
       assert html =~ "Subject"
@@ -23,7 +23,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
     test "shows urgency options", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       assert html =~ "Normal"
       assert html =~ "Elevated"
@@ -33,7 +33,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
     test "has cancel link back to request list", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       assert view |> element("a", "Cancel") |> has_element?()
     end
@@ -43,7 +43,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
     test "creates conversation on submit", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       view
       |> form("form", %{
@@ -63,7 +63,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
     test "creates initial message on submit", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       view
       |> form("form", %{
@@ -85,7 +85,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
     test "redirects to conversation page after submit", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       {:error, {:live_redirect, %{to: redirect_path}}} =
         view
@@ -96,13 +96,13 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
         })
         |> render_submit()
 
-      assert redirect_path =~ ~r"/p/#{org.token}/request/\d+"
+      assert redirect_path =~ ~r"/portal/#{portal_token(org)}/request/\d+"
     end
 
     test "creates elevated urgency conversation", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       view
       |> form("form", %{
@@ -119,7 +119,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
     test "creates urgent urgency conversation", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       view
       |> form("form", %{
@@ -136,7 +136,7 @@ defmodule CustyardWeb.Portal.NewRequestLiveTest do
     test "calculates and caches score on submit", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/new")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/new")
 
       view
       |> form("form", %{

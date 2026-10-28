@@ -4,6 +4,7 @@ defmodule Custyard.Auth.LoginEmail do
   """
 
   import Swoosh.Email
+  alias Custyard.Auth.Account
 
   require Logger
 
@@ -69,7 +70,7 @@ defmodule Custyard.Auth.LoginEmail do
         <p style="color: #4f46e5; font-size: 14px; word-break: break-all;">#{login_url}</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
         <p style="color: #9ca3af; font-size: 12px; margin-bottom: 0;">
-          This link expires in #{Custyard.Auth.Account.login_token_ttl_minutes()} minutes.
+          This link expires in #{Account.login_token_ttl_minutes()} minutes.
           If you didn't request this, you can safely ignore this email.
         </p>
       </div>
@@ -86,7 +87,7 @@ defmodule Custyard.Auth.LoginEmail do
 
     #{login_url}
 
-    This link expires in #{Custyard.Auth.Account.login_token_ttl_minutes()} minutes.
+    This link expires in #{Account.login_token_ttl_minutes()} minutes.
     If you didn't request this, you can safely ignore this email.
     """
   end

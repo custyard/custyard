@@ -23,33 +23,21 @@ defmodule Custyard.ConversationTest do
       assert "can't be blank" in errors_on(changeset).subject
     end
 
-    test "requires organization_id" do
+    test "requires tenant_id" do
       attrs = build_conversation() |> Map.delete(:organization_id)
       changeset = Conversation.changeset(%Conversation{}, attrs)
 
       refute changeset.valid?
-      assert "can't be blank" in errors_on(changeset).organization_id
+      assert "can't be blank" in errors_on(changeset).tenant_id
     end
   end
 
-  describe "organization requirement by source" do
-    test "nil organization is allowed only for :disambiguation and :public_intake" do
-      for source <- [:disambiguation, :public_intake] do
-        attrs = build_conversation(source: source, organization_id: nil)
-        changeset = Conversation.changeset(%Conversation{}, attrs)
+  test "all sources can leave customer identity unassigned inside an explicit tenant" do
+    tenant = insert_tenant()
 
-        assert changeset.valid?, "expected nil org to be allowed for #{source}"
-      end
-    end
-
-    test "organization is still required for every other source (regression)" do
-      for source <- [:email, :lettermint, :zendesk, :intercom, :slack, :portal] do
-        attrs = build_conversation(source: source, organization_id: nil)
-        changeset = Conversation.changeset(%Conversation{}, attrs)
-
-        refute changeset.valid?, "expected org to be required for #{source}"
-        assert "can't be blank" in errors_on(changeset).organization_id
-      end
+    for source <- Conversation.sources() do
+      attrs = build_conversation(source: source, organization_id: nil, tenant_id: tenant.id)
+      assert Conversation.changeset(%Conversation{}, attrs).valid?
     end
   end
 
@@ -72,7 +60,11 @@ defmodule Custyard.ConversationTest do
 
     test "intake_changeset/2 casts and format-validates it" do
       attrs =
-        build_conversation(source: :public_intake, organization_id: nil)
+        build_conversation(
+          source: :public_intake,
+          organization_id: nil,
+          tenant_id: insert_tenant().id
+        )
         |> Map.put(:intake_source_key, "landing-page_2")
 
       changeset = Conversation.intake_changeset(%Conversation{}, attrs)
@@ -83,7 +75,11 @@ defmodule Custyard.ConversationTest do
     test "intake_changeset/2 rejects malformed keys" do
       for key <- ["Bad Key", "-lead", String.duplicate("k", 51)] do
         attrs =
-          build_conversation(source: :public_intake, organization_id: nil)
+          build_conversation(
+            source: :public_intake,
+            organization_id: nil,
+            tenant_id: insert_tenant().id
+          )
           |> Map.put(:intake_source_key, key)
 
         changeset = Conversation.intake_changeset(%Conversation{}, attrs)

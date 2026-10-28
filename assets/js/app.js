@@ -113,7 +113,9 @@ Hooks.CopyToClipboard = {
 }
 
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
-let liveSocket = new LiveSocket("/live", Socket, {
+const socketPath = window.location.pathname.startsWith("/admin") ? "/admin/live" :
+  window.location.pathname.startsWith("/app") ? "/app/live" : "/live"
+let liveSocket = new LiveSocket(socketPath, Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
   hooks: Hooks

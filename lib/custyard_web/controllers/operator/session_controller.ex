@@ -1,10 +1,8 @@
 defmodule CustyardWeb.Operator.SessionController do
   use CustyardWeb, :controller
 
-  import Ecto.Query, only: [from: 2]
-
   alias Custyard.{OperatorAccount, RateLimit, Repo}
-  alias Custyard.Auth.LoginEmail
+  alias Custyard.Auth.{Account, LoginEmail}
   alias CustyardWeb.Live.OperatorAuth
   alias CustyardWeb.Plugs.PublicRateLimit
 
@@ -23,7 +21,7 @@ defmodule CustyardWeb.Operator.SessionController do
       error: Phoenix.Flash.get(conn.assigns.flash, :error),
       email: nil,
       info: Phoenix.Flash.get(conn.assigns.flash, :info),
-      layout: {CustyardWeb.Layouts, :root}
+      layout: false
     )
   end
 
@@ -32,7 +30,7 @@ defmodule CustyardWeb.Operator.SessionController do
     # per-email rate-limit key and the lookup.
     email = OperatorAccount.normalize_email(email)
 
-    case RateLimit.check_rate(:operator_login_email, email) do
+    case RateLimit.check_rate(:operator_login_email, {conn.assigns.host_tenant.id, email}) do
       {:deny, retry_after_ms} ->
         Logger.info("operator_login_skipped", reason: :email_rate_limited)
 
@@ -56,7 +54,7 @@ defmodule CustyardWeb.Operator.SessionController do
       error: "Email is required.",
       email: nil,
       info: nil,
-      layout: {CustyardWeb.Layouts, :root}
+      layout: false
     )
   end
 
@@ -75,7 +73,7 @@ defmodule CustyardWeb.Operator.SessionController do
   end
 
   defp deliver_login_link(conn, email) do
-    case Repo.get_by(OperatorAccount, email: email) do
+    case Repo.get_by(OperatorAccount, tenant_id: conn.assigns.host_tenant.id, email: email) do
       nil ->
         # Don't reveal whether the email exists — always show success page
         Logger.info("operator_login_skipped", reason: :unknown_account)
@@ -89,22 +87,22 @@ defmodule CustyardWeb.Operator.SessionController do
             operator_id: operator.id
           )
         else
-          send_login_link(operator)
+          send_login_link(operator, conn.assigns.host_tenant)
         end
     end
 
     # Keep the response identical whether the account exists or not.
     conn
     |> put_session(:login_sent_email, email)
-    |> redirect(to: ~p"/operator/login/sent")
+    |> redirect(to: ~p"/app/login/sent")
   end
 
-  defp send_login_link(operator) do
+  defp send_login_link(operator, tenant) do
     updated_operator = ensure_login_token(operator)
 
     login_url =
-      CustyardWeb.Endpoint.url() <>
-        ~p"/operator/login/verify/#{updated_operator.login_token}"
+      Custyard.Tenants.url(tenant) <>
+        ~p"/app/login/verify/#{updated_operator.login_token}"
 
     LoginEmail.deliver_login_link(updated_operator, login_url)
   end
@@ -119,31 +117,14 @@ defmodule CustyardWeb.Operator.SessionController do
   # link is built from whatever the row then holds: two concurrent requests
   # (a double-submitted form) converge on one token instead of the second
   # write invalidating the email the first one already sent.
-  defp ensure_login_token(operator) do
-    if OperatorAccount.login_token_valid?(operator) do
-      operator
-    else
-      %{changes: fresh} = OperatorAccount.login_token_changeset(operator)
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      from(o in OperatorAccount,
-        where: o.id == ^operator.id,
-        where:
-          is_nil(o.login_token) or is_nil(o.login_token_expires_at) or
-            o.login_token_expires_at <= ^now
-      )
-      |> Repo.update_all(set: Map.to_list(fresh))
-
-      Repo.get!(OperatorAccount, operator.id)
-    end
-  end
+  defp ensure_login_token(operator), do: Account.ensure_login_token(operator)
 
   def sent(conn, _params) do
     email = get_session(conn, :login_sent_email)
 
     conn
     |> delete_session(:login_sent_email)
-    |> render(:sent, email: email || "", layout: {CustyardWeb.Layouts, :root})
+    |> render(:sent, email: email || "", layout: false)
   end
 
   # GET peeks: the link in the email renders a page with a "Log in" button
@@ -152,9 +133,9 @@ defmodule CustyardWeb.Operator.SessionController do
   # "expired") nor walks away with an operator session. Only the explicit
   # POST below consumes the token. Same pattern as ClaimConfirmationController.
   def verify(conn, %{"token" => token}) do
-    case lookup_login_token(token) do
+    case lookup_login_token(conn, token) do
       {:ok, _operator} ->
-        render(conn, :verify, token: token, layout: {CustyardWeb.Layouts, :root})
+        render(conn, :verify, token: token, layout: false)
 
       {:error, :expired} ->
         render_expired_token(conn)
@@ -168,7 +149,7 @@ defmodule CustyardWeb.Operator.SessionController do
   end
 
   def consume(conn, %{"token" => token}) do
-    with {:ok, operator} <- lookup_login_token(token),
+    with {:ok, operator} <- lookup_login_token(conn, token),
          :ok <- clear_login_token(operator, token) do
       conn
       |> configure_session(renew: true)
@@ -177,7 +158,7 @@ defmodule CustyardWeb.Operator.SessionController do
       # the highest id after a delete); see OperatorAuth.session_operator/2.
       |> put_session(:operator_claim, OperatorAccount.session_claim(operator))
       |> put_flash(:info, "Welcome back")
-      |> redirect(to: ~p"/operator")
+      |> redirect(to: ~p"/app")
     else
       {:error, :expired} -> render_expired_token(conn)
       {:error, :invalid} -> render_invalid_token(conn)
@@ -188,22 +169,21 @@ defmodule CustyardWeb.Operator.SessionController do
   # Clear the token so it can't be reused. Conditional on the token still
   # being stored, so of two concurrent POSTs with one link only the first
   # gets a session.
-  defp clear_login_token(operator, token) do
-    {cleared, _} =
-      from(o in OperatorAccount, where: o.id == ^operator.id and o.login_token == ^token)
-      |> Repo.update_all(set: [login_token: nil, login_token_expires_at: nil])
-
-    if cleared == 1, do: :ok, else: {:error, :invalid}
-  end
+  defp clear_login_token(operator, token),
+    do: Account.consume_login_token(operator, token)
 
   # A link minted before the operator's organization was deleted still
   # verifies, but never yields a session. Only the token holder sees why.
-  defp lookup_login_token(token) do
+  defp lookup_login_token(conn, token) do
     with true <- String.match?(token, @token_pattern),
-         %OperatorAccount{} = operator <- Repo.get_by(OperatorAccount, login_token: token) do
+         %OperatorAccount{} = operator <-
+           Repo.get_by(OperatorAccount,
+             tenant_id: conn.assigns.host_tenant.id,
+             login_token: token
+           ) do
       cond do
         not OperatorAccount.verify_login_token(operator, token) -> {:error, :expired}
-        OperatorAccount.orphaned?(operator) -> {:error, :no_organization}
+        not Custyard.Tenants.active?(operator.tenant_id) -> {:error, :no_organization}
         true -> {:ok, operator}
       end
     else
@@ -216,7 +196,7 @@ defmodule CustyardWeb.Operator.SessionController do
       error: "This login link has expired. Please request a new one.",
       email: nil,
       info: nil,
-      layout: {CustyardWeb.Layouts, :root}
+      layout: false
     )
   end
 
@@ -225,7 +205,7 @@ defmodule CustyardWeb.Operator.SessionController do
     |> delete_session(:operator_id)
     |> delete_session(:operator_claim)
     |> put_flash(:info, "Logged out")
-    |> redirect(to: ~p"/operator/login")
+    |> redirect(to: ~p"/app/login")
   end
 
   defp render_no_organization(conn) do
@@ -233,7 +213,7 @@ defmodule CustyardWeb.Operator.SessionController do
       error: OperatorAuth.no_organization_message(),
       email: nil,
       info: nil,
-      layout: {CustyardWeb.Layouts, :root}
+      layout: false
     )
   end
 
@@ -242,7 +222,7 @@ defmodule CustyardWeb.Operator.SessionController do
       error: "Invalid or expired login link. Please request a new one.",
       email: nil,
       info: nil,
-      layout: {CustyardWeb.Layouts, :root}
+      layout: false
     )
   end
 end

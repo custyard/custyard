@@ -14,7 +14,7 @@ defmodule CustyardWeb.Operator.AttachmentController do
   def show(conn, %{"id" => id}) do
     case Integer.parse(id) do
       {int_id, ""} ->
-        attachment = Attachments.get_for_operator(int_id, conn.assigns.current_operator)
+        attachment = Attachments.get(conn.assigns.current_scope, int_id)
         AttachmentDownload.send_attachment(conn, attachment)
 
       _invalid ->
@@ -25,7 +25,7 @@ defmodule CustyardWeb.Operator.AttachmentController do
   def inline(conn, %{"id" => id}) do
     case Integer.parse(id) do
       {int_id, ""} ->
-        attachment = Attachments.get_for_operator(int_id, conn.assigns.current_operator)
+        attachment = Attachments.get(conn.assigns.current_scope, int_id)
         AttachmentDownload.send_inline_image(conn, attachment)
 
       _invalid ->

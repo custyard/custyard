@@ -4,10 +4,10 @@ defmodule Custyard.Acknowledgments.TransportTest do
 
   test "source attribution comes from the subscription" do
     assert {:error, :source_mismatch} =
-             Consumer.process(~s({"source":"other-production"}), "ots-production")
+             Consumer.process(~s({"source":"other-production"}), 123, "ots-production")
 
-    assert {:error, :invalid_json} = Consumer.process("not json", "ots-production")
-    assert {:error, :invalid_json} = Consumer.process("[]", "ots-production")
+    assert {:error, :invalid_json} = Consumer.process("not json", 123, "ots-production")
+    assert {:error, :invalid_json} = Consumer.process("[]", 123, "ots-production")
   end
 
   test "stale subscription deliveries cannot acknowledge the current channel" do
@@ -24,13 +24,17 @@ defmodule Custyard.Acknowledgments.TransportTest do
     body = ~s({"source":"ots-production"})
 
     assert {:error, :storage_unavailable} =
-             Consumer.process(body, "ots-production", fn _ -> raise "database unavailable" end)
+             Consumer.process(body, 123, "ots-production", fn _, _ ->
+               raise "database unavailable"
+             end)
 
     assert {:error, :storage_unavailable} =
-             Consumer.process(body, "ots-production", fn _ -> exit(:database_unavailable) end)
+             Consumer.process(body, 123, "ots-production", fn _, _ ->
+               exit(:database_unavailable)
+             end)
 
     assert {:error, :message_too_large} =
-             Consumer.process(String.duplicate("x", 65_537), "ots-production")
+             Consumer.process(String.duplicate("x", 65_537), 123, "ots-production")
   end
 
   test "retry headers accept only nonnegative integers" do

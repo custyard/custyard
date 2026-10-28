@@ -30,8 +30,11 @@ defmodule Custyard.Auth.Account do
   end
 
   def password_changeset(account, attrs) do
-    account |> cast(attrs, [:password]) |> validate_required(:password)
-    |> validate_length(:password, min: 8, max: 72) |> hash_password()
+    account
+    |> cast(attrs, [:password])
+    |> validate_required(:password)
+    |> validate_length(:password, min: 8, max: 72)
+    |> hash_password()
   end
 
   defp hash_password(changeset) do
@@ -41,30 +44,50 @@ defmodule Custyard.Auth.Account do
     end
   end
 
-  def verify_password(%{password_hash: hash}, password) when is_binary(hash) and is_binary(password),
-    do: Argon2.verify_pass(password, hash)
+  def verify_password(%{password_hash: hash}, password)
+      when is_binary(hash) and is_binary(password),
+      do: Argon2.verify_pass(password, hash)
+
   def verify_password(_, _) do
     Argon2.no_user_verify()
     false
   end
 
   def session_claim(%{session_claim: claim}), do: claim
+
   def session_claim_matches?(%{session_claim: stored}, claim)
       when is_binary(stored) and is_binary(claim), do: Plug.Crypto.secure_compare(stored, claim)
+
   def session_claim_matches?(_, _), do: false
 
   def login_token_changeset(account) do
     token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
-    expires = DateTime.utc_now() |> DateTime.add(login_token_ttl_minutes() * 60, :second) |> DateTime.truncate(:second)
+
+    expires =
+      DateTime.utc_now()
+      |> DateTime.add(login_token_ttl_minutes() * 60, :second)
+      |> DateTime.truncate(:second)
+
     change(account, login_token: token, login_token_expires_at: expires)
   end
 
-  def clear_login_token_changeset(account), do: change(account, login_token: nil, login_token_expires_at: nil)
-  def login_token_valid?(%{login_token: token} = account) when is_binary(token), do: verify_login_token(account, token)
+  def clear_login_token_changeset(account),
+    do: change(account, login_token: nil, login_token_expires_at: nil)
+
+  def login_token_valid?(%{login_token: token} = account) when is_binary(token),
+    do: verify_login_token(account, token)
+
   def login_token_valid?(_), do: false
-  def verify_login_token(%{login_token: token, login_token_expires_at: %DateTime{} = expires}, provided)
+
+  def verify_login_token(
+        %{login_token: token, login_token_expires_at: %DateTime{} = expires},
+        provided
+      )
       when is_binary(token) and is_binary(provided),
-      do: Plug.Crypto.secure_compare(token, provided) and DateTime.compare(expires, DateTime.utc_now()) == :gt
+      do:
+        Plug.Crypto.secure_compare(token, provided) and
+          DateTime.compare(expires, DateTime.utc_now()) == :gt
+
   def verify_login_token(_, _), do: false
 
   def ensure_login_token(%schema{} = account) do
@@ -73,26 +96,39 @@ defmodule Custyard.Auth.Account do
     else
       %{changes: fresh} = login_token_changeset(account)
       now = DateTime.utc_now() |> DateTime.truncate(:second)
-      from(a in schema, where: a.id == ^account.id,
-        where: is_nil(a.login_token) or is_nil(a.login_token_expires_at) or a.login_token_expires_at <= ^now)
+
+      from(a in schema,
+        where: a.id == ^account.id,
+        where:
+          is_nil(a.login_token) or is_nil(a.login_token_expires_at) or
+            a.login_token_expires_at <= ^now
+      )
       |> Repo.update_all(set: Map.to_list(fresh))
+
       Repo.get!(schema, account.id)
     end
   end
 
   def consume_login_token(%schema{} = account, token) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    {count, _} = from(a in schema, where: a.id == ^account.id and a.login_token == ^token,
-      where: a.login_token_expires_at > ^now)
+
+    {count, _} =
+      from(a in schema,
+        where: a.id == ^account.id and a.login_token == ^token,
+        where: a.login_token_expires_at > ^now
+      )
       |> Repo.update_all(set: [login_token: nil, login_token_expires_at: nil])
+
     if count == 1, do: :ok, else: {:error, :invalid}
   end
 
   def lock_current(%schema{id: id}) when is_integer(id) do
-    case from(a in schema, where: a.id == ^id, update: [set: [updated_at: a.updated_at]]) |> Repo.update_all([]) do
+    case from(a in schema, where: a.id == ^id, update: [set: [updated_at: a.updated_at]])
+         |> Repo.update_all([]) do
       {1, _} -> Repo.get!(schema, id)
       _ -> nil
     end
   end
+
   def lock_current(_), do: nil
 end

@@ -202,27 +202,21 @@ defmodule Custyard.Email.DeliveryStatus do
   # Outbound only: inbound messages have a nil delivery_status and must never
   # be touched, even when they carry the same provider id.
   defp find_message(provider_id, opts) do
-    query =
-      from(m in Message,
-        where: m.lettermint_message_id == ^provider_id and not is_nil(m.delivery_status),
-        limit: 1
-      )
+    case Keyword.fetch(opts, :tenant_id) do
+      {:ok, tenant_id} when is_integer(tenant_id) ->
+        Repo.one(
+          from m in Message,
+            where: m.tenant_id == ^tenant_id and m.lettermint_message_id == ^provider_id,
+            where: not is_nil(m.delivery_status),
+            limit: 1
+        )
+        |> case do
+          nil -> {:ignored, :unknown_message}
+          message -> {:ok, message}
+        end
 
-    query =
-      case Keyword.get(opts, :tenant_id) do
-        nil ->
-          query
-
-        tenant_id ->
-          from(m in query,
-            join: c in assoc(m, :conversation),
-            where: c.tenant_id == ^tenant_id
-          )
-      end
-
-    case Repo.one(query) do
-      nil -> {:ignored, :unknown_message}
-      message -> {:ok, message}
+      _ ->
+        {:ignored, :tenant_required}
     end
   end
 
@@ -366,6 +360,7 @@ defmodule Custyard.Email.DeliveryStatus do
     recipient = recipient || %{role: nil, from: nil, to: nil}
 
     attrs = %{
+      tenant_id: message.tenant_id,
       event_type: :delivery_status_updated,
       source: @source,
       message_id: message.message_id,

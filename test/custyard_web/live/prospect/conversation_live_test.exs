@@ -7,9 +7,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
   import Phoenix.LiveViewTest
 
   alias Custyard.{Conversation, Conversations, Intake, Message, Prospect, RateLimit, Repo}
+  alias Custyard.Auth.Token
 
   @generous [limit: 1000, window_ms: 60_000]
-  @unavailable "/c/unavailable"
+  @unavailable "/threads/unavailable"
 
   setup do
     RateLimit.reset()
@@ -26,6 +27,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
   defp put_buckets(overrides \\ []) do
     base = [
+      public_instance_ip: @generous,
       intake_get: @generous,
       intake_post: @generous,
       conversation_mount: @generous,
@@ -43,7 +45,13 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
   defp create_intake!(body \\ "Hello, I need help with X") do
     source = insert_intake_source(mode: :active)
-    {:ok, result} = Intake.create_intake_conversation(source.key, body)
+
+    unless Repo.get_by(Custyard.EmailConnection, tenant_id: source.tenant_id),
+      do: configure_tenant_email(source.tenant_id)
+
+    {:ok, result} =
+      Intake.create_intake_conversation(source.key, body, tenant_id: source.tenant_id)
+
     result
   end
 
@@ -89,10 +97,16 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
           due_at: ~U[2026-11-20 16:45:00Z]
         )
 
-      operator = insert_operator_account()
-      {:ok, _label} = Custyard.Labels.create_and_assign(operator, conversation, "Private label")
+      operator = insert_operator_account(role: "admin")
 
-      {:ok, view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _label} =
+        Custyard.Labels.create_and_assign(
+          Custyard.Scope.for_staff(operator, Custyard.Tenants.get_tenant!(operator.tenant_id)),
+          conversation,
+          "Private label"
+        )
+
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert has_element?(
                view,
@@ -114,7 +128,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
     test "task refresh does not reveal new content after the token is revoked" do
       %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, view, _} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
       prospect = Intake.get_prospect(conversation)
 
       prospect
@@ -131,6 +145,36 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       assert_redirect(view, @unavailable)
     end
 
+    test "message notifications reject a revoked credential without an access-change broadcast" do
+      %{conversation: conversation, access_token: token} = create_intake!()
+      {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
+
+      Intake.get_prospect(conversation)
+      |> Ecto.Changeset.change(revoked_at: DateTime.utc_now(:second))
+      |> Repo.update!()
+
+      insert_message(conversation_id: conversation.id, body: "Private after revocation")
+      send(view.pid, {:message_added, conversation.id})
+
+      assert_redirect(view, @unavailable)
+    end
+
+    test "a rotated credential cannot claim a slug on an already connected view" do
+      %{conversation: conversation, access_token: token} = create_intake!()
+      {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
+
+      Intake.get_prospect(conversation)
+      |> Prospect.rotate_token_changeset(Token.hash("replacement-token"))
+      |> Repo.update!()
+
+      render_click(view, "claim_slug", %{
+        "claim" => %{"slug" => "revoked-claim", "email" => "person@example.com"}
+      })
+
+      assert_redirect(view, @unavailable)
+      refute Custyard.Slugs.get_claim_for_conversation(conversation.id)
+    end
+
     test "a fresh session shows the thread including operator replies" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
@@ -142,7 +186,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       )
 
       # Cookie-less fresh conn: the URL alone is the credential.
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(data-testid="resume-conversation")
       assert html =~ "Hello, I need help with X"
@@ -156,7 +200,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       %{conversation: conversation, access_token: token} = create_intake!()
 
       # Prospect's own message is the most recent → collapsed behind a button.
-      {:ok, view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-add-comment")
       refute html =~ ~s(data-testid="resume-reply-form")
 
@@ -167,7 +211,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       # When the team spoke last, the form shows automatically as "Reply".
       insert_message(conversation_id: conversation.id, source: :operator, body: "On it!")
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-reply-form")
       refute html =~ ~s(data-testid="resume-add-comment")
     end
@@ -182,7 +226,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
         is_internal_note: true
       )
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       refute html =~ "INTERNAL: lowball them"
     end
@@ -198,7 +242,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
             String.duplicate("a", 43)
           ] do
         assert {:error, {:redirect, %{to: @unavailable}}} =
-                 live(build_conn(), ~p"/c/#{guess}")
+                 live(build_conn(), ~p"/threads/#{guess}")
       end
     end
 
@@ -206,7 +250,8 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       %{conversation: conversation, access_token: token} = create_intake!()
       {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
 
-      assert {:error, {:redirect, %{to: @unavailable}}} = live(build_conn(), ~p"/c/#{token}")
+      assert {:error, {:redirect, %{to: @unavailable}}} =
+               live(build_conn(), ~p"/threads/#{token}")
 
       # Identical failure rendering for every class: same redirect target,
       # one static page.
@@ -218,13 +263,13 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "the email prompt renders only while no email is captured" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-email-prompt")
       refute html =~ ~s(data-testid="resume-notify-toggle")
 
       {:ok, _conversation} = Intake.capture_email(conversation, "captured@example.com")
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       refute html =~ ~s(data-testid="resume-email-prompt")
       assert html =~ ~s(data-testid="resume-notify-toggle")
     end
@@ -234,9 +279,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       %{access_token: token} = create_intake!()
 
       # First page view: disconnected + connected mount = the whole budget.
-      {:ok, _view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
-      assert {:error, {:redirect, %{to: @unavailable}}} = live(build_conn(), ~p"/c/#{token}")
+      assert {:error, {:redirect, %{to: @unavailable}}} =
+               live(build_conn(), ~p"/threads/#{token}")
     end
   end
 
@@ -251,10 +297,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
           body: "Operator reply sent by mistake"
         )
 
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
       {:ok, _deleted} = Conversations.soft_delete_message(message, operator)
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(data-testid="resume-message-tombstone")
       assert html =~ "This message was deleted"
@@ -274,10 +320,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
           body: "Accidentally pasted a password here"
         )
 
-      {:ok, view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ "Accidentally pasted a password here"
 
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
       {:ok, _deleted} = Conversations.soft_delete_message(message, operator)
 
       # The message_updated broadcast reloads the thread in place.
@@ -296,9 +342,10 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
           link_url: "https://acme.example/product"
         )
 
-      {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, "Hello")
+      {:ok, %{access_token: token}} =
+        Intake.create_intake_conversation(source.key, "Hello", tenant_id: source.tenant_id)
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(data-testid="resume-source-link")
       assert html =~ ~s(href="https://acme.example/product")
@@ -310,7 +357,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "renders no link when the source has no link configured" do
       %{access_token: token} = create_intake!()
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       refute html =~ ~s(data-testid="resume-source-link")
     end
@@ -323,10 +370,12 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
           link_url: "https://acme.example/product"
         )
 
-      {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, "Hello")
-      {:ok, _deleted} = Intake.delete_source(source)
+      {:ok, %{access_token: token}} =
+        Intake.create_intake_conversation(source.key, "Hello", tenant_id: source.tenant_id)
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _deleted} = Intake.delete_source(staff_scope(source.tenant_id), source)
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(data-testid="resume-conversation")
       assert html =~ "Hello"
@@ -341,10 +390,13 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
           link_url: "https://acme.example/product"
         )
 
-      {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, "Hello")
-      {:ok, _source} = Intake.update_source(source, %{enabled: false})
+      {:ok, %{access_token: token}} =
+        Intake.create_intake_conversation(source.key, "Hello", tenant_id: source.tenant_id)
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _source} =
+        Intake.update_source(staff_scope(source.tenant_id), source, %{enabled: false})
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(data-testid="resume-source-link")
       assert html =~ "Acme Product"
@@ -356,7 +408,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       %{conversation: conversation, access_token: token} = create_intake!()
       {:ok, _conversation} = Conversations.update_conversation(conversation, %{state: :resolved})
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       html = submit_reply(view, "I am back!")
 
@@ -381,7 +433,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "reply bodies are validated and bounded like intake submissions" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       submit_reply(view, "   ")
 
@@ -397,7 +449,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "resending the latest message verbatim is refused with a friendly notice" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       submit_reply(view, "Any update?")
       assert message_count(conversation.id) == 2
@@ -420,7 +472,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       put_buckets(conversation_reply: [limit: 2, window_ms: 60_000])
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       for n <- 1..2 do
         submit_reply(view, "Reply #{n}")
@@ -437,7 +489,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "mid-session revocation shuts the mounted view down to the uniform page" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       # The revocation broadcast alone re-authenticates the mounted socket:
       # no further mutation is needed for the view to halt, and no reply
@@ -451,7 +503,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "token rotation shuts down sockets mounted under the old token" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       # An operator rotating a leaked link must cut off already-open tabs:
       # the socket re-reads the prospect, sees its mount-time hash no longer
@@ -473,7 +525,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       html =
         view
@@ -515,7 +567,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       [contact_html, domain_html, none_html] =
         for {email, %{access_token: token}} <- captures do
-          {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+          {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
           view
           |> form(~s([data-testid="resume-email-form"]), %{
@@ -533,7 +585,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       put_buckets(email_capture: [limit: 1, window_ms: 60_000])
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       # First attempt consumes the budget even though it fails validation.
       view
@@ -559,7 +611,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       %{conversation: conversation, access_token: token} = create_intake!()
       {:ok, _conversation} = Intake.capture_email(conversation, "toggle@example.com")
 
-      {:ok, view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-notify-toggle")
 
       view
@@ -580,7 +632,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       %{conversation: conversation, access_token: token} = create_intake!()
       {:ok, _conversation} = Intake.capture_email(conversation, "toggle@example.com")
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       view
       |> element(~s([data-testid="resume-notify-form"]))
@@ -611,7 +663,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "offers the claim form when the conversation has no live claim" do
       %{access_token: token} = create_intake!()
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(data-testid="resume-claim-panel")
       assert html =~ ~s(data-testid="resume-claim-form")
@@ -623,7 +675,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "submit claims the slug, captures the email, honors notify, and sends the email" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       html = submit_claim(view, "Acme-Corp", "Buyer@Example.com", "true")
 
@@ -642,8 +694,8 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       # the /r conversation URL the prospect already holds.
       assert_email_sent(fn email ->
         assert email.text_body =~ "acme-corp"
-        assert email.text_body =~ "/claim/"
-        assert email.text_body =~ "/c/#{token}"
+        assert email.text_body =~ "/claims/"
+        assert email.text_body =~ "/threads/#{token}"
       end)
 
       # The panel flips to the provisional state with an expiry countdown.
@@ -655,7 +707,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
     test "notify unchecked leaves notifications off" do
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       submit_claim(view, "quiet-corp", "quiet@example.com", "false")
 
       refute Repo.get_by!(Prospect, conversation_id: conversation.id).notify_on_reply
@@ -667,7 +719,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       %{conversation: conversation, access_token: token} = create_intake!("Second prospect")
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       html = submit_claim(view, "contested", "second@example.com")
 
       # The changeset error renders; nothing was captured or sent.
@@ -683,7 +735,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       %{conversation: conversation, access_token: token} = create_intake!()
       {:ok, _} = Intake.capture_email(conversation, "first@example.com")
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       html = submit_claim(view, "sturdy-claim", "different@example.com")
 
       claim = Slugs.get_claim_for_conversation(conversation.id)
@@ -707,7 +759,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, _} = Intake.capture_email(conversation, "first@example.com")
       refute Repo.get_by!(Prospect, conversation_id: conversation.id).notify_on_reply
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       submit_claim(view, "notify-me", "different@example.com", "true")
 
       # capture_email returned :already_captured (write-once email), but a
@@ -723,12 +775,12 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       # Exhaust the per-email daily budget from another conversation
       # claiming with the same anchor email.
       first = create_intake!("Earlier claim")
-      {:ok, first_view, _html} = live(build_conn(), ~p"/c/#{first.access_token}")
+      {:ok, first_view, _html} = live(build_conn(), ~p"/threads/#{first.access_token}")
       submit_claim(first_view, "first-claim", "shared@example.com")
       assert_email_sent()
 
       %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
       html = submit_claim(view, "quota-hit", "shared@example.com")
 
       # The claim committed and the panel flips to provisional...
@@ -757,7 +809,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       # Expiry released only the slug row: the conversation link still
       # authenticates and the thread still renders...
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ "Hello, I need help with X"
 
       # ...and the panel offers a fresh claim form.
@@ -769,7 +821,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       %{conversation: conversation, access_token: token} = create_intake!()
       {:ok, _} = Intake.capture_email(conversation, "captured@example.com")
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(value="captured@example.com")
     end
@@ -780,9 +832,9 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, _slug, confirmation_token} =
         Slugs.claim("all-done", "buyer@example.com", conversation)
 
-      {:ok, _} = Slugs.confirm(confirmation_token)
+      {:ok, _} = Slugs.confirm(confirmation_token, conversation.tenant_id)
 
-      {:ok, _view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
 
       assert html =~ ~s(data-testid="resume-claim-status-confirmed")
       assert html =~ "all-done"
@@ -795,7 +847,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, claim, _confirmation_token} =
         Slugs.claim("resend-me", "buyer@example.com", conversation)
 
-      {:ok, view, html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
       assert html =~ ~s(data-testid="resume-claim-resend")
 
       result =
@@ -810,7 +862,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       assert_email_sent(fn email ->
         assert email.text_body =~ "resend-me"
-        assert email.text_body =~ "/claim/"
+        assert email.text_body =~ "/claims/"
       end)
     end
 
@@ -821,7 +873,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, claim, _confirmation_token} =
         Slugs.claim("throttled", "buyer@example.com", conversation)
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       # First resend consumes the whole budget.
       view |> element(~s([data-testid="resume-claim-resend"])) |> render_click()
@@ -842,7 +894,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       put_buckets(claim_submit: [limit: 1, window_ms: 60_000])
       %{conversation: conversation, access_token: token} = create_intake!()
 
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       # Malformed submissions fail the DB-free shape check and spend
       # nothing — a typo must not burn the small hourly allowance.
@@ -866,7 +918,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       {:ok, _slug, _token} = Slugs.claim("contested", "first@example.com", holder.conversation)
 
       %{conversation: conversation, access_token: token} = create_intake!()
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       html = submit_claim(view, "contested", "second@example.com")
       assert html =~ "is already claimed"
@@ -898,12 +950,13 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
       # The prospect cascaded away with the conversation, so the token no
       # longer resolves...
-      assert Intake.get_conversation_by_access_token(token) == {:error, :not_found}
+      assert Intake.get_conversation_by_access_token(token, conversation.tenant_id) ==
+               {:error, :not_found}
 
       # ...and the conversation URL renders the same unavailable page as an
       # invalid token — no validity oracle.
       assert {:error, {:redirect, %{to: @unavailable}}} =
-               live(build_conn(), ~p"/c/#{token}")
+               live(build_conn(), ~p"/threads/#{token}")
     end
   end
 
@@ -932,7 +985,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
 
     test "capturing an email on the thread page sends the resume URL even without notify" do
       %{access_token: token} = create_intake!()
-      {:ok, view, _html} = live(build_conn(), ~p"/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
 
       view
       |> form(~s([data-testid="resume-email-form"]), %{
@@ -941,7 +994,7 @@ defmodule CustyardWeb.Prospect.ConversationLiveTest do
       |> render_submit()
 
       assert_receive {:email, %Swoosh.Email{to: [{_, "late@example.com"}]} = email}
-      assert email.text_body =~ "/c/#{token}"
+      assert email.text_body =~ "/threads/#{token}"
     end
   end
 end

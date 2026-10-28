@@ -12,7 +12,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, subject: "My Test Subject")
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "My Test Subject"
     end
@@ -21,7 +21,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "Back to requests"
     end
@@ -30,7 +30,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "Write a reply"
       assert html =~ "Send Reply"
@@ -40,9 +40,9 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
 
       {:error, {:live_redirect, %{to: redirect_path}}} =
-        live(conn, ~p"/p/#{org.token}/request/99999")
+        live(conn, ~p"/portal/#{portal_token(org)}/request/99999")
 
-      assert redirect_path == "/p/#{org.token}"
+      assert redirect_path == "/portal/#{portal_token(org)}"
     end
 
     test "redirects if conversation belongs to different org", %{conn: conn} do
@@ -51,9 +51,9 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       conv = insert_conversation(organization_id: org2.id)
 
       {:error, {:live_redirect, %{to: redirect_path}}} =
-        live(conn, ~p"/p/#{org1.token}/request/#{conv.id}")
+        live(conn, ~p"/portal/#{portal_token(org1)}/request/#{conv.id}")
 
-      assert redirect_path == "/p/#{org1.token}"
+      assert redirect_path == "/portal/#{portal_token(org1)}"
     end
   end
 
@@ -65,7 +65,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       insert_message(conversation_id: conv.id, body: "First message content", source: :email)
       insert_message(conversation_id: conv.id, body: "Second message content", source: :portal)
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "First message content"
       assert html =~ "Second message content"
@@ -78,7 +78,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       insert_message(conversation_id: conv.id, body: "Public message", is_internal_note: false)
       insert_message(conversation_id: conv.id, body: "Internal note", is_internal_note: true)
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "Public message"
       refute html =~ "Internal note"
@@ -90,7 +90,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
 
       insert_message(conversation_id: conv.id, body: "Operator reply", source: :operator)
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "Operator reply"
       assert html =~ "border-indigo"
@@ -107,7 +107,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
         sender_email: "operator@internal.example.com"
       )
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "Support Team"
       refute html =~ "operator@internal.example.com"
@@ -124,7 +124,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
         sender_email: "customer@example.com"
       )
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "customer@example.com"
     end
@@ -133,11 +133,11 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
       message = insert_message(conversation_id: conv.id, body: "Deleted operator slip")
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
 
       {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, operator)
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ ~s(data-testid="portal-message-tombstone")
       assert html =~ "This message was deleted"
@@ -148,9 +148,9 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
       message = insert_message(conversation_id: conv.id, body: "Regretted message")
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
 
-      {:ok, view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
       assert html =~ "Regretted message"
 
       {:ok, _deleted} = Custyard.Conversations.soft_delete_message(message, operator)
@@ -167,7 +167,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       view
       |> form("form", %{"body" => "This is my reply"})
@@ -184,7 +184,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       view
       |> form("form", %{"body" => "Form reply text"})
@@ -207,7 +207,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       view
       |> form("form", %{"body" => "   "})
@@ -222,7 +222,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, state: :dormant)
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       view
       |> form("form", %{"body" => "Reactivating reply"})
@@ -236,7 +236,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, state: :waiting)
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       view
       |> form("form", %{"body" => "Follow up reply"})
@@ -250,7 +250,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id, cached_score: 0)
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       view
       |> form("form", %{"body" => "Score update reply"})
@@ -275,7 +275,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
           portal_visible: true
         })
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert html =~ "Tasks"
       assert html =~ task.title
@@ -294,7 +294,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
           portal_visible: false
         })
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
 
       refute html =~ "Hidden Task"
     end
@@ -305,7 +305,7 @@ defmodule CustyardWeb.Portal.ConversationLiveTest do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
-      {:ok, view, html} = live(conn, ~p"/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, html} = live(conn, ~p"/portal/#{portal_token(org)}/request/#{conv.id}")
       refute html =~ "Real-time message"
 
       # Add message and broadcast

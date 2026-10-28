@@ -8,6 +8,13 @@ defmodule Custyard.Email.DeliveryStatusTest do
   alias Custyard.{AuditEvent, Contact, Message, MessageRecipientStatus, Repo}
   alias Custyard.Email.DeliveryStatus
 
+  defp apply_event(envelope, opts \\ []) do
+    DeliveryStatus.apply_event(
+      envelope,
+      Keyword.put_new(opts, :tenant_id, Process.get(:factory_tenant_id))
+    )
+  end
+
   @provider_id "lm-msg-0a1b2c3d"
 
   describe "rank/1 and terminal?/1" do
@@ -123,7 +130,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
     } do
       envelope = envelope("message.delivered", "evt-1", delivered_data())
 
-      assert {:ok, :updated, %Message{} = updated} = DeliveryStatus.apply_event(envelope)
+      assert {:ok, :updated, %Message{} = updated} = apply_event(envelope)
       assert updated.id == outbound.id
       assert updated.delivery_status == :delivered
       assert Repo.get!(Message, outbound.id).delivery_status == :delivered
@@ -158,19 +165,17 @@ defmodule Custyard.Email.DeliveryStatusTest do
     test "a retried identical event is ignored and writes no second audit event" do
       envelope = envelope("message.delivered", "evt-1", delivered_data())
 
-      assert {:ok, :updated, _} = DeliveryStatus.apply_event(envelope)
-      assert {:ok, :ignored, :not_advanced} = DeliveryStatus.apply_event(envelope)
+      assert {:ok, :updated, _} = apply_event(envelope)
+      assert {:ok, :ignored, :not_advanced} = apply_event(envelope)
       assert Repo.aggregate(AuditEvent, :count) == 1
     end
 
     test "out-of-order sent after delivered is ignored", %{outbound: outbound} do
       assert {:ok, :updated, _} =
-               DeliveryStatus.apply_event(
-                 envelope("message.delivered", "evt-1", delivered_data())
-               )
+               apply_event(envelope("message.delivered", "evt-1", delivered_data()))
 
       assert {:ok, :ignored, :not_advanced} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.sent", "evt-0", %{
                    "message_id" => @provider_id,
                    "recipient" => "alice@customer.com"
@@ -192,7 +197,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       }
 
       assert {:ok, :updated, updated} =
-               DeliveryStatus.apply_event(envelope("message.hard_bounced", "evt-b", data))
+               apply_event(envelope("message.hard_bounced", "evt-b", data))
 
       assert updated.delivery_status == :bounced
       assert Repo.get!(Message, outbound.id).delivery_status == :bounced
@@ -209,8 +214,8 @@ defmodule Custyard.Email.DeliveryStatusTest do
     } do
       envelope = envelope("message.hard_bounced", "evt-b", %{"message_id" => @provider_id})
 
-      assert {:ok, :updated, _} = DeliveryStatus.apply_event(envelope)
-      assert {:ok, :ignored, :not_advanced} = DeliveryStatus.apply_event(envelope)
+      assert {:ok, :updated, _} = apply_event(envelope)
+      assert {:ok, :ignored, :not_advanced} = apply_event(envelope)
 
       assert Repo.get!(Message, outbound.id).delivery_status == :bounced
       assert Repo.aggregate(AuditEvent, :count) == 1
@@ -218,12 +223,12 @@ defmodule Custyard.Email.DeliveryStatusTest do
 
     test "a later terminal event replaces an earlier terminal status", %{outbound: outbound} do
       assert {:ok, :updated, _} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.hard_bounced", "evt-b", %{"message_id" => @provider_id})
                )
 
       assert {:ok, :updated, updated} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.failed", "evt-f", %{
                    "message_id" => @provider_id,
                    "reason" => "rejected",
@@ -246,19 +251,17 @@ defmodule Custyard.Email.DeliveryStatusTest do
 
     test "unknown provider message id is ignored" do
       assert {:ok, :ignored, :unknown_message} =
-               DeliveryStatus.apply_event(
-                 envelope("message.delivered", "evt-x", %{"message_id" => "lm-nope"})
-               )
+               apply_event(envelope("message.delivered", "evt-x", %{"message_id" => "lm-nope"}))
 
       assert Repo.aggregate(AuditEvent, :count) == 0
     end
 
     test "missing message id is ignored" do
       assert {:ok, :ignored, :missing_message_id} =
-               DeliveryStatus.apply_event(envelope("message.delivered", "evt-x", %{}))
+               apply_event(envelope("message.delivered", "evt-x", %{}))
 
       assert {:ok, :ignored, :missing_message_id} =
-               DeliveryStatus.apply_event(%{"event" => "message.delivered", "data" => "junk"})
+               apply_event(%{"event" => "message.delivered", "data" => "junk"})
     end
 
     test "an inbound message with the same provider id is never touched", %{
@@ -280,9 +283,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       assert is_nil(inbound.delivery_status)
 
       assert {:ok, :updated, updated} =
-               DeliveryStatus.apply_event(
-                 envelope("message.delivered", "evt-1", delivered_data())
-               )
+               apply_event(envelope("message.delivered", "evt-1", delivered_data()))
 
       assert updated.id == outbound.id
       assert Repo.get!(Message, inbound.id).delivery_status == nil
@@ -305,14 +306,12 @@ defmodule Custyard.Email.DeliveryStatusTest do
       )
 
       assert {:ok, :ignored, :unknown_message} =
-               DeliveryStatus.apply_event(
-                 envelope("message.delivered", "evt-1", delivered_data())
-               )
+               apply_event(envelope("message.delivered", "evt-1", delivered_data()))
     end
 
     test "soft bounce is ignored", %{outbound: outbound} do
       assert {:ok, :ignored, :unknown_event} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.soft_bounced", "evt-s", %{"message_id" => @provider_id})
                )
 
@@ -330,7 +329,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       )
 
       assert {:ok, :ignored, :not_advanced} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.delivered", "evt-w", %{"message_id" => "lm-withheld"})
                )
     end
@@ -351,17 +350,17 @@ defmodule Custyard.Email.DeliveryStatusTest do
       on_exit(fn -> :telemetry.detach("delivery-status-test-#{inspect(ref)}") end)
 
       envelope = envelope("message.delivered", "evt-1", delivered_data())
-      assert {:ok, :updated, _} = DeliveryStatus.apply_event(envelope)
+      assert {:ok, :updated, _} = apply_event(envelope)
       assert_receive {^ref, %{count: 1}, %{event: "message.delivered", result: :updated}}
 
-      assert {:ok, :ignored, _} = DeliveryStatus.apply_event(envelope)
+      assert {:ok, :ignored, _} = apply_event(envelope)
       assert_receive {^ref, %{count: 1}, %{event: "message.delivered", result: :ignored}}
     end
 
     test "non-map or event-less payload is an error" do
-      assert {:error, :invalid_payload} = DeliveryStatus.apply_event(%{})
-      assert {:error, :invalid_payload} = DeliveryStatus.apply_event(%{"event" => 42})
-      assert {:error, :invalid_payload} = DeliveryStatus.apply_event([])
+      assert {:error, :invalid_payload} = apply_event(%{})
+      assert {:error, :invalid_payload} = apply_event(%{"event" => 42})
+      assert {:error, :invalid_payload} = apply_event([])
     end
   end
 
@@ -388,9 +387,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
     end
 
     test "a hard bounce flags the recipient at the event time", %{alice: alice, bob: bob} do
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com")))
 
       alice = Repo.reload!(alice)
       assert alice.email_status == :bounced
@@ -402,18 +399,14 @@ defmodule Custyard.Email.DeliveryStatusTest do
       alice: alice,
       bob: bob
     } do
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-b", recipient_data(" BOB@customer.com "))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-b", recipient_data(" BOB@customer.com ")))
 
       assert Repo.reload!(bob).email_status == :bounced
       assert Repo.reload!(alice).email_status == :valid
     end
 
     test "a suppression flags the recipient as suppressed", %{alice: alice} do
-      DeliveryStatus.apply_event(
-        envelope("message.suppressed", "evt-s", recipient_data("alice@customer.com"))
-      )
+      apply_event(envelope("message.suppressed", "evt-s", recipient_data("alice@customer.com")))
 
       assert Repo.reload!(alice).email_status == :suppressed
     end
@@ -421,9 +414,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
     test "the same address in another organization is not flagged" do
       other = insert_contact(email: "alice@customer.com")
 
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com")))
 
       assert Repo.reload!(other).email_status == :valid
     end
@@ -433,17 +424,17 @@ defmodule Custyard.Email.DeliveryStatusTest do
       bob: bob
     } do
       assert {:ok, :updated, %Message{delivery_status: :sent}} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.hard_bounced", "evt-1", recipient_data("bob@customer.com"))
                )
 
       assert {:ok, :updated, %Message{delivery_status: :bounced}} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.hard_bounced", "evt-2", recipient_data("alice@customer.com"))
                )
 
       assert {:ok, :ignored, :not_advanced} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.hard_bounced", "evt-3", recipient_data("bob@customer.com"))
                )
 
@@ -452,11 +443,9 @@ defmodule Custyard.Email.DeliveryStatusTest do
     end
 
     test "a later delivery clears the flag", %{alice: alice} do
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com")))
 
-      DeliveryStatus.apply_event(
+      apply_event(
         envelope(
           "message.delivered",
           "evt-d",
@@ -471,11 +460,9 @@ defmodule Custyard.Email.DeliveryStatusTest do
     end
 
     test "a delivery event older than the bounce does not clear it", %{alice: alice} do
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com")))
 
-      DeliveryStatus.apply_event(
+      apply_event(
         envelope(
           "message.delivered",
           "evt-d",
@@ -489,7 +476,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
 
     test "sent and failed events leave the address alone", %{alice: alice} do
       for event <- ["message.sent", "message.failed"] do
-        DeliveryStatus.apply_event(envelope(event, event, recipient_data("alice@customer.com")))
+        apply_event(envelope(event, event, recipient_data("alice@customer.com")))
       end
 
       assert Repo.reload!(alice).email_status == :valid
@@ -497,15 +484,13 @@ defmodule Custyard.Email.DeliveryStatusTest do
 
     test "an unknown provider message flags nothing", %{alice: alice} do
       data = %{recipient_data("alice@customer.com") | "message_id" => "lm-unknown"}
-      DeliveryStatus.apply_event(envelope("message.hard_bounced", "evt-b", data))
+      apply_event(envelope("message.hard_bounced", "evt-b", data))
 
       assert Repo.reload!(alice).email_status == :valid
     end
 
     test "changing the contact's address clears the flag", %{alice: alice} do
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com"))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-b", recipient_data("alice@customer.com")))
 
       {:ok, updated} =
         alice
@@ -550,7 +535,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       }
 
       assert {:ok, :updated, %Message{delivery_status: :sent}} =
-               DeliveryStatus.apply_event(envelope("message.hard_bounced", "evt-cc", data))
+               apply_event(envelope("message.hard_bounced", "evt-cc", data))
 
       assert Repo.get!(Message, outbound.id).delivery_status == :sent
 
@@ -573,12 +558,10 @@ defmodule Custyard.Email.DeliveryStatusTest do
     test "the customer's delivery after a CC bounce marks the message delivered", %{
       outbound: outbound
     } do
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com")))
 
       assert {:ok, :updated, %Message{delivery_status: :delivered}} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope(
                    "message.delivered",
                    "evt-to",
@@ -597,7 +580,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
 
     test "the customer's bounce marks the message bounced as before", %{outbound: outbound} do
       assert {:ok, :updated, %Message{delivery_status: :bounced}} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.hard_bounced", "evt-to", recipient_data("alice@customer.com"))
                )
 
@@ -616,8 +599,8 @@ defmodule Custyard.Email.DeliveryStatusTest do
     } do
       event = envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
 
-      assert {:ok, :updated, _} = DeliveryStatus.apply_event(event)
-      assert {:ok, :ignored, :not_advanced} = DeliveryStatus.apply_event(event)
+      assert {:ok, :updated, _} = apply_event(event)
+      assert {:ok, :ignored, :not_advanced} = apply_event(event)
 
       assert Repo.aggregate(AuditEvent, :count) == 1
       assert %{{"bob@customer.com", :cc} => :bounced} == statuses_by_recipient(outbound)
@@ -626,12 +609,10 @@ defmodule Custyard.Email.DeliveryStatusTest do
     test "a later terminal event replaces a recipient's earlier terminal status", %{
       outbound: outbound
     } do
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com")))
 
       assert {:ok, :updated, %Message{delivery_status: :sent}} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope(
                    "message.failed",
                    "evt-cc2",
@@ -650,7 +631,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
     test "an event older than the recipient's recorded status is ignored", %{
       outbound: outbound
     } do
-      DeliveryStatus.apply_event(
+      apply_event(
         envelope(
           "message.delivered",
           "evt-to",
@@ -660,7 +641,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       )
 
       assert {:ok, :ignored, :not_advanced} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope(
                    "message.hard_bounced",
                    "evt-late",
@@ -674,12 +655,10 @@ defmodule Custyard.Email.DeliveryStatusTest do
     end
 
     test "an out-of-order sent event for a recipient is ignored", %{outbound: outbound} do
-      DeliveryStatus.apply_event(
-        envelope("message.delivered", "evt-to", recipient_data("alice@customer.com"))
-      )
+      apply_event(envelope("message.delivered", "evt-to", recipient_data("alice@customer.com")))
 
       assert {:ok, :ignored, :not_advanced} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope(
                    "message.sent",
                    "evt-sent",
@@ -695,7 +674,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       outbound: outbound
     } do
       assert {:ok, :updated, %Message{delivery_status: :sent}} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.hard_bounced", "evt-bcc", recipient_data("archive@acme.com"))
                )
 
@@ -707,7 +686,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
       outbound: outbound
     } do
       assert {:ok, :updated, %Message{delivery_status: :delivered}} =
-               DeliveryStatus.apply_event(
+               apply_event(
                  envelope("message.delivered", "evt-x", %{"message_id" => @provider_id})
                )
 
@@ -733,15 +712,13 @@ defmodule Custyard.Email.DeliveryStatusTest do
       data = %{"message_id" => "lm-legacy", "recipient" => "bob@customer.com"}
 
       assert {:ok, :updated, %Message{delivery_status: :bounced}} =
-               DeliveryStatus.apply_event(envelope("message.hard_bounced", "evt-l", data))
+               apply_event(envelope("message.hard_bounced", "evt-l", data))
 
       assert %{{"bob@customer.com", :to} => :bounced} == statuses_by_recipient(legacy)
     end
 
     test "recipient rows go with their message", %{outbound: outbound} do
-      DeliveryStatus.apply_event(
-        envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com"))
-      )
+      apply_event(envelope("message.hard_bounced", "evt-cc", recipient_data("bob@customer.com")))
 
       Repo.delete!(outbound)
       assert Repo.aggregate(MessageRecipientStatus, :count) == 0

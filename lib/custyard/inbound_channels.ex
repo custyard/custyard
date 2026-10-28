@@ -53,21 +53,12 @@ defmodule Custyard.InboundChannels do
 
   def list_for_tenant(tenant_id) when is_integer(tenant_id) do
     Repo.all(
-      from c in InboundChannel,
+      from(c in InboundChannel,
         where: c.tenant_id == ^tenant_id,
         order_by: [asc: c.public_address],
-        preload: [:inbound_route, :project]
+        preload: [:inbound_route, :default_project]
+      )
     )
-  end
-
-  @doc "Channels for an organization, newest first, with route and project preloaded."
-  def list_for_organization(organization_id) when is_integer(organization_id) do
-    from(c in InboundChannel,
-      where: c.organization_id == ^organization_id,
-      order_by: [asc: c.state, asc: c.public_address],
-      preload: [:inbound_route, :project]
-    )
-    |> Repo.all()
   end
 
   @doc "Channels bound to a route."
@@ -75,32 +66,33 @@ defmodule Custyard.InboundChannels do
     from(c in InboundChannel,
       where: c.inbound_route_id == ^route_id,
       order_by: [asc: c.id],
-      preload: [:inbound_route, :project]
+      preload: [:inbound_route, :default_project]
     )
     |> Repo.all()
   end
 
   @doc "True when the route has at least one channel (so routing by token applies)."
   def route_has_channels?(route_id) when is_integer(route_id) do
-    Repo.exists?(from c in InboundChannel, where: c.inbound_route_id == ^route_id)
+    Repo.exists?(from(c in InboundChannel, where: c.inbound_route_id == ^route_id))
   end
 
   def get_channel(id) when is_integer(id) do
-    InboundChannel |> Repo.get(id) |> Repo.preload([:inbound_route, :project, :organization])
+    InboundChannel
+    |> Repo.get(id)
+    |> Repo.preload([:inbound_route, :default_project, :default_organization])
   end
 
   def get_channel!(id) when is_integer(id) do
-    InboundChannel |> Repo.get!(id) |> Repo.preload([:inbound_route, :project, :organization])
+    InboundChannel
+    |> Repo.get!(id)
+    |> Repo.preload([:inbound_route, :default_project, :default_organization])
   end
 
-  @doc "Channel scoped to an organization; nil when absent or owned elsewhere."
-  def get_channel_for_organization(id, organization_id)
-      when is_integer(id) and is_integer(organization_id) do
-    from(c in InboundChannel,
-      where: c.id == ^id and c.organization_id == ^organization_id,
-      preload: [:inbound_route, :project, :organization]
-    )
-    |> Repo.one()
+  def get(%Custyard.Scope{tenant_id: tenant_id} = scope, id) do
+    if Custyard.Scope.current_staff(scope) do
+      Repo.get_by(InboundChannel, id: id, tenant_id: tenant_id)
+      |> Repo.preload([:inbound_route, :default_organization, :default_project, :default_label])
+    end
   end
 
   @doc "Changeset for form rendering."
@@ -134,8 +126,8 @@ defmodule Custyard.InboundChannels do
   ingress identity. nil when the fallback is selected but the route has no
   domain yet (callers then use their own fallback).
   """
-  def from_address(%InboundChannel{reply_from: :public_address, public_address: address}),
-    do: address
+  def from_address(%InboundChannel{reply_from: :public_address} = channel),
+    do: InboundChannel.sending_address(channel)
 
   def from_address(%InboundChannel{reply_from: :ingress_address} = channel),
     do: ingress_address(channel)
@@ -183,9 +175,7 @@ defmodule Custyard.InboundChannels do
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
       |> Map.put("inbound_route_id", route.id)
-      |> Map.put("organization_id", route.organization_id)
       |> Map.put("tenant_id", route.tenant_id)
-      |> Map.put("project_id", route.project_id)
 
     changeset = InboundChannel.changeset(%InboundChannel{}, attrs)
 
@@ -201,7 +191,7 @@ defmodule Custyard.InboundChannels do
       })
 
       broadcast(channel)
-      {:ok, Repo.preload(channel, [:inbound_route, :project])}
+      {:ok, Repo.preload(channel, [:inbound_route, :default_project])}
     end
   end
 
@@ -304,9 +294,7 @@ defmodule Custyard.InboundChannels do
     attrs =
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
-      |> Map.drop(
-        ~w(public_address ingress_kind inbound_route_id organization_id tenant_id project_id)
-      )
+      |> Map.drop(~w(public_address ingress_kind inbound_route_id tenant_id))
 
     changeset = InboundChannel.changeset(channel, attrs)
 
@@ -314,7 +302,7 @@ defmodule Custyard.InboundChannels do
       audit(updated, :channel_updated, opts, %{changed: Map.keys(attrs)})
       if Map.has_key?(changeset.changes, :attention_bonus), do: rescore(updated)
 
-      if Map.has_key?(changeset.changes, :reply_from),
+      if Enum.any?([:reply_from, :sending_domain], &Map.has_key?(changeset.changes, &1)),
         do: Custyard.EmailSetup.invalidate_identity(updated.tenant_id)
 
       broadcast(updated)
@@ -338,6 +326,14 @@ defmodule Custyard.InboundChannels do
       current
       |> InboundChannel.state_changeset(:awaiting_first_message, %{verified_at: now()})
       |> Ecto.Changeset.merge(InboundChannel.clear_verification_changeset(current))
+    end)
+  end
+
+  def confirm_verification(%InboundChannel{state: :awaiting_first_message} = channel, opts) do
+    transition(channel, opts, fn current ->
+      if current.verification_captured_at,
+        do: InboundChannel.clear_verification_changeset(current),
+        else: invalid_state(current, :confirm_verification)
     end)
   end
 
@@ -592,7 +588,8 @@ defmodule Custyard.InboundChannels do
 
   # update_all returns a bare row; callers hold a struct with associations.
   defp keep_preloads(updated, channel) do
-    Enum.reduce([:inbound_route, :organization, :project], updated, fn assoc, acc ->
+    Enum.reduce([:inbound_route, :default_organization, :default_project], updated, fn assoc,
+                                                                                       acc ->
       case Map.fetch!(channel, assoc) do
         %Ecto.Association.NotLoaded{} -> acc
         loaded -> Map.put(acc, assoc, loaded)
@@ -620,12 +617,12 @@ defmodule Custyard.InboundChannels do
   recorded on the audit event.
   """
   def check_sending_domain(%InboundChannel{} = channel, opts \\ []) do
-    domain = InboundChannel.public_domain(channel)
+    domain = InboundChannel.sending_domain(channel)
 
     configuration = Custyard.EmailSetup.management_config(channel.tenant_id)
 
-    with {:ok, domains} <- Client.call(:list_domains, [], channel.tenant_id),
-         {:ok, status} <- domain_status(domains, domain) do
+    with {:ok, found} <- Client.call(:get_sending_domain, [domain], channel.tenant_id),
+         {:ok, status} <- domain_status(found) do
       persist_check(channel, opts, fn current ->
         if Custyard.EmailSetup.management_config(channel.tenant_id) != configuration,
           do: Repo.rollback(:stale_configuration)
@@ -660,32 +657,15 @@ defmodule Custyard.InboundChannels do
     end
   end
 
-  defp domain_status(_domains, nil), do: {:ok, "not_found"}
+  defp domain_status(nil), do: {:ok, "not_found"}
 
-  defp domain_status(domains, domain) when is_list(domains) do
-    wanted = String.downcase(domain)
-
-    found =
-      Enum.find(domains, fn
-        %{"domain" => candidate} when is_binary(candidate) -> String.downcase(candidate) == wanted
-        _ -> false
-      end)
-
-    case found do
-      nil ->
-        {:ok, "not_found"}
-
-      %{"status" => status} when is_binary(status) ->
-        if status in InboundChannel.sending_domain_statuses(),
-          do: {:ok, status},
-          else: {:error, {:unknown_domain_status, status}}
-
-      _ ->
-        {:error, {:unexpected_response, found}}
-    end
+  defp domain_status(%{"status" => status}) when is_binary(status) do
+    if status in InboundChannel.sending_domain_statuses(),
+      do: {:ok, status},
+      else: {:error, {:unknown_domain_status, status}}
   end
 
-  defp domain_status(domains, _domain), do: {:error, {:unexpected_response, domains}}
+  defp domain_status(other), do: {:error, {:unexpected_response, other}}
 
   # Network checks never hold a database transaction. Before recording results,
   # reject revoked sessions and channels whose routing/credentials changed.
@@ -705,9 +685,10 @@ defmodule Custyard.InboundChannels do
   def authorized_operator?(%Custyard.OperatorAccount{} = operator, resource) do
     current = Repo.get(Custyard.OperatorAccount, operator.id)
 
-    current &&
+    current && current.tenant_id == operator.tenant_id &&
+      Custyard.Tenants.active?(current.tenant_id) &&
       if(is_nil(resource),
-        do: current.role in ["admin", "super_admin"],
+        do: current.role == "admin",
         else: check_manager?(current, resource)
       ) &&
       Custyard.OperatorAccount.session_claim_matches?(current, operator.session_claim)
@@ -759,11 +740,12 @@ defmodule Custyard.InboundChannels do
 
       fields = [
         :tenant_id,
-        :organization_id,
+        :default_organization_id,
         :inbound_route_id,
         :state,
         :public_address,
         :reply_from,
+        :sending_domain,
         :imap_host,
         :imap_port,
         :imap_username,
@@ -790,22 +772,14 @@ defmodule Custyard.InboundChannels do
   end
 
   defp authorize_current!(current, operator, channel) do
-    unless current && check_manager?(current, channel) &&
+    unless current && current.tenant_id == operator.tenant_id && current.role == operator.role &&
+             Custyard.Tenants.active?(current.tenant_id) && check_manager?(current, channel) &&
              Custyard.OperatorAccount.session_claim_matches?(current, operator.session_claim),
            do: Repo.rollback(:unauthorized)
   end
 
-  defp check_manager?(%{role: "super_admin"}, _), do: true
-
   defp check_manager?(%{role: "admin", tenant_id: id}, %{tenant_id: id}) when is_integer(id),
     do: true
-
-  defp check_manager?(%{role: "admin", tenant_id: nil, organization_id: id}, %{
-         organization_id: id
-       })
-       when is_integer(id) do
-    true
-  end
 
   defp check_manager?(_, _), do: false
 
@@ -825,8 +799,6 @@ defmodule Custyard.InboundChannels do
     * `{:ok, channel}` for a receiving channel that matched
     * `{:paused, channel}` / `{:revoked, channel}` when the token matched a
       channel that must not create conversations
-    * `:legacy` when the route has no channels at all (routes created before
-      channels exist keep working as one implicit channel)
     * `{:error, :no_channel}` when the route has channels but nothing matched
 
   Only the recipient (`data.recipient`, falling back to `normalized.to`) is
@@ -835,7 +807,7 @@ defmodule Custyard.InboundChannels do
   def resolve_for_delivery(%InboundRoute{id: route_id} = route, recipient) do
     case list_for_route(route_id) do
       [] ->
-        :legacy
+        {:error, :no_channel}
 
       channels ->
         classify_match(
@@ -966,7 +938,7 @@ defmodule Custyard.InboundChannels do
     from(c in InboundChannel,
       where: c.state == :active and not is_nil(c.last_received_at),
       where: is_nil(c.quiet_notified_at) or c.quiet_notified_at < c.last_received_at,
-      preload: [:inbound_route, :organization]
+      preload: [:inbound_route, :default_organization]
     )
     |> Repo.all()
     |> Enum.filter(fn channel ->
@@ -1060,7 +1032,6 @@ defmodule Custyard.InboundChannels do
       |> Map.put("classification", classification)
       |> Map.put("tenant_id", route.tenant_id)
       |> Map.put("inbound_route_id", route.id)
-      |> Map.put("organization_id", route.organization_id)
       |> Map.update("subject", nil, &truncate(&1, 500))
 
     case %InboundChannelRejection{}
@@ -1088,19 +1059,6 @@ defmodule Custyard.InboundChannels do
 
     from(r in InboundChannelRejection,
       where: r.inbound_route_id == ^route_id,
-      order_by: [desc: r.inserted_at, desc: r.id],
-      limit: ^limit
-    )
-    |> Repo.all()
-  end
-
-  @doc "Rejections for an organization, newest first."
-  def list_rejections_for_organization(organization_id, opts \\ [])
-      when is_integer(organization_id) do
-    limit = Keyword.get(opts, :limit, 100)
-
-    from(r in InboundChannelRejection,
-      where: r.organization_id == ^organization_id,
       order_by: [desc: r.inserted_at, desc: r.id],
       limit: ^limit
     )
@@ -1157,7 +1115,7 @@ defmodule Custyard.InboundChannels do
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "organization:#{channel.organization_id}:channels",
+      "tenant:#{channel.tenant_id}:channels",
       {:channel_updated, channel.id}
     )
 
@@ -1172,8 +1130,8 @@ defmodule Custyard.InboundChannels do
     do: Phoenix.PubSub.subscribe(Custyard.PubSub, "channel:#{id}")
 
   @doc false
-  def subscribe_organization(organization_id),
-    do: Phoenix.PubSub.subscribe(Custyard.PubSub, "organization:#{organization_id}:channels")
+  def subscribe_tenant(tenant_id),
+    do: Phoenix.PubSub.subscribe(Custyard.PubSub, "tenant:#{tenant_id}:channels")
 
   # Audit payloads never carry the ingress token or any message content.
   defp audit(%InboundChannel{} = channel, event_type, opts, payload) do
@@ -1181,9 +1139,10 @@ defmodule Custyard.InboundChannels do
 
     attrs = %{
       event_type: event_type,
+      tenant_id: channel.tenant_id,
       source: "inbound_channels",
-      organization_id: channel.organization_id,
-      project_id: channel.project_id,
+      organization_id: channel.default_organization_id,
+      project_id: channel.default_project_id,
       payload:
         payload
         |> Map.put(:channel_id, channel.id)

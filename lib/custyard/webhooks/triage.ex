@@ -67,11 +67,13 @@ defmodule Custyard.Webhooks.Triage do
 
   @default_verification_senders %{
     google: ["forwarding-noreply@google.com"],
-    proton: ["no-reply@notify.proton.me", "notify@proton.me"]
+    proton: ["no-reply@notify.proton.me", "notify@proton.me", "no-reply@mail.proton.me"]
   }
 
   @verification_link_hosts %{google: ["google.com"], proton: ["proton.me"]}
   @google_subject ~r/forwarding confirmation/i
+  @proton_notification_sender "no-reply@mail.proton.me"
+  @proton_forwarding_subject ~r/confirm.*forward|forward.*confirm/i
   @gmail_code ~r/\(#(\d{4,})\)/
   @https_url ~r/https:\/\/[^\s<>"'\]\)]+/
   @trailing_punctuation ~r/[.,;:]+\z/
@@ -150,10 +152,7 @@ defmodule Custyard.Webhooks.Triage do
         nil
 
       identity ->
-        match =
-          if route.organization_id,
-            do: ThreadMatcher.find_thread(normalized, route.organization_id),
-            else: ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
+        match = ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
 
         case match do
           {:ok, conversation} ->
@@ -192,29 +191,13 @@ defmodule Custyard.Webhooks.Triage do
   end
 
   defp operator_owned(sender, route, channel) do
-    case Repo.get_by(OperatorAccount, email: OperatorAccount.normalize_email(sender)) do
-      %OperatorAccount{role: "super_admin"} = operator ->
-        {:ok, operator}
-
-      %OperatorAccount{} = operator ->
-        if legacy_customer_operator?(operator, route) or tenant_staff?(operator, route),
-          do: {:ok, operator},
-          else: channel_owned(sender, channel)
-
-      _other ->
-        channel_owned(sender, channel)
+    case Repo.get_by(OperatorAccount,
+           email: OperatorAccount.normalize_email(sender),
+           tenant_id: route.tenant_id
+         ) do
+      %OperatorAccount{} = operator -> {:ok, operator}
+      _ -> channel_owned(sender, channel)
     end
-  end
-
-  defp legacy_customer_operator?(operator, route) do
-    not is_nil(route.organization_id) and
-      operator.organization_id == route.organization_id and
-      (is_nil(operator.tenant_id) or operator.tenant_id == route.tenant_id)
-  end
-
-  defp tenant_staff?(operator, route) do
-    not is_nil(route.tenant_id) and operator.tenant_id == route.tenant_id and
-      (is_nil(route.organization_id) or is_nil(operator.organization_id))
   end
 
   defp channel_owned(sender, channel) do
@@ -270,14 +253,26 @@ defmodule Custyard.Webhooks.Triage do
     senders = verification_senders()
 
     cond do
-      sender in Map.get(senders, :google, []) -> :google
-      sender in Map.get(senders, :proton, []) -> :proton
-      google_domain?(sender) and is_binary(subject) and subject =~ @google_subject -> :google
-      true -> nil
+      sender in Map.get(senders, :google, []) ->
+        :google
+
+      sender in Map.get(senders, :proton, []) and proton_forwarding_notice?(sender, subject) ->
+        :proton
+
+      google_domain?(sender) and is_binary(subject) and subject =~ @google_subject ->
+        :google
+
+      true ->
+        nil
     end
   end
 
   defp google_domain?(sender), do: String.ends_with?(sender, "@google.com")
+
+  defp proton_forwarding_notice?(@proton_notification_sender, subject),
+    do: is_binary(subject) and subject =~ @proton_forwarding_subject
+
+  defp proton_forwarding_notice?(_sender, _subject), do: true
 
   defp verification_senders do
     :custyard
@@ -321,8 +316,23 @@ defmodule Custyard.Webhooks.Triage do
         _other -> []
       end
 
-    Enum.find(body_links ++ html_links, &provider_link?(&1, hosts))
+    Enum.find(body_links ++ html_links, fn url ->
+      provider_link?(url, hosts) and confirmation_action?(provider, url)
+    end)
   end
+
+  defp confirmation_action?(:proton, url) do
+    case URI.parse(url) do
+      %URI{host: "account.proton.me", path: path} when is_binary(path) ->
+        path in ["/email-forwarding/accept", "/forward/confirm", "/confirm"] or
+          String.starts_with?(path, ["/forward/confirm/", "/confirm/"])
+
+      _ ->
+        false
+    end
+  end
+
+  defp confirmation_action?(_provider, _url), do: true
 
   defp provider_link?(url, hosts) do
     case URI.parse(url) do
@@ -435,10 +445,7 @@ defmodule Custyard.Webhooks.Triage do
         where: c.email == ^email,
         where: not exists(suspect_only) or exists(accepted)
 
-    query =
-      if route.organization_id,
-        do: where(query, [c], c.organization_id == ^route.organization_id),
-        else: where(query, [_c, o], o.tenant_id == ^route.tenant_id)
+    query = where(query, [_c, o], o.tenant_id == ^route.tenant_id)
 
     Repo.exists?(query)
   end

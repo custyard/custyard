@@ -36,20 +36,15 @@ defmodule Custyard.Intake do
   @doc """
   List all intake sources, ordered by key.
   """
-  def list_sources do
-    Repo.all(from s in IntakeSource, order_by: [asc: s.key])
+  def list_sources(%Custyard.Scope{tenant_id: tenant_id} = scope) do
+    if Custyard.Scope.current_staff(scope),
+      do: Repo.all(from s in IntakeSource, where: s.tenant_id == ^tenant_id, order_by: s.key),
+      else: []
   end
 
-  def list_sources(tenant_id),
-    do: Repo.all(from s in IntakeSource, where: s.tenant_id == ^tenant_id, order_by: s.key)
-
-  @doc """
-  Get an intake source by id, regardless of enabled state. Returns `nil`
-  when not found. Operator UI lookup - the public surface must use
-  `get_enabled_source/1`.
-  """
-  def get_source(id) do
-    Repo.get(IntakeSource, id)
+  def get_source(%Custyard.Scope{tenant_id: tenant_id} = scope, id) do
+    if Custyard.Scope.current_staff(scope),
+      do: Repo.get_by(IntakeSource, tenant_id: tenant_id, id: id)
   end
 
   @doc """
@@ -58,11 +53,11 @@ defmodule Custyard.Intake do
   Returns `nil` for unknown or disabled keys. Request input is validated by
   table lookup — never converted to an atom.
   """
-  def get_enabled_source(key) when is_binary(key) do
-    Repo.get_by(IntakeSource, key: key, enabled: true)
+  def get_enabled_source(key, tenant_id) when is_binary(key) do
+    Repo.get_by(IntakeSource, key: key, tenant_id: tenant_id, enabled: true)
   end
 
-  def get_enabled_source(_key), do: nil
+  def get_enabled_source(_key, _tenant_id), do: nil
 
   @doc """
   Get an intake source by key, regardless of enabled state. Returns `nil`
@@ -74,18 +69,18 @@ defmodule Custyard.Intake do
   thread survives a disable (the source still exists) and disappears on
   delete. Public intake entry must keep using `get_enabled_source/1`.
   """
-  def get_source_by_key(key) when is_binary(key) do
-    Repo.get_by(IntakeSource, key: key)
+  def get_source_by_key(key, tenant_id) when is_binary(key) do
+    Repo.get_by(IntakeSource, key: key, tenant_id: tenant_id)
   end
 
-  def get_source_by_key(_key), do: nil
+  def get_source_by_key(_key, _tenant_id), do: nil
 
   @doc """
   The intake source passive pages pair with: the first enabled active-mode
   source, ordered by key — the deterministic choice until explicit pairing
   exists in the schema. Returns `nil` when no enabled active source exists.
   """
-  def first_enabled_active_source(tenant_id \\ 1) do
+  def first_enabled_active_source(tenant_id) do
     Repo.one(
       from s in IntakeSource,
         where: s.enabled == true and s.mode == :active and s.tenant_id == ^tenant_id,
@@ -97,10 +92,14 @@ defmodule Custyard.Intake do
   @doc """
   Create an intake source.
   """
-  def create_source(attrs) do
-    %IntakeSource{}
-    |> IntakeSource.changeset(attrs)
-    |> Repo.insert()
+  def create_source(%Custyard.Scope{} = scope, attrs) do
+    with_source_admin(scope, fn ->
+      attrs =
+        Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
+        |> Map.put("tenant_id", scope.tenant_id)
+
+      %IntakeSource{} |> IntakeSource.changeset(attrs) |> Repo.insert()
+    end)
   end
 
   @doc """
@@ -110,10 +109,13 @@ defmodule Custyard.Intake do
   provenance): `IntakeSource.update_changeset/2` never casts `:key`, so key
   values in `attrs` are ignored regardless of caller.
   """
-  def update_source(%IntakeSource{} = source, attrs) do
-    source
-    |> IntakeSource.update_changeset(attrs)
-    |> Repo.update()
+  def update_source(%Custyard.Scope{} = scope, %IntakeSource{} = source, attrs) do
+    with_source_admin(scope, fn ->
+      case get_source(scope, source.id) do
+        nil -> {:error, :not_found}
+        current -> current |> IntakeSource.update_changeset(attrs) |> Repo.update()
+      end
+    end)
   end
 
   @doc """
@@ -122,8 +124,32 @@ defmodule Custyard.Intake do
   Conversation provenance is unaffected: `conversations.intake_source_key`
   stores the key string, not a foreign key.
   """
-  def delete_source(%IntakeSource{} = source) do
-    Repo.delete(source)
+  def delete_source(%Custyard.Scope{} = scope, %IntakeSource{} = source) do
+    with_source_admin(scope, fn ->
+      case get_source(scope, source.id) do
+        nil -> {:error, :not_found}
+        current -> Repo.delete(current)
+      end
+    end)
+  end
+
+  defp with_source_admin(scope, fun) do
+    Repo.transaction(fn ->
+      staff =
+        scope.staff_id &&
+          Custyard.OperatorAccess.lock_current(%Custyard.OperatorAccount{id: scope.staff_id})
+
+      if staff && staff.tenant_id == scope.tenant_id && staff.role == "admin" &&
+           Custyard.OperatorAccount.session_claim_matches?(staff, scope.session_claim) &&
+           Custyard.Tenants.active?(scope.tenant_id) do
+        case fun.() do
+          {:ok, result} -> result
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      else
+        Repo.rollback(:unauthorized)
+      end
+    end)
   end
 
   ## Conversation creation ----------------------------------------------------
@@ -147,8 +173,8 @@ defmodule Custyard.Intake do
   only place the plaintext access token is returned — or
   `{:error, :unknown_source}` / `{:error, changeset}`.
   """
-  def create_intake_conversation(source_key, message_body, _opts \\ []) do
-    case get_enabled_source(source_key) do
+  def create_intake_conversation(source_key, message_body, opts) do
+    case get_enabled_source(source_key, Keyword.fetch!(opts, :tenant_id)) do
       nil ->
         {:error, :unknown_source}
 
@@ -186,6 +212,7 @@ defmodule Custyard.Intake do
       # message_id is synthetic — see generate_prospect_message_id/1.
       Message.changeset(%Message{}, %{
         conversation_id: conversation.id,
+        tenant_id: conversation.tenant_id,
         source: :prospect,
         origin: :public_intake,
         body: body,
@@ -257,12 +284,16 @@ defmodule Custyard.Intake do
   are indistinguishable (`{:error, :not_found}`). Preloads the associations the
   conversation view renders (organization, contact, prospect, public messages).
   """
-  def get_conversation_by_access_token(token) when is_binary(token) do
+  def get_conversation_by_access_token(token, tenant_id)
+      when is_binary(token) and is_integer(tenant_id) do
     hash = Token.hash(token)
 
     prospect =
       Repo.one(
         from p in Prospect,
+          join: t in Custyard.Tenant,
+          on: t.id == p.tenant_id,
+          where: p.tenant_id == ^tenant_id and t.status == "active",
           where: p.access_token_hash == ^hash and is_nil(p.revoked_at)
       )
 
@@ -271,7 +302,7 @@ defmodule Custyard.Intake do
         {:error, :not_found}
 
       %Prospect{} = prospect ->
-        case Repo.get(Conversation, prospect.conversation_id) do
+        case Repo.get_by(Conversation, id: prospect.conversation_id, tenant_id: tenant_id) do
           nil ->
             {:error, :not_found}
 
@@ -293,7 +324,7 @@ defmodule Custyard.Intake do
     end
   end
 
-  def get_conversation_by_access_token(_token), do: {:error, :not_found}
+  def get_conversation_by_access_token(_token, _tenant_id), do: {:error, :not_found}
 
   @doc """
   Whether a access token currently resolves: same predicate as
@@ -304,16 +335,19 @@ defmodule Custyard.Intake do
   `CustyardWeb.Plugs.ConversationCookie` and the intake-page conversation banner —
   not the thread.
   """
-  def access_token_valid?(token) when is_binary(token) do
+  def access_token_valid?(token, tenant_id) when is_binary(token) and is_integer(tenant_id) do
     hash = Token.hash(token)
 
     Repo.exists?(
       from p in Prospect,
+        join: t in Custyard.Tenant,
+        on: t.id == p.tenant_id,
+        where: p.tenant_id == ^tenant_id and t.status == "active",
         where: p.access_token_hash == ^hash and is_nil(p.revoked_at)
     )
   end
 
-  def access_token_valid?(_token), do: false
+  def access_token_valid?(_token, _tenant_id), do: false
 
   @doc """
   Add a prospect reply to a public-intake conversation via the conversation surface.
@@ -361,6 +395,7 @@ defmodule Custyard.Intake do
     message_changeset =
       Message.changeset(%Message{}, %{
         conversation_id: conversation.id,
+        tenant_id: conversation.tenant_id,
         source: :prospect,
         origin: :public_intake,
         body: body,
@@ -763,7 +798,8 @@ defmodule Custyard.Intake do
     conditional_link(conversation, id, organization_id: organization.id)
   end
 
-  defp link_conversation(conversation, :none), do: {:ok, conversation}
+  defp link_conversation(conversation, outcome) when outcome in [:none, :ambiguous],
+    do: {:ok, conversation}
 
   # Race-safe conditional link: `WHERE id = ? AND organization_id IS NULL`.
   # On count == 1 the fields are patched onto the in-memory struct so the

@@ -1,6 +1,6 @@
 defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   @moduledoc """
-  Super-admin operation of the Colonel acknowledgment subscription: status,
+  Tenant administrator operation of the Colonel acknowledgment subscription: status,
   queue counts, the oldest failed message (sanitized) with a guarded replay,
   and organization bindings.
 
@@ -14,7 +14,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   """
   use CustyardWeb, :live_view
 
-  alias Custyard.{Acknowledgments, OperatorAccount, OperatorAccounts, Organizations}
+  alias Custyard.{Acknowledgments, OperatorAccounts, Organizations}
   alias Custyard.Acknowledgments.{Evidence, Operations}
 
   # Longer than a connect timeout plus a publisher confirm; a broker that
@@ -45,6 +45,18 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
         else: socket
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
+  end
+
+  def handle_event("configure_integration", %{"integration" => attrs}, socket) do
+    when_allowed(socket, fn ->
+      case Acknowledgments.configure_integration(socket.assigns.current_scope, attrs) do
+        {:ok, _} ->
+          socket |> load_overview() |> load_bindings() |> put_flash(:info, "Integration saved")
+
+        {:error, _} ->
+          put_flash(socket, :error, "Integration settings are invalid")
+      end
+    end)
   end
 
   # --- Broker operations ---
@@ -121,8 +133,12 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   # operation runs.
   defp when_allowed(socket, fun) do
     cond do
-      not OperatorAccount.super_admin?(socket.assigns.current_operator) ->
-        {:noreply, put_flash(socket, :error, "Only super admins can operate acknowledgments")}
+      not match?(
+        %Custyard.OperatorAccount{role: "admin"},
+        Custyard.Scope.current_staff(socket.assigns.current_scope)
+      ) ->
+        {:noreply,
+         put_flash(socket, :error, "Only tenant administrators can operate acknowledgments")}
 
       socket.assigns.in_flight ->
         {:noreply, socket}
@@ -133,14 +149,16 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   end
 
   defp review_bind(socket, params) do
-    source = Acknowledgments.configured_source()
+    source = Acknowledgments.configured_source(socket.assigns.current_scope)
     external_id = Map.get(params, "source_organization_id", "")
-    organization = find_organization(Map.get(params, "organization_id"))
+
+    organization =
+      find_organization(Map.get(params, "organization_id"), socket.assigns.current_scope)
 
     errors =
       [
         is_nil(source) &&
-          "Set ACKNOWLEDGMENTS_SOURCE to bind here; other sources are bound with bin/acknowledgments",
+          "Configure this tenant integration before adding customer bindings",
         not Evidence.valid_identity?(external_id) &&
           "Source organization ID must be a nonblank identity of at most 255 bytes without surrounding spaces or control characters",
         is_nil(organization) && "Choose an existing organization"
@@ -169,13 +187,13 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
     # The form is pinned to the configured source; a source changed since
     # review is not bound under the old name.
     result =
-      if Acknowledgments.configured_source() == pending.source,
+      if Acknowledgments.configured_source(socket.assigns.current_scope) == pending.source,
         do:
           Acknowledgments.bind(
+            socket.assigns.current_scope,
             pending.source,
             pending.source_organization_id,
-            pending.organization_id,
-            socket.assigns.current_operator
+            pending.organization_id
           ),
         else: {:error, :source_changed}
 
@@ -222,23 +240,23 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
     socket
     |> assign(:in_flight, key)
     |> assign(:operation_ref, ref)
-    |> start_async(key, operation_fun(operation))
+    |> start_async(key, operation_fun(operation, socket.assigns.current_scope))
   end
 
   defp operation_key({:replay, _, _}), do: :replay
   defp operation_key(key), do: key
 
-  defp operation_fun(:counts), do: &Operations.status/0
-  defp operation_fun(:inspect), do: &Operations.failure_summary/0
+  defp operation_fun(:counts, scope), do: fn -> Operations.status(scope) end
+  defp operation_fun(:inspect, scope), do: fn -> Operations.failure_summary(scope) end
 
   # A confirmed replay runs in an unlinked task that this view's task only
   # awaits, so closing the tab cannot interrupt it between publishing and
   # acknowledging, and the audit record (written in that task, never in
   # handle_async) always follows the broker outcome.
-  defp operation_fun({:replay, expected, operator}) do
+  defp operation_fun({:replay, expected, _operator}, scope) do
     fn ->
       Custyard.TaskSupervisor
-      |> Task.Supervisor.async_nolink(fn -> Operations.replay(expected, operator) end)
+      |> Task.Supervisor.async_nolink(fn -> Operations.replay(scope, expected) end)
       |> Task.await(:infinity)
     end
   end
@@ -326,26 +344,38 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   # --- Loading ---
 
   defp load_overview(socket),
-    do: assign(socket, :overview, Acknowledgments.subscription_overview())
+    do:
+      assign(
+        socket,
+        :overview,
+        Acknowledgments.subscription_overview(socket.assigns.current_scope)
+      )
 
   defp load_bindings(socket) do
     socket
-    |> assign(:bindings, Acknowledgments.list_bindings())
+    |> assign(:bindings, Acknowledgments.list_bindings(socket.assigns.current_scope))
     |> assign(
       :organizations,
-      Enum.map(Organizations.list_organizations(), &{&1.name, &1.id})
+      Enum.map(
+        Organizations.list(socket.assigns.current_scope),
+        &{&1.name, &1.id}
+      )
     )
   end
 
-  defp find_organization(id) when is_binary(id) do
+  defp find_organization(id, operator) when is_binary(id) do
     # An id beyond signed 64 bits would make the SQLite driver raise.
     case Integer.parse(id) do
-      {id, ""} -> if OperatorAccounts.valid_id?(id), do: Organizations.get_organization(id)
-      _ -> nil
+      {id, ""} ->
+        if OperatorAccounts.valid_id?(id),
+          do: Organizations.get(operator, id)
+
+      _ ->
+        nil
     end
   end
 
-  defp find_organization(_), do: nil
+  defp find_organization(_, _), do: nil
 
   defp bind_form(params) do
     to_form(
@@ -469,6 +499,32 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
   def render(assigns) do
     ~H"""
     <div class="max-w-4xl mx-auto p-4 overflow-y-auto" data-testid="operator-acknowledgments-page">
+      <form
+        phx-submit="configure_integration"
+        class="mb-6 space-y-3"
+        data-testid="acknowledgments-integration-form"
+      >
+        <h2 class="font-semibold">Configure tenant subscription</h2>
+        <label>Source<input name="integration[source]" value={@overview.source || ""} required /></label>
+        <label>Broker URL<input
+          name="integration[url]"
+          type="password"
+          autocomplete="off"
+          placeholder={
+            if @overview.broker_configured?, do: "Saved; leave blank to keep", else: "amqps://..."
+          }
+          required={!@overview.broker_configured?}
+        /></label>
+        <label>Queue<input name="integration[queue]" value={@overview.queue || ""} required /></label>
+        <input name="integration[enabled]" type="hidden" value="false" />
+        <label><input
+          name="integration[enabled]"
+          type="checkbox"
+          value="true"
+          checked={@overview.status != :disabled}
+        />Enable subscription</label>
+        <.button>Save integration</.button>
+      </form>
       <div class="flex items-center justify-between mb-6">
         <h1
           class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
@@ -522,7 +578,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
           data-testid="acknowledgments-not-configured"
         >
           The consumer is enabled but not running. Set these secrets to start it:
-          <code :for={name <- @overview.required_variables} class="mx-1 font-mono text-xs">
+          <code :for={name <- @overview.required_fields} class="mx-1 font-mono text-xs">
             {name}
           </code>
         </p>
@@ -531,7 +587,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
           class="mt-4 text-sm text-gray-600 dark:text-zinc-400"
           data-testid="acknowledgments-disabled"
         >
-          The consumer is off: ACKNOWLEDGMENTS_ENABLED is false (unset means on in production only).
+          This tenant subscription is disabled. Enable it in the integration settings.
         </p>
       </section>
 
@@ -684,9 +740,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
               <td class="py-1 break-all">{binding.source_organization_id}</td>
               <td class="py-1">
                 <.link
-                  navigate={
-                    ~p"/operator/organizations/#{binding.organization_id}?tab=acknowledgments"
-                  }
+                  navigate={~p"/app/customers/#{binding.organization_id}?tab=acknowledgments"}
                   class="text-blue-600 hover:text-blue-800"
                 >
                   {binding.organization_name}
@@ -700,7 +754,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLive do
         </table>
 
         <div :if={@overview.source == nil} class="text-sm text-gray-600 dark:text-zinc-400">
-          Set ACKNOWLEDGMENTS_SOURCE to bind organizations here. Bindings for other sources
+          Configure this tenant integration to bind customers here. Bindings for other sources
           are made with bin/acknowledgments bind.
         </div>
 

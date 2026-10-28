@@ -34,7 +34,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
 
       {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
     else
-      {:ok, redirect(socket, to: ~p"/operator")}
+      {:ok, redirect(socket, to: ~p"/app")}
     end
   end
 
@@ -159,13 +159,13 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
     result =
       case socket.assigns.editing_source do
         nil ->
-          Intake.create_source(Map.put(attrs, "tenant_id", socket.assigns.current_tenant.id))
+          Intake.create_source(socket.assigns.current_scope, attrs)
 
         source ->
           # The key is immutable after creation (public URL segment).
           # update_changeset/2 never casts it; stripping here is a second
           # layer so forged params never even reach the context.
-          Intake.update_source(source, Map.delete(attrs, "key"))
+          Intake.update_source(socket.assigns.current_scope, source, Map.delete(attrs, "key"))
       end
 
     socket =
@@ -199,7 +199,9 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
          |> load_sources()}
 
       source ->
-        case Intake.update_source(source, %{enabled: not source.enabled}) do
+        case Intake.update_source(socket.assigns.current_scope, source, %{
+               enabled: not source.enabled
+             }) do
           {:ok, _source} ->
             {:noreply, load_sources(socket)}
 
@@ -218,7 +220,7 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
          |> load_sources()}
 
       source ->
-        case Intake.delete_source(source) do
+        case Intake.delete_source(socket.assigns.current_scope, source) do
           {:ok, _source} ->
             {:noreply,
              socket
@@ -707,10 +709,8 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   end
 
   # The absolute public intake URL (application host, /i/:key scope).
-  defp intake_url(%{tenant_id: 1} = source), do: url(~p"/i/#{source.key}")
-
   defp intake_url(source),
-    do: Tenants.url(Tenants.get_tenant!(source.tenant_id)) <> "/i/" <> source.key
+    do: Tenants.url(Tenants.get_tenant!(source.tenant_id)) <> "/intake/" <> source.key
 
   # A ready-to-paste anchor tag. Link text prefers the headline, falling
   # back to the source name; both are operator-authored.
@@ -729,9 +729,9 @@ defmodule CustyardWeb.Operator.IntakeSourcesLive do
   defp mode_colors(_other), do: "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
 
   defp scoped_source(socket, id),
-    do: Enum.find(Intake.list_sources(socket.assigns.current_tenant.id), &(&1.id == id))
+    do: Enum.find(Intake.list_sources(socket.assigns.current_scope), &(&1.id == id))
 
   defp load_sources(socket) do
-    assign(socket, :sources, Intake.list_sources(socket.assigns.current_tenant.id))
+    assign(socket, :sources, Intake.list_sources(socket.assigns.current_scope))
   end
 end

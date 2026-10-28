@@ -50,8 +50,13 @@ defmodule CustyardWeb.Plugs.ConversationCookie do
   def call(%Plug.Conn{method: "GET"} = conn, _opts) do
     with token when is_binary(token) <- conn.path_params["token"],
          {:allow, _count} <-
-           RateLimit.peek(:conversation_mount, ClientIP.from_conn(conn) || "unknown"),
-         true <- Intake.access_token_valid?(token) do
+           RateLimit.peek(
+             :conversation_mount,
+             {conn.assigns.host_tenant.id, ClientIP.from_conn(conn) || "unknown"}
+           ),
+         {:ok, conversation} <-
+           Intake.get_conversation_by_access_token(token, conn.assigns.host_tenant.id),
+         true <- conversation.tenant_id == conn.assigns.host_tenant.id do
       put_conversation_cookie(conn, token)
     else
       _denied_or_invalid -> conn

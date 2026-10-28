@@ -34,16 +34,17 @@ inactive_class =
         <span class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight">
           {if assigns[:current_tenant],
             do: @current_tenant.name,
-            else: Custyard.Settings.get_branding().name || "Custyard"}
+            else: "Custyard"}
         </span>
+        <span :if={assigns[:current_operator]} data-testid="staff-identity" class="text-sm">Staff · {@current_operator.email}</span>
         <span class="hidden md:inline text-gray-300 dark:text-zinc-600">|</span>
         <%!-- Desktop nav links - hidden on mobile --%>
         <nav class="hidden md:flex items-center gap-4">
           <.link
-            navigate={~p"/operator"}
+            navigate={~p"/app"}
             class={
-              if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) &&
-                   !nav_active?.("/operator/", []),
+              if nav_active?.("/app", [CustyardWeb.Operator.AttentionQueueLive]) &&
+                   !nav_active?.("/app/", []),
                  do: active_class,
                  else: inactive_class
             }
@@ -52,9 +53,9 @@ inactive_class =
             Attention Queue
           </.link>
           <.link
-            navigate={~p"/operator/neglect"}
+            navigate={~p"/app/neglect"}
             class={
-              if nav_active?.("/operator/neglect", [CustyardWeb.Operator.NeglectReportLive]),
+              if nav_active?.("/app/neglect", [CustyardWeb.Operator.NeglectReportLive]),
                 do: active_class,
                 else: inactive_class
             }
@@ -63,9 +64,9 @@ inactive_class =
             Neglect Report
           </.link>
           <.link
-            navigate={~p"/operator/organizations"}
+            navigate={~p"/app/customers"}
             class={
-              if nav_active?.("/operator/organizations", [
+              if nav_active?.("/app/customers", [
                    CustyardWeb.Operator.OrganizationsLive,
                    CustyardWeb.Operator.OrganizationDetailLive
                  ]),
@@ -74,12 +75,12 @@ inactive_class =
             }
             data-testid="operator-nav-orgs"
           >
-            Organizations
+            Customers
           </.link>
           <.link
-            navigate={~p"/operator/projects"}
+            navigate={~p"/app/projects"}
             class={
-              if nav_active?.("/operator/projects", [CustyardWeb.Operator.ProjectsLive]),
+              if nav_active?.("/app/projects", [CustyardWeb.Operator.ProjectsLive]),
                 do: active_class,
                 else: inactive_class
             }
@@ -88,9 +89,9 @@ inactive_class =
             Projects
           </.link>
           <.link
-            navigate={~p"/operator/intake-sources"}
+            navigate={~p"/app/settings/intake"}
             class={
-              if nav_active?.("/operator/intake-sources", [
+              if nav_active?.("/app/settings/intake", [
                    CustyardWeb.Operator.IntakeSourcesLive
                  ]),
                  do: active_class,
@@ -101,9 +102,9 @@ inactive_class =
             Intake Sources
           </.link>
           <.link
-            navigate={~p"/operator/slugs"}
+            navigate={~p"/app/settings/slugs"}
             class={
-              if nav_active?.("/operator/slugs", [CustyardWeb.Operator.SlugsLive]),
+              if nav_active?.("/app/settings/slugs", [CustyardWeb.Operator.SlugsLive]),
                 do: active_class,
                 else: inactive_class
             }
@@ -112,9 +113,9 @@ inactive_class =
             Slugs
           </.link>
           <.link
-            navigate={~p"/operator/acknowledgments"}
+            navigate={~p"/app/settings/integrations"}
             class={
-              if nav_active?.("/operator/acknowledgments", [
+              if nav_active?.("/app/settings/integrations", [
                    CustyardWeb.Operator.AcknowledgmentsLive
                  ]),
                  do: active_class,
@@ -125,9 +126,9 @@ inactive_class =
             Acknowledgments
           </.link>
           <.link
-            navigate={~p"/operator/settings"}
+            navigate={~p"/app/settings/workflow"}
             class={
-              if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
+              if nav_active?.("/app/settings/workflow", [CustyardWeb.Operator.SettingsLive]),
                 do: active_class,
                 else: inactive_class
             }
@@ -139,8 +140,9 @@ inactive_class =
       </div>
       <%!-- Desktop logout - hidden on mobile --%>
       <div class="hidden md:block">
+        <.link href={CustyardWeb.Endpoint.url() <> "/admin/login"} class="text-xs mr-3">Instance admin sign in</.link>
         <.link
-          href={~p"/operator/logout"}
+          href={~p"/app/logout"}
           method="delete"
           class="text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
           data-testid="operator-nav-logout"
@@ -172,10 +174,10 @@ inactive_class =
       class="hidden md:hidden mt-2 pb-2 border-t border-gray-200 dark:border-zinc-700 pt-2 flex flex-col gap-2"
     >
       <.link
-        navigate={~p"/operator"}
+        navigate={~p"/app"}
         class={
-          if nav_active?.("/operator", [CustyardWeb.Operator.AttentionQueueLive]) &&
-               !nav_active?.("/operator/", []),
+          if nav_active?.("/app", [CustyardWeb.Operator.AttentionQueueLive]) &&
+               !nav_active?.("/app/", []),
              do: active_class,
              else: inactive_class
         }
@@ -183,9 +185,9 @@ inactive_class =
         Attention Queue
       </.link>
       <.link
-        navigate={~p"/operator/neglect"}
+        navigate={~p"/app/neglect"}
         class={
-          if nav_active?.("/operator/neglect", [CustyardWeb.Operator.NeglectReportLive]),
+          if nav_active?.("/app/neglect", [CustyardWeb.Operator.NeglectReportLive]),
             do: active_class,
             else: inactive_class
         }
@@ -193,9 +195,9 @@ inactive_class =
         Neglect Report
       </.link>
       <.link
-        navigate={~p"/operator/organizations"}
+        navigate={~p"/app/customers"}
         class={
-          if nav_active?.("/operator/organizations", [
+          if nav_active?.("/app/customers", [
                CustyardWeb.Operator.OrganizationsLive,
                CustyardWeb.Operator.OrganizationDetailLive
              ]),
@@ -203,12 +205,12 @@ inactive_class =
              else: inactive_class
         }
       >
-        Organizations
+        Customers
       </.link>
       <.link
-        navigate={~p"/operator/projects"}
+        navigate={~p"/app/projects"}
         class={
-          if nav_active?.("/operator/projects", [CustyardWeb.Operator.ProjectsLive]),
+          if nav_active?.("/app/projects", [CustyardWeb.Operator.ProjectsLive]),
             do: active_class,
             else: inactive_class
         }
@@ -216,9 +218,9 @@ inactive_class =
         Projects
       </.link>
       <.link
-        navigate={~p"/operator/intake-sources"}
+        navigate={~p"/app/settings/intake"}
         class={
-          if nav_active?.("/operator/intake-sources", [
+          if nav_active?.("/app/settings/intake", [
                CustyardWeb.Operator.IntakeSourcesLive
              ]),
              do: active_class,
@@ -228,9 +230,9 @@ inactive_class =
         Intake Sources
       </.link>
       <.link
-        navigate={~p"/operator/slugs"}
+        navigate={~p"/app/settings/slugs"}
         class={
-          if nav_active?.("/operator/slugs", [CustyardWeb.Operator.SlugsLive]),
+          if nav_active?.("/app/settings/slugs", [CustyardWeb.Operator.SlugsLive]),
             do: active_class,
             else: inactive_class
         }
@@ -238,9 +240,9 @@ inactive_class =
         Slugs
       </.link>
       <.link
-        navigate={~p"/operator/acknowledgments"}
+        navigate={~p"/app/settings/integrations"}
         class={
-          if nav_active?.("/operator/acknowledgments", [CustyardWeb.Operator.AcknowledgmentsLive]) do
+          if nav_active?.("/app/settings/integrations", [CustyardWeb.Operator.AcknowledgmentsLive]) do
             active_class
           else
             inactive_class
@@ -251,9 +253,9 @@ inactive_class =
         Acknowledgments
       </.link>
       <.link
-        navigate={~p"/operator/settings"}
+        navigate={~p"/app/settings/workflow"}
         class={
-          if nav_active?.("/operator/settings", [CustyardWeb.Operator.SettingsLive]),
+          if nav_active?.("/app/settings/workflow", [CustyardWeb.Operator.SettingsLive]),
             do: active_class,
             else: inactive_class
         }
@@ -261,7 +263,7 @@ inactive_class =
         Settings
       </.link>
       <.link
-        href={~p"/operator/logout"}
+        href={~p"/app/logout"}
         method="delete"
         class="text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
       >
@@ -275,20 +277,15 @@ inactive_class =
 
   <div :if={assigns[:current_tenant]} class="px-4 py-2 flex flex-wrap gap-4 text-sm border-b">
     <.link
-      :if={assigns[:current_role] in ["admin", "super_admin"]}
-      navigate={~p"/operator/email-setup"}
+      :if={assigns[:current_role] == "admin"}
+      navigate={~p"/app/settings/email"}
       class="text-indigo-600 dark:text-indigo-400"
     >Support email setup</.link>
     <.link
-      :if={assigns[:current_role] in ["admin", "super_admin"]}
-      navigate={~p"/operator/tenant"}
+      :if={assigns[:current_role] == "admin"}
+      navigate={~p"/app/settings/workspace"}
       class="text-indigo-600 dark:text-indigo-400"
     >Tenant settings</.link>
-    <.link
-      :if={assigns[:is_super_admin]}
-      href={CustyardWeb.Endpoint.url() <> ~p"/operator/tenants"}
-      class="text-indigo-600 dark:text-indigo-400"
-    >Switch tenant</.link>
   </div>
 
   <%!-- Content --%>

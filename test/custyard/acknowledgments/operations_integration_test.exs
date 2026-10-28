@@ -1,4 +1,7 @@
 defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
+  defp local_authority(tenant_id, channel),
+    do: %Custyard.Acknowledgments.LocalAuthority{tenant_id: tenant_id, channel: channel}
+
   use Custyard.DataCase, async: false
   import Custyard.AcknowledgmentsBroker
   alias Custyard.{Acknowledgments, AuditEvent}
@@ -11,6 +14,8 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
     setup_topology(retry_delays: [50, 60])
   end
 
+  defp tenant_id, do: Process.get(:ack_test_tenant_id)
+
   defp failed_queue(ctx), do: Topology.failure(ctx.config)
   defp body(submission_id), do: Jason.encode!(evidence(%{"submission_id" => submission_id}))
   defp sha256(body), do: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
@@ -20,7 +25,7 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       put_failure(ctx, body("one"))
       await_failures(ctx, 1)
 
-      assert {:ok, queues} = Operations.status()
+      assert {:ok, queues} = Operations.status(local_authority(tenant_id(), "console"))
 
       assert Enum.map(queues, & &1.role) == [:work, {:retry, 1}, {:retry, 2}, :failed]
       assert %{queue: queue, ready: 0, consumers: 0} = hd(queues)
@@ -31,14 +36,19 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
     test "a missing queue is reported per queue, not as a failed status", ctx do
       {:ok, _} = AMQP.Queue.delete(ctx.channel, Topology.retry(ctx.config, 2))
 
-      assert {:ok, queues} = Operations.status()
+      assert {:ok, queues} = Operations.status(local_authority(tenant_id(), "console"))
       assert %{role: {:retry, 2}, error: :queue_missing} = Enum.at(queues, 2)
       assert %{role: :failed, ready: 0} = List.last(queues)
     end
 
     test "an unusable configuration is a fixed error, not a raise" do
-      Application.put_env(:custyard, :acknowledgments, url: nil, source: nil)
-      assert Operations.status() == {:error, :invalid_config}
+      Repo.get_by!(Custyard.Acknowledgments.Integration, tenant_id: tenant_id())
+      |> Ecto.Changeset.change(url_ciphertext: "invalid")
+      |> Repo.update!()
+
+      assert Operations.status(local_authority(tenant_id(), "console")) ==
+               {:error, :invalid_config}
+
       assert Operations.error_message(:invalid_config) =~ "missing or invalid"
     end
   end
@@ -58,10 +68,13 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
         body_sha256: sha256(body("first"))
       }
 
-      assert Operations.failure_summary() == {:ok, expected}
+      assert Operations.failure_summary(local_authority(tenant_id(), "console")) ==
+               {:ok, expected}
+
       await_failures(ctx, 2)
       # A reject with requeue would have moved "first" behind "second".
-      assert Operations.failure_summary() == {:ok, expected}
+      assert Operations.failure_summary(local_authority(tenant_id(), "console")) ==
+               {:ok, expected}
     end
 
     test "an unreadable body hides its identity; unknown headers are not shown", ctx do
@@ -72,7 +85,7 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
 
       await_failures(ctx, 1)
 
-      assert Operations.failure_summary() ==
+      assert Operations.failure_summary(local_authority(tenant_id(), "console")) ==
                {:ok,
                 %{
                   readable: false,
@@ -87,17 +100,21 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
     test "an invalid identity or an oversized body is unreadable", ctx do
       put_failure(ctx, body("bad\nid"))
       await_failures(ctx, 1)
-      assert {:ok, %{readable: false, submission_id: nil}} = Operations.failure_summary()
+
+      assert {:ok, %{readable: false, submission_id: nil}} =
+               Operations.failure_summary(local_authority(tenant_id(), "console"))
 
       {:ok, _} = AMQP.Queue.purge(ctx.channel, failed_queue(ctx))
       oversized = Jason.encode!(evidence(%{"statement_text" => String.duplicate("x", 70_000)}))
       put_failure(ctx, oversized)
       await_failures(ctx, 1)
-      assert {:ok, %{readable: false, source: nil}} = Operations.failure_summary()
+
+      assert {:ok, %{readable: false, source: nil}} =
+               Operations.failure_summary(local_authority(tenant_id(), "console"))
     end
 
     test "an empty failure queue is :empty" do
-      assert Operations.failure_summary() == :empty
+      assert Operations.failure_summary(local_authority(tenant_id(), "console")) == :empty
     end
   end
 
@@ -107,13 +124,20 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       put_failure(ctx, body("second"))
       await_failures(ctx, 2)
 
-      assert Operations.replay("second", "console") == {:error, :changed}
-      await_failures(ctx, 2)
-      assert {:ok, %{submission_id: "first"}} = Operations.failure_summary()
+      assert Operations.replay(local_authority(tenant_id(), "console"), "second") ==
+               {:error, :changed}
 
-      assert Operations.replay("first", "console") == :ok
+      await_failures(ctx, 2)
+
+      assert {:ok, %{submission_id: "first"}} =
+               Operations.failure_summary(local_authority(tenant_id(), "console"))
+
+      assert Operations.replay(local_authority(tenant_id(), "console"), "first") == :ok
       await_failures(ctx, 1)
-      assert {:ok, %{submission_id: "second"}} = Operations.failure_summary()
+
+      assert {:ok, %{submission_id: "second"}} =
+               Operations.failure_summary(local_authority(tenant_id(), "console"))
+
       assert {:ok, replayed, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
       assert replayed == body("first")
     end
@@ -122,7 +146,9 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       put_failure(ctx, "{not json")
       await_failures(ctx, 1)
 
-      assert Operations.replay("anything", "console") == {:error, :changed}
+      assert Operations.replay(local_authority(tenant_id(), "console"), "anything") ==
+               {:error, :changed}
+
       await_failures(ctx, 1)
     end
 
@@ -136,7 +162,7 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       await_failures(ctx, 2)
 
       assert {:ok, %{submission_id: "shared", body_sha256: inspected}} =
-               Operations.failure_summary()
+               Operations.failure_summary(local_authority(tenant_id(), "console"))
 
       assert inspected == sha256(original)
       await_failures(ctx, 2)
@@ -146,12 +172,15 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       :ok = AMQP.Basic.ack(ctx.channel, meta.delivery_tag)
 
       expected = %{submission_id: "shared", body_sha256: inspected}
-      assert Operations.replay(expected, "console") == {:error, :changed}
+
+      assert Operations.replay(local_authority(tenant_id(), "console"), expected) ==
+               {:error, :changed}
+
       await_failures(ctx, 1)
       assert {:empty, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
 
       matching = %{submission_id: "shared", body_sha256: sha256(conflicting)}
-      assert Operations.replay(matching, "console") == :ok
+      assert Operations.replay(local_authority(tenant_id(), "console"), matching) == :ok
 
       assert {:ok, ^conflicting, _} =
                AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
@@ -163,12 +192,25 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       do: Repo.all(from e in AuditEvent, where: e.event_type == :acknowledgment_replayed)
 
     test "records operator, sanitized identity, body digest and outcome", ctx do
-      operator = Custyard.Factory.insert_operator_account()
+      operator = Custyard.Factory.insert_operator_account(tenant_id: tenant_id(), role: "admin")
       put_failure(ctx, body("audited"))
       await_failures(ctx, 1)
 
-      assert Operations.replay("other", operator) == {:error, :changed}
-      assert Operations.replay("audited", operator) == :ok
+      assert Operations.replay(
+               Custyard.Scope.for_staff(
+                 operator,
+                 Custyard.Tenants.get_tenant!(operator.tenant_id)
+               ),
+               "other"
+             ) == {:error, :changed}
+
+      assert Operations.replay(
+               Custyard.Scope.for_staff(
+                 operator,
+                 Custyard.Tenants.get_tenant!(operator.tenant_id)
+               ),
+               "audited"
+             ) == :ok
 
       assert [changed, started, replayed] = Enum.sort_by(replay_audits(), & &1.id)
       assert changed.payload["outcome"] == "changed"
@@ -200,7 +242,8 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert Operations.replay("unaudited", "cli") == {:error, :audit_failed}
+          assert Operations.replay(local_authority(tenant_id(), "cli"), "unaudited") ==
+                   {:error, :audit_failed}
         end)
 
       assert log =~ "Failed to record acknowledgment_replayed audit event"
@@ -208,12 +251,15 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       Repo.query!("DROP TRIGGER refuse_audit")
 
       assert replay_audits() == []
-      assert {:ok, %{submission_id: "unaudited"}} = Operations.failure_summary()
+
+      assert {:ok, %{submission_id: "unaudited"}} =
+               Operations.failure_summary(local_authority(tenant_id(), "console"))
+
       assert {:empty, _} = AMQP.Basic.get(ctx.channel, ctx.config[:queue], no_ack: true)
     end
 
     test "release replays are audited with the channel, including empty ones" do
-      assert Operations.replay(nil, "cli") == :empty
+      assert Operations.replay(local_authority(tenant_id(), "cli"), nil) == :empty
 
       assert [%{source: "cli", payload: %{"actor" => "cli", "outcome" => "empty"}}] =
                replay_audits()
@@ -230,8 +276,11 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       # An actor that cannot be recorded is refused before any broker work.
       put_failure(ctx, body("kept"))
       await_failures(ctx, 1)
-      assert_raise ArgumentError, fn -> Operations.replay(nil, "someone") end
-      assert_raise ArgumentError, fn -> Operations.replay(nil, nil) end
+
+      assert {:error, :unauthorized} =
+               Operations.replay(local_authority(tenant_id(), "someone"), nil)
+
+      assert {:error, :unauthorized} = Operations.replay(nil, nil)
       await_failures(ctx, 1)
       assert replay_audits() == []
     end
@@ -245,9 +294,13 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
     await_failures(ctx, 1)
     test = self()
 
+    tenant_id = tenant_id()
+
     caller =
       spawn(fn ->
-        Operations.with_channel(fn channel, connection, config ->
+        Operations.with_channel(local_authority(tenant_id, "console"), fn channel,
+                                                                          connection,
+                                                                          config ->
           {:ok, _, _} = AMQP.Basic.get(channel, Topology.failure(config), no_ack: false)
           send(test, {:holding, connection})
           Process.sleep(:infinity)
@@ -263,14 +316,18 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
 
     assert_receive {:DOWN, ^connection_monitor, :process, _, _}, 5_000
     await_failures(ctx, 1)
-    assert {:ok, %{submission_id: "held"}} = Operations.failure_summary()
+
+    assert {:ok, %{submission_id: "held"}} =
+             Operations.failure_summary(local_authority(tenant_id(), "console"))
   end
 
   test "a completed operation closes its connection", ctx do
     test = self()
 
     assert :done =
-             Operations.with_channel(fn _channel, connection, _config ->
+             Operations.with_channel(local_authority(tenant_id(), "console"), fn _channel,
+                                                                                 connection,
+                                                                                 _config ->
                send(test, {:connection, connection})
                :done
              end)

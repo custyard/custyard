@@ -1,43 +1,34 @@
 defmodule CustyardWeb.Operator.SettingsLive do
   use CustyardWeb, :live_view
 
-  import CustyardWeb.FormHelpers, only: [format_changeset_errors: 1]
-
   alias Custyard.{Authorization, Settings}
-  alias CustyardWeb.Uploads
 
   # Fixed display order for weight keys (maps don't guarantee iteration order)
   @weight_display_order ~w(idle state tier urgency velocity neglect)a
 
   @impl true
   def mount(_params, _session, socket) do
-    settings = Settings.get()
+    settings = Settings.get(socket.assigns.current_tenant.id)
 
     # Settings.get_weights/0 returns atom keys; the raw score_weights column
     # holds the JSON map with string keys, which sorted_weights/1 cannot see.
-    weights = Settings.get_weights()
+    weights = Settings.get_weights(socket.assigns.current_tenant.id)
     thresholds = settings.neglect_thresholds
-    branding = Settings.get_branding()
 
     socket =
       socket
       |> assign(:page_title, "Settings")
       |> assign(:weights, weights)
       |> assign(:thresholds, thresholds)
-      |> assign(:intake_config, Settings.get_intake_config())
-      |> assign(:branding, branding)
+      |> assign(:intake_config, Settings.get_intake_config(socket.assigns.current_tenant.id))
       |> assign(:editing_weights, false)
       |> assign(:editing_thresholds, false)
       |> assign(:editing_intake, false)
-      |> assign(:editing_branding, false)
-      |> assign(:weight_form, to_form(weights, as: "weights"))
-      |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
-      |> assign(:branding_form, branding_form_from(branding))
-      |> allow_upload(:logo,
-        accept: ~w(.png .jpg .jpeg .svg .webp),
-        max_entries: 1,
-        max_file_size: 2_000_000
+      |> assign(
+        :weight_form,
+        to_form(Map.new(weights, fn {key, value} -> {to_string(key), value} end), as: "weights")
       )
+      |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :operator}}
   end
@@ -57,7 +48,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
     if Authorization.can_modify_settings?(socket.assigns.current_operator) do
       do_save_weights(weight_params, socket)
     else
-      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
+      {:noreply, put_flash(socket, :error, "Only tenant administrators can modify settings")}
     end
   end
 
@@ -80,7 +71,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
     if Authorization.can_modify_settings?(socket.assigns.current_operator) do
       save_thresholds(threshold_params, socket)
     else
-      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
+      {:noreply, put_flash(socket, :error, "Only tenant administrators can modify settings")}
     end
   end
 
@@ -99,68 +90,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
     if Authorization.can_modify_settings?(socket.assigns.current_operator) do
       save_intake(intake_params, socket)
     else
-      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
-    end
-  end
-
-  @impl true
-  def handle_event("edit_branding", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:editing_branding, true)
-     |> assign(:branding_form, branding_form_from(socket.assigns.branding))}
-  end
-
-  @impl true
-  def handle_event("cancel_branding", _params, socket) do
-    socket =
-      Enum.reduce(socket.assigns.uploads.logo.entries, socket, fn entry, acc ->
-        cancel_upload(acc, :logo, entry.ref)
-      end)
-
-    {:noreply, assign(socket, :editing_branding, false)}
-  end
-
-  # Tracks in-progress branding form state so re-renders triggered by upload
-  # progress (or the color picker) don't reset what the operator has typed.
-  @impl true
-  def handle_event("validate_branding", params, socket) do
-    branding_params = Map.get(params, "branding", %{})
-    form = socket.assigns.branding_form
-
-    form =
-      form
-      |> Map.put("name", Map.get(branding_params, "name", form["name"]))
-      |> Map.put(
-        "primary_color",
-        Map.get(branding_params, "primary_color", form["primary_color"])
-      )
-      |> Map.put("remove_logo", Map.get(branding_params, "remove_logo", "false") == "true")
-
-    # The native color picker feeds the visible hex input, not vice versa.
-    form =
-      case params["_target"] do
-        ["branding", "primary_color_picker"] ->
-          Map.put(form, "primary_color", Map.get(branding_params, "primary_color_picker", ""))
-
-        _ ->
-          form
-      end
-
-    {:noreply, assign(socket, :branding_form, form)}
-  end
-
-  @impl true
-  def handle_event("cancel_logo_upload", %{"ref" => ref}, socket) do
-    {:noreply, cancel_upload(socket, :logo, ref)}
-  end
-
-  @impl true
-  def handle_event("save_branding", %{"branding" => branding_params}, socket) do
-    if Authorization.can_modify_settings?(socket.assigns.current_operator) do
-      save_branding(branding_params, socket)
-    else
-      {:noreply, put_flash(socket, :error, "Only super admins can modify settings")}
+      {:noreply, put_flash(socket, :error, "Only tenant administrators can modify settings")}
     end
   end
 
@@ -180,17 +110,22 @@ defmodule CustyardWeb.Operator.SettingsLive do
     else
       weights = Map.new(parsed)
 
-      case Settings.update_weights(weights) do
+      case Settings.update_weights(socket.assigns.current_scope, weights) do
         {:ok, _settings} ->
           # Re-read through get_weights/0: the form submits string keys and
           # the display helpers expect atom keys.
-          saved = Settings.get_weights()
+          saved = Settings.get_weights(socket.assigns.current_tenant.id)
 
           {:noreply,
            socket
            |> assign(:weights, saved)
            |> assign(:editing_weights, false)
-           |> assign(:weight_form, to_form(saved, as: "weights"))
+           |> assign(
+             :weight_form,
+             to_form(Map.new(saved, fn {key, value} -> {to_string(key), value} end),
+               as: "weights"
+             )
+           )
            |> put_flash(:info, "Weights updated successfully")}
 
         {:error, _changeset} ->
@@ -247,7 +182,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
           |> Enum.map(fn {tier, [w, c]} -> {String.to_existing_atom(tier), {w, c}} end)
           |> Map.new()
 
-        case Settings.update_thresholds(thresholds_tuples) do
+        case Settings.update_thresholds(socket.assigns.current_scope, thresholds_tuples) do
           {:ok, _settings} ->
             {:noreply,
              socket
@@ -280,11 +215,11 @@ defmodule CustyardWeb.Operator.SettingsLive do
     else
       config = Map.new(parsed_values)
 
-      case Settings.update_intake_config(config) do
+      case Settings.update_intake_config(socket.assigns.current_scope, config) do
         {:ok, _settings} ->
           {:noreply,
            socket
-           |> assign(:intake_config, Settings.get_intake_config())
+           |> assign(:intake_config, Settings.get_intake_config(socket.assigns.current_tenant.id))
            |> assign(:editing_intake, false)
            |> put_flash(:info, "Intake settings updated successfully")}
 
@@ -298,96 +233,6 @@ defmodule CustyardWeb.Operator.SettingsLive do
       end
     end
   end
-
-  # Blank (empty or whitespace-only) fields are omitted rather than stored:
-  # update_branding replaces the whole map, so an omitted key reads back as
-  # its default (nil). Settings.valid_branding_entry?/2 independently rejects
-  # blank names, so direct context callers cannot store them either.
-  #
-  # The logo never comes from a form param - it is either a freshly consumed
-  # upload, the previously stored path, or nil when "remove_logo" is checked.
-  defp save_branding(branding_params, socket) do
-    old_logo_url = socket.assigns.branding.logo_url
-    uploaded_logo_url = consume_uploaded_logo(socket)
-    logo_url = resolve_logo_url(branding_params, uploaded_logo_url, old_logo_url)
-
-    branding =
-      branding_params
-      |> Map.take(["name", "primary_color"])
-      |> Map.put("logo_url", logo_url)
-      |> Enum.reject(&blank_branding_entry?/1)
-      |> Map.new()
-
-    case Settings.update_branding(branding) do
-      {:ok, _settings} ->
-        handle_branding_saved(socket, old_logo_url, logo_url)
-
-      {:error, changeset} ->
-        handle_branding_error(socket, uploaded_logo_url, changeset)
-    end
-  end
-
-  defp resolve_logo_url(branding_params, uploaded_logo_url, old_logo_url) do
-    remove_logo? = Map.get(branding_params, "remove_logo") == "true"
-
-    cond do
-      uploaded_logo_url -> uploaded_logo_url
-      remove_logo? -> nil
-      true -> old_logo_url
-    end
-  end
-
-  defp blank_branding_entry?({_key, value}) do
-    not is_binary(value) or String.trim(value) == ""
-  end
-
-  defp handle_branding_saved(socket, old_logo_url, logo_url) do
-    # Delete the replaced (or explicitly removed) file only after the new
-    # branding persisted successfully.
-    if old_logo_url && old_logo_url != logo_url do
-      Uploads.delete_logo(old_logo_url)
-    end
-
-    {:noreply,
-     socket
-     |> assign(:branding, Settings.get_branding())
-     |> assign(:editing_branding, false)
-     |> put_flash(:info, "Branding updated successfully")}
-  end
-
-  defp handle_branding_error(socket, uploaded_logo_url, changeset) do
-    # The consumed upload was never persisted; remove it so failed saves
-    # (e.g. a bad color) don't leave orphaned files behind.
-    if uploaded_logo_url, do: Uploads.delete_logo(uploaded_logo_url)
-
-    {:noreply,
-     put_flash(
-       socket,
-       :error,
-       "Failed to update branding: #{format_changeset_errors(changeset)}"
-     )}
-  end
-
-  defp consume_uploaded_logo(socket) do
-    socket
-    |> consume_uploaded_entries(:logo, fn %{path: path}, entry ->
-      {:ok, Uploads.save_logo(path, entry.client_name)}
-    end)
-    |> List.first()
-  end
-
-  defp branding_form_from(branding) do
-    %{
-      "name" => branding.name || "",
-      "primary_color" => branding.primary_color || "",
-      "remove_logo" => false
-    }
-  end
-
-  defp upload_error_to_string(:too_large), do: "File is too large (max 2MB)"
-  defp upload_error_to_string(:not_accepted), do: "Invalid file type"
-  defp upload_error_to_string(:too_many_files), do: "Only one file allowed"
-  defp upload_error_to_string(_), do: "Upload error"
 
   defp parse_float(str) when is_binary(str) do
     case Float.parse(str) do
@@ -712,213 +557,6 @@ defmodule CustyardWeb.Operator.SettingsLive do
               type="submit"
               class="text-xs text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded"
               data-testid="operator-settings-save-intake"
-            >
-              Save
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div
-        class="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 mb-4"
-        data-testid="operator-settings-branding"
-      >
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">Branding</h2>
-          <button
-            :if={not @editing_branding}
-            phx-click="edit_branding"
-            class="text-xs text-blue-600 hover:text-blue-800"
-            data-testid="operator-settings-edit-branding"
-          >
-            Edit
-          </button>
-        </div>
-        <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
-          Instance branding for the public intake pages and prospect-facing email.
-          The name falls back to "Custyard" when unset. Upload a logo image
-          (PNG, JPG, SVG, or WebP, max 2MB) and pick a primary color. Leave the
-          name or color blank to clear it.
-        </p>
-
-        <div :if={not @editing_branding} class="space-y-3">
-          <div
-            class="flex items-center justify-between"
-            data-testid="operator-settings-branding-name"
-          >
-            <span class="text-sm text-gray-700 dark:text-zinc-300">Name</span>
-            <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded">
-              {@branding.name || "not set"}
-            </span>
-          </div>
-          <div
-            class="flex items-center justify-between"
-            data-testid="operator-settings-branding-logo-url"
-          >
-            <span class="text-sm text-gray-700 dark:text-zinc-300">Logo</span>
-            <span class="flex items-center gap-2">
-              <img
-                :if={@branding.logo_url}
-                src={@branding.logo_url}
-                alt="Instance logo"
-                class="w-8 h-8 rounded object-cover border border-gray-200 dark:border-zinc-700"
-                data-testid="operator-settings-branding-logo-thumb"
-              />
-              <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded break-all">
-                {@branding.logo_url || "not set"}
-              </span>
-            </span>
-          </div>
-          <div
-            class="flex items-center justify-between"
-            data-testid="operator-settings-branding-primary-color"
-          >
-            <span class="text-sm text-gray-700 dark:text-zinc-300">Primary color</span>
-            <span class="flex items-center gap-2">
-              <span
-                :if={@branding.primary_color}
-                class="inline-block w-4 h-4 rounded border border-gray-300 dark:border-zinc-600"
-                style={"background-color: #{@branding.primary_color}"}
-              />
-              <span class="text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded">
-                {@branding.primary_color || "not set"}
-              </span>
-            </span>
-          </div>
-        </div>
-
-        <form
-          :if={@editing_branding}
-          id="operator-settings-branding-form"
-          phx-submit="save_branding"
-          phx-change="validate_branding"
-          class="space-y-3"
-          data-testid="operator-settings-branding-form"
-        >
-          <div class="flex items-center justify-between gap-4">
-            <label class="text-sm text-gray-700 dark:text-zinc-300" for="branding_name">
-              Name
-            </label>
-            <input
-              type="text"
-              maxlength="100"
-              name="branding[name]"
-              id="branding_name"
-              value={@branding_form["name"]}
-              placeholder="Custyard (default)"
-              phx-debounce="300"
-              class="w-64 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
-            />
-          </div>
-          <div>
-            <label
-              class="block text-sm text-gray-700 dark:text-zinc-300 mb-1"
-              for={@uploads.logo.ref}
-            >
-              Logo
-            </label>
-            <div class="flex items-start gap-4">
-              <div :if={@branding.logo_url} class="shrink-0">
-                <img
-                  src={@branding.logo_url}
-                  alt="Current logo"
-                  class="w-16 h-16 rounded object-cover border border-gray-200 dark:border-zinc-700"
-                  data-testid="operator-settings-branding-current-logo"
-                />
-                <label class="flex items-center gap-1 mt-1 text-xs text-gray-500 dark:text-zinc-400">
-                  <input type="hidden" name="branding[remove_logo]" value="false" />
-                  <input
-                    type="checkbox"
-                    name="branding[remove_logo]"
-                    value="true"
-                    checked={@branding_form["remove_logo"]}
-                    class="rounded border-gray-300 dark:border-zinc-600"
-                    data-testid="operator-settings-branding-remove-logo"
-                  /> Remove logo
-                </label>
-              </div>
-              <div class="flex-1">
-                <.live_file_input upload={@uploads.logo} class="text-sm" />
-                <p class="text-xs text-gray-500 dark:text-zinc-400 mt-1">
-                  PNG, JPG, SVG, or WebP. Max 2MB.
-                </p>
-                <div :for={entry <- @uploads.logo.entries} class="mt-2">
-                  <div class="flex items-center gap-2">
-                    <div class="text-sm text-gray-600 dark:text-zinc-400">{entry.client_name}</div>
-                    <progress value={entry.progress} max="100" class="w-20 h-2" />
-                    <button
-                      type="button"
-                      phx-click="cancel_logo_upload"
-                      phx-value-ref={entry.ref}
-                      class="text-red-500 text-xs hover:text-red-700"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  <div
-                    :for={err <- upload_errors(@uploads.logo, entry)}
-                    class="text-red-500 text-xs mt-1"
-                  >
-                    {upload_error_to_string(err)}
-                  </div>
-                </div>
-                <div :for={err <- upload_errors(@uploads.logo)} class="text-red-500 text-xs mt-1">
-                  {upload_error_to_string(err)}
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="flex items-center justify-between gap-4">
-            <label class="text-sm text-gray-700 dark:text-zinc-300" for="branding_primary_color">
-              Primary color
-            </label>
-            <div class="flex items-center gap-2">
-              <input
-                type="color"
-                name="branding[primary_color_picker]"
-                id="branding_primary_color_picker"
-                aria-label="Primary color picker"
-                value={
-                  if(@branding_form["primary_color"] != "",
-                    do: @branding_form["primary_color"],
-                    else: "#808080"
-                  )
-                }
-                class={[
-                  "w-9 h-9 rounded border cursor-pointer",
-                  if(@branding_form["primary_color"] == "",
-                    do: "border-dashed border-gray-400 dark:border-zinc-500 opacity-50",
-                    else: "border-gray-300 dark:border-zinc-600"
-                  )
-                ]}
-                data-testid="operator-settings-branding-color-picker"
-              />
-              <input
-                type="text"
-                name="branding[primary_color]"
-                id="branding_primary_color"
-                value={@branding_form["primary_color"]}
-                placeholder="#1a2b3c"
-                pattern="^#[0-9a-fA-F]{6}$"
-                phx-debounce="300"
-                class="w-28 text-sm font-mono text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 px-2 py-1 rounded border border-gray-300 dark:border-zinc-600 focus:ring-blue-500 focus:border-blue-500"
-                data-testid="operator-settings-branding-color-input"
-              />
-            </div>
-          </div>
-          <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-zinc-700">
-            <button
-              type="button"
-              phx-click="cancel_branding"
-              class="text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200 px-3 py-1"
-              data-testid="operator-settings-cancel-branding"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              class="text-xs text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded"
-              data-testid="operator-settings-save-branding"
             >
               Save
             </button>

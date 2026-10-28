@@ -32,7 +32,9 @@ defmodule CustyardWeb.Portal.NewRequestLive do
       |> Multi.insert(
         :conversation,
         Conversation.changeset(%Conversation{}, %{
+          tenant_id: org.tenant_id,
           organization_id: org.id,
+          contact_id: socket.assigns.portal_credential.contact_id,
           subject: params["subject"],
           state: :new,
           urgency: String.to_existing_atom(urgency),
@@ -41,9 +43,12 @@ defmodule CustyardWeb.Portal.NewRequestLive do
       )
       |> Multi.insert(:message, fn %{conversation: conv} ->
         Message.changeset(%Message{}, %{
+          tenant_id: org.tenant_id,
           conversation_id: conv.id,
           source: :portal,
-          sender_email: "portal@#{org.domain || "portal"}",
+          sender_email:
+            socket.assigns.portal_credential.contact &&
+              socket.assigns.portal_credential.contact.email,
           body: params["body"],
           is_internal_note: false
         })

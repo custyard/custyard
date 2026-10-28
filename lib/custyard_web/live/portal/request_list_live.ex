@@ -14,40 +14,12 @@ defmodule CustyardWeb.Portal.RequestListLive do
 
     {:ok,
      socket
-     |> assign(:current_contact, nil)
-     |> assign(:admin_mode, false)
+     |> assign(:current_contact, socket.assigns.portal_credential.contact)
      |> assign(:page_title, "My Requests")}
   end
 
   @impl true
-  def handle_params(params, _uri, socket) do
-    # Allow simulating a contact via ?as=<contact_id> for testing
-    # Only enabled in dev/test environments via config
-    {contact, admin_mode} = maybe_impersonate_contact(params, socket.assigns.current_org.id)
-
-    {:noreply,
-     socket
-     |> assign(:current_contact, contact)
-     |> assign(:admin_mode, admin_mode)
-     |> load_conversations()}
-  end
-
-  @impl true
-  def handle_event("toggle_admin_mode", _params, socket) do
-    contact = socket.assigns.current_contact
-
-    # Only admin contacts can toggle admin mode
-    if contact && contact.is_admin do
-      new_mode = !socket.assigns.admin_mode
-
-      {:noreply,
-       socket
-       |> assign(:admin_mode, new_mode)
-       |> load_conversations()}
-    else
-      {:noreply, socket}
-    end
-  end
+  def handle_params(_params, _uri, socket), do: {:noreply, load_conversations(socket)}
 
   @impl true
   def handle_info({:conversation_updated, _id}, socket) do
@@ -67,25 +39,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
 
   defp load_conversations(socket) do
     org = socket.assigns.current_org
-    contact = socket.assigns.current_contact
-    admin_mode = socket.assigns.admin_mode
-
-    opts =
-      cond do
-        # No contact - show all org conversations (legacy behavior)
-        is_nil(contact) ->
-          []
-
-        # Admin mode enabled - show all org conversations
-        admin_mode ->
-          []
-
-        # Regular contact - show only their conversations
-        true ->
-          [contact_id: contact.id]
-      end
-
-    conversations = Conversations.list_for_organization(org.id, opts)
+    conversations = Conversations.list_for_organization(org.id)
     assign(socket, :conversations, conversations)
   end
 
@@ -99,7 +53,7 @@ defmodule CustyardWeb.Portal.RequestListLive do
             class="text-2xl font-semibold text-gray-900 dark:text-zinc-100"
             data-testid="portal-request-list-heading"
           >
-            {if @admin_mode, do: "All Organization Requests", else: "My Requests"}
+            Customer threads
           </h1>
           <p
             :if={@current_contact}
@@ -110,28 +64,6 @@ defmodule CustyardWeb.Portal.RequestListLive do
           </p>
         </div>
         <div class="flex items-center gap-4">
-          <div :if={@current_contact && @current_contact.is_admin} class="flex items-center gap-2">
-            <label id="admin-view-label" class="text-sm text-gray-600 dark:text-zinc-400">
-              Admin view
-            </label>
-            <button
-              type="button"
-              phx-click="toggle_admin_mode"
-              data-testid="portal-admin-toggle"
-              class={[
-                "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2",
-                if(@admin_mode, do: "bg-indigo-600", else: "bg-gray-200 dark:bg-zinc-700")
-              ]}
-              role="switch"
-              aria-checked={to_string(@admin_mode)}
-              aria-labelledby="admin-view-label"
-            >
-              <span class={[
-                "pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform duration-200 ease-in-out",
-                if(@admin_mode, do: "translate-x-5", else: "translate-x-0")
-              ]}></span>
-            </button>
-          </div>
           <.link
             navigate={"#{@portal_path}/projects"}
             class="text-indigo-600 dark:text-indigo-400 px-4 py-2 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
@@ -239,33 +171,5 @@ defmodule CustyardWeb.Portal.RequestListLive do
       diff < 24 -> "#{diff}h ago"
       true -> "#{div(diff, 24)}d ago"
     end
-  end
-
-  # Contact impersonation via ?as= param - only when explicitly enabled at runtime.
-  # This is a runtime check (not compile-time) so it can be disabled even if the
-  # binary was built with the wrong config.
-  defp maybe_impersonate_contact(params, org_id) do
-    if impersonation_enabled?() do
-      do_impersonate_contact(params, org_id)
-    else
-      {nil, false}
-    end
-  end
-
-  defp impersonation_enabled? do
-    Application.get_env(:custyard, :allow_contact_impersonation, false) == true
-  end
-
-  defp do_impersonate_contact(%{"as" => nil}, _org_id), do: {nil, false}
-
-  defp do_impersonate_contact(%{} = params, _org_id) when not is_map_key(params, "as"),
-    do: {nil, false}
-
-  defp do_impersonate_contact(%{"as" => contact_id} = params, org_id) do
-    alias Custyard.{Contact, Repo}
-    contact = Repo.get_by(Contact, id: contact_id, organization_id: org_id)
-    # Only admin contacts can use admin mode
-    admin_mode = contact && contact.is_admin && params["admin"] == "true"
-    {contact, admin_mode}
   end
 end

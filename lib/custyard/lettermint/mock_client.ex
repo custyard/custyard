@@ -20,7 +20,8 @@ defmodule Custyard.Lettermint.MockClient do
   completes in development.
   """
 
-  @behaviour Custyard.Lettermint.Client
+  alias Custyard.Lettermint.Client
+  @behaviour Client
 
   @impl true
   def create_route(_params) do
@@ -62,6 +63,12 @@ defmodule Custyard.Lettermint.MockClient do
   @impl true
   def list_domains do
     {:ok, Application.get_env(:custyard, :lettermint_mock_domains, [])}
+  end
+
+  @impl true
+  def get_sending_domain(domain) do
+    with {:ok, domains} <- list_domains(),
+         do: {:ok, Client.find_domain(domains, domain)}
   end
 
   defp route(id) do

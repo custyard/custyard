@@ -4,11 +4,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   ## Authorization Model
 
-  Access is controlled by `Custyard.Authorization`:
-  - super_admin can access any conversation
-  - admin/agent can access conversations in their organization, plus unlinked
-    (nil-org) conversations — mirroring `Custyard.Authorization.can_access_conversation?/2`
-  - Only admin+ can change conversation state (active/waiting/resolved)
+  Tenant staff can access threads and unassigned intake within their workspace.
+  Administrators can change thread state. Every read and mutation rechecks the
+  authenticated tenant scope.
   """
   use CustyardWeb, :live_view
 
@@ -28,19 +26,18 @@ defmodule CustyardWeb.Operator.ConversationLive do
     Message,
     MessageRecipientStatus,
     Organizations,
-    Repo,
     Scoring,
     Slugs
   }
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
-    case load_conversation(id) do
+    case load_conversation(socket.assigns.current_scope, id) do
       nil ->
         {:ok,
          socket
          |> put_flash(:error, "Conversation not found")
-         |> redirect(to: ~p"/operator")}
+         |> redirect(to: ~p"/app")}
 
       conversation ->
         if Authorization.can_access_conversation?(socket.assigns.current_operator, conversation) do
@@ -49,7 +46,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
           {:ok,
            socket
            |> put_flash(:error, "You do not have access to this conversation")
-           |> redirect(to: ~p"/operator")}
+           |> redirect(to: ~p"/app")}
         end
     end
   end
@@ -73,7 +70,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversation:#{id}")
     end
 
-    case activate_if_new(conversation, socket.assigns.current_operator) do
+    case activate_if_new(conversation, socket.assigns.current_scope) do
       {:ok, current} ->
         if current &&
              Authorization.can_access_conversation?(socket.assigns.current_operator, current) do
@@ -82,21 +79,21 @@ defmodule CustyardWeb.Operator.ConversationLive do
           {:ok,
            socket
            |> put_flash(:error, "You do not have access to this conversation")
-           |> redirect(to: ~p"/operator")}
+           |> redirect(to: ~p"/app")}
         end
 
       {:error, :unauthorized} ->
         {:ok,
          socket
          |> put_flash(:error, "You do not have access to this conversation")
-         |> redirect(to: ~p"/operator")}
+         |> redirect(to: ~p"/app")}
     end
   end
 
-  defp activate_if_new(%Conversation{state: :new} = conversation, operator) do
+  defp activate_if_new(%Conversation{state: :new} = conversation, scope) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    case Conversations.with_operator_access(conversation.id, operator, fn current, _operator ->
+    case Conversations.with_access(scope, conversation.id, fn current, _operator ->
            if current.state == :new do
              Conversations.transition_state(current, :new, :active, last_operator_action_at: now)
            else
@@ -106,17 +103,17 @@ defmodule CustyardWeb.Operator.ConversationLive do
       {:ok, %Conversation{}} ->
         Scoring.calculate_and_cache(conversation.id)
         broadcast_conversation_update(conversation.id, conversation.organization_id)
-        {:ok, load_conversation(conversation.id)}
+        {:ok, load_conversation(scope, conversation.id)}
 
       {:ok, :already_transitioned} ->
-        {:ok, load_conversation(conversation.id)}
+        {:ok, load_conversation(scope, conversation.id)}
 
       {:error, :unauthorized} = error ->
         error
     end
   end
 
-  defp activate_if_new(conversation, _operator), do: {:ok, conversation}
+  defp activate_if_new(conversation, _scope), do: {:ok, conversation}
 
   defp mount_loaded_conversation(socket, conversation) do
     breakdown = Scoring.breakdown(conversation)
@@ -262,7 +259,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         {:noreply, put_flash(socket, :error, "Message not found")}
 
       message ->
-        case Outbound.retry(message, socket.assigns.current_operator) do
+        case Outbound.retry(socket.assigns.current_scope, message) do
           {:ok, _} ->
             {:noreply, reload_conversation(socket)}
 
@@ -367,7 +364,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
        |> assign(:show_convert_form, true)
        |> assign(:convert_form_data, prefill_convert_form(socket.assigns.conversation))}
     else
-      {:noreply, put_flash(socket, :error, "Only super admins can convert prospects")}
+      {:noreply, put_flash(socket, :error, "Only tenant administrators can convert prospects")}
     end
   end
 
@@ -393,11 +390,10 @@ defmodule CustyardWeb.Operator.ConversationLive do
         domain: empty_to_nil(Map.get(params, "domain", ""))
       }
 
-      socket.assigns.conversation
-      |> Organizations.convert_prospect(attrs, operator)
+      Organizations.convert(socket.assigns.current_scope, socket.assigns.conversation, attrs)
       |> handle_convert_result(socket)
     else
-      {:noreply, put_flash(socket, :error, "Only super admins can convert prospects")}
+      {:noreply, put_flash(socket, :error, "Only tenant administrators can convert prospects")}
     end
   end
 
@@ -406,19 +402,19 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   def handle_event("create_label", %{"name" => name}, socket) do
-    socket.assigns.current_operator
+    socket.assigns.current_scope
     |> Labels.create_and_assign(socket.assigns.conversation, name)
     |> label_result(socket)
   end
 
   def handle_event("assign_label", %{"label_id" => id}, socket) do
-    socket.assigns.current_operator
+    socket.assigns.current_scope
     |> Labels.assign(socket.assigns.conversation, id)
     |> label_result(socket)
   end
 
   def handle_event("remove_label", %{"id" => id}, socket) do
-    socket.assigns.current_operator
+    socket.assigns.current_scope
     |> Labels.remove(socket.assigns.conversation, id)
     |> label_result(socket)
   end
@@ -712,17 +708,18 @@ defmodule CustyardWeb.Operator.ConversationLive do
 
   defp scoped_task(_socket, _task_id), do: nil
 
-  defp load_conversation(id) do
-    Conversations.get_with_messages(id)
+  defp load_conversation(scope, id) do
+    Conversations.get_with_messages(scope, id)
   rescue
     Ecto.NoResultsError -> nil
+    Ecto.Query.CastError -> nil
   end
 
   # A LiveView stays connected after mount. Check the current database row before
   # every client event so a prospect linked to another organization cannot keep
   # mutating it through an already-open socket.
   defp authorize_conversation_event(_event, _params, socket) do
-    conversation = Repo.get(Conversation, socket.assigns.conversation.id)
+    conversation = Conversations.get(socket.assigns.current_scope, socket.assigns.conversation.id)
 
     if conversation &&
          Authorization.can_access_conversation?(socket.assigns.current_operator, conversation) do
@@ -733,9 +730,9 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   defp conversation_mutation(socket, fun) do
-    Conversations.with_operator_access(
+    Conversations.with_access(
+      socket.assigns.current_scope,
       socket.assigns.conversation.id,
-      socket.assigns.current_operator,
       fun
     )
   end
@@ -743,7 +740,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   defp access_revoked(socket) do
     socket
     |> put_flash(:error, "You no longer have access to this conversation")
-    |> push_navigate(to: ~p"/operator")
+    |> push_navigate(to: ~p"/app")
   end
 
   defp begin_attachment_recovery(socket) do
@@ -767,12 +764,12 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   defp reload_conversation(socket) do
-    case load_conversation(socket.assigns.conversation.id) do
+    case load_conversation(socket.assigns.current_scope, socket.assigns.conversation.id) do
       nil ->
         # Conversation was deleted - redirect to queue
         socket
         |> put_flash(:error, "Conversation no longer exists")
-        |> push_navigate(to: ~p"/operator")
+        |> push_navigate(to: ~p"/app")
 
       conversation ->
         if Authorization.can_access_conversation?(socket.assigns.current_operator, conversation) do
@@ -924,7 +921,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
   end
 
   defp assign_labels(socket, conversation) do
-    labels = Labels.for_conversation(socket.assigns.current_operator, conversation)
+    labels = Labels.for_conversation(socket.assigns.current_scope, conversation)
 
     socket
     |> assign(:available_labels, labels.available)
@@ -968,7 +965,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
       <div class="flex-1 flex flex-col min-w-0" data-testid="operator-conversation-thread">
         <div class="border-b border-gray-200 dark:border-zinc-700 px-4 py-3 flex items-center gap-3 bg-white dark:bg-zinc-800">
           <.link
-            navigate={~p"/operator"}
+            navigate={~p"/app"}
             class="text-sm text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
             data-testid="operator-conversation-back"
           >
@@ -1237,7 +1234,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
             </div>
             <%= if @conversation.organization do %>
               <.link
-                navigate={~p"/operator/organizations/#{@conversation.organization.id}"}
+                navigate={~p"/app/customers/#{@conversation.organization.id}"}
                 class="text-sm text-indigo-600 hover:underline font-medium"
                 data-testid="operator-sidebar-org-link"
               >
@@ -1426,7 +1423,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
               <button type="submit" class="text-xs text-indigo-600">Add</button>
             </form>
             <form
-              :if={@current_operator.role in ["admin", "super_admin"]}
+              :if={@current_operator.role == "admin"}
               id="create-label-form"
               phx-submit="create_label"
               class="flex gap-1"
@@ -1559,7 +1556,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
             <div class="space-y-1.5">
               <.link
                 :for={conv <- @other_conversations}
-                navigate={~p"/operator/conversation/#{conv.id}"}
+                navigate={~p"/app/threads/#{conv.id}"}
                 class="block text-sm text-gray-700 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 truncate"
                 data-testid={"operator-other-conv-#{conv.id}"}
               >
@@ -1827,7 +1824,7 @@ defmodule CustyardWeb.Operator.ConversationLive do
         <.icon name="hero-paper-clip" class="h-3 w-3 text-gray-400 dark:text-zinc-500" />
         <%= if att.state == :fetched do %>
           <a
-            href={~p"/operator/attachments/#{att.id}"}
+            href={~p"/app/attachments/#{att.id}"}
             class="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
             data-testid={"attachment-#{att.id}"}
           >

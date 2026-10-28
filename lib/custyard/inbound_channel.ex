@@ -80,64 +80,66 @@ defmodule Custyard.InboundChannel do
   @imap_mailbox_fields [:imap_host, :imap_port, :imap_username, :imap_folder]
 
   schema "inbound_channels" do
-    field :tenant_id, :id, default: 1
-    belongs_to :tenant, Custyard.Tenant, define_field: false
-    field :public_address, :string
-    field :display_name, :string
+    field(:tenant_id, :id)
+    belongs_to(:tenant, Custyard.Tenant, define_field: false)
+    field(:public_address, :string)
+    field(:display_name, :string)
 
-    field :ingress_local, :string
-    field :ingress_token, :string
-    field :previous_ingress_token, :string
-    field :previous_token_expires_at, :utc_datetime
+    field(:ingress_local, :string)
+    field(:ingress_token, :string)
+    field(:previous_ingress_token, :string)
+    field(:previous_token_expires_at, :utc_datetime)
 
-    field :ingress_kind, Ecto.Enum, values: @ingress_kinds, default: :forward
-    field :provider, Ecto.Enum, values: @providers
+    field(:ingress_kind, Ecto.Enum, values: @ingress_kinds, default: :forward)
+    field(:provider, Ecto.Enum, values: @providers)
 
-    field :state, Ecto.Enum, values: @states, default: :draft
+    field(:state, Ecto.Enum, values: @states, default: :draft)
 
-    field :reply_from, Ecto.Enum, values: @reply_from_options, default: :public_address
+    field(:reply_from, Ecto.Enum, values: @reply_from_options, default: :public_address)
+    field(:sending_domain, :string)
     # D4: BCC every outbound reply to the public address so the operator's
     # mailbox keeps a copy. Off by default; the copy is forwarded back and
     # recognised by triage as an own echo.
-    field :archive_copy, :boolean, default: false
+    field(:archive_copy, :boolean, default: false)
     # D9: per-message attachment cap in megabytes; 0 disables fetching.
-    field :attachment_limit_mb, :integer, default: 10
+    field(:attachment_limit_mb, :integer, default: 10)
     # Points added to the attention score of the channel's conversations
     # (Custyard.Scoring), so security@ can outrank sales@. 0 is neutral.
-    field :attention_bonus, :integer, default: 0
-    field :sending_domain_status, :string
-    field :sending_domain_checked_at, :utc_datetime
+    field(:attention_bonus, :integer, default: 0)
+    field(:sending_domain_status, :string)
+    field(:sending_domain_checked_at, :utc_datetime)
 
-    field :verification_code, :string
-    field :verification_link, :string
-    field :verification_captured_at, :utc_datetime
-    field :verification_expires_at, :utc_datetime
+    field(:verification_code, :string)
+    field(:verification_link, :string)
+    field(:verification_captured_at, :utc_datetime)
+    field(:verification_expires_at, :utc_datetime)
 
-    field :imap_host, :string
-    field :imap_port, :integer
-    field :imap_username, :string
-    field :imap_password, :string, virtual: true, redact: true
-    field :imap_password_ciphertext, :string, redact: true
-    field :imap_folder, :string
-    field :imap_uid_validity, :integer
-    field :imap_last_uid, :integer
-    field :imap_last_polled_at, :utc_datetime
-    field :imap_last_error, :string
-    field :imap_consecutive_failures, :integer, default: 0
-    field :imap_auth_failures, :integer, default: 0
-    field :imap_message_attempts, :integer, default: 0
-    field :imap_auth_failed_at, :utc_datetime
+    field(:imap_host, :string)
+    field(:imap_port, :integer)
+    field(:imap_username, :string)
+    field(:imap_password, :string, virtual: true, redact: true)
+    field(:imap_password_ciphertext, :string, redact: true)
+    field(:imap_folder, :string)
+    field(:imap_uid_validity, :integer)
+    field(:imap_last_uid, :integer)
+    field(:imap_last_polled_at, :utc_datetime)
+    field(:imap_last_error, :string)
+    field(:imap_consecutive_failures, :integer, default: 0)
+    field(:imap_auth_failures, :integer, default: 0)
+    field(:imap_message_attempts, :integer, default: 0)
+    field(:imap_auth_failed_at, :utc_datetime)
 
-    field :verified_at, :utc_datetime
-    field :last_received_at, :utc_datetime
-    field :quiet_after_hours, :integer, default: 72
-    field :quiet_notified_at, :utc_datetime
-    field :paused_at, :utc_datetime
-    field :revoked_at, :utc_datetime
+    field(:verified_at, :utc_datetime)
+    field(:last_received_at, :utc_datetime)
+    field(:quiet_after_hours, :integer, default: 72)
+    field(:quiet_notified_at, :utc_datetime)
+    field(:paused_at, :utc_datetime)
+    field(:revoked_at, :utc_datetime)
 
-    belongs_to :inbound_route, Custyard.InboundRoute
-    belongs_to :organization, Custyard.Organization
-    belongs_to :project, Custyard.Project
+    belongs_to(:inbound_route, Custyard.InboundRoute)
+    belongs_to(:default_organization, Custyard.Organization)
+    belongs_to(:default_project, Custyard.Project)
+    belongs_to(:default_label, Custyard.Label)
 
     timestamps(type: :utc_datetime)
   end
@@ -168,23 +170,37 @@ defmodule Custyard.InboundChannel do
       :ingress_kind,
       :provider,
       :reply_from,
+      :sending_domain,
       :quiet_after_hours,
       :archive_copy,
       :attachment_limit_mb,
       :attention_bonus,
       :inbound_route_id,
-      :organization_id,
+      :default_organization_id,
       :tenant_id,
-      :project_id
+      :default_project_id,
+      :default_label_id
       | @imap_fields
     ])
     |> update_change(:public_address, &normalize_address/1)
+    |> update_change(:sending_domain, &normalize_address/1)
     |> update_change(:display_name, &normalize_display_name/1)
     |> validate_required([:public_address, :ingress_kind, :inbound_route_id, :tenant_id])
     |> foreign_key_constraint(:tenant_id)
     |> validate_length(:public_address, max: 255)
     |> validate_format(:public_address, @email_regex, message: "must be a valid email address")
     |> validate_length(:display_name, max: 100)
+    |> validate_length(:sending_domain, max: 253)
+    |> validate_format(:sending_domain, @hostname_regex,
+      message: "must be a domain such as mail.example.com"
+    )
+    |> validate_change(:sending_domain, fn :sending_domain, domain ->
+      if Enum.any?(String.split(domain, "."), &(byte_size(&1) > 63)),
+        do: [sending_domain: "domain labels must be at most 63 characters"],
+        else: []
+    end)
+    |> validate_sending_address_length()
+    |> reset_sending_domain_check()
     |> validate_number(:quiet_after_hours,
       greater_than_or_equal_to: 1,
       less_than_or_equal_to: 720
@@ -210,8 +226,33 @@ defmodule Custyard.InboundChannel do
       message: "is already a channel on this route"
     )
     |> foreign_key_constraint(:inbound_route_id)
-    |> foreign_key_constraint(:organization_id)
-    |> foreign_key_constraint(:project_id)
+    |> foreign_key_constraint(:default_organization_id)
+    |> foreign_key_constraint(:default_project_id)
+    |> foreign_key_constraint(:default_label_id)
+    |> validate_hint_tenants()
+  end
+
+  defp validate_hint_tenants(changeset) do
+    Enum.reduce(
+      [
+        {:inbound_route_id, Custyard.InboundRoute},
+        {:default_organization_id, Custyard.Organization},
+        {:default_project_id, Custyard.Project},
+        {:default_label_id, Custyard.Label}
+      ],
+      changeset,
+      fn {field, schema}, acc ->
+        case get_field(acc, field) && Custyard.Repo.get(schema, get_field(acc, field)) do
+          %{tenant_id: tenant_id} ->
+            if tenant_id == get_field(acc, :tenant_id),
+              do: acc,
+              else: add_error(acc, field, "must belong to the same tenant")
+
+          _ ->
+            acc
+        end
+      end
+    )
   end
 
   @doc """
@@ -346,6 +387,35 @@ defmodule Custyard.InboundChannel do
   end
 
   def public_domain(_channel), do: nil
+
+  @doc "The selected sending domain, defaulting to the public mailbox's domain."
+  def sending_domain(%__MODULE__{sending_domain: domain}) when is_binary(domain), do: domain
+  def sending_domain(%__MODULE__{} = channel), do: public_domain(channel)
+
+  @doc "The public mailbox local part at the selected sending domain."
+  def sending_address(%__MODULE__{public_address: address} = channel) when is_binary(address) do
+    case String.split(address, "@", parts: 2) do
+      [local, _domain] -> local <> "@" <> sending_domain(channel)
+      _ -> nil
+    end
+  end
+
+  def sending_address(_channel), do: nil
+
+  defp reset_sending_domain_check(changeset) do
+    if changed?(changeset, :sending_domain),
+      do: change(changeset, sending_domain_status: nil, sending_domain_checked_at: nil),
+      else: changeset
+  end
+
+  defp validate_sending_address_length(changeset) do
+    address = changeset |> apply_changes() |> sending_address()
+
+    if is_binary(address) and byte_size(address) > 255,
+      do:
+        add_error(changeset, :sending_domain, "makes the sending address longer than 255 bytes"),
+      else: changeset
+  end
 
   @doc "True while a previous (rotated) token is still inside its grace period."
   def previous_token_valid?(%__MODULE__{previous_ingress_token: nil}, _now), do: false

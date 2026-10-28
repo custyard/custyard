@@ -7,7 +7,7 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
   context (organization_id, project_id).
 
   These tests exercise the intended pipeline:
-    Parser.parse -> Adapters.Email.normalize -> Dispatcher.dispatch(route, normalized)
+    Parser.parse -> Adapters.Email.normalize -> Dispatcher.dispatch(route, normalized, channel: hd(Custyard.InboundChannels.list_for_route(route.id)))
 
   They do NOT start an actual LMTP server; they test the processing pipeline
   that handle_DATA delegates to.
@@ -24,9 +24,11 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
 
   # Helper: build a route with sender_matching enabled
   defp create_route_with_webhook(attrs) do
+    org = Repo.get!(Custyard.Organization, attrs.organization_id)
+
     route =
       %InboundRoute{}
-      |> InboundRoute.changeset(attrs)
+      |> InboundRoute.changeset(%{tenant_id: org.tenant_id})
       |> Repo.insert!()
 
     %InboundRouteWebhook{}
@@ -36,6 +38,14 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
       enabled: true
     })
     |> Repo.insert!()
+
+    insert_inbound_channel(
+      tenant_id: org.tenant_id,
+      inbound_route_id: route.id,
+      default_organization_id: org.id,
+      default_project_id: attrs[:project_id],
+      state: :active
+    )
 
     route
   end
@@ -78,7 +88,9 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
   defp parse_normalize_dispatch(raw_email, route) do
     with {:ok, parsed} <- Parser.parse(raw_email),
          {:ok, normalized} <- EmailAdapter.normalize(parsed) do
-      Dispatcher.dispatch(route, normalized)
+      Dispatcher.dispatch(route, normalized,
+        channel: hd(Custyard.InboundChannels.list_for_route(route.id))
+      )
     end
   end
 
@@ -126,15 +138,18 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
       org = insert_organization(domain: "neworg.example.com")
 
       # No route exists yet
-      assert InboundRoutes.get_general_route(org.id) == nil
+      assert List.first(InboundRoutes.list_for_tenant(org.tenant_id)) == nil
 
       # find_or_create_general_route creates one
-      assert {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
-      assert route.route_type == :general
-      assert route.organization_id == org.id
+      assert {:ok, route} =
+               InboundRoutes.find_or_create_general_route(org.tenant_id, source: :email)
+
+      assert route.tenant_id == org.tenant_id
 
       # Second call returns the same route
-      assert {:ok, same_route} = InboundRoutes.find_or_create_general_route(org.id)
+      assert {:ok, same_route} =
+               InboundRoutes.find_or_create_general_route(org.tenant_id, source: :email)
+
       assert same_route.id == route.id
     end
   end
@@ -142,7 +157,8 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
   describe "cross-org scoping" do
     test "email dispatched to org-A route does not create conversation in org-B" do
       org_a = insert_organization(domain: "alpha.example.com")
-      org_b = insert_organization(domain: "beta.example.com")
+      other_tenant = insert_tenant()
+      org_b = insert_organization(tenant_id: other_tenant.id, domain: "beta.example.com")
       _contact_a = insert_contact(organization_id: org_a.id, email: "alice@alpha.example.com")
       _contact_b = insert_contact(organization_id: org_b.id, email: "bob@beta.example.com")
 
@@ -161,7 +177,8 @@ defmodule Custyard.Email.LmtpDispatcherIntegrationTest do
 
     test "same sender email on different org routes creates separate conversations" do
       org_a = insert_organization(domain: "alpha.example.com")
-      org_b = insert_organization(domain: "beta.example.com")
+      other_tenant = insert_tenant()
+      org_b = insert_organization(tenant_id: other_tenant.id, domain: "beta.example.com")
 
       # The sender exists in both orgs (shared email)
       _contact_a = insert_contact(organization_id: org_a.id, email: "shared@external.com")

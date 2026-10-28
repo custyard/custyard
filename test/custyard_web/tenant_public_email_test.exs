@@ -1,9 +1,10 @@
 defmodule CustyardWeb.TenantPublicEmailTest.ApiClient do
   @behaviour Swoosh.ApiClient
-  def post(_url, headers, _body, email) do
+  def post(_url, headers, body, email) do
     owner = Application.fetch_env!(:custyard, :tenant_public_email_test_owner)
     send(owner, {:email, email})
     send(owner, {:tenant_delivery_headers, headers})
+    send(owner, {:tenant_delivery_payload, Jason.decode!(body)})
     {:ok, 202, [], ~s({"message_id":"test-only-message","status":"pending"})}
   end
 end
@@ -12,7 +13,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   use CustyardWeb.ConnCase, async: false
   import Custyard.Factory
   import Phoenix.LiveViewTest
-  alias Custyard.{Conversations, EmailSetup, Intake, RateLimit, Repo, Tenants}
+  alias Custyard.{Conversations, EmailSetup, InboundChannels, Intake, RateLimit, Repo, Tenants}
   alias Custyard.Intake.{ArrivalEmail, ClaimEmail, EmailBranding, ReceiptEmail}
 
   setup do
@@ -40,11 +41,11 @@ defmodule CustyardWeb.TenantPublicEmailTest do
       Tenants.create_tenant(%{
         name: "Atlas, Support",
         slug: "mail-atlas",
-        custom_domain: "help.atlas.example",
         logo_url: "/uploads/logos/atlas.png",
         primary_color: "#123456"
       })
 
+    {:ok, _} = Tenants.add_host(tenant.id, "help.atlas.example")
     source = insert_intake_source(tenant_id: tenant.id, name: "Atlas pricing")
     admin = insert_operator_account(role: "admin", tenant_id: tenant.id, organization_id: nil)
 
@@ -66,12 +67,13 @@ defmodule CustyardWeb.TenantPublicEmailTest do
       Custyard.InboundChannels.create_channel(route, %{public_address: "support@atlas.example"})
 
     channel = channel |> Ecto.Changeset.change(state: :active) |> Repo.update!()
+    {:ok, _} = EmailSetup.set_default_channel(admin, tenant.id, channel.id)
     %{tenant: tenant, source: source, channel: channel, admin: admin}
   end
 
   test "submission receipt uses the tenant identity and canonical conversation origin", c do
     conn =
-      post(build_conn(), "/i/#{c.source.key}", %{
+      post(%{build_conn() | host: Tenants.host(c.tenant)}, "/intake/#{c.source.key}", %{
         "submission" => %{
           "body" => "PRIVATE submitted details",
           "email" => "receipt@example.com",
@@ -89,9 +91,11 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
   test "late email capture and claim confirmation preserve tenant URLs and consent", c do
     {:ok, %{conversation: conversation, access_token: token}} =
-      Intake.create_intake_conversation(c.source.key, "PRIVATE support question")
+      Intake.create_intake_conversation(c.source.key, "PRIVATE support question",
+        tenant_id: c.tenant.id
+      )
 
-    {:ok, view, _} = live(build_conn(), "/c/#{token}")
+    {:ok, view, _} = live(%{build_conn() | host: Tenants.host(c.tenant)}, "/threads/#{token}")
 
     view
     |> form("[data-testid=resume-email-form]", %{
@@ -100,7 +104,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     |> render_submit()
 
     assert_receive {:email, %Swoosh.Email{to: [{_, "late@example.com"}]} = receipt}
-    assert receipt.text_body =~ Tenants.url(c.tenant) <> "/c/#{token}"
+    assert receipt.text_body =~ Tenants.url(c.tenant) <> "/threads/#{token}"
     assert_branding(receipt, c.tenant)
     refute Intake.get_prospect(conversation).notify_on_reply
 
@@ -111,14 +115,14 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     |> render_submit()
 
     assert_receive {:email, %Swoosh.Email{subject: "Confirm your claim: atlas-claim"} = claim}
-    assert claim.text_body =~ Tenants.url(c.tenant) <> "/claim/"
-    assert claim.text_body =~ Tenants.url(c.tenant) <> "/c/#{token}"
+    assert claim.text_body =~ Tenants.url(c.tenant) <> "/claims/"
+    assert claim.text_body =~ Tenants.url(c.tenant) <> "/threads/#{token}"
     assert_branding(claim, c.tenant)
-    [_, confirmation_token] = Regex.run(~r{/claim/([A-Za-z0-9_-]+)}, claim.text_body)
+    [_, confirmation_token] = Regex.run(~r{/claims/([A-Za-z0-9_-]+)}, claim.text_body)
 
     confirmation_page =
       %{build_conn() | host: Tenants.host(c.tenant)}
-      |> get("/claim/#{confirmation_token}")
+      |> get("/claims/#{confirmation_token}")
       |> html_response(200)
 
     assert confirmation_page =~ "Atlas, Support"
@@ -127,6 +131,62 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     refute claim.text_body =~ "PRIVATE support question"
     refute claim.html_body =~ "PRIVATE support question"
     refute Intake.get_prospect(conversation).notify_on_reply
+  end
+
+  test "tenant receipts and claims keep the public return address with a sending subdomain", c do
+    assert {:ok, _} =
+             InboundChannels.update_channel(c.channel, %{sending_domain: "mail.atlas.example"},
+               operator: c.admin
+             )
+
+    conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
+    conversation_url = Tenants.url(c.tenant) <> "/threads/receipt-token"
+
+    assert {:ok, _} =
+             ReceiptEmail.send_receipt("buyer@example.com", c.source,
+               conversation_url: conversation_url
+             )
+
+    assert_custom_domain_return_path()
+
+    assert {:ok, slug, _} =
+             Custyard.Slugs.claim("custom-domain-claim", "buyer@example.com", conversation)
+
+    assert {:ok, _} =
+             ClaimEmail.send_confirmation(slug,
+               confirm_url: Tenants.url(c.tenant) <> "/claims/claim-token",
+               conversation_url: conversation_url
+             )
+
+    assert_custom_domain_return_path()
+  end
+
+  test "tenant receipt ingress fallback retains its direct return path", c do
+    assert {:ok, channel} =
+             InboundChannels.update_channel(
+               c.channel,
+               %{sending_domain: "mail.atlas.example", reply_from: :ingress_address},
+               operator: c.admin
+             )
+
+    assert {:ok, _} =
+             ReceiptEmail.send_receipt("buyer@example.com", c.source,
+               conversation_url: Tenants.url(c.tenant) <> "/threads/receipt-token"
+             )
+
+    assert_receive {:email, email}
+    assert elem(email.from, 1) == InboundChannels.ingress_address(channel)
+    assert is_nil(email.reply_to)
+    assert_receive {:tenant_delivery_payload, payload}
+    refute Map.has_key?(payload, "reply_to")
+  end
+
+  defp assert_custom_domain_return_path do
+    assert_receive {:email, email}
+    assert email.from == {~s("Atlas, Support"), "support@mail.atlas.example"}
+    assert email.reply_to == {"", "support@atlas.example"}
+    assert_receive {:tenant_delivery_payload, payload}
+    assert payload["reply_to"] == ["support@atlas.example"]
   end
 
   defp assert_branding(email, tenant) do
@@ -144,15 +204,15 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     Repo.delete!(EmailSetup.connection(c.tenant.id))
 
     conn =
-      post(build_conn(), "/i/#{c.source.key}", %{
+      post(%{build_conn() | host: Tenants.host(c.tenant)}, "/intake/#{c.source.key}", %{
         "submission" => %{"body" => "Still stored", "email" => "quiet@example.com"}
       })
 
-    assert "/c/" <> token = redirected_to(conn)
-    assert {:ok, _} = Intake.get_conversation_by_access_token(token)
+    assert "/threads/" <> token = redirected_to(conn)
+    assert {:ok, _} = Intake.get_conversation_by_access_token(token, c.tenant.id)
     refute_receive {:tenant_delivery_headers, _}
     refute_receive {:email, %Swoosh.Email{to: [{_, "quiet@example.com"}]}}
-    {:ok, view, _} = live(build_conn(), "/c/#{token}")
+    {:ok, view, _} = live(%{build_conn() | host: Tenants.host(c.tenant)}, "/threads/#{token}")
 
     view
     |> form("[data-testid=resume-claim-form]", %{
@@ -169,7 +229,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     assert {:error, :no_default_channel} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/c/test-token"
+               conversation_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     refute_receive {:email, _}
@@ -180,51 +240,11 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     assert {:ok, _} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/c/test-token"
+               conversation_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     assert_receive {:email, email}
     assert_branding(email, c.tenant)
-  end
-
-  test "saved default-tenant credentials reach receipts, confirmations and staff alerts" do
-    put_delivery_env(Custyard.Mailer, adapter: Swoosh.Adapters.SMTP, relay: "unused.example")
-    put_delivery_env(:email_from_address, "platform@example.com")
-    put_delivery_env(:operator_email, "instance-operator@example.com")
-
-    admin = insert_operator_account(role: "super_admin", tenant_id: nil, organization_id: nil)
-
-    assert {:ok, _} =
-             EmailSetup.save_credentials(admin, 1, %{
-               "project_id" => "default-project",
-               "project_token" => "saved-default-project-token"
-             })
-
-    source = insert_intake_source(tenant_id: 1)
-    conversation = insert_conversation(source: :public_intake, tenant_id: 1)
-    conversation = Repo.preload(conversation, [:organization, :contact])
-
-    assert {:ok, _} =
-             ReceiptEmail.send_receipt("buyer@example.com", source,
-               conversation_url: "http://localhost/c/default-token"
-             )
-
-    assert_default_delivery("buyer@example.com")
-
-    assert {:ok, slug, _} =
-             Custyard.Slugs.claim("default-claim", "buyer@example.com", conversation)
-
-    assert {:ok, _} =
-             ClaimEmail.send_confirmation(slug,
-               confirm_url: "http://localhost/claim/default-confirmation",
-               conversation_url: "http://localhost/c/default-token"
-             )
-
-    assert_default_delivery("buyer@example.com")
-    assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "A support question")
-    assert_default_delivery("instance-operator@example.com")
-    assert :ok = Custyard.Notifications.Email.deliver_neglect_alert(conversation, :warning)
-    assert_default_delivery("instance-operator@example.com")
   end
 
   test "a missing selected ingress identity prevents tenant mail instead of building a nil From",
@@ -247,19 +267,11 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     assert {:error, :from_not_set} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/c/test-token"
+               conversation_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     refute_receive {:email, _}
     refute_receive {:tenant_delivery_headers, _}
-  end
-
-  defp assert_default_delivery(recipient) do
-    assert_receive {:email, email}
-    assert email.to == [{"", recipient}]
-    assert elem(email.from, 1) == "platform@example.com"
-    assert_receive {:tenant_delivery_headers, headers}
-    assert {"x-lettermint-token", "saved-default-project-token"} in headers
   end
 
   defp put_delivery_env(key, value) do
@@ -295,7 +307,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     assert arrival.text_body =~ "PRIVATE tenant body"
 
     assert arrival.text_body =~
-             Tenants.url(c.tenant) <> "/operator/conversation/#{conversation.id}"
+             Tenants.url(c.tenant) <> "/app/threads/#{conversation.id}"
 
     refute Enum.any?(arrival.to, &(elem(&1, 1) == foreign.email))
     assert arrival.from == {~s("Atlas, Support"), "support@atlas.example"}

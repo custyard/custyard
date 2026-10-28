@@ -16,7 +16,7 @@ defmodule CustyardWeb.Operator.TenantSettingsLive do
          max_file_size: 2_000_000
        ), layout: {CustyardWeb.Layouts, :operator}}
     else
-      {:ok, redirect(socket, to: ~p"/operator")}
+      {:ok, redirect(socket, to: ~p"/app")}
     end
   end
 
@@ -89,26 +89,6 @@ defmodule CustyardWeb.Operator.TenantSettingsLive do
     end
   end
 
-  def handle_event("grant_tenant_access", %{"id" => id}, socket) do
-    with {staff_id, ""} <- Integer.parse(id),
-         {:ok, _} <-
-           Tenants.grant_tenant_access(
-             socket.assigns.current_operator,
-             socket.assigns.current_tenant.id,
-             staff_id
-           ) do
-      {:noreply,
-       socket
-       |> load()
-       |> put_flash(
-         :info,
-         "Tenant access granted. The staff member must sign in again."
-       )}
-    else
-      _ -> {:noreply, put_flash(socket, :error, "Could not grant tenant access")}
-    end
-  end
-
   defp save_tenant(socket, attrs) do
     if logo_ready?(socket) do
       save_tenant_logo(socket, attrs)
@@ -161,13 +141,6 @@ defmodule CustyardWeb.Operator.TenantSettingsLive do
 
     socket
     |> assign(:form, to_form(Tenants.change_tenant(tenant)))
-    |> assign(
-      :legacy_staff,
-      if(OperatorAccount.super_admin?(socket.assigns.current_operator),
-        do: Tenants.legacy_staff(tenant.id),
-        else: []
-      )
-    )
     |> assign(:remove_logo, false)
     |> assign(:staff_form, to_form(%{"email" => "", "role" => "agent"}, as: :staff))
     |> assign(
@@ -195,8 +168,7 @@ defmodule CustyardWeb.Operator.TenantSettingsLive do
       </.header>
       <.simple_form for={@form} id="tenant-settings" phx-submit="save" phx-change="validate">
         <.input field={@form[:name]} label="Name" required />
-        <.input field={@form[:slug]} label="Subdomain" required />
-        <.input field={@form[:custom_domain]} label="Custom domain" />
+        <p>Hostname changes are managed in the instance admin console.</p>
         <p class="text-sm">
           Point the domain at {Tenants.app_host()} and configure TLS with your hosting provider. Customer portal links keep their private token.
         </p>
@@ -235,28 +207,7 @@ defmodule CustyardWeb.Operator.TenantSettingsLive do
         <.input field={@form[:primary_color]} label="Brand color (#RRGGBB)" />
         <:actions><.button>Save tenant</.button></:actions>
       </.simple_form>
-      <.link navigate={~p"/operator/email-setup"} class="text-indigo-600">Set up support email</.link>
-      <section :if={@legacy_staff != []} id="legacy-staff" class="space-y-3">
-        <h2 class="font-semibold">Review existing organization access</h2>
-        <p class="text-sm">These accounts still have access to one customer organization.
-          Granting tenant access lets them work with every customer in {@current_tenant.name} using their current role. Administrator accounts also gain tenant and email setup controls.
-          Existing sessions will be signed out.</p>
-        <div
-          :for={staff <- @legacy_staff}
-          data-testid={"legacy-staff-#{staff.id}"}
-          class="flex items-center justify-between gap-4 py-2"
-        >
-          <p>{staff.email} · {staff.role} · {staff.organization.name}</p>
-          <button
-            type="button"
-            phx-click="grant_tenant_access"
-            phx-value-id={staff.id}
-            data-confirm={"Grant #{staff.email} access to every customer in #{@current_tenant.name} as #{staff.role}? They must sign in again."}
-            phx-disable-with="Granting..."
-            class="text-sm text-indigo-600"
-          >Grant tenant access</button>
-        </div>
-      </section>
+      <.link navigate={~p"/app/settings/email"} class="text-indigo-600">Set up support email</.link>
       <section>
         <h2 class="font-semibold">Staff</h2>
         <p class="text-sm">Staff can work with every customer organization in this tenant.</p>

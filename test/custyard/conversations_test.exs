@@ -4,117 +4,88 @@ defmodule Custyard.ConversationsTest do
 
   alias Custyard.Auth.Token
   alias Custyard.Email.Outbound
-  alias Custyard.{Conversations, Intake, Message, OperatorAccount, Prospect, Repo, Tenants}
+  alias Custyard.{Conversations, Intake, Message, Prospect, Repo}
 
   import Custyard.Factory
   import Swoosh.TestAssertions
 
-  test "legacy organization staff can mutate only their tenant's unlinked conversations" do
-    {:ok, foreign_tenant} =
-      Tenants.create_tenant(%{name: "Foreign tenant", slug: "foreign-conversation-scope"})
+  setup do
+    tenant = insert_tenant()
+    Process.put(:factory_tenant_id, tenant.id)
+    :ok
+  end
 
-    organization = insert_organization()
+  defp scope(staff),
+    do: Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
 
-    operator =
-      insert_operator_account(role: "agent", organization_id: organization.id, tenant_id: nil)
+  defp current_scope do
+    tenant_id = Process.get(:factory_tenant_id)
+    key = {:conversation_scope, tenant_id}
 
-    own = insert_conversation(source: :public_intake, organization_id: nil)
+    case Process.get(key) do
+      nil ->
+        scope = scope(insert_operator_account(role: "admin", tenant_id: tenant_id))
+        Process.put(key, scope)
+        scope
 
-    foreign =
-      insert_conversation(
-        source: :public_intake,
-        organization_id: nil,
-        tenant_id: foreign_tenant.id
-      )
+      scope ->
+        scope
+    end
+  end
+
+  test "tenant staff can mutate only their workspace's unassigned threads" do
+    own = insert_tenant()
+    foreign = insert_tenant()
+    operator = insert_operator_account(role: "agent", tenant_id: own.id)
+    thread = insert_conversation(tenant_id: own.id, organization_id: nil, source: :public_intake)
+
+    other =
+      insert_conversation(tenant_id: foreign.id, organization_id: nil, source: :public_intake)
 
     assert {:ok, :allowed} =
-             Conversations.with_operator_access(own.id, operator, fn _, _ -> {:ok, :allowed} end)
+             Conversations.with_access(scope(operator), thread.id, fn _, _ ->
+               {:ok, :allowed}
+             end)
 
     assert {:error, :unauthorized} =
-             Conversations.with_operator_access(foreign.id, operator, fn _, _ ->
-               flunk("a foreign unlinked conversation must not reach the mutation")
+             Conversations.with_access(scope(operator), other.id, fn _, _ ->
+               flunk("foreign thread")
              end)
   end
 
-  test "an organization removed before a mutation cannot grant access to unlinked intake" do
-    organization = insert_organization()
+  test "deleting a customer does not revoke tenant staff membership" do
+    org = insert_organization()
+    operator = insert_operator_account(role: "agent", tenant_id: org.tenant_id)
+    Repo.delete!(org)
 
-    operator =
-      insert_operator_account(role: "agent", organization_id: organization.id, tenant_id: nil)
+    thread =
+      insert_conversation(tenant_id: org.tenant_id, organization_id: nil, source: :public_intake)
 
-    Repo.delete!(organization)
-    conversation = insert_conversation(source: :public_intake, organization_id: nil)
-
-    assert {:error, :unauthorized} =
-             Conversations.with_operator_access(conversation.id, operator, fn _, _ ->
-               flunk("an orphaned account must not reach the mutation")
+    assert {:ok, :allowed} =
+             Conversations.with_access(scope(operator), thread.id, fn _, _ ->
+               {:ok, :allowed}
              end)
   end
 
-  test "operator reply and other writes reject a stale conversation after foreign linkage" do
+  test "a thread cannot be relinked to another workspace's customer" do
     own = insert_organization()
-    foreign = insert_organization()
+    foreign = insert_organization(tenant_id: insert_tenant().id)
+    thread = insert_conversation(tenant_id: own.tenant_id, organization_id: own.id)
 
-    operator =
-      %OperatorAccount{}
-      |> OperatorAccount.changeset(%{
-        email: "conversation-scope@example.com",
-        role: "admin",
-        organization_id: own.id
-      })
-      |> Repo.insert!()
-
-    stale = insert_conversation(organization_id: nil, source: :public_intake, state: :active)
-
-    stale
-    |> Ecto.Changeset.change(organization_id: foreign.id)
-    |> Repo.update!()
-
-    assert {:error, :unauthorized} =
-             Conversations.send_reply(stale, "Unauthorized reply", operator: operator)
-
-    assert {:error, :unauthorized} =
-             Conversations.with_operator_access(stale.id, operator, fn current, _operator ->
-               Conversations.create_message(%{
-                 source: :operator,
-                 body: "Unauthorized note",
-                 is_internal_note: true,
-                 conversation_id: current.id
-               })
-             end)
-
-    assert Repo.aggregate(Message, :count) == 0
+    assert_raise Ecto.ConstraintError, fn ->
+      thread |> Ecto.Changeset.change(organization_id: foreign.id) |> Repo.update!()
+    end
   end
 
-  test "scoped conversation writes use the operator's current organization" do
-    own = insert_organization()
-    foreign = insert_organization()
-
-    operator =
-      %OperatorAccount{}
-      |> OperatorAccount.changeset(%{
-        email: "current-conversation-scope@example.com",
-        role: "admin",
-        organization_id: own.id
-      })
-      |> Repo.insert!()
-
-    conversation = insert_conversation(organization_id: own.id, state: :active)
-
-    operator
-    |> OperatorAccount.role_changeset(%{organization_id: foreign.id})
-    |> Repo.update!()
+  test "scoped writes use staff's current tenant assignment" do
+    own = insert_tenant()
+    foreign = insert_tenant()
+    operator = insert_operator_account(role: "admin", tenant_id: own.id)
+    thread = insert_conversation(tenant_id: own.id)
+    operator |> Ecto.Changeset.change(tenant_id: foreign.id) |> Repo.update!()
 
     assert {:error, :unauthorized} =
-             Conversations.send_reply(conversation, "Stale assignment", operator: operator)
-
-    assert {:error, :unauthorized} =
-             Conversations.with_operator_access(conversation.id, operator, fn _current,
-                                                                              _operator ->
-               {:ok, :unexpected}
-             end)
-
-    assert Repo.aggregate(Message, :count) == 0
+             Conversations.send_reply(thread, "Stale assignment", operator: operator)
   end
 
   describe "list_neglected" do
@@ -123,7 +94,7 @@ defmodule Custyard.ConversationsTest do
       active = insert_conversation(organization_id: org.id, state: :active)
       _resolved = insert_conversation(organization_id: org.id, state: :resolved)
 
-      results = Conversations.list_neglected()
+      results = Conversations.neglected(current_scope())
       ids = Enum.map(results, & &1.id)
 
       assert active.id in ids
@@ -137,7 +108,7 @@ defmodule Custyard.ConversationsTest do
       _snoozed = insert_conversation(organization_id: org.id, snoozed_until: future)
       active = insert_conversation(organization_id: org.id, snoozed_until: nil)
 
-      results = Conversations.list_neglected()
+      results = Conversations.neglected(current_scope())
       ids = Enum.map(results, & &1.id)
 
       assert active.id in ids
@@ -149,7 +120,7 @@ defmodule Custyard.ConversationsTest do
       contact = insert_contact(organization_id: org.id)
       _conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
 
-      [result] = Conversations.list_neglected()
+      [result] = Conversations.neglected(current_scope())
 
       assert result.organization.id == org.id
       assert result.contact.id == contact.id
@@ -163,7 +134,7 @@ defmodule Custyard.ConversationsTest do
       other = insert_conversation(organization_id: other_org.id)
       unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
 
-      results = Conversations.list_neglected(organization_id: org.id)
+      results = Conversations.neglected(current_scope(), organization_id: org.id)
       ids = Enum.map(results, & &1.id)
 
       assert own.id in ids
@@ -180,7 +151,7 @@ defmodule Custyard.ConversationsTest do
       conv_high = insert_conversation(organization_id: org.id, cached_score: 50)
       conv_mid = insert_conversation(organization_id: org.id, cached_score: 30)
 
-      results = Conversations.list_for_attention_queue()
+      results = Conversations.list(current_scope())
       ids = Enum.map(results, & &1.conversation.id)
 
       assert ids == [conv_high.id, conv_mid.id, conv_low.id]
@@ -193,7 +164,7 @@ defmodule Custyard.ConversationsTest do
       _snoozed = insert_conversation(organization_id: org.id, snoozed_until: future)
       active = insert_conversation(organization_id: org.id, snoozed_until: nil)
 
-      results = Conversations.list_for_attention_queue()
+      results = Conversations.list(current_scope())
       ids = Enum.map(results, & &1.conversation.id)
 
       assert active.id in ids
@@ -207,7 +178,7 @@ defmodule Custyard.ConversationsTest do
       active_conv = insert_conversation(organization_id: org.id, state: :active)
       _waiting_conv = insert_conversation(organization_id: org.id, state: :waiting)
 
-      new_results = Conversations.list_for_attention_queue(filter: "new")
+      new_results = Conversations.list(current_scope(), filter: "new")
       new_ids = Enum.map(new_results, & &1.conversation.id)
 
       assert new_conv.id in new_ids
@@ -219,7 +190,7 @@ defmodule Custyard.ConversationsTest do
       insert_message(conversation_id: conv.id)
       insert_message(conversation_id: conv.id)
 
-      [result] = Conversations.list_for_attention_queue()
+      [result] = Conversations.list(current_scope())
 
       assert result.message_count == 2
     end
@@ -232,7 +203,7 @@ defmodule Custyard.ConversationsTest do
       other = insert_conversation(organization_id: other_org.id)
       unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
 
-      results = Conversations.list_for_attention_queue(organization_id: org.id)
+      results = Conversations.list(current_scope(), organization_id: org.id)
       ids = Enum.map(results, & &1.conversation.id)
 
       assert own.id in ids
@@ -245,7 +216,7 @@ defmodule Custyard.ConversationsTest do
       own = insert_conversation(organization_id: org.id)
       unlinked = insert_conversation(organization_id: nil, source: :disambiguation)
 
-      results = Conversations.list_for_attention_queue()
+      results = Conversations.list(current_scope())
       ids = Enum.map(results, & &1.conversation.id)
 
       assert own.id in ids
@@ -311,13 +282,13 @@ defmodule Custyard.ConversationsTest do
     test "returns conversation when found" do
       conv = insert_conversation()
 
-      result = Conversations.get_conversation(conv.id)
+      result = Conversations.get(current_scope(), conv.id)
 
       assert result.id == conv.id
     end
 
     test "returns nil when not found" do
-      assert Conversations.get_conversation(99_999) == nil
+      assert Conversations.get(current_scope(), 99_999) == nil
     end
   end
 
@@ -325,14 +296,14 @@ defmodule Custyard.ConversationsTest do
     test "returns conversation when found" do
       conv = insert_conversation()
 
-      result = Conversations.get_conversation!(conv.id)
+      result = Conversations.get!(current_scope(), conv.id)
 
       assert result.id == conv.id
     end
 
     test "raises when not found" do
       assert_raise Ecto.NoResultsError, fn ->
-        Conversations.get_conversation!(99_999)
+        Conversations.get!(current_scope(), 99_999)
       end
     end
   end
@@ -366,7 +337,7 @@ defmodule Custyard.ConversationsTest do
       msg1 = insert_message(conversation_id: conv.id)
       msg2 = insert_message(conversation_id: conv.id)
 
-      result = Conversations.get_with_messages(conv.id)
+      result = Conversations.get_with_messages(current_scope(), conv.id)
 
       assert length(result.messages) == 2
       assert [first, second] = result.messages
@@ -379,7 +350,7 @@ defmodule Custyard.ConversationsTest do
       contact = insert_contact(organization_id: org.id)
       conv = insert_conversation(organization_id: org.id, contact_id: contact.id)
 
-      result = Conversations.get_with_messages(conv.id)
+      result = Conversations.get_with_messages(current_scope(), conv.id)
 
       assert result.organization.id == org.id
       assert result.contact.id == contact.id
@@ -432,7 +403,7 @@ defmodule Custyard.ConversationsTest do
       org = insert_organization()
 
       assert {:ok, conv} =
-               Conversations.create_conversation(%{
+               Conversations.create(current_scope(), %{
                  subject: "Test subject",
                  organization_id: org.id
                })
@@ -443,7 +414,7 @@ defmodule Custyard.ConversationsTest do
     end
 
     test "returns error for invalid attributes" do
-      assert {:error, changeset} = Conversations.create_conversation(%{})
+      assert {:error, changeset} = Conversations.create(current_scope(), %{})
       assert %{subject: ["can't be blank"]} = errors_on(changeset)
     end
   end
@@ -934,7 +905,7 @@ defmodule Custyard.ConversationsTest do
       # get_with_messages/1 preloads messages ascending — the same shape the
       # LiveView passes in. Regression: the already-loaded association must
       # not decide which message gets threaded.
-      preloaded = Conversations.get_with_messages(conv.id)
+      preloaded = Conversations.get_with_messages(current_scope(), conv.id)
 
       {:ok, message} = Conversations.send_reply(preloaded, "Reply to the follow-up")
 
@@ -982,13 +953,18 @@ defmodule Custyard.ConversationsTest do
       assert reloaded.last_operator_action_at != nil
     end
 
-    test "uses operator_email option for sender when no route from_address", %{conversation: conv} do
+    test "does not use staff personal email when tenant sending is unconfigured", %{
+      conversation: conv
+    } do
       {:ok, message} = Conversations.send_reply(conv, "Reply", operator_email: "agent@corp.com")
 
-      assert message.sender_email == "agent@corp.com"
+      assert is_nil(message.sender_email)
     end
 
-    test "prefers route from_address over operator_email", %{conversation: conv, org: org} do
+    test "route infrastructure does not select a sending identity", %{
+      conversation: conv,
+      org: org
+    } do
       # Create a route with a from_address for this org
       insert_inbound_route(
         organization_id: org.id,
@@ -999,10 +975,10 @@ defmodule Custyard.ConversationsTest do
       {:ok, message} =
         Conversations.send_reply(conv, "Reply", operator_email: "agent@corp.com")
 
-      assert message.sender_email == "support@acme.com"
+      assert is_nil(message.sender_email)
     end
 
-    test "prefers project route from_address for project-routed conversations", %{
+    test "a project does not select tenant sending identity", %{
       org: org,
       contact: contact
     } do
@@ -1031,10 +1007,10 @@ defmodule Custyard.ConversationsTest do
 
       {:ok, message} = Conversations.send_reply(conversation, "Project reply")
 
-      assert message.sender_email == "projects@acme.com"
+      assert is_nil(message.sender_email)
     end
 
-    test "falls back to the general route when the project route has no from_address", %{
+    test "provider routes do not provide a global sending fallback", %{
       org: org,
       contact: contact
     } do
@@ -1062,7 +1038,7 @@ defmodule Custyard.ConversationsTest do
 
       {:ok, message} = Conversations.send_reply(conversation, "Project reply")
 
-      assert message.sender_email == "support@acme.com"
+      assert is_nil(message.sender_email)
     end
 
     test "returns error on empty body", %{conversation: conv} do
@@ -1166,7 +1142,7 @@ defmodule Custyard.ConversationsTest do
     test "sender_email is nil when no route and no operator_email", %{conversation: conv} do
       {:ok, message} = Conversations.send_reply(conv, "No sender")
 
-      assert message.sender_email == nil
+      assert is_nil(message.sender_email)
     end
 
     test "message and conversation update are atomic", %{conversation: conv} do
@@ -1265,7 +1241,13 @@ defmodule Custyard.ConversationsTest do
     test "contact email wins over a captured prospect email" do
       org = insert_organization()
       contact = insert_contact(organization_id: org.id, email: "customer@example.com")
-      conv = insert_conversation(source: :public_intake, contact_id: contact.id)
+
+      conv =
+        insert_conversation(
+          source: :public_intake,
+          organization_id: contact.organization_id,
+          contact_id: contact.id
+        )
 
       insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
 
@@ -1308,7 +1290,7 @@ defmodule Custyard.ConversationsTest do
       conv = insert_conversation(source: :public_intake, state: :new)
       insert_prospect(conversation_id: conv.id, email: "prospect@example.com")
 
-      [%{conversation: loaded}] = Conversations.list_for_attention_queue()
+      [%{conversation: loaded}] = Conversations.list(current_scope())
 
       assert Ecto.assoc_loaded?(loaded.prospect)
       assert Ecto.assoc_loaded?(loaded.contact)
@@ -1317,6 +1299,13 @@ defmodule Custyard.ConversationsTest do
   end
 
   describe "send_reply/3 consent gate (public intake)" do
+    setup do
+      tenant = insert_tenant()
+      Process.put(:factory_tenant_id, tenant.id)
+      configure_tenant_email(tenant.id)
+      :ok
+    end
+
     test "prospect with opt-in: reply is pending and delivers to the prospect email" do
       {conversation, _prospect} =
         intake_fixture(email: "prospect@example.com", notify_on_reply: true)
@@ -1423,10 +1412,10 @@ defmodule Custyard.ConversationsTest do
           operator_email: "operator-personal@example.com"
         )
 
-      assert message.sender_email == nil
+      assert message.sender_email == "support@custyard.local"
     end
 
-    test "public-intake sender stays platform-addressed after linking to an org with a route" do
+    test "public intake retains tenant support sender after linking to a customer" do
       org = insert_organization()
 
       insert_inbound_route(
@@ -1455,7 +1444,7 @@ defmodule Custyard.ConversationsTest do
 
       # Source-keyed rule: neither the org route address nor the operator's
       # personal address — nil selects Outbound's platform fallback.
-      assert message.sender_email == nil
+      assert message.sender_email == "support@custyard.local"
     end
 
     test "sets origin to :email for public-intake conversations" do
@@ -1497,6 +1486,24 @@ defmodule Custyard.ConversationsTest do
   end
 
   describe "cleanup_resolved_conversations/2" do
+    test "purges dependent rows while preserving tenant audit and optional project links" do
+      org = insert_organization()
+      thread = insert_conversation(organization_id: org.id, state: :resolved)
+      message = insert_message(conversation_id: thread.id)
+      insert_prospect(conversation_id: thread.id)
+      project = insert_project(organization_id: org.id, conversation_id: thread.id)
+      task = insert_task(organization_id: org.id, conversation_id: thread.id)
+      event = insert_audit_event(conversation_id: thread.id, organization_id: org.id)
+      backdate_updated_at(thread, 91)
+      assert Conversations.cleanup_resolved_conversations(90) == 1
+      refute Repo.get(Message, message.id)
+      refute Repo.get_by(Prospect, conversation_id: thread.id)
+      assert Repo.reload!(project).conversation_id == nil
+      assert Repo.reload!(task).conversation_id == nil
+      assert Repo.reload!(event).tenant_id == org.tenant_id
+      assert Repo.reload!(event).conversation_id == nil
+    end
+
     test "purges resolved non-intake conversations after 90 days and keeps younger ones" do
       org = insert_organization()
       old = insert_conversation(organization_id: org.id, state: :resolved)
@@ -1576,12 +1583,15 @@ defmodule Custyard.ConversationsTest do
       prospect = insert_prospect(conversation_id: conversation.id, access_token_hash: hash)
       backdate_updated_at(conversation, 366)
 
-      assert {:ok, _conversation} = Intake.get_conversation_by_access_token(token)
+      assert {:ok, _conversation} =
+               Intake.get_conversation_by_access_token(token, Process.get(:factory_tenant_id))
 
       assert Conversations.cleanup_resolved_conversations(90) == 1
 
       assert Repo.get(Prospect, prospect.id) == nil
-      assert Intake.get_conversation_by_access_token(token) == {:error, :not_found}
+
+      assert Intake.get_conversation_by_access_token(token, Process.get(:factory_tenant_id)) ==
+               {:error, :not_found}
     end
 
     test "run_cleanup applies the public-intake retention split" do
@@ -1653,7 +1663,7 @@ defmodule Custyard.ConversationsTest do
   end
 
   # Re-read without preloaded associations so send_reply sees fresh consent.
-  defp fresh(conversation), do: Conversations.get_conversation!(conversation.id)
+  defp fresh(conversation), do: Conversations.get!(current_scope(), conversation.id)
 
   defp backdate_updated_at(conversation, days) do
     backdated =
@@ -1717,14 +1727,14 @@ defmodule Custyard.ConversationsTest do
              }
     end
 
-    test "a channel without a display name reports the organization name", %{
+    test "a channel without a display name reports the tenant name", %{
       org: org,
       route: route
     } do
       channel = insert_inbound_channel(inbound_route_id: route.id, state: :active)
       conversation = insert_conversation(organization_id: org.id, inbound_channel_id: channel.id)
 
-      assert %{name: "Channel Corp", source: :channel} =
+      assert %{name: "Tenant", source: :channel} =
                Conversations.reply_identity(conversation)
     end
 
@@ -1764,47 +1774,31 @@ defmodule Custyard.ConversationsTest do
                Conversations.reply_identity(conversation)
     end
 
-    test "without a channel the route from_address is the identity", %{org: org} do
+    test "without a channel tenant setup is required", %{org: org} do
       conversation = insert_conversation(organization_id: org.id)
 
       assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
-               address: "route@acme.example.com",
-               name: "Channel Corp",
-               source: :route
-             }
-    end
-
-    test "without a route identity the operator email is used, else the platform" do
-      org = insert_organization(name: "No Route Inc")
-      conversation = insert_conversation(organization_id: org.id)
-
-      assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
-               address: "agent@corp.com",
-               name: "No Route Inc",
-               source: :operator
-             }
-
-      assert Conversations.reply_identity(conversation) == %{
                address: nil,
-               name: "No Route Inc",
+               name: "Tenant",
                source: :platform
              }
     end
 
-    test "public-intake conversations always use the platform identity", %{route: route} do
+    test "public intake uses the tenant's support channel", %{route: route} do
       channel = insert_inbound_channel(inbound_route_id: route.id, state: :active)
 
       conversation =
         insert_conversation(
           source: :public_intake,
-          organization_id: route.organization_id,
+          tenant_id: route.tenant_id,
+          organization_id: nil,
           inbound_channel_id: channel.id
         )
 
-      assert Conversations.reply_identity(conversation, operator_email: "agent@corp.com") == %{
-               address: nil,
-               name: nil,
-               source: :platform
+      assert Conversations.reply_identity(conversation) == %{
+               address: channel.public_address,
+               name: "Tenant",
+               source: :channel
              }
     end
   end

@@ -53,7 +53,7 @@ defmodule Custyard.Intake.ReceiptEmail do
 
     if email_enabled?() do
       with {:ok, delivery} <- EmailBranding.delivery_settings(source.tenant_id) do
-        case RateLimit.check_rate(:intake_receipt_email, email) do
+        case RateLimit.check_rate(:intake_receipt_email, {source.tenant_id, email}) do
           {:deny, _retry_after_ms} ->
             {:error, :rate_limited}
 

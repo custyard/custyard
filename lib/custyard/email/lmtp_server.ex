@@ -238,7 +238,7 @@ defmodule Custyard.Email.LMTPServer do
   @behaviour :gen_smtp_server_session
 
   alias Custyard.Email.Parser
-  alias Custyard.InboundRoutes
+  alias Custyard.{InboundChannel, InboundRoute, Repo, Tenant}
   alias Custyard.Webhooks.Adapters.Email, as: EmailAdapter
   alias Custyard.Webhooks.Dispatcher
 
@@ -548,7 +548,7 @@ defmodule Custyard.Email.LMTPServer do
       from: nil,
       to: [],
       data: nil,
-      organization: nil,
+      channel: nil,
       tls_enabled: tls_enabled,
       peer_address: peer_address,
       connected_at: System.monotonic_time(),
@@ -619,9 +619,14 @@ defmodule Custyard.Email.LMTPServer do
     # Add SIZE extension (RFC 1870) if message size limit is configured
     # gen_smtp expects {charlist, charlist_value} for extensions with values
     extensions =
+      Enum.reject(extensions, fn {name, _} -> String.upcase(to_string(name)) == "SIZE" end)
+
+    extensions =
       case Map.get(state, :max_message_size) do
+        # gen_smtp consumes SIZE 0 as an internal infinity marker: it removes
+        # the extension from the greeting and lifts its own parser size limit.
+        :infinity -> [{~c"SIZE", ~c"0"} | extensions]
         nil -> extensions
-        :infinity -> extensions
         size when is_integer(size) -> [{~c"SIZE", Integer.to_charlist(size)} | extensions]
       end
 
@@ -676,101 +681,88 @@ defmodule Custyard.Email.LMTPServer do
 
   @impl true
   def handle_RCPT(to, state) do
-    Logger.debug("LMTP RCPT TO received", recipient: to)
-    current_count = length(state.to)
-    max_recipients = Map.get(state, :max_recipients, @default_max_recipients)
-
-    # Validate recipient domain and resolve organization before accepting
-    case validate_recipient_domain(to) do
-      {:ok, org} ->
-        # Guard: all recipients in an LMTP session must belong to the same org.
-        # If we already have an org set and the new recipient resolves to a
-        # different one, reject — LMTP sessions should not span orgs.
-        if state.organization != nil and state.organization.id != org.id do
-          Logger.warning("LMTP rejecting recipient from different organization",
-            recipient: to,
-            existing_org_id: state.organization.id,
-            new_org_id: org.id
-          )
-
-          {:error, "550 5.1.1 All recipients must belong to the same organization", state}
-        else
-          cond do
-            max_recipients == :infinity ->
-              {:ok, %{state | to: [to | state.to], organization: org}}
-
-            current_count < max_recipients ->
-              {:ok, %{state | to: [to | state.to], organization: org}}
-
-            true ->
-              # Emit telemetry for recipient limit exceeded
-              :telemetry.execute(
-                [:custyard, :lmtp, :recipient_limit, :exceeded],
-                %{count: 1},
-                %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
-              )
-
-              Logger.warning("LMTP recipient limit exceeded",
-                current_count: current_count,
-                max_recipients: max_recipients,
-                sender: state[:from]
-              )
-
-              {:error, "452 4.5.3 Too many recipients", state}
-          end
-        end
+    case resolve_recipient(to) do
+      {:ok, channel} ->
+        accept_recipient(to, channel, state)
 
       {:error, :invalid_domain} ->
-        Logger.warning("LMTP rejecting unknown recipient domain",
-          recipient: to,
-          sender: state[:from]
-        )
-
+        Logger.warning("LMTP rejecting unknown recipient domain", recipient: to)
         {:error, "550 5.1.1 Unknown recipient domain", state}
     end
   end
 
-  # Validate that the recipient domain is one we serve and resolve the org.
-  # Returns {:ok, org} or {:error, :invalid_domain}.
-  defp validate_recipient_domain(recipient) when is_binary(recipient) do
-    case extract_domain(recipient) do
-      nil ->
-        {:error, :invalid_domain}
-
-      domain ->
-        case find_org_by_domain(domain) do
-          {:ok, org} -> {:ok, org}
-          :not_found -> {:error, :invalid_domain}
-        end
+  defp accept_recipient(to, channel, state) do
+    if state.channel != nil and state.channel.tenant_id != channel.tenant_id do
+      Logger.warning("LMTP rejecting recipient from different tenant", recipient: to)
+      {:error, "550 5.1.1 All recipients must belong to the same tenant", state}
+    else
+      accept_within_limit(to, channel, state)
     end
   end
 
-  defp validate_recipient_domain(_), do: {:error, :invalid_domain}
+  defp accept_within_limit(to, channel, state) do
+    current_count = length(state.to)
+    max_recipients = Map.get(state, :max_recipients, @default_max_recipients)
 
-  defp extract_domain(email) do
-    case String.split(to_string(email), "@") do
-      [_, domain] -> String.downcase(domain)
-      _ -> nil
-    end
-  end
+    if max_recipients == :infinity or current_count < max_recipients do
+      {:ok, %{state | to: [to | state.to], channel: state.channel || channel}}
+    else
+      :telemetry.execute([:custyard, :lmtp, :recipient_limit, :exceeded], %{count: 1}, %{
+        peer: state[:peer_address],
+        current_count: current_count,
+        max: max_recipients
+      })
 
-  # A legacy listener has no trusted tenant context. Only a unique domain
-  # match is routable; selecting one of several tenants would leak email.
-  # Returns {:ok, org} or :not_found.
-  defp find_org_by_domain(domain) do
-    import Ecto.Query
-
-    query =
-      from(o in Custyard.Organization,
-        where: o.domain == ^domain or o.custom_domain == ^domain,
-        limit: 2
+      Logger.warning("LMTP recipient limit exceeded",
+        current_count: current_count,
+        max_recipients: max_recipients
       )
 
-    case Custyard.Repo.all(query) do
-      [org] -> {:ok, org}
-      _ -> :not_found
+      {:error, "452 4.5.3 Too many recipients", state}
     end
   end
+
+  # Recipient infrastructure selects the tenant before sender identity is read.
+  defp resolve_recipient(recipient) when is_binary(recipient) do
+    import Ecto.Query
+    address = recipient |> String.trim() |> String.downcase()
+
+    address =
+      case String.split(address, "@", parts: 2) do
+        [local, domain] -> hd(String.split(local, "+", parts: 2)) <> "@" <> domain
+        _ -> ""
+      end
+
+    Repo.all(
+      from c in InboundChannel,
+        join: t in Tenant,
+        on: t.id == c.tenant_id,
+        where: c.public_address == ^address,
+        where: c.state in [:active, :awaiting_first_message, :pending_verification],
+        limit: 2,
+        select: {c, t.status},
+        preload: [:inbound_route]
+    )
+    |> case do
+      [{channel, "active"}] ->
+        {:ok, channel}
+
+      [{channel, _}] ->
+        Custyard.AuditEvent.create(%{
+          tenant_id: channel.tenant_id,
+          event_type: :webhook_error,
+          source: "lmtp",
+          payload: %{"reason" => "tenant_suspended"}
+        })
+
+        {:error, :invalid_domain}
+
+      _ ->
+        {:error, :invalid_domain}
+    end
+  end
+
+  defp resolve_recipient(_), do: {:error, :invalid_domain}
 
   @impl true
   def handle_RCPT_extension(extension, state) do
@@ -858,11 +850,11 @@ defmodule Custyard.Email.LMTPServer do
   # Every DATA outcome ends the mail transaction. gen_smtp resets its own
   # envelope but keeps the callback state, and MTAs reuse one LMTP connection
   # for many messages: without this reset the next transaction inherits this
-  # one's recipients and organization, so mail for a second organization is
-  # bounced as a cross-organization delivery and the recipient count keeps
+  # one's recipients and channel, so mail for a second tenant is
+  # bounced as a cross-tenant delivery and the recipient count keeps
   # growing until every RCPT TO is refused.
   defp reset_transaction(state) do
-    %{state | from: nil, to: [], data: nil, declared_size: nil, organization: nil}
+    %{state | from: nil, to: [], data: nil, declared_size: nil, channel: nil}
   end
 
   # LMTP (RFC 2033 section 4.2) answers DATA with one reply per accepted
@@ -943,7 +935,7 @@ defmodule Custyard.Email.LMTPServer do
 
   @impl true
   def handle_RSET(state) do
-    {:ok, %{state | from: nil, to: [], data: nil, declared_size: nil, organization: nil}}
+    {:ok, %{state | from: nil, to: [], data: nil, declared_size: nil, channel: nil}}
   end
 
   @impl true
@@ -1011,12 +1003,13 @@ defmodule Custyard.Email.LMTPServer do
   # Internal functions
 
   defp process_email(raw_data, state) do
-    org = state[:organization]
+    channel = state[:channel]
 
-    with {:ok, parsed} <- Parser.parse(raw_data),
+    with %InboundChannel{} <- channel,
+         {:ok, parsed} <- Parser.parse(raw_data),
          {:ok, normalized} <- EmailAdapter.normalize(parsed),
-         {:ok, route} <- resolve_route(org),
-         {:ok, _conversation} <- Dispatcher.dispatch(route, normalized) do
+         %InboundRoute{} = route <- Repo.get(InboundRoute, channel.inbound_route_id),
+         {:ok, _conversation} <- Dispatcher.dispatch(route, normalized, channel: channel) do
       :ok
     else
       # Triage dropped the delivery deliberately and logged a rejection row;
@@ -1031,11 +1024,11 @@ defmodule Custyard.Email.LMTPServer do
         # Unknown sender - could be temporary if we expect them to register
         {:error, :temporary, :sender_not_found}
 
-      {:error, :organization_not_found} ->
-        {:error, :permanent, :organization_not_found}
+      nil ->
+        {:error, :permanent, :no_channel}
 
-      {:error, :no_organization} ->
-        {:error, :permanent, :no_organization}
+      {:error, :tenant_suspended} ->
+        {:error, :permanent, :tenant_suspended}
 
       # A validation failure is deterministic: the same message fails the
       # same way on every retry, so a 421 only makes the MTA requeue it for
@@ -1047,15 +1040,6 @@ defmodule Custyard.Email.LMTPServer do
         # Default to temporary for unknown errors (allows retry)
         {:error, :temporary, reason}
     end
-  end
-
-  # Resolve the inbound route for an organization, creating one if needed.
-  # find_or_create_general_route already short-circuits when a route exists
-  # and handles creation (with Lettermint API call) only once per org.
-  defp resolve_route(nil), do: {:error, :no_organization}
-
-  defp resolve_route(org) do
-    InboundRoutes.find_or_create_general_route(org.id, source: :email)
   end
 
   # Mail loop detection functions

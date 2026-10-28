@@ -24,6 +24,7 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
 
   defp put_buckets(overrides \\ []) do
     base = [
+      public_instance_ip: @generous,
       intake_get: @generous,
       intake_post: @generous,
       conversation_mount: @generous,
@@ -61,12 +62,12 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     test "renders the slug and a confirm form with ZERO state change", %{conn: conn} do
       %{slug: slug, token: token} = claim!()
 
-      conn = get(conn, ~p"/claim/#{token}")
+      conn = get(conn, ~p"/claims/#{token}")
       html = html_response(conn, 200)
 
       assert html =~ "claim-confirm-page"
       assert html =~ "acme-corp"
-      assert html =~ ~s(action="/claim/#{token}/confirm")
+      assert html =~ ~s(action="/claims/#{token}/confirm")
       assert html =~ "claim-confirm-submit"
 
       # Zero state change: still claimed, hash untouched.
@@ -79,13 +80,13 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       %{slug: slug, token: token} = claim!()
 
       for _scan <- 1..5 do
-        assert build_conn() |> get(~p"/claim/#{token}") |> html_response(200) =~ "acme-corp"
+        assert build_conn() |> get(~p"/claims/#{token}") |> html_response(200) =~ "acme-corp"
       end
 
       assert Repo.get!(Slug, slug.id).status == :claimed
 
       # The prospect's explicit POST still confirms after all the scans.
-      conn = post(conn, ~p"/claim/#{token}/confirm")
+      conn = post(conn, ~p"/claims/#{token}/confirm")
       assert html_response(conn, 200) =~ "claim-confirmed-page"
       assert Repo.get!(Slug, slug.id).status == :confirmed
     end
@@ -93,7 +94,7 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     test "sends Referrer-Policy: no-referrer (the token is a bearer credential)", %{conn: conn} do
       %{token: token} = claim!()
 
-      conn = get(conn, ~p"/claim/#{token}")
+      conn = get(conn, ~p"/claims/#{token}")
       assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
     end
   end
@@ -104,13 +105,13 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     } do
       %{slug: slug, token: token} = claim!()
 
-      conn = post(conn, ~p"/claim/#{token}/confirm")
+      conn = post(conn, ~p"/claims/#{token}/confirm")
       html = html_response(conn, 200)
 
       assert html =~ "claim-confirmed-page"
       assert html =~ "acme-corp"
       # The success page must not mint or reveal the conversation URL.
-      refute html =~ "/c/"
+      refute html =~ "/threads/"
 
       reloaded = Repo.get!(Slug, slug.id)
       assert reloaded.status == :confirmed
@@ -123,6 +124,8 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     setup do
       {:ok, tenant} = Tenants.create_tenant(%{name: "Atlas", slug: "atlas-claims"})
       {:ok, other} = Tenants.create_tenant(%{name: "Beacon", slug: "beacon-claims"})
+      {:ok, _} = Tenants.add_host(tenant.id, "atlas-claims.test")
+      {:ok, _} = Tenants.add_host(other.id, "beacon-claims.test")
       conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
       {:ok, slug, token} = Slugs.claim("atlas-claim", "buyer@example.com", conversation)
 
@@ -130,26 +133,29 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     end
 
     test "a foreign host renders unavailable without exposing the claim", c do
-      conn = get(%{build_conn() | host: Tenants.host(c.other)}, "/claim/#{c.token}")
+      conn = get(%{build_conn() | host: Tenants.host(c.other)}, "/claims/#{c.token}")
       html = html_response(conn, 200)
 
       assert html =~ "claim-unavailable"
       refute html =~ "atlas-claim"
       assert Repo.reload!(c.slug).status == :claimed
 
-      own = get(%{build_conn() | host: Tenants.host(c.tenant)}, "/claim/#{c.token}")
+      own = get(%{build_conn() | host: Tenants.host(c.tenant)}, "/claims/#{c.token}")
       assert html_response(own, 200) =~ "atlas-claim"
       assert Repo.reload!(c.slug).status == :claimed
     end
 
     test "a foreign host cannot consume a token that still works on its own tenant", c do
-      conn = post(%{build_conn() | host: Tenants.host(c.other)}, "/claim/#{c.token}/confirm")
+      conn =
+        post(%{build_conn() | host: Tenants.host(c.other)}, "/claims/#{c.token}/confirm")
 
       assert html_response(conn, 200) =~ "claim-unavailable"
       assert Repo.reload!(c.slug).status == :claimed
       assert Repo.reload!(c.slug).confirmation_token_hash == c.slug.confirmation_token_hash
 
-      own = post(%{build_conn() | host: Tenants.host(c.tenant)}, "/claim/#{c.token}/confirm")
+      own =
+        post(%{build_conn() | host: Tenants.host(c.tenant)}, "/claims/#{c.token}/confirm")
+
       assert html_response(own, 200) =~ "claim-confirmed-page"
       assert Repo.reload!(c.slug).status == :confirmed
     end
@@ -168,7 +174,7 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
     test "invalid, expired, used, and purged tokens all render one identical page" do
       # Used token
       %{token: used_token} = claim!()
-      post(build_conn(), ~p"/claim/#{used_token}/confirm")
+      post(build_conn(), ~p"/claims/#{used_token}/confirm")
 
       # Expired token
       conversation = insert_conversation(source: :public_intake)
@@ -178,7 +184,7 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       # Purged token (claim released entirely)
       other = insert_conversation(source: :public_intake)
       {:ok, purged_slug, purged_token} = Slugs.claim("purged", "c@example.com", other)
-      {:ok, _} = Slugs.release(purged_slug)
+      {:ok, _} = Slugs.release(staff_scope(purged_slug.tenant_id), purged_slug)
 
       tokens = [
         "not-a-real-token",
@@ -189,13 +195,13 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
 
       get_pages =
         for token <- tokens do
-          build_conn() |> get(~p"/claim/#{token}") |> html_response(200) |> normalized_page()
+          build_conn() |> get(~p"/claims/#{token}") |> html_response(200) |> normalized_page()
         end
 
       post_pages =
         for token <- tokens do
           build_conn()
-          |> post(~p"/claim/#{token}/confirm")
+          |> post(~p"/claims/#{token}/confirm")
           |> html_response(200)
           |> normalized_page()
         end
@@ -210,16 +216,16 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       put_buckets(claim_confirm: [limit: 2, window_ms: 60_000])
       %{token: token} = claim!()
 
-      assert conn |> get(~p"/claim/#{token}") |> html_response(200)
-      assert build_conn() |> get(~p"/claim/#{token}") |> html_response(200)
+      assert conn |> get(~p"/claims/#{token}") |> html_response(200)
+      assert build_conn() |> get(~p"/claims/#{token}") |> html_response(200)
 
-      denied = build_conn() |> post(~p"/claim/#{token}/confirm")
+      denied = build_conn() |> post(~p"/claims/#{token}/confirm")
       assert denied.status == 429
       assert [retry_after] = get_resp_header(denied, "retry-after")
       assert String.to_integer(retry_after) >= 1
 
       # The denied POST consumed nothing.
-      assert Custyard.Slugs.peek(token) |> elem(0) == :ok
+      assert Custyard.Slugs.peek(token, factory_tenant_id()) |> elem(0) == :ok
     end
 
     test "shape-invalid tokens render unavailable without consuming the bucket" do
@@ -229,15 +235,15 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       # Scanner garbage — wrong length, wrong charset — fails the shape
       # check before the rate limit and spends nothing.
       for garbage <- ["not-a-real-token", String.duplicate("a", 44), "shell$injection!"] do
-        assert build_conn() |> get(~p"/claim/#{garbage}") |> html_response(200) =~
+        assert build_conn() |> get(~p"/claims/#{garbage}") |> html_response(200) =~
                  "claim-unavailable"
 
-        assert build_conn() |> post(~p"/claim/#{garbage}/confirm") |> html_response(200) =~
+        assert build_conn() |> post(~p"/claims/#{garbage}/confirm") |> html_response(200) =~
                  "claim-unavailable"
       end
 
       # The whole budget survived the garbage: the real token still confirms.
-      assert build_conn() |> post(~p"/claim/#{token}/confirm") |> html_response(200) =~
+      assert build_conn() |> post(~p"/claims/#{token}/confirm") |> html_response(200) =~
                "claim-confirmed-page"
     end
 
@@ -249,10 +255,10 @@ defmodule CustyardWeb.ClaimConfirmationControllerTest do
       # SHAPE, never whether a token EXISTS.
       phantom = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
 
-      assert build_conn() |> get(~p"/claim/#{phantom}") |> html_response(200) =~
+      assert build_conn() |> get(~p"/claims/#{phantom}") |> html_response(200) =~
                "claim-unavailable"
 
-      denied = build_conn() |> get(~p"/claim/#{phantom}")
+      denied = build_conn() |> get(~p"/claims/#{phantom}")
       assert denied.status == 429
     end
   end

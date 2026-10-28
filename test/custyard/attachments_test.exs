@@ -7,6 +7,9 @@ defmodule Custyard.AttachmentsTest do
   alias Custyard.{Attachments, MessageAttachment, Repo}
   alias Custyard.Attachments.StubClient
 
+  defp scope(staff),
+    do: Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+
   @png <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3>>
 
   setup do
@@ -37,7 +40,10 @@ defmodule Custyard.AttachmentsTest do
       assert row.sniffed_type == "image/png"
       assert row.content_type == "image/png"
       assert row.size == byte_size(@png)
-      assert row.storage_path == Path.join(binary_part(sha, 0, 2), sha)
+
+      assert row.storage_path ==
+               Path.join([Integer.to_string(message.tenant_id), binary_part(sha, 0, 2), sha])
+
       assert File.read!(Attachments.file_path(row)) == @png
       assert String.starts_with?(Attachments.file_path(row), Attachments.dir())
     end
@@ -134,6 +140,7 @@ defmodule Custyard.AttachmentsTest do
     test "unfinished durable slots resume after interruption", %{message: message} do
       pending =
         Repo.insert!(%MessageAttachment{
+          tenant_id: message.tenant_id,
           message_id: message.id,
           position: 0,
           state: :pending,
@@ -229,6 +236,7 @@ defmodule Custyard.AttachmentsTest do
 
       pending =
         Repo.insert!(%MessageAttachment{
+          tenant_id: message.tenant_id,
           message_id: message.id,
           position: 0,
           state: :pending,
@@ -257,6 +265,7 @@ defmodule Custyard.AttachmentsTest do
       expires = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(300)
 
       Repo.insert!(%MessageAttachment{
+        tenant_id: message.tenant_id,
         message_id: message.id,
         position: 0,
         filename: first.filename,
@@ -267,6 +276,7 @@ defmodule Custyard.AttachmentsTest do
       })
 
       Repo.insert!(%MessageAttachment{
+        tenant_id: message.tenant_id,
         message_id: message.id,
         position: 1,
         filename: second.filename,
@@ -355,7 +365,7 @@ defmodule Custyard.AttachmentsTest do
     end
   end
 
-  describe "get_for_operator/2" do
+  describe "get/2" do
     setup %{message: message} do
       d = descriptor()
       StubClient.put(d.url, "secret bytes")
@@ -368,37 +378,54 @@ defmodule Custyard.AttachmentsTest do
       %{fetched: fetched, skipped: skipped}
     end
 
-    test "a super admin reaches any fetched attachment", %{fetched: fetched} do
-      operator = insert_operator_account(role: "super_admin")
-      assert %MessageAttachment{id: id} = Attachments.get_for_operator(fetched.id, operator)
+    test "a tenant admin reaches its fetched attachments", %{fetched: fetched} do
+      operator = insert_operator_account(role: "admin")
+      assert %MessageAttachment{id: id} = Attachments.get(scope(operator), fetched.id)
       assert id == fetched.id
     end
 
-    test "an agent reaches only their organization's attachments", %{
+    test "an agent reaches only their tenant attachments", %{
       fetched: fetched,
       org: org
     } do
       agent = insert_operator_account(role: "agent", organization_id: org.id)
-      assert Attachments.get_for_operator(fetched.id, agent)
+      assert Attachments.get(scope(agent), fetched.id)
 
-      other_org = insert_organization()
-      stranger = insert_operator_account(role: "agent", organization_id: other_org.id)
-      refute Attachments.get_for_operator(fetched.id, stranger)
+      other_tenant = insert_tenant()
+      stranger = insert_operator_account(role: "agent", tenant_id: other_tenant.id)
+      refute Attachments.get(scope(stranger), fetched.id)
     end
 
     test "marking the conversation suspect blocks already fetched files", %{
       fetched: fetched,
       conv: conv
     } do
-      operator = insert_operator_account(role: "super_admin")
+      operator = insert_operator_account(role: "admin")
       conv |> Ecto.Changeset.change(suspect: true) |> Repo.update!()
-      refute Attachments.get_for_operator(fetched.id, operator)
+      refute Attachments.get(scope(operator), fetched.id)
+    end
+
+    test "stale, removed and suspended staff scopes cannot read attachments", %{fetched: fetched} do
+      staff = insert_operator_account(role: "admin")
+      original_scope = scope(staff)
+      assert Attachments.get(original_scope, fetched.id)
+      Repo.update!(Ecto.Changeset.change(staff, role: "agent"))
+      refute Attachments.get(original_scope, fetched.id)
+      current = Repo.reload!(staff)
+      current_scope = scope(current)
+      Repo.delete!(current)
+      refute Attachments.get(current_scope, fetched.id)
+      active = insert_operator_account(role: "agent")
+      active_scope = scope(active)
+      tenant = Custyard.Tenants.get_tenant!(active.tenant_id)
+      Repo.update!(Ecto.Changeset.change(tenant, status: "suspended"))
+      refute Attachments.get(active_scope, fetched.id)
     end
 
     test "unfetched and unknown attachments are nil", %{skipped: skipped} do
-      operator = insert_operator_account(role: "super_admin")
-      refute Attachments.get_for_operator(skipped.id, operator)
-      refute Attachments.get_for_operator(skipped.id + 10_000, operator)
+      operator = insert_operator_account(role: "admin")
+      refute Attachments.get(scope(operator), skipped.id)
+      refute Attachments.get(scope(operator), skipped.id + 10_000)
     end
   end
 
@@ -411,7 +438,14 @@ defmodule Custyard.AttachmentsTest do
       orphan_sha =
         :crypto.hash(:sha256, "orphan-#{System.unique_integer()}") |> Base.encode16(case: :lower)
 
-      orphan_path = Path.join([Attachments.dir(), binary_part(orphan_sha, 0, 2), orphan_sha])
+      orphan_path =
+        Path.join([
+          Attachments.dir(),
+          Integer.to_string(message.tenant_id),
+          binary_part(orphan_sha, 0, 2),
+          orphan_sha
+        ])
+
       File.mkdir_p!(Path.dirname(orphan_path))
       File.write!(orphan_path, "orphan")
       File.touch!(orphan_path, System.os_time(:second) - 90_000)
@@ -422,9 +456,17 @@ defmodule Custyard.AttachmentsTest do
     end
   end
 
-  test "orphan cleanup leaves fresh final files and temporary writes alone" do
+  test "orphan cleanup leaves fresh final files and temporary writes alone", %{message: message} do
     sha = :crypto.hash(:sha256, "fresh-#{System.unique_integer()}") |> Base.encode16(case: :lower)
-    path = Path.join([Attachments.dir(), binary_part(sha, 0, 2), sha])
+
+    path =
+      Path.join([
+        Attachments.dir(),
+        Integer.to_string(message.tenant_id),
+        binary_part(sha, 0, 2),
+        sha
+      ])
+
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, "fresh")
     temporary = path <> ".tmp-123"

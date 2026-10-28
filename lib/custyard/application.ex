@@ -5,11 +5,6 @@ defmodule Custyard.Application do
 
   require Logger
 
-  alias Custyard.Acknowledgments.Config, as: AcknowledgmentsConfig
-  alias Custyard.Acknowledgments.Consumer, as: AcknowledgmentsConsumer
-
-  @default_operator_email "admin@custyard.local"
-
   @impl true
   def start(_type, _args) do
     # Debug logging for check_origin config. Uncomment to trace.
@@ -55,10 +50,18 @@ defmodule Custyard.Application do
     opts = [strategy: :one_for_one, name: Custyard.Supervisor]
     result = Supervisor.start_link(children, opts)
 
-    # Setup operator account after supervisor fully starts
-    # Use Task to avoid blocking application startup
-    if Application.get_env(:custyard, :env) == :dev do
-      Task.start(fn -> setup_dev_operator() end)
+    case {result, Application.get_env(:custyard, :env), System.get_env("INSTANCE_ADMIN_EMAIL")} do
+      {{:ok, _}, env, email} when env != :test and is_binary(email) and email != "" ->
+        case Custyard.InstanceAdmins.create_admin(email) do
+          {status, _admin} when status in [:created, :exists] ->
+            :ok
+
+          {:error, changeset} ->
+            raise "Invalid INSTANCE_ADMIN_EMAIL: #{inspect(changeset.errors)}"
+        end
+
+      _ ->
+        :ok
     end
 
     result
@@ -107,10 +110,9 @@ defmodule Custyard.Application do
   # application refuses to start. The consumer loads its configuration itself:
   # a child spec carrying the URL would put the password in supervisor reports.
   defp maybe_add_acknowledgment_consumer(children) do
-    case AcknowledgmentsConfig.startup() do
-      :enabled -> children ++ [AcknowledgmentsConsumer]
-      _ -> children
-    end
+    if Application.get_env(:custyard, :env) == :test,
+      do: children,
+      else: children ++ [Custyard.Acknowledgments.Subscriptions]
   end
 
   # Public-intake background sweeps (expired slug claims, retention bounds).
@@ -151,19 +153,7 @@ defmodule Custyard.Application do
     end
   end
 
-  # IMAP channels replaced the global poller (spec-inbound-channels D8). A
-  # deployment that still sets IMAP_ENABLED expects mail that would silently
-  # stop arriving, so it refuses to start until the variable is removed.
   defp maybe_add_imap_pollers(children) do
-    if Application.get_env(:custyard, :legacy_imap_enabled, false) do
-      raise """
-      IMAP_ENABLED is no longer supported. Connect the mailbox as an IMAP channel
-      instead (organization page > Channels > New channel > "Read a mailbox over
-      IMAP"), then unset IMAP_ENABLED, IMAP_ORGANIZATION_ID, IMAP_HOST, IMAP_PORT,
-      IMAP_USERNAME, IMAP_PASSWORD, IMAP_FOLDER, IMAP_POLL_INTERVAL and IMAP_SSL.
-      """
-    end
-
     if Application.get_env(:custyard, :start_imap_pollers, true),
       do: children ++ [Custyard.Email.ImapPollers],
       else: children
@@ -174,69 +164,4 @@ defmodule Custyard.Application do
     CustyardWeb.Endpoint.config_change(changed, removed)
     :ok
   end
-
-  defp setup_dev_operator do
-    # Wait for Repo with exponential backoff instead of fixed sleep
-    wait_for_repo(5, 100)
-    do_setup_dev_operator()
-  rescue
-    e ->
-      Logger.warning("Failed to setup dev operator: #{inspect(e)}")
-  end
-
-  # Poll for Repo availability with exponential backoff
-  # max_attempts=5, initial_delay_ms=100 gives delays: 100, 200, 400, 800, 1600 = ~3s total
-  defp wait_for_repo(0, _delay_ms), do: :ok
-
-  defp wait_for_repo(attempts_remaining, delay_ms) do
-    if repo_ready?() do
-      :ok
-    else
-      Process.sleep(delay_ms)
-      wait_for_repo(attempts_remaining - 1, delay_ms * 2)
-    end
-  end
-
-  defp repo_ready? do
-    alias Custyard.Repo
-    # Try a simple query - if it succeeds, Repo is ready
-    Repo.query("SELECT 1")
-    true
-  rescue
-    _ -> false
-  end
-
-  defp do_setup_dev_operator do
-    case Custyard.OperatorAccounts.create_operator(@default_operator_email,
-           via: "boot",
-           allow_placeholder: true
-         ) do
-      {:created, _operator} ->
-        Logger.info("""
-
-        ========================================
-        DEV OPERATOR ACCOUNT CREATED
-        ========================================
-        Email: #{@default_operator_email}
-
-        Login at: /operator/login
-        A magic link will be sent to your email.
-        (In dev, check the Swoosh local mailbox at /dev/mailbox)
-        ========================================
-        """)
-
-      {:exists, _operator} ->
-        Logger.debug("Dev operator account exists, skipping creation")
-
-      {:error, message} ->
-        Logger.warning("Failed to setup dev operator: #{message}")
-    end
-  end
-
-  # Helper for startup logging (uncomment with debug block above)
-  # defp origin_type({m, f, a}) when is_atom(m) and is_atom(f) and is_list(a), do: "MFA"
-  # defp origin_type(:conn), do: ":conn atom"
-  # defp origin_type(list) when is_list(list), do: "static list"
-  # defp origin_type(bool) when is_boolean(bool), do: "boolean"
-  # defp origin_type(_), do: "unknown"
 end

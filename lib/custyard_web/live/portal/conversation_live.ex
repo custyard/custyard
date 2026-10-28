@@ -68,9 +68,11 @@ defmodule CustyardWeb.Portal.ConversationLive do
 
   defp submit_reply(socket, conv, org, body) do
     if String.trim(body) != "" do
-      sender_email = "portal@#{org.domain || "portal"}"
+      sender_email =
+        socket.assigns.portal_credential.contact && socket.assigns.portal_credential.contact.email
 
       case Conversations.create_message(%{
+             tenant_id: org.tenant_id,
              conversation_id: conv.id,
              source: :portal,
              sender_email: sender_email,

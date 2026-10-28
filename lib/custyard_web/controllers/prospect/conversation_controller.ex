@@ -16,7 +16,7 @@ defmodule CustyardWeb.Prospect.ConversationController do
 
   def unavailable(conn, _params) do
     conn
-    |> assign(:branding, Settings.get_branding())
+    |> assign(:branding, Settings.get_branding(conn.assigns.host_tenant.id))
     |> assign(:page_title, "Conversation unavailable")
     |> render(:unavailable)
   end

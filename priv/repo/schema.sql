@@ -15,7 +15,6 @@ CREATE TABLE "contacts" (
   "organization_id" INTEGER NOT NULL ,
   "email" TEXT NOT NULL,
   "name" TEXT,
-  "is_admin" INTEGER DEFAULT false NOT NULL,
   "inserted_at" TEXT NOT NULL,
   "updated_at" TEXT NOT NULL,
   "email_status" TEXT DEFAULT 'valid' NOT NULL,
@@ -57,7 +56,7 @@ CREATE TABLE "messages" (
   "delivery_payload_hash" TEXT,
   "delivery_recipients_locked" INTEGER DEFAULT false NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  CONSTRAINT messages_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT messages_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE CASCADE,
   CONSTRAINT messages_deleted_by_operator_id_fkey FOREIGN KEY (tenant_id,deleted_by_operator_id) REFERENCES operator_accounts(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT messages_inbound_channel_id_fkey FOREIGN KEY (tenant_id,inbound_channel_id) REFERENCES inbound_channels(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT messages_forwarded_by_operator_id_fkey FOREIGN KEY (tenant_id,forwarded_by_operator_id) REFERENCES operator_accounts(tenant_id,id) ON DELETE RESTRICT
@@ -145,7 +144,8 @@ CREATE TABLE "audit_events" (
   tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
   CONSTRAINT audit_events_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE RESTRICT,
   CONSTRAINT audit_events_organization_id_fkey FOREIGN KEY (tenant_id,organization_id) REFERENCES organizations(tenant_id,id) ON DELETE RESTRICT,
-  CONSTRAINT audit_events_project_id_fkey FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id) ON DELETE RESTRICT
+  CONSTRAINT audit_events_project_id_fkey FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id) ON DELETE RESTRICT,
+  CONSTRAINT audit_events_tenant_required CHECK(tenant_id IS NOT NULL OR (conversation_id IS NULL AND organization_id IS NULL AND project_id IS NULL AND event_type IN ('instance_admin_created','instance_admin_removed','installation_configured')))
 );
 
 CREATE TABLE "operator_accounts" (
@@ -173,7 +173,7 @@ CREATE TABLE "prospects" (
   "inserted_at" TEXT NOT NULL,
   "updated_at" TEXT NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  CONSTRAINT prospects_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE RESTRICT
+  CONSTRAINT prospects_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE CASCADE
 );
 
 CREATE TABLE "intake_sources" (
@@ -262,7 +262,7 @@ CREATE TABLE "message_attachments" (
   "batch_processing_token" TEXT,
   "batch_processing_expires_at" TEXT,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  CONSTRAINT message_attachments_message_id_fkey FOREIGN KEY (tenant_id,message_id) REFERENCES messages(tenant_id,id) ON DELETE RESTRICT
+  CONSTRAINT message_attachments_message_id_fkey FOREIGN KEY (tenant_id,message_id) REFERENCES messages(tenant_id,id) ON DELETE CASCADE
 );
 
 CREATE TABLE "message_recipient_statuses" (
@@ -275,7 +275,7 @@ CREATE TABLE "message_recipient_statuses" (
   "inserted_at" TEXT NOT NULL,
   "updated_at" TEXT NOT NULL,
   tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  CONSTRAINT message_recipient_statuses_message_id_fkey FOREIGN KEY (tenant_id,message_id) REFERENCES messages(tenant_id,id) ON DELETE RESTRICT
+  CONSTRAINT message_recipient_statuses_message_id_fkey FOREIGN KEY (tenant_id,message_id) REFERENCES messages(tenant_id,id) ON DELETE CASCADE
 );
 
 CREATE TABLE "tenants" (
@@ -309,6 +309,7 @@ CREATE TABLE "inbound_routes" (
 );
 
 CREATE TABLE "inbound_channels" (
+  sending_domain TEXT,
   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
   "inbound_route_id" INTEGER NOT NULL ,
   "public_address" TEXT NOT NULL,
@@ -415,10 +416,13 @@ CREATE TABLE "labels" (
 );
 
 CREATE TABLE "conversation_labels" (
-  "conversation_id" INTEGER CONSTRAINT "conversation_labels_conversation_id_fkey" REFERENCES "conversations"("id") ON DELETE CASCADE,
-  "label_id" INTEGER CONSTRAINT "conversation_labels_label_id_fkey" REFERENCES "labels"("id") ON DELETE CASCADE,
-  "inserted_at" TEXT NOT NULL,
-  PRIMARY KEY ("conversation_id","label_id")
+  tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  conversation_id INTEGER NOT NULL,
+  label_id INTEGER NOT NULL,
+  inserted_at TEXT NOT NULL,
+  PRIMARY KEY (conversation_id,label_id),
+  CONSTRAINT conversation_labels_conversation_id_fkey FOREIGN KEY (tenant_id,conversation_id) REFERENCES conversations(tenant_id,id) ON DELETE CASCADE,
+  CONSTRAINT conversation_labels_label_id_fkey FOREIGN KEY (tenant_id,label_id) REFERENCES labels(tenant_id,id) ON DELETE CASCADE
 );
 
 CREATE TABLE "tasks" (
@@ -667,3 +671,15 @@ CREATE UNIQUE INDEX intake_sources_tenant_id_key_index ON intake_sources(tenant_
 CREATE UNIQUE INDEX acknowledgments_tenant_id_source_submission_id_index ON acknowledgments(tenant_id,source,submission_id);
 
 CREATE UNIQUE INDEX acknowledgment_organization_bindings_tenant_id_source_source_organization_id_index ON acknowledgment_organization_bindings(tenant_id,source,source_organization_id);
+
+CREATE TABLE acknowledgment_integrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  url_ciphertext TEXT NOT NULL,
+  queue TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT false,
+  inserted_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX acknowledgment_integrations_tenant_id_index ON acknowledgment_integrations(tenant_id);

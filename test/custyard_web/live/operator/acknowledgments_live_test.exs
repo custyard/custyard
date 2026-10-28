@@ -1,4 +1,21 @@
 defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
+  defp local_authority(tenant_id, channel),
+    do: %Custyard.Acknowledgments.LocalAuthority{tenant_id: tenant_id, channel: channel}
+
+  defp ack_scope(tenant_id) do
+    key = {__MODULE__, :scope, tenant_id}
+
+    case Process.get(key) do
+      nil ->
+        scope = Custyard.Factory.staff_scope(tenant_id)
+        Process.put(key, scope)
+        scope
+
+      scope ->
+        scope
+    end
+  end
+
   # Replaces the application's acknowledgment configuration.
   use CustyardWeb.ConnCase, async: false
 
@@ -7,6 +24,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
   import Phoenix.LiveViewTest
 
   alias Custyard.{Acknowledgments, AuditEvent, Repo}
+  alias Custyard.Acknowledgments.Integration
   alias CustyardWeb.Operator.AcknowledgmentsLive
 
   @password "ui-broker-s3cret"
@@ -17,7 +35,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
     put_config(enabled: false, url: nil, source: "ots.eu.production")
 
     # Default factory role is super_admin, which the live_session requires.
-    operator = insert_operator_account()
+    operator = insert_operator_account(role: "admin")
     {:ok, conn: authenticate(conn, operator), operator: operator}
   end
 
@@ -27,52 +45,78 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
     |> put_operator_session(operator)
   end
 
+  defp tenant_id, do: Process.get(:factory_tenant_id)
+
   defp put_config(overrides) do
-    Application.put_env(
-      :custyard,
-      :acknowledgments,
-      Keyword.merge([queue: "custyard.acknowledgments", prefetch: 1], overrides)
-    )
+    config =
+      Keyword.merge(
+        [
+          queue: "custyard.acknowledgments",
+          prefetch: 1,
+          source: "ots.eu.production",
+          enabled: false
+        ],
+        overrides
+      )
+
+    id = tenant_id()
+
+    case config[:source] do
+      nil ->
+        Repo.delete_all(from i in Integration, where: i.tenant_id == ^id)
+
+      source ->
+        url = config[:url] || "amqp://guest:guest@127.0.0.1:1/ots"
+        {:ok, encrypted} = Custyard.Credentials.encrypt(url, "acknowledgments.#{id}.url")
+
+        integration =
+          Repo.get_by(Integration, tenant_id: id) ||
+            %Integration{}
+
+        integration
+        |> Integration.changeset(%{
+          tenant_id: id,
+          source: source,
+          queue: config[:queue],
+          enabled: config[:enabled],
+          url_ciphertext: encrypted
+        })
+        |> Repo.insert_or_update!()
+    end
   end
 
   defp binding_audits,
     do: Repo.all(from e in AuditEvent, where: e.event_type == :acknowledgment_binding_created)
 
   describe "access and navigation" do
-    test "admins and agents are turned away", %{conn: conn} do
-      admin = insert_operator_account(role: "admin")
+    test "agents are turned away", %{conn: conn} do
+      admin = insert_operator_account(role: "agent")
 
-      assert {:error, {:redirect, %{to: "/operator"}}} =
-               live(authenticate(conn, admin), ~p"/operator/acknowledgments")
+      assert {:error, {:redirect, %{to: "/app"}}} =
+               live(authenticate(conn, admin), ~p"/app/settings/integrations")
     end
 
     test "desktop and mobile navigation link to the page", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/operator/slugs")
+      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
 
       assert html =~ ~s(data-testid="operator-nav-acknowledgments")
       assert html =~ ~s(data-testid="operator-nav-mobile-acknowledgments")
-      assert html =~ ~s(href="/operator/acknowledgments")
+      assert html =~ ~s(href="/app/settings/integrations")
     end
   end
 
   describe "subscription" do
-    test "not configured lists the secrets to set, by name", %{conn: conn} do
-      put_config(enabled: true, url: nil, source: nil)
-
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
-
-      assert view |> element("[data-testid=acknowledgments-status]") |> render() =~
-               "Not configured"
-
-      message = view |> element("[data-testid=acknowledgments-not-configured]") |> render()
-      assert message =~ "ACKNOWLEDGMENTS_AMQP_URL"
-      assert message =~ "ACKNOWLEDGMENTS_SOURCE"
+    test "an unconfigured tenant can set up its subscription", %{conn: conn} do
+      put_config(source: nil)
+      {:ok, view, html} = live(conn, ~p"/app/settings/integrations")
+      assert html =~ "Configure tenant subscription"
+      assert html =~ "Broker URL"
+      assert view |> element("[data-testid=acknowledgments-status]") |> render() =~ "Disabled"
       refute has_element?(view, "[data-testid=acknowledgments-queues]")
-      refute has_element?(view, "[data-testid=acknowledgments-inspect]")
     end
 
     test "disabled says how it is switched", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
 
       assert view |> element("[data-testid=acknowledgments-status]") |> render() =~ "Disabled"
       assert has_element?(view, "[data-testid=acknowledgments-disabled]")
@@ -89,7 +133,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
         source: "ots.eu.production"
       )
 
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
       html = render_async(view, 10_000)
 
       assert view |> element("[data-testid=acknowledgments-status]") |> render() =~ "Connecting"
@@ -106,9 +150,11 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
   describe "bindings" do
     test "lists every binding with its organization", %{conn: conn} do
       org = insert_organization(name: "Bound organization")
-      {:ok, :created, binding} = Acknowledgments.bind("ots.other", "org-77", org.id, "cli")
 
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+      {:ok, :created, binding} =
+        Acknowledgments.bind(local_authority(tenant_id(), "cli"), "ots.other", "org-77", org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
 
       row = view |> element("[data-testid=acknowledgments-binding-#{binding.id}]") |> render()
       assert row =~ "ots.other"
@@ -121,7 +167,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       operator: operator
     } do
       org = insert_organization(name: "Acme Support")
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
@@ -136,7 +182,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       assert confirmation =~ "ots-org-9"
       assert confirmation =~ "Acme Support"
       assert confirmation =~ "permanent"
-      assert Acknowledgments.list_bindings() == []
+      assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
 
       view |> element("[data-testid=acknowledgments-confirm-bind]") |> render_click()
 
@@ -144,7 +190,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
                "Bound ots-org-9 to Acme Support"
 
       assert [%{source: "ots.eu.production", source_organization_id: "ots-org-9"}] =
-               Acknowledgments.list_bindings()
+               Acknowledgments.list_bindings(ack_scope(tenant_id()))
 
       assert [%{payload: %{"actor" => "operator", "operator_id" => operator_id}}] =
                binding_audits()
@@ -158,7 +204,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
     test "confirming after the organization was deleted binds nothing, even once another exists",
          %{conn: conn} do
       org = insert_organization(name: "Reviewed")
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
@@ -175,13 +221,13 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       assert view |> element("[data-testid=acknowledgments-bind-result]") |> render() =~
                "That organization no longer exists"
 
-      assert Acknowledgments.list_bindings() == []
+      assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
       assert binding_audits() == []
     end
 
     test "cancel leaves nothing bound", %{conn: conn} do
       org = insert_organization()
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
@@ -192,14 +238,22 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       view |> element("[data-testid=acknowledgments-cancel-bind]") |> render_click()
 
       assert has_element?(view, "[data-testid=acknowledgments-bind-form]")
-      assert Acknowledgments.list_bindings() == []
+      assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
     end
 
     test "validation errors and conflicts are shown inline", %{conn: conn} do
       org = insert_organization()
       other = insert_organization(name: "Other")
-      {:ok, :created, _} = Acknowledgments.bind("ots.eu.production", "taken", other.id, "cli")
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+
+      {:ok, :created, _} =
+        Acknowledgments.bind(
+          local_authority(tenant_id(), "cli"),
+          "ots.eu.production",
+          "taken",
+          other.id
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
@@ -234,7 +288,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       assert view |> element("[data-testid=acknowledgments-bind-result]") |> render() =~
                "already bound to another organization"
 
-      assert Acknowledgments.get_binding("ots.eu.production", "taken").organization_id ==
+      assert Acknowledgments.get_binding(ack_scope(tenant_id()), "ots.eu.production", "taken").organization_id ==
                other.id
 
       assert length(binding_audits()) == 1
@@ -242,7 +296,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
 
     test "the form is pinned to the configured source", %{conn: conn} do
       org = insert_organization()
-      {:ok, view, _html} = live(conn, ~p"/operator/acknowledgments")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
 
       refute has_element?(
                view,
@@ -259,13 +313,14 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
 
       view |> element("[data-testid=acknowledgments-confirm-bind]") |> render_click()
 
-      assert [%{source: "ots.eu.production"}] = Acknowledgments.list_bindings()
+      assert [%{source: "ots.eu.production"}] =
+               Acknowledgments.list_bindings(ack_scope(tenant_id()))
     end
 
     test "without a configured source, binding is left to the CLI", %{conn: conn} do
       put_config(enabled: false, url: nil, source: nil)
       org = insert_organization()
-      {:ok, view, html} = live(conn, ~p"/operator/acknowledgments")
+      {:ok, view, html} = live(conn, ~p"/app/settings/integrations")
 
       refute has_element?(view, "[data-testid=acknowledgments-bind-form]")
       assert html =~ "bin/acknowledgments bind"
@@ -275,7 +330,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       })
 
       refute has_element?(view, "[data-testid=acknowledgments-bind-confirmation]")
-      assert Acknowledgments.list_bindings() == []
+      assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
     end
   end
 
@@ -290,6 +345,13 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
               __changed__: %{},
               flash: %{},
               current_operator: operator,
+              current_role: operator.role,
+              current_tenant: Custyard.Tenants.get_tenant!(operator.tenant_id),
+              current_scope:
+                Custyard.Scope.for_staff(
+                  operator,
+                  Custyard.Tenants.get_tenant!(operator.tenant_id)
+                ),
               in_flight: nil,
               confirming_replay: true,
               failure: {:summary, %{readable: true, submission_id: "s-1"}}
@@ -309,21 +371,21 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
 
     test "a demoted operator cannot bind, inspect, replay or refresh" do
       org = insert_organization()
-      admin = insert_operator_account(role: "admin", organization_id: org.id)
+      admin = insert_operator_account(role: "agent", tenant_id: org.tenant_id)
       socket = socket(admin, %{pending_bind: pending(org)})
 
       for event <- ~w(confirm_bind inspect replay refresh confirm_replay) do
         assert {:noreply, returned} = AcknowledgmentsLive.handle_event(event, %{}, socket)
-        assert returned.assigns.flash["error"] =~ "Only super admins"
+        assert returned.assigns.flash["error"] =~ "Only tenant administrators"
         refute returned.assigns[:in_flight]
       end
 
-      assert Acknowledgments.list_bindings() == []
+      assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
     end
 
     test "events are ignored while an operation runs" do
       org = insert_organization()
-      super_admin = insert_operator_account()
+      super_admin = insert_operator_account(role: "admin")
       socket = socket(super_admin, %{pending_bind: pending(org), in_flight: :inspect})
 
       for event <- ~w(confirm_bind inspect replay refresh) do
@@ -336,7 +398,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
                socket
              ) == {:noreply, socket}
 
-      assert Acknowledgments.list_bindings() == []
+      assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
     end
 
     # Only the page's wait is cancelled; the unlinked replay task may still
@@ -345,7 +407,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveTest do
       ref = make_ref()
 
       socket =
-        socket(insert_operator_account(), %{
+        socket(insert_operator_account(role: "admin"), %{
           in_flight: :replay,
           operation_ref: ref,
           replay_result: nil,

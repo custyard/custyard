@@ -18,7 +18,7 @@ defmodule CustyardWeb.Layouts do
     tenant =
       assigns[:current_tenant] || conn_assigns[:current_tenant] || conn_assigns[:host_tenant]
 
-    if tenant && tenant.id != 1 do
+    if tenant do
       %{
         tenant?: true,
         name: tenant.name,

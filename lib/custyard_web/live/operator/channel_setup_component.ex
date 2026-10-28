@@ -177,10 +177,17 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     end
   end
 
+  def handle_event("confirm_forwarding", _params, %{assigns: %{channel: nil}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("confirm_forwarding", _params, socket) do
-    with_channel(socket, fn channel ->
-      InboundChannels.confirm_verification(channel, operator: socket.assigns.current_operator)
-    end)
+    result =
+      InboundChannels.confirm_verification(socket.assigns.channel,
+        operator: socket.assigns.current_operator
+      )
+
+    {:noreply, socket} = apply_channel_result(socket, result)
+    {:noreply, if(match?({:ok, _}, result), do: assign(socket, :step, 3), else: socket)}
   end
 
   def handle_event("check_mx", _params, socket) do
@@ -249,6 +256,16 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
       when value in ~w(public_address ingress_address) do
     with_channel(socket, fn channel ->
       InboundChannels.update_channel(channel, %{reply_from: value},
+        operator: socket.assigns.current_operator
+      )
+    end)
+  end
+
+  def handle_event("set_sending_domain", %{"sending_domain" => domain}, socket) do
+    with_channel(socket, fn channel ->
+      InboundChannels.update_channel(
+        channel,
+        %{sending_domain: domain, reply_from: :public_address},
         operator: socket.assigns.current_operator
       )
     end)
@@ -344,7 +361,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   defp apply_channel_result(socket, result) do
     case result do
       {:ok, %InboundChannel{} = channel} ->
-        channel = Custyard.Repo.preload(channel, [:inbound_route, :project])
+        channel = Custyard.Repo.preload(channel, [:inbound_route, :default_project])
 
         socket =
           socket
@@ -618,7 +635,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           </label>
           <p :if={@routes == []} role="status" class="text-sm mb-2">
             Connect a receiving route in
-            <.link navigate={~p"/operator/email-setup"} class="underline">Email setup</.link>
+            <.link navigate={~p"/app/settings/email"} class="underline">Email setup</.link>
             before adding a support address.
           </p>
           <select
@@ -814,13 +831,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
   end
 
   defp route_label(route, kind) do
-    scope =
-      case route do
-        %{route_type: :general, organization_id: nil} -> "Shared inbox"
-        %{route_type: :general} -> "Organization-wide"
-        %{project: %{title: title}} -> title
-        %{route_type: type} -> to_string(type)
-      end
+    scope = "Receiving route #{route.id}"
 
     cond do
       not route_selectable?(route, kind) -> "#{scope} (domain not synced)"
@@ -1245,6 +1256,13 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
           First message received. {arrival_text(@channel)} and the channel is active.
         </div>
       <% else %>
+        <p
+          :if={InboundChannel.verification_valid?(@channel, DateTime.utc_now())}
+          class="text-sm text-indigo-700 dark:text-indigo-300"
+          data-testid="channel-confirmation-pending"
+        >
+          A forwarding confirmation is waiting. Open the Forward step to accept it before sending your test email.
+        </p>
         <p class="text-sm text-gray-700 dark:text-zinc-300" data-testid="channel-test-prompt">
           Send a test email to
           <code class="text-gray-900 dark:text-zinc-100">{@channel.public_address}</code>
@@ -1276,13 +1294,46 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
     assigns =
       assigns
       |> assign(:summary, InboundChannels.sending_domain_summary(channel))
-      |> assign(:domain, InboundChannel.public_domain(channel))
+      |> assign(:domain, InboundChannel.sending_domain(channel))
+      |> assign(:sending_address, InboundChannel.sending_address(channel))
+      |> assign(:from_address, InboundChannels.from_address(channel))
       |> assign(:ingress_address, InboundChannels.ingress_address(channel))
       |> assign(:data_path, data_path_text(channel))
 
     ~H"""
     <div class="space-y-4" data-testid="channel-reply-step">
       <section class="rounded border border-gray-200 dark:border-zinc-700 p-3 space-y-2">
+        <form
+          id={"sending-domain-form-#{@channel.id}"}
+          phx-submit="set_sending_domain"
+          phx-target={@myself}
+          class="space-y-2"
+        >
+          <label for={"sending-domain-#{@channel.id}"} class="block text-sm font-medium">
+            Sending domain
+          </label>
+          <input
+            id={"sending-domain-#{@channel.id}"}
+            name="sending_domain"
+            type="text"
+            value={@channel.sending_domain || ""}
+            placeholder="mail.example.com"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby={"sending-domain-help-#{@channel.id}"}
+            class="w-full rounded border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 px-2 py-1.5 text-sm"
+          />
+          <p
+            id={"sending-domain-help-#{@channel.id}"}
+            class="text-xs text-gray-500 dark:text-zinc-400"
+          >
+            Use a domain or subdomain verified for this tenant's Lettermint project. Saving selects this sender; leave blank to use the public address's domain. The mailbox local part stays the same.
+          </p>
+          <button
+            type="submit"
+            class="text-xs px-2 py-1 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 rounded"
+          >Save sending domain</button>
+        </form>
         <div class="flex items-center justify-between gap-2">
           <h4 class="text-xs font-medium text-gray-500 dark:text-zinc-400">
             Sending domain: {@domain}
@@ -1304,18 +1355,20 @@ defmodule CustyardWeb.Operator.ChannelSetupComponent do
         <p class="text-sm text-gray-700 dark:text-zinc-300" data-testid="channel-domain-explanation">
           <%= case @summary do %>
             <% :verified -> %>
-              Replies go out as {@channel.public_address}. Customers answer the address they wrote to.
+              Replies go out as {@from_address}. Replies return to {if @channel.reply_from ==
+                                                                         :ingress_address,
+                                                                       do: @ingress_address,
+                                                                       else: @channel.public_address}.
             <% :unchecked -> %>
-              Not checked yet. Replies are sent as {@channel.public_address} once the domain is verified in Lettermint.
+              Not checked yet. Verify {@domain} in the selected Lettermint project before sending as {@sending_address}. Replies return to {@channel.public_address}.
             <% _ -> %>
               <%= if InboundChannel.forwarding?(@channel) do %>
                 {@domain} is not a verified sending domain in Lettermint. Add the DKIM CNAME records and the
-                SPF include for the root domain in Lettermint, then check again. Until then, replies from
-                the public address will fail authentication; the fallback below replies from the ingress
+                SPF include for this sending domain in Lettermint, then check again. You can use a verified subdomain when the public address's domain belongs to another team. Until then, replies from {@sending_address} may be rejected; the fallback below replies from the ingress
                 address instead.
               <% else %>
                 {@domain} is not a verified sending domain in Lettermint. Add it in Lettermint with its
-                DKIM CNAME records and SPF include, then check again. Until then, replies from {@channel.public_address} will fail authentication.
+                DKIM CNAME records and SPF include, then check again. Until then, replies from {@sending_address} will fail authentication.
               <% end %>
           <% end %>
         </p>

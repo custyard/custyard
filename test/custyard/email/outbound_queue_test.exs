@@ -14,6 +14,7 @@ defmodule Custyard.Email.OutboundQueueTest do
 
   test "recovers a pending reply and delivers it once" do
     org = insert_organization()
+    configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
     conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
 
@@ -45,6 +46,7 @@ defmodule Custyard.Email.OutboundQueueTest do
     on_exit(fn -> Enum.each(pids, &Process.exit(&1, :kill)) end)
 
     org = insert_organization()
+    configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
     conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
 
@@ -58,6 +60,7 @@ defmodule Custyard.Email.OutboundQueueTest do
 
   test "the supervised worker wakes after a committed reply" do
     org = insert_organization()
+    configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
     conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
     Phoenix.PubSub.subscribe(PubSub, "conversation:#{conversation.id}")

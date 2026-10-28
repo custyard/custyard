@@ -10,7 +10,12 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
     # Create and authenticate an operator
     {:ok, operator} =
       %OperatorAccount{}
-      |> OperatorAccount.changeset(%{email: "test@example.com", password: "password123"})
+      |> OperatorAccount.changeset(%{
+        role: "admin",
+        tenant_id: Process.get(:factory_tenant_id),
+        email: "test@example.com",
+        password: "password123"
+      })
       |> Repo.insert()
 
     conn =
@@ -26,6 +31,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
     operator =
       %OperatorAccount{}
       |> OperatorAccount.changeset(%{
+        tenant_id: Process.get(:factory_tenant_id),
         email: "project-admin-#{System.unique_integer([:positive])}@example.com",
         role: "admin",
         organization_id: org.id
@@ -37,18 +43,18 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
 
   test "scoped admin cannot filter, edit, or take over a foreign project", %{conn: conn} do
     own = insert_organization(name: "Own organization")
-    foreign = insert_organization(name: "Foreign organization")
+    foreign = insert_organization(name: "Foreign organization", tenant_id: insert_tenant().id)
 
     project =
       create_project(%{title: "Foreign confidential project", organization_id: foreign.id})
 
     conn = scoped_admin_conn(conn, own)
 
-    {:ok, _view, html} = live(conn, ~p"/operator/projects?org=#{foreign.id}")
+    {:ok, _view, html} = live(conn, ~p"/app/projects?org=#{foreign.id}")
     refute html =~ project.title
     refute html =~ foreign.name
 
-    {:ok, view, _html} = live(conn, ~p"/operator/projects")
+    {:ok, view, _html} = live(conn, ~p"/app/projects")
     refute render_click(view, "edit_project", %{"id" => to_string(project.id)}) =~ project.title
 
     render_change(view, "validate_form", %{
@@ -63,10 +69,10 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
 
   test "scoped admin cannot reassign an owned project to a foreign organization", %{conn: conn} do
     own = insert_organization()
-    foreign = insert_organization()
+    foreign = insert_organization(tenant_id: insert_tenant().id)
     project = create_project(%{title: "Owned project", organization_id: own.id})
     conn = scoped_admin_conn(conn, own)
-    {:ok, view, _html} = live(conn, ~p"/operator/projects")
+    {:ok, view, _html} = live(conn, ~p"/app/projects")
 
     render_click(view, "edit_project", %{"id" => to_string(project.id)})
 
@@ -81,7 +87,16 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
 
   defp create_project(attrs) do
     %Project{}
-    |> Project.changeset(attrs)
+    |> Project.changeset(
+      Map.put_new(
+        attrs,
+        :tenant_id,
+        if(attrs[:organization_id],
+          do: Repo.get!(Custyard.Organization, attrs[:organization_id]).tenant_id,
+          else: Process.get(:factory_tenant_id)
+        )
+      )
+    )
     |> Repo.insert!()
   end
 
@@ -97,7 +112,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       create_project(%{title: "Website Redesign", organization_id: org.id})
       create_project(%{title: "Mobile App", organization_id: org.id})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects")
+      {:ok, _view, html} = live(conn, ~p"/app/projects")
 
       assert html =~ "Projects"
       assert html =~ "Website Redesign"
@@ -108,7 +123,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       insert_organization(name: "Org A")
       insert_organization(name: "Org B")
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects")
+      {:ok, _view, html} = live(conn, ~p"/app/projects")
 
       assert html =~ "All organizations"
       assert html =~ "Org A"
@@ -116,7 +131,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
     end
 
     test "shows empty state when no projects", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/operator/projects")
+      {:ok, _view, html} = live(conn, ~p"/app/projects")
 
       assert html =~ "No projects found"
     end
@@ -126,7 +141,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       create_project(%{title: "Regular Project", organization_id: org.id, is_template: false})
       create_project(%{title: "Template Project", is_template: true})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects")
+      {:ok, _view, html} = live(conn, ~p"/app/projects")
 
       assert html =~ "Regular Project"
       refute html =~ "Template Project"
@@ -145,7 +160,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
 
       create_project(%{title: "Internal Project", project_type: :internal, portal_visible: false})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects")
+      {:ok, _view, html} = live(conn, ~p"/app/projects")
 
       assert html =~ "customer"
       assert html =~ "internal"
@@ -155,7 +170,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       org = insert_organization()
       create_project(%{title: "Hidden Project", organization_id: org.id, portal_visible: false})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects")
+      {:ok, _view, html} = live(conn, ~p"/app/projects")
 
       assert html =~ "hidden"
     end
@@ -166,7 +181,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       create_task(%{title: "Done Task", project_id: project.id, state: :done})
       create_task(%{title: "Open Task", project_id: project.id, state: :open})
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects")
+      {:ok, _view, html} = live(conn, ~p"/app/projects")
 
       # 50% progress
       assert html =~ "50%"
@@ -183,7 +198,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
         target_completion_date: ~D[2024-04-15]
       })
 
-      {:ok, _view, html} = live(conn, ~p"/operator/projects")
+      {:ok, _view, html} = live(conn, ~p"/app/projects")
 
       assert html =~ "2024-03-01"
       assert html =~ "2024-04-15"
@@ -198,7 +213,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       create_project(%{title: "Org1 Project", organization_id: org1.id})
       create_project(%{title: "Org2 Project", organization_id: org2.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       # Filter to org1
       html =
@@ -215,7 +230,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       create_project(%{title: "Project A", organization_id: org.id})
       create_project(%{title: "Project B", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects?org=#{org.id}")
+      {:ok, view, _html} = live(conn, ~p"/app/projects?org=#{org.id}")
 
       # Clear filter
       html =
@@ -230,7 +245,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
 
   describe "show_form event" do
     test "displays new project form", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       html =
         view
@@ -249,7 +264,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
 
   describe "hide_form event" do
     test "hides the form", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       view
       |> element("button", "Add project")
@@ -278,7 +293,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
           portal_visible: true
         })
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       html =
         view
@@ -297,7 +312,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
     test "creates new project", %{conn: conn} do
       org = insert_organization(name: "New Project Org")
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       view
       |> element("button", "Add project")
@@ -320,7 +335,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
     end
 
     test "creates internal project when no organization selected", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       view
       |> element("button", "Add project")
@@ -342,7 +357,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
     test "creates project with dates", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       view
       |> element("button", "Add project")
@@ -369,7 +384,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       org = insert_organization()
       project = create_project(%{title: "Original Title", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       view
       |> element("[phx-click=edit_project][phx-value-id=\"#{project.id}\"]")
@@ -395,7 +410,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
       org = insert_organization()
       project = create_project(%{title: "To Delete", organization_id: org.id})
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       html =
         view
@@ -411,7 +426,7 @@ defmodule CustyardWeb.Operator.ProjectsLiveTest do
     test "creates project with portal visibility off", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/operator/projects")
+      {:ok, view, _html} = live(conn, ~p"/app/projects")
 
       view
       |> element("button", "Add project")

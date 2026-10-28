@@ -5,14 +5,15 @@ defmodule Custyard.Task do
   @states [:open, :in_progress, :done]
 
   schema "tasks" do
-    field :title, :string
-    field :state, Ecto.Enum, values: @states, default: :open
-    field :portal_visible, :boolean, default: false
-    field :due_at, :utc_datetime
+    belongs_to(:tenant, Custyard.Tenant)
+    field(:title, :string)
+    field(:state, Ecto.Enum, values: @states, default: :open)
+    field(:portal_visible, :boolean, default: false)
+    field(:due_at, :utc_datetime)
 
-    belongs_to :organization, Custyard.Organization
-    belongs_to :conversation, Custyard.Conversation
-    belongs_to :project, Custyard.Project
+    belongs_to(:organization, Custyard.Organization)
+    belongs_to(:conversation, Custyard.Conversation)
+    belongs_to(:project, Custyard.Project)
 
     timestamps(type: :utc_datetime)
   end
@@ -23,6 +24,7 @@ defmodule Custyard.Task do
   def changeset(task, attrs) do
     task
     |> cast(normalize_due_at(attrs), [
+      :tenant_id,
       :title,
       :state,
       :portal_visible,
@@ -36,6 +38,8 @@ defmodule Custyard.Task do
     |> validate_inclusion(:state, @states)
     |> validate_has_parent_or_org()
     |> validate_parent_scope()
+    |> validate_required([:tenant_id])
+    |> foreign_key_constraint(:tenant_id)
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:project_id)
@@ -69,8 +73,26 @@ defmodule Custyard.Task do
     project = parent(Custyard.Project, get_field(changeset, :project_id))
     org_id = get_field(changeset, :organization_id)
     parent_orgs = Enum.map(Enum.reject([conversation, project], &is_nil/1), & &1.organization_id)
-    parent_tenants = Enum.map(Enum.reject([conversation, project], &is_nil/1), & &1.tenant_id)
+    organization = parent(Custyard.Organization, org_id)
 
+    parent_tenants =
+      Enum.map(Enum.reject([conversation, project, organization], &is_nil/1), & &1.tenant_id)
+
+    changeset = put_parent_tenant(changeset, Enum.uniq(parent_tenants))
+    validate_parent_customer(changeset, org_id, parent_orgs, parent_tenants)
+  end
+
+  defp put_parent_tenant(changeset, [tenant_id]) do
+    case get_field(changeset, :tenant_id) do
+      nil -> put_change(changeset, :tenant_id, tenant_id)
+      ^tenant_id -> changeset
+      _ -> add_error(changeset, :tenant_id, "must match the parent tenant")
+    end
+  end
+
+  defp put_parent_tenant(changeset, _), do: changeset
+
+  defp validate_parent_customer(changeset, org_id, parent_orgs, parent_tenants) do
     cond do
       length(Enum.uniq(parent_tenants)) > 1 ->
         add_error(changeset, :project_id, "must belong to the conversation's workspace")

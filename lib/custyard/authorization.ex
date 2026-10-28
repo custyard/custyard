@@ -1,116 +1,38 @@
 defmodule Custyard.Authorization do
-  @moduledoc """
-  Role and tenant authorization. Tenant staff work across customer organizations;
-  legacy organization assignments retain their narrower scope. Instance
-  administrators can manage all tenants. Resource contexts recheck ownership
-  while holding their mutation locks.
-  """
+  @moduledoc "Tenant staff authorization. Instance administrators have no customer access."
+  alias Custyard.{OperatorAccount, Scope}
+  @role_rank %{"admin" => 2, "agent" => 1}
 
-  alias Custyard.OperatorAccount
-
-  @role_rank %{"super_admin" => 3, "admin" => 2, "agent" => 1}
-
-  @doc """
-  Returns true if the operator has at least the given role level.
-  """
-  def has_minimum_role?(%OperatorAccount{role: role}, required_role)
-      when is_map_key(@role_rank, role) and is_map_key(@role_rank, required_role) do
-    @role_rank[role] >= @role_rank[required_role]
-  end
-
-  def has_minimum_role?(%OperatorAccount{}, _required_role), do: false
+  def has_minimum_role?(%OperatorAccount{role: role}, required)
+      when is_map_key(@role_rank, role) and is_map_key(@role_rank, required),
+      do: @role_rank[role] >= @role_rank[required]
 
   def has_minimum_role?(_, _), do: false
 
-  @doc """
-  Only super_admin can create organizations.
-  """
-  def can_create_organization?(%OperatorAccount{role: "super_admin"}), do: true
-
   def can_create_organization?(%OperatorAccount{role: "admin", tenant_id: id})
-      when is_integer(id) do
-    true
-  end
+      when is_integer(id), do: true
 
   def can_create_organization?(_), do: false
 
-  @doc """
-  super_admin can manage any org; admin can manage their own org.
-  """
-  def can_manage_organization?(%OperatorAccount{role: "super_admin"}, _org_id), do: true
-
-  def can_manage_organization?(%OperatorAccount{role: "admin", tenant_id: id} = op, org_id)
-      when is_integer(id) do
-    OperatorAccount.can_access_organization?(op, org_id)
-  end
-
-  def can_manage_organization?(%OperatorAccount{role: "admin", organization_id: org_id}, org_id)
-      when is_integer(org_id),
-      do: true
+  def can_manage_organization?(%OperatorAccount{role: "admin"} = staff, id),
+    do: OperatorAccount.can_access_organization?(staff, id)
 
   def can_manage_organization?(_, _), do: false
 
-  @doc """
-  Only super_admin can modify global settings.
-  """
-  def can_modify_settings?(%OperatorAccount{role: "super_admin"}), do: true
+  def can_modify_settings?(%OperatorAccount{role: "admin", tenant_id: id}) when is_integer(id),
+    do: true
+
   def can_modify_settings?(_), do: false
 
-  @doc """
-  super_admin can manage any project; admin can manage projects in their own org.
-  """
-  def can_manage_project?(%OperatorAccount{role: "super_admin"}, _org_id), do: true
-
   def can_manage_project?(%OperatorAccount{role: "admin", tenant_id: id}, nil)
-      when is_integer(id) do
-    true
-  end
+      when is_integer(id), do: true
 
-  def can_manage_project?(%OperatorAccount{role: "admin", tenant_id: id} = op, org_id)
-      when is_integer(id) do
-    OperatorAccount.can_access_organization?(op, org_id)
-  end
-
-  def can_manage_project?(%OperatorAccount{role: "admin", organization_id: org_id}, org_id)
-      when is_integer(org_id),
-      do: true
-
-  def can_manage_project?(_, _), do: false
-
-  @doc """
-  admin+ can set conversation state (active, waiting, resolved).
-  """
-  def can_set_conversation_state?(%OperatorAccount{} = op),
-    do: has_minimum_role?(op, "admin")
-
-  def can_set_conversation_state?(_), do: false
-
-  @doc """
-  Tenant staff can access conversations in their tenant, including unlinked
-  public intake. Customer portal credentials remain scoped to one customer.
-  """
-  def can_access_conversation?(%OperatorAccount{role: "super_admin"}, _conversation), do: true
+  def can_manage_project?(staff, id), do: can_manage_organization?(staff, id)
+  def can_set_conversation_state?(staff), do: has_minimum_role?(staff, "admin")
 
   def can_access_conversation?(%OperatorAccount{tenant_id: id}, %{tenant_id: id})
-      when is_integer(id) do
-    true
-  end
+      when is_integer(id), do: true
 
-  def can_access_conversation?(%OperatorAccount{tenant_id: id}, _) when is_integer(id), do: false
-
-  def can_access_conversation?(%OperatorAccount{organization_id: id}, %{
-        organization_id: nil,
-        tenant_id: tenant_id
-      })
-      when is_integer(id) do
-    case Custyard.Repo.get(Custyard.Organization, id) do
-      %{tenant_id: ^tenant_id} -> true
-      _ -> false
-    end
-  end
-
-  def can_access_conversation?(%OperatorAccount{organization_id: org_id}, conversation),
-    do: conversation.organization_id == org_id
-
+  def can_access_conversation?(%Scope{} = scope, resource), do: Scope.tenant?(scope, resource)
   def can_access_conversation?(_, _), do: false
 end

@@ -62,13 +62,11 @@ defmodule Custyard.Message do
     field :body, :string
     field :is_internal_note, :boolean, default: false
     field :message_id, :string
-    # Uniqueness namespace for inbound deliveries (organization, source, route).
-    field :dedup_scope, :string
     field :in_reply_to, :string
     field :lettermint_message_id, :string
     # Provider webhook delivery id (Lettermint's top-level `id`, reused on
     # retries). Second idempotency key for inbound deliveries, alongside
-    # (dedup_scope, message_id). nil for outbound messages.
+    # (tenant_id, message_id). nil for outbound messages.
     field :provider_delivery_id, :string
     # Delivery status tracks outbound message lifecycle (nil for inbound messages)
     field :delivery_status, Ecto.Enum, values: @delivery_statuses
@@ -111,6 +109,7 @@ defmodule Custyard.Message do
     field :deleted_at, :utc_datetime
     belongs_to :deleted_by_operator, Custyard.OperatorAccount
 
+    belongs_to :tenant, Custyard.Tenant
     belongs_to :conversation, Custyard.Conversation
 
     timestamps(type: :utc_datetime)
@@ -131,7 +130,7 @@ defmodule Custyard.Message do
       :body,
       :is_internal_note,
       :message_id,
-      :dedup_scope,
+      :tenant_id,
       :in_reply_to,
       :lettermint_message_id,
       :provider_delivery_id,
@@ -148,7 +147,8 @@ defmodule Custyard.Message do
       :forwarded_by_email,
       :conversation_id
     ])
-    |> validate_required([:source, :body, :conversation_id])
+    |> put_tenant_from_conversation()
+    |> validate_required([:tenant_id, :source, :body, :conversation_id])
     |> validate_length(:body, max: 100_000)
     |> validate_length(:html_body, max: 500_000)
     |> validate_length(:forwarded_by_email, max: 255)
@@ -160,10 +160,15 @@ defmodule Custyard.Message do
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:inbound_channel_id)
     |> foreign_key_constraint(:forwarded_by_operator_id)
-    |> unique_constraint([:dedup_scope, :message_id],
-      name: :messages_dedup_scope_message_id_index
+    |> foreign_key_constraint(:tenant_id)
+    |> unique_constraint([:tenant_id, :message_id],
+      name: :messages_tenant_id_message_id_index,
+      error_key: :message_id
     )
-    |> unique_constraint(:provider_delivery_id, name: :messages_provider_delivery_id_index)
+    |> unique_constraint([:tenant_id, :provider_delivery_id],
+      name: :messages_tenant_id_provider_delivery_id_index,
+      error_key: :provider_delivery_id
+    )
   end
 
   @doc """
@@ -206,86 +211,55 @@ defmodule Custyard.Message do
     |> validate_required([:delivery_status])
   end
 
-  @doc """
-  Insert a message, handling duplicate message_id gracefully.
-
-  For webhook idempotency: a matching message ID in the same delivery namespace
-  returns the existing message. The namespace includes the organization, provider,
-  and inbound route when available.
-
-  Returns `{:ok, message}` on success or duplicate, `{:error, changeset}` on validation failure.
-  """
+  @doc "Insert a message idempotently within its tenant."
   def insert_idempotent(attrs) do
-    attrs = ensure_dedup_scope(attrs)
     changeset = changeset(%__MODULE__{}, attrs)
+    tenant_id = get_field(changeset, :tenant_id)
 
     case Repo.insert(changeset) do
       {:ok, message} -> {:ok, message}
-      {:error, %Ecto.Changeset{} = cs} -> recover_duplicate(attrs, cs)
+      {:error, %Ecto.Changeset{} = cs} -> recover_duplicate(attrs, tenant_id, cs)
     end
   end
 
-  # Postgres reports one violated unique index per insert, so the two dedup
-  # keys are checked in turn: the provider delivery id (a retried webhook
-  # delivery) and the (dedup_scope, message_id) pair (the same mail arriving
-  # twice through one route).
-  defp recover_duplicate(attrs, %Ecto.Changeset{errors: errors} = cs) do
+  defp recover_duplicate(attrs, tenant_id, %Ecto.Changeset{errors: errors} = cs) do
     existing =
       cond do
-        delivery_constraint?(errors) && attrs[:provider_delivery_id] ->
-          Repo.get_by(__MODULE__, provider_delivery_id: attrs[:provider_delivery_id])
-
-        duplicate_constraint?(errors) && attrs[:message_id] && attrs[:dedup_scope] ->
+        Keyword.has_key?(errors, :provider_delivery_id) && attrs[:provider_delivery_id] ->
           Repo.get_by(__MODULE__,
-            dedup_scope: attrs[:dedup_scope],
-            message_id: attrs[:message_id]
+            tenant_id: tenant_id,
+            provider_delivery_id: attrs[:provider_delivery_id]
           )
+
+        Keyword.has_key?(errors, :message_id) && attrs[:message_id] ->
+          Repo.get_by(__MODULE__, tenant_id: tenant_id, message_id: attrs[:message_id])
 
         true ->
           nil
       end
 
-    if existing && same_organization?(attrs[:conversation_id], existing.conversation_id),
-      do: {:ok, existing},
-      else: {:error, cs}
+    if existing, do: {:ok, existing}, else: {:error, cs}
   end
 
-  defp delivery_constraint?(errors), do: Keyword.has_key?(errors, :provider_delivery_id)
+  # The parent thread supplies authoritative tenant ownership for all writers.
+  # Explicit attributes remain subject to the composite database foreign key.
+  defp put_tenant_from_conversation(changeset) do
+    case get_field(changeset, :conversation_id) do
+      id when is_integer(id) ->
+        case Repo.get(Conversation, id) do
+          %Conversation{tenant_id: tenant_id} ->
+            case get_field(changeset, :tenant_id) do
+              nil -> put_change(changeset, :tenant_id, tenant_id)
+              ^tenant_id -> changeset
+              _ -> add_error(changeset, :tenant_id, "does not match the parent thread")
+            end
 
-  defp duplicate_constraint?(errors),
-    do: Keyword.has_key?(errors, :message_id) or Keyword.has_key?(errors, :dedup_scope)
-
-  defp same_organization?(requested_id, existing_id) do
-    case {Repo.get(Conversation, requested_id), Repo.get(Conversation, existing_id)} do
-      {%Conversation{organization_id: org_id}, %Conversation{organization_id: org_id}} -> true
-      _ -> false
-    end
-  end
-
-  @doc "Build the namespace for a provider delivery within an organization."
-  def dedup_scope(organization_id, origin, route_id \\ nil) do
-    "org:#{organization_id}:source:#{origin || :email}:route:#{route_id || 0}"
-  end
-
-  defp ensure_dedup_scope(%{message_id: message_id} = attrs) when not is_nil(message_id) do
-    case attrs[:dedup_scope] do
-      nil ->
-        case attrs[:conversation_id] && Repo.get(Conversation, attrs[:conversation_id]) do
-          nil ->
-            attrs
-
-          conversation ->
-            Map.put(
-              attrs,
-              :dedup_scope,
-              dedup_scope(conversation.organization_id, attrs[:origin] || attrs[:source])
-            )
+          _ ->
+            changeset
         end
 
       _ ->
-        attrs
+        changeset
     end
   end
-
-  defp ensure_dedup_scope(attrs), do: attrs
 end

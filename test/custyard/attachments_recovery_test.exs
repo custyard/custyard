@@ -102,23 +102,14 @@ defmodule Custyard.Attachments.RecoveryTest do
       })
       |> Repo.insert!()
 
-    other_org = insert_organization(tenant_id: tenant.id)
-    foreign_channel = insert_inbound_channel(organization_id: other_org.id)
-    foreign_channel = Repo.update!(Ecto.Changeset.change(foreign_channel, tenant_id: tenant.id))
+    foreign_channel = insert_inbound_channel(tenant_id: tenant.id)
 
-    insert_inbound_route_webhook(
-      inbound_route_id: foreign_channel.inbound_route_id,
-      lettermint_webhook_id: "foreign-webhook"
-    )
+    assert_raise Ecto.ConstraintError, fn ->
+      message |> Ecto.Changeset.change(inbound_channel_id: foreign_channel.id) |> Repo.update!()
+    end
 
-    message
-    |> Ecto.Changeset.change(inbound_channel_id: foreign_channel.id)
-    |> Repo.update!()
-
-    Conversations.set_suspect(conv, false)
-    assert {:error, :recovery_incomplete} = Recovery.recover(conv.id, client: Provider)
-    refute_received {:requested_delivery, _, _}
-    assert [%{skip_reason: "suspect"}] = Repo.all(MessageAttachment)
+    assert Repo.get!(Custyard.Message, message.id).inbound_channel_id != foreign_channel.id
+    assert Repo.get!(Custyard.Conversation, conv.id).tenant_id != tenant.id
   end
 
   test "shared tenant inbox recovers using the real route webhook binding", %{
@@ -130,12 +121,10 @@ defmodule Custyard.Attachments.RecoveryTest do
 
     Repo.update!(
       Ecto.Changeset.change(route,
-        organization_id: nil,
         lettermint_webhook_id: "bound-provider-webhook"
       )
     )
 
-    Repo.update!(Ecto.Changeset.change(channel, organization_id: nil))
     Process.put({:delivery, "bound-provider-webhook", "delivery"}, {:ok, %{"payload" => payload}})
     Conversations.set_suspect(conv, false)
     assert :ok = Recovery.recover(conv.id, client: Provider)

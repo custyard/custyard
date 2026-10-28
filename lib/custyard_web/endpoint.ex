@@ -14,40 +14,85 @@ defmodule CustyardWeb.Endpoint do
   @default_signing_salt "custyard_dev_signing_DO_NOT_USE_IN_PROD"
   @default_encryption_salt "custyard_dev_encrypt_DO_NOT_USE_IN_PROD"
 
-  # Build session options at runtime to use configured salts
-  defp session_options do
+  # Separate host-only cookies, salts and socket paths for each authentication realm.
+  def session_options(realm) do
     config = Application.get_env(:custyard, __MODULE__, [])
+
+    path =
+      case realm do
+        :staff -> "/app"
+        :admin -> "/admin"
+        :public -> "/"
+      end
 
     [
       store: :cookie,
-      key: "_custyard_key",
-      signing_salt: config[:session_signing_salt] || @default_signing_salt,
-      encryption_salt: config[:session_encryption_salt] || @default_encryption_salt,
+      key: "_custyard_#{realm}",
+      path: path,
+      signing_salt: (config[:session_signing_salt] || @default_signing_salt) <> ":#{realm}",
+      encryption_salt:
+        (config[:session_encryption_salt] || @default_encryption_salt) <> ":#{realm}",
       same_site: "Lax",
       secure: Application.get_env(:custyard, :env) == :prod,
       max_age: 86_400
     ]
   end
 
-  # Expose for LiveView socket connection
-  def session_options_for_socket, do: session_options()
+  def staff_session_options, do: session_options(:staff)
+  def admin_session_options, do: session_options(:admin)
+  def public_session_options, do: session_options(:public)
 
-  # LiveView socket - session options are resolved at runtime
-  # check_origin: :conn is set at endpoint config level in runtime.exs
-  # :peer_data and :x_headers feed CustyardWeb.ClientIP for LiveView rate limiting
-  socket "/live", Phoenix.LiveView.Socket,
+  socket "/app/live", Phoenix.LiveView.Socket,
     websocket: [
       connect_info: [
+        :uri,
         :peer_data,
         :x_headers,
-        session: {__MODULE__, :session_options_for_socket, []}
+        session: {__MODULE__, :staff_session_options, []}
       ]
     ],
     longpoll: [
       connect_info: [
+        :uri,
         :peer_data,
         :x_headers,
-        session: {__MODULE__, :session_options_for_socket, []}
+        session: {__MODULE__, :staff_session_options, []}
+      ]
+    ]
+
+  socket "/admin/live", Phoenix.LiveView.Socket,
+    websocket: [
+      connect_info: [
+        :uri,
+        :peer_data,
+        :x_headers,
+        session: {__MODULE__, :admin_session_options, []}
+      ]
+    ],
+    longpoll: [
+      connect_info: [
+        :uri,
+        :peer_data,
+        :x_headers,
+        session: {__MODULE__, :admin_session_options, []}
+      ]
+    ]
+
+  socket "/live", Phoenix.LiveView.Socket,
+    websocket: [
+      connect_info: [
+        :uri,
+        :peer_data,
+        :x_headers,
+        session: {__MODULE__, :public_session_options, []}
+      ]
+    ],
+    longpoll: [
+      connect_info: [
+        :uri,
+        :peer_data,
+        :x_headers,
+        session: {__MODULE__, :public_session_options, []}
       ]
     ]
 
@@ -121,7 +166,14 @@ defmodule CustyardWeb.Endpoint do
   plug :session_plug
 
   defp session_plug(conn, _opts) do
-    Plug.Session.call(conn, Plug.Session.init(session_options()))
+    realm =
+      case conn.path_info do
+        ["app" | _] -> :staff
+        ["admin" | _] -> :admin
+        _ -> :public
+      end
+
+    Plug.Session.call(conn, Plug.Session.init(session_options(realm)))
   end
 
   # Trust Fly.io proxy headers - rewrites conn.scheme/port from x-forwarded-*

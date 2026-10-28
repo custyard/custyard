@@ -5,23 +5,39 @@ defmodule Custyard.ProjectsTest do
 
   import Custyard.Factory
 
+  defp scope(staff),
+    do: Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+
+  setup do
+    tenant = insert_tenant()
+    Process.put(:factory_tenant_id, tenant.id)
+
+    Process.put(
+      :project_scope,
+      scope(insert_operator_account(role: "admin", tenant_id: tenant.id))
+    )
+
+    :ok
+  end
+
+  defp default_scope, do: Process.get(:project_scope)
+
   test "scoped project writes reject a stale foreign project" do
     own = insert_organization()
-    foreign = insert_organization()
+    foreign = insert_organization(tenant_id: insert_tenant().id)
     operator = insert_admin(own)
     stale = create_project(%{title: "Foreign project", organization_id: foreign.id})
 
     assert {:error, :unauthorized} =
-             Projects.update_project_for_operator(
-               stale,
-               %{title: "Taken over", organization_id: own.id},
-               operator
-             )
+             Projects.update(scope(operator), stale, %{
+               title: "Taken over",
+               organization_id: own.id
+             })
 
-    assert {:error, :unauthorized} = Projects.delete_project_for_operator(stale, operator)
+    assert {:error, :unauthorized} = Projects.delete(scope(operator), stale)
 
     assert {:error, :unauthorized} =
-             Projects.with_operator_access(stale.id, operator, fn project, _operator ->
+             Projects.with_access(scope(operator), stale.id, fn project, _operator ->
                Projects.create_task(project, %{title: "Foreign task"})
              end)
 
@@ -31,45 +47,40 @@ defmodule Custyard.ProjectsTest do
 
   test "scoped project update checks the destination organization" do
     own = insert_organization()
-    foreign = insert_organization()
+    foreign = insert_organization(tenant_id: insert_tenant().id)
     operator = insert_admin(own)
     project = create_project(%{title: "Own project", organization_id: own.id})
 
     assert {:error, :unauthorized} =
-             Projects.update_project_for_operator(
-               project,
-               %{title: "Moved", organization_id: foreign.id},
-               operator
-             )
+             Projects.update(scope(operator), project, %{
+               title: "Moved",
+               organization_id: foreign.id
+             })
 
     assert {:error, :unauthorized} =
-             Projects.update_project_for_operator(
-               project,
-               %{"title" => "Moved", "organization_id" => foreign.id},
-               operator
-             )
+             Projects.update(scope(operator), project, %{
+               "title" => "Moved",
+               "organization_id" => foreign.id
+             })
 
     assert Repo.get!(Project, project.id).organization_id == own.id
   end
 
   test "scoped project mutation uses the operator's current assignment and role" do
     own = insert_organization()
-    foreign = insert_organization()
+    foreign = insert_organization(tenant_id: insert_tenant().id)
     operator = insert_admin(own)
     project = create_project(%{title: "Own project", organization_id: own.id})
 
     operator
-    |> OperatorAccount.role_changeset(%{organization_id: foreign.id})
+    |> Ecto.Changeset.change(tenant_id: foreign.tenant_id)
     |> Repo.update!()
 
     assert {:error, :unauthorized} =
-             Projects.update_project_for_operator(project, %{title: "Stale edit"}, operator)
+             Projects.update(scope(operator), project, %{title: "Stale edit"})
 
     assert {:error, :unauthorized} =
-             Projects.create_project_for_operator(
-               %{title: "Stale creation", organization_id: own.id},
-               operator
-             )
+             Projects.create(scope(operator), %{title: "Stale creation", organization_id: own.id})
 
     assert Repo.get!(Project, project.id).title == "Own project"
 
@@ -82,11 +93,7 @@ defmodule Custyard.ProjectsTest do
     foreign_project = create_project(%{title: "Foreign project", organization_id: foreign.id})
 
     assert {:error, :unauthorized} =
-             Projects.update_project_for_operator(
-               foreign_project,
-               %{title: "Stale admin edit"},
-               reassigned
-             )
+             Projects.update(scope(reassigned), foreign_project, %{title: "Stale admin edit"})
   end
 
   test "scoped task mutation broadcasts after its transaction commits" do
@@ -96,9 +103,9 @@ defmodule Custyard.ProjectsTest do
     Phoenix.PubSub.subscribe(Custyard.PubSub, "project:#{project.id}")
 
     assert {:ok, _task} =
-             Projects.with_operator_access(
+             Projects.with_access(
+               scope(operator),
                project.id,
-               operator,
                fn current, _operator ->
                  result = Projects.create_task(current, %{title: "New task"}, broadcast?: false)
                  refute_received {:project_updated, _}
@@ -119,9 +126,9 @@ defmodule Custyard.ProjectsTest do
     Phoenix.PubSub.subscribe(Custyard.PubSub, "project:#{project.id}")
 
     assert {:error, :forced_rollback} =
-             Projects.with_operator_access(
+             Projects.with_access(
+               scope(operator),
                project.id,
-               operator,
                fn current, _operator ->
                  assert {:ok, _task} =
                           Projects.create_task(current, %{title: "Uncommitted task"},
@@ -143,14 +150,22 @@ defmodule Custyard.ProjectsTest do
     |> OperatorAccount.changeset(%{
       email: "project-scope-#{System.unique_integer([:positive])}@example.com",
       role: "admin",
-      organization_id: org.id
+      tenant_id: org.tenant_id
     })
     |> Repo.insert!()
   end
 
   defp create_project(attrs) do
     %Project{}
-    |> Project.changeset(attrs)
+    |> Project.changeset(
+      Map.put_new(
+        attrs,
+        :tenant_id,
+        (attrs[:organization_id] &&
+           Repo.get!(Custyard.Organization, attrs[:organization_id]).tenant_id) ||
+          Process.get(:factory_tenant_id)
+      )
+    )
     |> Repo.insert!()
   end
 
@@ -168,7 +183,7 @@ defmodule Custyard.ProjectsTest do
       create_project(%{title: "Project B", organization_id: org.id, is_template: false})
       create_project(%{title: "Template", organization_id: org.id, is_template: true})
 
-      result = Projects.list_for_operator()
+      result = Projects.list(default_scope())
 
       assert length(result) == 2
       titles = Enum.map(result, & &1.title)
@@ -182,7 +197,7 @@ defmodule Custyard.ProjectsTest do
       create_project(%{title: "Normal", organization_id: org.id, is_template: false})
       create_project(%{title: "Template", organization_id: org.id, is_template: true})
 
-      result = Projects.list_for_operator()
+      result = Projects.list(default_scope())
 
       assert length(result) == 1
       assert hd(result).title == "Normal"
@@ -194,7 +209,7 @@ defmodule Custyard.ProjectsTest do
       create_task(%{title: "Task 1", project_id: project.id, state: :done})
       create_task(%{title: "Task 2", project_id: project.id, state: :open})
 
-      [result] = Projects.list_for_operator()
+      [result] = Projects.list(default_scope())
 
       assert result.progress.total == 2
       assert result.progress.done == 1
@@ -206,7 +221,7 @@ defmodule Custyard.ProjectsTest do
       p1 = create_project(%{title: "First", organization_id: org.id})
       p2 = create_project(%{title: "Second", organization_id: org.id})
 
-      result = Projects.list_for_operator()
+      result = Projects.list(default_scope())
 
       # Both projects should be returned - order depends on insertion timing
       # which may be identical in tests, so just verify both are present
@@ -232,7 +247,7 @@ defmodule Custyard.ProjectsTest do
       create_project(%{title: "Org A Project", organization_id: org1.id})
       create_project(%{title: "Org B Project", organization_id: org2.id})
 
-      result = Projects.list_for_operator(organization_id: org1.id)
+      result = Projects.list(default_scope(), organization_id: org1.id)
 
       assert length(result) == 1
       assert hd(result).title == "Org A Project"
@@ -243,7 +258,7 @@ defmodule Custyard.ProjectsTest do
       create_project(%{title: "Normal", organization_id: org.id, is_template: false})
       create_project(%{title: "Template", organization_id: org.id, is_template: true})
 
-      result = Projects.list_for_operator(organization_id: org.id)
+      result = Projects.list(default_scope(), organization_id: org.id)
 
       assert length(result) == 1
       assert hd(result).title == "Normal"
@@ -254,7 +269,7 @@ defmodule Custyard.ProjectsTest do
       other_org = insert_organization()
       create_project(%{title: "Other Project", organization_id: other_org.id})
 
-      result = Projects.list_for_operator(organization_id: org.id)
+      result = Projects.list(default_scope(), organization_id: org.id)
 
       assert result == []
     end
@@ -265,7 +280,7 @@ defmodule Custyard.ProjectsTest do
       create_task(%{title: "Done", project_id: project.id, state: :done})
       create_task(%{title: "Open", project_id: project.id, state: :open})
 
-      [result] = Projects.list_for_operator(organization_id: org.id)
+      [result] = Projects.list(default_scope(), organization_id: org.id)
 
       assert result.progress.total == 2
       assert result.progress.done == 1
@@ -276,7 +291,7 @@ defmodule Custyard.ProjectsTest do
       org = insert_organization(name: "Preload Check")
       create_project(%{title: "Test", organization_id: org.id})
 
-      [result] = Projects.list_for_operator(organization_id: org.id)
+      [result] = Projects.list(default_scope(), organization_id: org.id)
 
       assert result.organization.name == "Preload Check"
     end
@@ -285,8 +300,8 @@ defmodule Custyard.ProjectsTest do
       org = insert_organization()
       create_project(%{title: "Project 1", organization_id: org.id})
 
-      all_result = Projects.list_for_operator()
-      keyword_result = Projects.list_for_operator([])
+      all_result = Projects.list(default_scope())
+      keyword_result = Projects.list(default_scope(), [])
 
       assert length(all_result) == length(keyword_result)
     end
@@ -300,7 +315,7 @@ defmodule Custyard.ProjectsTest do
       create_project(%{title: "Org1 Project", organization_id: org1.id})
       create_project(%{title: "Org2 Project", organization_id: org2.id})
 
-      result = Projects.list_for_organization(org1.id)
+      result = Projects.list_for_organization(default_scope(), org1.id)
 
       assert length(result) == 1
       assert hd(result).title == "Org1 Project"
@@ -311,7 +326,7 @@ defmodule Custyard.ProjectsTest do
       create_project(%{title: "Normal", organization_id: org.id, is_template: false})
       create_project(%{title: "Template", organization_id: org.id, is_template: true})
 
-      result = Projects.list_for_organization(org.id)
+      result = Projects.list_for_organization(default_scope(), org.id)
 
       assert length(result) == 1
       assert hd(result).title == "Normal"
@@ -380,7 +395,7 @@ defmodule Custyard.ProjectsTest do
       project = create_project(%{title: "Test Project", organization_id: org.id})
       create_task(%{title: "Task 1", project_id: project.id})
 
-      result = Projects.get_project!(project.id)
+      result = Projects.get!(staff_scope(), project.id)
 
       assert result.id == project.id
       assert length(result.tasks) == 1
@@ -389,7 +404,7 @@ defmodule Custyard.ProjectsTest do
 
     test "raises for non-existent project" do
       assert_raise Ecto.NoResultsError, fn ->
-        Projects.get_project!(999_999)
+        Projects.get!(staff_scope(), 999_999)
       end
     end
   end
@@ -399,12 +414,12 @@ defmodule Custyard.ProjectsTest do
       org = insert_organization()
       attrs = %{title: "New Project", organization_id: org.id}
 
-      assert {:ok, project} = Projects.create_project(attrs)
+      assert {:ok, project} = Projects.create(staff_scope(), attrs)
       assert project.title == "New Project"
     end
 
     test "returns error for missing title" do
-      assert {:error, changeset} = Projects.create_project(%{})
+      assert {:error, changeset} = Projects.create(staff_scope(), %{})
       assert "can't be blank" in errors_on(changeset).title
     end
   end
@@ -414,7 +429,7 @@ defmodule Custyard.ProjectsTest do
       org = insert_organization()
       project = create_project(%{title: "Original", organization_id: org.id})
 
-      assert {:ok, updated} = Projects.update_project(project, %{title: "Updated"})
+      assert {:ok, updated} = Projects.update(staff_scope(), project, %{title: "Updated"})
       assert updated.title == "Updated"
     end
   end
@@ -424,8 +439,8 @@ defmodule Custyard.ProjectsTest do
       org = insert_organization()
       project = create_project(%{title: "To Delete", organization_id: org.id})
 
-      assert {:ok, _} = Projects.delete_project(project)
-      assert_raise Ecto.NoResultsError, fn -> Projects.get_project!(project.id) end
+      assert {:ok, _} = Projects.delete(staff_scope(), project)
+      assert_raise Ecto.NoResultsError, fn -> Projects.get!(staff_scope(), project.id) end
     end
   end
 
@@ -436,7 +451,7 @@ defmodule Custyard.ProjectsTest do
       create_project(%{title: "Template A", is_template: true})
       create_project(%{title: "Template B", is_template: true})
 
-      result = Projects.list_templates()
+      result = Projects.list_templates(staff_scope())
 
       assert length(result) == 2
       titles = Enum.map(result, & &1.title)
@@ -449,7 +464,7 @@ defmodule Custyard.ProjectsTest do
       create_project(%{title: "Zebra Template", is_template: true})
       create_project(%{title: "Alpha Template", is_template: true})
 
-      result = Projects.list_templates()
+      result = Projects.list_templates(staff_scope())
 
       assert hd(result).title == "Alpha Template"
       assert List.last(result).title == "Zebra Template"
@@ -459,7 +474,7 @@ defmodule Custyard.ProjectsTest do
       template = create_project(%{title: "Template", is_template: true})
       create_task(%{title: "Template Task", project_id: template.id})
 
-      [result] = Projects.list_templates()
+      [result] = Projects.list_templates(staff_scope())
 
       assert length(result.tasks) == 1
       assert hd(result.tasks).title == "Template Task"
@@ -500,7 +515,8 @@ defmodule Custyard.ProjectsTest do
     test "creates project from template", %{org: org, template: template} do
       start_date = ~D[2024-03-01]
 
-      assert {:ok, project} = Projects.create_from_template(template, org.id, start_date)
+      assert {:ok, project} =
+               Projects.create_from_template(staff_scope(), template, org.id, start_date)
 
       assert project.title == "Onboarding Template"
       assert project.description == "Standard onboarding process"
@@ -517,17 +533,19 @@ defmodule Custyard.ProjectsTest do
     } do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "projects:org:#{org.id}")
 
-      assert {:ok, project} = Projects.create_from_template(template, org.id, ~D[2024-03-01])
+      assert {:ok, project} =
+               Projects.create_from_template(staff_scope(), template, org.id, ~D[2024-03-01])
+
       assert_receive {:project_created, id}
       assert id == project.id
-      assert length(Projects.get_project!(id).tasks) == 2
+      assert length(Projects.get!(staff_scope(), id).tasks) == 2
     end
 
     test "calculates target date based on template duration", %{org: org, template: template} do
       # Template has 14 days duration (Jan 1 to Jan 15)
       start_date = ~D[2024-03-01]
 
-      {:ok, project} = Projects.create_from_template(template, org.id, start_date)
+      {:ok, project} = Projects.create_from_template(staff_scope(), template, org.id, start_date)
 
       # Should be 14 days after start: March 15
       assert project.target_completion_date == ~D[2024-03-15]
@@ -536,7 +554,7 @@ defmodule Custyard.ProjectsTest do
     test "copies tasks with adjusted due dates", %{org: org, template: template} do
       start_date = ~D[2024-03-01]
 
-      {:ok, project} = Projects.create_from_template(template, org.id, start_date)
+      {:ok, project} = Projects.create_from_template(staff_scope(), template, org.id, start_date)
 
       assert length(project.tasks) == 2
 
@@ -554,7 +572,8 @@ defmodule Custyard.ProjectsTest do
     end
 
     test "preserves task portal visibility", %{org: org, template: template} do
-      {:ok, project} = Projects.create_from_template(template, org.id, ~D[2024-03-01])
+      {:ok, project} =
+        Projects.create_from_template(staff_scope(), template, org.id, ~D[2024-03-01])
 
       initial_task = Enum.find(project.tasks, &(&1.title == "Initial setup"))
       final_task = Enum.find(project.tasks, &(&1.title == "Final review"))
@@ -564,7 +583,8 @@ defmodule Custyard.ProjectsTest do
     end
 
     test "sets all task states to open", %{org: org, template: template} do
-      {:ok, project} = Projects.create_from_template(template, org.id, ~D[2024-03-01])
+      {:ok, project} =
+        Projects.create_from_template(staff_scope(), template, org.id, ~D[2024-03-01])
 
       for task <- project.tasks do
         assert task.state == :open
@@ -575,18 +595,24 @@ defmodule Custyard.ProjectsTest do
       normal_project = create_project(%{title: "Normal", is_template: false})
 
       assert {:error, :not_a_template} =
-               Projects.create_from_template(normal_project, org.id, ~D[2024-03-01])
+               Projects.create_from_template(
+                 staff_scope(),
+                 normal_project,
+                 org.id,
+                 ~D[2024-03-01]
+               )
     end
 
     test "returns error for nil template", %{org: org} do
       assert {:error, :not_a_template} =
-               Projects.create_from_template(nil, org.id, ~D[2024-03-01])
+               Projects.create_from_template(staff_scope(), nil, org.id, ~D[2024-03-01])
     end
 
     test "handles template without start date", %{org: org} do
       template = create_project(%{title: "No Dates", is_template: true, start_date: nil})
 
-      {:ok, project} = Projects.create_from_template(template, org.id, ~D[2024-03-01])
+      {:ok, project} =
+        Projects.create_from_template(staff_scope(), template, org.id, ~D[2024-03-01])
 
       assert project.start_date == ~D[2024-03-01]
       assert project.target_completion_date == nil
@@ -601,7 +627,8 @@ defmodule Custyard.ProjectsTest do
           target_completion_date: nil
         })
 
-      {:ok, project} = Projects.create_from_template(template, org.id, ~D[2024-03-01])
+      {:ok, project} =
+        Projects.create_from_template(staff_scope(), template, org.id, ~D[2024-03-01])
 
       assert project.target_completion_date == nil
     end
@@ -609,14 +636,16 @@ defmodule Custyard.ProjectsTest do
     test "handles template without tasks", %{org: org} do
       template = create_project(%{title: "Empty", is_template: true})
 
-      {:ok, project} = Projects.create_from_template(template, org.id, ~D[2024-03-01])
+      {:ok, project} =
+        Projects.create_from_template(staff_scope(), template, org.id, ~D[2024-03-01])
 
       assert project.tasks == []
       assert project.progress.total == 0
     end
 
     test "includes progress in returned project", %{org: org, template: template} do
-      {:ok, project} = Projects.create_from_template(template, org.id, ~D[2024-03-01])
+      {:ok, project} =
+        Projects.create_from_template(staff_scope(), template, org.id, ~D[2024-03-01])
 
       assert project.progress.total == 2
       assert project.progress.done == 0

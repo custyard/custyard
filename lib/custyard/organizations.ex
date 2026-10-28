@@ -1,6 +1,6 @@
 defmodule Custyard.Organizations do
   @moduledoc """
-  Context for organization operations including custom domain management.
+  Customer organization operations.
   """
 
   require Logger
@@ -10,7 +10,6 @@ defmodule Custyard.Organizations do
     Contact,
     Conversation,
     Conversations,
-    InboundRoutes,
     Organization,
     OperatorAccount,
     Prospect,
@@ -21,240 +20,116 @@ defmodule Custyard.Organizations do
 
   import Ecto.Query
 
-  @doc """
-  Verify that a custom domain has proper DNS configuration.
+  def list(%Custyard.Scope{tenant_id: tenant_id} = scope) do
+    if Custyard.Scope.current_staff(scope),
+      do: Repo.all(from o in Organization, where: o.tenant_id == ^tenant_id, order_by: o.name),
+      else: []
+  end
 
-  Checks that the domain has a CNAME record pointing to the app host.
+  def get(%Custyard.Scope{tenant_id: tenant_id} = scope, id) do
+    if Custyard.Scope.current_staff(scope),
+      do: Repo.get_by(Organization, id: id, tenant_id: tenant_id)
+  end
 
-  Returns:
-  - `{:ok, :verified}` if DNS is correctly configured
-  - `{:error, :no_cname}` if no CNAME record found
-  - `{:error, :wrong_target}` if CNAME points to wrong host
-  - `{:error, :dns_lookup_failed}` if DNS lookup failed
-  """
-  @spec verify_custom_domain(String.t()) ::
-          {:ok, :verified}
-          | {:error, :no_cname | :wrong_target | :dns_lookup_failed}
-  def verify_custom_domain(domain) when is_binary(domain) do
-    expected_host = get_app_host()
+  def create(%Custyard.Scope{} = scope, attrs) do
+    with_scope(scope, fn _staff ->
+      attrs =
+        Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
+        |> Map.put("tenant_id", scope.tenant_id)
 
-    case lookup_cname(domain) do
-      {:ok, cname_target} ->
-        # Normalize the CNAME target (remove trailing dot if present)
-        normalized_target = String.trim_trailing(cname_target, ".")
+      create_organization(attrs)
+    end)
+  end
 
-        if String.downcase(normalized_target) == String.downcase(expected_host) do
-          {:ok, :verified}
-        else
-          {:error, :wrong_target}
+  def update(%Custyard.Scope{} = scope, %Organization{} = org, attrs) do
+    with_scope(scope, fn _staff ->
+      case Repo.get_by(Organization, id: org.id, tenant_id: scope.tenant_id) do
+        nil -> {:error, :unauthorized}
+        current -> update_organization(current, attrs)
+      end
+    end)
+  end
+
+  def delete(%Custyard.Scope{} = scope, %Organization{} = org) do
+    with_scope(scope, fn _staff ->
+      case Repo.get_by(Organization, id: org.id, tenant_id: scope.tenant_id) do
+        nil -> {:error, :unauthorized}
+        current -> delete_organization(current)
+      end
+    end)
+  end
+
+  def convert(%Custyard.Scope{} = scope, %Conversation{tenant_id: tenant_id} = thread, attrs) do
+    result =
+      if tenant_id == scope.tenant_id,
+        do: with_scope(scope, fn staff -> convert_prospect(thread, attrs, staff) end),
+        else: {:error, :unauthorized}
+
+    case result do
+      {:ok, {converted, organization, staff}} ->
+        handle_convert_result({:ok, converted}, organization, staff)
+
+      error ->
+        error
+    end
+  end
+
+  defp with_scope(%Custyard.Scope{} = scope, fun) do
+    Repo.transaction(fn ->
+      staff = Custyard.OperatorAccess.lock_current(%OperatorAccount{id: scope.staff_id})
+
+      if staff && staff.tenant_id == scope.tenant_id && staff.role == "admin" &&
+           OperatorAccount.session_claim_matches?(staff, scope.session_claim) &&
+           Custyard.Tenants.active?(scope.tenant_id) do
+        case fun.(staff) do
+          {:ok, value} -> value
+          {:error, reason} -> Repo.rollback(reason)
         end
-
-      {:error, :no_cname} ->
-        {:error, :no_cname}
-
-      {:error, _reason} ->
-        {:error, :dns_lookup_failed}
-    end
+      else
+        Repo.rollback(:unauthorized)
+      end
+    end)
   end
 
-  @doc """
-  Get the expected CNAME target for custom domains.
-  """
-  def expected_cname_target do
-    get_app_host()
-  end
-
-  # Look up CNAME record using :inet_res
-  defp lookup_cname(domain) do
-    # Convert to charlist for :inet_res
-    domain_charlist = String.to_charlist(domain)
-
-    case :inet_res.lookup(domain_charlist, :in, :cname) do
-      [] ->
-        # No CNAME record found
-        {:error, :no_cname}
-
-      [cname_target | _] ->
-        {:ok, List.to_string(cname_target)}
-    end
-  rescue
-    _ ->
-      {:error, :dns_lookup_failed}
-  catch
-    :exit, _ ->
-      {:error, :dns_lookup_failed}
-  end
-
-  defp get_app_host do
-    config = Application.get_env(:custyard, CustyardWeb.Endpoint, [])
-    get_in(config, [:url, :host]) || "localhost"
-  end
-
-  @doc """
-  Get an organization by ID.
-  """
-  def get_organization(id) do
-    Repo.get(Organization, id)
-  end
-
-  @doc "Get an organization only when it is in an operator's scope."
-  def get_organization_for_operator(id, %OperatorAccount{} = operator) do
-    case get_organization(id) do
-      %Organization{} = org ->
-        if OperatorAccount.can_access_organization?(operator, org.id), do: org
-
-      nil ->
-        nil
-    end
-  end
-
-  @doc """
-  Get an organization by ID, raising if not found.
-  """
-  def get_organization!(id) do
-    Repo.get!(Organization, id)
-  end
-
-  @doc """
-  Get an organization by ID with preloaded contacts.
-  """
-  def get_organization_with_contacts(id) do
-    from(o in Organization,
-      where: o.id == ^id,
-      preload: [:contacts]
-    )
-    |> Repo.one()
+  def get!(%Custyard.Scope{} = scope, id) do
+    get(scope, id) || raise Ecto.NoResultsError, queryable: Organization
   end
 
   @doc """
   List contacts for an organization.
   """
-  def list_contacts(org_id) do
-    from(c in Contact,
-      where: c.organization_id == ^org_id,
-      order_by: [asc: c.name, asc: c.email]
-    )
-    |> Repo.all()
-  end
-
-  @doc """
-  Get an organization by token.
-  """
-  def get_organization_by_token(token) do
-    Repo.get_by(Organization, token: token)
-  end
-
-  @doc """
-  List all organizations.
-  """
-  def list_organizations do
-    from(o in Organization, order_by: [asc: o.name])
-    |> Repo.all()
-  end
-
-  @doc "List organizations visible to an operator."
-  def list_organizations_for_operator(%OperatorAccount{} = operator) do
-    Organization
-    |> scope_to_operator(operator)
-    |> order_by([o], asc: o.name)
-    |> Repo.all()
-  end
-
-  @doc """
-  List all organizations with conversation counts.
-  """
-  def list_organizations_with_counts do
-    from(o in Organization,
-      left_join: c in assoc(o, :conversations),
-      group_by: o.id,
-      select: %{org: o, conversation_count: count(c.id)},
-      order_by: [asc: o.name]
-    )
-    |> Repo.all()
+  def list_contacts(%Custyard.Scope{tenant_id: tenant_id} = scope, org_id) do
+    if Custyard.Scope.current_staff(scope) do
+      Repo.all(
+        from c in Contact,
+          where: c.organization_id == ^org_id and c.tenant_id == ^tenant_id,
+          order_by: [asc: c.name, asc: c.email]
+      )
+    else
+      []
+    end
   end
 
   @doc "List visible organizations with their conversation counts."
-  def list_organizations_with_counts(%OperatorAccount{} = operator) do
-    Organization
-    |> scope_to_operator(operator)
-    |> join(:left, [o], c in assoc(o, :conversations))
-    |> group_by([o], o.id)
-    |> select([o, c], %{org: o, conversation_count: count(c.id)})
-    |> order_by([o], asc: o.name)
-    |> Repo.all()
-  end
-
-  defp scope_to_operator(query, %OperatorAccount{role: "super_admin"}), do: query
-
-  defp scope_to_operator(query, %OperatorAccount{tenant_id: tenant_id})
-       when is_integer(tenant_id),
-       do: where(query, [o], o.tenant_id == ^tenant_id)
-
-  defp scope_to_operator(query, %OperatorAccount{organization_id: org_id})
-       when is_integer(org_id),
-       do: where(query, [o], o.id == ^org_id)
-
-  defp scope_to_operator(query, %OperatorAccount{}), do: where(query, [o], false)
-
-  @doc """
-  Create a new organization.
-
-  Creates the organization in the database, then provisions a default inbound
-  route via the Lettermint API. If route provisioning fails, the organization
-  is deleted (compensating transaction pattern).
-
-  Returns `{:ok, organization}` or `{:error, changeset}`.
-  """
-  def create_organization(attrs) do
-    changeset = Organization.changeset(%Organization{}, attrs)
-
-    case Repo.insert(changeset) do
-      {:ok, org} ->
-        maybe_provision_route(org, changeset)
-
-      {:error, changeset} ->
-        {:error, changeset}
+  def list_with_counts(%Custyard.Scope{tenant_id: tenant_id} = scope) do
+    if Custyard.Scope.current_staff(scope) do
+      Organization
+      |> where([o], o.tenant_id == ^tenant_id)
+      |> join(:left, [o], c in assoc(o, :conversations))
+      |> group_by([o], o.id)
+      |> select([o, c], %{org: o, conversation_count: count(c.id)})
+      |> order_by([o], asc: o.name)
+      |> Repo.all()
+    else
+      []
     end
   end
 
-  defp maybe_provision_route(%Organization{lettermint_project_id: nil} = org, _changeset) do
-    {:ok, org}
+  defp create_organization(attrs) do
+    %Organization{} |> Organization.changeset(attrs) |> Repo.insert()
   end
 
-  defp maybe_provision_route(org, changeset) do
-    case InboundRoutes.create_route(%{organization_id: org.id, route_type: :general}) do
-      {:ok, _route} ->
-        {:ok, org}
-
-      {:error, reason} ->
-        Repo.delete(org)
-        {:error, wrap_route_error(changeset, reason)}
-    end
-  end
-
-  # Wrap non-changeset errors into a changeset with a :base error for consistent return types
-  defp wrap_route_error(changeset, {:api_error, message}) when is_binary(message) do
-    Ecto.Changeset.add_error(changeset, :base, "Route provisioning failed: #{message}")
-  end
-
-  defp wrap_route_error(changeset, {:api_error, reason}) do
-    Ecto.Changeset.add_error(changeset, :base, "Route provisioning failed: #{inspect(reason)}")
-  end
-
-  defp wrap_route_error(changeset, %Ecto.Changeset{} = error_changeset) do
-    # If the route creation returned a changeset error, merge errors into base
-    errors = Ecto.Changeset.traverse_errors(error_changeset, fn {msg, _opts} -> msg end)
-    Ecto.Changeset.add_error(changeset, :base, "Route provisioning failed: #{inspect(errors)}")
-  end
-
-  defp wrap_route_error(changeset, reason) do
-    Ecto.Changeset.add_error(changeset, :base, "Route provisioning failed: #{inspect(reason)}")
-  end
-
-  @doc """
-  Update an organization.
-  """
-  def update_organization(%Organization{} = org, attrs) do
+  defp update_organization(%Organization{} = org, attrs) do
     org
     |> Organization.changeset(attrs)
     |> reject_tenant_move()
@@ -279,15 +154,7 @@ defmodule Custyard.Organizations do
     Organization.changeset(org, attrs)
   end
 
-  @doc """
-  Delete an organization.
-
-  WARNING: This is a hard delete that cascades to all associated contacts and
-  conversations. This action is irreversible. Deletion is logged for audit purposes.
-
-  Returns `{:ok, organization}` or `{:error, changeset}`.
-  """
-  def delete_organization(%Organization{} = org) do
+  defp delete_organization(%Organization{} = org) do
     # Count associated records for audit logging
     contact_count =
       Repo.aggregate(from(c in Contact, where: c.organization_id == ^org.id), :count)
@@ -305,7 +172,16 @@ defmodule Custyard.Organizations do
       conversations_to_delete: conversation_count
     )
 
-    result = Repo.delete(org)
+    result =
+      if Repo.exists?(
+           from(a in Custyard.Acknowledgments.Acknowledgment,
+             where: a.tenant_id == ^org.tenant_id and a.organization_id == ^org.id
+           )
+         ) do
+        {:error, :retained_evidence}
+      else
+        delete_customer_records(org)
+      end
 
     case result do
       {:ok, deleted} ->
@@ -330,85 +206,135 @@ defmodule Custyard.Organizations do
     end
   end
 
-  @doc """
-  Get an organization by custom domain.
-  """
-  def get_organization_by_custom_domain(domain) when is_binary(domain) do
-    Repo.get_by(Organization, custom_domain: domain)
+  defp delete_customer_records(org) do
+    Repo.transaction(fn ->
+      {threads, projects} = customer_work_queries(org)
+      detach_customer_audit(org, threads, projects)
+      detach_customer_infrastructure(org, threads, projects)
+      delete_customer_claims(org, threads)
+      delete_customer_identity(org)
+      delete_customer_work(org, threads, projects)
+
+      Repo.delete_all(
+        from c in Contact, where: c.tenant_id == ^org.tenant_id and c.organization_id == ^org.id
+      )
+
+      case Repo.delete(org) do
+        {:ok, deleted} -> deleted
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
-  @doc """
-  Regenerate the portal access token for an organization.
+  defp customer_work_queries(org) do
+    threads =
+      from(c in Conversation,
+        where: c.tenant_id == ^org.tenant_id and c.organization_id == ^org.id,
+        select: c.id
+      )
 
-  This invalidates any existing portal links using the old token.
-  Returns `{:ok, organization}` or `{:error, changeset}`.
-  """
-  def regenerate_portal_token(%Organization{} = org) do
-    new_token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+    projects =
+      from(p in Custyard.Project,
+        where: p.tenant_id == ^org.tenant_id and p.organization_id == ^org.id,
+        select: p.id
+      )
 
-    org
-    |> Ecto.Changeset.change(token: new_token)
-    |> Repo.update()
+    {threads, projects}
   end
 
-  @doc """
-  Convert an unlinked public-intake conversation into a brand-new
-  organization. Caller-gated: mirrors `create_organization/1`, which enforces
-  no role check of its own — the LiveView checks
-  `Authorization.can_create_organization?/1` before calling this. `operator`
-  is recorded on the `:prospect_converted` audit event, not used for
-  authorization.
+  defp detach_customer_audit(org, threads, projects) do
+    from(a in AuditEvent,
+      where: a.tenant_id == ^org.tenant_id,
+      where:
+        a.organization_id == ^org.id or a.conversation_id in subquery(threads) or
+          a.project_id in subquery(projects)
+    )
+    |> Repo.update_all(set: [organization_id: nil, conversation_id: nil, project_id: nil])
+  end
 
-  Step 1: `create_organization/1` unchanged — a Lettermint provisioning
-  failure already compensates by deleting the org before this function ever
-  sees it.
+  defp detach_customer_infrastructure(org, threads, projects) do
+    from(e in Custyard.EmailConnection,
+      where: e.tenant_id == ^org.tenant_id,
+      where: e.latest_received_conversation_id in subquery(threads)
+    )
+    |> Repo.update_all(set: [latest_received_conversation_id: nil])
 
-  Step 2, one transaction: the prospect is read inside the transaction (not
-  before it), narrowing — though not eliminating, under READ COMMITTED — the
-  window in which a concurrently committed email capture is missed (the
-  conditional link below, `WHERE ... organization_id IS NULL`, is what makes
-  this safe, not the read placement); race-safe conditional promotion of the
-  conversation's confirmed slug claim
-  (`Slugs.promote/2` — `{:error, :not_found}` is not a failure, a prospect
-  can convert without ever having claimed a slug), a contact created from
-  the prospect's captured email when present, then a conditional link
-  (`WHERE id AND organization_id IS NULL`) so a conversation converted by a
-  concurrent call is never silently re-linked. `source` stays
-  `:public_intake` as provenance.
+    from(c in Custyard.InboundChannel,
+      where: c.tenant_id == ^org.tenant_id and c.default_organization_id == ^org.id
+    )
+    |> Repo.update_all(set: [default_organization_id: nil])
 
-  Any step-2 failure — the conditional link losing its race, or a real
-  error — compensates by deleting the organization: it is conversation-free
-  until this transaction commits, so the delete is cascade-safe.
+    from(c in Custyard.InboundChannel,
+      where: c.tenant_id == ^org.tenant_id and c.default_project_id in subquery(projects)
+    )
+    |> Repo.update_all(set: [default_project_id: nil])
 
-  Post-commit: rescore, `"conversations"` + org-scoped broadcasts, a
-  `:prospect_converted` audit event. Conversation access is untouched — conversion
-  neither revokes nor rotates the prospect's access token.
+    from(p in Custyard.Project,
+      where: p.tenant_id == ^org.tenant_id and p.conversation_id in subquery(threads)
+    )
+    |> Repo.update_all(set: [conversation_id: nil])
+  end
 
-  Returns `{:ok, conversation}`, `{:error, :not_convertible}` (already
-  linked, or not a public-intake conversation), `{:error, :already_converted}`
-  (lost the race to a concurrent conversion), or `{:error, changeset}`.
-  """
-  def convert_prospect(
-        %Conversation{organization_id: nil, source: :public_intake} = conversation,
-        org_attrs,
-        %OperatorAccount{} = operator
-      ) do
+  defp delete_customer_claims(org, threads) do
+    from(s in Custyard.Slug,
+      where: s.tenant_id == ^org.tenant_id,
+      where: s.organization_id == ^org.id or s.conversation_id in subquery(threads)
+    )
+    |> Repo.delete_all()
+  end
+
+  defp delete_customer_identity(org) do
+    from(p in Custyard.PortalCredential,
+      where: p.tenant_id == ^org.tenant_id and p.organization_id == ^org.id
+    )
+    |> Repo.delete_all()
+
+    from(b in Custyard.Acknowledgments.OrganizationBinding,
+      where: b.tenant_id == ^org.tenant_id and b.organization_id == ^org.id
+    )
+    |> Repo.delete_all()
+
+    from(r in Custyard.InboundChannelRejection,
+      where: r.tenant_id == ^org.tenant_id and r.organization_id == ^org.id
+    )
+    |> Repo.delete_all()
+  end
+
+  defp delete_customer_work(org, threads, projects) do
+    from(t in Custyard.Task,
+      where: t.tenant_id == ^org.tenant_id,
+      where:
+        t.organization_id == ^org.id or t.conversation_id in subquery(threads) or
+          t.project_id in subquery(projects)
+    )
+    |> Repo.delete_all()
+
+    Repo.delete_all(from(c in Conversation, where: c.id in subquery(threads)))
+    Repo.delete_all(from(p in Custyard.Project, where: p.id in subquery(projects)))
+  end
+
+  defp convert_prospect(
+         %Conversation{organization_id: nil, source: :public_intake} = conversation,
+         org_attrs,
+         %OperatorAccount{} = operator
+       ) do
     org_attrs =
       Map.new(org_attrs, fn {key, value} -> {to_string(key), value} end)
       |> Map.put("tenant_id", conversation.tenant_id)
 
     case create_organization(org_attrs) do
       {:ok, organization} ->
-        conversation
-        |> do_convert_or_compensate(organization)
-        |> handle_convert_result(organization, operator)
+        case do_convert_or_compensate(conversation, organization) do
+          {:ok, converted} -> {:ok, {converted, organization, operator}}
+          {:error, reason} -> Repo.rollback(reason)
+        end
 
       {:error, changeset} ->
         {:error, changeset}
     end
   end
 
-  def convert_prospect(%Conversation{}, _org_attrs, %OperatorAccount{}),
+  defp convert_prospect(%Conversation{}, _org_attrs, %OperatorAccount{}),
     do: {:error, :not_convertible}
 
   # The organization (and its provisioned inbound route) is already committed
@@ -418,7 +344,9 @@ defmodule Custyard.Organizations do
     do_convert(conversation, organization)
   rescue
     error ->
-      delete_organization(organization)
+      # with_scope/2 owns the transaction containing customer creation.
+      # Let that transaction roll back rather than write on a failed connection.
+      unless Repo.in_transaction?(), do: delete_organization(organization)
       reraise error, __STACKTRACE__
   end
 
@@ -454,7 +382,11 @@ defmodule Custyard.Organizations do
 
   defp maybe_create_contact(%Prospect{email: email}, organization) when is_binary(email) do
     case %Contact{}
-         |> Contact.changeset(%{email: email, organization_id: organization.id})
+         |> Contact.changeset(%{
+           email: email,
+           organization_id: organization.id,
+           tenant_id: organization.tenant_id
+         })
          |> Repo.insert() do
       {:ok, contact} -> contact
       {:error, changeset} -> Repo.rollback(changeset)
@@ -483,11 +415,6 @@ defmodule Custyard.Organizations do
     record_conversion_audit(conversation, organization, operator)
 
     {:ok, conversation}
-  end
-
-  defp handle_convert_result({:error, reason}, organization, _operator) do
-    delete_organization(organization)
-    {:error, reason}
   end
 
   # Append-only audit trail for the conversion (AuditEvent.create pattern,

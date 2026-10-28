@@ -1,7 +1,7 @@
 defmodule Custyard.LettermintRuntimeConfigTest do
   use ExUnit.Case, async: false
   alias Config.Reader
-  alias Custyard.Lettermint.{DisabledClient, HttpClient}
+  alias Custyard.Lettermint.HttpClient
   alias Custyard.Mailer
   @runtime Path.expand("../../config/runtime.exs", __DIR__)
   @keys ~w(MAIL_ADAPTER SECRET_KEY_BASE LETTERMINT_PROJECT_TOKEN LETTERMINT_TEAM_TOKEN LETTERMINT_API_KEY LETTERMINT_API_URL DATABASE_URL DATABASE_PATH)
@@ -21,33 +21,21 @@ defmodule Custyard.LettermintRuntimeConfigTest do
     :ok
   end
 
-  test "project and Team tokens configure separate APIs" do
-    System.put_env("LETTERMINT_PROJECT_TOKEN", "project-token")
-    System.put_env("LETTERMINT_TEAM_TOKEN", "team-token")
+  test "system sending config never bootstraps tenant provider access" do
+    System.put_env("LETTERMINT_PROJECT_TOKEN", "system-project-token")
+    System.put_env("LETTERMINT_TEAM_TOKEN", "unused-global-management-token")
     config = Reader.read!(@runtime, env: :prod)[:custyard]
-    assert config[Mailer][:api_token] == "project-token"
-    assert config[:lettermint][:team_token] == "team-token"
-    refute Keyword.has_key?(config[:lettermint], :api_key)
+    assert config[Mailer][:api_token] == "system-project-token"
     assert config[:lettermint][:client] == HttpClient
+    refute Keyword.has_key?(config[:lettermint], :team_token)
+    refute Keyword.has_key?(config[:lettermint], :api_key)
   end
 
-  test "legacy token only configures sending and production management stays disabled" do
-    System.put_env("LETTERMINT_API_KEY", "legacy-project-token")
+  test "removed sending aliases do not configure credentials" do
+    System.put_env("LETTERMINT_API_KEY", "unused-token")
     config = Reader.read!(@runtime, env: :prod)[:custyard]
-    assert config[Mailer][:api_token] == "legacy-project-token"
-    assert config[:lettermint][:client] == DisabledClient
-    refute config[:lettermint_configured]
-    assert {:error, :not_configured} = DisabledClient.create_route(%{})
-
-    assert {:error, :not_configured} =
-             DisabledClient.verify_inbound_domain("real-route")
-  end
-
-  test "explicit project token takes precedence over the legacy sending alias" do
-    System.put_env("LETTERMINT_API_KEY", "legacy-project-token")
-    System.put_env("LETTERMINT_PROJECT_TOKEN", "new-project-token")
-    config = Reader.read!(@runtime, env: :prod)[:custyard]
-    assert config[Mailer][:api_token] == "new-project-token"
+    assert is_nil(config[Mailer][:api_token])
+    refute Keyword.has_key?(config[:lettermint], :team_token)
   end
 
   test "SMTP installations keep the HTTP client available for tenant Lettermint mail" do

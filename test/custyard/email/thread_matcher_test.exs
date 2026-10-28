@@ -1,189 +1,82 @@
 defmodule Custyard.Email.ThreadMatcherTest do
   use Custyard.DataCase, async: true
-
+  import Custyard.Factory
   alias Custyard.Email.ThreadMatcher
 
-  import Custyard.Factory
+  test "headers are matched only in the receiving tenant, including duplicate message ids" do
+    a = insert_organization()
+    b = insert_organization(tenant_id: insert_tenant().id)
+    thread_a = insert_conversation(organization_id: a.id)
+    thread_b = insert_conversation(organization_id: b.id)
+    insert_message(conversation_id: thread_a.id, message_id: "shared@example.com")
+    insert_message(conversation_id: thread_b.id, message_id: "shared@example.com")
+    parsed = %{from: "alice@example.com", in_reply_to: "shared@example.com", references: nil}
+    assert {:ok, %{id: id_a}} = ThreadMatcher.find_in_tenant(parsed, a.tenant_id)
+    assert {:ok, %{id: id_b}} = ThreadMatcher.find_in_tenant(parsed, b.tenant_id)
+    assert id_a == thread_a.id
+    assert id_b == thread_b.id
+    refute id_a == id_b
+  end
 
-  describe "find_thread/2" do
-    test "thread found via In-Reply-To in same org returns {:ok, conversation}" do
-      org = insert_organization()
-      conversation = insert_conversation(organization_id: org.id)
+  test "In-Reply-To precedes References and missing headers do not match" do
+    org = insert_organization()
+    a = insert_conversation(organization_id: org.id)
+    b = insert_conversation(organization_id: org.id)
+    insert_message(conversation_id: a.id, message_id: "a@example.com")
+    insert_message(conversation_id: b.id, message_id: "b@example.com")
 
-      message =
-        insert_message(conversation_id: conversation.id, message_id: "msg-123@example.com")
+    assert {:ok, %{id: id}} =
+             ThreadMatcher.find_in_tenant(
+               %{in_reply_to: "a@example.com", references: "b@example.com"},
+               org.tenant_id
+             )
 
-      parsed = %{
-        in_reply_to: message.message_id,
-        references: nil
-      }
+    assert id == a.id
+    assert :not_found = ThreadMatcher.find_in_tenant(%{}, org.tenant_id)
+  end
 
-      assert {:ok, found_conversation} = ThreadMatcher.find_thread(parsed, org.id)
-      assert found_conversation.id == conversation.id
-    end
+  test "subject fallback requires reply prefix, same customer and a participating sender" do
+    org = insert_organization()
+    contact = insert_contact(organization_id: org.id, email: "alice@example.com")
 
-    test "thread found via References in same org returns {:ok, conversation}" do
-      org = insert_organization()
-      conversation = insert_conversation(organization_id: org.id)
+    thread =
+      insert_conversation(organization_id: org.id, contact_id: contact.id, subject: "Onboarding")
 
-      message =
-        insert_message(conversation_id: conversation.id, message_id: "ref-456@example.com")
+    assert {:ok, %{id: id}} =
+             ThreadMatcher.find_by_subject(
+               %{subject: "Re: Onboarding", from: contact.email},
+               org.id,
+               org.tenant_id
+             )
 
-      parsed = %{
-        in_reply_to: nil,
-        references: "some-other-id@example.com #{message.message_id}"
-      }
+    assert id == thread.id
 
-      assert {:ok, found_conversation} = ThreadMatcher.find_thread(parsed, org.id)
-      assert found_conversation.id == conversation.id
-    end
+    assert :not_found =
+             ThreadMatcher.find_by_subject(
+               %{subject: "Onboarding", from: contact.email},
+               org.id,
+               org.tenant_id
+             )
 
-    test "In-Reply-To takes precedence over References" do
-      org = insert_organization()
+    assert :not_found =
+             ThreadMatcher.find_by_subject(
+               %{subject: "Re: Onboarding", from: "stranger@example.com"},
+               org.id,
+               org.tenant_id
+             )
+  end
 
-      conversation1 = insert_conversation(organization_id: org.id, subject: "Thread 1")
+  test "ambiguous references do not select an arbitrary customer" do
+    org = insert_organization()
+    a = insert_conversation(organization_id: org.id)
+    b = insert_conversation(organization_id: org.id)
+    insert_message(conversation_id: a.id, message_id: "a@example.com")
+    insert_message(conversation_id: b.id, message_id: "b@example.com")
 
-      message1 =
-        insert_message(conversation_id: conversation1.id, message_id: "primary@example.com")
-
-      conversation2 = insert_conversation(organization_id: org.id, subject: "Thread 2")
-
-      message2 =
-        insert_message(conversation_id: conversation2.id, message_id: "secondary@example.com")
-
-      parsed = %{
-        in_reply_to: message1.message_id,
-        references: message2.message_id
-      }
-
-      # Should find conversation1 via In-Reply-To, not conversation2 via References
-      assert {:ok, found_conversation} = ThreadMatcher.find_thread(parsed, org.id)
-      assert found_conversation.id == conversation1.id
-    end
-
-    test "thread not found returns :not_found" do
-      org = insert_organization()
-
-      parsed = %{
-        in_reply_to: "nonexistent@example.com",
-        references: "also-nonexistent@example.com"
-      }
-
-      assert :not_found = ThreadMatcher.find_thread(parsed, org.id)
-    end
-
-    test "nil headers return :not_found" do
-      org = insert_organization()
-
-      parsed = %{
-        in_reply_to: nil,
-        references: nil
-      }
-
-      assert :not_found = ThreadMatcher.find_thread(parsed, org.id)
-    end
-
-    test "thread in different org not matched (prevents cross-org leakage)" do
-      org1 = insert_organization()
-      org2 = insert_organization()
-
-      # Create conversation and message in org1
-      conversation = insert_conversation(organization_id: org1.id)
-
-      message =
-        insert_message(conversation_id: conversation.id, message_id: "isolated@example.com")
-
-      # Try to find it from org2's context - should NOT match
-      parsed = %{
-        in_reply_to: message.message_id,
-        references: nil
-      }
-
-      assert :not_found = ThreadMatcher.find_thread(parsed, org2.id)
-
-      # Verify it DOES match when searched from org1
-      assert {:ok, found} = ThreadMatcher.find_thread(parsed, org1.id)
-      assert found.id == conversation.id
-    end
-
-    test "cross-org References header doesn't leak conversations" do
-      org1 = insert_organization()
-      org2 = insert_organization()
-
-      # Simulate a forwarded email scenario where References contains
-      # message IDs from both organizations
-      conv1 = insert_conversation(organization_id: org1.id)
-      msg1 = insert_message(conversation_id: conv1.id, message_id: "org1-msg@example.com")
-
-      conv2 = insert_conversation(organization_id: org2.id)
-      msg2 = insert_message(conversation_id: conv2.id, message_id: "org2-msg@example.com")
-
-      # References header that mentions both orgs' messages
-      # (could happen with mailing list cross-posts or forwards)
-      parsed = %{
-        in_reply_to: nil,
-        references: "#{msg1.message_id} #{msg2.message_id}"
-      }
-
-      # Searching from org1's context should only find org1's conversation
-      assert {:ok, found1} = ThreadMatcher.find_thread(parsed, org1.id)
-      assert found1.id == conv1.id
-
-      # Searching from org2's context should only find org2's conversation
-      assert {:ok, found2} = ThreadMatcher.find_thread(parsed, org2.id)
-      assert found2.id == conv2.id
-    end
-
-    test "empty-string References returns :not_found" do
-      org = insert_organization()
-
-      parsed = %{in_reply_to: nil, references: ""}
-
-      assert :not_found = ThreadMatcher.find_thread(parsed, org.id)
-    end
-
-    test "malformed message ids do not crash and return :not_found" do
-      org = insert_organization()
-
-      for bad_id <- ["<<not@valid>>", "no-brackets-no-at", "<>", "   ", "<@>"] do
-        parsed = %{in_reply_to: bad_id, references: bad_id}
-
-        assert :not_found = ThreadMatcher.find_thread(parsed, org.id),
-               "expected :not_found for #{inspect(bad_id)}"
-      end
-    end
-
-    test "References chain with irregular whitespace still matches" do
-      org = insert_organization()
-      conversation = insert_conversation(organization_id: org.id)
-
-      message =
-        insert_message(conversation_id: conversation.id, message_id: "spaced@example.com")
-
-      parsed = %{
-        in_reply_to: nil,
-        references: "first@example.com  \t #{message.message_id} \n last@example.com"
-      }
-
-      assert {:ok, found} = ThreadMatcher.find_thread(parsed, org.id)
-      assert found.id == conversation.id
-    end
-
-    test "multiple References matched returns one conversation" do
-      org = insert_organization()
-      conversation = insert_conversation(organization_id: org.id)
-
-      # Same conversation has multiple messages
-      msg1 = insert_message(conversation_id: conversation.id, message_id: "thread-1@example.com")
-      msg2 = insert_message(conversation_id: conversation.id, message_id: "thread-2@example.com")
-
-      parsed = %{
-        in_reply_to: nil,
-        references: "#{msg1.message_id} #{msg2.message_id}"
-      }
-
-      assert {:ok, found} = ThreadMatcher.find_thread(parsed, org.id)
-      assert found.id == conversation.id
-    end
+    assert :ambiguous =
+             ThreadMatcher.find_in_tenant(
+               %{references: "a@example.com b@example.com"},
+               org.tenant_id
+             )
   end
 end

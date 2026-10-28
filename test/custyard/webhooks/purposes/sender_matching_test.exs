@@ -1,7 +1,7 @@
 defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
   use Custyard.DataCase, async: true
 
-  alias Custyard.Webhooks.Adapters.Email
+  alias Custyard.Webhooks.Adapters.{Email, Slack, Intercom}
   alias Custyard.Webhooks.Purposes.SenderMatching
   alias Custyard.{Message, Repo}
 
@@ -24,7 +24,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       }
 
       assert {:ok, _conversation} =
-               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+               SenderMatching.process(normalized, %{
+                 tenant_id: org.tenant_id,
+                 default_organization_id: org.id,
+                 project_id: nil
+               })
 
       assert [%Message{html_body: "<p>Hello <b>bold</b></p>", body: "Hello bold"}] =
                Repo.all(Message)
@@ -43,7 +47,10 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         })
 
       assert {:ok, conversation} =
-               SenderMatching.process(normalized, %{organization_id: org.id})
+               SenderMatching.process(normalized, %{
+                 tenant_id: org.tenant_id,
+                 default_organization_id: org.id
+               })
 
       message = Repo.get_by!(Message, conversation_id: conversation.id)
       assert message.to_addresses == ["support+billing@example.com"]
@@ -63,7 +70,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      route_context = %{organization_id: org.id, project_id: nil}
+      route_context = %{
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        project_id: nil
+      }
 
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
       assert conversation.organization_id == org.id
@@ -99,7 +110,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      route_context = %{organization_id: org.id, project_id: nil}
+      route_context = %{
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        project_id: nil
+      }
 
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
       # Should return the existing conversation, not create a new one
@@ -131,7 +146,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      route_context = %{organization_id: org.id, project_id: nil}
+      route_context = %{
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        project_id: nil
+      }
 
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
       # Should return existing conversation, not create duplicate
@@ -142,9 +161,10 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert length(messages) == 1
     end
 
-    test "the same provider message ID is retained separately for two organizations" do
+    test "the same provider message ID is retained separately for two tenants" do
       first_org = insert_organization(domain: "first.example.com")
-      second_org = insert_organization(domain: "second.example.com")
+      second_tenant = insert_tenant()
+      second_org = insert_organization(tenant_id: second_tenant.id, domain: "second.example.com")
 
       normalized = %{
         from: "sender@example.com",
@@ -157,8 +177,18 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :lettermint
       }
 
-      assert {:ok, first} = SenderMatching.process(normalized, %{organization_id: first_org.id})
-      assert {:ok, second} = SenderMatching.process(normalized, %{organization_id: second_org.id})
+      assert {:ok, first} =
+               SenderMatching.process(normalized, %{
+                 tenant_id: first_org.tenant_id,
+                 default_organization_id: first_org.id
+               })
+
+      assert {:ok, second} =
+               SenderMatching.process(normalized, %{
+                 tenant_id: second_org.tenant_id,
+                 default_organization_id: second_org.id
+               })
+
       assert first.id != second.id
       assert second.organization_id == second_org.id
 
@@ -175,7 +205,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       alias Custyard.Webhooks.Adapters.Zendesk
 
       org = insert_organization(domain: "zendesk.example.com")
-      route_context = %{organization_id: org.id, route_id: 42}
+      route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 42}
 
       ticket = %{
         "id" => 987,
@@ -203,7 +233,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       assert Enum.sort(Enum.map(messages, & &1.body)) == ["First", "Second"]
     end
 
-    test "identical Zendesk ticket and comment IDs on separate routes stay separate" do
+    test "identical Zendesk ticket and comment IDs deduplicate across tenant routes" do
       alias Custyard.Webhooks.Adapters.Zendesk
 
       org = insert_organization(domain: "zendesk-routes.example.com")
@@ -216,12 +246,22 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       }
 
       {:ok, event} = Zendesk.normalize(%{"ticket" => ticket})
-      assert {:ok, first} = SenderMatching.process(event, %{organization_id: org.id, route_id: 1})
+
+      assert {:ok, first} =
+               SenderMatching.process(event, %{
+                 tenant_id: org.tenant_id,
+                 default_organization_id: org.id,
+                 route_id: 1
+               })
 
       assert {:ok, second} =
-               SenderMatching.process(event, %{organization_id: org.id, route_id: 2})
+               SenderMatching.process(event, %{
+                 tenant_id: org.tenant_id,
+                 default_organization_id: org.id,
+                 route_id: 2
+               })
 
-      assert first.id != second.id
+      assert first.id == second.id
     end
 
     test "detects urgent subject keywords" do
@@ -238,7 +278,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      route_context = %{organization_id: org.id, project_id: nil}
+      route_context = %{
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        project_id: nil
+      }
 
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
       assert conversation.urgency == :urgent
@@ -258,24 +302,30 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      route_context = %{organization_id: org.id, project_id: nil}
+      route_context = %{
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        project_id: nil
+      }
 
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
       assert conversation.urgency == :elevated
     end
 
     test "a suspect delivery stays at normal urgency despite a mapped priority header" do
-      _settings = Custyard.Settings.get()
+      org = insert_organization(domain: "acme.example.com")
+      _settings = Custyard.Settings.get(org.tenant_id)
 
       {:ok, _} =
-        Custyard.Settings.update_sieve_header_mappings(%{
-          "X-Priority" => %{
-            "property" => "urgency",
-            "mapping" => %{"high" => "urgent"}
+        Custyard.Settings.update_sieve_header_mappings(
+          Custyard.Factory.staff_scope(org.tenant_id),
+          %{
+            "X-Priority" => %{
+              "property" => "urgency",
+              "mapping" => %{"high" => "urgent"}
+            }
           }
-        })
-
-      org = insert_organization(domain: "acme.example.com")
+        )
 
       normalized = %{
         from: "mallory@spam.example.net",
@@ -288,7 +338,12 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      route_context = %{organization_id: org.id, project_id: nil, triage_class: :suspect}
+      route_context = %{
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        project_id: nil,
+        triage_class: :suspect
+      }
 
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
       assert conversation.suspect == true
@@ -333,7 +388,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      route_context = %{organization_id: org.id, project_id: nil}
+      route_context = %{
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        project_id: nil
+      }
 
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
       assert conversation.id == dormant_conv.id
@@ -356,14 +415,18 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         source: :email
       }
 
-      route_context = %{organization_id: org.id, project_id: project.id}
+      route_context = %{
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        default_project_id: project.id
+      }
 
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)
       assert conversation.project_id == project.id
     end
 
-    test "falls back to domain matching without route context" do
-      org = insert_organization(domain: "acme.example.com")
+    test "refuses sender matching without tenant context" do
+      _org = insert_organization(domain: "acme.example.com")
 
       normalized = %{
         from: "alice@acme.example.com",
@@ -377,17 +440,13 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       }
 
       # Empty route context triggers domain-based matching
-      assert {:ok, conversation} = SenderMatching.process(normalized, %{})
-      assert conversation.organization_id == org.id
+      assert {:error, :tenant_required} = SenderMatching.process(normalized, %{})
+      assert Repo.aggregate(Message, :count) == 0
     end
-  end
-
-  describe "chat providers and blank payloads" do
-    alias Custyard.Webhooks.Adapters.{Intercom, Slack}
 
     test "a Slack event creates a conversation with no contact" do
       org = insert_organization(domain: "slack.example.com")
-      route_context = %{organization_id: org.id, route_id: 7}
+      route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 7}
 
       {:ok, event} =
         Slack.normalize(%{
@@ -402,7 +461,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         })
 
       assert {:ok, conversation} = SenderMatching.process(event, route_context)
-      assert conversation.organization_id == org.id
+      assert conversation.organization_id == nil
       assert conversation.contact_id == nil
       assert conversation.source == :slack
 
@@ -413,7 +472,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
 
     test "Intercom replies thread together when the root event was never stored" do
       org = insert_organization(domain: "intercom.example.com")
-      route_context = %{organization_id: org.id, route_id: 8}
+      route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 8}
 
       reply = fn part_id, body ->
         {:ok, event} =
@@ -465,7 +524,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       }
 
       assert {:ok, conversation} =
-               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+               SenderMatching.process(normalized, %{
+                 tenant_id: org.tenant_id,
+                 default_organization_id: org.id,
+                 project_id: nil
+               })
 
       assert conversation.subject == "(no subject)"
 
@@ -488,7 +551,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       }
 
       assert {:ok, conversation} =
-               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+               SenderMatching.process(normalized, %{
+                 tenant_id: org.tenant_id,
+                 default_organization_id: org.id,
+                 project_id: nil
+               })
 
       assert conversation.contact_id == nil
     end
@@ -512,7 +579,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
       }
 
       assert {:ok, conversation} =
-               SenderMatching.process(normalized, %{organization_id: org.id, project_id: nil})
+               SenderMatching.process(normalized, %{
+                 tenant_id: org.tenant_id,
+                 default_organization_id: org.id,
+                 project_id: nil
+               })
 
       assert conversation.id == waiting.id
       assert conversation.state == :active
@@ -545,7 +616,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
 
     test "a retried delivery creates exactly one conversation and one message" do
       org = insert_organization(domain: "acme.example.com")
-      route_context = %{organization_id: org.id, route_id: 3}
+      route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 3}
 
       {:ok, normalized} =
         Lettermint.normalize(
@@ -564,7 +635,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
 
     test "a retried delivery without a Message-ID header still dedups" do
       org = insert_organization(domain: "acme.example.com")
-      route_context = %{organization_id: org.id, route_id: 3}
+      route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 3}
 
       {:ok, normalized} = Lettermint.normalize(lettermint_envelope("delivery-2", []))
       assert normalized.message_id == nil
@@ -590,7 +661,11 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
         )
 
       assert {:ok, conversation} =
-               SenderMatching.process(normalized, %{organization_id: org.id, route_id: 3})
+               SenderMatching.process(normalized, %{
+                 tenant_id: org.tenant_id,
+                 default_organization_id: org.id,
+                 route_id: 3
+               })
 
       message = Repo.get_by!(Message, conversation_id: conversation.id)
       assert message.provider_delivery_id == "delivery-3"
@@ -600,7 +675,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatchingTest do
 
     test "a replayed delivery does not reactivate a resolved conversation" do
       org = insert_organization(domain: "acme.example.com")
-      route_context = %{organization_id: org.id, route_id: 3}
+      route_context = %{tenant_id: org.tenant_id, default_organization_id: org.id, route_id: 3}
 
       {:ok, normalized} = Lettermint.normalize(lettermint_envelope("delivery-4", []))
       assert {:ok, conversation} = SenderMatching.process(normalized, route_context)

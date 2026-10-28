@@ -15,14 +15,14 @@ defmodule CustyardWeb.InlineImagesTest do
     html = ~S|<p>Hi <img src="cid:logo@acme" alt="Logo" /></p>|
 
     assert InlineImages.render(html, [attachment(7, "<Logo@Acme>")]) ==
-             ~S|<p>Hi <img src="/operator/attachments/7/inline" alt="Logo" loading="lazy" /></p>|
+             ~S|<p>Hi <img src="/app/attachments/7/inline" alt="Logo" loading="lazy" /></p>|
   end
 
   test "decodes percent escapes in the cid: URL" do
     html = ~S|<img src="cid:logo%40acme" />|
 
     assert InlineImages.render(html, [attachment(7, "logo@acme")]) ==
-             ~S|<img src="/operator/attachments/7/inline" alt="" loading="lazy" />|
+             ~S|<img src="/app/attachments/7/inline" alt="" loading="lazy" />|
   end
 
   test "drops images it cannot resolve to a fetched raster attachment" do
@@ -38,6 +38,6 @@ defmodule CustyardWeb.InlineImagesTest do
 
   test "survives a malformed escape" do
     assert InlineImages.render(~S|<img src="cid:%zz" />|, [attachment(1, "%zz")]) =~
-             "/operator/attachments/1/inline"
+             "/app/attachments/1/inline"
   end
 end

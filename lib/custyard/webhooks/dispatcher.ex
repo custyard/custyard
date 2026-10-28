@@ -8,8 +8,7 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   1. **Channel resolution.** `Custyard.InboundChannels.resolve_for_delivery/2`
      maps the envelope recipient to a channel on the route. A route without
-     channels is `:legacy` and behaves exactly as before channels existed. A
-     recipient that matches no channel, or a paused or revoked channel, is
+     email channels rejects email deliveries. A recipient that matches no channel, or a paused or revoked channel, is
      written to the route's rejection log and the delivery is acknowledged
      as `{:ignored, reason}` so the provider does not retry. An IMAP channel
      poller passes its channel as `channel:` instead; only the channel state
@@ -97,6 +96,23 @@ defmodule Custyard.Webhooks.Dispatcher do
   @spec dispatch(struct(), map(), keyword()) ::
           {:ok, struct()} | {:ignored, ignored_reason()} | {:error, term()}
   def dispatch(%InboundRoute{} = route, normalized, opts \\ []) do
+    case Repo.get(Custyard.Tenant, route.tenant_id) do
+      %Custyard.Tenant{status: "active"} ->
+        dispatch_active(route, normalized, opts)
+
+      _ ->
+        AuditEvent.create(%{
+          tenant_id: route.tenant_id,
+          event_type: :webhook_error,
+          source: to_string(normalized[:source] || :email),
+          payload: %{"reason" => "tenant_suspended"}
+        })
+
+        {:error, :tenant_suspended}
+    end
+  end
+
+  defp dispatch_active(route, normalized, opts) do
     start_time = System.monotonic_time()
     adapter = normalized[:source] || :unknown
 
@@ -143,6 +159,10 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   # --- Stage 1: channel resolution (D2) ---
 
+  defp resolve_channel(_route, %{source: source}, nil)
+       when source in [:zendesk, :intercom, :slack],
+       do: {:ok, nil}
+
   defp resolve_channel(route, normalized, nil) do
     recipient = recipient(normalized)
 
@@ -167,9 +187,6 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   defp resolved(resolution, route, normalized) do
     case resolution do
-      :legacy ->
-        {:ok, nil}
-
       {:ok, channel} ->
         {:ok, channel}
 
@@ -315,9 +332,10 @@ defmodule Custyard.Webhooks.Dispatcher do
   defp handle_verification(
          route,
          normalized,
-         %InboundChannel{state: :pending_verification} = channel,
+         %InboundChannel{state: state} = channel,
          capture
-       ) do
+       )
+       when state in [:pending_verification, :awaiting_first_message] do
     case InboundChannels.capture_verification(channel, capture) do
       {:ok, _channel} ->
         audit_triaged(route, normalized, channel, "verification_captured", nil)
@@ -333,7 +351,7 @@ defmodule Custyard.Webhooks.Dispatcher do
     end
   end
 
-  # A legacy route, or a channel that is not waiting for confirmation: the
+  # A channel that is no longer being set up: the
   # notice is kept in the rejection log so the operator can find it.
   defp handle_verification(route, normalized, channel, _capture) do
     log_rejection(route, channel, :provider_notice, normalized)
@@ -344,10 +362,7 @@ defmodule Custyard.Webhooks.Dispatcher do
   # message: no reactivation, no contact resolution, no notification and no
   # enrichment. One that threads to nothing is logged and dropped.
   defp handle_auto_response(route, normalized, channel, _reason) do
-    match =
-      if route.organization_id,
-        do: ThreadMatcher.find_thread(normalized, route.organization_id),
-        else: ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
+    match = ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
 
     case match do
       {:ok, conversation} ->
@@ -404,9 +419,9 @@ defmodule Custyard.Webhooks.Dispatcher do
   defp route_context(route, channel, triage_class) do
     %{
       tenant_id: route.tenant_id,
-      organization_id: route.organization_id,
-      project_id: route.project_id,
-      route_type: route.route_type,
+      default_organization_id: channel && channel.default_organization_id,
+      default_project_id: channel && channel.default_project_id,
+      default_label_id: channel && channel.default_label_id,
       route_id: route.id,
       channel_id: channel && channel.id,
       triage_class: triage_class
@@ -514,8 +529,7 @@ defmodule Custyard.Webhooks.Dispatcher do
       source: to_string(normalized[:source] || "unknown"),
       message_id: normalized[:message_id],
       conversation_id: conversation_id,
-      organization_id: route.organization_id,
-      project_id: route.project_id,
+      tenant_id: route.tenant_id,
       payload: %{
         "class" => class,
         "channel_id" => channel && channel.id,

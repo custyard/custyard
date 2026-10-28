@@ -37,6 +37,7 @@ defmodule Custyard.MessageAttachment do
     field :state, Ecto.Enum, values: @states
     field :skip_reason, :string
 
+    belongs_to :tenant, Custyard.Tenant
     belongs_to :message, Custyard.Message
 
     timestamps(type: :utc_datetime)
@@ -49,6 +50,7 @@ defmodule Custyard.MessageAttachment do
   def changeset(attachment, attrs) do
     attachment
     |> cast(attrs, [
+      :tenant_id,
       :position,
       :descriptor_hash,
       :batch_processing_token,
@@ -67,7 +69,7 @@ defmodule Custyard.MessageAttachment do
       :message_id
     ])
     |> update_change(:filename, &clean_filename/1)
-    |> validate_required([:state, :message_id])
+    |> validate_required([:tenant_id, :state, :message_id])
     |> validate_length(:filename, max: 255)
     |> validate_length(:content_type, max: 255)
     |> validate_length(:sniffed_type, max: 255)

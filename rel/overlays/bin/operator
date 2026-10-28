@@ -13,4 +13,4 @@ if [ "$(id -u)" = "0" ]; then
   exit 1
 fi
 
-exec "$bin_dir/custyard" eval 'Custyard.Release.operator_cli(System.argv())' "$@"
+exec "$bin_dir/custyard" eval 'Custyard.Release.instance_admin_cli(System.argv())' "$@"

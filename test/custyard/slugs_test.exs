@@ -46,7 +46,14 @@ defmodule Custyard.SlugsTest do
     end
 
     test "expires_at honors the configured TTL" do
-      {:ok, _} = Settings.update_intake_config(%{slug_claim_ttl_hours: 5})
+      {:ok, _} =
+        Settings.update_intake_config(
+          Custyard.Factory.staff_scope(Custyard.Factory.factory_tenant_id()),
+          %{
+            slug_claim_ttl_hours: 5
+          }
+        )
+
       conversation = intake_conversation()
 
       {:ok, slug, _token} = Slugs.claim("ttl-check", "buyer@example.com", conversation)
@@ -149,7 +156,7 @@ defmodule Custyard.SlugsTest do
         {:ok, _slug, token} =
           Slugs.claim("held-#{i}", "greedy@example.com", intake_conversation())
 
-        {:ok, _confirmed} = Slugs.confirm(token)
+        {:ok, _confirmed} = confirm_claim(token)
       end
 
       assert {:error, %Ecto.Changeset{}} =
@@ -175,17 +182,17 @@ defmodule Custyard.SlugsTest do
     end
 
     test "peek returns the claim without any state change", %{slug: slug, token: token} do
-      assert {:ok, peeked} = Slugs.peek(token)
+      assert {:ok, peeked} = peek_claim(token)
       assert peeked.id == slug.id
 
       # Scanner-style repeated peeks consume nothing.
-      assert {:ok, _} = Slugs.peek(token)
+      assert {:ok, _} = peek_claim(token)
       assert Repo.get!(Slug, slug.id).status == :claimed
       assert Repo.get!(Slug, slug.id).confirmation_token_hash == slug.confirmation_token_hash
     end
 
     test "confirm consumes the token exactly once", %{slug: slug, token: token} do
-      assert {:ok, confirmed} = Slugs.confirm(token)
+      assert {:ok, confirmed} = confirm_claim(token)
 
       assert confirmed.id == slug.id
       assert confirmed.status == :confirmed
@@ -194,23 +201,23 @@ defmodule Custyard.SlugsTest do
       assert is_nil(confirmed.expires_at)
 
       # Single-use: the second confirm and any peek are uniformly invalid.
-      assert {:error, :invalid} = Slugs.confirm(token)
-      assert {:error, :invalid} = Slugs.peek(token)
+      assert {:error, :invalid} = confirm_claim(token)
+      assert {:error, :invalid} = peek_claim(token)
     end
 
     test "expired tokens neither peek nor confirm", %{slug: slug, token: token} do
       expire!(slug)
 
-      assert {:error, :invalid} = Slugs.peek(token)
-      assert {:error, :invalid} = Slugs.confirm(token)
+      assert {:error, :invalid} = peek_claim(token)
+      assert {:error, :invalid} = confirm_claim(token)
       assert Repo.get!(Slug, slug.id).status == :claimed
     end
 
     test "unknown and malformed tokens are invalid" do
-      assert {:error, :invalid} = Slugs.peek("no-such-token")
-      assert {:error, :invalid} = Slugs.confirm("no-such-token")
-      assert {:error, :invalid} = Slugs.peek(nil)
-      assert {:error, :invalid} = Slugs.confirm(nil)
+      assert {:error, :invalid} = peek_claim("no-such-token")
+      assert {:error, :invalid} = confirm_claim("no-such-token")
+      assert {:error, :invalid} = peek_claim(nil)
+      assert {:error, :invalid} = confirm_claim(nil)
     end
   end
 
@@ -223,13 +230,13 @@ defmodule Custyard.SlugsTest do
 
       assert rotated.confirmation_token_hash == Token.hash(new_token)
       refute new_token == old_token
-      assert {:error, :invalid} = Slugs.confirm(old_token)
-      assert {:ok, _} = Slugs.confirm(new_token)
+      assert {:error, :invalid} = confirm_claim(old_token)
+      assert {:ok, _} = confirm_claim(new_token)
     end
 
     test "refuses confirmed and expired claims" do
       {:ok, _slug, token} = Slugs.claim("done-deal", "buyer@example.com", intake_conversation())
-      {:ok, confirmed} = Slugs.confirm(token)
+      {:ok, confirmed} = confirm_claim(token)
 
       assert {:error, :invalid} = Slugs.rotate_confirmation_token(confirmed)
 
@@ -245,14 +252,14 @@ defmodule Custyard.SlugsTest do
       conversation = intake_conversation()
       {:ok, slug, _token} = Slugs.claim("give-back", "buyer@example.com", conversation)
 
-      assert {:ok, _released} = Slugs.release(slug)
+      assert {:ok, _released} = Slugs.release(admin_scope(), slug)
       refute Repo.get(Slug, slug.id)
 
       # The conversation survives — only the slug row dies.
       assert Repo.get(Conversation, conversation.id)
 
       # Available again, claimable by anyone.
-      assert Slugs.available?("give-back")
+      assert available?("give-back")
 
       assert {:ok, _slug, _token} =
                Slugs.claim("give-back", "other@example.com", intake_conversation())
@@ -260,10 +267,10 @@ defmodule Custyard.SlugsTest do
 
     test "releases a confirmed slug" do
       {:ok, _slug, token} = Slugs.claim("give-back-2", "buyer@example.com", intake_conversation())
-      {:ok, confirmed} = Slugs.confirm(token)
+      {:ok, confirmed} = confirm_claim(token)
 
-      assert {:ok, _released} = Slugs.release(confirmed)
-      assert Slugs.available?("give-back-2")
+      assert {:ok, _released} = Slugs.release(admin_scope(), confirmed)
+      assert available?("give-back-2")
     end
 
     test "refuses provisioned slugs — that is org-deletion territory" do
@@ -278,7 +285,7 @@ defmodule Custyard.SlugsTest do
           expires_at: nil
         )
 
-      assert {:error, :provisioned} = Slugs.release(provisioned)
+      assert {:error, :provisioned} = Slugs.release(admin_scope(), provisioned)
       assert Repo.get(Slug, provisioned.id)
     end
   end
@@ -287,7 +294,7 @@ defmodule Custyard.SlugsTest do
     test "promotes a confirmed claim to provisioned, linking the organization" do
       conversation = intake_conversation()
       {:ok, _slug, token} = Slugs.claim("promote-me", "buyer@example.com", conversation)
-      {:ok, _confirmed} = Slugs.confirm(token)
+      {:ok, _confirmed} = confirm_claim(token)
       org = insert_organization()
 
       assert {:ok, :provisioned} = Slugs.promote(conversation, org)
@@ -315,7 +322,7 @@ defmodule Custyard.SlugsTest do
     test "an already-provisioned row is not re-promoted" do
       conversation = intake_conversation()
       {:ok, _slug, token} = Slugs.claim("once-only", "buyer@example.com", conversation)
-      {:ok, _confirmed} = Slugs.confirm(token)
+      {:ok, _confirmed} = confirm_claim(token)
       org = insert_organization()
       other_org = insert_organization()
 
@@ -327,20 +334,20 @@ defmodule Custyard.SlugsTest do
 
   describe "available?/1" do
     test "no row means available" do
-      assert Slugs.available?("never-claimed")
+      assert available?("never-claimed")
     end
 
     test "live and confirmed claims block; expired ones do not" do
       {:ok, _slug, token} = Slugs.claim("checking", "buyer@example.com", intake_conversation())
-      refute Slugs.available?("checking")
-      refute Slugs.available?("  CHECKING  ")
+      refute available?("checking")
+      refute available?("  CHECKING  ")
 
-      {:ok, _} = Slugs.confirm(token)
-      refute Slugs.available?("checking")
+      {:ok, _} = confirm_claim(token)
+      refute available?("checking")
 
       {:ok, stale, _} = Slugs.claim("lapsing", "buyer@example.com", intake_conversation())
       expire!(stale)
-      assert Slugs.available?("lapsing")
+      assert available?("lapsing")
     end
   end
 
@@ -352,7 +359,7 @@ defmodule Custyard.SlugsTest do
       {:ok, slug, token} = Slugs.claim("my-live-claim", "buyer@example.com", conversation)
       assert Slugs.get_claim_for_conversation(conversation.id).id == slug.id
 
-      {:ok, _} = Slugs.confirm(token)
+      {:ok, _} = confirm_claim(token)
       assert Slugs.get_claim_for_conversation(conversation.id).status == :confirmed
 
       other = intake_conversation()
@@ -389,8 +396,8 @@ defmodule Custyard.SlugsTest do
     test "provisioned without an organization raises" do
       assert {:error, %Exqlite.Error{message: message}} =
                Repo.query(
-                 "INSERT INTO slugs (slug, status, inserted_at, updated_at) " <>
-                   "VALUES ('bad-provisioned', 'provisioned', '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                 "INSERT INTO slugs (tenant_id, slug, status, inserted_at, updated_at) " <>
+                   "VALUES (#{Custyard.Factory.factory_tenant_id()}, 'bad-provisioned', 'provisioned', '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
                )
 
       assert message =~ "CHECK"
@@ -402,8 +409,8 @@ defmodule Custyard.SlugsTest do
       for status <- ["claimed", "confirmed"] do
         assert {:error, %Exqlite.Error{message: message}} =
                  Repo.query(
-                   "INSERT INTO slugs (slug, status, organization_id, inserted_at, updated_at) " <>
-                     "VALUES ('bad-#{status}', '#{status}', #{org.id}, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                   "INSERT INTO slugs (tenant_id, slug, status, organization_id, inserted_at, updated_at) " <>
+                     "VALUES (#{Custyard.Factory.factory_tenant_id()}, 'bad-#{status}', '#{status}', #{org.id}, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
                  )
 
         assert message =~ "CHECK"
@@ -415,16 +422,16 @@ defmodule Custyard.SlugsTest do
 
       assert {:ok, _} =
                Repo.query(
-                 "INSERT INTO slugs (slug, status, organization_id, inserted_at, updated_at) " <>
-                   "VALUES ('good-provisioned', 'provisioned', #{org.id}, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                 "INSERT INTO slugs (tenant_id, slug, status, organization_id, inserted_at, updated_at) " <>
+                   "VALUES (#{Custyard.Factory.factory_tenant_id()}, 'good-provisioned', 'provisioned', #{org.id}, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
                )
     end
 
     test "unknown status values raise on the status CHECK" do
       assert {:error, %Exqlite.Error{message: message}} =
                Repo.query(
-                 "INSERT INTO slugs (slug, status, inserted_at, updated_at) " <>
-                   "VALUES ('bad-status', 'tombstoned', '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                 "INSERT INTO slugs (tenant_id, slug, status, inserted_at, updated_at) " <>
+                   "VALUES (#{Custyard.Factory.factory_tenant_id()}, 'bad-status', 'tombstoned', '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
                )
 
       assert message =~ "CHECK"
@@ -440,7 +447,7 @@ defmodule Custyard.SlugsTest do
 
       confirmed = intake_conversation()
       {:ok, _slug, token} = Slugs.claim("orphan-confirmed", "b@example.com", confirmed)
-      {:ok, confirmed_slug} = Slugs.confirm(token)
+      {:ok, confirmed_slug} = confirm_claim(token)
 
       # The retention purge nilifies slugs.conversation_id (ON DELETE SET NULL)
       Custyard.Repo.update_all(
@@ -449,8 +456,8 @@ defmodule Custyard.SlugsTest do
       )
 
       assert Slugs.delete_expired_claims() == 2
-      assert Slugs.available?("orphan-claimed")
-      assert Slugs.available?("orphan-confirmed")
+      assert available?("orphan-claimed")
+      assert available?("orphan-confirmed")
     end
 
     test "keeps provisioned rows and live claims" do
@@ -468,8 +475,34 @@ defmodule Custyard.SlugsTest do
       )
 
       assert Slugs.delete_expired_claims() == 0
-      refute Slugs.available?("still-live")
-      refute Slugs.available?("promoted-co")
+      refute available?("still-live")
+      refute available?("promoted-co")
     end
+  end
+
+  defp available?(text), do: Slugs.available?(text, Custyard.Factory.factory_tenant_id())
+
+  defp admin_scope do
+    staff = insert_operator_account(tenant_id: factory_tenant_id(), role: "admin")
+    Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+  end
+
+  defp confirm_claim(token), do: Slugs.confirm(token, factory_tenant_id())
+  defp peek_claim(token), do: Slugs.peek(token, factory_tenant_id())
+
+  test "claim credentials are tenant-bound and stop at suspension" do
+    conversation = intake_conversation()
+    {:ok, _claim, token} = Slugs.claim("tenant-bound-claim", "claimant@example.com", conversation)
+    other = insert_tenant()
+    assert {:error, :invalid} = Slugs.peek(token, other.id)
+    assert {:error, :invalid} = Slugs.confirm(token, other.id)
+    assert {:ok, _} = Slugs.peek(token, conversation.tenant_id)
+
+    Custyard.Tenants.get_tenant!(conversation.tenant_id)
+    |> Ecto.Changeset.change(status: "suspended")
+    |> Repo.update!()
+
+    assert {:error, :invalid} = Slugs.peek(token, conversation.tenant_id)
+    assert {:error, :invalid} = Slugs.confirm(token, conversation.tenant_id)
   end
 end

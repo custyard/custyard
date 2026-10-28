@@ -40,14 +40,8 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
   end
 
   defp load_neglected(socket) do
-    # Scope to operator's organization (nil for super_admin = all orgs)
-    org_id = socket.assigns[:scoped_organization_id]
-
     conversations =
-      Conversations.list_neglected(
-        organization_id: org_id,
-        tenant_id: socket.assigns.current_tenant.id
-      )
+      Conversations.neglected(socket.assigns.current_scope)
 
     # Filter to only neglected items and enrich with status
     neglected =
@@ -103,7 +97,7 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
     <div class="max-w-3xl mx-auto p-4" data-testid="operator-neglect-page">
       <div class="flex items-center gap-3 mb-4">
         <.link
-          navigate={~p"/operator"}
+          navigate={~p"/app"}
           class="text-sm text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
           data-testid="operator-neglect-back"
         >
@@ -158,7 +152,7 @@ defmodule CustyardWeb.Operator.NeglectReportLive do
           <div class="space-y-2">
             <.link
               :for={item <- items}
-              navigate={~p"/operator/conversation/#{item.conversation.id}"}
+              navigate={~p"/app/threads/#{item.conversation.id}"}
               class="block"
               data-testid={"operator-neglect-item-#{item.conversation.id}"}
             >

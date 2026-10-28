@@ -12,27 +12,6 @@ defmodule Custyard.Email.ThreadMatcher do
   alias Custyard.Email.SenderMatcher
   import Ecto.Query
 
-  @doc """
-  Find an existing conversation thread for the given parsed email.
-
-  Searches for matching message references (In-Reply-To header first,
-  then References header) scoped to the specified organization.
-
-  ## Parameters
-    - parsed: Map containing `:in_reply_to` and `:references` headers
-    - organization_id: The organization ID to scope the search to
-
-  ## Returns
-    - `{:ok, conversation}` if a matching thread is found
-    - `:not_found` if no matching thread exists
-  """
-  def find_thread(parsed, organization_id, dedup_scope \\ nil) do
-    # Try In-Reply-To first, then fall back to References header
-    with :not_found <- find_by_message_id(parsed.in_reply_to, organization_id, dedup_scope) do
-      find_by_references(parsed.references, organization_id, dedup_scope)
-    end
-  end
-
   @doc "Find an email thread by headers within the receiving tenant."
   def find_in_tenant(parsed, tenant_id) when is_integer(tenant_id) do
     with :not_found <- tenant_header_match([parsed[:in_reply_to]], tenant_id, parsed) do
@@ -155,49 +134,4 @@ defmodule Custyard.Email.ThreadMatcher do
 
   defp unique_match([conversation]), do: {:ok, conversation}
   defp unique_match(_none_or_ambiguous), do: :not_found
-
-  defp find_by_message_id(nil, _organization_id, _dedup_scope), do: :not_found
-
-  defp find_by_message_id(message_id, organization_id, dedup_scope) do
-    query =
-      from m in Message,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
-        where: m.message_id == ^message_id,
-        where: c.organization_id == ^organization_id,
-        select: c,
-        limit: 1
-
-    case Repo.one(maybe_scope(query, dedup_scope)) do
-      nil -> :not_found
-      conversation -> {:ok, conversation}
-    end
-  end
-
-  defp find_by_references(nil, _organization_id, _dedup_scope), do: :not_found
-
-  defp find_by_references(references, organization_id, dedup_scope) do
-    # References header can contain multiple message IDs
-    message_ids = String.split(references, ~r/\s+/)
-
-    query =
-      from m in Message,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
-        where: m.message_id in ^message_ids,
-        where: c.organization_id == ^organization_id,
-        select: c,
-        limit: 1
-
-    case Repo.one(maybe_scope(query, dedup_scope)) do
-      nil -> :not_found
-      conversation -> {:ok, conversation}
-    end
-  end
-
-  defp maybe_scope(query, nil), do: query
-
-  defp maybe_scope(query, dedup_scope) do
-    where(query, [m, _c], m.dedup_scope == ^dedup_scope or is_nil(m.dedup_scope))
-  end
 end

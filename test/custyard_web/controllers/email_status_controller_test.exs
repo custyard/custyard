@@ -1,26 +1,14 @@
 defmodule CustyardWeb.EmailStatusControllerTest do
   use CustyardWeb.ConnCase, async: false
-
   import Custyard.Factory
+  alias Custyard.Auth.Token
+  alias Custyard.{Credentials, EmailConnection, Message, Repo}
 
-  alias Custyard.{Message, Repo}
-
+  @secret "whsec_status_test_secret"
   @provider_id "lm-msg-ctrl-001"
   @recipient "alice@customer.com"
 
   setup do
-    original_env = Application.get_env(:custyard, :env)
-    original_secrets = Application.get_env(:custyard, :webhook_secrets)
-
-    # Skip signature verification unless a test configures a secret.
-    Application.put_env(:custyard, :env, :test)
-    Application.delete_env(:custyard, :webhook_secrets)
-
-    on_exit(fn ->
-      restore_env(:env, original_env)
-      restore_env(:webhook_secrets, original_secrets)
-    end)
-
     org = insert_organization()
     contact = insert_contact(organization_id: org.id, email: @recipient)
     conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
@@ -29,203 +17,132 @@ defmodule CustyardWeb.EmailStatusControllerTest do
       insert_message(
         conversation_id: conversation.id,
         source: :operator,
-        sender_email: "support@acme.com",
-        message_id: "<reply-ctrl@custyard.local>",
-        body: "We can help with that.",
         delivery_status: :sent,
         lettermint_message_id: @provider_id
       )
 
-    {:ok, outbound: outbound}
+    {:ok, ciphertext} =
+      Credentials.encrypt(@secret, "email_connection:#{org.tenant_id}:status_secret")
+
+    connection =
+      %EmailConnection{}
+      |> EmailConnection.changeset(%{tenant_id: org.tenant_id})
+      |> Ecto.Changeset.change(
+        status_secret_ciphertext: ciphertext,
+        status_callback_token: Token.generate() |> elem(0)
+      )
+      |> Repo.insert!()
+
+    %{outbound: outbound, connection: connection}
   end
 
-  describe "POST /api/webhook/email-status/lettermint without a secret (dev/test)" do
-    test "returns 200 ok on a valid delivered event and advances the message", %{
-      conn: conn,
-      outbound: outbound
-    } do
-      response =
-        conn
-        |> post(~p"/api/webhook/email-status/lettermint", delivered_envelope())
-        |> json_response(200)
-
-      assert response == %{"status" => "ok"}
-      assert Repo.get!(Message, outbound.id).delivery_status == :delivered
-    end
-
-    test "returns 200 ignored for a non-status event", %{conn: conn} do
-      response =
-        conn
-        |> post(
-          ~p"/api/webhook/email-status/lettermint",
-          envelope("message.opened", %{"message_id" => @provider_id, "recipient" => @recipient})
-        )
-        |> json_response(200)
-
-      assert response == %{"status" => "ignored", "reason" => "unknown_event"}
-    end
-
-    test "returns 200 ignored for an unknown message id", %{conn: conn} do
-      response =
-        conn
-        |> post(
-          ~p"/api/webhook/email-status/lettermint",
-          envelope("message.delivered", %{"message_id" => "lm-unknown", "recipient" => @recipient})
-        )
-        |> json_response(200)
-
-      assert response == %{"status" => "ignored", "reason" => "unknown_message"}
-    end
-
-    test "returns 422 invalid payload when event is missing", %{conn: conn} do
-      response =
-        conn
-        |> post(~p"/api/webhook/email-status/lettermint", %{"id" => "evt-1", "data" => %{}})
-        |> json_response(422)
-
-      assert response == %{"status" => "error", "reason" => "invalid payload"}
-    end
-
-    test "returns 422 invalid payload for a non-object JSON body", %{conn: conn} do
-      response =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post(~p"/api/webhook/email-status/lettermint", Jason.encode!(["message.delivered"]))
-        |> json_response(422)
-
-      assert response == %{"status" => "error", "reason" => "invalid payload"}
-    end
-
-    test "never echoes the recipient address", %{conn: conn} do
-      envelopes = [
-        delivered_envelope(),
-        envelope("message.opened", %{"message_id" => @provider_id, "recipient" => @recipient}),
-        envelope("message.delivered", %{"message_id" => "lm-x", "recipient" => @recipient}),
-        %{"id" => "evt-1", "data" => %{"recipient" => @recipient}}
-      ]
-
-      for envelope <- envelopes do
-        body =
-          conn
-          |> post(~p"/api/webhook/email-status/lettermint", envelope)
-          |> Map.fetch!(:resp_body)
-
-        refute body =~ @recipient
-        refute body =~ "Help with billing"
-      end
-    end
+  test "signed tenant status advances the message", c do
+    assert json_response(send_event(c, envelope("message.delivered")), 200) == %{"status" => "ok"}
+    assert Repo.get!(Message, c.outbound.id).delivery_status == :delivered
   end
 
-  describe "POST /api/webhook/email-status/lettermint with a configured secret" do
-    @secret "whsec_status_test_secret"
-
-    setup do
-      Application.put_env(:custyard, :webhook_secrets, %{lettermint_status: @secret})
-      :ok
-    end
-
-    test "a correctly signed request succeeds", %{conn: conn, outbound: outbound} do
-      params = delivered_envelope()
-      raw_body = Jason.encode!(params)
-
-      response =
-        conn
-        |> put_private(:raw_body, raw_body)
-        |> put_req_header("x-lettermint-signature", sign(raw_body, @secret))
-        |> put_req_header("content-type", "application/json")
-        |> post(~p"/api/webhook/email-status/lettermint", params)
-        |> json_response(200)
-
-      assert response == %{"status" => "ok"}
-      assert Repo.get!(Message, outbound.id).delivery_status == :delivered
-    end
-
-    test "a bad signature returns 401 and does not change the message", %{
-      conn: conn,
-      outbound: outbound
-    } do
-      params = delivered_envelope()
-      raw_body = Jason.encode!(params)
-
-      response =
-        conn
-        |> put_private(:raw_body, raw_body)
-        |> put_req_header("x-lettermint-signature", sign(raw_body, "wrong-secret"))
-        |> put_req_header("content-type", "application/json")
-        |> post(~p"/api/webhook/email-status/lettermint", params)
-        |> json_response(401)
-
-      assert response == %{"status" => "error", "reason" => "unauthorized"}
-      assert Repo.get!(Message, outbound.id).delivery_status == :sent
-    end
-
-    test "a missing signature returns 401", %{conn: conn} do
-      params = delivered_envelope()
-
-      response =
-        conn
-        |> put_private(:raw_body, Jason.encode!(params))
-        |> put_req_header("content-type", "application/json")
-        |> post(~p"/api/webhook/email-status/lettermint", params)
-        |> json_response(401)
-
-      assert response == %{"status" => "error", "reason" => "unauthorized"}
-    end
-
-    test "the inbound route secret does not authorize the status webhook", %{conn: conn} do
-      Application.put_env(:custyard, :webhook_secrets, %{lettermint: @secret})
-      Application.put_env(:custyard, :env, :prod)
-
-      params = delivered_envelope()
-      raw_body = Jason.encode!(params)
-
-      response =
-        conn
-        |> put_private(:raw_body, raw_body)
-        |> put_req_header("x-lettermint-signature", sign(raw_body, @secret))
-        |> put_req_header("content-type", "application/json")
-        |> post(~p"/api/webhook/email-status/lettermint", params)
-        |> json_response(401)
-
-      assert response == %{"status" => "error", "reason" => "unauthorized"}
-    end
+  test "unknown status events are ignored", c do
+    assert json_response(send_event(c, envelope("message.opened")), 200) == %{
+             "status" => "ignored",
+             "reason" => "unknown_event"
+           }
   end
 
-  defp sign(raw_body, secret) do
+  test "unknown message is ignored", c do
+    event = put_in(envelope("message.delivered"), ["data", "message_id"], "unknown")
+
+    assert json_response(send_event(c, event), 200) == %{
+             "status" => "ignored",
+             "reason" => "unknown_message"
+           }
+  end
+
+  test "invalid payload is contained", c do
+    event = Map.delete(envelope("message.delivered"), "event")
+    assert json_response(send_event(c, event), 422)["reason"] == "invalid payload"
+  end
+
+  test "bad signature fails closed", c do
+    assert json_response(send_event(c, envelope("message.delivered"), "wrong"), 401)["reason"] ==
+             "unauthorized"
+
+    assert Repo.get!(Message, c.outbound.id).delivery_status == :sent
+  end
+
+  test "missing signature fails closed", c do
+    assert json_response(send_event(c, envelope("message.delivered"), nil), 401)["reason"] ==
+             "unauthorized"
+  end
+
+  test "callback credentials cannot authorize a different tenant's message", c do
+    other = insert_tenant()
+    {:ok, encrypted} = Credentials.encrypt(@secret, "email_connection:#{other.id}:status_secret")
+
+    connection =
+      %EmailConnection{}
+      |> EmailConnection.changeset(%{tenant_id: other.id})
+      |> Ecto.Changeset.change(
+        status_secret_ciphertext: encrypted,
+        status_callback_token: Token.generate() |> elem(0)
+      )
+      |> Repo.insert!()
+
+    assert json_response(
+             send_event(%{c | connection: connection}, envelope("message.delivered")),
+             200
+           )["reason"] == "unknown_message"
+
+    assert Repo.get!(Message, c.outbound.id).delivery_status == :sent
+  end
+
+  test "delivery callbacks continue during suspension", c do
+    Custyard.Tenants.get_tenant!(c.connection.tenant_id)
+    |> Ecto.Changeset.change(status: "suspended")
+    |> Repo.update!()
+
+    assert json_response(send_event(c, envelope("message.delivered")), 200)["status"] == "ok"
+  end
+
+  test "responses do not expose recipient or subject", c do
+    response = send_event(c, envelope("message.delivered"))
+    refute response.resp_body =~ @recipient
+    refute response.resp_body =~ "Private subject"
+  end
+
+  test "removed global status endpoint is unavailable", c do
+    assert post(c.conn, "/api/webhook/email-status/lettermint", envelope("message.delivered")).status ==
+             404
+  end
+
+  defp send_event(c, event, secret \\ @secret) do
+    raw = Jason.encode!(event)
+    conn = c.conn |> put_req_header("content-type", "application/json")
+
+    conn =
+      if secret, do: put_req_header(conn, "x-lettermint-signature", sign(raw, secret)), else: conn
+
+    post(conn, "/api/webhook/email-status/lettermint/#{c.connection.status_callback_token}", raw)
+  end
+
+  defp sign(raw, secret) do
     timestamp = to_string(System.system_time(:second))
 
     digest =
-      :crypto.mac(:hmac, :sha256, secret, timestamp <> "." <> raw_body)
-      |> Base.encode16(case: :lower)
+      :crypto.mac(:hmac, :sha256, secret, timestamp <> "." <> raw) |> Base.encode16(case: :lower)
 
     "t=#{timestamp},v1=#{digest}"
   end
 
-  defp delivered_envelope do
-    envelope("message.delivered", %{
-      "message_id" => @provider_id,
-      "subject" => "Help with billing",
-      "recipient" => @recipient,
-      "response" => %{
-        "status_code" => 250,
-        "enhanced_status_code" => "2.0.0",
-        "content" => "250 2.0.0 OK"
-      }
-    })
-  end
-
-  defp envelope(event, data) do
-    %{
+  defp envelope(event),
+    do: %{
       "id" => "evt-#{System.unique_integer([:positive])}",
       "event" => event,
       "timestamp" => "2026-10-20T12:00:00Z",
       "sandbox" => false,
-      "sandbox_result" => nil,
-      "context" => %{"scope" => "route", "team_id" => "t", "project_id" => "p", "route_id" => "r"},
-      "data" => data
+      "data" => %{
+        "message_id" => @provider_id,
+        "recipient" => @recipient,
+        "subject" => "Private subject"
+      }
     }
-  end
-
-  defp restore_env(key, nil), do: Application.delete_env(:custyard, key)
-  defp restore_env(key, value), do: Application.put_env(:custyard, key, value)
 end

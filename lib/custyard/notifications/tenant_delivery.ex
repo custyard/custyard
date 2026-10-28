@@ -5,9 +5,6 @@ defmodule Custyard.Notifications.TenantDelivery do
   alias Custyard.{OperatorAccount, Repo}
   alias Custyard.Intake.EmailBranding
 
-  def recipients(id) when id in [nil, 1],
-    do: [Application.get_env(:custyard, :operator_email, "operator@example.com")]
-
   def recipients(id) do
     Repo.all(
       from o in OperatorAccount,
@@ -17,18 +14,10 @@ defmodule Custyard.Notifications.TenantDelivery do
     )
   end
 
-  def ready?(id) when id in [nil, 1], do: :ok
-
   def ready?(id) do
     case settings(id) do
       {:ok, _, _} -> :ok
       {:error, reason} -> skip(id, reason)
-    end
-  end
-
-  def deliver(email, id) when id in [nil, 1] do
-    with {:ok, delivery} <- EmailBranding.delivery_settings(id) do
-      Custyard.Mailer.deliver(email, delivery.config)
     end
   end
 
@@ -48,15 +37,18 @@ defmodule Custyard.Notifications.TenantDelivery do
   end
 
   defp settings(id) do
-    case recipients(id) do
-      [] ->
+    case {Repo.get(Custyard.Tenant, id), recipients(id)} do
+      {%Custyard.Tenant{status: "active"}, []} ->
         {:error, :no_staff}
 
-      recipients ->
+      {%Custyard.Tenant{status: "active"}, recipients} ->
         case EmailBranding.delivery_settings(id) do
           {:ok, delivery} -> {:ok, recipients, delivery}
           {:error, _} -> {:error, :not_configured}
         end
+
+      _ ->
+        {:error, :tenant_suspended}
     end
   end
 

@@ -29,7 +29,7 @@ defmodule Custyard.Email.Outbound do
     InboundChannels,
     Message,
     Repo,
-    Settings
+    Tenant
   }
 
   # Swoosh.Email also exports from/2, so Ecto.Query is not imported here.
@@ -97,10 +97,9 @@ defmodule Custyard.Email.Outbound do
   defp retry_window_open?(_message), do: false
 
   @doc "Requeue a confirmed failed reply under current operator authorization. Unknown sends never retry blindly."
-  def retry(%Message{} = message, operator) do
+  def retry(%Custyard.Scope{} = scope, %Message{} = message) do
     result =
-      Conversations.with_operator_access(message.conversation_id, operator, fn conversation,
-                                                                               _operator ->
+      Conversations.with_access(scope, message.conversation_id, fn conversation, _operator ->
         case Repo.get_by(Message, id: message.id, conversation_id: conversation.id) do
           %Message{} = current ->
             if retryable?(current) do
@@ -176,13 +175,30 @@ defmodule Custyard.Email.Outbound do
          do: %{message.conversation | inbound_channel: message.inbound_channel},
          else: message.conversation
 
-    with {:ok, recipient} <- delivery_recipient(message, conversation),
+    with :ok <- active_tenant(conversation.tenant_id),
+         {:ok, recipient} <- delivery_recipient(message, conversation),
          {:ok, from_addr} <- resolve_from_address(message, conversation),
          email <- compose(message, conversation, recipient, from_addr),
+         email <- preserve_provider_message_id(email),
          {:ok, message} <- persist_delivery_facts(message, email) do
       {:ok, message, email}
     else
       {:error, reason} -> {:error, reason, message}
+    end
+  end
+
+  # Lettermint rewrites Message-ID unless this provider control is included.
+  # Snapshot it before fingerprinting so every retry uses the identical request.
+  defp preserve_provider_message_id(email) do
+    if is_binary(email.headers["Message-ID"]),
+      do: header(email, "X-LM-Preserve-Message-ID", "true"),
+      else: email
+  end
+
+  defp active_tenant(tenant_id) do
+    case Repo.get(Tenant, tenant_id) do
+      %Tenant{status: "active"} -> :ok
+      _ -> {:error, :tenant_suspended}
     end
   end
 
@@ -299,14 +315,20 @@ defmodule Custyard.Email.Outbound do
   defp failure_category(reason) when reason in [:timeout, :closed, :econnrefused, :nxdomain],
     do: {:unknown, Atom.to_string(reason)}
 
+  defp failure_category(:tenant_suspended), do: {:configuration, "tenant_suspended"}
   defp failure_category(_reason), do: {:unknown, "delivery_error"}
 
   # Store actual participants before contacting the provider. The message was
   # read under the claim's write lock, so this cannot restore stale CC data.
   defp persist_delivery_facts(message, email) do
-    fingerprint =
+    envelope =
       {email.from, email.to, email.cc, email.bcc, email.subject, email.text_body, email.html_body,
        email.headers}
+
+    # Reply-To is serialized outside email.headers. Its presence changes the
+    # provider envelope and must block a retry after the return path changes.
+    fingerprint =
+      if(is_nil(email.reply_to), do: envelope, else: {envelope, {:reply_to, email.reply_to}})
       |> :erlang.term_to_binary()
       |> then(&:crypto.hash(:sha256, &1))
       |> Base.encode16(case: :lower)
@@ -342,6 +364,7 @@ defmodule Custyard.Email.Outbound do
     )
     |> put_archive_bcc(conversation)
     |> from(from_address)
+    |> put_channel_reply_to(conversation)
     |> subject(compose_subject(conversation))
     |> text_body(message.body)
     |> html_body(wrap_html(message.body))
@@ -371,6 +394,14 @@ defmodule Custyard.Email.Outbound do
   end
 
   defp put_cc(email, _message, _recipient), do: email
+
+  defp put_channel_reply_to(email, %{
+         inbound_channel:
+           %InboundChannel{reply_from: :public_address, sending_domain: domain} = channel
+       })
+       when is_binary(domain), do: reply_to(email, channel.public_address)
+
+  defp put_channel_reply_to(email, _conversation), do: email
 
   # Archive copy (spec-inbound-channels D4): BCC the channel's public address
   # so the operator's mailbox keeps the reply. The copy is forwarded straight
@@ -402,16 +433,13 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
-  defp fallback_from_address(%{tenant_id: tenant_id}) when tenant_id != 1,
-    do: {:error, :from_not_set}
-
   defp fallback_from_address(conversation) do
-    case Application.get_env(:custyard, :email_from_address, "support@custyard.local") do
-      fallback when is_binary(fallback) and fallback != "" ->
-        {:ok, {from_name(conversation), fallback}}
-
-      _ ->
-        {:error, :from_not_set}
+    with {:ok, channel} <- Custyard.EmailSetup.default_reply_channel(conversation.tenant_id),
+         address when is_binary(address) and address != "" <-
+           InboundChannels.from_address(channel) do
+      {:ok, {from_name(conversation), address}}
+    else
+      _ -> {:error, :from_not_set}
     end
   end
 
@@ -450,48 +478,19 @@ defmodule Custyard.Email.Outbound do
     |> Map.get("References", in_reply_to)
   end
 
-  # Public-intake mail always carries the instance branding display name,
-  # keyed on the conversation's source — linking the conversation to an
-  # organization later must not change the From identity (source-keyed rule
-  # in the public intake spec).
-  defp from_name(%{source: :public_intake, tenant_id: 1}), do: header_safe_name(branding_name())
-
-  # Channel display name (D3) when the conversation arrived on a channel that
-  # has one, else the organization name.
   defp from_name(conversation) do
-    name = channel_display_name(conversation) || organization_name(conversation)
+    name = channel_display_name(conversation) || tenant_name(conversation.tenant_id)
     header_safe_name(name)
   end
 
-  defp channel_display_name(%{inbound_channel: %InboundChannel{} = channel}) do
-    InboundChannels.from_name(channel) ||
-      if is_nil(channel.organization_id) do
-        case Repo.get(Custyard.Tenant, channel.tenant_id) do
-          %{name: name} -> name
-          _ -> nil
-        end
-      end
-  end
+  defp channel_display_name(%{inbound_channel: %InboundChannel{} = channel}),
+    do: InboundChannels.from_name(channel)
 
   defp channel_display_name(_conversation), do: nil
 
-  defp organization_name(conversation) do
-    case conversation.organization do
-      %{name: name} when is_binary(name) and name != "" -> name
-      _ -> "Custyard"
-    end
-  end
+  defp tenant_name(tenant_id), do: Repo.get!(Tenant, tenant_id).name
 
   defp header_safe_name(name), do: name |> sanitize_header_text() |> quote_display_name()
-
-  # Instance branding display name for public-intake mail; "Custyard" when no
-  # branding name is configured.
-  defp branding_name do
-    case Settings.get_branding() do
-      %{name: name} when is_binary(name) and name != "" -> name
-      _ -> "Custyard"
-    end
-  end
 
   # Delegates to the shared Custyard.Email.Headers (extracted from this
   # module's privates; behavior byte-identical).

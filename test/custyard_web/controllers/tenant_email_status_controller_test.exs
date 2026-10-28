@@ -91,7 +91,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
              "/api/webhook/email-status/lettermint",
              payload(c.message.lettermint_message_id)
            )
-           |> json_response(200) == %{"status" => "ignored", "reason" => "unknown_message"}
+           |> response(404)
 
     assert Repo.reload!(c.message).delivery_status == :sent
   end

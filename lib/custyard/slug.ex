@@ -46,6 +46,7 @@ defmodule Custyard.Slug do
   )
 
   schema "slugs" do
+    belongs_to :tenant, Custyard.Tenant
     field :slug, :string
     field :status, Ecto.Enum, values: @statuses, default: :claimed
     field :email, :string
@@ -86,10 +87,24 @@ defmodule Custyard.Slug do
   """
   def claim_changeset(slug, attrs) do
     slug
-    |> cast(attrs, [:slug, :email, :conversation_id, :expires_at, :confirmation_token_hash])
+    |> cast(attrs, [
+      :tenant_id,
+      :slug,
+      :email,
+      :conversation_id,
+      :expires_at,
+      :confirmation_token_hash
+    ])
     |> normalize_slug()
     |> update_change(:email, &EmailAddress.normalize/1)
-    |> validate_required([:slug, :email, :conversation_id, :expires_at, :confirmation_token_hash])
+    |> validate_required([
+      :tenant_id,
+      :slug,
+      :email,
+      :conversation_id,
+      :expires_at,
+      :confirmation_token_hash
+    ])
     |> validate_format(:slug, @slug_format,
       message: "must be 3-63 characters: lowercase letters, digits, and interior hyphens"
     )
@@ -97,7 +112,7 @@ defmodule Custyard.Slug do
     |> validate_exclusion(:slug, reserved_slugs(), message: "is reserved")
     |> validate_length(:email, max: 320, message: "must be at most 320 characters")
     |> EmailAddress.validate_email(:email)
-    |> unique_constraint(:slug, message: "is already claimed")
+    |> unique_constraint([:tenant_id, :slug], error_key: :slug, message: "is already claimed")
     |> unique_constraint(:conversation_id, message: "already has a slug claim")
     |> unique_constraint(:confirmation_token_hash)
     |> foreign_key_constraint(:conversation_id)

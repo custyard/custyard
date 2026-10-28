@@ -32,17 +32,20 @@ defmodule Custyard.Notifications.NeglectChecker do
   Returns `{:ok, count}` where count is the number of notifications dispatched.
   """
   def check_and_notify do
-    # Load thresholds once for all candidates to avoid repeated Settings calls
-    thresholds = Settings.get_neglect_thresholds()
-    reset_recovered_notifications(thresholds)
-    candidates = list_notification_candidates(thresholds)
+    count =
+      Custyard.Tenants.list_tenants()
+      |> Enum.filter(&(&1.status == "active"))
+      |> Enum.map(fn tenant ->
+        thresholds = Settings.get_neglect_thresholds(tenant.id)
+        reset_recovered_notifications(tenant.id, thresholds)
 
-    notifications_sent =
-      candidates
-      |> Enum.map(&check_and_notify_single(&1, thresholds))
-      |> Enum.count(& &1)
+        tenant.id
+        |> list_notification_candidates(thresholds)
+        |> Enum.count(&check_and_notify_single(&1, thresholds))
+      end)
+      |> Enum.sum()
 
-    {:ok, notifications_sent}
+    {:ok, count}
   end
 
   @doc """
@@ -65,15 +68,16 @@ defmodule Custyard.Notifications.NeglectChecker do
   - Currently snoozed conversations
   - Suspect conversations (triage flagged, not yet cleared by an operator)
   """
-  def list_notification_candidates(thresholds \\ nil) do
+  def list_notification_candidates(tenant_id, thresholds \\ nil) do
     now = DateTime.utc_now()
 
     # Use provided thresholds or load from Settings
-    thresholds = thresholds || Settings.get_neglect_thresholds()
+    thresholds = thresholds || Settings.get_neglect_thresholds(tenant_id)
 
     from(c in Conversation,
       left_join: o in assoc(c, :organization),
       left_join: ct in assoc(c, :contact),
+      where: c.tenant_id == ^tenant_id,
       where: c.state != :resolved,
       where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
       # Suspect mail is excluded from operator notifications until an operator
@@ -124,8 +128,8 @@ defmodule Custyard.Notifications.NeglectChecker do
 
   Returns the number of conversations reset.
   """
-  def reset_recovered_notifications(thresholds \\ nil) do
-    thresholds = thresholds || Settings.get_neglect_thresholds()
+  def reset_recovered_notifications(tenant_id, thresholds \\ nil) do
+    thresholds = thresholds || Settings.get_neglect_thresholds(tenant_id)
     past_cutoff = past_warning_cutoff(thresholds)
 
     # For an unlinked conversation every tier branch of the cutoff is NULL,
@@ -135,6 +139,7 @@ defmodule Custyard.Notifications.NeglectChecker do
     recovered =
       from(c in Conversation,
         left_join: o in assoc(c, :organization),
+        where: c.tenant_id == ^tenant_id,
         where: not is_nil(c.last_neglect_notification),
         where: ^dynamic(not coalesce(^past_cutoff, false)),
         select: c.id

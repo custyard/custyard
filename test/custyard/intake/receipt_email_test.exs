@@ -8,9 +8,10 @@ defmodule Custyard.Intake.ReceiptEmailTest do
   alias Custyard.Intake.ReceiptEmail
   alias Custyard.RateLimit
 
-  @conversation_url "http://localhost/c/test-access-token"
+  @conversation_url "http://localhost/threads/test-access-token"
 
   setup do
+    configure_tenant_email(factory_tenant_id())
     RateLimit.reset()
     original_buckets = Application.get_env(:custyard, :rate_limit_buckets)
     original_enabled = Application.get_env(:custyard, :email_enabled)

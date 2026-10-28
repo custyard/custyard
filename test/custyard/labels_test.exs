@@ -1,7 +1,9 @@
 defmodule Custyard.LabelsTest do
   use Custyard.DataCase, async: true
   import Custyard.Factory
-  alias Custyard.{Conversations, Labels, Tenants}
+  alias Custyard.{Conversations, Labels, Scope, Tenants}
+
+  defp scope(staff), do: Scope.for_staff(staff, Tenants.get_tenant!(staff.tenant_id))
 
   setup do
     {:ok, tenant} =
@@ -31,16 +33,19 @@ defmodule Custyard.LabelsTest do
   end
 
   test "labels are reusable within a tenant and assignments are idempotent", c do
-    assert {:ok, label} = Labels.create_and_assign(c.operator, c.conversation, " Billing ")
+    assert {:ok, label} = Labels.create_and_assign(scope(c.operator), c.conversation, " Billing ")
     assert label.name == "Billing"
-    assert {:ok, _} = Labels.assign(c.operator, c.conversation, label.id)
-    assert %{assigned: [^label]} = Labels.for_conversation(c.operator, c.conversation)
-    assert {:error, changeset} = Labels.create_and_assign(c.operator, c.conversation, "billing")
+    assert {:ok, _} = Labels.assign(scope(c.operator), c.conversation, label.id)
+    assert %{assigned: [^label]} = Labels.for_conversation(scope(c.operator), c.conversation)
+
+    assert {:error, changeset} =
+             Labels.create_and_assign(scope(c.operator), c.conversation, "billing")
+
     assert "has already been taken" in errors_on(changeset).tenant_id
-    assert {:ok, :removed} = Labels.remove(c.operator, c.conversation, label.id)
+    assert {:ok, :removed} = Labels.remove(scope(c.operator), c.conversation, label.id)
 
     assert %{assigned: [], available: [^label]} =
-             Labels.for_conversation(c.operator, c.conversation)
+             Labels.for_conversation(scope(c.operator), c.conversation)
   end
 
   test "foreign labels cannot be read, assigned or used to cross tenant boundaries", c do
@@ -52,55 +57,62 @@ defmodule Custyard.LabelsTest do
       )
 
     foreign_conversation = insert_conversation(organization_id: c.other_org.id)
-    {:ok, label} = Labels.create_and_assign(foreign_operator, foreign_conversation, "Private")
-    refute label in Labels.list_for_operator(c.operator)
+
+    {:ok, label} =
+      Labels.create_and_assign(scope(foreign_operator), foreign_conversation, "Private")
+
+    refute label in Labels.list(scope(c.operator))
 
     assert %{available: [], assigned: []} =
-             Labels.for_conversation(c.operator, foreign_conversation)
+             Labels.for_conversation(scope(c.operator), foreign_conversation)
 
-    assert {:error, :not_found} = Labels.assign(c.operator, c.conversation, label.id)
-    assert {:error, :unauthorized} = Labels.assign(c.operator, foreign_conversation, label.id)
+    assert {:error, :not_found} = Labels.assign(scope(c.operator), c.conversation, label.id)
 
-    assert Conversations.list_for_attention_queue(organization_id: c.org.id, label_id: label.id) ==
+    assert {:error, :unauthorized} =
+             Labels.assign(scope(c.operator), foreign_conversation, label.id)
+
+    assert Conversations.list(scope(c.operator), organization_id: c.org.id, label_id: label.id) ==
              []
   end
 
   test "agents can apply existing labels but cannot define labels", c do
-    {:ok, label} = Labels.create_and_assign(c.operator, c.conversation, "Bug")
-    {:ok, _} = Labels.remove(c.operator, c.conversation, label.id)
+    {:ok, label} = Labels.create_and_assign(scope(c.operator), c.conversation, "Bug")
+    {:ok, _} = Labels.remove(scope(c.operator), c.conversation, label.id)
 
     agent =
       insert_operator_account(role: "agent", organization_id: c.org.id, tenant_id: c.tenant.id)
 
-    assert {:ok, _} = Labels.assign(agent, c.conversation, label.id)
-    assert {:error, :unauthorized} = Labels.create_and_assign(agent, c.conversation, "New")
+    assert {:ok, _} = Labels.assign(scope(agent), c.conversation, label.id)
+    assert {:error, :unauthorized} = Labels.create_and_assign(scope(agent), c.conversation, "New")
   end
 
   test "unlinked public conversations use their workspace labels", c do
     conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
     assert is_nil(conversation.organization_id)
-    assert {:ok, label} = Labels.create_and_assign(c.operator, conversation, "Public question")
-    assert %{assigned: [^label]} = Labels.for_conversation(c.operator, conversation)
+
+    assert {:ok, label} =
+             Labels.create_and_assign(scope(c.operator), conversation, "Public question")
+
+    assert %{assigned: [^label]} = Labels.for_conversation(scope(c.operator), conversation)
     id = conversation.id
     assert %{^id => [^label]} = Labels.for_conversations([conversation])
 
     assert [%{conversation: %{id: ^id}}] =
-             Conversations.list_for_attention_queue(tenant_id: c.tenant.id, label_id: label.id)
+             Conversations.list(scope(c.operator), label_id: label.id)
   end
 
-  test "legacy customer staff can filter with their workspace labels only", c do
-    {:ok, label} = Labels.create_and_assign(c.operator, c.conversation, "Customer request")
+  test "tenant staff can filter with their workspace labels only", c do
+    {:ok, label} = Labels.create_and_assign(scope(c.operator), c.conversation, "Customer request")
 
     for role <- ["admin", "agent"] do
-      legacy = insert_operator_account(role: role, organization_id: c.org.id, tenant_id: nil)
-      assert Labels.list_for_operator(legacy) == [label]
-      assert Labels.list_for_operator(legacy, c.tenant.id) == [label]
-      assert Labels.list_for_operator(legacy, c.other_org.tenant_id) == []
-      assert %{available: [^label]} = Labels.for_conversation(legacy, c.conversation)
+      staff = insert_operator_account(role: role, tenant_id: c.tenant.id)
+      assert Labels.list(scope(staff)) == [label]
+      assert Labels.list(scope(staff)) == [label]
+      assert Labels.list(%{scope(staff) | tenant_id: c.other_org.tenant_id}) == []
+      assert %{available: [^label]} = Labels.for_conversation(scope(staff), c.conversation)
     end
 
-    orphan = %Custyard.OperatorAccount{role: "admin", tenant_id: nil, organization_id: nil}
-    assert Labels.list_for_operator(orphan) == []
-    assert Labels.list_for_operator(orphan, c.tenant.id) == []
+    assert Labels.list(nil) == []
+    assert Labels.list(nil) == []
   end
 end

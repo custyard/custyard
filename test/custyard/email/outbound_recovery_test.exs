@@ -13,7 +13,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
   import Custyard.Factory
   import ExUnit.CaptureLog
 
-  alias Custyard.{Conversations, Message, Repo}
+  alias Custyard.{Conversations, InboundChannels, Message, Repo}
   alias Custyard.Email.{Outbound, OutboundQueue}
 
   setup do
@@ -34,9 +34,10 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     end)
 
     org = insert_organization()
+    configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id)
     conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
-    operator = insert_operator_account(role: "super_admin")
+    operator = insert_operator_account(role: "admin")
 
     insert_message(
       conversation_id: conversation.id,
@@ -70,7 +71,15 @@ defmodule Custyard.Email.OutboundRecoveryTest do
       message_id: "<later@customer.example>"
     )
 
-    assert {:ok, retried} = Outbound.retry(failed, context.operator)
+    assert {:ok, retried} =
+             Outbound.retry(
+               Custyard.Scope.for_staff(
+                 context.operator,
+                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+               ),
+               failed
+             )
+
     Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "provider-result"}})
     assert {:ok, sent} = Outbound.deliver(retried)
     assert sent.delivery_status == :sent
@@ -89,7 +98,15 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:error, :timeout, failed} = Outbound.deliver(context.message)
     assert failed.delivery_failure_kind == :unknown
     refute Outbound.retryable?(failed)
-    assert {:error, :reconciliation_required} = Outbound.retry(failed, context.operator)
+
+    assert {:error, :reconciliation_required} =
+             Outbound.retry(
+               Custyard.Scope.for_staff(
+                 context.operator,
+                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+               ),
+               failed
+             )
 
     old = DateTime.utc_now() |> DateTime.add(-1200) |> DateTime.truncate(:second)
 
@@ -107,7 +124,16 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert {:error, _, failed} = Outbound.deliver(context.message)
     assert_receive {:attempted_email, _email}
     failed |> Ecto.Changeset.change(body: "A different reply") |> Repo.update!()
-    assert {:ok, retried} = Outbound.retry(failed, context.operator)
+
+    assert {:ok, retried} =
+             Outbound.retry(
+               Custyard.Scope.for_staff(
+                 context.operator,
+                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+               ),
+               failed
+             )
+
     assert {:error, :envelope_changed, blocked} = Outbound.deliver(retried)
     refute Outbound.retryable?(blocked)
     refute_receive {:attempted_email, _email}
@@ -118,46 +144,177 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     old = DateTime.utc_now() |> DateTime.add(-86_401) |> DateTime.truncate(:second)
     failed = failed |> Ecto.Changeset.change(delivery_attempted_at: old) |> Repo.update!()
     refute Outbound.retryable?(failed)
-    assert {:error, :reconciliation_required} = Outbound.retry(failed, context.operator)
+
+    assert {:error, :reconciliation_required} =
+             Outbound.retry(
+               Custyard.Scope.for_staff(
+                 context.operator,
+                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+               ),
+               failed
+             )
+  end
+
+  test "a retry cannot drop Reply-To after clearing the domain or selecting ingress", context do
+    for attrs <- [%{sending_domain: ""}, %{reply_from: :ingress_address}] do
+      {channel, message} = custom_domain_reply(context)
+      assert {:error, {422, _}, failed} = Outbound.deliver(message)
+      assert_receive {:attempted_email, original_email}
+      assert original_email.reply_to == {"", channel.public_address}
+
+      assert {:ok, _} = InboundChannels.update_channel(channel, attrs, operator: context.operator)
+      Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "retry-must-not-send"}})
+
+      assert {:ok, retried} =
+               Outbound.retry(
+                 Custyard.Scope.for_staff(
+                   context.operator,
+                   Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+                 ),
+                 failed
+               )
+
+      assert retried.sender_email == message.sender_email
+      assert {:error, :envelope_changed, blocked} = Outbound.deliver(retried)
+      refute Outbound.retryable?(blocked)
+      refute_receive {:attempted_email, _}
+
+      Application.put_env(:custyard, :recovery_test_result, {:error, {422, %{body: "rejected"}}})
+    end
+  end
+
+  test "an unattempted configuration retry cannot drop the saved return path", context do
+    {channel, message} = custom_domain_reply(context)
+
+    connection = Custyard.EmailSetup.connection(message.tenant_id)
+    connection |> Ecto.Changeset.change(project_token_ciphertext: nil) |> Repo.update!()
+
+    assert {:error, :not_configured, failed} = Outbound.deliver(message)
+    assert is_nil(failed.delivery_attempted_at)
+    refute_receive {:attempted_email, _}
+
+    assert {:ok, _} =
+             InboundChannels.update_channel(channel, %{sending_domain: ""},
+               operator: context.operator
+             )
+
+    Application.put_env(:custyard, Custyard.Mailer, adapter: __MODULE__.Adapter)
+    Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "retry-must-not-send"}})
+
+    assert {:ok, retried} =
+             Outbound.retry(
+               Custyard.Scope.for_staff(
+                 context.operator,
+                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+               ),
+               failed
+             )
+
+    assert {:error, :envelope_changed, blocked} = Outbound.deliver(retried)
+    assert is_nil(blocked.delivery_attempted_at)
+    refute_receive {:attempted_email, _}
+  end
+
+  defp custom_domain_reply(context) do
+    channel =
+      insert_inbound_channel(
+        organization_id: context.conversation.organization_id,
+        tenant_id: context.conversation.tenant_id,
+        public_address: "support@acme.example",
+        sending_domain: "mail.acme.example",
+        state: :active
+      )
+
+    conversation =
+      insert_conversation(
+        organization_id: context.conversation.organization_id,
+        contact_id: context.contact.id,
+        inbound_channel_id: channel.id
+      )
+
+    {:ok, message} = Conversations.send_reply(conversation, "A reply using the custom sender")
+    assert message.sender_email == "support@mail.acme.example"
+    {channel, message}
   end
 
   test "configuration failures before provider invocation remain retryable after a day",
        context do
-    Application.put_env(:custyard, Custyard.Mailer,
-      adapter: Swoosh.Adapters.Lettermint,
-      api_token: nil
-    )
+    connection = Custyard.EmailSetup.connection(context.message.tenant_id)
+    encrypted = connection.project_token_ciphertext
+    Repo.update!(Ecto.Changeset.change(connection, project_token_ciphertext: nil))
 
-    assert {:error, :sending_not_configured, failed} = Outbound.deliver(context.message)
+    assert {:error, :not_configured, failed} = Outbound.deliver(context.message)
     assert failed.delivery_failure_kind == :configuration
     assert is_nil(failed.delivery_attempted_at)
+    assert is_binary(failed.delivery_payload_hash)
     refute_receive {:attempted_email, _email}
 
     old = DateTime.utc_now() |> DateTime.add(-172_800) |> DateTime.truncate(:second)
     failed = failed |> Ecto.Changeset.change(inserted_at: old, updated_at: old) |> Repo.update!()
     assert Outbound.retryable?(failed)
 
-    Application.put_env(:custyard, Custyard.Mailer, adapter: __MODULE__.Adapter)
+    Repo.update!(
+      Ecto.Changeset.change(Repo.reload!(connection), project_token_ciphertext: encrypted)
+    )
+
     Application.put_env(:custyard, :recovery_test_result, {:ok, %{id: "configured-later"}})
-    assert {:ok, retried} = Outbound.retry(failed, context.operator)
+
+    assert {:ok, retried} =
+             Outbound.retry(
+               Custyard.Scope.for_staff(
+                 context.operator,
+                 Custyard.Tenants.get_tenant!(context.operator.tenant_id)
+               ),
+               failed
+             )
+
     assert {:ok, sent} = Outbound.deliver(retried)
     assert sent.delivery_status == :sent
     assert %DateTime{} = sent.delivery_attempted_at
-    assert_receive {:attempted_email, _email}
+    assert_receive {:attempted_email, email}
+    assert email.headers["X-LM-Preserve-Message-ID"] == "true"
   end
 
-  test "a missing platform From fails before recording a provider attempt", context do
-    previous = Application.get_env(:custyard, :email_from_address)
-    Application.put_env(:custyard, :email_from_address, nil)
+  test "missing tenant credentials still lock the return path before a retry" do
+    tenant =
+      %Custyard.Tenant{}
+      |> Custyard.Tenant.changeset(%{
+        name: "Unconfigured tenant",
+        slug: "unconfigured-#{System.unique_integer([:positive])}"
+      })
+      |> Repo.insert!()
 
-    on_exit(fn ->
-      if is_nil(previous),
-        do: Application.delete_env(:custyard, :email_from_address),
-        else: Application.put_env(:custyard, :email_from_address, previous)
-    end)
+    operator = insert_operator_account(tenant_id: tenant.id, role: "admin")
+    org = insert_organization(tenant_id: tenant.id)
+    contact = insert_contact(organization_id: org.id)
+    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+    {channel, message} = custom_domain_reply(%{conversation: conversation, contact: contact})
 
-    assert is_nil(context.message.sender_email)
-    assert {:error, :from_not_set, failed} = Outbound.deliver(context.message)
+    assert {:error, :not_configured, failed} = Outbound.deliver(message)
+    assert is_binary(failed.delivery_payload_hash)
+    assert is_nil(failed.delivery_attempted_at)
+    refute_receive {:attempted_email, _}
+
+    assert {:ok, _} =
+             InboundChannels.update_channel(channel, %{sending_domain: ""}, operator: operator)
+
+    assert {:ok, retried} = Outbound.retry(Custyard.Scope.for_staff(operator, tenant), failed)
+    assert {:error, :envelope_changed, _} = Outbound.deliver(retried)
+    refute_receive {:attempted_email, _}
+  end
+
+  test "a missing tenant From fails before recording a provider attempt", context do
+    Repo.update_all(
+      from(c in Custyard.InboundChannel, where: c.tenant_id == ^context.message.tenant_id),
+      set: [state: :paused]
+    )
+
+    message =
+      context.message
+      |> Ecto.Changeset.change(sender_email: nil, inbound_channel_id: nil)
+      |> Repo.update!()
+
+    assert {:error, :from_not_set, failed} = Outbound.deliver(message)
     assert is_nil(failed.delivery_attempted_at)
     assert Outbound.retryable?(failed)
     refute_receive {:attempted_email, _email}
@@ -181,6 +338,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
   test "recipient erasure cannot be undone by queued delivery", context do
     assert {:ok, _} =
              Custyard.DataSubjects.erase_participation(
+               staff_scope(context.message.tenant_id),
                context.contact.email,
                context.conversation.organization_id
              )

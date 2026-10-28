@@ -6,33 +6,51 @@ defmodule Custyard.Projects do
   alias Custyard.{Authorization, OperatorAccess, OperatorAccount, Project, Repo, Task}
   import Ecto.Query
 
-  @doc """
-  List projects for operator view, with organization preloaded.
-
-  ## Options
-
-  - `:organization_id` - when set, filters to only projects in that org.
-    When `nil`, returns all projects (super_admin behavior).
-  """
-  def list_for_operator(opts \\ []) do
-    query =
-      from(p in Project,
-        where: p.is_template == false,
-        order_by: [desc: p.inserted_at],
-        preload: [:tasks, :organization]
-      )
-
-    query =
-      case Keyword.get(opts, :organization_id) do
-        nil -> query
-        org_id -> from(p in query, where: p.organization_id == ^org_id)
-      end
-
-    query |> Repo.all() |> Enum.map(&with_progress/1)
+  def list(%Custyard.Scope{} = scope, opts \\ []) do
+    case staff_for_scope(scope) do
+      nil -> []
+      staff -> list_for_operator(staff, opts)
+    end
   end
 
-  @doc "List projects within an operator's scope, intersected with an optional org filter."
-  def list_for_operator(%OperatorAccount{} = operator, opts) do
+  def get(%Custyard.Scope{} = scope, id) do
+    case staff_for_scope(scope) do
+      nil -> nil
+      staff -> get_project_for_operator(id, staff)
+    end
+  end
+
+  def create(%Custyard.Scope{} = scope, attrs) do
+    case staff_for_scope(scope) do
+      nil -> {:error, :unauthorized}
+      staff -> create_project_for_operator(attrs, staff)
+    end
+  end
+
+  def update(%Custyard.Scope{} = scope, %Project{} = project, attrs) do
+    case staff_for_scope(scope) do
+      nil -> {:error, :unauthorized}
+      staff -> update_project_for_operator(project, attrs, staff)
+    end
+  end
+
+  def delete(%Custyard.Scope{} = scope, %Project{} = project) do
+    case staff_for_scope(scope) do
+      nil -> {:error, :unauthorized}
+      staff -> delete_project_for_operator(project, staff)
+    end
+  end
+
+  def with_access(%Custyard.Scope{} = scope, id, fun, opts \\ []) do
+    case staff_for_scope(scope) do
+      nil -> {:error, :unauthorized}
+      staff -> with_operator_access(id, staff, fun, opts)
+    end
+  end
+
+  defp staff_for_scope(scope), do: Custyard.Scope.current_staff(scope)
+
+  defp list_for_operator(%OperatorAccount{} = operator, opts) do
     requested_org_id = Keyword.get(opts, :organization_id)
 
     query =
@@ -53,24 +71,18 @@ defmodule Custyard.Projects do
     query |> Repo.all() |> Enum.map(&with_progress/1)
   end
 
-  defp scope_to_operator(query, %OperatorAccount{role: "super_admin"}), do: query
-
   defp scope_to_operator(query, %OperatorAccount{tenant_id: tenant_id})
        when is_integer(tenant_id),
        do: from(p in query, where: p.tenant_id == ^tenant_id)
-
-  defp scope_to_operator(query, %OperatorAccount{organization_id: org_id})
-       when is_integer(org_id),
-       do: from(p in query, where: p.organization_id == ^org_id)
 
   defp scope_to_operator(query, %OperatorAccount{}), do: from(p in query, where: false)
 
   @doc """
   List projects for a specific organization (operator view).
   """
-  def list_for_organization(org_id) do
+  def list_for_organization(%Custyard.Scope{tenant_id: tenant_id}, org_id) do
     from(p in Project,
-      where: p.organization_id == ^org_id,
+      where: p.organization_id == ^org_id and p.tenant_id == ^tenant_id,
       where: p.is_template == false,
       order_by: [desc: p.inserted_at],
       preload: [:tasks, :organization]
@@ -125,26 +137,14 @@ defmodule Custyard.Projects do
     end
   end
 
-  @doc """
-  Get a project by ID (operator access).
-  Returns nil if not found.
-  """
-  def get_project(id) do
-    case Repo.get(Project, id) do
-      nil -> nil
-      project -> project |> Repo.preload(:tasks) |> with_progress()
-    end
-  end
-
-  @doc "Get a project only when it is within an operator's organization scope."
-  def get_project_for_operator(id, %OperatorAccount{} = operator) when is_binary(id) do
+  defp get_project_for_operator(id, %OperatorAccount{} = operator) when is_binary(id) do
     case Integer.parse(id) do
       {int_id, ""} -> get_project_for_operator(int_id, operator)
       _ -> nil
     end
   end
 
-  def get_project_for_operator(id, %OperatorAccount{} = operator) when is_integer(id) do
+  defp get_project_for_operator(id, %OperatorAccount{} = operator) when is_integer(id) do
     query = from(p in Project, where: p.id == ^id) |> scope_to_operator(operator)
 
     case Repo.one(query) do
@@ -153,51 +153,24 @@ defmodule Custyard.Projects do
     end
   end
 
-  def get_project_for_operator(_id, %OperatorAccount{}), do: nil
+  defp get_project_for_operator(_id, %OperatorAccount{}), do: nil
 
-  @doc """
-  Get a project by ID (operator access).
-  Raises if not found.
-  """
-  def get_project!(id) do
-    Repo.get!(Project, id)
-    |> Repo.preload(:tasks)
-    |> with_progress()
+  def get!(%Custyard.Scope{} = scope, id) do
+    get(scope, id) || raise Ecto.NoResultsError, queryable: Project
   end
 
-  @doc """
-  Create a project.
-  """
-  def create_project(attrs) do
-    case %Project{} |> Project.changeset(attrs) |> Repo.insert() do
-      {:ok, project} = result ->
-        broadcast_org_project(project.organization_id, {:project_created, project.id})
-        result
-
-      error ->
-        error
-    end
-  end
-
-  @doc "Create a project with the operator's current role and assignment locked."
-  def create_project_for_operator(attrs, %OperatorAccount{} = operator) do
+  defp create_project_for_operator(attrs, %OperatorAccount{} = operator) do
     result =
       Repo.transaction(fn ->
         current_operator = OperatorAccess.lock_current(operator)
 
-        attrs =
-          if current_operator && current_operator.tenant_id do
-            Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
-            |> Map.put("tenant_id", current_operator.tenant_id)
-          else
-            attrs
-          end
+        attrs = stamp_project_tenant(attrs, current_operator)
 
         changeset = Project.changeset(%Project{}, attrs)
 
         destination_id = Ecto.Changeset.get_field(changeset, :organization_id)
 
-        if current_operator && Authorization.can_manage_project?(current_operator, destination_id) do
+        if authorized_project_creator?(current_operator, operator, destination_id) do
           case Repo.insert(changeset) do
             {:ok, project} -> project
             {:error, reason} -> Repo.rollback(reason)
@@ -217,41 +190,22 @@ defmodule Custyard.Projects do
     end
   end
 
-  @doc """
-  Update a project.
-  """
-  def update_project(project, attrs) do
-    result =
-      Repo.transaction(fn ->
-        query =
-          from p in Project, where: p.id == ^project.id, update: [set: [updated_at: p.updated_at]]
-
-        Repo.update_all(query, [])
-        current = Repo.get!(Project, project.id)
-
-        case update_project_and_tasks(current, attrs) do
-          {:ok, updated} -> {updated, current.organization_id}
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-
-    case result do
-      {:ok, {updated, old_org_id}} ->
-        broadcast_project_update(updated.id)
-
-        if old_org_id != updated.organization_id do
-          broadcast_org_project(old_org_id, {:project_updated, updated.id})
-        end
-
-        {:ok, updated}
-
-      error ->
-        error
-    end
+  defp stamp_project_tenant(attrs, %OperatorAccount{tenant_id: id}) do
+    Map.new(attrs, fn {key, value} -> {to_string(key), value} end) |> Map.put("tenant_id", id)
   end
 
-  @doc "Update an operator-managed project while holding its scoped database row lock."
-  def update_project_for_operator(%Project{} = project, attrs, %OperatorAccount{} = operator) do
+  defp stamp_project_tenant(attrs, _), do: attrs
+
+  defp authorized_project_creator?(%OperatorAccount{} = current, original, destination_id) do
+    current.tenant_id == original.tenant_id && current.role == original.role &&
+      OperatorAccount.session_claim_matches?(current, original.session_claim) &&
+      Custyard.Tenants.active?(current.tenant_id) &&
+      Authorization.can_manage_project?(current, destination_id)
+  end
+
+  defp authorized_project_creator?(_, _, _), do: false
+
+  defp update_project_for_operator(%Project{} = project, attrs, %OperatorAccount{} = operator) do
     case with_operator_access(project.id, operator, fn current, current_operator ->
            changeset = Project.changeset(current, attrs)
            destination_id = Ecto.Changeset.get_field(changeset, :organization_id)
@@ -305,11 +259,12 @@ defmodule Custyard.Projects do
 
       conversation_orgs =
         Repo.all(
-          from t in Task,
+          from(t in Task,
             join: c in Custyard.Conversation,
             on: c.id == t.conversation_id,
             where: t.project_id == ^changeset.data.id,
             select: c.organization_id
+          )
         )
 
       if Enum.any?(conversation_orgs, &(&1 != organization_id)) do
@@ -326,25 +281,10 @@ defmodule Custyard.Projects do
     end
   end
 
-  @doc """
-  Delete a project.
-  """
-  def delete_project(project) do
-    case Repo.delete(project) do
-      {:ok, deleted} = result ->
-        broadcast_org_project(deleted.organization_id, {:project_deleted, deleted.id})
-        result
-
-      error ->
-        error
-    end
-  end
-
-  @doc "Delete an operator-managed project only while its scoped row is locked."
-  def delete_project_for_operator(%Project{} = project, %OperatorAccount{} = operator) do
+  defp delete_project_for_operator(%Project{} = project, %OperatorAccount{} = operator) do
     case with_operator_access(project.id, operator, fn current, current_operator ->
            if Authorization.can_manage_project?(current_operator, current.organization_id) do
-             Repo.delete(current)
+             delete_project_records(current)
            else
              {:error, :unauthorized}
            end
@@ -358,12 +298,41 @@ defmodule Custyard.Projects do
     end
   end
 
-  @doc "Run a project mutation while its current operator scope is locked."
-  def with_operator_access(id, %OperatorAccount{} = operator, fun, opts \\ [])
-      when is_function(fun, 2) do
+  defp delete_project_records(project) do
+    Repo.transaction(fn ->
+      from(t in Task, where: t.tenant_id == ^project.tenant_id and t.project_id == ^project.id)
+      |> Repo.delete_all()
+
+      from(c in Custyard.Conversation,
+        where: c.tenant_id == ^project.tenant_id and c.project_id == ^project.id
+      )
+      |> Repo.update_all(set: [project_id: nil])
+
+      from(c in Custyard.InboundChannel,
+        where: c.tenant_id == ^project.tenant_id and c.default_project_id == ^project.id
+      )
+      |> Repo.update_all(set: [default_project_id: nil])
+
+      from(a in Custyard.AuditEvent,
+        where: a.tenant_id == ^project.tenant_id and a.project_id == ^project.id
+      )
+      |> Repo.update_all(set: [project_id: nil])
+
+      case Repo.delete(project) do
+        {:ok, deleted} -> deleted
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp with_operator_access(id, %OperatorAccount{} = operator, fun, opts \\ [])
+       when is_function(fun, 2) do
     result =
       Repo.transaction(fn ->
         with %OperatorAccount{} = current_operator <- OperatorAccess.lock_current(operator),
+             true <-
+               OperatorAccount.session_claim_matches?(current_operator, operator.session_claim),
+             true <- Custyard.Tenants.active?(current_operator.tenant_id),
              %Project{} = project <- lock_project_for_operator(id, current_operator) do
           case fun.(project, current_operator) do
             {:ok, value} -> value
@@ -399,13 +368,17 @@ defmodule Custyard.Projects do
   List all project templates.
   Templates are projects with is_template=true.
   """
-  def list_templates do
-    from(p in Project,
-      where: p.is_template == true,
-      order_by: [asc: p.title],
-      preload: [:tasks]
-    )
-    |> Repo.all()
+  def list_templates(%Custyard.Scope{} = scope) do
+    if staff_for_scope(scope) do
+      from(p in Project,
+        where: p.tenant_id == ^scope.tenant_id and p.is_template == true,
+        order_by: [asc: p.title],
+        preload: [:tasks]
+      )
+      |> Repo.all()
+    else
+      []
+    end
   end
 
   @doc """
@@ -425,11 +398,28 @@ defmodule Custyard.Projects do
     - `{:error, :not_a_template}` if the project is not a template
     - `{:error, changeset}` on validation failure
   """
-  def create_from_template(%Project{is_template: true} = template, org_id, start_date) do
+  def create_from_template(%Custyard.Scope{} = scope, %Project{} = template, org_id, start_date) do
+    with_access(scope, template.id, fn current, staff ->
+      if staff.role == "admin" && current.tenant_id == scope.tenant_id &&
+           Repo.exists?(
+             from o in Custyard.Organization,
+               where: o.id == ^org_id and o.tenant_id == ^scope.tenant_id
+           ) do
+        do_create_from_template(current, org_id, start_date)
+      else
+        {:error, :unauthorized}
+      end
+    end)
+  end
+
+  def create_from_template(%Custyard.Scope{}, nil, _, _), do: {:error, :not_a_template}
+
+  defp do_create_from_template(%Project{is_template: true} = template, org_id, start_date) do
     template = Repo.preload(template, :tasks)
 
     project_attrs = %{
       title: template.title,
+      tenant_id: template.tenant_id,
       description: template.description,
       start_date: start_date,
       target_completion_date: calculate_target_date(template, start_date),
@@ -459,11 +449,7 @@ defmodule Custyard.Projects do
     end
   end
 
-  def create_from_template(%Project{is_template: false}, _org_id, _start_date) do
-    {:error, :not_a_template}
-  end
-
-  def create_from_template(nil, _org_id, _start_date) do
+  defp do_create_from_template(%Project{is_template: false}, _org_id, _start_date) do
     {:error, :not_a_template}
   end
 

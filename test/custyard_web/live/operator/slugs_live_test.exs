@@ -10,7 +10,7 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
 
   setup %{conn: conn} do
     # Default factory role is super_admin — the route's live_session requires it
-    operator = insert_operator_account()
+    operator = insert_operator_account(role: "admin")
 
     conn =
       conn
@@ -34,19 +34,19 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
     test "renders slug, status, email, expiry, and the conversation link", %{conn: conn} do
       %{slug: slug, conversation: conversation} = claim!("listed-claim")
 
-      {:ok, _view, html} = live(conn, ~p"/operator/slugs")
+      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
 
       assert html =~ "operator-slugs-page"
       assert html =~ "listed-claim"
       assert html =~ "Provisional"
       assert html =~ "buyer@example.com"
       assert html =~ ~s(operator-slug-expiry-#{slug.id})
-      assert html =~ ~s(href="/operator/conversation/#{conversation.id}")
+      assert html =~ ~s(href="/app/threads/#{conversation.id}")
     end
 
     test "renders confirmed and provisioned statuses", %{conn: conn} do
-      %{token: token} = claim!("confirmed-claim")
-      {:ok, _} = Slugs.confirm(token)
+      %{slug: slug, token: token} = claim!("confirmed-claim")
+      {:ok, _} = Slugs.confirm(token, slug.tenant_id)
 
       org = insert_organization()
 
@@ -58,20 +58,20 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
         expires_at: nil
       )
 
-      {:ok, _view, html} = live(conn, ~p"/operator/slugs")
+      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
 
       assert html =~ "Confirmed"
       assert html =~ "Provisioned"
     end
 
     test "renders empty state when the registry is empty", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/operator/slugs")
+      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
 
       assert html =~ "operator-slugs-empty"
     end
 
     test "the nav entry renders next to intake sources", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/operator/slugs")
+      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
 
       assert html =~ "operator-nav-slugs"
       assert html =~ "operator-nav-intake-sources"
@@ -83,7 +83,7 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
          %{conn: conn, operator: operator} do
       %{slug: slug, conversation: conversation} = claim!("give-back")
 
-      {:ok, view, _html} = live(conn, ~p"/operator/slugs")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
 
       view |> element("[data-testid=operator-slug-release-#{slug.id}]") |> render_click()
 
@@ -109,9 +109,9 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
 
     test "releases a confirmed slug", %{conn: conn} do
       %{slug: slug, token: token} = claim!("confirmed-release")
-      {:ok, _} = Slugs.confirm(token)
+      {:ok, _} = Slugs.confirm(token, slug.tenant_id)
 
-      {:ok, view, _html} = live(conn, ~p"/operator/slugs")
+      {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
 
       view |> element("[data-testid=operator-slug-release-#{slug.id}]") |> render_click()
 
@@ -133,14 +133,22 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
           expires_at: nil
         )
 
-      {:ok, view, html} = live(conn, ~p"/operator/slugs")
+      {:ok, view, html} = live(conn, ~p"/app/settings/slugs")
 
       # No release button renders for provisioned rows.
       refute html =~ "operator-slug-release-#{provisioned.id}"
 
       # A forged release event is refused by the context guard.
       socket = %Phoenix.LiveView.Socket{
-        assigns: %{__changed__: %{}, flash: %{}, current_operator: operator, slugs: []}
+        assigns: %{
+          __changed__: %{},
+          flash: %{},
+          current_operator: operator,
+          current_scope:
+            Custyard.Scope.for_staff(operator, Custyard.Tenants.get_tenant!(operator.tenant_id)),
+          current_tenant: Custyard.Tenants.get_tenant!(operator.tenant_id),
+          slugs: []
+        }
       }
 
       {:noreply, after_release} =
@@ -156,17 +164,6 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
   end
 
   describe "authorization (double gate)" do
-    test "admin is redirected at route mount" do
-      operator = insert_operator_account(role: "admin")
-
-      conn =
-        build_conn()
-        |> Phoenix.ConnTest.init_test_session(%{})
-        |> put_operator_session(operator.id)
-
-      assert {:error, {:redirect, %{to: "/operator"}}} = live(conn, ~p"/operator/slugs")
-    end
-
     test "agent is redirected at route mount" do
       operator = insert_operator_account(role: "agent")
 
@@ -175,24 +172,34 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_operator_session(operator.id)
 
-      assert {:error, {:redirect, %{to: "/operator"}}} = live(conn, ~p"/operator/slugs")
+      assert {:error, {:redirect, %{to: "/app"}}} = live(conn, ~p"/app/settings/slugs")
     end
 
     test "non-super-admin cannot release via direct handle_event invocation" do
       # The route is mount-gated to super_admin; the double-gate branch in
       # the mutating handle_event is exercised by direct invocation, per
       # the settings_live_test precedent.
-      operator = insert_operator_account(role: "admin")
+      operator = insert_operator_account(role: "agent")
       %{slug: slug} = claim!("guarded-slug")
 
       socket = %Phoenix.LiveView.Socket{
-        assigns: %{__changed__: %{}, flash: %{}, current_operator: operator, slugs: []}
+        assigns: %{
+          __changed__: %{},
+          flash: %{},
+          current_operator: operator,
+          current_scope:
+            Custyard.Scope.for_staff(operator, Custyard.Tenants.get_tenant!(operator.tenant_id)),
+          current_tenant: Custyard.Tenants.get_tenant!(operator.tenant_id),
+          slugs: []
+        }
       }
 
       {:noreply, after_release} =
         SlugsLive.handle_event("release", %{"id" => to_string(slug.id)}, socket)
 
-      assert after_release.assigns.flash["error"] == "Only super admins can release slugs"
+      assert after_release.assigns.flash["error"] ==
+               "Only tenant administrators can release slugs"
+
       assert Repo.get(Slug, slug.id)
       assert release_audit_events() == []
     end

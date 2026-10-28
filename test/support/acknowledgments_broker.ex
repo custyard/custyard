@@ -20,14 +20,19 @@ defmodule Custyard.AcknowledgmentsBroker do
 
   @doc """
   Provisions a topology, installs it as the application configuration and
-  returns `%{config: config, connection: connection, channel: channel}`.
+  returns `%{tenant: tenant, config: config, connection: connection, channel: channel}`.
   """
   def setup_topology(overrides \\ []) do
     if !url(), do: flunk("Set ACKNOWLEDGMENTS_TEST_AMQP_URL for RabbitMQ integration tests")
 
+    tenant = Custyard.Factory.insert_tenant()
+    Process.put(:ack_test_tenant_id, tenant.id)
+
     config =
       Keyword.merge(
         [
+          tenant_id: tenant.id,
+          enabled: true,
           url: url(),
           source: "ots.integration",
           queue: unique_queue("custyard.consumer.test"),
@@ -45,13 +50,22 @@ defmodule Custyard.AcknowledgmentsBroker do
     previous = Application.get_env(:custyard, :acknowledgments)
     Application.put_env(:custyard, :acknowledgments, config)
 
+    {:ok, _} =
+      Custyard.Acknowledgments.configure_integration(
+        Custyard.Scope.for_staff(
+          Custyard.Factory.insert_operator_account(tenant_id: tenant.id, role: "admin"),
+          tenant
+        ),
+        Map.new(config)
+      )
+
     on_exit(fn ->
       Application.put_env(:custyard, :acknowledgments, previous)
       delete_topology(config)
       if Process.alive?(connection.pid), do: AMQP.Connection.close(connection)
     end)
 
-    %{config: config, connection: connection, channel: channel}
+    %{tenant: tenant, config: config, connection: connection, channel: channel}
   end
 
   defp delete_topology(config) do

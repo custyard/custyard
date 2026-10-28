@@ -5,7 +5,7 @@ defmodule CustyardWeb.Operator.SupportWorkflowToolsTest do
   alias Custyard.{Conversations, Labels, Repo, Task}
 
   setup %{conn: conn} do
-    operator = insert_operator_account()
+    operator = insert_operator_account(role: "admin")
     org = insert_organization()
     conversation = insert_conversation(organization_id: org.id, state: :active)
     conn = conn |> Phoenix.ConnTest.init_test_session(%{}) |> put_operator_session(operator.id)
@@ -13,7 +13,7 @@ defmodule CustyardWeb.Operator.SupportWorkflowToolsTest do
   end
 
   test "task deadline and internal default round trip through the operator form", c do
-    {:ok, view, _} = live(c.conn, ~p"/operator/conversation/#{c.conversation.id}")
+    {:ok, view, _} = live(c.conn, ~p"/app/threads/#{c.conversation.id}")
     view |> element("[phx-click=toggle_task_form]") |> render_click()
     assert has_element?(view, "label", "Due date and time (UTC)")
     refute has_element?(view, "[data-testid=operator-task-visible-checkbox][checked]")
@@ -37,11 +37,17 @@ defmodule CustyardWeb.Operator.SupportWorkflowToolsTest do
 
   test "labels can be created, applied and removed, and filter the attention queue", c do
     other = insert_conversation(organization_id: c.org.id, state: :active)
-    {:ok, view, _} = live(c.conn, ~p"/operator/conversation/#{c.conversation.id}")
+    {:ok, view, _} = live(c.conn, ~p"/app/threads/#{c.conversation.id}")
     view |> form("#create-label-form", name: "Billing") |> render_submit()
-    %{assigned: [label]} = Labels.for_conversation(c.operator, c.conversation)
+
+    %{assigned: [label]} =
+      Labels.for_conversation(
+        Custyard.Scope.for_staff(c.operator, Custyard.Tenants.get_tenant!(c.operator.tenant_id)),
+        c.conversation
+      )
+
     assert has_element?(view, "[data-testid='conversation-label-#{label.id}']", "Billing")
-    {:ok, queue, _} = live(c.conn, ~p"/operator?label=#{label.id}")
+    {:ok, queue, _} = live(c.conn, ~p"/app?label=#{label.id}")
     assert has_element?(queue, "[data-testid='operator-queue-card-#{c.conversation.id}']")
     refute has_element?(queue, "[data-testid='operator-queue-card-#{other.id}']")
     view |> element("[phx-click=remove_label][phx-value-id='#{label.id}']") |> render_click()
@@ -61,7 +67,7 @@ defmodule CustyardWeb.Operator.SupportWorkflowToolsTest do
         due_at: future
       })
 
-    {:ok, view, _} = live(c.conn, ~p"/operator?filter=due_tasks")
+    {:ok, view, _} = live(c.conn, ~p"/app?filter=due_tasks")
     refute has_element?(view, "[data-testid='operator-queue-card-#{resolved.id}']")
     task |> Ecto.Changeset.change(due_at: DateTime.add(future, -7200)) |> Repo.update!()
     send(view.pid, :refresh_deadlines)
@@ -84,7 +90,7 @@ defmodule CustyardWeb.Operator.SupportWorkflowToolsTest do
     )
     |> Repo.update!()
 
-    {:ok, view, _} = live(c.conn, ~p"/operator/conversation/#{c.conversation.id}")
+    {:ok, view, _} = live(c.conn, ~p"/app/threads/#{c.conversation.id}")
     assert has_element?(view, "[data-testid=delivery-status-unknown]", "Delivery unknown")
 
     assert has_element?(
@@ -110,7 +116,7 @@ defmodule CustyardWeb.Operator.SupportWorkflowToolsTest do
       inserted_at: ~U[2026-10-26 12:00:00Z]
     )
 
-    {:ok, view, _} = live(c.conn, ~p"/operator/conversation/#{c.conversation.id}")
+    {:ok, view, _} = live(c.conn, ~p"/app/threads/#{c.conversation.id}")
     assert has_element?(view, "[data-testid=operator-reply-to]", "alice@example.com")
 
     insert_message(

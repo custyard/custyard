@@ -39,7 +39,7 @@ defmodule CustyardWeb.Operator.AttachmentControllerTest do
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
       |> put_operator_session(agent)
-      |> get(~p"/operator/attachments/#{attachment.id}")
+      |> get(~p"/app/attachments/#{attachment.id}")
 
     assert conn.status == 200
     assert conn.resp_body =~ "alert(1)"
@@ -53,33 +53,37 @@ defmodule CustyardWeb.Operator.AttachmentControllerTest do
     assert get_resp_header(conn, "content-security-policy") == ["default-src 'none'; sandbox"]
   end
 
-  test "an operator from another organization gets 404", %{conn: conn, attachment: attachment} do
-    stranger = insert_operator_account(role: "agent", organization_id: insert_organization().id)
+  test "an operator from another tenant gets 404", %{conn: conn, attachment: attachment} do
+    stranger =
+      insert_operator_account(
+        role: "agent",
+        organization_id: insert_organization(tenant_id: insert_tenant().id).id
+      )
 
     conn =
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
       |> put_operator_session(stranger)
-      |> get(~p"/operator/attachments/#{attachment.id}")
+      |> get(~p"/app/attachments/#{attachment.id}")
 
     assert conn.status == 404
   end
 
   test "unknown ids are 404", %{conn: conn} do
-    operator = insert_operator_account(role: "super_admin")
+    operator = insert_operator_account(role: "admin")
 
     conn =
       conn
       |> Phoenix.ConnTest.init_test_session(%{})
       |> put_operator_session(operator)
 
-    assert get(conn, ~p"/operator/attachments/999999").status == 404
-    assert get(conn, "/operator/attachments/not-an-id").status == 404
+    assert get(conn, ~p"/app/attachments/999999").status == 404
+    assert get(conn, "/app/attachments/not-an-id").status == 404
   end
 
   test "an anonymous request is sent to login", %{conn: conn, attachment: attachment} do
-    conn = get(conn, ~p"/operator/attachments/#{attachment.id}")
-    assert redirected_to(conn) == "/operator/login"
+    conn = get(conn, ~p"/app/attachments/#{attachment.id}")
+    assert redirected_to(conn) == "/app/login"
   end
 
   describe "inline/2" do
@@ -105,7 +109,7 @@ defmodule CustyardWeb.Operator.AttachmentControllerTest do
     end
 
     test "serves a raster image inline", %{conn: conn, image: image} do
-      conn = get(conn, ~p"/operator/attachments/#{image.id}/inline")
+      conn = get(conn, ~p"/app/attachments/#{image.id}/inline")
 
       assert conn.status == 200
       assert get_resp_header(conn, "content-type") == ["image/png"]
@@ -116,17 +120,21 @@ defmodule CustyardWeb.Operator.AttachmentControllerTest do
     end
 
     test "refuses anything that is not a raster image", %{conn: conn, attachment: attachment} do
-      assert get(conn, ~p"/operator/attachments/#{attachment.id}/inline").status == 404
+      assert get(conn, ~p"/app/attachments/#{attachment.id}/inline").status == 404
     end
 
-    test "refuses another organization's image", %{image: image} do
-      stranger = insert_operator_account(role: "agent", organization_id: insert_organization().id)
+    test "refuses another tenant's image", %{image: image} do
+      stranger =
+        insert_operator_account(
+          role: "agent",
+          organization_id: insert_organization(tenant_id: insert_tenant().id).id
+        )
 
       conn =
         build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_operator_session(stranger)
-        |> get(~p"/operator/attachments/#{image.id}/inline")
+        |> get(~p"/app/attachments/#{image.id}/inline")
 
       assert conn.status == 404
     end

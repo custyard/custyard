@@ -23,10 +23,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       |> assign(:label_id, nil)
       |> assign(
         :labels,
-        Labels.list_for_operator(
-          socket.assigns.current_operator,
-          socket.assigns.current_tenant.id
-        )
+        Labels.list(socket.assigns.current_scope)
       )
       |> assign(:show_score_breakdown, nil)
       |> assign(:show_snooze_menu, nil)
@@ -41,7 +38,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     filter = params["filter"] || "all"
 
     labels =
-      Labels.list_for_operator(socket.assigns.current_operator, socket.assigns.current_tenant.id)
+      Labels.list(socket.assigns.current_scope)
 
     label = Enum.find(labels, &(to_string(&1.id) == params["label"]))
 
@@ -58,12 +55,11 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   @impl true
   def handle_event("filter", %{"filter" => filter}, socket) do
     {:noreply,
-     push_patch(socket, to: ~p"/operator?#{[filter: filter, label: socket.assigns.label_id]}")}
+     push_patch(socket, to: ~p"/app?#{[filter: filter, label: socket.assigns.label_id]}")}
   end
 
   def handle_event("filter_label", %{"label" => label}, socket) do
-    {:noreply,
-     push_patch(socket, to: ~p"/operator?#{[filter: socket.assigns.filter, label: label]}")}
+    {:noreply, push_patch(socket, to: ~p"/app?#{[filter: socket.assigns.filter, label: label]}")}
   end
 
   def handle_event("toggle_score", %{"id" => id}, socket) do
@@ -91,11 +87,12 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   def handle_event("snooze", %{"id" => id, "duration" => duration}, socket) do
     with {id, ""} <- Integer.parse(id),
          true <- queue_contains_conversation?(socket, id) do
-      conversation = Conversations.get_conversation!(id)
       until = calculate_snooze_until(duration)
 
-      case Conversations.snooze(conversation, until) do
-        {:ok, _} ->
+      case Conversations.with_access(socket.assigns.current_scope, id, fn current, _staff ->
+             Conversations.snooze(current, until)
+           end) do
+        {:ok, conversation} ->
           Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
 
           Conversations.broadcast_to_org(
@@ -116,10 +113,10 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
   def handle_event("unsnooze", %{"id" => id}, socket) do
     with {id, ""} <- Integer.parse(id),
          true <- queue_contains_conversation?(socket, id) do
-      conversation = Conversations.get_conversation!(id)
-
-      case Conversations.unsnooze(conversation) do
-        {:ok, _} ->
+      case Conversations.with_access(socket.assigns.current_scope, id, fn current, _staff ->
+             Conversations.unsnooze(current)
+           end) do
+        {:ok, conversation} ->
           Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, id})
 
           Conversations.broadcast_to_org(
@@ -178,21 +175,16 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
 
   defp load_conversations(socket) do
     filter = socket.assigns.filter
-    # Scope to operator's organization (nil for super_admin = all orgs).
-    # Org scoping also includes unlinked (nil-org) conversations.
-    org_id = socket.assigns[:scoped_organization_id]
     now = DateTime.utc_now()
 
     # Read operator settings once for the whole render. Without this each
     # row re-reads them (four uncached Repo.one calls) and re-counts its own
     # 24h messages, which is a remote round trip each in production.
-    settings = Scoring.preload_settings()
+    settings = Scoring.preload_settings(socket.assigns.current_tenant.id)
 
     conversations =
-      Conversations.list_for_attention_queue(
+      Conversations.list(socket.assigns.current_scope,
         filter: filter,
-        organization_id: org_id,
-        tenant_id: socket.assigns.current_tenant.id,
         label_id: socket.assigns.label_id
       )
 
@@ -231,7 +223,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
     )
     |> assign(
       :labels,
-      Labels.list_for_operator(socket.assigns.current_operator, socket.assigns.current_tenant.id)
+      Labels.list(socket.assigns.current_scope)
     )
   end
 
@@ -285,7 +277,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
           Forward your support mailbox, verify the sending address and test a reply.
         </p>
         <.link
-          navigate={~p"/operator/email-setup"}
+          navigate={~p"/app/settings/email"}
           class="mt-2 inline-block text-sm font-medium text-indigo-600 dark:text-indigo-300"
         >{if @email_setup.configured?, do: "Continue setup", else: "Set up email"}</.link>
       </section>
@@ -395,7 +387,7 @@ defmodule CustyardWeb.Operator.AttentionQueueLive do
       class={"bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-4 hover:shadow-md transition-shadow border-l-4 #{@border_color}"}
       data-testid={"operator-queue-card-#{@item.conversation.id}"}
     >
-      <.link navigate={~p"/operator/conversation/#{@item.conversation.id}"} class="block">
+      <.link navigate={~p"/app/threads/#{@item.conversation.id}"} class="block">
         <div class="flex items-start justify-between mb-1">
           <div class="flex items-center gap-2">
             <span

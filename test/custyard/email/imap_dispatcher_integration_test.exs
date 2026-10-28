@@ -8,7 +8,7 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
 
   These tests exercise the pipeline an IMAP channel import runs
   (`Custyard.Email.ImapPoll`):
-    Parser.parse -> Adapters.Email.normalize -> Dispatcher.dispatch(route, normalized)
+    Parser.parse -> Adapters.Email.normalize -> Dispatcher.dispatch(route, normalized, channel: hd(Custyard.InboundChannels.list_for_route(route.id)))
 
   They do NOT start an IMAP server or poller; `ImapPollTest` covers the
   channel path.
@@ -25,9 +25,11 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
 
   # Helper: build a route with sender_matching enabled
   defp create_route_with_webhook(attrs) do
+    org = Repo.get!(Custyard.Organization, attrs.organization_id)
+
     route =
       %InboundRoute{}
-      |> InboundRoute.changeset(attrs)
+      |> InboundRoute.changeset(%{tenant_id: org.tenant_id})
       |> Repo.insert!()
 
     %InboundRouteWebhook{}
@@ -37,6 +39,14 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
       enabled: true
     })
     |> Repo.insert!()
+
+    insert_inbound_channel(
+      tenant_id: org.tenant_id,
+      inbound_route_id: route.id,
+      default_organization_id: org.id,
+      default_project_id: attrs[:project_id],
+      state: :active
+    )
 
     route
   end
@@ -68,7 +78,9 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
   defp parse_normalize_dispatch(raw_email, route) do
     with {:ok, parsed} <- Parser.parse(raw_email),
          {:ok, normalized} <- EmailAdapter.normalize(parsed) do
-      Dispatcher.dispatch(route, normalized)
+      Dispatcher.dispatch(route, normalized,
+        channel: hd(Custyard.InboundChannels.list_for_route(route.id))
+      )
     end
   end
 
@@ -120,8 +132,15 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
       # Route exists but has no webhooks enabled
       route =
         %InboundRoute{}
-        |> InboundRoute.changeset(%{organization_id: org.id, route_type: :general})
+        |> InboundRoute.changeset(%{tenant_id: org.tenant_id})
         |> Repo.insert!()
+
+      insert_inbound_channel(
+        tenant_id: org.tenant_id,
+        inbound_route_id: route.id,
+        default_organization_id: org.id,
+        state: :active
+      )
 
       raw = sample_email("sender@external.com", "inbox@misconfigured.example.com")
 
@@ -132,9 +151,9 @@ defmodule Custyard.Email.ImapDispatcherIntegrationTest do
       assert {:ok, _conversation} = result
     end
 
-    test "get_general_route returns nil for non-existent org_id" do
+    test "no route exists for a nonexistent tenant" do
       # Simulates IMAP poller configured with an org that was deleted
-      assert InboundRoutes.get_general_route(999_999_999) == nil
+      assert InboundRoutes.list_for_tenant(999_999_999) == []
     end
   end
 end

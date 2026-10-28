@@ -43,20 +43,21 @@ defmodule Custyard.Slugs do
   indexes arbitrate races: a lost race surfaces as a changeset error on
   `:slug` (taken) or `:conversation_id` (one live claim per conversation).
 
-  `expires_at` = now + `Settings.get_intake_config().slug_claim_ttl_hours`.
+  `expires_at` = now + `Settings.get_intake_config(conversation.tenant_id).slug_claim_ttl_hours`.
 
   Returns `{:ok, slug_record, confirmation_token}` — the ONLY place the
   plaintext confirmation token for a new claim exists; only its hash is
   stored — or `{:error, changeset}`.
   """
   def claim(slug_text, email, %Conversation{} = conversation) do
-    ttl_hours = Settings.get_intake_config().slug_claim_ttl_hours
+    ttl_hours = Settings.get_intake_config(conversation.tenant_id).slug_claim_ttl_hours
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     {token, hash} = Token.generate()
 
     changeset =
       Slug.claim_changeset(%Slug{}, %{
         slug: slug_text,
+        tenant_id: conversation.tenant_id,
         email: email,
         conversation_id: conversation.id,
         expires_at: DateTime.add(now, ttl_hours, :hour),
@@ -74,11 +75,12 @@ defmodule Custyard.Slugs do
     slug_text = Ecto.Changeset.get_field(changeset, :slug)
     email = Ecto.Changeset.get_field(changeset, :email)
     conversation_id = Ecto.Changeset.get_field(changeset, :conversation_id)
+    tenant_id = Ecto.Changeset.get_field(changeset, :tenant_id)
 
     Repo.transaction(fn ->
-      release_expired_claims(slug_text, conversation_id, now)
+      release_expired_claims(slug_text, conversation_id, tenant_id, now)
 
-      if live_claim_count_for_email(email, now) >= @max_live_claims_per_email do
+      if live_claim_count_for_email(email, tenant_id, now) >= @max_live_claims_per_email do
         changeset
         |> Ecto.Changeset.add_error(:email, "already anchors the maximum number of live claims")
         |> Map.put(:action, :insert)
@@ -100,20 +102,20 @@ defmodule Custyard.Slugs do
   # rows must not block either unique index — neither the slug being
   # claimed by a new party nor the one-claim-per-conversation rule when the
   # conversation's own earlier claim lapsed.
-  defp release_expired_claims(slug_text, conversation_id, now) do
+  defp release_expired_claims(slug_text, conversation_id, tenant_id, now) do
     Repo.delete_all(
       from s in Slug,
         where:
-          s.status == :claimed and s.expires_at <= ^now and
+          s.tenant_id == ^tenant_id and s.status == :claimed and s.expires_at <= ^now and
             (s.slug == ^slug_text or s.conversation_id == ^conversation_id)
     )
   end
 
-  defp live_claim_count_for_email(email, now) do
+  defp live_claim_count_for_email(email, tenant_id, now) do
     Repo.aggregate(
       from(s in Slug,
         where:
-          s.email == ^email and
+          s.tenant_id == ^tenant_id and s.email == ^email and
             (s.status == :confirmed or (s.status == :claimed and s.expires_at > ^now))
       ),
       :count
@@ -127,22 +129,22 @@ defmodule Custyard.Slugs do
   Expired, consumed, and unknown tokens are all `{:error, :invalid}`,
   indistinguishable by design.
   """
-  def peek(token) when is_binary(token) do
+  def peek(token, tenant_id) when is_binary(token) and is_integer(tenant_id) do
     hash = Token.hash(token)
     now = DateTime.utc_now()
 
     case Repo.one(
-           from s in Slug,
-             where:
-               s.confirmation_token_hash == ^hash and s.status == :claimed and
-                 s.expires_at > ^now
+           from s in active_tenant_claims(tenant_id),
+             where: s.confirmation_token_hash == ^hash,
+             where: s.status == :claimed,
+             where: s.expires_at > ^now
          ) do
       nil -> {:error, :invalid}
       %Slug{} = slug -> {:ok, slug}
     end
   end
 
-  def peek(_token), do: {:error, :invalid}
+  def peek(_token, _tenant_id), do: {:error, :invalid}
 
   @doc """
   Consume a confirmation token: race-safe conditional UPDATE.
@@ -154,21 +156,24 @@ defmodule Custyard.Slugs do
   invalid, expired, already-used, or purged — is `{:error, :invalid}`:
   one failure shape, no validity oracle.
   """
-  def confirm(token) when is_binary(token) do
+  def confirm(token, tenant_id) when is_binary(token) and is_integer(tenant_id) do
     hash = Token.hash(token)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    case Repo.one(from s in Slug, where: s.confirmation_token_hash == ^hash) do
+    case Repo.one(
+           from s in active_tenant_claims(tenant_id), where: s.confirmation_token_hash == ^hash
+         ) do
       nil ->
         {:error, :invalid}
 
       slug ->
         {count, _} =
           Repo.update_all(
-            from(s in Slug,
-              where:
-                s.id == ^slug.id and s.confirmation_token_hash == ^hash and
-                  s.status == :claimed and s.expires_at > ^now
+            from(s in active_tenant_claims(tenant_id),
+              where: s.id == ^slug.id,
+              where: s.confirmation_token_hash == ^hash,
+              where: s.status == :claimed,
+              where: s.expires_at > ^now
             ),
             set: [
               status: :confirmed,
@@ -198,7 +203,16 @@ defmodule Custyard.Slugs do
     end
   end
 
-  def confirm(_token), do: {:error, :invalid}
+  def confirm(_token, _tenant_id), do: {:error, :invalid}
+
+  defp active_tenant_claims(tenant_id) do
+    from s in Slug,
+      where: s.tenant_id == ^tenant_id,
+      where:
+        s.tenant_id in subquery(
+          from t in Custyard.Tenant, where: t.status == "active", select: t.id
+        )
+  end
 
   @doc """
   Rotate the confirmation token on a live claim (the resend path: only the
@@ -239,13 +253,38 @@ defmodule Custyard.Slugs do
   organization deletion. The delete is conditional on status so a row
   promoted between load and click is never deleted (`{:error, :not_found}`).
   """
-  def release(%Slug{status: :provisioned}), do: {:error, :provisioned}
+  def release(%Custyard.Scope{} = scope, %Slug{id: id}) do
+    Repo.transaction(fn ->
+      authorize_release!(scope)
 
-  def release(%Slug{id: id} = slug) do
-    {count, _} =
-      Repo.delete_all(from s in Slug, where: s.id == ^id and s.status in [:claimed, :confirmed])
+      case get_slug(scope, id) do
+        nil ->
+          Repo.rollback(:not_found)
 
-    if count == 1, do: {:ok, slug}, else: {:error, :not_found}
+        %Slug{status: :provisioned} ->
+          Repo.rollback(:provisioned)
+
+        slug ->
+          case Repo.delete_all(
+                 from s in Slug,
+                   where:
+                     s.id == ^id and s.tenant_id == ^scope.tenant_id and
+                       s.status in [:claimed, :confirmed]
+               ) do
+            {1, _} -> slug
+            _ -> Repo.rollback(:not_found)
+          end
+      end
+    end)
+  end
+
+  defp authorize_release!(scope) do
+    Custyard.OperatorAccess.lock_current(%Custyard.OperatorAccount{id: scope.staff_id})
+
+    case Custyard.Scope.current_staff(scope) do
+      %{role: "admin"} -> :ok
+      _ -> Repo.rollback(:unauthorized)
+    end
   end
 
   @doc """
@@ -264,7 +303,10 @@ defmodule Custyard.Slugs do
   caller only needs to know whether the promotion happened, so this skips
   the extra `SELECT` a re-fetch would cost on every conversion.
   """
-  def promote(%Conversation{id: conversation_id}, %Organization{id: organization_id}) do
+  def promote(%Conversation{id: conversation_id, tenant_id: tenant_id}, %Organization{
+        id: organization_id,
+        tenant_id: tenant_id
+      }) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     {count, _} =
@@ -286,14 +328,14 @@ defmodule Custyard.Slugs do
   Not exposed as a public probe endpoint — the claim attempt itself is the
   availability check, and its changeset error is the only oracle.
   """
-  def available?(slug_text) when is_binary(slug_text) do
+  def available?(slug_text, tenant_id) when is_binary(slug_text) do
     normalized = slug_text |> String.trim() |> String.downcase()
     now = DateTime.utc_now()
 
     not Repo.exists?(
       from s in Slug,
         where:
-          s.slug == ^normalized and
+          s.tenant_id == ^tenant_id and s.slug == ^normalized and
             (s.status in [:confirmed, :provisioned] or
                (s.status == :claimed and s.expires_at > ^now))
     )
@@ -319,14 +361,23 @@ defmodule Custyard.Slugs do
   @doc """
   All registry rows for the operator view, newest first.
   """
-  def list_slugs do
-    Repo.all(from s in Slug, order_by: [desc: s.inserted_at, desc: s.id])
+  def list_slugs(%Custyard.Scope{tenant_id: tenant_id} = scope) do
+    if Custyard.Scope.current_staff(scope),
+      do:
+        Repo.all(
+          from s in Slug,
+            where: s.tenant_id == ^tenant_id,
+            order_by: [desc: s.inserted_at, desc: s.id]
+        ),
+      else: []
   end
 
   @doc """
   Fetch a slug row by id. Returns `nil` when not found.
   """
-  def get_slug(id), do: Repo.get(Slug, id)
+  def get_slug(%Custyard.Scope{tenant_id: tenant_id} = scope, id) do
+    if Custyard.Scope.current_staff(scope), do: Repo.get_by(Slug, id: id, tenant_id: tenant_id)
+  end
 
   @doc """
   Delete every claimed row whose expiry has passed as of `now` (injectable

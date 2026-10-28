@@ -25,7 +25,12 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       # Create super_admin operator (default role)
       {:ok, operator} =
         %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: "super@example.com", password: "password123"})
+        |> OperatorAccount.changeset(%{
+          role: "admin",
+          tenant_id: Process.get(:factory_tenant_id),
+          email: "super@example.com",
+          password: "password123"
+        })
         |> Repo.insert()
 
       conn =
@@ -40,7 +45,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       conv1 = insert_neglected_conversation(org1.id)
       conv2 = insert_neglected_conversation(org2.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, _view, html} = live(conn, ~p"/app/neglect")
 
       # Super admin should see both organizations' conversations
       assert html =~ "Org One"
@@ -52,12 +57,15 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
     test "admin sees only their organization's conversations", %{conn: conn} do
       # Create two organizations
       org1 = insert_organization(name: "Admin Org", tier: :standard)
-      org2 = insert_organization(name: "Other Org", tier: :standard)
+
+      org2 =
+        insert_organization(name: "Other Org", tier: :standard, tenant_id: insert_tenant().id)
 
       # Create admin operator scoped to org1
       {:ok, operator} =
         %OperatorAccount{}
         |> OperatorAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
           email: "admin@example.com",
           password: "password123",
           role: "admin",
@@ -74,7 +82,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       conv1 = insert_neglected_conversation(org1.id)
       conv2 = insert_neglected_conversation(org2.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, _view, html} = live(conn, ~p"/app/neglect")
 
       # Admin should only see their organization's conversations
       assert html =~ "Admin Org"
@@ -86,12 +94,15 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
     test "agent sees only their organization's conversations", %{conn: conn} do
       # Create two organizations
       org1 = insert_organization(name: "Agent Org", tier: :standard)
-      org2 = insert_organization(name: "Another Org", tier: :standard)
+
+      org2 =
+        insert_organization(name: "Another Org", tier: :standard, tenant_id: insert_tenant().id)
 
       # Create agent operator scoped to org1
       {:ok, operator} =
         %OperatorAccount{}
         |> OperatorAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
           email: "agent@example.com",
           password: "password123",
           role: "agent",
@@ -108,7 +119,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       conv1 = insert_neglected_conversation(org1.id)
       conv2 = insert_neglected_conversation(org2.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, _view, html} = live(conn, ~p"/app/neglect")
 
       # Agent should only see their organization's conversations
       assert html =~ "Agent Org"
@@ -123,7 +134,12 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       # Default setup with super_admin for basic functionality tests
       {:ok, operator} =
         %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: "test@example.com", password: "password123"})
+        |> OperatorAccount.changeset(%{
+          role: "admin",
+          tenant_id: Process.get(:factory_tenant_id),
+          email: "test@example.com",
+          password: "password123"
+        })
         |> Repo.insert()
 
       conn =
@@ -135,13 +151,13 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
     end
 
     test "renders neglect report page", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, _view, html} = live(conn, ~p"/app/neglect")
 
       assert html =~ "Neglect Report"
     end
 
     test "shows empty state when no neglected conversations", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, _view, html} = live(conn, ~p"/app/neglect")
 
       assert html =~ "No items are currently past their neglect thresholds"
     end
@@ -150,7 +166,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       org = insert_organization(name: "Test Org", tier: :standard)
       conv = insert_neglected_conversation(org.id)
 
-      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, _view, html} = live(conn, ~p"/app/neglect")
 
       assert html =~ "Test Org"
       assert html =~ conv.subject
@@ -173,7 +189,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
           last_operator_action_at: past_time
         )
 
-      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, _view, html} = live(conn, ~p"/app/neglect")
 
       assert html =~ "Unlinked prospect"
       assert html =~ conv.subject
@@ -188,7 +204,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       # 50 hours idle = critical for standard tier (> 48 hours)
       _critical_conv = insert_neglected_conversation(org.id, 50)
 
-      {:ok, _view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, _view, html} = live(conn, ~p"/app/neglect")
 
       assert html =~ "critical"
       assert html =~ "warning"
@@ -199,7 +215,12 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
     setup %{conn: conn} do
       {:ok, operator} =
         %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: "test@example.com", password: "password123"})
+        |> OperatorAccount.changeset(%{
+          role: "admin",
+          tenant_id: Process.get(:factory_tenant_id),
+          email: "test@example.com",
+          password: "password123"
+        })
         |> Repo.insert()
 
       conn =
@@ -214,7 +235,7 @@ defmodule CustyardWeb.Operator.NeglectReportLiveTest do
       org = insert_organization(tier: :standard)
       conv = insert_neglected_conversation(org.id)
 
-      {:ok, view, html} = live(conn, ~p"/operator/neglect")
+      {:ok, view, html} = live(conn, ~p"/app/neglect")
       assert html =~ conv.subject
 
       # Broadcast update

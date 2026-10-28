@@ -33,7 +33,46 @@ defmodule CustyardWeb.ConnCase do
 
   setup tags do
     Custyard.DataCase.setup_sandbox(tags)
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+    host = Custyard.Tenants.app_host()
+
+    unless tags[:explicit_tenant_hosts] do
+      tenant = Custyard.Factory.insert_tenant()
+      Process.put(:factory_tenant_id, tenant.id)
+      Custyard.Tenants.add_host(tenant.id, host)
+      if host != "www.example.com", do: Custyard.Tenants.add_host(tenant.id, "www.example.com")
+    end
+
+    {:ok, conn: %{Phoenix.ConnTest.build_conn() | host: host}}
+  end
+
+  defp portal_staff_scope(tenant_id) do
+    staff =
+      Custyard.Repo.get_by(Custyard.OperatorAccount, tenant_id: tenant_id, role: "admin") ||
+        Custyard.Factory.insert_operator_account(tenant_id: tenant_id, role: "admin")
+
+    Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(tenant_id))
+  end
+
+  def portal_scope(%Custyard.Organization{} = organization),
+    do: portal_staff_scope(organization.tenant_id)
+
+  def portal_token(%Custyard.Organization{} = organization) do
+    key = {:portal_token, organization.id}
+
+    case Process.get(key) do
+      nil ->
+        {:ok, _, token} =
+          Custyard.PortalCredentials.issue(
+            portal_scope(organization),
+            organization.id
+          )
+
+        Process.put(key, token)
+        token
+
+      token ->
+        token
+    end
   end
 
   @doc """
@@ -44,6 +83,23 @@ defmodule CustyardWeb.ConnCase do
   be initialized (`init_test_session/2`).
   """
   def put_operator_session(conn, %Custyard.OperatorAccount{} = operator) do
+    tenant = Custyard.Tenants.get_tenant!(operator.tenant_id)
+    host = Custyard.Tenants.host(tenant)
+
+    host =
+      if host do
+        host
+      else
+        hostname = "tenant-#{tenant.id}.test"
+        {:ok, _} = Custyard.Tenants.add_host(tenant.id, hostname)
+        hostname
+      end
+
+    conn =
+      if conn.host in [Custyard.Tenants.app_host(), "www.example.com"],
+        do: %{conn | host: host},
+        else: conn
+
     conn
     |> Plug.Conn.put_session(:operator_id, operator.id)
     |> Plug.Conn.put_session(:operator_claim, Custyard.OperatorAccount.session_claim(operator))

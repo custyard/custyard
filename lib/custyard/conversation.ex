@@ -18,7 +18,6 @@ defmodule Custyard.Conversation do
   # Sources whose conversations may exist without an organization:
   # - :disambiguation — limbo conversations awaiting manual routing
   # - :public_intake — anonymous prospect conversations (linked later, if ever)
-  @org_exempt_sources [:disambiguation, :public_intake]
 
   @neglect_levels [:ok, :warning, :critical]
 
@@ -35,42 +34,42 @@ defmodule Custyard.Conversation do
   }
 
   schema "conversations" do
-    field :tenant_id, :id, default: 1
-    belongs_to :tenant, Custyard.Tenant, define_field: false
-    field :subject, :string
-    field :state, Ecto.Enum, values: @states, default: :new
-    field :urgency, Ecto.Enum, values: @urgencies, default: :normal
-    field :source, Ecto.Enum, values: @sources, default: :email
-    field :cached_score, :integer, default: 0
+    field(:tenant_id, :id)
+    belongs_to(:tenant, Custyard.Tenant, define_field: false)
+    field(:subject, :string)
+    field(:state, Ecto.Enum, values: @states, default: :new)
+    field(:urgency, Ecto.Enum, values: @urgencies, default: :normal)
+    field(:source, Ecto.Enum, values: @sources, default: :email)
+    field(:cached_score, :integer, default: 0)
 
     # CTA provenance: which public intake source (by key string, not FK)
     # created this conversation. Creation-only — deliberately absent from the
     # changeset/2 cast list; set via intake_changeset/2 at creation.
-    field :intake_source_key, :string
+    field(:intake_source_key, :string)
 
-    field :last_operator_action_at, :utc_datetime
-    field :last_customer_action_at, :utc_datetime
-    field :snoozed_until, :utc_datetime
+    field(:last_operator_action_at, :utc_datetime)
+    field(:last_customer_action_at, :utc_datetime)
+    field(:snoozed_until, :utc_datetime)
 
     # Tracks the last neglect level that triggered a notification
     # Prevents duplicate alerts when recalculating
-    field :last_neglect_notification, Ecto.Enum, values: @neglect_levels
+    field(:last_neglect_notification, Ecto.Enum, values: @neglect_levels)
 
     # Triage flagged the first message as spam or unauthenticated from an
     # unknown sender (spec-inbound-channels D6). A badge and a notification
     # suppressor, never a filter; cleared via suspect_changeset/2.
-    field :suspect, :boolean, default: false
+    field(:suspect, :boolean, default: false)
     # ISO 639-1 code detected from the first customer message (enrichment);
     # nil when the text was too short or ambiguous.
-    field :language, :string
+    field(:language, :string)
 
-    belongs_to :organization, Custyard.Organization
-    belongs_to :inbound_channel, Custyard.InboundChannel
-    belongs_to :contact, Custyard.Contact
-    belongs_to :project, Custyard.Project
-    has_one :prospect, Custyard.Prospect
-    has_many :messages, Custyard.Message
-    has_many :tasks, Custyard.Task
+    belongs_to(:organization, Custyard.Organization)
+    belongs_to(:inbound_channel, Custyard.InboundChannel)
+    belongs_to(:contact, Custyard.Contact)
+    belongs_to(:project, Custyard.Project)
+    has_one(:prospect, Custyard.Prospect)
+    has_many(:messages, Custyard.Message)
+    has_many(:tasks, Custyard.Task)
 
     timestamps(type: :utc_datetime)
   end
@@ -101,7 +100,8 @@ defmodule Custyard.Conversation do
     ])
     |> put_organization_tenant()
     |> validate_tenant_ownership()
-    |> validate_required_organization()
+    |> validate_customer_relationships()
+    |> validate_required([:tenant_id])
     |> foreign_key_constraint(:tenant_id)
     |> validate_required([:subject])
     |> validate_length(:subject, max: 500)
@@ -224,8 +224,15 @@ defmodule Custyard.Conversation do
     case get_field(changeset, :organization_id) do
       id when is_integer(id) ->
         case Custyard.Repo.get(Custyard.Organization, id) do
-          %{tenant_id: tenant_id} -> put_change(changeset, :tenant_id, tenant_id)
-          _ -> changeset
+          %{tenant_id: tenant_id} ->
+            case get_field(changeset, :tenant_id) do
+              nil -> put_change(changeset, :tenant_id, tenant_id)
+              ^tenant_id -> changeset
+              _ -> add_error(changeset, :organization_id, "must belong to the same tenant")
+            end
+
+          _ ->
+            changeset
         end
 
       _ ->
@@ -256,6 +263,19 @@ defmodule Custyard.Conversation do
       else: changeset
   end
 
+  defp validate_customer_relationships(changeset) do
+    organization_id = get_field(changeset, :organization_id)
+
+    Enum.reduce([contact_id: Custyard.Contact, project_id: Custyard.Project], changeset, fn
+      {field, schema}, acc ->
+        case get_field(acc, field) && Custyard.Repo.get(schema, get_field(acc, field)) do
+          %{organization_id: ^organization_id} -> acc
+          nil -> acc
+          _ -> add_error(acc, field, "must belong to the thread's customer")
+        end
+    end)
+  end
+
   defp validate_reference_tenant(changeset, field, schema, tenant_id) do
     case get_field(changeset, field) do
       id when is_integer(id) ->
@@ -282,13 +302,4 @@ defmodule Custyard.Conversation do
   defp reference_tenant(%{tenant_id: tenant_id}), do: tenant_id
 
   # Disambiguation and public-intake conversations can have nil organization_id
-  defp validate_required_organization(changeset) do
-    source = get_field(changeset, :source)
-
-    if source in @org_exempt_sources do
-      changeset
-    else
-      validate_required(changeset, [:organization_id])
-    end
-  end
 end

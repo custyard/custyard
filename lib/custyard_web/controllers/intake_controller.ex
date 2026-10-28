@@ -54,7 +54,7 @@ defmodule CustyardWeb.IntakeController do
   defp create_conversation(conn, body, submission) do
     source = conn.assigns.intake_source
 
-    case Intake.create_intake_conversation(source.key, body) do
+    case Intake.create_intake_conversation(source.key, body, tenant_id: source.tenant_id) do
       {:ok, %{conversation: conversation, access_token: token}} ->
         capture_result = maybe_capture_email(conversation, submission.email, submission.notify)
         receipt_result = maybe_send_receipt(capture_result, conversation, source, token)
@@ -64,7 +64,7 @@ defmodule CustyardWeb.IntakeController do
         conn
         |> ConversationCookie.put_conversation_cookie(token)
         |> maybe_flash_rejected_email(capture_result)
-        |> redirect(to: ~p"/c/#{token}")
+        |> redirect(to: ~p"/threads/#{token}")
 
       # The source was disabled or deleted between load_source and the
       # context's own lookup — same treatment as an unknown key, but a
@@ -119,7 +119,7 @@ defmodule CustyardWeb.IntakeController do
       %{email: email} when is_binary(email) ->
         case ReceiptEmail.send_receipt(email, source,
                conversation_url:
-                 Tenants.url(Tenants.get_tenant!(source.tenant_id)) <> ~p"/c/#{token}"
+                 Tenants.url(Tenants.get_tenant!(source.tenant_id)) <> ~p"/threads/#{token}"
              ) do
           {:ok, _} -> :sent
           {:error, _} -> :skipped
@@ -208,8 +208,13 @@ defmodule CustyardWeb.IntakeController do
     token = conn.cookies[ConversationCookie.cookie_name()]
 
     conversation_path =
-      if is_binary(token) and Intake.access_token_valid?(token) do
-        ~p"/c/#{token}"
+      with token when is_binary(token) <- token,
+           {:ok, conversation} <-
+             Intake.get_conversation_by_access_token(token, conn.assigns.host_tenant.id),
+           true <- conversation.tenant_id == conn.assigns.host_tenant.id do
+        ~p"/threads/#{token}"
+      else
+        _ -> nil
       end
 
     assign(conn, :conversation_path, conversation_path)
@@ -220,7 +225,7 @@ defmodule CustyardWeb.IntakeController do
   # only builds the path. Omitted when none exists.
   defp assign_active_path(conn, %IntakeSource{mode: :passive}) do
     active = Intake.first_enabled_active_source(conn.assigns.intake_source.tenant_id)
-    assign(conn, :active_path, active && ~p"/i/#{active.key}")
+    assign(conn, :active_path, active && ~p"/intake/#{active.key}")
   end
 
   defp assign_active_path(conn, _source), do: assign(conn, :active_path, nil)
@@ -228,28 +233,25 @@ defmodule CustyardWeb.IntakeController do
   ## Plugs ---------------------------------------------------------------------
 
   defp assign_branding(conn, _opts) do
-    assign(conn, :branding, Settings.get_branding())
+    assign(conn, :branding, Settings.get_branding(conn.assigns.host_tenant.id))
   end
 
   # Unknown or disabled keys render the standard 404 — table lookup only,
   # request input is never converted to an atom (Intake.get_enabled_source/1).
   defp load_source(conn, _opts) do
-    case Intake.get_enabled_source(conn.path_params["source_key"]) do
+    case Intake.get_enabled_source(conn.path_params["source_key"], conn.assigns.host_tenant.id) do
       nil ->
         render_not_found(conn, :unknown_key)
 
       %IntakeSource{} = source ->
         host_tenant = conn.assigns[:host_tenant]
 
-        if is_nil(host_tenant) or source.tenant_id == host_tenant.id do
+        if host_tenant && source.tenant_id == host_tenant.id do
           conn
           |> assign(:intake_source, source)
           |> assign(
             :branding,
-            if(source.tenant_id == 1,
-              do: Settings.get_branding(),
-              else: Tenants.branding(Tenants.get_tenant!(source.tenant_id))
-            )
+            Tenants.branding(host_tenant)
           )
         else
           render_not_found(conn, :unknown_key)

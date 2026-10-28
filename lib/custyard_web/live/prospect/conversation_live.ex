@@ -31,7 +31,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   alias Custyard.Intake.{ClaimEmail, ReceiptEmail}
   alias Custyard.{Conversations, Intake, IntakeSource, RateLimit, Slug, Slugs}
 
-  @unavailable_path "/c/unavailable"
+  @unavailable_path "/threads/unavailable"
 
   @impl true
   def mount(params, _session, socket) do
@@ -52,7 +52,10 @@ defmodule CustyardWeb.Prospect.ConversationLive do
      # (IntakeSource.link?/1 handles nil). Operator-configured branding is
      # identical for every prospect of the source, so enumeration neutrality
      # is unaffected.
-     |> assign(:intake_source, Intake.get_source_by_key(conversation.intake_source_key))
+     |> assign(
+       :intake_source,
+       Intake.get_source_by_key(conversation.intake_source_key, conversation.tenant_id)
+     )
      |> assign(:prospect, conversation.prospect)
      |> assign(:messages, conversation.messages)
      |> assign(:tasks, Conversations.list_portal_visible_tasks(conversation.id))
@@ -250,7 +253,8 @@ defmodule CustyardWeb.Prospect.ConversationLive do
     case socket.assigns.intake_source do
       %IntakeSource{} = source ->
         ReceiptEmail.send_receipt(email, source,
-          conversation_url: conversation_origin(socket) <> ~p"/c/#{socket.assigns.access_token}"
+          conversation_url:
+            conversation_origin(socket) <> ~p"/threads/#{socket.assigns.access_token}"
         )
 
       _no_source ->
@@ -324,8 +328,8 @@ defmodule CustyardWeb.Prospect.ConversationLive do
     base = conversation_origin(socket)
 
     ClaimEmail.send_confirmation(slug,
-      confirm_url: base <> ~p"/claim/#{confirmation_token}",
-      conversation_url: base <> ~p"/c/#{socket.assigns.access_token}"
+      confirm_url: base <> ~p"/claims/#{confirmation_token}",
+      conversation_url: base <> ~p"/threads/#{socket.assigns.access_token}"
     )
   end
 
@@ -367,7 +371,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
   # check inside ClaimEmail.send_confirmation/2 stays the single owner of
   # the budget.
   defp resend_confirmation(socket, claim) do
-    case RateLimit.peek(:claim_email_send, claim.email) do
+    case RateLimit.peek(:claim_email_send, {claim.tenant_id, claim.email}) do
       {:deny, _retry_after_ms} ->
         {:noreply,
          put_flash(
@@ -508,6 +512,7 @@ defmodule CustyardWeb.Prospect.ConversationLive do
       slug: slug,
       email: email,
       conversation_id: socket.assigns.conversation.id,
+      tenant_id: socket.assigns.conversation.tenant_id,
       expires_at: DateTime.utc_now() |> DateTime.truncate(:second),
       confirmation_token_hash: "shape-check-placeholder"
     })

@@ -9,7 +9,7 @@
         <img :if={branding.logo} src={branding.logo} alt="" class="h-12 w-auto mx-auto mb-3" />
         <h1 class="text-xl font-bold text-gray-900 dark:text-zinc-100">{branding.name}</h1>
         <p class="text-sm text-gray-500 dark:text-zinc-400 mt-1">
-          {if branding.tenant?, do: "Staff sign in", else: "Operator Login"}
+          {assigns[:auth_title] || "Staff sign in"}
         </p>
       </div>
 
@@ -35,7 +35,18 @@
         Enter your email address and we'll send you a login link.
       </p>
 
-      <form action={~p"/operator/login"} method="post" data-testid="auth-form">
+      <p :if={assigns[:auth_base] == "/admin"} class="text-sm mb-4">
+        Instance administrators manage this installation. Tenant staff sign in through their workspace.
+      </p>
+      <p :if={assigns[:auth_base] != "/admin"} class="text-sm mb-4">
+        Staff access for this workspace.
+        <a href={CustyardWeb.Endpoint.url() <> "/admin/login"} class="underline">Instance admin sign in</a>
+      </p>
+      <form
+        action={(assigns[:auth_base] || "/app") <> "/login"}
+        method="post"
+        data-testid="auth-form"
+      >
         <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
 
         <div class="mb-6">

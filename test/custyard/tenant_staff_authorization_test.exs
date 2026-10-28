@@ -29,7 +29,6 @@ defmodule Custyard.TenantStaffAuthorizationTest do
                })
 
       assert invited.tenant_id == c.tenant.id
-      assert invited.organization_id == nil
       assert invited.role == role
     end
 
@@ -69,7 +68,7 @@ defmodule Custyard.TenantStaffAuthorizationTest do
 
   test "administrator reassignment after an event refresh prevents writes to the previous tenant",
        c do
-    c.admin |> OperatorAccount.role_changeset(%{tenant_id: c.other.id}) |> Repo.update!()
+    c.admin |> Ecto.Changeset.change(tenant_id: c.other.id) |> Repo.update!()
     assert_unauthorized(c.admin, c.tenant)
   end
 
@@ -78,36 +77,28 @@ defmodule Custyard.TenantStaffAuthorizationTest do
     assert_unauthorized(c.admin, c.tenant)
   end
 
-  test "creating tenants rechecks the current instance administrator and session", c do
-    operator =
-      %OperatorAccount{}
-      |> OperatorAccount.changeset(%{email: "instance@managed.example", role: "super_admin"})
-      |> Repo.insert!()
+  test "creating tenants rechecks the installation administrator claim" do
+    {:created, admin} = Custyard.InstanceAdmins.create_admin("instance@example.com")
 
     assert {:ok, _} =
-             Tenants.create_tenant_for_operator(operator, %{
-               name: "New tenant",
-               slug: "created-by-instance"
+             Tenants.create_tenant_for_admin(admin, %{
+               name: "New",
+               slug: "created",
+               hostname: "created.example.com"
              })
 
-    assert {:error, :unauthorized} =
-             Tenants.create_tenant_for_operator(%{c.agent | role: "super_admin"}, %{
-               name: "Forged tenant",
-               slug: "forged-by-instance"
-             })
-
-    operator
+    admin
     |> Ecto.Changeset.change(session_claim: OperatorAccount.generate_session_claim())
     |> Repo.update!()
 
     assert {:error, :unauthorized} =
-             Tenants.create_tenant_for_operator(operator, %{
-               name: "Revoked tenant",
-               slug: "revoked-by-instance"
+             Tenants.create_tenant_for_admin(admin, %{
+               name: "Revoked",
+               slug: "revoked",
+               hostname: "revoked.example.com"
              })
 
-    refute Repo.get_by(Custyard.Tenant, slug: "forged-by-instance")
-    refute Repo.get_by(Custyard.Tenant, slug: "revoked-by-instance")
+    refute Repo.get_by(Custyard.Tenant, slug: "revoked")
   end
 
   defp assert_unauthorized(operator, tenant) do

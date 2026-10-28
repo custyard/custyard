@@ -1,24 +1,5 @@
 defmodule Custyard.InboundRoutes do
-  @moduledoc """
-  Context for inbound route management.
-
-  Routes are invisible infrastructure — operators never interact with them
-  directly. Route lifecycle is tied to organization and project lifecycle:
-  creating an org auto-provisions a general route via the Lettermint API.
-
-  Note: Deleting an organization cascades to its routes in the local database
-  via foreign key constraints, but does not call the Lettermint API to remove
-  remote routes. Use `delete_route/1` directly for explicit cleanup.
-
-  Lettermint provisioning records the remote route ID together with where the
-  route receives mail (`lettermint_route_domain`, `lettermint_inbound_address`
-  and the optional custom domain). Routes created before those fields existed
-  have a nil domain; `sync_remote_route/1` and `sync_remote_routes_missing_domain/0`
-  (also `mix custyard.lettermint.sync_routes`) backfill them from the API.
-
-  Provides CRUD operations for InboundRoute and InboundRouteWebhook,
-  following the context pattern used elsewhere in the application.
-  """
+  @moduledoc "Manage tenant-owned inbound provider routes and webhook consumers."
 
   require Logger
 
@@ -29,17 +10,15 @@ defmodule Custyard.InboundRoutes do
 
   # --- InboundRoute Operations ---
 
-  @doc """
-  List all inbound routes for an organization.
-  Preloads webhooks and project associations.
-  """
-  def list_for_organization(organization_id) when is_integer(organization_id) do
-    from(r in InboundRoute,
-      where: r.organization_id == ^organization_id,
-      order_by: [asc: r.route_type, asc: r.inserted_at],
-      preload: [:webhooks, :project]
+  @doc "List a tenant's inbound routes."
+  def list_for_tenant(tenant_id) do
+    Repo.all(
+      from(r in InboundRoute,
+        where: r.tenant_id == ^tenant_id,
+        order_by: [asc: r.id],
+        preload: [:webhooks]
+      )
     )
-    |> Repo.all()
   end
 
   @doc """
@@ -50,7 +29,7 @@ defmodule Custyard.InboundRoutes do
   def get_route(id) when is_integer(id) do
     InboundRoute
     |> Repo.get(id)
-    |> Repo.preload([:webhooks, :organization, :project])
+    |> Repo.preload([:webhooks])
   end
 
   @doc """
@@ -60,7 +39,7 @@ defmodule Custyard.InboundRoutes do
   def get_route!(id) when is_integer(id) do
     InboundRoute
     |> Repo.get!(id)
-    |> Repo.preload([:webhooks, :organization, :project])
+    |> Repo.preload([:webhooks])
   end
 
   @doc """
@@ -72,7 +51,7 @@ defmodule Custyard.InboundRoutes do
   def get_by_callback_token(token) when is_binary(token) do
     from(r in InboundRoute,
       where: r.callback_token == ^token,
-      preload: [:webhooks, :organization, :project]
+      preload: [:webhooks]
     )
     |> Repo.one()
   end
@@ -84,25 +63,12 @@ defmodule Custyard.InboundRoutes do
   stored. Other sources are webhook-only and are stored locally without
   creating a Lettermint mailbox.
 
-  ## Examples
-
-      create_route(%{
-        organization_id: 1,
-        route_type: :general
-      })
-
-      create_route(%{
-        organization_id: 1,
-        route_type: :project,
-        project_id: 5
-      })
   """
   def create_route(attrs) when is_map(attrs) do
     # Validate changeset first to avoid orphaning remote routes on validation failure
     changeset =
       %InboundRoute{}
       |> InboundRoute.changeset(attrs)
-      |> validate_project_organization()
 
     if changeset.valid? do
       case Changeset.get_field(changeset, :source) do
@@ -114,40 +80,18 @@ defmodule Custyard.InboundRoutes do
     end
   end
 
-  # A route stamps its project on every conversation it receives, so the
-  # project must belong to the route's own organization; the changeset alone
-  # only checks that the project row exists, which let an admin link another
-  # organization's project to their route.
-  defp validate_project_organization(changeset) do
-    project_id = Changeset.get_field(changeset, :project_id)
-    organization_id = Changeset.get_field(changeset, :organization_id)
-
-    case project_id && Repo.get(Custyard.Project, project_id) do
-      nil ->
-        changeset
-
-      %Custyard.Project{organization_id: ^organization_id} ->
-        changeset
-
-      _other_organization ->
-        Changeset.add_error(changeset, :project_id, "must belong to the same organization")
-    end
-  end
-
   defp create_lettermint_route(changeset) do
-    org = optional_record(Custyard.Organization, Changeset.get_field(changeset, :organization_id))
-    tenant_id = Changeset.get_field(changeset, :tenant_id) || field(org, :tenant_id)
-    tenant = optional_record(Custyard.Tenant, tenant_id)
-    project_id = configured_project(tenant_id) || field(org, :lettermint_project_id)
-    name = field(tenant, :name) || field(org, :name) || "Support"
-    route_type = Changeset.get_field(changeset, :route_type)
+    tenant_id = Changeset.get_field(changeset, :tenant_id)
+    tenant = Repo.get!(Custyard.Tenant, tenant_id)
+    project_id = Custyard.EmailSetup.project_id(tenant_id)
+    name = tenant.name
 
     case Client.call(
            :create_route,
            [
              %{
                lettermint_project_id: project_id,
-               name: "#{name} #{route_type}",
+               name: "#{name} Support",
                route_type: "inbound"
              }
            ],
@@ -163,13 +107,6 @@ defmodule Custyard.InboundRoutes do
         error
     end
   end
-
-  defp optional_record(_, nil), do: nil
-  defp optional_record(schema, id), do: Repo.get(schema, id)
-  defp field(nil, _), do: nil
-  defp field(record, key), do: Map.get(record, key)
-  defp configured_project(nil), do: nil
-  defp configured_project(id), do: Custyard.EmailSetup.project_id(id)
 
   @doc """
   Refresh a Lettermint route's domain fields from the Lettermint API.
@@ -272,8 +209,9 @@ defmodule Custyard.InboundRoutes do
   # channels still depend on it.
   defp mx_channels_on_domain?(%InboundRoute{id: route_id}) do
     Repo.exists?(
-      from c in Custyard.InboundChannel,
+      from(c in Custyard.InboundChannel,
         where: c.inbound_route_id == ^route_id and c.ingress_kind == :mx and c.state != :revoked
+      )
     )
   end
 
@@ -545,16 +483,15 @@ defmodule Custyard.InboundRoutes do
       `:email` reuses an existing Lettermint route, then an email route.
       Other sources use only a route of their own source.
   """
-  def find_or_create_general_route(organization_id, opts \\ [])
-      when is_integer(organization_id) do
+  def find_or_create_general_route(tenant_id, opts \\ [])
+      when is_integer(tenant_id) do
     source = Keyword.get(opts, :source, :lettermint)
 
-    case get_general_route(organization_id, source: source) do
+    case get_general_route(tenant_id, source: source) do
       nil ->
         with {:ok, route} <-
                create_route(%{
-                 organization_id: organization_id,
-                 route_type: :general,
+                 tenant_id: tenant_id,
                  source: source
                }) do
           ensure_default_webhooks(route)
@@ -592,12 +529,12 @@ defmodule Custyard.InboundRoutes do
   selects only that source except `:email`, which prefers an existing Lettermint
   route. Returns nil if no suitable route exists.
   """
-  def get_general_route(organization_id, opts \\ []) when is_integer(organization_id) do
+  def get_general_route(tenant_id, opts \\ []) when is_integer(tenant_id) do
     source = Keyword.get(opts, :source)
 
     query =
       from(r in InboundRoute,
-        where: r.organization_id == ^organization_id and r.route_type == :general,
+        where: r.tenant_id == ^tenant_id,
         order_by: [
           asc:
             fragment(
@@ -622,37 +559,6 @@ defmodule Custyard.InboundRoutes do
 
   defp maybe_filter_general_source(query, source),
     do: where(query, [r], r.source == ^source)
-
-  @doc """
-  Get the project-specific route for a project.
-  Returns nil if not found.
-  """
-  def get_project_route(project_id) when is_integer(project_id) do
-    from(r in InboundRoute,
-      where: r.project_id == ^project_id and r.route_type == :project,
-      preload: [:webhooks]
-    )
-    |> Repo.one()
-  end
-
-  @doc """
-  Returns true if this is the only general route for its organization.
-
-  Used to prevent deletion of the last general route, which would leave
-  the organization without a catch-all inbound route.
-  """
-  def is_last_general_route?(%InboundRoute{route_type: :general, organization_id: org_id}) do
-    count =
-      from(r in InboundRoute,
-        where: r.organization_id == ^org_id and r.route_type == :general,
-        select: count(r.id)
-      )
-      |> Repo.one()
-
-    count <= 1
-  end
-
-  def is_last_general_route?(_), do: false
 
   # --- Private Helpers ---
 

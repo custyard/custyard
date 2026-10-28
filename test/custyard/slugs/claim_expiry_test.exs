@@ -31,12 +31,12 @@ defmodule Custyard.Slugs.ClaimExpiryTest do
       assert ClaimExpiry.sweep(after_expiry) == 1
       refute Repo.get(Slug, slug.id)
       assert Repo.get(Conversation, conversation.id)
-      assert Slugs.available?("sweep-me")
+      assert Slugs.available?("sweep-me", conversation.tenant_id)
     end
 
     test "confirmed and provisioned rows are never swept" do
       %{token: token} = claim!("confirmed-keeper", "buyer@example.com")
-      {:ok, confirmed} = Slugs.confirm(token)
+      {:ok, confirmed} = Slugs.confirm(token, Custyard.Factory.factory_tenant_id())
 
       org = insert_organization()
 

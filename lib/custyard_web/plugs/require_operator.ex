@@ -1,58 +1,29 @@
 defmodule CustyardWeb.Plugs.RequireOperator do
-  @moduledoc """
-  Plug that requires an authenticated operator session.
-  Redirects to login if no operator_id in session, if no operator matches both
-  the session's id and its session claim (deleted, or the id reused by a
-  newer account; see `CustyardWeb.Live.OperatorAuth.session_operator/2`), or
-  if the operator is an admin or agent without an organization
-  (`OperatorAccount.orphaned?/1`). Every refusal of a stored session clears it.
-  """
+  @moduledoc "Requires a tenant staff session belonging to the current registered hostname."
   import Plug.Conn
   import Phoenix.Controller
-
-  alias Custyard.OperatorAccount
+  alias Custyard.{Scope, Tenants}
   alias CustyardWeb.Live.OperatorAuth
-
   def init(opts), do: opts
 
-  def call(conn, _opts) do
-    case get_session(conn, :operator_id) do
-      nil ->
-        redirect_to_login(conn, "Please log in")
+  def call(conn, _) do
+    staff =
+      OperatorAuth.session_operator(
+        get_session(conn, :operator_id),
+        get_session(conn, :operator_claim)
+      )
 
-      operator_id ->
-        case OperatorAuth.session_operator(operator_id, get_session(conn, :operator_claim)) do
-          nil ->
-            conn
-            |> clear_operator_session()
-            |> redirect_to_login("Session expired")
+    scope = staff && Scope.for_staff(staff, conn.assigns[:host_tenant])
 
-          operator ->
-            if OperatorAccount.orphaned?(operator) or
-                 not Custyard.Tenants.operator_on_host?(
-                   operator,
-                   conn.assigns[:host_tenant] && conn.assigns.host_tenant.id
-                 ) do
-              conn
-              |> clear_operator_session()
-              |> redirect_to_login(OperatorAuth.no_organization_message())
-            else
-              assign(conn, :current_operator, operator)
-            end
-        end
+    if scope && Tenants.active?(scope.tenant_id) do
+      conn |> assign(:current_operator, staff) |> assign(:current_scope, scope)
+    else
+      conn
+      |> delete_session(:operator_id)
+      |> delete_session(:operator_claim)
+      |> put_flash(:error, "Please sign in to this workspace")
+      |> redirect(to: "/app/login")
+      |> halt()
     end
-  end
-
-  defp clear_operator_session(conn) do
-    conn
-    |> delete_session(:operator_id)
-    |> delete_session(:operator_claim)
-  end
-
-  defp redirect_to_login(conn, message) do
-    conn
-    |> put_flash(:error, message)
-    |> redirect(to: "/operator/login")
-    |> halt()
   end
 end

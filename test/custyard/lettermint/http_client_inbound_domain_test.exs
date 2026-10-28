@@ -31,7 +31,7 @@ defmodule Custyard.Lettermint.HttpClientInboundDomainTest do
     Application.put_env(:custyard, :lettermint,
       client: HttpClient,
       api_url: "http://127.0.0.1:#{port}",
-      api_key: "test-api-key"
+      team_token: "test-api-key"
     )
 
     on_exit(fn ->

@@ -41,10 +41,16 @@ defmodule Custyard.Webhooks.DispatcherTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          route_type: :general
+          tenant_id: org.tenant_id
         })
         |> Repo.insert!()
+
+      channel =
+        insert_inbound_channel(
+          tenant_id: org.tenant_id,
+          inbound_route_id: route.id,
+          default_organization_id: org.id
+        )
 
       %InboundRouteWebhook{}
       |> InboundRouteWebhook.changeset(%{
@@ -67,7 +73,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
         metadata: %{}
       }
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
       assert conversation.subject == "Routed webhook test"
       assert conversation.organization_id == org.id
     end
@@ -80,11 +86,17 @@ defmodule Custyard.Webhooks.DispatcherTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          project_id: project.id,
-          route_type: :project
+          tenant_id: org.tenant_id
         })
         |> Repo.insert!()
+
+      channel =
+        insert_inbound_channel(
+          tenant_id: org.tenant_id,
+          inbound_route_id: route.id,
+          default_organization_id: org.id,
+          default_project_id: project.id
+        )
 
       %InboundRouteWebhook{}
       |> InboundRouteWebhook.changeset(%{
@@ -107,7 +119,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
         metadata: %{}
       }
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
       assert conversation.project_id == project.id
     end
   end
@@ -120,10 +132,16 @@ defmodule Custyard.Webhooks.DispatcherTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          route_type: :general
+          tenant_id: org.tenant_id
         })
         |> Repo.insert!()
+
+      channel =
+        insert_inbound_channel(
+          tenant_id: org.tenant_id,
+          inbound_route_id: route.id,
+          default_organization_id: org.id
+        )
 
       %InboundRouteWebhook{}
       |> InboundRouteWebhook.changeset(%{
@@ -146,7 +164,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
         metadata: %{}
       }
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
       assert conversation.organization_id == org.id
       assert conversation.project_id == nil
     end
@@ -159,11 +177,17 @@ defmodule Custyard.Webhooks.DispatcherTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          project_id: project.id,
-          route_type: :project
+          tenant_id: org.tenant_id
         })
         |> Repo.insert!()
+
+      channel =
+        insert_inbound_channel(
+          tenant_id: org.tenant_id,
+          inbound_route_id: route.id,
+          default_organization_id: org.id,
+          default_project_id: project.id
+        )
 
       %InboundRouteWebhook{}
       |> InboundRouteWebhook.changeset(%{
@@ -186,7 +210,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
         metadata: %{}
       }
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
       assert conversation.organization_id == org.id
       assert conversation.project_id == project.id
     end
@@ -198,8 +222,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          route_type: :general
+          tenant_id: org.tenant_id
         })
         |> Repo.insert!()
 
@@ -213,6 +236,13 @@ defmodule Custyard.Webhooks.DispatcherTest do
         })
         |> Repo.insert!()
       end
+
+      channel =
+        insert_inbound_channel(
+          tenant_id: org.tenant_id,
+          inbound_route_id: route.id,
+          default_organization_id: org.id
+        )
 
       normalized = %{
         from: "alice@purposes.example.com",
@@ -228,7 +258,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
       }
 
       # Dispatch should succeed (sender_matching creates conversation)
-      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
       assert conversation.organization_id == org.id
 
       # Poll the DB for the audit event created by the async audit purpose,
@@ -267,8 +297,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          route_type: :general
+          tenant_id: org.tenant_id
         })
         |> Repo.insert!()
 
@@ -280,6 +309,13 @@ defmodule Custyard.Webhooks.DispatcherTest do
         enabled: false
       })
       |> Repo.insert!()
+
+      channel =
+        insert_inbound_channel(
+          tenant_id: org.tenant_id,
+          inbound_route_id: route.id,
+          default_organization_id: org.id
+        )
 
       normalized = %{
         from: "bob@disabled-sm.example.com",
@@ -294,7 +330,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
         metadata: %{}
       }
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
       assert conversation.subject == "Disabled webhook test"
       assert conversation.organization_id == org.id
     end
@@ -308,8 +344,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          route_type: :general
+          tenant_id: org.tenant_id
         })
         |> Repo.insert!()
 
@@ -317,6 +352,13 @@ defmodule Custyard.Webhooks.DispatcherTest do
       assert [] =
                from(w in InboundRouteWebhook, where: w.inbound_route_id == ^route.id)
                |> Repo.all()
+
+      channel =
+        insert_inbound_channel(
+          tenant_id: org.tenant_id,
+          inbound_route_id: route.id,
+          default_organization_id: org.id
+        )
 
       normalized = %{
         from: "carol@no-webhook.example.com",
@@ -331,7 +373,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
         metadata: %{}
       }
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
       assert conversation.subject == "No webhook records test"
       assert conversation.organization_id == org.id
     end
@@ -349,8 +391,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          route_type: :general
+          tenant_id: org.tenant_id
         })
         |> Repo.insert!()
 
@@ -362,6 +403,13 @@ defmodule Custyard.Webhooks.DispatcherTest do
         enabled: false
       })
       |> Repo.insert!()
+
+      channel =
+        insert_inbound_channel(
+          tenant_id: org.tenant_id,
+          inbound_route_id: route.id,
+          default_organization_id: org.id
+        )
 
       normalized = %{
         from: "dave@async-off.example.com",
@@ -376,7 +424,7 @@ defmodule Custyard.Webhooks.DispatcherTest do
         metadata: %{}
       }
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+      assert {:ok, conversation} = Dispatcher.dispatch(route, normalized, channel: channel)
 
       # Give async tasks a brief window to complete (if any were started)
       Process.sleep(100)

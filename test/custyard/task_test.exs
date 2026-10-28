@@ -106,6 +106,7 @@ defmodule Custyard.TaskTest do
           [
             %{
               title: "Direct insert",
+              tenant_id: org.tenant_id,
               organization_id: org.id,
               inserted_at: "2026-10-27 00:00:00",
               updated_at: "2026-10-27 00:00:00"

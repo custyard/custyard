@@ -5,17 +5,17 @@ defmodule Custyard.Contact do
   @email_statuses [:valid, :bounced, :suppressed]
 
   schema "contacts" do
-    field :email, :string
-    field :name, :string
-    field :is_admin, :boolean, default: false
+    belongs_to(:tenant, Custyard.Tenant)
+    field(:email, :string)
+    field(:name, :string)
     # Set from provider delivery events (Custyard.Email.DeliveryStatus):
     # a bounced or suppressed reply flags the address, a later delivery
     # clears it. Informational only; sends are never blocked.
-    field :email_status, Ecto.Enum, values: @email_statuses, default: :valid
-    field :email_status_at, :utc_datetime
+    field(:email_status, Ecto.Enum, values: @email_statuses, default: :valid)
+    field(:email_status_at, :utc_datetime)
 
-    belongs_to :organization, Custyard.Organization
-    has_many :conversations, Custyard.Conversation
+    belongs_to(:organization, Custyard.Organization)
+    has_many(:conversations, Custyard.Conversation)
 
     timestamps(type: :utc_datetime)
   end
@@ -25,8 +25,10 @@ defmodule Custyard.Contact do
   """
   def changeset(contact, attrs) do
     contact
-    |> cast(attrs, [:email, :name, :is_admin, :organization_id])
-    |> validate_required([:email, :organization_id])
+    |> cast(attrs, [:tenant_id, :email, :name, :organization_id])
+    |> put_customer_tenant()
+    |> validate_required([:tenant_id, :email, :organization_id])
+    |> foreign_key_constraint(:tenant_id)
     |> validate_organization_immutable()
     |> validate_length(:email, max: 320, message: "must be at most 320 characters")
     |> validate_email()
@@ -40,7 +42,7 @@ defmodule Custyard.Contact do
   """
   def update_changeset(contact, attrs) do
     contact
-    |> cast(attrs, [:email, :name, :is_admin])
+    |> cast(attrs, [:email, :name])
     |> validate_length(:email, max: 320, message: "must be at most 320 characters")
     |> validate_email()
     |> reset_email_status_on_change()
@@ -58,6 +60,21 @@ defmodule Custyard.Contact do
       |> put_change(:email_status_at, nil)
     else
       changeset
+    end
+  end
+
+  defp put_customer_tenant(changeset) do
+    case get_field(changeset, :organization_id) &&
+           Custyard.Repo.get(Custyard.Organization, get_field(changeset, :organization_id)) do
+      %{tenant_id: tenant_id} ->
+        case get_field(changeset, :tenant_id) do
+          nil -> put_change(changeset, :tenant_id, tenant_id)
+          ^tenant_id -> changeset
+          _ -> add_error(changeset, :organization_id, "must belong to the same tenant")
+        end
+
+      _ ->
+        changeset
     end
   end
 

@@ -115,14 +115,20 @@ defmodule Custyard.Scoring do
 
     # Operator settings are identical for every conversation in the batch;
     # read them once rather than four times per row (see preload_settings/0).
-    settings = preload_settings()
+    settings =
+      conversations
+      |> Enum.map(& &1.tenant_id)
+      |> Enum.uniq()
+      |> Map.new(&{&1, preload_settings(&1)})
 
     # Calculate and update each - use non-raising update to handle race conditions
     updated_count =
       conversations
       |> Enum.map(fn conv ->
         msg_count = Map.get(message_counts, conv.id, 0)
-        score = calculate_with_message_count(conv, msg_count, settings)
+
+        score =
+          calculate_with_message_count(conv, msg_count, Map.fetch!(settings, conv.tenant_id))
 
         case conv
              |> Ecto.Changeset.change(cached_score: score)
@@ -162,7 +168,7 @@ defmodule Custyard.Scoring do
   """
   def calculate(conversation, settings \\ nil) do
     conversation
-    |> components(nil, settings || preload_settings())
+    |> components(nil, settings || preload_settings(conversation.tenant_id))
     |> components_total()
   end
 
@@ -180,11 +186,11 @@ defmodule Custyard.Scoring do
   than one conversation. Reads are per-call, so hold a bundle only for the
   duration of one render or sweep.
   """
-  def preload_settings do
+  def preload_settings(tenant_id) do
     %{
-      weights: get_weights(),
-      thresholds: get_neglect_thresholds(),
-      unlinked_tier_score: get_unlinked_tier_score()
+      weights: get_weights(tenant_id),
+      thresholds: get_neglect_thresholds(tenant_id),
+      unlinked_tier_score: get_unlinked_tier_score(tenant_id)
     }
   end
 
@@ -199,7 +205,7 @@ defmodule Custyard.Scoring do
     already has it, which skips a per-conversation `COUNT` query.
   """
   def breakdown(conversation, opts \\ []) do
-    settings = Keyword.get(opts, :settings) || preload_settings()
+    settings = Keyword.get(opts, :settings) || preload_settings(conversation.tenant_id)
     message_count = Keyword.get(opts, :message_count)
     components = components(conversation, message_count, settings)
 
@@ -271,7 +277,7 @@ defmodule Custyard.Scoring do
     conversation = ensure_preloaded(conversation, :organization)
 
     hours_idle = hours_since_operator_action(conversation)
-    thresholds = thresholds || get_neglect_thresholds()
+    thresholds = thresholds || get_neglect_thresholds(conversation.tenant_id)
     {warning, critical} = Map.get(thresholds, neglect_tier(conversation), {24, 48})
 
     cond do
@@ -353,8 +359,8 @@ defmodule Custyard.Scoring do
 
   @default_weights %{idle: 1.0, state: 1.0, tier: 1.0, urgency: 1.0, velocity: 1.0, neglect: 1.0}
 
-  defp get_weights do
-    Settings.get_weights()
+  defp get_weights(tenant_id) do
+    Settings.get_weights(tenant_id)
   rescue
     e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
       # Expected errors during first boot or if Settings row doesn't exist yet
@@ -382,8 +388,8 @@ defmodule Custyard.Scoring do
 
   @default_unlinked_tier_score @tier_scores.standard
 
-  defp get_unlinked_tier_score do
-    Settings.get_intake_config().unlinked_tier_score
+  defp get_unlinked_tier_score(tenant_id) do
+    Settings.get_intake_config(tenant_id).unlinked_tier_score
   rescue
     e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
       # Expected errors during first boot or if Settings row doesn't exist yet
@@ -409,8 +415,8 @@ defmodule Custyard.Scoring do
       @default_unlinked_tier_score
   end
 
-  defp get_neglect_thresholds do
-    Settings.get_neglect_thresholds()
+  defp get_neglect_thresholds(tenant_id) do
+    Settings.get_neglect_thresholds(tenant_id)
   rescue
     e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
       # Expected errors during first boot

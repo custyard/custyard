@@ -6,18 +6,18 @@ defmodule Custyard.Release.Acknowledgments do
   They never start the application: the repository runs through
   `Ecto.Migrator.with_repo/2` and broker work starts only `:amqp`, so they
   work beside a running server. Input arrives only as argv. The broker URL and
-  credentials come from the environment and are never accepted as arguments
+  credentials come from tenant integration settings and are never accepted as arguments
   or printed.
   """
   alias Custyard.{Acknowledgments, OperatorAccounts}
-  alias Custyard.Acknowledgments.{Config, Evidence, Operations}
+  alias Custyard.Acknowledgments.{Config, Evidence, LocalAuthority, Operations}
 
   @app :custyard
   # The largest id OperatorAccounts.valid_id?/1 accepts (signed 64 bits).
   @max_id 9_223_372_036_854_775_807
 
   @usage """
-  Usage: bin/acknowledgments COMMAND
+  Usage: bin/acknowledgments COMMAND --tenant TENANT_ID
          (mix acknowledgments.COMMAND in development)
 
   Commands:
@@ -34,8 +34,7 @@ defmodule Custyard.Release.Acknowledgments do
                               SUBMISSION_ID, only while it is still the oldest
     help                      Show this help
 
-  The broker URL and source come from ACKNOWLEDGMENTS_AMQP_URL and
-  ACKNOWLEDGMENTS_SOURCE; they are never accepted as arguments.
+  The broker URL and source come from tenant integration settings.
   """
 
   # Command => {strict switches, accepted positional argument counts}.
@@ -61,16 +60,25 @@ defmodule Custyard.Release.Acknowledgments do
     opts = Keyword.merge([mode: :running, actor: "cli"], opts)
 
     case parse(argv) do
-      {:ok, command} -> execute(command, opts)
-      :usage -> usage_error()
+      {:ok, {name, switches, _} = command} ->
+        if name == "help",
+          do: execute(command, opts),
+          else:
+            with_repo(opts, fn ->
+              execute(command, Keyword.put(opts, :tenant_id, switches[:tenant]))
+            end)
+
+      :usage ->
+        usage_error()
     end
   end
 
   defp parse([name | rest]) when is_map_key(@commands, name) do
     {switches, counts} = Map.fetch!(@commands, name)
 
-    with {parsed, args, []} <- OptionParser.parse(rest, strict: switches),
-         true <- length(args) in counts do
+    with {parsed, args, []} <- OptionParser.parse(rest, strict: [tenant: :integer] ++ switches),
+         true <- length(args) in counts,
+         true <- name == "help" or (is_integer(parsed[:tenant]) and parsed[:tenant] > 0) do
       {:ok, {name, parsed, args}}
     else
       _ -> :usage
@@ -86,20 +94,20 @@ defmodule Custyard.Release.Acknowledgments do
 
   defp execute({"status", _, _}, opts) do
     load(opts)
-    config = Config.load()
+    config = Config.load(opts[:tenant_id])
     print_configuration(config)
 
     case Config.connection_mode(config) do
       :configured ->
         with_broker(opts, fn ->
           case Config.validation_error(config) do
-            nil -> print_queue_status()
+            nil -> print_queue_status(authority(opts))
             message -> fail("Invalid configuration: #{message}")
           end
         end)
 
       :not_configured ->
-        IO.puts("Set ACKNOWLEDGMENTS_AMQP_URL and ACKNOWLEDGMENTS_SOURCE to use the broker.")
+        IO.puts("Configure the tenant acknowledgment integration to use the broker.")
         0
 
       {:incomplete, missing} ->
@@ -111,9 +119,9 @@ defmodule Custyard.Release.Acknowledgments do
     load(opts)
 
     with_broker(opts, fn ->
-      case Operations.provision() do
+      case Operations.provision(authority(opts)) do
         :ok ->
-          Config.load()
+          Config.load(opts[:tenant_id])
           |> Operations.queues()
           |> Enum.each(fn {_, queue} -> IO.puts("Provisioned #{queue}") end)
 
@@ -139,7 +147,9 @@ defmodule Custyard.Release.Acknowledgments do
     load(opts)
 
     with_broker(opts, fn ->
-      if switches[:evidence], do: print_evidence(), else: print_summary()
+      if switches[:evidence],
+        do: print_evidence(authority(opts)),
+        else: print_summary(authority(opts))
     end)
   end
 
@@ -147,7 +157,7 @@ defmodule Custyard.Release.Acknowledgments do
   defp execute({"replay", _, args}, opts) do
     with_repo(opts, fn ->
       with_broker(opts, fn ->
-        case Operations.replay(List.first(args), opts[:actor]) do
+        case Operations.replay(authority(opts), List.first(args)) do
           :ok -> ok("Replayed the oldest failed message to the work queue")
           :empty -> ok("No failed messages")
           error -> fail(Operations.error_message(error))
@@ -159,7 +169,7 @@ defmodule Custyard.Release.Acknowledgments do
   defp bind(source, external_id, id, opts) do
     binding = "#{printable(source)} #{printable(external_id)}"
 
-    case Acknowledgments.bind(source, external_id, id, opts[:actor]) do
+    case Acknowledgments.bind(authority(opts), source, external_id, id) do
       {:ok, :created, _} ->
         ok("Bound #{binding} to organization #{id}")
 
@@ -195,8 +205,8 @@ defmodule Custyard.Release.Acknowledgments do
     IO.puts("Queue: #{printable(config[:queue])}, prefetch #{config[:prefetch]}")
   end
 
-  defp print_queue_status do
-    case Operations.status() do
+  defp print_queue_status(tenant_id) do
+    case Operations.status(tenant_id) do
       {:ok, queues} ->
         Enum.each(queues, &IO.puts(queue_line(&1)))
         0
@@ -212,8 +222,8 @@ defmodule Custyard.Release.Acknowledgments do
   defp queue_line(%{queue: queue, error: error}),
     do: "#{printable(queue)}: #{Operations.error_message(error)}"
 
-  defp print_summary do
-    case Operations.failure_summary() do
+  defp print_summary(tenant_id) do
+    case Operations.failure_summary(tenant_id) do
       {:ok, summary} ->
         print_summary_lines(summary)
         0
@@ -226,8 +236,8 @@ defmodule Custyard.Release.Acknowledgments do
     end
   end
 
-  defp print_evidence do
-    case Operations.inspect_failure() do
+  defp print_evidence(tenant_id) do
+    case Operations.inspect_failure(tenant_id) do
       {:ok, %{body: body, summary: summary}} ->
         IO.puts(
           :stderr,
@@ -265,6 +275,8 @@ defmodule Custyard.Release.Acknowledgments do
     IO.puts("  Failure category: #{summary.category || "unknown"}")
     IO.puts("  Attempt: #{summary.attempt || "unknown"}")
   end
+
+  defp authority(opts), do: %LocalAuthority{tenant_id: opts[:tenant_id], channel: opts[:actor]}
 
   defp load(opts) do
     if opts[:mode] == :release, do: Application.load(@app)

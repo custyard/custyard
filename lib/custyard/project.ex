@@ -24,32 +24,31 @@ defmodule Custyard.Project do
   @project_types [:customer, :internal]
 
   schema "projects" do
-    field :tenant_id, :id, default: 1
-    belongs_to :tenant, Custyard.Tenant, define_field: false
-    field :title, :string
-    field :description, :string
-    field :start_date, :date
-    field :target_completion_date, :date
-    field :portal_visible, :boolean, default: true
-    field :project_type, Ecto.Enum, values: @project_types, default: :customer
+    field(:tenant_id, :id)
+    belongs_to(:tenant, Custyard.Tenant, define_field: false)
+    field(:title, :string)
+    field(:description, :string)
+    field(:start_date, :date)
+    field(:target_completion_date, :date)
+    field(:portal_visible, :boolean, default: true)
+    field(:project_type, Ecto.Enum, values: @project_types, default: :customer)
 
     # Tags for categorization (especially useful for internal projects)
-    field :tags, {:array, :string}, default: []
+    field(:tags, {:array, :string}, default: [])
 
     # Template flag - templates are used to create new projects
-    field :is_template, :boolean, default: false
+    field(:is_template, :boolean, default: false)
 
     # Virtual field for computed progress data (set by Projects.with_progress/1)
     # Contains %{total: integer, done: integer, percentage: integer}
-    field :progress, :map, virtual: true
+    field(:progress, :map, virtual: true)
 
-    belongs_to :organization, Custyard.Organization
+    belongs_to(:organization, Custyard.Organization)
     # Single linked conversation (e.g., initial onboarding request)
-    belongs_to :conversation, Custyard.Conversation
+    belongs_to(:conversation, Custyard.Conversation)
     # All conversations associated with this project
-    has_many :conversations, Custyard.Conversation
-    has_many :tasks, Custyard.Task
-    has_many :inbound_routes, Custyard.InboundRoute
+    has_many(:conversations, Custyard.Conversation)
+    has_many(:tasks, Custyard.Task)
 
     timestamps(type: :utc_datetime)
   end
@@ -128,8 +127,15 @@ defmodule Custyard.Project do
     case get_field(changeset, :organization_id) do
       id when is_integer(id) ->
         case Custyard.Repo.get(Custyard.Organization, id) do
-          %{tenant_id: tenant_id} -> put_change(changeset, :tenant_id, tenant_id)
-          _ -> changeset
+          %{tenant_id: tenant_id} ->
+            case get_field(changeset, :tenant_id) do
+              nil -> put_change(changeset, :tenant_id, tenant_id)
+              ^tenant_id -> changeset
+              _ -> add_error(changeset, :organization_id, "must belong to the same tenant")
+            end
+
+          _ ->
+            changeset
         end
 
       _ ->

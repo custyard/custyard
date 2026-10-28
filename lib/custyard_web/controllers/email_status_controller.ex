@@ -3,11 +3,10 @@ defmodule CustyardWeb.EmailStatusController do
   Delivery-status webhook for outbound replies, separate from the inbound
   message pipeline (`WebhookController`).
 
-  Lettermint signs each webhook with its own `whsec_` secret, so the status
-  webhook is verified against `:webhook_secrets[:lettermint_status]` rather
-  than the inbound route secret. Without a configured secret, verification is
-  skipped with a warning in dev/test and fails closed (401) in production,
-  mirroring the inbound controller.
+  Each callback uses the encrypted secret stored on its tenant email connection.
+  Until binding succeeds, callbacks return 401. Provider Basic Auth does not
+  replace webhook signatures. Previous sends can receive status updates while
+  a tenant is suspended; new inbound and outbound work is blocked.
 
   Responses never echo payload fields other than the event name's outcome.
   """
@@ -34,31 +33,11 @@ defmodule CustyardWeb.EmailStatusController do
     end
   end
 
-  def lettermint(conn, params) do
-    case verify(conn) do
-      :ok ->
-        if Custyard.EmailSetup.legacy_status_allowed?(params),
-          do: handle_event(conn, params),
-          else: json(conn, %{status: "ignored", reason: "unknown_message"})
-
-      {:error, reason} ->
-        Logger.warning(
-          "Lettermint status webhook rejected (delivery #{delivery_id(params)}): #{reason}"
-        )
-
-        conn |> put_status(401) |> json(%{status: "error", reason: "unauthorized"})
-    end
-  end
-
   defp handle_event(conn, %{"sandbox" => true}),
     do: json(conn, %{status: "ignored", reason: "sandbox"})
 
   defp handle_event(conn, %{"event" => event} = params) when is_binary(event) do
-    tenant_id =
-      case conn.assigns[:email_connection] do
-        %{tenant_id: tenant_id} -> tenant_id
-        nil -> Custyard.Tenants.default_tenant().id
-      end
+    tenant_id = conn.assigns.email_connection.tenant_id
 
     case DeliveryStatus.apply_event(params, tenant_id: tenant_id) do
       {:ok, :updated, message} ->
@@ -84,40 +63,12 @@ defmodule CustyardWeb.EmailStatusController do
     conn |> put_status(422) |> json(%{status: "error", reason: "invalid payload"})
   end
 
-  defp verify(conn) do
-    case status_secret() do
-      nil -> verify_without_secret()
-      secret -> verify_with_secret(conn, secret)
-    end
-  end
-
-  defp verify_without_secret do
-    if Application.get_env(:custyard, :env, :prod) in [:dev, :test] do
-      Logger.warning(
-        "Lettermint status webhook signature verification SKIPPED (no secret configured). " <>
-          "Set :webhook_secrets[:lettermint_status] to enable verification."
-      )
-
-      :ok
-    else
-      Logger.error("Webhook secret not configured for lettermint_status")
-      {:error, "unauthorized"}
-    end
-  end
-
   defp verify_with_secret(conn, secret) do
     signature = conn |> get_req_header("x-lettermint-signature") |> List.first()
 
     case conn.private[:raw_body] do
       nil -> {:error, "missing raw body"}
       raw_body -> Lettermint.verify_request(raw_body, nil, signature, secret)
-    end
-  end
-
-  defp status_secret do
-    case Application.get_env(:custyard, :webhook_secrets, %{}) do
-      %{lettermint_status: secret} when is_binary(secret) and secret != "" -> secret
-      _ -> nil
     end
   end
 

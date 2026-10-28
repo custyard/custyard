@@ -13,7 +13,7 @@ defmodule Custyard.IntakeTest do
 
     test "creates conversation, prospect, and first message atomically", %{source: source} do
       assert {:ok, %{conversation: conversation, prospect: prospect, access_token: token}} =
-               Intake.create_intake_conversation("landing-page", "Hello, I need help with X")
+               create_intake("landing-page", "Hello, I need help with X")
 
       assert conversation.source == :public_intake
       assert conversation.organization_id == nil
@@ -38,7 +38,7 @@ defmodule Custyard.IntakeTest do
 
     test "stores only the token hash at rest, never the plaintext" do
       assert {:ok, %{prospect: prospect, access_token: token}} =
-               Intake.create_intake_conversation("landing-page", "Hello")
+               create_intake("landing-page", "Hello")
 
       stored = Repo.get!(Prospect, prospect.id)
       assert stored.access_token_hash == Token.hash(token)
@@ -49,7 +49,7 @@ defmodule Custyard.IntakeTest do
 
     test "caches a score greater than zero" do
       assert {:ok, %{conversation: conversation}} =
-               Intake.create_intake_conversation("landing-page", "Hello")
+               create_intake("landing-page", "Hello")
 
       assert conversation.cached_score > 0
     end
@@ -58,7 +58,7 @@ defmodule Custyard.IntakeTest do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "conversations")
 
       assert {:ok, %{conversation: conversation}} =
-               Intake.create_intake_conversation("landing-page", "Hello")
+               create_intake("landing-page", "Hello")
 
       conversation_id = conversation.id
       assert_receive {:conversation_created, ^conversation_id}
@@ -68,7 +68,7 @@ defmodule Custyard.IntakeTest do
       body = "\n\n   \nActual subject line\nsecond line with more detail"
 
       assert {:ok, %{conversation: conversation}} =
-               Intake.create_intake_conversation("landing-page", body)
+               create_intake("landing-page", body)
 
       assert conversation.subject == "Actual subject line"
     end
@@ -77,7 +77,7 @@ defmodule Custyard.IntakeTest do
       first_line = String.duplicate("s", 100)
 
       assert {:ok, %{conversation: conversation}} =
-               Intake.create_intake_conversation("landing-page", first_line <> "\nrest")
+               create_intake("landing-page", first_line <> "\nrest")
 
       assert conversation.subject == String.duplicate("s", 77) <> "..."
       assert String.length(conversation.subject) == 80
@@ -87,7 +87,7 @@ defmodule Custyard.IntakeTest do
       body = String.duplicate("b", 100_001)
 
       assert {:ok, %{conversation: conversation}} =
-               Intake.create_intake_conversation("landing-page", body)
+               create_intake("landing-page", body)
 
       [message] = Repo.all(from m in Message, where: m.conversation_id == ^conversation.id)
       assert String.length(message.body) == 100_000
@@ -95,24 +95,24 @@ defmodule Custyard.IntakeTest do
     end
 
     test "rejects an empty body" do
-      assert {:error, %Ecto.Changeset{}} = Intake.create_intake_conversation("landing-page", "")
+      assert {:error, %Ecto.Changeset{}} = create_intake("landing-page", "")
 
       assert {:error, %Ecto.Changeset{}} =
-               Intake.create_intake_conversation("landing-page", "\n  \n")
+               create_intake("landing-page", "\n  \n")
 
       assert Repo.aggregate(Conversation, :count) == 0
       assert Repo.aggregate(Prospect, :count) == 0
     end
 
     test "rejects unknown source keys" do
-      assert {:error, :unknown_source} = Intake.create_intake_conversation("nope", "Hello")
+      assert {:error, :unknown_source} = create_intake("nope", "Hello")
       assert Repo.aggregate(Conversation, :count) == 0
     end
 
     test "rejects disabled source keys" do
       insert_intake_source(key: "paused", enabled: false)
 
-      assert {:error, :unknown_source} = Intake.create_intake_conversation("paused", "Hello")
+      assert {:error, :unknown_source} = create_intake("paused", "Hello")
       assert Repo.aggregate(Conversation, :count) == 0
     end
   end
@@ -122,7 +122,7 @@ defmodule Custyard.IntakeTest do
       insert_intake_source(key: "cta")
 
       {:ok, %{conversation: conversation, access_token: token}} =
-        Intake.create_intake_conversation("cta", "Hello from a prospect")
+        create_intake("cta", "Hello from a prospect")
 
       %{conversation: conversation, token: token}
     end
@@ -131,7 +131,7 @@ defmodule Custyard.IntakeTest do
       conversation: conversation,
       token: token
     } do
-      assert {:ok, loaded} = Intake.get_conversation_by_access_token(token)
+      assert {:ok, loaded} = lookup_token(token)
       assert loaded.id == conversation.id
       assert Ecto.assoc_loaded?(loaded.prospect)
       assert Ecto.assoc_loaded?(loaded.organization)
@@ -141,13 +141,13 @@ defmodule Custyard.IntakeTest do
     end
 
     test "rejects unknown tokens" do
-      assert {:error, :not_found} = Intake.get_conversation_by_access_token("bogus")
-      assert {:error, :not_found} = Intake.get_conversation_by_access_token(nil)
+      assert {:error, :not_found} = lookup_token("bogus")
+      assert {:error, :not_found} = lookup_token(nil)
     end
 
     test "rejects revoked tokens", %{conversation: conversation, token: token} do
       assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
-      assert {:error, :not_found} = Intake.get_conversation_by_access_token(token)
+      assert {:error, :not_found} = lookup_token(token)
     end
 
     test "excludes internal notes from the preloaded messages", %{
@@ -161,7 +161,7 @@ defmodule Custyard.IntakeTest do
         body: "secret operator note"
       )
 
-      assert {:ok, loaded} = Intake.get_conversation_by_access_token(token)
+      assert {:ok, loaded} = lookup_token(token)
       refute Enum.any?(loaded.messages, & &1.is_internal_note)
     end
   end
@@ -169,7 +169,7 @@ defmodule Custyard.IntakeTest do
   describe "rotate_access_token/1" do
     setup do
       insert_intake_source(key: "cta")
-      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      {:ok, result} = create_intake("cta", "Hello")
       %{conversation: result.conversation, token: result.access_token}
     end
 
@@ -183,8 +183,8 @@ defmodule Custyard.IntakeTest do
       refute new_token == old_token
       assert prospect.access_token_hash == Token.hash(new_token)
 
-      assert {:error, :not_found} = Intake.get_conversation_by_access_token(old_token)
-      assert {:ok, loaded} = Intake.get_conversation_by_access_token(new_token)
+      assert {:error, :not_found} = lookup_token(old_token)
+      assert {:ok, loaded} = lookup_token(new_token)
       assert loaded.id == conversation.id
     end
 
@@ -213,36 +213,36 @@ defmodule Custyard.IntakeTest do
   describe "access_token_valid?/1" do
     setup do
       insert_intake_source(key: "cta")
-      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      {:ok, result} = create_intake("cta", "Hello")
       %{conversation: result.conversation, token: result.access_token}
     end
 
     test "true for a live token", %{token: token} do
-      assert Intake.access_token_valid?(token)
+      assert valid_token?(token)
     end
 
     test "false for unknown and non-binary tokens" do
-      refute Intake.access_token_valid?("bogus")
-      refute Intake.access_token_valid?(nil)
+      refute valid_token?("bogus")
+      refute valid_token?(nil)
     end
 
     test "false once revoked", %{conversation: conversation, token: token} do
       assert {:ok, _prospect} = Intake.revoke_conversation_access(conversation)
-      refute Intake.access_token_valid?(token)
+      refute valid_token?(token)
     end
 
     test "false for the old token after rotation", %{conversation: conversation, token: token} do
       assert {:ok, %{access_token: new_token}} = Intake.rotate_access_token(conversation)
 
-      refute Intake.access_token_valid?(token)
-      assert Intake.access_token_valid?(new_token)
+      refute valid_token?(token)
+      assert valid_token?(new_token)
     end
   end
 
   describe "token rotation strips access from handles under the old token" do
     setup do
       insert_intake_source(key: "cta")
-      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      {:ok, result} = create_intake("cta", "Hello")
       old_hash = Token.hash(result.access_token)
 
       {:ok, %{access_token: new_token}} = Intake.rotate_access_token(result.conversation)
@@ -305,7 +305,7 @@ defmodule Custyard.IntakeTest do
   describe "add_prospect_reply/3 revocation guard" do
     setup do
       insert_intake_source(key: "cta")
-      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      {:ok, result} = create_intake("cta", "Hello")
       %{conversation: result.conversation}
     end
 
@@ -320,7 +320,7 @@ defmodule Custyard.IntakeTest do
   describe "add_prospect_reply/3 duplicate suppression" do
     setup do
       insert_intake_source(key: "cta")
-      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      {:ok, result} = create_intake("cta", "Hello")
       %{conversation: result.conversation}
     end
 
@@ -377,21 +377,22 @@ defmodule Custyard.IntakeTest do
       insert_intake_source(key: "bb-passive", mode: :passive)
       insert_intake_source(key: "mm-active", mode: :active)
 
-      assert %IntakeSource{key: "mm-active"} = Intake.first_enabled_active_source()
+      assert %IntakeSource{key: "mm-active"} =
+               Intake.first_enabled_active_source(Custyard.Factory.factory_tenant_id())
     end
 
     test "returns nil when no enabled active source exists" do
       insert_intake_source(key: "only-passive", mode: :passive)
       insert_intake_source(key: "off", mode: :active, enabled: false)
 
-      assert Intake.first_enabled_active_source() == nil
+      assert Intake.first_enabled_active_source(Custyard.Factory.factory_tenant_id()) == nil
     end
   end
 
   describe "set_notification/3" do
     setup do
       insert_intake_source(key: "cta")
-      {:ok, result} = Intake.create_intake_conversation("cta", "Hello")
+      {:ok, result} = create_intake("cta", "Hello")
       %{conversation: result.conversation}
     end
 
@@ -628,33 +629,43 @@ defmodule Custyard.IntakeTest do
       insert_intake_source(key: "zeta")
       insert_intake_source(key: "alpha")
 
-      assert ["alpha", "zeta"] = Intake.list_sources() |> Enum.map(& &1.key)
+      assert ["alpha", "zeta"] = Intake.list_sources(source_scope()) |> Enum.map(& &1.key)
     end
 
     test "get_enabled_source/1 returns nil for unknown, disabled, or non-binary keys" do
       source = insert_intake_source(key: "live")
       insert_intake_source(key: "paused", enabled: false)
 
-      assert %IntakeSource{id: id} = Intake.get_enabled_source("live")
+      assert %IntakeSource{id: id} = get_enabled_source("live")
       assert id == source.id
-      assert Intake.get_enabled_source("paused") == nil
-      assert Intake.get_enabled_source("missing") == nil
-      assert Intake.get_enabled_source(nil) == nil
-      assert Intake.get_enabled_source(:live) == nil
+      assert get_enabled_source("paused") == nil
+      assert get_enabled_source("missing") == nil
+      assert get_enabled_source(nil) == nil
+      assert get_enabled_source(:live) == nil
     end
 
     test "create_source/1 validates attributes" do
       assert {:ok, %IntakeSource{key: "docs-cta"}} =
-               Intake.create_source(%{key: "docs-cta", name: "Docs CTA"})
+               Intake.create_source(source_scope(), %{
+                 tenant_id: Custyard.Factory.factory_tenant_id(),
+                 key: "docs-cta",
+                 name: "Docs CTA"
+               })
 
       assert {:error, %Ecto.Changeset{}} =
-               Intake.create_source(%{key: "Bad Key!", name: "Nope"})
+               Intake.create_source(source_scope(), %{
+                 tenant_id: Custyard.Factory.factory_tenant_id(),
+                 key: "Bad Key!",
+                 name: "Nope"
+               })
     end
 
     test "update_source/2 applies changes" do
       source = insert_intake_source()
 
-      assert {:ok, updated} = Intake.update_source(source, %{name: "Renamed", mode: :passive})
+      assert {:ok, updated} =
+               Intake.update_source(source_scope(), source, %{name: "Renamed", mode: :passive})
+
       assert updated.name == "Renamed"
       assert updated.mode == :passive
     end
@@ -662,12 +673,14 @@ defmodule Custyard.IntakeTest do
     test "update_source/2 never changes the key (immutable public URL segment)" do
       source = insert_intake_source(key: "original")
 
-      assert {:ok, updated} = Intake.update_source(source, %{key: "other", name: "Renamed"})
+      assert {:ok, updated} =
+               Intake.update_source(source_scope(), source, %{key: "other", name: "Renamed"})
+
       assert updated.key == "original"
       assert updated.name == "Renamed"
 
       # String keys (the LiveView param shape) are ignored the same way.
-      assert {:ok, updated} = Intake.update_source(source, %{"key" => "other"})
+      assert {:ok, updated} = Intake.update_source(source_scope(), source, %{"key" => "other"})
       assert updated.key == "original"
       assert Repo.reload!(source).key == "original"
     end
@@ -678,7 +691,7 @@ defmodule Custyard.IntakeTest do
       conversation =
         insert_conversation(source: :public_intake, intake_source_key: "ephemeral")
 
-      assert {:ok, _} = Intake.delete_source(source)
+      assert {:ok, _} = Intake.delete_source(source_scope(), source)
       assert Repo.reload!(conversation).intake_source_key == "ephemeral"
     end
   end
@@ -686,7 +699,7 @@ defmodule Custyard.IntakeTest do
   describe "revoke_conversation_access/1 and slug claims" do
     test "revoking access releases the conversation's pending claim" do
       source = insert_intake_source(mode: :active)
-      {:ok, %{conversation: conversation}} = Intake.create_intake_conversation(source.key, "Hi")
+      {:ok, %{conversation: conversation}} = create_intake(source.key, "Hi")
 
       {:ok, _slug, confirmation_token} =
         Custyard.Slugs.claim("revoked-co", "x@example.com", conversation)
@@ -695,8 +708,31 @@ defmodule Custyard.IntakeTest do
 
       assert is_nil(Custyard.Slugs.get_claim_for_conversation(conversation.id))
       # The link already in the abuser's inbox no longer confirms anything
-      assert {:error, :invalid} = Custyard.Slugs.confirm(confirmation_token)
-      assert Custyard.Slugs.available?("revoked-co")
+      assert {:error, :invalid} =
+               Custyard.Slugs.confirm(confirmation_token, Custyard.Factory.factory_tenant_id())
+
+      assert Custyard.Slugs.available?("revoked-co", Custyard.Factory.factory_tenant_id())
     end
   end
+
+  defp create_intake(key, body, opts \\ []),
+    do:
+      Intake.create_intake_conversation(
+        key,
+        body,
+        Keyword.put(opts, :tenant_id, Custyard.Factory.factory_tenant_id())
+      )
+
+  defp get_enabled_source(key),
+    do: Intake.get_enabled_source(key, Custyard.Factory.factory_tenant_id())
+
+  defp source_scope do
+    staff = insert_operator_account(tenant_id: factory_tenant_id(), role: "admin")
+    Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+  end
+
+  defp lookup_token(token),
+    do: Intake.get_conversation_by_access_token(token, factory_tenant_id())
+
+  defp valid_token?(token), do: Intake.access_token_valid?(token, factory_tenant_id())
 end

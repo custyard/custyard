@@ -72,7 +72,8 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     org = Repo.get!(Organization, alice.organization_id)
     assert org.name == "Alice Chen"
     assert org.domain == nil
-    assert org.intake_key == "email:alice@gmail.com"
+    assert org.identity_kind == :email
+    assert org.identity_value == "alice@gmail.com"
     assert again.organization_id == alice.organization_id
     assert again.contact_id == alice.contact_id
     assert bob.organization_id != alice.organization_id
@@ -153,17 +154,62 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert ambiguous.id not in [original.id, new_topic.id]
   end
 
-  test "an explicit customer route keeps its customer organization" do
+  test "a customer hint resolves a new sender within the tenant" do
     tenant = tenant()
     organization = insert_organization(tenant_id: tenant.id)
 
     assert {:ok, conversation} =
              SenderMatching.process(message("alice@acme.example"), %{
                tenant_id: tenant.id,
-               organization_id: organization.id
+               default_organization_id: organization.id
              })
 
     assert conversation.organization_id == organization.id
+  end
+
+  test "channel hints cannot override known customer identity or an existing thread" do
+    tenant = tenant()
+    known = insert_organization(tenant_id: tenant.id, domain: "known.example")
+    other = insert_organization(tenant_id: tenant.id)
+    contact = insert_contact(organization_id: known.id, email: "alice@known.example")
+    project = insert_project(organization_id: other.id)
+
+    label =
+      %Custyard.Label{}
+      |> Custyard.Label.changeset(%{tenant_id: tenant.id, name: "Priority"})
+      |> Repo.insert!()
+
+    context = %{
+      tenant_id: tenant.id,
+      default_organization_id: other.id,
+      default_project_id: project.id,
+      default_label_id: label.id
+    }
+
+    assert {:ok, thread} = SenderMatching.process(message(contact.email), context)
+    assert thread.organization_id == known.id
+    assert thread.project_id == nil
+    assert Repo.get_by(Custyard.ConversationLabel, conversation_id: thread.id, label_id: label.id)
+
+    first = Repo.get_by!(Custyard.Message, conversation_id: thread.id)
+
+    label2 =
+      %Custyard.Label{}
+      |> Custyard.Label.changeset(%{tenant_id: tenant.id, name: "Other"})
+      |> Repo.insert!()
+
+    assert {:ok, reply} =
+             SenderMatching.process(
+               message(contact.email, in_reply_to: first.message_id),
+               %{context | default_label_id: label2.id}
+             )
+
+    assert reply.id == thread.id
+
+    refute Repo.get_by(Custyard.ConversationLabel,
+             conversation_id: thread.id,
+             label_id: label2.id
+           )
   end
 
   test "lookup-only public capture never creates an organization" do
@@ -207,14 +253,15 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
            }
   end
 
-  test "an ambiguous contact uses deterministic domain identity for new unthreaded mail" do
+  test "an ambiguous contact remains unassigned for new unthreaded mail" do
     tenant = tenant()
     customer = insert_organization(tenant_id: tenant.id, domain: "acme.example")
     other = insert_organization(tenant_id: tenant.id, domain: "other.example")
     insert_contact(organization_id: customer.id, email: "alice@acme.example")
     insert_contact(organization_id: other.id, email: "alice@acme.example")
     assert {:ok, conversation} = receive_email(tenant, message("alice@acme.example"))
-    assert conversation.organization_id == customer.id
+    assert conversation.organization_id == nil
+    assert conversation.contact_id == nil
   end
 
   test "missing sender remains visible without creating an undeliverable contact" do
@@ -441,8 +488,8 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert failed.delivery_failure_kind == :configuration
 
     channel = shared_channel(tenant)
-    operator = insert_operator_account(role: "super_admin")
-    assert {:ok, pending} = Outbound.retry(failed, operator)
+    operator = insert_operator_account(role: "admin", tenant_id: tenant.id)
+    assert {:ok, pending} = Outbound.retry(Custyard.Scope.for_staff(operator, tenant), failed)
     assert pending.sender_email == channel.public_address
     assert pending.inbound_channel_id == channel.id
     assert pending.to_addresses == outgoing.to_addresses

@@ -16,12 +16,18 @@ defmodule Custyard.Email.OutboundTest do
   import Custyard.Factory
   import Swoosh.TestAssertions
 
-  alias Custyard.Email.Outbound
+  alias Custyard.Email.{Outbound, ThreadMatcher}
   alias Custyard.Email.OutboundTest.LettermintStub
-  alias Custyard.{Conversations, Intake, Message, Repo, Settings}
+  alias Custyard.{Conversations, Intake, Message, Repo, Tenant}
 
   setup do
     org = insert_organization(name: "Acme Support")
+
+    Repo.get!(Tenant, org.tenant_id)
+    |> Tenant.changeset(%{name: "Acme Support"})
+    |> Repo.update!()
+
+    configure_tenant_email(org.tenant_id)
     contact = insert_contact(organization_id: org.id, name: "Alice", email: "alice@customer.com")
 
     conversation =
@@ -80,7 +86,11 @@ defmodule Custyard.Email.OutboundTest do
         msg |> Message.changeset(%{cc_addresses: ["bystander@example.com"]}) |> Repo.update!()
 
       assert {:ok, %{erased: 1}} =
-               Custyard.DataSubjects.erase_participation("bystander@example.com", org.id)
+               Custyard.DataSubjects.erase_participation(
+                 staff_scope(org.tenant_id),
+                 "bystander@example.com",
+                 org.id
+               )
 
       assert {:ok, sent} = Outbound.deliver(stale)
       assert sent.cc_addresses == []
@@ -488,7 +498,7 @@ defmodule Custyard.Email.OutboundTest do
   end
 
   describe "from_name resolution" do
-    test "uses organization name when present", %{operator_msg: msg} do
+    test "uses tenant name", %{operator_msg: msg} do
       {:ok, _} = Outbound.deliver(msg)
 
       assert_email_sent(fn email ->
@@ -499,6 +509,11 @@ defmodule Custyard.Email.OutboundTest do
 
     test "quotes display names containing RFC 5322 specials" do
       org = insert_organization(name: "Acme, Inc.")
+
+      Repo.get!(Tenant, org.tenant_id)
+      |> Tenant.changeset(%{name: "Acme, Inc."})
+      |> Repo.update!()
+
       contact = insert_contact(organization_id: org.id, email: "quoted@customer.com")
 
       conversation =
@@ -554,12 +569,15 @@ defmodule Custyard.Email.OutboundTest do
 
       assert_email_sent(fn email ->
         assert email.to == [{"", "prospect@example.com"}]
-        assert email.from == {"Custyard", "support@custyard.local"}
+        assert email.from == {"Acme Support", "support@custyard.local"}
       end)
     end
 
-    test "uses the instance branding name as the From display name" do
-      {:ok, _settings} = Settings.update_branding(%{name: "Helpdesk North"})
+    test "uses the tenant branding name as the From display name" do
+      {:ok, _settings} =
+        Repo.get!(Tenant, Process.get(:factory_tenant_id))
+        |> Tenant.changeset(%{name: "Helpdesk North"})
+        |> Repo.update()
 
       {_conversation, _prospect, message} =
         intake_message_fixture(email: "prospect@example.com", notify_on_reply: true)
@@ -575,7 +593,10 @@ defmodule Custyard.Email.OutboundTest do
       # Settings.valid_branding_entry? only checks non-blank + max length, so
       # a stored branding name can carry commas and CRLF — header_safe_name
       # is the sole injection defense on this branch.
-      {:ok, _settings} = Settings.update_branding(%{name: "Acme, Inc.\r\nX-Evil: 1"})
+      {:ok, _settings} =
+        Repo.get!(Tenant, Process.get(:factory_tenant_id))
+        |> Tenant.changeset(%{name: "Acme, Inc.\r\nX-Evil: 1"})
+        |> Repo.update()
 
       {_conversation, _prospect, message} =
         intake_message_fixture(email: "prospect@example.com", notify_on_reply: true)
@@ -683,7 +704,7 @@ defmodule Custyard.Email.OutboundTest do
           operator_email: "operator-personal@example.com"
         )
 
-      assert message.sender_email == nil
+      assert message.sender_email == "support@custyard.local"
 
       {:ok, _updated} = Outbound.deliver(message)
 
@@ -691,7 +712,7 @@ defmodule Custyard.Email.OutboundTest do
         # Source-keyed rule: branding display name + platform fallback
         # address — not the org name, the org route address, or the
         # replying operator's personal address.
-        assert email.from == {"Custyard", "support@custyard.local"}
+        assert email.from == {"Acme Support", "support@custyard.local"}
       end)
     end
   end
@@ -866,7 +887,64 @@ defmodule Custyard.Email.OutboundTest do
       end)
     end
 
-    test "a channel without a display name falls back to the organization name", %{
+    test "a separate sending domain uses the public mailbox as Reply-To and keeps threading", %{
+      channel: channel,
+      channel_conversation: conv
+    } do
+      assert {:ok, _} =
+               Custyard.InboundChannels.update_channel(channel, %{
+                 sending_domain: "mail.acme.example.com"
+               })
+
+      insert_message(
+        conversation_id: conv.id,
+        source: :email,
+        sender_email: "alice@customer.com",
+        message_id: "<question@customer.com>"
+      )
+
+      assert {:ok, reply} = Conversations.send_reply(conv, "Reply from the sending subdomain")
+      assert reply.sender_email == "help@mail.acme.example.com"
+      assert {:ok, sent} = Outbound.deliver(reply)
+
+      assert_email_sent(fn email ->
+        assert email.from == {"Acme Help Desk", "help@mail.acme.example.com"}
+        assert email.reply_to == {"", "help@acme.example.com"}
+        assert Map.new(email.headers)["In-Reply-To"] == "<question@customer.com>"
+      end)
+
+      assert {:ok, matched} =
+               ThreadMatcher.find_in_tenant(
+                 %{in_reply_to: sent.message_id, references: nil},
+                 conv.tenant_id
+               )
+
+      assert matched.id == conv.id
+      assert matched.organization_id == conv.organization_id
+    end
+
+    test "the ingress fallback keeps its direct return path with a custom sending domain", %{
+      channel: channel,
+      channel_conversation: conv
+    } do
+      {:ok, channel} =
+        Custyard.InboundChannels.update_channel(
+          channel,
+          %{sending_domain: "mail.acme.example.com", reply_from: :ingress_address}
+        )
+
+      ingress = Custyard.InboundChannels.ingress_address(channel)
+      {:ok, reply} = Conversations.send_reply(conv, "Reply using the ingress fallback")
+      assert reply.sender_email == ingress
+      assert {:ok, _} = Outbound.deliver(reply)
+
+      assert_email_sent(fn email ->
+        assert elem(email.from, 1) == ingress
+        assert is_nil(email.reply_to)
+      end)
+    end
+
+    test "a channel without a display name falls back to the tenant name", %{
       channel: channel,
       channel_conversation: conv
     } do

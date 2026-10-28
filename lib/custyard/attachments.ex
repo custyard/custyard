@@ -9,7 +9,7 @@ defmodule Custyard.Attachments do
   Attachments past the cap are listed as skipped so the operator knows they
   existed. The signed URL is never persisted and never logged.
 
-  Files are named by their SHA-256 (`<dir>/<ab>/<sha256>`), so a declared
+  Files are tenant scoped and named by SHA-256 (`<dir>/<tenant>/<ab>/<sha256>`), so a declared
   filename can never become a path and identical content is stored once.
   Serving goes through `CustyardWeb.Operator.AttachmentController`, which
   checks the operator's access to the conversation; the directory is never
@@ -18,7 +18,7 @@ defmodule Custyard.Attachments do
 
   import Ecto.Query
 
-  alias Custyard.{Authorization, Conversation, Message, MessageAttachment, Repo}
+  alias Custyard.{Conversation, Message, MessageAttachment, Repo, Scope}
   alias Custyard.Attachments.{Client, Sniffer}
 
   require Logger
@@ -29,7 +29,7 @@ defmodule Custyard.Attachments do
   @doc "The configured attachment directory."
   def dir, do: Application.fetch_env!(:custyard, :attachment_dir)
 
-  @doc "Default per-message cap in bytes, used on legacy routes without a channel."
+  @doc "Default per-message cap in bytes for integrations without an email channel."
   def default_limit_bytes, do: @default_limit_mb * @megabyte
 
   @doc "Per-message cap in bytes for a channel (nil channel: the default)."
@@ -56,7 +56,7 @@ defmodule Custyard.Attachments do
   fetched slots are reused. URLs are never retained. The dispatcher withholds
   successful acknowledgment while any slot remains failed or pending.
   """
-  def fetch_for_message(%Message{id: message_id}, descriptors, opts \\ [])
+  def fetch_for_message(%Message{id: message_id, tenant_id: tenant_id}, descriptors, opts \\ [])
       when is_list(descriptors) do
     limit = Keyword.get(opts, :limit_bytes, default_limit_bytes())
     skip = Keyword.get(opts, :skip)
@@ -64,7 +64,7 @@ defmodule Custyard.Attachments do
     # A replay resumes each durable slot rather than treating one row as proof
     # that the whole batch finished. The lock also serializes concurrent replays.
     :global.trans({{__MODULE__, message_id}, self()}, fn ->
-      reserve_slots(message_id, descriptors)
+      reserve_slots(message_id, tenant_id, descriptors)
 
       case claim_batch(message_id) do
         {:ok, batch_token} ->
@@ -169,7 +169,7 @@ defmodule Custyard.Attachments do
 
   defp reusable?(_row, _skip), do: false
 
-  defp reserve_slots(message_id, descriptors) do
+  defp reserve_slots(message_id, tenant_id, descriptors) do
     Repo.transaction(fn ->
       existing = list_for_message(message_id)
 
@@ -179,7 +179,11 @@ defmodule Custyard.Attachments do
       descriptors
       |> Enum.with_index()
       |> Enum.map(fn {descriptor, position} ->
-        base = descriptor_attrs(message_id, descriptor) |> Map.put(:position, position)
+        base =
+          descriptor_attrs(message_id, descriptor)
+          |> Map.put(:position, position)
+          |> Map.put(:tenant_id, tenant_id)
+
         fingerprint = descriptor_fingerprint(base)
         base = Map.put(base, :descriptor_hash, fingerprint)
 
@@ -245,8 +249,13 @@ defmodule Custyard.Attachments do
     # Publish the reference before the file. SQLite's immediate transaction in the
     # sweeper then orders deletion before this reservation or sees the reference.
     case Repo.update_all(query, set: [sha256: sha]) do
-      {1, _} -> file_lock(sha, fn -> finish_slot(row, store(bytes), batch_token) end)
-      {0, _} -> Repo.get!(MessageAttachment, row.id)
+      {1, _} ->
+        file_lock({row.tenant_id, sha}, fn ->
+          finish_slot(row, store(row.tenant_id, bytes), batch_token)
+        end)
+
+      {0, _} ->
+        Repo.get!(MessageAttachment, row.id)
     end
   end
 
@@ -359,9 +368,9 @@ defmodule Custyard.Attachments do
 
   # Content-addressed write: the temp file lands next to its final name so the
   # rename is atomic on the same filesystem; identical content is kept once.
-  defp store(bytes) do
+  defp store(tenant_id, bytes) do
     sha = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
-    relative = Path.join(binary_part(sha, 0, 2), sha)
+    relative = Path.join([Integer.to_string(tenant_id), binary_part(sha, 0, 2), sha])
     final = Path.join(dir(), relative)
 
     unless File.exists?(final) do
@@ -403,8 +412,16 @@ defmodule Custyard.Attachments do
   defp declared_or_nil(_descriptor), do: nil
 
   @doc "Absolute path of a fetched attachment's file, nil for other states."
-  def file_path(%MessageAttachment{state: :fetched, storage_path: path}) when is_binary(path),
-    do: Path.join(dir(), path)
+  def file_path(%MessageAttachment{
+        state: :fetched,
+        tenant_id: tenant_id,
+        sha256: sha,
+        storage_path: path
+      })
+      when is_integer(tenant_id) and is_binary(sha) and byte_size(sha) == 64 do
+    expected = Path.join([Integer.to_string(tenant_id), binary_part(sha, 0, 2), sha])
+    if path == expected, do: Path.join(dir(), path), else: nil
+  end
 
   def file_path(%MessageAttachment{}), do: nil
 
@@ -413,27 +430,23 @@ defmodule Custyard.Attachments do
   operator's role and organization give access to. `nil` otherwise, so the
   caller answers 404 for missing and foreign attachments alike.
   """
-  def get_for_operator(id, operator) when is_integer(id) do
-    query =
-      from a in MessageAttachment,
-        join: m in Message,
-        on: m.id == a.message_id,
-        join: c in Conversation,
-        on: c.id == m.conversation_id,
-        where:
-          a.id == ^id and a.state == :fetched and is_nil(m.deleted_at) and c.suspect == false,
-        select: {a, c}
-
-    case Repo.one(query) do
-      {attachment, conversation} ->
-        if Authorization.can_access_conversation?(operator, conversation),
-          do: attachment,
-          else: nil
-
-      nil ->
-        nil
+  def get(%Scope{tenant_id: tenant_id} = scope, id) when is_integer(id) do
+    if Scope.current_staff(scope) do
+      Repo.one(
+        from a in MessageAttachment,
+          join: m in Message,
+          on: m.id == a.message_id,
+          join: c in Conversation,
+          on: c.id == m.conversation_id,
+          where: a.id == ^id and a.tenant_id == ^tenant_id and m.tenant_id == ^tenant_id,
+          where: c.tenant_id == ^tenant_id and a.state == :fetched and is_nil(m.deleted_at),
+          where: c.suspect == false,
+          select: a
+      )
     end
   end
+
+  def get(_, _), do: nil
 
   @doc """
   An attachment the portal of `organization_id` may download: fetched, on a
@@ -483,20 +496,32 @@ defmodule Custyard.Attachments do
 
     if File.dir?(directory) do
       directory
-      |> Path.join("*/*")
+      |> Path.join("*/*/*")
       |> Path.wildcard()
-      |> Enum.filter(&Regex.match?(~r/^[0-9a-f]{64}$/, Path.basename(&1)))
+      |> Enum.filter(fn path ->
+        parts = path |> Path.relative_to(directory) |> Path.split()
+
+        match?([_, _, _], parts) and Regex.match?(~r/^[0-9]+$/, hd(parts)) and
+          Regex.match?(~r/^[0-9a-f]{64}$/, Path.basename(path))
+      end)
       |> Enum.reduce(0, fn path, count ->
         sha = Path.basename(path)
+        relative = Path.relative_to(path, directory)
+        tenant_id = relative |> Path.split() |> hd() |> String.to_integer()
 
         removed =
-          file_lock(sha, fn ->
+          file_lock({tenant_id, sha}, fn ->
             # Check each file immediately before removal, under the same lock as
             # publication. Never remove an in-progress temporary file.
             {:ok, result} =
               Repo.transaction(
                 fn ->
-                  referenced? = Repo.exists?(from a in MessageAttachment, where: a.sha256 == ^sha)
+                  referenced? =
+                    Repo.exists?(
+                      from a in MessageAttachment,
+                        where: a.tenant_id == ^tenant_id and a.sha256 == ^sha
+                    )
+
                   if not referenced? and old_file?(path), do: File.rm(path), else: :kept
                 end,
                 mode: :immediate

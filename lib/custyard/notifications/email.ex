@@ -1,8 +1,7 @@
 defmodule Custyard.Notifications.Email do
   @moduledoc """
   Operator email alerts for neglect, quiet channels, and delivery failures.
-  Nondefault tenants use their staff recipients and sending credentials.
-  The default instance retains its configured operator notification address.
+  Each tenant uses its staff recipients and sending credentials.
   """
 
   require Logger
@@ -73,14 +72,8 @@ defmodule Custyard.Notifications.Email do
   defp send_channel_quiet(channel) do
     import Swoosh.Email
 
-    operator_email = Application.get_env(:custyard, :operator_email, "operator@example.com")
-    from_name = Application.get_env(:custyard, :email_from_name, "Custyard Alerts")
-    from_email = Application.get_env(:custyard, :email_from_address, "alerts@custyard.local")
-
     email =
       new()
-      |> to(operator_email)
-      |> from({from_name, from_email})
       |> subject("Inbound channel quiet: #{channel.public_address}")
       |> html_body(channel_quiet_html(channel))
       |> text_body(channel_quiet_text(channel))
@@ -103,7 +96,7 @@ defmodule Custyard.Notifications.Email do
 
   defp channel_quiet_html(channel) do
     safe_address = html_escape(channel.public_address)
-    safe_org_name = html_escape(organization_display(channel_organization(channel)))
+    safe_org_name = html_escape(tenant_display(channel.tenant_id))
 
     """
     <html>
@@ -113,7 +106,7 @@ defmodule Custyard.Notifications.Email do
       </div>
       <div style="padding: 16px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
         <p><strong>Channel:</strong> #{safe_address}</p>
-        <p><strong>Organization:</strong> #{safe_org_name}</p>
+        <p><strong>Workspace:</strong> #{safe_org_name}</p>
         <p><strong>Last message received:</strong> #{format_datetime(channel.last_received_at)}</p>
         <p><strong>Quiet window:</strong> #{channel.quiet_after_hours} hours</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
@@ -131,7 +124,7 @@ defmodule Custyard.Notifications.Email do
     INBOUND CHANNEL QUIET
 
     Channel: #{channel.public_address}
-    Organization: #{organization_display(channel_organization(channel))}
+    Workspace: #{tenant_display(channel.tenant_id)}
     Last message received: #{format_datetime(channel.last_received_at)}
     Quiet window: #{channel.quiet_after_hours} hours
 
@@ -151,14 +144,8 @@ defmodule Custyard.Notifications.Email do
   defp send_delivery_failure(conversation, status, recipient, role) do
     import Swoosh.Email
 
-    operator_email = Application.get_env(:custyard, :operator_email, "operator@example.com")
-    from_name = Application.get_env(:custyard, :email_from_name, "Custyard Alerts")
-    from_email = Application.get_env(:custyard, :email_from_address, "alerts@custyard.local")
-
     email =
       new()
-      |> to(operator_email)
-      |> from({from_name, from_email})
       |> subject("Reply #{status}: #{conversation.subject}")
       |> html_body(delivery_failure_html(conversation, status, recipient, role))
       |> text_body(delivery_failure_text(conversation, status, recipient, role))
@@ -237,8 +224,7 @@ defmodule Custyard.Notifications.Email do
     """
   end
 
-  defp channel_organization(%{organization: %{name: _} = organization}), do: organization
-  defp channel_organization(_channel), do: nil
+  defp tenant_display(tenant_id), do: Custyard.Tenants.get_tenant!(tenant_id).name
 
   defp log_neglect_alert(conversation, level) do
     Logger.info("""
@@ -255,14 +241,8 @@ defmodule Custyard.Notifications.Email do
   defp send_neglect_alert(conversation, level) do
     import Swoosh.Email
 
-    operator_email = Application.get_env(:custyard, :operator_email, "operator@example.com")
-    from_name = Application.get_env(:custyard, :email_from_name, "Custyard Alerts")
-    from_email = Application.get_env(:custyard, :email_from_address, "alerts@custyard.local")
-
     email =
       new()
-      |> to(operator_email)
-      |> from({from_name, from_email})
       |> subject("[#{String.upcase(to_string(level))}] Neglect alert: #{conversation.subject}")
       |> html_body(neglect_alert_html(conversation, level))
       |> text_body(neglect_alert_text(conversation, level))

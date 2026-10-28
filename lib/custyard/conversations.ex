@@ -15,36 +15,72 @@ defmodule Custyard.Conversations do
   alias Custyard.Email.{OutboundQueue, ReplyRecipients}
   import Ecto.Query
 
-  @doc """
-  List conversations for the operator attention queue.
-  Excludes resolved and currently-snoozed conversations, ordered by cached_score descending.
-  Returns list of `%{conversation: conversation, message_count: count}` maps.
+  def list(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
+    if Custyard.Scope.current_staff(scope),
+      do: list_for_attention_queue(Keyword.put(opts, :tenant_id, tenant_id)),
+      else: []
+  end
 
-  Options:
-    - :filter - state filter ("all", "new", "active", "waiting", "dormant", "snoozed")
-    - :organization_id - scope to a specific organization (nil for all - super_admin only).
-      Org-scoped results also include conversations without an organization
-      (unlinked prospects) — they are visible to all operator roles, matching
-      `Custyard.Authorization.can_access_conversation?/2`.
-  """
-  def list_for_attention_queue(opts \\ []) do
+  def get(%Custyard.Scope{tenant_id: tenant_id} = scope, id) do
+    if Custyard.Scope.current_staff(scope),
+      do: Repo.get_by(Conversation, id: id, tenant_id: tenant_id)
+  end
+
+  def get!(%Custyard.Scope{} = scope, id),
+    do: get(scope, id) || raise(Ecto.NoResultsError, queryable: Conversation)
+
+  def get_with_messages(%Custyard.Scope{} = scope, id) do
+    case get(scope, id) do
+      nil -> nil
+      conversation -> load_with_messages(conversation.id)
+    end
+  end
+
+  def neglected(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
+    if Custyard.Scope.current_staff(scope),
+      do: list_neglected(Keyword.put(opts, :tenant_id, tenant_id)),
+      else: []
+  end
+
+  def with_access(%Custyard.Scope{} = scope, id, fun) do
+    case Custyard.Scope.current_staff(scope) do
+      nil -> {:error, :unauthorized}
+      staff -> with_operator_access(id, staff, fun)
+    end
+  end
+
+  def create(%Custyard.Scope{tenant_id: tenant_id} = scope, attrs) do
+    if Custyard.Scope.current_staff(scope) do
+      attrs =
+        Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+        |> Map.put("tenant_id", tenant_id)
+
+      create_conversation(attrs)
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  defp list_for_attention_queue(opts) do
     filter = Keyword.get(opts, :filter, "all")
     organization_id = Keyword.get(opts, :organization_id)
     now = DateTime.utc_now()
 
     message_count_subquery =
-      from m in Message,
+      from(m in Message,
         group_by: m.conversation_id,
         select: %{conversation_id: m.conversation_id, count: count(m.id)}
+      )
 
     due_task_subquery =
-      from t in Custyard.Task,
+      from(t in Custyard.Task,
         where: t.state != :done and not is_nil(t.due_at) and t.due_at <= ^now,
         group_by: t.conversation_id,
         select: %{conversation_id: t.conversation_id, count: count(t.id), due_at: min(t.due_at)}
+      )
 
     query =
-      from c in Conversation,
+      from(c in Conversation,
         # Left join: disambiguation/public-intake conversations have nil organization_id
         left_join: o in assoc(c, :organization),
         left_join: ct in assoc(c, :contact),
@@ -66,6 +102,7 @@ defmodule Custyard.Conversations do
           message_count: coalesce(mc.count, 0),
           due_task_count: coalesce(dt.count, 0)
         }
+      )
 
     query
     |> apply_organization_filter(organization_id)
@@ -78,23 +115,25 @@ defmodule Custyard.Conversations do
 
   # Filter for snoozed conversations - only show snoozed when explicitly filtered
   defp apply_snooze_filter(query, "snoozed", now) do
-    from c in query, where: c.snoozed_until >= ^now
+    from(c in query, where: c.snoozed_until >= ^now)
   end
 
   defp apply_snooze_filter(query, _filter, now) do
-    from [c, due_tasks: dt] in query,
+    from([c, due_tasks: dt] in query,
       where: is_nil(c.snoozed_until) or c.snoozed_until < ^now or not is_nil(dt.conversation_id)
+    )
   end
 
   defp apply_label_filter(query, nil), do: query
 
   defp apply_label_filter(query, label_id) when is_integer(label_id) do
-    from c in query,
+    from(c in query,
       join: cl in Custyard.ConversationLabel,
       on: cl.conversation_id == c.id,
       join: l in Custyard.Label,
       on: l.id == cl.label_id,
       where: l.id == ^label_id and l.tenant_id == c.tenant_id
+    )
   end
 
   defp apply_tenant_filter(query, nil), do: query
@@ -107,7 +146,7 @@ defmodule Custyard.Conversations do
   defp apply_organization_filter(query, nil), do: query
 
   defp apply_organization_filter(query, org_id) when is_integer(org_id) do
-    from c in query, where: c.organization_id == ^org_id or is_nil(c.organization_id)
+    from(c in query, where: c.organization_id == ^org_id or is_nil(c.organization_id))
   end
 
   defp apply_state_filter(query, "all"), do: query
@@ -121,14 +160,7 @@ defmodule Custyard.Conversations do
 
   defp apply_state_filter(query, _), do: query
 
-  @doc """
-  List all conversations that are currently at or past neglect thresholds.
-  Returns conversations with organization preloaded, excluding resolved and snoozed.
-
-  Options:
-    - :organization_id - scope to a specific organization (nil for all - super_admin only)
-  """
-  def list_neglected(opts \\ []) do
+  defp list_neglected(opts) do
     organization_id = Keyword.get(opts, :organization_id)
     now = DateTime.utc_now()
 
@@ -159,14 +191,15 @@ defmodule Custyard.Conversations do
     contact_id = Keyword.get(opts, :contact_id)
 
     query =
-      from c in Conversation,
+      from(c in Conversation,
         where: c.organization_id == ^org_id,
         order_by: [desc: c.inserted_at],
         preload: [:contact]
+      )
 
     query =
       if contact_id do
-        from c in query, where: c.contact_id == ^contact_id
+        from(c in query, where: c.contact_id == ^contact_id)
       else
         query
       end
@@ -175,24 +208,10 @@ defmodule Custyard.Conversations do
       if include_resolved do
         query
       else
-        from c in query, where: c.state != :resolved
+        from(c in query, where: c.state != :resolved)
       end
 
     Repo.all(query)
-  end
-
-  @doc """
-  Get a single conversation by ID.
-  """
-  def get_conversation(id) do
-    Repo.get(Conversation, id)
-  end
-
-  @doc """
-  Get a single conversation by ID or raise.
-  """
-  def get_conversation!(id) do
-    Repo.get!(Conversation, id)
   end
 
   @doc """
@@ -213,11 +232,7 @@ defmodule Custyard.Conversations do
     end
   end
 
-  @doc """
-  Get conversation with preloaded messages and associations.
-  WARNING: No org scoping - use get_with_messages_for_organization/2 for user-facing requests.
-  """
-  def get_with_messages(id) do
+  defp load_with_messages(id) do
     Repo.get!(Conversation, id)
     |> Repo.preload([
       :organization,
@@ -297,10 +312,7 @@ defmodule Custyard.Conversations do
     |> Repo.one()
   end
 
-  @doc """
-  Create a new conversation.
-  """
-  def create_conversation(attrs) do
+  defp create_conversation(attrs) do
     %Conversation{}
     |> Conversation.changeset(attrs)
     |> Repo.insert()
@@ -367,8 +379,9 @@ defmodule Custyard.Conversations do
 
     # Build the update query with a WHERE condition on current state
     query =
-      from c in Conversation,
+      from(c in Conversation,
         where: c.id == ^conversation.id and c.state == ^from_state
+      )
 
     case Repo.update_all(query, set: attrs) do
       {1, _} ->
@@ -537,10 +550,12 @@ defmodule Custyard.Conversations do
     end)
   end
 
-  @doc "Run an operator mutation while the conversation's current scope is locked."
-  def with_operator_access(id, %OperatorAccount{} = operator, fun) when is_function(fun, 2) do
+  defp with_operator_access(id, %OperatorAccount{} = operator, fun) when is_function(fun, 2) do
     Repo.transaction(fn ->
       with %OperatorAccount{} = current_operator <- OperatorAccess.lock_current(operator),
+           true <-
+             OperatorAccount.session_claim_matches?(current_operator, operator.session_claim),
+           true <- Custyard.Tenants.active?(current_operator.tenant_id),
            %Conversation{} = conversation <-
              lock_conversation_for_operator(id, current_operator) do
         case fun.(conversation, current_operator) do
@@ -569,24 +584,11 @@ defmodule Custyard.Conversations do
     end
   end
 
-  defp scope_conversation_to_operator(query, %OperatorAccount{role: "super_admin"}),
-    do: query
+  defp scope_conversation_to_operator(query, %OperatorAccount{tenant_id: tenant_id})
+       when is_integer(tenant_id),
+       do: where(query, [c], c.tenant_id == ^tenant_id)
 
-  defp scope_conversation_to_operator(query, %OperatorAccount{tenant_id: id}) when is_integer(id),
-    do: from(c in query, where: c.tenant_id == ^id)
-
-  defp scope_conversation_to_operator(query, %OperatorAccount{organization_id: org_id})
-       when is_integer(org_id) do
-    tenant_query =
-      from o in Custyard.Organization, where: o.id == ^org_id, select: o.tenant_id
-
-    from c in query,
-      where: c.tenant_id in subquery(tenant_query),
-      where: c.organization_id == ^org_id or is_nil(c.organization_id)
-  end
-
-  defp scope_conversation_to_operator(query, %OperatorAccount{}),
-    do: from(c in query, where: false)
+  defp scope_conversation_to_operator(query, %OperatorAccount{}), do: where(query, [c], false)
 
   @doc """
   Create a message for a conversation, raising on failure.
@@ -905,37 +907,17 @@ defmodule Custyard.Conversations do
         }
   def reply_identity(conversation, opts \\ [])
 
-  # Public-intake conversations always send from the platform address: with a
-  # nil sender_email, Outbound's :email_from_address fallback applies. Keyed
-  # on the conversation's source, not org presence — no inbound route exists
-  # for these conversations, and the operator_email fallback would leak the
-  # replying operator's personal address to prospects. The rule holds even
-  # after the conversation links to an organization (source-keyed rule in the
-  # public intake spec).
-  def reply_identity(%Conversation{source: :public_intake, tenant_id: 1}, _opts),
-    do: %{address: nil, name: nil, source: :platform}
+  def reply_identity(%Conversation{} = conversation, _opts) do
+    case reply_sending_channel(conversation) do
+      %Custyard.InboundChannel{} = channel ->
+        %{
+          address: Custyard.InboundChannels.from_address(channel),
+          name: reply_channel_name(channel),
+          source: :channel
+        }
 
-  # Priority: channel From identity > inbound route from_address >
-  # operator_email option > platform fallback
-  def reply_identity(%Conversation{} = conversation, opts) do
-    channel = reply_sending_channel(conversation)
-
-    cond do
-      address = channel && Custyard.InboundChannels.from_address(channel) ->
-        name = reply_channel_name(channel) || organization_name(conversation)
-        %{address: address, name: name, source: :channel}
-
-      address = lookup_route_from_address(conversation) ->
-        %{address: address, name: organization_name(conversation), source: :route}
-
-      conversation.tenant_id != 1 ->
+      nil ->
         %{address: nil, name: tenant_name(conversation.tenant_id), source: :platform}
-
-      address = Keyword.get(opts, :operator_email) ->
-        %{address: address, name: organization_name(conversation), source: :operator}
-
-      true ->
-        %{address: nil, name: organization_name(conversation), source: :platform}
     end
   end
 
@@ -944,15 +926,11 @@ defmodule Custyard.Conversations do
   defp resolve_sender_email(conversation, opts), do: reply_identity(conversation, opts).address
 
   @doc "The tenant-owned sending channel, snapshotted on an outbound reply at enqueue."
-  def reply_sending_channel(%Conversation{source: :public_intake, tenant_id: 1}), do: nil
-
   def reply_sending_channel(%Conversation{} = conversation) do
     reply_channel_record(conversation) ||
-      if conversation.tenant_id != 1 do
-        case Custyard.EmailSetup.default_reply_channel(conversation.tenant_id) do
-          {:ok, channel} -> channel
-          {:error, _reason} -> nil
-        end
+      case Custyard.EmailSetup.default_reply_channel(conversation.tenant_id) do
+        {:ok, channel} -> channel
+        {:error, _reason} -> nil
       end
   end
 
@@ -975,29 +953,8 @@ defmodule Custyard.Conversations do
   defp reply_channel_record(_conversation), do: nil
 
   defp reply_channel_name(channel) do
-    Custyard.InboundChannels.from_name(channel) ||
-      if is_nil(channel.organization_id) do
-        case Repo.get(Custyard.Tenant, channel.tenant_id) do
-          %{name: name} -> name
-          _ -> nil
-        end
-      end
+    Custyard.InboundChannels.from_name(channel) || tenant_name(channel.tenant_id)
   end
-
-  defp organization_name(%Conversation{organization: %Custyard.Organization{name: name}})
-       when is_binary(name) and name != "",
-       do: name
-
-  defp organization_name(%Conversation{organization: %Custyard.Organization{}}), do: nil
-
-  defp organization_name(%Conversation{organization_id: org_id}) when is_integer(org_id) do
-    case Repo.get(Custyard.Organization, org_id) do
-      %Custyard.Organization{name: name} when is_binary(name) and name != "" -> name
-      _organization -> nil
-    end
-  end
-
-  defp organization_name(_conversation), do: nil
 
   # Determine origin for outbound replies based on the conversation's source.
   # The origin reflects which integration/adapter the reply is routed through,
@@ -1017,28 +974,6 @@ defmodule Custyard.Conversations do
       _ -> :email
     end
   end
-
-  # Prefer the project-specific route so replies flow back through the same
-  # webhook/route the conversation arrived on; fall back to the org's
-  # general route.
-  defp lookup_route_from_address(conversation) do
-    project_route_from_address(conversation) || general_route_from_address(conversation)
-  end
-
-  defp project_route_from_address(%{project_id: project_id}) when is_integer(project_id) do
-    project_id |> Custyard.InboundRoutes.get_project_route() |> route_from_address()
-  end
-
-  defp project_route_from_address(_conversation), do: nil
-
-  defp general_route_from_address(%{organization_id: org_id}) when is_integer(org_id) do
-    org_id |> Custyard.InboundRoutes.get_general_route() |> route_from_address()
-  end
-
-  defp general_route_from_address(_conversation), do: nil
-
-  defp route_from_address(%{from_address: addr}) when is_binary(addr) and addr != "", do: addr
-  defp route_from_address(_route), do: nil
 
   # Generate a unique Message-ID for outbound emails following RFC 5322.
   defp generate_outbound_message_id(conversation) do
@@ -1262,6 +1197,20 @@ defmodule Custyard.Conversations do
         from(a in Custyard.AuditEvent, where: a.conversation_id in subquery(expired_ids))
         |> Repo.update_all(set: [conversation_id: nil])
 
+        from(p in Custyard.Project, where: p.conversation_id in subquery(expired_ids))
+        |> Repo.update_all(set: [conversation_id: nil])
+
+        from(t in Custyard.Task, where: t.conversation_id in subquery(expired_ids))
+        |> Repo.update_all(set: [conversation_id: nil])
+
+        from(e in Custyard.EmailConnection,
+          where: e.latest_received_conversation_id in subquery(expired_ids)
+        )
+        |> Repo.update_all(set: [latest_received_conversation_id: nil])
+
+        from(s in Custyard.Slug, where: s.conversation_id in subquery(expired_ids))
+        |> Repo.delete_all()
+
         {deleted, _} = Repo.delete_all(query)
         deleted
       end)
@@ -1298,8 +1247,19 @@ defmodule Custyard.Conversations do
     if dry_run do
       Repo.aggregate(query, :count)
     else
-      {count, _} = Repo.delete_all(query)
-      count
+      Repo.transaction(fn ->
+        contact_ids = from(ct in query, select: ct.id)
+
+        from(c in Custyard.PortalCredential, where: c.contact_id in subquery(contact_ids))
+        |> Repo.update_all(set: [contact_id: nil])
+
+        {count, _} = Repo.delete_all(query)
+        count
+      end)
+      |> case do
+        {:ok, count} -> count
+        {:error, reason} -> raise "Contact cleanup failed: #{inspect(reason)}"
+      end
     end
   end
 

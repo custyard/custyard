@@ -12,7 +12,7 @@ defmodule Custyard.Release.Dsar do
   terminal output ends up in scrollback and logs.
   """
 
-  alias Custyard.{DataSubjects, OperatorAccounts, Organizations, Release}
+  alias Custyard.{DataSubjects, OperatorAccounts, Release}
 
   @usage """
   Usage: bin/dsar ACTION EMAIL --org ID [--yes]
@@ -103,18 +103,28 @@ defmodule Custyard.Release.Dsar do
   end
 
   defp perform(action, email, organization_id) do
-    if Organizations.get_organization(organization_id),
+    if Custyard.Repo.get(Custyard.Organization, organization_id),
       do: perform_in(action, email, organization_id),
       else: {:error, "organization #{organization_id} not found"}
   end
 
+  # The local release command is installation-owner authority; scope it to
+  # the selected customer's tenant before invoking resource operations.
+  defp scope(organization_id) do
+    org = Custyard.Repo.get!(Custyard.Organization, organization_id)
+    %Custyard.DataSubjects.LocalAuthority{tenant_id: org.tenant_id}
+  end
+
   defp perform_in("export", email, organization_id) do
-    json = email |> DataSubjects.export(organization_id) |> Jason.encode!(pretty: true)
+    json =
+      DataSubjects.export(scope(organization_id), email, organization_id)
+      |> Jason.encode!(pretty: true)
+
     {:ok, json <> "\n"}
   end
 
   defp perform_in("erase", email, organization_id) do
-    case DataSubjects.erase_participation(email, organization_id) do
+    case DataSubjects.erase_participation(scope(organization_id), email, organization_id) do
       {:ok, %{erased: erased, sent_by_subject: sent}} ->
         {:ok,
          "Removed the address from #{erased} message(s) as a recipient. " <>
@@ -126,7 +136,7 @@ defmodule Custyard.Release.Dsar do
   end
 
   defp perform_in("erase-contact", email, organization_id) do
-    case DataSubjects.erase_subject(email, organization_id) do
+    case DataSubjects.erase_subject(scope(organization_id), email, organization_id) do
       {:ok, counts} ->
         {:ok,
          """

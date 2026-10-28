@@ -1,161 +1,40 @@
 defmodule CustyardWeb.Plugs.CustomDomainTest do
-  use Custyard.DataCase, async: true
-
+  use Custyard.DataCase
   import Plug.Test
-
+  import Custyard.Factory
+  alias Custyard.{InstanceAdmins, Tenants}
   alias CustyardWeb.Plugs.CustomDomain
 
-  import Custyard.Factory
-
-  describe "call/2" do
-    test "passes through requests to app host without modification" do
-      conn = conn(:get, "/some/path") |> Map.put(:host, "localhost")
-
-      result = CustomDomain.call(conn, [])
-
-      assert result.host == "localhost"
-      assert result.request_path == "/some/path"
-      refute Map.has_key?(result.assigns, :organization)
-      refute Map.has_key?(result.assigns, :custom_domain_request)
-    end
-
-    test "passes through requests to 127.0.0.1" do
-      conn = conn(:get, "/path") |> Map.put(:host, "127.0.0.1")
-
-      result = CustomDomain.call(conn, [])
-
-      assert result.request_path == "/path"
-      refute Map.has_key?(result.assigns, :organization)
-    end
-
-    test "passes through unknown custom domains without modification" do
-      conn = conn(:get, "/") |> Map.put(:host, "unknown.example.com")
-
-      result = CustomDomain.call(conn, [])
-
-      assert result.request_path == "/"
-      refute Map.has_key?(result.assigns, :organization)
-    end
-
-    test "redirects the root path of a custom domain to the request list" do
-      org =
-        insert_organization(
-          custom_domain: "support.acme.com",
-          token: "acme-test-token-secure-32-chars-x"
-        )
-
-      conn = conn(:get, "/") |> Map.put(:host, "support.acme.com")
-
-      result = CustomDomain.call(conn, [])
-
-      # "/" is the app host's home page; the browser must land on a URL the
-      # LiveView client can resolve on connect.
-      assert result.halted
-      assert result.status == 302
-      assert Plug.Conn.get_resp_header(result, "location") == ["/requests"]
-      assert result.assigns.organization.id == org.id
-    end
-
-    test "rewrites /requests to the portal list for a known custom domain" do
-      org =
-        insert_organization(
-          custom_domain: "support.acme.com",
-          token: "acme-test-token-secure-32-chars-x"
-        )
-
-      conn = conn(:get, "/requests") |> Map.put(:host, "support.acme.com")
-
-      result = CustomDomain.call(conn, [])
-
-      assert result.request_path == "/p/acme-test-token-secure-32-chars-x"
-      assert result.path_info == ["p", "acme-test-token-secure-32-chars-x"]
-      assert result.assigns.organization.id == org.id
-      assert result.assigns.custom_domain_request == true
-      assert result.private[:custyard_custom_domain] == true
-    end
-
-    test "resolves the custom domain regardless of case" do
-      org = insert_organization(custom_domain: "support.acme.com")
-
-      conn = conn(:get, "/new") |> Map.put(:host, "Support.ACME.com")
-      result = CustomDomain.call(conn, [])
-
-      assert result.assigns.organization.id == org.id
-      assert result.request_path == "/p/#{org.token}/new"
-    end
-
-    test "rewrites subpath for known custom domain" do
-      org =
-        insert_organization(
-          custom_domain: "help.example.org",
-          token: "example-org-secure-token-32chars"
-        )
-
-      conn = conn(:get, "/request/123") |> Map.put(:host, "help.example.org")
-
-      result = CustomDomain.call(conn, [])
-
-      assert result.request_path == "/p/example-org-secure-token-32chars/request/123"
-      assert result.path_info == ["p", "example-org-secure-token-32chars", "request", "123"]
-      assert result.assigns.organization.id == org.id
-    end
-
-    test "rewrites /new path for custom domain" do
-      insert_organization(
-        custom_domain: "portal.test.io",
-        token: "test-io-token-secure-32-chars-xyz"
-      )
-
-      conn = conn(:get, "/new") |> Map.put(:host, "portal.test.io")
-
-      result = CustomDomain.call(conn, [])
-
-      assert result.request_path == "/p/test-io-token-secure-32-chars-xyz/new"
-      assert result.path_info == ["p", "test-io-token-secure-32-chars-xyz", "new"]
-    end
-
-    test "does not double-prefix paths already starting with /p/" do
-      insert_organization(
-        custom_domain: "support.acme.com",
-        token: "acme-test-token-secure-32-chars-x"
-      )
-
-      conn = conn(:get, "/p/other-token/request/1") |> Map.put(:host, "support.acme.com")
-
-      result = CustomDomain.call(conn, [])
-
-      # Should not become /p/acme-test-token-secure-32-chars-x/p/other-token/request/1
-      assert result.request_path == "/p/other-token/request/1"
-      assert result.path_info == ["p", "other-token", "request", "1"]
-      # Still assigns the org for the custom domain
-      assert result.assigns.custom_domain_request == true
-    end
+  test "registered host resolves tenant without rewriting paths" do
+    tenant = insert_tenant()
+    {:ok, _} = Tenants.add_host(tenant.id, "support.example.com")
+    result = CustomDomain.call(%{conn(:get, "/app/projects") | host: "SUPPORT.EXAMPLE.COM"}, [])
+    assert result.assigns.host_tenant.id == tenant.id
+    assert result.request_path == "/app/projects"
+    refute result.halted
   end
 
-  describe "custom_domain?/1" do
-    test "returns true when custom domain flag is set" do
-      conn = %Plug.Conn{private: %{custyard_custom_domain: true}}
+  test "unknown host is rejected and installation console remains reachable" do
+    assert %{status: 404, halted: true} =
+             CustomDomain.call(%{conn(:get, "/") | host: "unknown.example.com"}, [])
 
-      assert CustomDomain.custom_domain?(conn) == true
-    end
-
-    test "returns false when flag is not set" do
-      conn = %Plug.Conn{private: %{}}
-
-      assert CustomDomain.custom_domain?(conn) == false
-    end
-
-    test "returns false when flag is explicitly false" do
-      conn = %Plug.Conn{private: %{custyard_custom_domain: false}}
-
-      assert CustomDomain.custom_domain?(conn) == false
-    end
+    result = CustomDomain.call(%{conn(:get, "/admin/login") | host: Tenants.app_host()}, [])
+    assert result.assigns.installation_host
+    refute result.halted
   end
 
-  describe "init/1" do
-    test "passes through options unchanged" do
-      assert CustomDomain.init([]) == []
-      assert CustomDomain.init(foo: :bar) == [foo: :bar]
+  test "suspended hosts block tenant pages but accept authenticated callback processing" do
+    tenant = insert_tenant()
+    {:ok, _} = Tenants.add_host(tenant.id, "support.example.com")
+    {:created, admin} = InstanceAdmins.create_admin("instance@example.com")
+    {:ok, _} = Tenants.set_status(admin, tenant.id, "suspended")
+
+    assert %{status: 403, halted: true} =
+             CustomDomain.call(%{conn(:get, "/app/login") | host: "support.example.com"}, [])
+
+    for path <- ["/api/webhook/route/token", "/api/webhook/email-status/lettermint/token"] do
+      result = CustomDomain.call(%{conn(:post, path) | host: "support.example.com"}, [])
+      refute result.halted
     end
   end
 end

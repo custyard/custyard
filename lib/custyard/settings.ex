@@ -3,10 +3,12 @@ defmodule Custyard.Settings do
   Application settings for scoring weights, neglect thresholds, and
   public intake configuration.
 
-  Uses a single-row pattern - there's only ever one settings record.
+  Each tenant owns its settings record.
   """
   use Ecto.Schema
   import Ecto.Changeset
+  import Ecto.Query, only: [from: 2]
+  alias Custyard.{OperatorAccess, OperatorAccount, Scope, Tenant}
 
   alias Custyard.Repo
 
@@ -32,45 +34,27 @@ defmodule Custyard.Settings do
     slug_claim_ttl_hours: 72
   }
 
-  # All-nil defaults: consumers (intake layout, prospect-facing mail) fall
-  # back to "Custyard" for the name and render nothing for logo/color.
-  @default_branding %{
-    name: nil,
-    logo_url: nil,
-    primary_color: nil
-  }
-
-  @branding_name_max_length 100
-
-  # \A/\z (not ^/$): $ can match before a trailing newline.
-  @branding_color_format ~r/\A#[0-9a-fA-F]{6}\z/
-
   @valid_weight_keys Map.keys(@default_weights) |> Enum.map(&to_string/1)
   @valid_threshold_keys Map.keys(@default_thresholds) |> Enum.map(&to_string/1)
 
   schema "settings" do
     # Score weights (stored as map in JSON column)
-    field :score_weights, :map, default: @default_weights
+    field(:score_weights, :map, default: @default_weights)
 
     # Neglect thresholds per tier: %{tier => [warning_hours, critical_hours]}
-    field :neglect_thresholds, :map
+    field(:neglect_thresholds, :map)
 
     # Sieve header mappings for email metadata extraction
     # Format: %{header_name => %{property => property_name, mapping => %{value => property_value}}}
     # Example: %{"X-Customer-Tier" => %{"property" => "tier", "mapping" => %{"ent" => "enterprise"}}}
-    field :sieve_header_mappings, :map, default: %{}
+    field(:sieve_header_mappings, :map, default: %{})
 
     # Public intake configuration (stored as map in JSON column)
     # Keys: "unlinked_tier_score" (integer 0..100), "slug_claim_ttl_hours" (integer 1..720)
-    field :intake_config, :map, default: %{}
+    field(:intake_config, :map, default: %{})
 
-    # Instance branding for the public intake surface (stored as map in JSON column)
-    # Keys: "name" (string, max 100), "logo_url" (/uploads/ path),
-    # "primary_color" (hex color like #1a2b3c)
-    field :branding, :map, default: %{}
-
-    # Singleton constraint - always true, unique constraint ensures only one row
-    field :singleton, :boolean, default: true
+    # One settings record per tenant
+    belongs_to(:tenant, Custyard.Tenant)
 
     timestamps(type: :utc_datetime)
   end
@@ -78,9 +62,9 @@ defmodule Custyard.Settings do
   @doc """
   Get the current settings, creating defaults if none exist.
   """
-  def get do
-    case Repo.one(__MODULE__) do
-      nil -> create_defaults()
+  def get(tenant_id) when is_integer(tenant_id) do
+    case Repo.get_by(__MODULE__, tenant_id: tenant_id) do
+      nil -> create_defaults(tenant_id)
       settings -> settings
     end
   end
@@ -91,8 +75,8 @@ defmodule Custyard.Settings do
   Malformed weight entries (non-numeric values) are silently skipped and
   the default weight for that key is used instead.
   """
-  def get_weights do
-    settings = get()
+  def get_weights(tenant_id) do
+    settings = get(tenant_id)
 
     parsed_weights =
       settings.score_weights
@@ -116,8 +100,8 @@ defmodule Custyard.Settings do
   Malformed threshold entries in the database (wrong structure, missing values, etc.)
   are silently skipped and the default threshold for that tier is used instead.
   """
-  def get_neglect_thresholds do
-    settings = get()
+  def get_neglect_thresholds(tenant_id) do
+    settings = get(tenant_id)
 
     parsed_thresholds =
       settings.neglect_thresholds
@@ -139,8 +123,12 @@ defmodule Custyard.Settings do
   Update score weights.
   Returns `{:ok, settings}` or `{:error, changeset}` if validation fails.
   """
-  def update_weights(weights) when is_map(weights) do
-    settings = get()
+  def update_weights(%Scope{} = scope, weights) when is_map(weights) do
+    with_admin_scope(scope, fn -> do_update_weights(scope.tenant_id, weights) end)
+  end
+
+  defp do_update_weights(tenant_id, weights) do
+    settings = get(tenant_id)
     stringified = stringify_keys(weights)
 
     settings
@@ -154,8 +142,12 @@ defmodule Custyard.Settings do
   Update neglect thresholds.
   Returns `{:ok, settings}` or `{:error, changeset}` if validation fails.
   """
-  def update_thresholds(thresholds) when is_map(thresholds) do
-    settings = get()
+  def update_thresholds(%Scope{} = scope, thresholds) when is_map(thresholds) do
+    with_admin_scope(scope, fn -> do_update_thresholds(scope.tenant_id, thresholds) end)
+  end
+
+  defp do_update_thresholds(tenant_id, thresholds) do
+    settings = get(tenant_id)
 
     # Convert {warning, critical} tuples to [warning, critical] lists for JSON
     thresholds_for_db =
@@ -177,8 +169,8 @@ defmodule Custyard.Settings do
   Returns a map of header name => mapping config.
   Example: %{"X-Customer-Tier" => %{"property" => "tier", "mapping" => %{"ent" => "enterprise"}}}
   """
-  def get_sieve_header_mappings do
-    settings = get()
+  def get_sieve_header_mappings(tenant_id) do
+    settings = get(tenant_id)
     settings.sieve_header_mappings || %{}
   end
 
@@ -194,8 +186,8 @@ defmodule Custyard.Settings do
   - `:slug_claim_ttl_hours` - lifetime of an unconfirmed slug claim
     (1..720, default 72)
   """
-  def get_intake_config do
-    settings = get()
+  def get_intake_config(tenant_id) do
+    settings = get(tenant_id)
 
     parsed_config =
       (settings.intake_config || %{})
@@ -210,8 +202,12 @@ defmodule Custyard.Settings do
   Update public intake configuration.
   Returns `{:ok, settings}` or `{:error, changeset}` if validation fails.
   """
-  def update_intake_config(config) when is_map(config) do
-    settings = get()
+  def update_intake_config(%Scope{} = scope, config) when is_map(config) do
+    with_admin_scope(scope, fn -> do_update_intake_config(scope.tenant_id, config) end)
+  end
+
+  defp do_update_intake_config(tenant_id, config) do
+    settings = get(tenant_id)
 
     # Merge over the stored map: intake_config holds independent keys driving
     # different subsystems (unlinked_tier_score, slug_claim_ttl_hours), so a
@@ -226,49 +222,9 @@ defmodule Custyard.Settings do
     |> Repo.update()
   end
 
-  @doc """
-  Get instance branding as a map with atom keys.
-
-  Malformed entries (wrong type, bad hex color, non-uploads logo path) and
-  unknown keys are silently skipped and the default for that key (nil) is
-  used instead.
-
-  Keys:
-  - `:name` - display name shown on the public intake surface and used as
-    the From display name on prospect-facing mail (max 100 chars; consumers
-    fall back to "Custyard" when nil)
-  - `:logo_url` - same-origin `/uploads/` path
-  - `:primary_color` - hex color like `#1a2b3c`
-  """
-  def get_branding do
-    settings = get()
-
-    parsed_branding =
-      (settings.branding || %{})
-      |> Enum.filter(fn {k, v} -> valid_branding_entry?(k, v) end)
-      |> Enum.map(fn {k, v} -> {String.to_existing_atom(k), v} end)
-      |> Map.new()
-
-    Map.merge(@default_branding, parsed_branding)
-  end
-
-  @doc """
-  Update instance branding.
-
-  The given map replaces the stored one, so omitting a key clears it back
-  to its default. Returns `{:ok, settings}` or `{:error, changeset}` if
-  validation fails (unknown keys, bad hex color, non-`/uploads/` or
-  traversal-carrying logo path, blank or over-long name).
-  """
-  def update_branding(branding) when is_map(branding) do
-    settings = get()
-    stringified = stringify_keys(branding)
-
-    settings
-    |> cast(%{branding: stringified}, [:branding])
-    |> validate_branding()
-    |> Repo.update()
-  end
+  @doc "Read the tenant's canonical workspace branding."
+  def get_branding(tenant_id),
+    do: Custyard.Tenants.branding(Custyard.Tenants.get_tenant!(tenant_id))
 
   @doc """
   Update Sieve header mappings.
@@ -280,8 +236,12 @@ defmodule Custyard.Settings do
   - "urgency" - maps to conversation urgency (urgent, elevated, normal)
   - "queue" - reserved for future queue assignment
   """
-  def update_sieve_header_mappings(mappings) when is_map(mappings) do
-    settings = get()
+  def update_sieve_header_mappings(%Scope{} = scope, mappings) when is_map(mappings) do
+    with_admin_scope(scope, fn -> do_update_sieve_header_mappings(scope.tenant_id, mappings) end)
+  end
+
+  defp do_update_sieve_header_mappings(tenant_id, mappings) do
+    settings = get(tenant_id)
 
     settings
     |> cast(%{sieve_header_mappings: mappings}, [:sieve_header_mappings])
@@ -289,22 +249,45 @@ defmodule Custyard.Settings do
     |> Repo.update()
   end
 
+  defp with_admin_scope(scope, fun) do
+    Repo.transaction(fn ->
+      OperatorAccess.lock_current(%OperatorAccount{id: scope.staff_id})
+
+      Repo.update_all(from(t in Tenant, where: t.id == ^scope.tenant_id and t.status == "active"),
+        set: [updated_at: DateTime.utc_now() |> DateTime.truncate(:second)]
+      )
+
+      case Scope.current_staff(scope) do
+        %{role: "admin"} ->
+          case fun.() do
+            {:ok, settings} -> settings
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        _ ->
+          Repo.rollback(:unauthorized)
+      end
+    end)
+  end
+
   @doc false
   def changeset(settings, attrs) do
     settings
     |> cast(attrs, [
+      :tenant_id,
       :score_weights,
       :neglect_thresholds,
       :sieve_header_mappings,
-      :intake_config,
-      :branding
+      :intake_config
     ])
+    |> validate_required([:tenant_id])
+    |> foreign_key_constraint(:tenant_id)
+    |> unique_constraint(:tenant_id)
     |> validate_weights()
     |> validate_weight_values()
     |> validate_thresholds()
     |> validate_sieve_header_mappings()
     |> validate_intake_config()
-    |> validate_branding()
   end
 
   defp validate_weights(changeset) do
@@ -455,51 +438,7 @@ defmodule Custyard.Settings do
 
   defp valid_intake_config_entry?(_key, _value), do: false
 
-  defp validate_branding(changeset) do
-    case get_change(changeset, :branding) do
-      nil ->
-        changeset
-
-      branding when is_map(branding) ->
-        invalid_keys =
-          branding
-          |> Enum.reject(fn {k, v} -> valid_branding_entry?(k, v) end)
-          |> Enum.map(fn {k, _v} -> k end)
-
-        if Enum.empty?(invalid_keys) do
-          changeset
-        else
-          add_error(
-            changeset,
-            :branding,
-            "contains invalid entries for: #{Enum.join(invalid_keys, ", ")}. " <>
-              "name must be a non-blank string of at most #{@branding_name_max_length} characters; " <>
-              "logo_url must be an /uploads/ path without traversal sequences; " <>
-              "primary_color must be a hex color like #1a2b3c."
-          )
-        end
-
-      _ ->
-        add_error(changeset, :branding, "must be a map")
-    end
-  end
-
-  # Blank names are rejected, never stored: consumers fall back to "Custyard"
-  # only on nil, so a stored "" or "   " would render a blank brand name.
-  defp valid_branding_entry?("name", value),
-    do:
-      is_binary(value) and String.trim(value) != "" and
-        String.length(value) <= @branding_name_max_length
-
-  defp valid_branding_entry?("logo_url", value),
-    do: Custyard.UploadPath.valid?(value)
-
-  defp valid_branding_entry?("primary_color", value),
-    do: is_binary(value) and Regex.match?(@branding_color_format, value)
-
-  defp valid_branding_entry?(_key, _value), do: false
-
-  defp create_defaults do
+  defp create_defaults(tenant_id) do
     # Handle race condition: multiple processes may call this concurrently on first access.
     # We use on_conflict: :nothing so only one insert succeeds; others become no-ops.
     # IMPORTANT: We must ALWAYS re-read from DB because:
@@ -519,12 +458,12 @@ defmodule Custyard.Settings do
       %__MODULE__{
         score_weights: stringify_keys(@default_weights),
         neglect_thresholds: thresholds_for_db,
-        singleton: true
+        tenant_id: tenant_id
       }
-      |> Repo.insert!(on_conflict: :nothing, conflict_target: [:singleton])
+      |> Repo.insert!(on_conflict: :nothing, conflict_target: [:tenant_id])
 
       # Always re-read the persisted row - this is the authoritative source of truth
-      Repo.one!(__MODULE__)
+      Repo.get_by!(__MODULE__, tenant_id: tenant_id)
     end)
     |> case do
       {:ok, settings} -> settings

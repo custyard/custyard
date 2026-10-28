@@ -1,6 +1,12 @@
 defmodule Custyard.TaskAttentionTest do
   use Custyard.DataCase, async: true
   import Custyard.Factory
+
+  defp scope_for(org) do
+    staff = insert_operator_account(role: "admin", tenant_id: org.tenant_id)
+    Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
+  end
+
   alias Custyard.Conversations
 
   test "due unfinished tasks surface resolved and snoozed conversations until completed" do
@@ -22,12 +28,12 @@ defmodule Custyard.TaskAttentionTest do
       })
 
     assert [%{conversation: %{id: id}, due_task_count: 1}] =
-             Conversations.list_for_attention_queue(filter: "due_tasks", organization_id: org.id)
+             Conversations.list(scope_for(org), filter: "due_tasks", organization_id: org.id)
 
     assert id == conversation.id
-    assert [_] = Conversations.list_for_attention_queue(organization_id: org.id)
+    assert [_] = Conversations.list(scope_for(org), organization_id: org.id)
     {:ok, _} = Conversations.update_task_state(task, :done)
-    assert [] = Conversations.list_for_attention_queue(organization_id: org.id)
+    assert [] = Conversations.list(scope_for(org), organization_id: org.id)
   end
 
   test "future tasks do not reopen resolved conversations and due tasks remain scoped" do
@@ -50,7 +56,7 @@ defmodule Custyard.TaskAttentionTest do
     })
 
     assert [] =
-             Conversations.list_for_attention_queue(filter: "due_tasks", organization_id: org.id)
+             Conversations.list(scope_for(org), filter: "due_tasks", organization_id: org.id)
   end
 
   test "task changes notify the conversation and attention queue" do

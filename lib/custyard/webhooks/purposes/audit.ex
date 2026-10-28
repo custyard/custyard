@@ -18,13 +18,14 @@ defmodule Custyard.Webhooks.Purposes.Audit do
   """
   def process(conversation, normalized, route_context) do
     attrs = %{
+      tenant_id: conversation.tenant_id,
       conversation_id: conversation.id,
       event_type: :webhook_received,
       source: to_string(normalized[:source] || "unknown"),
       message_id: normalized[:message_id],
       payload: build_payload(normalized),
-      organization_id: route_context[:organization_id],
-      project_id: route_context[:project_id]
+      organization_id: conversation.organization_id,
+      project_id: conversation.project_id
     }
 
     case AuditEvent.create(attrs) do
@@ -59,8 +60,6 @@ defmodule Custyard.Webhooks.Purposes.Audit do
   defp build_payload(normalized) do
     %{
       source: normalized[:source],
-      sender_email: normalized[:from],
-      subject: normalized[:subject],
       timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
     }
   end

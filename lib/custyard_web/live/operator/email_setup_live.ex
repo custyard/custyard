@@ -19,7 +19,8 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
            page_title: "Email setup",
            busy: false,
            setup_channel_id: nil,
-           show_channel: false
+           show_channel: false,
+           revealed_channel_ids: MapSet.new()
          )
          |> reload(), layout: {CustyardWeb.Layouts, :operator}}
 
@@ -27,8 +28,22 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
         {:ok,
          socket
          |> put_flash(:error, "Only a tenant administrator can configure email.")
-         |> redirect(to: ~p"/operator")}
+         |> redirect(to: ~p"/app")}
     end
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    selection = params["channel"]
+    channel = Enum.find(socket.assigns.channels, &(to_string(&1.id) == selection))
+
+    {:noreply,
+     socket
+     |> assign(
+       show_channel: selection == "new" or not is_nil(channel),
+       setup_channel_id: channel && channel.id
+     )
+     |> reload()}
   end
 
   @impl true
@@ -81,8 +96,65 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
         )
       end)
 
+  def handle_event("channel_action", %{"id" => id, "action" => action}, socket) do
+    channel = Enum.find(socket.assigns.channels, &(to_string(&1.id) == id))
+
+    operation =
+      %{
+        "pause" => :pause,
+        "resume" => :resume,
+        "revoke" => :revoke,
+        "rotate" => :rotate_token,
+        "delete" => :delete_channel
+      }[action]
+
+    result =
+      if channel && operation,
+        do:
+          apply(Custyard.InboundChannels, operation, [
+            channel,
+            [operator: socket.assigns.current_operator]
+          ]),
+        else: {:error, :not_found}
+
+    {:noreply, finish(socket, result, "Support address updated")}
+  end
+
+  def handle_event("reveal_channel", %{"id" => id}, socket) do
+    channel = Enum.find(socket.assigns.channels, &(to_string(&1.id) == id))
+
+    if channel do
+      Custyard.InboundChannels.record_reveal(channel, operator: socket.assigns.current_operator)
+
+      {:noreply,
+       assign(
+         socket,
+         :revealed_channel_ids,
+         MapSet.put(socket.assigns.revealed_channel_ids, channel.id)
+       )}
+    else
+      {:noreply, put_flash(socket, :error, "Support address unavailable")}
+    end
+  end
+
+  def handle_event("routing_defaults", %{"channel" => attrs}, socket) do
+    channel = Enum.find(socket.assigns.channels, &(to_string(&1.id) == attrs["id"]))
+
+    result =
+      if channel,
+        do:
+          Custyard.InboundChannels.update_channel(
+            channel,
+            Map.take(attrs, ~w(default_organization_id default_project_id default_label_id)),
+            operator: socket.assigns.current_operator
+          ),
+        else: {:error, :not_found}
+
+    {:noreply, finish(socket, result, "Address routing defaults saved")}
+  end
+
   def handle_event("new_channel", _, socket),
-    do: {:noreply, socket |> assign(show_channel: true, setup_channel_id: nil) |> reload()}
+    do: {:noreply, push_patch(socket, to: ~p"/app/settings/email?#{[channel: "new"]}")}
 
   def handle_event("set_default_channel", %{"default_channel_id" => id}, socket) do
     result =
@@ -98,10 +170,9 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
   def handle_event("resume_channel", %{"id" => id}, socket) do
     channel = Enum.find(socket.assigns.channels, &(to_string(&1.id) == id))
 
-    {:noreply,
-     socket
-     |> assign(show_channel: not is_nil(channel), setup_channel_id: channel && channel.id)
-     |> reload()}
+    if channel,
+      do: {:noreply, push_patch(socket, to: ~p"/app/settings/email?#{[channel: channel.id]}")},
+      else: {:noreply, socket}
   end
 
   defp async(%{assigns: %{busy: true}} = socket, _fun), do: {:noreply, socket}
@@ -134,10 +205,14 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
   def handle_info({:channel_updated, _}, socket), do: {:noreply, reload(socket)}
 
   def handle_info({:channel_setup_created, id}, socket),
-    do: {:noreply, socket |> assign(:setup_channel_id, id) |> reload()}
+    do:
+      {:noreply,
+       socket
+       |> reload()
+       |> push_patch(to: ~p"/app/settings/email?#{[channel: id]}")}
 
   def handle_info(:channel_setup_closed, socket),
-    do: {:noreply, assign(socket, show_channel: false)}
+    do: {:noreply, push_patch(socket, to: ~p"/app/settings/email")}
 
   defp finish(socket, {:ok, _}, message), do: socket |> reload() |> put_flash(:info, message)
 
@@ -152,7 +227,23 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
     socket
     |> assign(:connection, connection)
     |> assign(:routes, EmailSetup.routes(tenant_id))
+    |> assign(
+      :rejections,
+      Enum.flat_map(
+        EmailSetup.routes(tenant_id),
+        &Custyard.InboundChannels.list_rejections_for_route(&1.id, limit: 50)
+      )
+    )
     |> assign(:channels, channels)
+    |> assign(
+      :customers,
+      Custyard.Organizations.list(socket.assigns.current_scope)
+    )
+    |> assign(:projects, Custyard.Projects.list(socket.assigns.current_scope, []))
+    |> assign(
+      :labels,
+      Custyard.Labels.list(socket.assigns.current_scope)
+    )
     |> assign(
       :project_credential_status,
       EmailSetup.credential_status(tenant_id, "project_token")
@@ -198,13 +289,21 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
             label="Project API token (sending)"
             type="password"
             autocomplete="new-password"
+            placeholder={credential_placeholder(@project_credential_status)}
+            aria-describedby="project-token-state"
           />
+          <p id="project-token-state" class="text-xs">
+            {credential_help(@project_credential_status)}
+          </p>
           <.input
             field={@credential_form[:team_token]}
             label="Team API token (management)"
             type="password"
             autocomplete="new-password"
+            placeholder={credential_placeholder(@team_credential_status)}
+            aria-describedby="team-token-state"
           />
+          <p id="team-token-state" class="text-xs">{credential_help(@team_credential_status)}</p>
           <p class="text-xs">
             Blank token fields keep the saved value. Tokens are encrypted and never shown again. Project tokens send email; Team tokens read projects, routes, domains and webhook configuration. Grant only the required abilities.
           </p>
@@ -253,6 +352,9 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
         >
           <p class="font-medium">{route.lettermint_route_domain}</p>
           <p class="text-sm">
+            Imported route ID: <code class="break-all">{route.lettermint_route_id}</code>
+          </p>
+          <p class="text-sm">
             Open this inbound route's Webhooks screen in Lettermint. Create a route-scoped webhook using this complete URL and subscribe to message.inbound. Enable live deliveries and leave Basic Auth off.
           </p>
           <code class="block break-all text-xs">{Custyard.InboundRoutes.callback_url(route)}</code>
@@ -272,14 +374,19 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
               type="password"
               label="This webhook's signing secret"
               autocomplete="new-password"
+              placeholder={
+                if route.webhook_secret_ciphertext, do: "Saved securely", else: "Not saved yet"
+              }
+              aria-describedby={"inbound-secret-state-#{route.id}"}
               required
             />
             <.button disabled={@busy}>Verify binding and save secret</.button>
           </form>
+          <p id={"inbound-secret-state-#{route.id}"} class="text-xs">
+            {binding_secret_help(route.webhook_secret_ciphertext)}
+          </p>
           <p class="text-sm">
-            Signing secret: {if route.webhook_secret_ciphertext, do: "saved", else: "missing"}. Signed message: {observed(
-              route.webhook_verified_at
-            )}.
+            Signed message: {observed(route.webhook_verified_at)}.
           </p>
         </div>
         <p :if={@routes == []} class="text-sm" role="status">
@@ -299,10 +406,108 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
           Forward a copy to the complete address shown in the channel wizard, including its +token. Keep the original in your mailbox. Your provider may send a confirmation here.
         </p>
         <button type="button" phx-click="new_channel" disabled={@routes == []} class="underline">Add support address</button>
-        <div :for={channel <- @channels} class="flex justify-between text-sm">
-          <span>{channel.public_address} — {channel.state}</span>
-          <button type="button" phx-click="resume_channel" phx-value-id={channel.id} class="underline">Resume setup</button>
-        </div>
+        <article
+          :for={channel <- @channels}
+          data-testid={"channel-card-#{channel.id}"}
+          class="border rounded p-3 space-y-3 text-sm"
+        >
+          <div class="flex justify-between">
+            <span>{channel.public_address} · {channel.state}</span><button
+              type="button"
+              phx-click="resume_channel"
+              phx-value-id={channel.id}
+            >Resume setup</button>
+          </div>
+          <p>Last received: {channel.last_received_at || "No message yet"}</p>
+          <span data-testid={"channel-provider-#{channel.id}"}>{if channel.ingress_kind == :imap,
+            do: "IMAP mailbox",
+            else:
+              if(channel.ingress_kind == :mx,
+                do: "Direct MX",
+                else: to_string(channel.provider || channel.ingress_kind)
+              )}</span>
+          <p :if={channel.ingress_kind == :imap} data-testid={"channel-imap-#{channel.id}"}>
+            Reads {channel.imap_folder || "INBOX"} of {channel.imap_username}
+          </p>
+          <p :if={channel.ingress_kind == :mx} data-testid={"channel-mx-#{channel.id}"}>
+            Mail reaches this support address through its domain's MX record.
+          </p>
+          <div :if={channel.ingress_kind == :forward}>
+            <code>{if MapSet.member?(@revealed_channel_ids, channel.id),
+              do: Custyard.InboundChannels.ingress_address(channel),
+              else: Custyard.InboundChannels.masked_ingress_address(channel)}</code>
+            <button
+              phx-click="reveal_channel"
+              phx-value-id={channel.id}
+              data-testid={"reveal-channel-#{channel.id}"}
+            >Reveal forwarding address</button>
+            <button
+              phx-click="channel_action"
+              phx-value-id={channel.id}
+              phx-value-action="rotate"
+              data-confirm="Rotate this forwarding token? Update your mailbox forwarding rule afterward."
+              data-testid={"rotate-channel-#{channel.id}"}
+            >Rotate token</button>
+          </div>
+          <div class="flex gap-3">
+            <button
+              :if={channel.state not in [:paused, :revoked]}
+              phx-click="channel_action"
+              phx-value-id={channel.id}
+              phx-value-action="pause"
+            >Pause</button>
+            <button
+              :if={channel.state == :paused}
+              phx-click="channel_action"
+              phx-value-id={channel.id}
+              phx-value-action="resume"
+            >Resume receiving</button>
+            <button
+              :if={channel.state != :revoked}
+              phx-click="channel_action"
+              phx-value-id={channel.id}
+              phx-value-action="revoke"
+              data-confirm="Revoke this support address? Inbound delivery will stop."
+            >Revoke</button>
+            <button
+              phx-click="channel_action"
+              phx-value-id={channel.id}
+              phx-value-action="delete"
+              data-confirm="Delete this support address and its configuration?"
+            >Delete</button>
+          </div>
+          <form phx-submit="routing_defaults" class="space-y-2">
+            <input type="hidden" name="channel[id]" value={channel.id} />
+            <.input
+              type="select"
+              name="channel[default_organization_id]"
+              value={channel.default_organization_id}
+              label="Default customer"
+              prompt="Resolve from sender"
+              options={Enum.map(@customers, &{&1.name, &1.id})}
+            />
+            <.input
+              type="select"
+              name="channel[default_project_id]"
+              value={channel.default_project_id}
+              label="Default project"
+              prompt="No project default"
+              options={Enum.map(@projects, &{&1.title, &1.id})}
+            />
+            <.input
+              type="select"
+              name="channel[default_label_id]"
+              value={channel.default_label_id}
+              label="Default label"
+              prompt="No label default"
+              options={Enum.map(@labels, &{&1.name, &1.id})}
+            />
+            <p>
+              Defaults apply only to new threads. Sender identity and existing threads take precedence.
+            </p>
+            <.button>Save routing defaults</.button>
+          </form>
+        </article>
         <form
           :if={@channels != []}
           phx-submit="set_default_channel"
@@ -336,10 +541,19 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
         />
       </section>
 
+      <section :if={@rejections != []} class="space-y-3">
+        <h2 class="font-semibold">Recent rejected deliveries</h2><p :for={rejection <- @rejections}>
+          {rejection.inserted_at} · {rejection.classification} · {rejection.sender_email} · {rejection.subject}
+        </p>
+      </section>
+
       <section class="space-y-3" aria-labelledby="reply-title">
         <h2 id="reply-title" class="text-lg font-semibold">4. Verify replies and delivery events</h2>
         <p class="text-sm">
-          Create a project-scoped webhook in Lettermint for the selected sending project. Enable live deliveries, leave Basic Auth off, use this URL and select: {Enum.join(
+          In Lettermint Dashboard → Webhooks, create or edit a webhook. Set its scope to Projects and select this sending project. A webhook created for an outbound route may use Route scope; change it to Projects here so all sending routes are covered.
+        </p>
+        <p class="text-sm">
+          Enable live deliveries, leave Basic Auth off, use this URL and select: {Enum.join(
             EmailSetup.status_events(),
             ", "
           )}.
@@ -358,10 +572,20 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
             type="password"
             label="Status webhook signing secret"
             autocomplete="new-password"
+            placeholder={
+              if @connection.status_secret_ciphertext, do: "Saved securely", else: "Not saved yet"
+            }
+            aria-describedby="status-secret-state"
             required
           />
           <.button disabled={@busy}>Verify status binding and save secret</.button>
         </form>
+        <p id="status-secret-state" class="text-xs">
+          {binding_secret_help(@connection.status_secret_ciphertext)}
+        </p>
+        <p class="text-xs">
+          Deliveries return 401 until the binding and this webhook's signing secret are saved successfully. Changing the scope keeps the same signing secret.
+        </p>
         <p class="text-sm">
           Send a new message from an external mailbox to your support address. Open its conversation, send a reply, confirm it arrived, then reply back and confirm the same thread. A provider test event alone does not verify forwarding.
         </p>
@@ -389,7 +613,7 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
         </dl>
         <.link
           :if={@connection.latest_received_conversation_id}
-          navigate={~p"/operator/conversation/#{@connection.latest_received_conversation_id}"}
+          navigate={~p"/app/threads/#{@connection.latest_received_conversation_id}"}
           class="underline text-sm"
         >Open the received conversation</.link>
         <p class="text-xs">
@@ -399,6 +623,17 @@ defmodule CustyardWeb.Operator.EmailSetupLive do
     </main>
     """
   end
+
+  defp credential_placeholder(:missing), do: "Not saved yet"
+  defp credential_placeholder(:saved), do: "Saved securely"
+
+  defp credential_help(:missing), do: "No token saved yet."
+  defp credential_help(:saved), do: "Saved securely. Leave blank to keep it."
+
+  defp binding_secret_help(nil), do: "No signing secret saved yet."
+
+  defp binding_secret_help(_ciphertext),
+    do: "Saved securely. Enter the signing secret again only to recheck or change this binding."
 
   defp checked(nil), do: "(not checked)"
   defp checked(at), do: "(#{Calendar.strftime(at, "%Y-%m-%d %H:%M UTC")})"

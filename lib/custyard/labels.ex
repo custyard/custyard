@@ -7,38 +7,20 @@ defmodule Custyard.Labels do
     ConversationLabel,
     Conversations,
     Label,
-    Repo
+    Repo,
+    Scope
   }
 
-  def list_for_operator(operator, tenant_id \\ nil) do
-    operator_tenant_id =
-      cond do
-        is_integer(operator.tenant_id) ->
-          operator.tenant_id
-
-        is_integer(operator.organization_id) ->
-          Repo.one(
-            from o in Custyard.Organization,
-              where: o.id == ^operator.organization_id,
-              select: o.tenant_id
-          )
-
-        true ->
-          nil
-      end
-
-    tenant_id = tenant_id || operator_tenant_id || Custyard.Tenants.default_tenant().id
-
-    if operator.role == "super_admin" or
-         (operator.role in ["admin", "agent"] and operator_tenant_id == tenant_id) do
-      Repo.all(from l in Label, where: l.tenant_id == ^tenant_id, order_by: l.name)
-    else
-      []
-    end
+  def list(%Scope{tenant_id: tenant_id, role: role} = scope) when role in ["admin", "agent"] do
+    if Scope.current_staff(scope),
+      do: Repo.all(from l in Label, where: l.tenant_id == ^tenant_id, order_by: l.name),
+      else: []
   end
 
-  def for_conversation(operator, conversation) do
-    if Authorization.can_access_conversation?(operator, conversation) do
+  def list(_), do: []
+
+  def for_conversation(%Scope{} = scope, conversation) do
+    if Scope.current_staff(scope) && Authorization.can_access_conversation?(scope, conversation) do
       case tenant_id(conversation) do
         nil ->
           %{available: [], assigned: []}
@@ -77,15 +59,15 @@ defmodule Custyard.Labels do
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
   end
 
-  def create_and_assign(operator, conversation, name) do
-    mutate(operator, conversation, fn current, current_operator ->
+  def create_and_assign(%Scope{} = scope, conversation, name) do
+    mutate(scope, conversation, fn current, current_operator ->
       tenant_id = tenant_id(current)
 
       cond do
         is_nil(tenant_id) ->
           {:error, :tenant_required}
 
-        current_operator.role not in ["admin", "super_admin"] ->
+        current_operator.role not in ["admin"] ->
           {:error, :unauthorized}
 
         true ->
@@ -98,8 +80,8 @@ defmodule Custyard.Labels do
     end)
   end
 
-  def assign(operator, conversation, label_id) do
-    mutate(operator, conversation, fn current, _ ->
+  def assign(%Scope{} = scope, conversation, label_id) do
+    mutate(scope, conversation, fn current, _ ->
       case scoped_label(current, label_id) do
         %Label{} = label -> insert_assignment(current, label)
         _ -> {:error, :not_found}
@@ -107,8 +89,8 @@ defmodule Custyard.Labels do
     end)
   end
 
-  def remove(operator, conversation, label_id) do
-    mutate(operator, conversation, fn current, _ ->
+  def remove(%Scope{} = scope, conversation, label_id) do
+    mutate(scope, conversation, fn current, _ ->
       case scoped_label(current, label_id) do
         %Label{id: id} ->
           Repo.delete_all(
@@ -124,8 +106,8 @@ defmodule Custyard.Labels do
     end)
   end
 
-  defp mutate(operator, conversation, fun) do
-    result = Conversations.with_operator_access(conversation.id, operator, fun)
+  defp mutate(%Scope{} = scope, conversation, fun) do
+    result = Conversations.with_access(scope, conversation.id, fun)
 
     if match?({:ok, _}, result) do
       event = {:conversation_updated, conversation.id}
@@ -147,7 +129,11 @@ defmodule Custyard.Labels do
   end
 
   defp insert_assignment(conversation, label) do
-    %ConversationLabel{conversation_id: conversation.id, label_id: label.id}
+    %ConversationLabel{
+      tenant_id: conversation.tenant_id,
+      conversation_id: conversation.id,
+      label_id: label.id
+    }
     |> Repo.insert(on_conflict: :nothing)
   end
 

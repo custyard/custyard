@@ -4,6 +4,7 @@ defmodule Custyard.Factory do
   Returns maps with defaults that can be merged with overrides.
   """
 
+  alias Custyard.Acknowledgments.OrganizationBinding
   alias Custyard.Auth.Token
 
   @doc """
@@ -18,8 +19,7 @@ defmodule Custyard.Factory do
     defaults = %{
       name: "Test Organization #{unique_id()}",
       domain: "test-#{unique_id()}.example.com",
-      tier: :standard,
-      token: generate_token()
+      tier: :standard
     }
 
     Map.merge(defaults, Map.new(overrides))
@@ -152,6 +152,7 @@ defmodule Custyard.Factory do
   """
   def build_audit_event(overrides \\ []) do
     defaults = %{
+      tenant_id: test_tenant_id(),
       event_type: :webhook_received,
       source: "email",
       message_id: "audit-mid-#{unique_id()}",
@@ -182,8 +183,7 @@ defmodule Custyard.Factory do
     defaults = %{
       email: "operator-#{id}@example.com",
       password: "password123",
-      role: "super_admin",
-      organization_id: nil
+      role: "agent"
     }
 
     Map.merge(defaults, Map.new(overrides))
@@ -194,7 +194,7 @@ defmodule Custyard.Factory do
   """
   def insert_organization(overrides \\ []) do
     %Custyard.Organization{}
-    |> Custyard.Organization.changeset(build_organization(overrides))
+    |> Custyard.Organization.changeset(build_organization(ensure_tenant(overrides)))
     |> Custyard.Repo.insert!()
   end
 
@@ -228,7 +228,7 @@ defmodule Custyard.Factory do
         ensure_organization(overrides)
       end
 
-    attrs = build_conversation(overrides)
+    attrs = build_conversation(ensure_tenant(overrides))
 
     # Extract cached_score (not in changeset cast list for security)
     {cached_score, attrs} = Map.pop(attrs, :cached_score, 0)
@@ -318,10 +318,7 @@ defmodule Custyard.Factory do
       build_inbound_route(route_type: :project, project_id: 1)
   """
   def build_inbound_route(overrides \\ []) do
-    defaults = %{
-      route_type: :general,
-      organization_id: nil
-    }
+    defaults = %{}
 
     Map.merge(defaults, Map.new(overrides))
   end
@@ -331,7 +328,7 @@ defmodule Custyard.Factory do
   Requires organization_id or will create one.
   """
   def insert_inbound_route(overrides \\ []) do
-    overrides = ensure_organization(overrides)
+    overrides = ensure_tenant(overrides)
 
     %Custyard.InboundRoute{}
     |> Custyard.InboundRoute.changeset(build_inbound_route(overrides))
@@ -353,8 +350,8 @@ defmodule Custyard.Factory do
       provider: :google,
       reply_from: :public_address,
       inbound_route_id: nil,
-      organization_id: nil,
-      project_id: nil
+      default_organization_id: nil,
+      default_project_id: nil
     }
 
     Map.merge(defaults, Map.new(overrides))
@@ -380,7 +377,7 @@ defmodule Custyard.Factory do
     |> maybe_change(:last_received_at, last_received_at)
     |> maybe_change(:verified_at, verified_at)
     |> Custyard.Repo.insert!()
-    |> Custyard.Repo.preload([:inbound_route, :project])
+    |> Custyard.Repo.preload([:inbound_route, :default_project])
   end
 
   defp maybe_change(changeset, _field, nil), do: changeset
@@ -396,25 +393,25 @@ defmodule Custyard.Factory do
   defp ensure_channel_route(overrides) do
     case Keyword.get(overrides, :inbound_route_id) do
       nil ->
-        overrides = ensure_organization(overrides)
+        overrides = ensure_tenant(overrides)
 
         route =
           insert_inbound_route(
-            organization_id: Keyword.fetch!(overrides, :organization_id),
-            route_type: :general,
+            tenant_id: Keyword.fetch!(overrides, :tenant_id),
             source: :lettermint,
             lettermint_route_id: "lm_route_#{unique_id()}",
             lettermint_route_domain: "r#{unique_id()}.lettermint.app"
           )
 
-        Keyword.put(overrides, :inbound_route_id, route.id)
+        overrides
+        |> Keyword.put(:inbound_route_id, route.id)
+        |> Keyword.put(:tenant_id, route.tenant_id)
 
       route_id ->
         route = Custyard.Repo.get!(Custyard.InboundRoute, route_id)
 
         overrides
-        |> Keyword.put_new(:organization_id, route.organization_id)
-        |> Keyword.put_new(:project_id, route.project_id)
+        |> Keyword.put_new(:tenant_id, route.tenant_id)
     end
   end
 
@@ -440,34 +437,6 @@ defmodule Custyard.Factory do
 
     %Custyard.InboundRouteWebhook{}
     |> Custyard.InboundRouteWebhook.changeset(build_inbound_route_webhook(overrides))
-    |> Custyard.Repo.insert!()
-  end
-
-  @doc """
-  Build team attributes.
-
-  ## Examples
-
-      build_team()
-      build_team(name: "Support Team")
-  """
-  def build_team(overrides \\ []) do
-    defaults = %{
-      name: "Team #{unique_id()}"
-    }
-
-    Map.merge(defaults, Map.new(overrides))
-  end
-
-  @doc """
-  Insert a team into the database.
-  Requires organization_id or will create one.
-  """
-  def insert_team(overrides \\ []) do
-    overrides = ensure_organization(overrides)
-
-    %Custyard.Team{}
-    |> Custyard.Team.changeset(build_team(overrides))
     |> Custyard.Repo.insert!()
   end
 
@@ -524,6 +493,7 @@ defmodule Custyard.Factory do
     id = unique_id()
 
     defaults = %{
+      tenant_id: factory_tenant_id(),
       key: "source-#{id}",
       name: "Intake Source #{id}",
       mode: :active,
@@ -541,7 +511,7 @@ defmodule Custyard.Factory do
   """
   def insert_intake_source(overrides \\ []) do
     %Custyard.IntakeSource{}
-    |> Custyard.IntakeSource.changeset(build_intake_source(overrides))
+    |> Custyard.IntakeSource.changeset(build_intake_source(ensure_tenant(overrides)))
     |> Custyard.Repo.insert!()
   end
 
@@ -582,7 +552,7 @@ defmodule Custyard.Factory do
     overrides = ensure_intake_conversation(overrides)
 
     Custyard.Slug
-    |> struct(build_slug(overrides))
+    |> struct(build_slug(ensure_tenant(overrides)))
     |> Custyard.Repo.insert!()
   end
 
@@ -600,17 +570,7 @@ defmodule Custyard.Factory do
   For admin/agent roles, requires organization_id or will create one.
   """
   def insert_operator_account(overrides \\ []) do
-    attrs = build_operator_account(overrides)
-    role = Map.get(attrs, :role, "super_admin")
-
-    # Ensure organization_id for non-super_admin roles
-    attrs =
-      if role in ["admin", "agent"] and is_nil(Map.get(attrs, :organization_id)) do
-        org = insert_organization()
-        Map.put(attrs, :organization_id, org.id)
-      else
-        attrs
-      end
+    attrs = build_operator_account(ensure_tenant(overrides))
 
     %Custyard.OperatorAccount{}
     |> Custyard.OperatorAccount.changeset(attrs)
@@ -623,16 +583,99 @@ defmodule Custyard.Factory do
     System.unique_integer([:positive, :monotonic])
   end
 
-  defp generate_token do
-    :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+  def create_acknowledgment_binding(attrs) do
+    %OrganizationBinding{}
+    |> OrganizationBinding.changeset(attrs)
+    |> Custyard.Repo.insert()
+  end
+
+  def configure_tenant_email(tenant_id, opts \\ []) do
+    channel =
+      insert_inbound_channel(
+        tenant_id: tenant_id,
+        state: :active,
+        display_name: nil,
+        public_address: Keyword.get(opts, :public_address, "support@custyard.local")
+      )
+
+    {:ok, encrypted} =
+      Custyard.Credentials.encrypt(
+        "test-project-token",
+        "email_connection:#{tenant_id}:project_token"
+      )
+
+    connection =
+      Custyard.Repo.get_by(Custyard.EmailConnection, tenant_id: tenant_id) ||
+        %Custyard.EmailConnection{}
+
+    connection
+    |> Custyard.EmailConnection.changeset(%{tenant_id: tenant_id, project_id: "test-project"})
+    |> Ecto.Changeset.change(
+      project_token_ciphertext: encrypted,
+      default_channel_id: channel.id,
+      status_callback_token: "test-status-#{tenant_id}"
+    )
+    |> Custyard.Repo.insert_or_update!()
+
+    channel
+  end
+
+  def insert_tenant(overrides \\ []) do
+    %Custyard.Tenant{}
+    |> Custyard.Tenant.changeset(
+      Map.merge(%{name: "Tenant", slug: "tenant-#{unique_id()}"}, Map.new(overrides))
+    )
+    |> Custyard.Repo.insert!()
+  end
+
+  defp ensure_tenant(overrides) do
+    if Keyword.get(overrides, :tenant_id) do
+      overrides
+    else
+      parent =
+        Enum.find_value(
+          [
+            organization_id: Custyard.Organization,
+            conversation_id: Custyard.Conversation,
+            project_id: Custyard.Project,
+            inbound_route_id: Custyard.InboundRoute
+          ],
+          fn {key, module} ->
+            id = Keyword.get(overrides, key)
+            id && Custyard.Repo.get(module, id)
+          end
+        )
+
+      tenant_id = if parent, do: parent.tenant_id, else: test_tenant_id()
+      Keyword.put(overrides, :tenant_id, tenant_id)
+    end
+  end
+
+  def factory_tenant_id, do: test_tenant_id()
+
+  def staff_scope(tenant_id \\ nil, role \\ "admin") do
+    staff = insert_operator_account(tenant_id: tenant_id || factory_tenant_id(), role: role)
+    Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+  end
+
+  defp test_tenant_id do
+    case Process.get(:factory_tenant_id) do
+      nil ->
+        tenant = insert_tenant()
+        Process.put(:factory_tenant_id, tenant.id)
+        tenant.id
+
+      id ->
+        id
+    end
   end
 
   defp ensure_organization(overrides) do
     if Keyword.has_key?(overrides, :organization_id) do
       overrides
     else
-      org = insert_organization()
-      Keyword.put(overrides, :organization_id, org.id)
+      org = insert_organization(ensure_tenant(overrides))
+      overrides |> Keyword.put(:organization_id, org.id) |> Keyword.put(:tenant_id, org.tenant_id)
     end
   end
 
@@ -668,7 +711,10 @@ defmodule Custyard.Factory do
       overrides
     else
       route = insert_inbound_route()
-      Keyword.put(overrides, :inbound_route_id, route.id)
+
+      overrides
+      |> Keyword.put(:inbound_route_id, route.id)
+      |> Keyword.put(:tenant_id, route.tenant_id)
     end
   end
 end

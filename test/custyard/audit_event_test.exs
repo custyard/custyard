@@ -8,6 +8,9 @@ defmodule Custyard.AuditEventTest do
   describe "event_types/0" do
     test "returns list of valid event types" do
       assert AuditEvent.event_types() == [
+               :instance_admin_created,
+               :instance_admin_removed,
+               :installation_configured,
                :webhook_received,
                :webhook_processed,
                :webhook_error,
@@ -15,7 +18,7 @@ defmodule Custyard.AuditEventTest do
                :prospect_converted,
                :operator_created,
                :operator_removed,
-               :operator_tenant_access_granted,
+               :tenant_status_changed,
                :acknowledgment_replayed,
                :acknowledgment_binding_created,
                :delivery_status_updated,

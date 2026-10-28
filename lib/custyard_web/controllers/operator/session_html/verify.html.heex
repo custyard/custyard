@@ -12,7 +12,7 @@
         <img :if={branding.logo} src={branding.logo} alt="" class="h-12 w-auto mx-auto mb-3" />
         <h1 class="text-xl font-bold text-gray-900 dark:text-zinc-100">{branding.name}</h1>
         <p class="text-sm text-gray-500 dark:text-zinc-400 mt-1">
-          {if branding.tenant?, do: "Staff sign in", else: "Operator Login"}
+          {assigns[:auth_title] || "Staff sign in"}
         </p>
       </div>
 
@@ -21,7 +21,7 @@
       </p>
 
       <form
-        action={~p"/operator/login/verify/#{@token}"}
+        action={(assigns[:auth_base] || "/app") <> "/login/verify/" <> @token}
         method="post"
         data-testid="auth-verify-form"
       >

@@ -34,7 +34,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
       assert event.project_id == project.id
     end
 
-    test "builds payload with normalized data" do
+    test "records operational metadata without retaining sender or subject" do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
@@ -50,12 +50,14 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
       assert event.payload["source"] == "zendesk"
-      assert event.payload["sender_email"] == "bob@example.com"
-      assert event.payload["subject"] == "Zendesk ticket"
+      refute Map.has_key?(event.payload, "sender_email")
+      refute Map.has_key?(event.payload, "subject")
+      refute inspect(event.payload) =~ "bob@example.com"
+      refute inspect(event.payload) =~ "Zendesk ticket"
       assert Map.has_key?(event.payload, "timestamp")
     end
 
-    test "stores route context in audit event" do
+    test "records final customer attribution rather than channel hints" do
       org = insert_organization()
       project = insert_project(organization_id: org.id)
       conv = insert_conversation(organization_id: org.id)
@@ -74,7 +76,8 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
       assert event.organization_id == org.id
-      assert event.project_id == project.id
+      assert event.project_id == nil
+      assert event.tenant_id == conv.tenant_id
     end
 
     test "handles missing source gracefully" do

@@ -1,0 +1,17 @@
+<div class="min-h-screen bg-gray-100 dark:bg-zinc-900">
+  <nav class="p-4 border-b flex justify-between">
+    <div>
+      <.link navigate={~p"/admin/tenants"}>Instance admin · Tenants</.link><p
+        data-testid="instance-admin-identity"
+        class="text-sm"
+      >
+        Instance admin · {@current_instance_admin.email}
+      </p>
+    </div><.link
+      href={~p"/admin/logout"}
+      method="delete"
+    >Sign out</.link>
+  </nav>
+  <.flash_group flash={@flash} />
+  <main class="max-w-4xl mx-auto p-6">{@inner_content}</main>
+</div>

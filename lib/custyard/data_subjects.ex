@@ -30,6 +30,8 @@ defmodule Custyard.DataSubjects do
 
   import Ecto.Query
 
+  alias Custyard.Email.SenderMatcher
+
   alias Custyard.{
     AuditEvent,
     Contact,
@@ -54,10 +56,15 @@ defmodule Custyard.DataSubjects do
   Every message in `organization_id` the address appears on, newest first,
   each with the roles the address plays on it.
   """
-  @spec participations(String.t(), integer()) :: [
+  @spec participations(
+          Custyard.Scope.t() | Custyard.DataSubjects.LocalAuthority.t(),
+          String.t(),
+          integer()
+        ) :: [
           %{message: Message.t(), conversation: Conversation.t(), roles: [role()]}
         ]
-  def participations(email, organization_id) when is_binary(email) do
+  def participations(scope, email, organization_id) when is_binary(email) do
+    authorize_customer!(scope, organization_id, false)
     email = normalize(email)
 
     email
@@ -70,12 +77,13 @@ defmodule Custyard.DataSubjects do
   end
 
   @doc "Export for a data subject request. See the moduledoc for what is included."
-  def export(email, organization_id) when is_binary(email) do
+  def export(scope, email, organization_id) when is_binary(email) do
+    authorize_customer!(scope, organization_id, false)
     email = normalize(email)
 
     messages =
       for %{message: message, conversation: conversation, roles: roles} <-
-            participations(email, organization_id) do
+            participations(scope, email, organization_id) do
         %{
           message_id: message.id,
           conversation_id: conversation.id,
@@ -101,10 +109,11 @@ defmodule Custyard.DataSubjects do
   `{:ok, %{erased: n, sent_by_subject: m}}`; `sent_by_subject` counts the
   messages left for the contact-level erasure.
   """
-  def erase_participation(email, organization_id) when is_binary(email) do
+  def erase_participation(scope, email, organization_id)
+      when is_binary(email) do
     email = normalize(email)
 
-    in_write_transaction(fn ->
+    in_write_transaction(scope, organization_id, fn ->
       {sent, received} = locked_participations(email, organization_id)
       count = Enum.count(received, &scrub!(&1, email))
       erase_recipient_statuses!(email, organization_id)
@@ -132,12 +141,13 @@ defmodule Custyard.DataSubjects do
   Operator replies keep their text. Returns `{:ok, counts}` and writes a
   `data_subject_erasure` audit event with the same counts and no address.
   """
-  def erase_subject(email, organization_id) when is_binary(email) do
+  def erase_subject(scope, email, organization_id) when is_binary(email) do
     email = normalize(email)
 
-    in_write_transaction(fn ->
+    in_write_transaction(scope, organization_id, fn ->
       {sent, received} = locked_participations(email, organization_id)
       erased = Enum.count(received, &scrub!(&1, email))
+      scrub_audit_identity!(scope.tenant_id, email, organization_id, sent)
       erase_recipient_statuses!(email, organization_id)
       sent_ids = Enum.map(sent, & &1.id)
       Enum.each(sent, &erase_sent!/1)
@@ -147,7 +157,10 @@ defmodule Custyard.DataSubjects do
         Repo.delete_all(from(a in MessageAttachment, where: a.message_id in ^sent_ids))
 
       {conversations, contacts} = erase_contact!(email, organization_id)
-      rejections = erase_rejections!(email, organization_id)
+      erase_prospect_identity!(email, organization_id)
+      erase_slug_identity!(email, organization_id)
+      anonymize_personal_customer!(email, organization_id)
+      rejections = erase_rejections!(scope.tenant_id, email, organization_id)
 
       counts = %{
         erased: erased,
@@ -168,11 +181,148 @@ defmodule Custyard.DataSubjects do
   # Acquire SQLite's write reservation before reading, or lock matching
   # PostgreSQL rows. Concurrent erasures must never overwrite one another's
   # changes from a stale message snapshot.
-  defp in_write_transaction(fun),
-    do: Repo.transaction(fun, if(@postgres?, do: [], else: [mode: :immediate]))
+  defp in_write_transaction(scope, organization_id, fun) do
+    Repo.transaction(
+      fn ->
+        lock_authority!(scope)
+        authorize_customer!(scope, organization_id, true)
+        fun.()
+      end,
+      if(@postgres?, do: [], else: [mode: :immediate])
+    )
+  end
 
-  # Messages the address appears on, split into those the person sent and
-  # the rest.
+  defp lock_authority!(%Custyard.Scope{} = scope) do
+    Custyard.OperatorAccess.lock_current(%Custyard.OperatorAccount{id: scope.staff_id})
+    lock_tenant(scope.tenant_id)
+  end
+
+  defp lock_authority!(%Custyard.DataSubjects.LocalAuthority{tenant_id: id}), do: lock_tenant(id)
+
+  defp lock_tenant(tenant_id) do
+    Repo.update_all(
+      from(t in Custyard.Tenant,
+        where: t.id == ^tenant_id,
+        update: [set: [updated_at: t.updated_at]]
+      ),
+      []
+    )
+  end
+
+  defp authorize_customer!(%{tenant_id: tenant_id} = scope, organization_id, erase?) do
+    authorize_scope!(scope, erase?)
+
+    unless Repo.exists?(
+             from o in Custyard.Organization,
+               where: o.id == ^organization_id and o.tenant_id == ^tenant_id
+           ),
+           do: raise(Ecto.NoResultsError, queryable: Custyard.Organization)
+
+    :ok
+  end
+
+  defp authorize_scope!(%Custyard.Scope{} = scope, erase?) do
+    case Custyard.Scope.current_staff(scope) do
+      %Custyard.OperatorAccount{role: "admin"} -> :ok
+      %Custyard.OperatorAccount{} when not erase? -> :ok
+      _ -> deny_scope!(erase?)
+    end
+  end
+
+  defp authorize_scope!(%Custyard.DataSubjects.LocalAuthority{}, _erase?), do: :ok
+  defp authorize_scope!(_, erase?), do: deny_scope!(erase?)
+  defp deny_scope!(true), do: Repo.rollback(:unauthorized)
+  defp deny_scope!(false), do: raise(Ecto.NoResultsError, queryable: Custyard.Organization)
+
+  defp scrub_audit_identity!(tenant_id, email, organization_id, sent) do
+    customer_threads =
+      from c in Conversation, where: c.organization_id == ^organization_id, select: c.id
+
+    contact_ids =
+      from c in Contact,
+        where: c.organization_id == ^organization_id,
+        where: fragment("lower(trim(?))", c.email) == ^email,
+        select: c.id
+
+    contact_threads =
+      Repo.all(from c in Conversation, where: c.contact_id in subquery(contact_ids), select: c.id)
+
+    erased_threads = MapSet.new(contact_threads ++ Enum.map(sent, & &1.conversation_id))
+
+    from(a in AuditEvent,
+      where: a.tenant_id == ^tenant_id,
+      where:
+        a.organization_id == ^organization_id or a.conversation_id in subquery(customer_threads)
+    )
+    |> Repo.all()
+    |> Enum.each(&scrub_audit_event!(&1, email, erased_threads))
+  end
+
+  defp scrub_audit_event!(event, email, erased_threads) do
+    payload = event.payload || %{}
+
+    sender_matches =
+      Enum.any?(["sender_email", "from"], fn field ->
+        SenderMatcher.extract_email(payload[field]) == email
+      end)
+
+    if sender_matches or MapSet.member?(erased_threads, event.conversation_id) do
+      event
+      |> Ecto.Changeset.change(payload: Map.drop(payload, ["sender_email", "from", "subject"]))
+      |> Repo.update!()
+    end
+  end
+
+  defp erase_prospect_identity!(email, organization_id) do
+    threads = from c in Conversation, where: c.organization_id == ^organization_id, select: c.id
+
+    from(p in Custyard.Prospect,
+      where: p.conversation_id in subquery(threads),
+      where: fragment("lower(trim(?))", p.email) == ^email
+    )
+    |> Repo.update_all(
+      set: [
+        email: nil,
+        email_captured_at: nil,
+        notify_on_reply: false,
+        revoked_at: DateTime.utc_now(:second),
+        updated_at: DateTime.utc_now(:second)
+      ]
+    )
+  end
+
+  defp erase_slug_identity!(email, organization_id) do
+    threads = from c in Conversation, where: c.organization_id == ^organization_id, select: c.id
+
+    claims =
+      from s in Custyard.Slug,
+        where: s.organization_id == ^organization_id or s.conversation_id in subquery(threads),
+        where: fragment("lower(trim(?))", s.email) == ^email
+
+    Repo.delete_all(from s in claims, where: s.status in [:claimed, :confirmed])
+
+    from(s in claims, where: s.status == :provisioned)
+    |> Repo.update_all(
+      set: [email: nil, confirmation_token_hash: nil, updated_at: DateTime.utc_now(:second)]
+    )
+  end
+
+  defp anonymize_personal_customer!(email, organization_id) do
+    from(o in Custyard.Organization,
+      where: o.id == ^organization_id and o.identity_kind == :email,
+      where: fragment("lower(trim(?))", o.identity_value) == ^email
+    )
+    |> Repo.update_all(
+      set: [
+        identity_kind: :manual,
+        identity_value: Ecto.UUID.generate(),
+        name: "Erased customer",
+        domain: nil,
+        updated_at: DateTime.utc_now(:second)
+      ]
+    )
+  end
+
   defp locked_participations(email, organization_id) do
     query = participation_query(email, organization_id)
     query = if @postgres?, do: lock(query, "FOR UPDATE"), else: query
@@ -234,17 +384,21 @@ defmodule Custyard.DataSubjects do
         set: [subject: @erased_subject, contact_id: nil, updated_at: DateTime.utc_now(:second)]
       )
 
+    from(c in Custyard.PortalCredential, where: c.contact_id in ^contact_ids)
+    |> Repo.update_all(set: [contact_id: nil, revoked_at: DateTime.utc_now(:second)])
+
     {contacts, _} = Repo.delete_all(from(c in Contact, where: c.id in ^contact_ids))
     {conversations, contacts}
   end
 
-  defp erase_rejections!(email, organization_id) do
+  defp erase_rejections!(tenant_id, email, organization_id) do
     pattern = "%<#{escape_like(email)}>"
 
     {count, _} =
       from(r in InboundChannelRejection,
         where:
-          r.organization_id == ^organization_id and
+          r.tenant_id == ^tenant_id and
+            (r.organization_id == ^organization_id or is_nil(r.organization_id)) and
             (fragment("lower(trim(?))", r.sender_email) == ^email or
                fragment("lower(trim(?)) LIKE ? ESCAPE '!'", r.sender_email, ^pattern))
       )

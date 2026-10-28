@@ -8,8 +8,8 @@ defmodule Mix.Tasks.Custyard.Lettermint.SyncRoutes do
 
   Starts only the Repo and the HTTP client pool (`Custyard.Finch`), not the
   application, so it works while `mix phx.server` is running. Requires the
-  Lettermint client to be configured (`LETTERMINT_API_URL`,
-  `LETTERMINT_API_KEY` in production).
+  tenant connections to have their encrypted Lettermint management credentials
+  configured in the tenant email settings.
   """
   use Mix.Task
 

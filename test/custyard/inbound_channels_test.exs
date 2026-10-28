@@ -7,6 +7,19 @@ defmodule Custyard.InboundChannelsTest do
 
   alias Custyard.{AuditEvent, InboundChannel, InboundChannelRejection, InboundChannels, Repo}
 
+  setup do
+    previous = Application.get_env(:custyard, :lettermint)
+
+    Application.put_env(
+      :custyard,
+      :lettermint,
+      Keyword.put(previous || [], :client, Custyard.Lettermint.MockClient)
+    )
+
+    on_exit(fn -> Application.put_env(:custyard, :lettermint, previous) end)
+    :ok
+  end
+
   @token_a "0123456789abcdefghjk"
   @token_b "kjhgfedcba9876543210"
   @token_regex ~r/\A[0-9abcdefghjkmnpqrstvwxyz]{20}\z/
@@ -51,7 +64,7 @@ defmodule Custyard.InboundChannelsTest do
   describe "operator mutation boundaries" do
     test "confirmation consumes verification captured after the channel was loaded" do
       channel = insert_inbound_channel(state: :pending_verification)
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
       {:ok, _} = InboundChannels.capture_verification(channel, %{code: "new-code"})
 
       assert {:ok, confirmed} =
@@ -63,7 +76,7 @@ defmodule Custyard.InboundChannelsTest do
 
     test "revocation retires a previous token rotated after the channel was loaded" do
       channel = insert_inbound_channel(state: :active)
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
       {:ok, _} = InboundChannels.rotate_token(channel, operator: operator)
 
       assert {:ok, revoked} = InboundChannels.revoke(channel, operator: operator)
@@ -73,7 +86,7 @@ defmodule Custyard.InboundChannelsTest do
 
     test "a rotated session cannot create, edit, transition, rotate or delete a channel" do
       route = insert_route()
-      operator = insert_operator_account(role: "admin", organization_id: route.organization_id)
+      operator = insert_operator_account(role: "admin", tenant_id: route.tenant_id)
 
       {:ok, channel} =
         InboundChannels.create_channel(route, %{public_address: "support@acme.example.com"})
@@ -142,7 +155,7 @@ defmodule Custyard.InboundChannelsTest do
 
     test "a revoked administrator cannot persist a completed domain check" do
       route = insert_route()
-      operator = insert_operator_account(role: "admin", organization_id: route.organization_id)
+      operator = insert_operator_account(role: "admin", tenant_id: route.tenant_id)
 
       {:ok, channel} =
         InboundChannels.create_channel(route, %{public_address: "support@acme.example.com"})
@@ -160,9 +173,33 @@ defmodule Custyard.InboundChannelsTest do
       assert is_nil(Repo.reload!(channel).sending_domain_status)
     end
 
+    test "suspension during a domain lookup prevents persisting its result" do
+      route = insert_route()
+      operator = insert_operator_account(role: "admin", tenant_id: route.tenant_id)
+      channel = insert_inbound_channel(inbound_route_id: route.id)
+
+      Application.put_env(:custyard, :email_setup_test_provider, %{
+        domains: fn ->
+          Repo.get!(Custyard.Tenant, route.tenant_id)
+          |> Ecto.Changeset.change(status: "suspended")
+          |> Repo.update!()
+
+          {:ok, [%{"domain" => InboundChannel.sending_domain(channel), "status" => "verified"}]}
+        end
+      })
+
+      assert {:error, :unauthorized} =
+               InboundChannels.check_sending_domain(channel, operator: operator)
+
+      assert is_nil(Repo.reload!(channel).sending_domain_status)
+
+      assert {:error, :unauthorized} =
+               InboundChannels.update_channel(channel, %{archive_copy: true}, operator: operator)
+    end
+
     test "a completed domain check cannot certify changed channel configuration" do
       route = insert_route()
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
 
       {:ok, channel} =
         InboundChannels.create_channel(route, %{public_address: "support@acme.example.com"})
@@ -180,19 +217,39 @@ defmodule Custyard.InboundChannelsTest do
       assert is_nil(Repo.reload!(channel).sending_domain_status)
     end
 
+    test "a completed domain check cannot certify a newly selected sending domain" do
+      route = insert_route()
+      operator = insert_operator_account(role: "admin")
+      channel = insert_inbound_channel(inbound_route_id: route.id)
+
+      Application.put_env(:custyard, :email_setup_test_provider, %{
+        domains: fn ->
+          {:ok, _} =
+            InboundChannels.update_channel(channel, %{sending_domain: "mail.acme.example.com"})
+
+          {:ok, [%{"domain" => InboundChannel.public_domain(channel), "status" => "verified"}]}
+        end
+      })
+
+      assert {:error, :stale_configuration} =
+               InboundChannels.check_sending_domain(channel, operator: operator)
+
+      assert is_nil(Repo.reload!(channel).sending_domain_status)
+    end
+
     test "a late MX check cannot reactivate a paused channel or stamp its route" do
       route = insert_route(lettermint_custom_domain: "mx.example.com")
 
       channel =
         insert_inbound_channel(
           inbound_route_id: route.id,
-          organization_id: route.organization_id,
+          tenant_id: route.tenant_id,
           public_address: "support@mx.example.com",
           ingress_kind: :mx,
           state: :pending_verification
         )
 
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
 
       Application.put_env(:custyard, :email_setup_test_provider, %{
         mx: fn ->
@@ -212,7 +269,7 @@ defmodule Custyard.InboundChannelsTest do
   describe "create_channel/3" do
     test "starts pending_verification with route scope, preloads and an audit event" do
       route = insert_route()
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
 
       assert {:ok, channel} =
                InboundChannels.create_channel(
@@ -227,12 +284,12 @@ defmodule Custyard.InboundChannelsTest do
       assert channel.ingress_local == "support"
       assert channel.ingress_token =~ @token_regex
       assert channel.inbound_route_id == route.id
-      assert channel.organization_id == route.organization_id
+      assert channel.tenant_id == route.tenant_id
       assert Ecto.assoc_loaded?(channel.inbound_route)
-      assert Ecto.assoc_loaded?(channel.project)
+      assert Ecto.assoc_loaded?(channel.default_project)
 
       assert [event] = audit_events(:channel_created)
-      assert event.organization_id == route.organization_id
+      assert event.tenant_id == route.tenant_id
       assert event.source == "inbound_channels"
 
       assert event.payload["channel_id"] == channel.id
@@ -240,7 +297,7 @@ defmodule Custyard.InboundChannelsTest do
       assert event.payload["public_address"] == "support@acme.example.com"
     end
 
-    test "scopes the channel to the route's project" do
+    test "stores a customer project as an optional channel hint" do
       org = insert_organization()
       project = insert_project(organization_id: org.id)
       route = insert_route(organization_id: org.id, route_type: :project, project_id: project.id)
@@ -248,10 +305,10 @@ defmodule Custyard.InboundChannelsTest do
       assert {:ok, channel} =
                InboundChannels.create_channel(route, %{
                  public_address: "proj@acme.example.com",
-                 project_id: 999_999
+                 default_project_id: project.id
                })
 
-      assert channel.project_id == project.id
+      assert channel.default_project_id == project.id
     end
 
     test "accepts string keys" do
@@ -269,7 +326,7 @@ defmodule Custyard.InboundChannelsTest do
       assert {:error, changeset} = InboundChannels.create_channel(route, attrs)
       assert %{public_address: ["is already a channel on this route"]} = errors_on(changeset)
 
-      other_route = insert_route(organization_id: route.organization_id)
+      other_route = insert_route(tenant_id: route.tenant_id)
       assert {:ok, _} = InboundChannels.create_channel(other_route, attrs)
     end
 
@@ -381,7 +438,23 @@ defmodule Custyard.InboundChannelsTest do
       assert Repo.reload!(stale).state == :active
     end
 
-    test "confirm_verification/2 only applies to pending_verification" do
+    test "confirm_verification/2 consumes a late capture without regressing the channel" do
+      channel = insert_inbound_channel(state: :awaiting_first_message)
+
+      {:ok, channel} =
+        InboundChannels.capture_verification(channel, %{
+          code: nil,
+          link: "https://account.proton.me/email-forwarding/accept#confirmation-token"
+        })
+
+      assert {:ok, confirmed} = InboundChannels.confirm_verification(channel)
+      assert confirmed.state == :awaiting_first_message
+      assert confirmed.verified_at == channel.verified_at
+      assert is_nil(confirmed.verification_link)
+      assert is_nil(Repo.reload!(channel).verification_captured_at)
+    end
+
+    test "confirm_verification/2 rejects states without a pending or late capture" do
       for state <- [:awaiting_first_message, :active, :paused, :revoked, :draft] do
         channel = insert_inbound_channel(state: state)
 
@@ -506,7 +579,7 @@ defmodule Custyard.InboundChannelsTest do
   describe "record_reveal/2 and delete_channel/2" do
     test "record_reveal writes an audit event without the token" do
       channel = insert_inbound_channel()
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
 
       assert :ok = InboundChannels.record_reveal(channel, operator: operator)
 
@@ -518,7 +591,7 @@ defmodule Custyard.InboundChannelsTest do
 
     test "delete_channel removes the row and audits" do
       channel = insert_inbound_channel()
-      InboundChannels.subscribe_organization(channel.organization_id)
+      InboundChannels.subscribe_tenant(channel.tenant_id)
 
       assert {:ok, _} = InboundChannels.delete_channel(channel)
       assert is_nil(InboundChannels.get_channel(channel.id))
@@ -529,19 +602,15 @@ defmodule Custyard.InboundChannelsTest do
   end
 
   describe "reads and address helpers" do
-    test "list_for_organization/1 and get_channel_for_organization/2 scope by organization" do
+    test "tenant lists and scoped reads cannot expose another tenant's channel" do
       mine = insert_inbound_channel()
-      _theirs = insert_inbound_channel()
-
-      assert [%{id: id}] = InboundChannels.list_for_organization(mine.organization_id)
+      theirs = insert_inbound_channel(tenant_id: insert_tenant().id)
+      staff = insert_operator_account(role: "admin", tenant_id: mine.tenant_id)
+      scope = Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(mine.tenant_id))
+      assert [%{id: id}] = InboundChannels.list_for_tenant(mine.tenant_id)
       assert id == mine.id
-
-      assert %InboundChannel{} =
-               InboundChannels.get_channel_for_organization(mine.id, mine.organization_id)
-
-      assert is_nil(
-               InboundChannels.get_channel_for_organization(mine.id, mine.organization_id + 1)
-             )
+      assert %InboundChannel{} = InboundChannels.get(scope, mine.id)
+      assert is_nil(InboundChannels.get(scope, theirs.id))
     end
 
     test "ingress_address/1 and masked_ingress_address/1 use the route domain" do
@@ -584,9 +653,11 @@ defmodule Custyard.InboundChannelsTest do
   end
 
   describe "resolve_for_delivery/2" do
-    test "is :legacy for a route without channels" do
+    test "requires an explicit channel on every receiving route" do
       route = insert_route()
-      assert InboundChannels.resolve_for_delivery(route, "anything@x.lettermint.app") == :legacy
+
+      assert InboundChannels.resolve_for_delivery(route, "anything@x.lettermint.app") ==
+               {:error, :no_channel}
     end
 
     test "matches the current token" do
@@ -728,7 +799,7 @@ defmodule Custyard.InboundChannelsTest do
     test "broadcasts on the channel and organization topics" do
       channel = insert_inbound_channel(state: :active)
       InboundChannels.subscribe(channel)
-      InboundChannels.subscribe_organization(channel.organization_id)
+      InboundChannels.subscribe_tenant(channel.tenant_id)
 
       assert {:ok, _} = InboundChannels.mark_received(channel)
       assert_receive {:channel_updated, id}
@@ -811,7 +882,7 @@ defmodule Custyard.InboundChannelsTest do
       assert_receive {:channel_updated, ^id}
 
       assert [event] = audit_events(:channel_quiet)
-      assert event.organization_id == channel.organization_id
+      assert event.tenant_id == channel.tenant_id
       assert event.payload["channel_id"] == channel.id
       assert event.payload["public_address"] == "support@acme.example.com"
       assert event.payload["quiet_after_hours"] == 72
@@ -833,11 +904,15 @@ defmodule Custyard.InboundChannelsTest do
     end
 
     test "check_quiet_channels/1 sends the operator notice when email is enabled" do
-      insert_inbound_channel(
-        state: :active,
-        last_received_at: hours_ago(100),
-        public_address: "support@acme.example.com"
-      )
+      channel =
+        insert_inbound_channel(
+          state: :active,
+          last_received_at: hours_ago(100),
+          public_address: "support@acme.example.com"
+        )
+
+      configure_tenant_email(channel.tenant_id)
+      insert_operator_account(role: "admin", tenant_id: channel.tenant_id)
 
       Application.put_env(:custyard, :email_enabled, true)
       on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
@@ -874,7 +949,7 @@ defmodule Custyard.InboundChannelsTest do
 
     test "stores the Lettermint status, case-insensitively, with an audit event" do
       channel = insert_inbound_channel(public_address: "support@acme.example.com")
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
       InboundChannels.subscribe(channel)
 
       stage_domains([
@@ -908,6 +983,58 @@ defmodule Custyard.InboundChannelsTest do
       assert updated.sending_domain_status == "not_found"
       refute InboundChannels.sending_domain_verified?(updated)
       assert InboundChannels.sending_domain_summary(updated) == :not_found
+    end
+
+    test "a separate sending domain preserves the public mailbox and checks that domain" do
+      channel = insert_inbound_channel(public_address: "support@acme.example.com")
+      ingress = InboundChannels.ingress_address(channel)
+
+      assert {:ok, changed} =
+               InboundChannels.update_channel(channel, %{sending_domain: "mail.acme.example.com"})
+
+      assert changed.public_address == channel.public_address
+      assert InboundChannels.ingress_address(changed) == ingress
+      assert InboundChannels.from_address(changed) == "support@mail.acme.example.com"
+
+      stage_domains([%{"domain" => "mail.acme.example.com", "status" => "verified"}])
+      assert {:ok, verified} = InboundChannels.check_sending_domain(changed)
+      assert verified.sending_domain_status == "verified"
+
+      assert {:ok, cleared} = InboundChannels.update_channel(verified, %{sending_domain: ""})
+      assert InboundChannels.from_address(cleared) == "support@acme.example.com"
+      assert is_nil(cleared.sending_domain_status)
+    end
+
+    test "changing the sending domain clears verification and roundtrip evidence" do
+      channel = insert_inbound_channel()
+      operator = insert_operator_account(role: "admin")
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      {:ok, connection} = Custyard.EmailSetup.ensure_connection(operator, channel.tenant_id)
+
+      connection
+      |> Ecto.Changeset.change(
+        last_signed_inbound_at: now,
+        last_reply_accepted_at: now,
+        last_reply_delivered_at: now,
+        last_returning_reply_at: now
+      )
+      |> Repo.update!()
+
+      channel =
+        channel |> InboundChannel.sending_domain_changeset("verified", now) |> Repo.update!()
+
+      {:ok, changed} =
+        InboundChannels.update_channel(channel, %{sending_domain: "mail.acme.example.com"},
+          operator: operator
+        )
+
+      assert is_nil(changed.sending_domain_status)
+      assert is_nil(changed.sending_domain_checked_at)
+      fresh = Custyard.EmailSetup.connection(channel.tenant_id)
+      assert is_nil(fresh.last_signed_inbound_at)
+      assert is_nil(fresh.last_reply_accepted_at)
+      assert is_nil(fresh.last_reply_delivered_at)
+      assert is_nil(fresh.last_returning_reply_at)
     end
 
     test "summarises the intermediate statuses" do
@@ -966,7 +1093,7 @@ defmodule Custyard.InboundChannelsTest do
 
       assert rejection.classification == :channel_paused
       assert rejection.inbound_route_id == route.id
-      assert rejection.organization_id == route.organization_id
+      assert rejection.tenant_id == route.tenant_id
       assert rejection.inbound_channel_id == channel.id
       assert String.length(rejection.subject) == 500
 
@@ -974,7 +1101,7 @@ defmodule Custyard.InboundChannelsTest do
       assert id == rejection.id
 
       assert [%{id: ^id}] =
-               InboundChannels.list_rejections_for_organization(route.organization_id)
+               InboundChannels.list_rejections_for_route(route.id)
     end
 
     test "accepts keyword attrs and a missing subject" do
@@ -1072,7 +1199,7 @@ defmodule Custyard.InboundChannelsTest do
   describe "audit trail" do
     test "no channel audit payload carries an ingress token" do
       channel = insert_inbound_channel(ingress_token: @token_a)
-      operator = insert_operator_account()
+      operator = insert_operator_account(role: "admin")
 
       {:ok, channel} =
         InboundChannels.capture_verification(channel, %{code: "1"}, operator: operator)

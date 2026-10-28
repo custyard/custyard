@@ -20,6 +20,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
     operator =
       %OperatorAccount{}
       |> OperatorAccount.changeset(%{
+        tenant_id: Process.get(:factory_tenant_id),
         email: "admin-#{System.unique_integer([:positive])}@example.com",
         password: "password123",
         role: "admin",
@@ -27,8 +28,17 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       })
       |> Repo.insert!()
 
+    {:ok, _} = Custyard.EmailSetup.ensure_connection(operator, org.tenant_id)
+
+    {:ok, _} =
+      Custyard.EmailSetup.save_credentials(operator, org.tenant_id, %{
+        "project_id" => "wizard-project",
+        "project_token" => "wizard-project-token",
+        "team_token" => "wizard-team-token"
+      })
+
     # The mock Lettermint client gives the route a catch-all domain.
-    {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+    {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id})
 
     conn =
       conn
@@ -40,9 +50,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
     {:ok, conn: conn, org: org, operator: operator, route: route}
   end
 
-  defp open_wizard(conn, org) do
-    {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}?tab=channels")
-    view |> element("[data-testid=new-channel-btn]") |> render_click()
+  defp open_wizard(conn, _org) do
+    {:ok, view, _html} = live(conn, ~p"/app/settings/email")
+    view |> element("button[phx-click=new_channel]") |> render_click()
     view
   end
 
@@ -64,7 +74,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
     |> render_submit()
 
     render_async(view)
-    [channel] = InboundChannels.list_for_organization(route.organization_id)
+    [channel] = InboundChannels.list_for_tenant(route.tenant_id)
     channel
   end
 
@@ -74,13 +84,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       org: org,
       route: route
     } do
-      project = insert_project(organization_id: org.id, title: "Onboarding")
-
       unsynced =
         insert_inbound_route(
-          organization_id: org.id,
-          route_type: :project,
-          project_id: project.id,
+          tenant_id: org.tenant_id,
           lettermint_route_domain: nil
         )
 
@@ -90,14 +96,14 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       assert has_element?(view, "[data-testid=channel-setup-step-1][aria-current=step]")
 
       general = view |> element("[data-testid=channel-route-option-#{route.id}]") |> render()
-      assert general =~ "Organization-wide"
+      assert general =~ "Receiving route #{route.id}"
       assert general =~ "@#{route.lettermint_route_domain}"
       refute general =~ "disabled"
 
       project_option =
         view |> element("[data-testid=channel-route-option-#{unsynced.id}]") |> render()
 
-      assert project_option =~ "Onboarding"
+      assert project_option =~ "Receiving route #{unsynced.id}"
       assert project_option =~ "domain not synced"
       assert project_option =~ "disabled"
     end
@@ -156,7 +162,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
 
       assert html =~ "must be a valid email address"
       assert has_element?(view, "[data-testid=channel-error-public_address]")
-      assert InboundChannels.list_for_organization(org.id) == []
+      assert InboundChannels.list_for_tenant(org.tenant_id) == []
 
       input = Floki.parse_fragment!(html) |> Floki.find("[data-testid=channel-public-address]")
       assert Floki.attribute(input, "aria-invalid") == ["true"]
@@ -169,7 +175,7 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       view |> element("[data-testid=channel-setup-close]") |> render_click()
 
       refute has_element?(view, "[data-testid=channel-setup]")
-      assert has_element?(view, "[data-testid=new-channel-btn]")
+      assert has_element?(view, "button[phx-click=new_channel]")
     end
   end
 
@@ -203,8 +209,11 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       channel =
         insert_inbound_channel(organization_id: org.id, provider: :proton, display_name: nil)
 
-      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}?tab=channels")
-      view |> element("[data-testid=setup-channel-#{channel.id}]") |> render_click()
+      {:ok, view, _html} = live(conn, ~p"/app/settings/email")
+
+      view
+      |> element("button[phx-click=resume_channel][phx-value-id=\"#{channel.id}\"]")
+      |> render_click()
 
       assert has_element?(view, "[data-testid=channel-setup-step-2][aria-current=step]")
       assert view |> element("[data-testid=channel-provider-help]") |> render() =~ "Auto forward"
@@ -278,9 +287,9 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       {:ok, channel: channel}
     end
 
-    defp open_reply_step(conn, org, channel) do
-      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}?tab=channels")
-      render_click(view, "open_channel_setup", %{"id" => to_string(channel.id)})
+    defp open_reply_step(conn, _org, channel) do
+      {:ok, view, _html} = live(conn, ~p"/app/settings/email")
+      render_click(view, "resume_channel", %{"id" => to_string(channel.id)})
       assert has_element?(view, "[data-testid=channel-setup-step-4][aria-current=step]")
       view
     end
@@ -350,6 +359,28 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
       render_async(view)
       refute has_element?(view, "[data-testid=channel-check-progress]")
       assert InboundChannels.get_channel!(c.channel.id).sending_domain_status == "verified"
+    end
+
+    test "an administrator can save a sending subdomain and resume it", c do
+      Application.put_env(:custyard, :lettermint_mock_domains, [
+        %{"domain" => "mail.acme.example.com", "status" => "verified"}
+      ])
+
+      view = open_reply_step(c.conn, c.org, c.channel)
+
+      view
+      |> form("#sending-domain-form-#{c.channel.id}", sending_domain: "mail.acme.example.com")
+      |> render_submit()
+
+      assert InboundChannels.get_channel!(c.channel.id).sending_domain == "mail.acme.example.com"
+      assert render(view) =~ "support@mail.acme.example.com"
+      assert render(view) =~ "Replies return to support@acme.example.com"
+      view |> element("[data-testid=channel-setup-check-domain]") |> render_click()
+      render_async(view)
+      assert InboundChannels.get_channel!(c.channel.id).sending_domain_status == "verified"
+
+      reopened = open_reply_step(c.conn, c.org, InboundChannels.get_channel!(c.channel.id))
+      assert has_element?(reopened, "[name=sending_domain][value='mail.acme.example.com']")
     end
 
     test "a missing domain explains the DNS records and offers the fallback", %{
@@ -536,8 +567,8 @@ defmodule CustyardWeb.Operator.ChannelSetupComponentTest do
           last_received_at: DateTime.truncate(DateTime.utc_now(), :second)
         )
 
-      {:ok, view, _html} = live(conn, ~p"/operator/organizations/#{org.id}?tab=channels")
-      render_click(view, "open_channel_setup", %{"id" => to_string(channel.id)})
+      {:ok, view, _html} = live(conn, ~p"/app/settings/email")
+      render_click(view, "resume_channel", %{"id" => to_string(channel.id)})
 
       assert has_element?(view, "[data-testid=channel-reply-step]")
       refute has_element?(view, "[data-testid=channel-reply-from-toggle]")

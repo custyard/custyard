@@ -9,8 +9,7 @@ defmodule Custyard.EmailSetup do
     InboundRoutes,
     OperatorAccess,
     OperatorAccount,
-    Repo,
-    Tenant
+    Repo
   }
 
   alias Custyard.Email.{DeliveryStatus, ThreadHeaders}
@@ -104,21 +103,15 @@ defmodule Custyard.EmailSetup do
   def credential_status(tenant_id, field) when field in ["project_token", "team_token"] do
     connection = connection(tenant_id)
 
-    cond do
-      connection &&
-          is_binary(Map.get(connection, String.to_existing_atom(field <> "_ciphertext"))) ->
-        :saved
-
-      default_tenant?(tenant_id) and match?({:ok, _}, env_credential(field)) ->
-        :installation
-
-      true ->
-        :missing
-    end
+    if connection &&
+         is_binary(Map.get(connection, String.to_existing_atom(field <> "_ciphertext"))),
+       do: :saved,
+       else: :missing
   end
 
-  def authorized?(%{role: "super_admin"}, tenant_id), do: not is_nil(Repo.get(Tenant, tenant_id))
-  def authorized?(%{role: "admin", tenant_id: tenant_id}, tenant_id), do: true
+  def authorized?(%{role: "admin", tenant_id: tenant_id}, tenant_id),
+    do: Custyard.Tenants.active?(tenant_id)
+
   def authorized?(_, _), do: false
 
   def ensure_connection(operator, tenant_id),
@@ -314,6 +307,7 @@ defmodule Custyard.EmailSetup do
          snapshot = configuration_snapshot(connection),
          {:ok, opts} <- snapshot.management,
          {:ok, remote} <- provider().get_webhook(String.trim(webhook_id), opts),
+         :ok <- status_webhook_scope(remote),
          true <- valid_status_webhook?(remote, connection),
          {:ok, ciphertext} <- encrypt_secret(secret, secret_context(connection, "status_secret")) do
       mutate(operator, tenant_id, fn ->
@@ -331,6 +325,13 @@ defmodule Custyard.EmailSetup do
       error -> error
     end
   end
+
+  # Lettermint supports team, project and route targets. A hook created for an
+  # outbound route can be route-scoped even when all its events are selected.
+  # Require the project so changes to the default sending route stay covered.
+  # https://lettermint.co/docs/platform/webhooks/introduction
+  defp status_webhook_scope(%{"scope" => "project"}), do: :ok
+  defp status_webhook_scope(_), do: {:error, :status_webhook_scope}
 
   defp valid_inbound_webhook?(remote, route) do
     live_webhook?(remote) and remote["scope"] == "route" and
@@ -382,7 +383,11 @@ defmodule Custyard.EmailSetup do
         params["event"] == "message.inbound" and params["sandbox"] == false and
         get_in(normalized, [:metadata, :is_spam]) != true and
         is_binary(id) and
-        not Repo.exists?(from(m in Custyard.Message, where: m.provider_delivery_id == ^id))
+        not Repo.exists?(
+          from(m in Custyard.Message,
+            where: m.tenant_id == ^route.tenant_id and m.provider_delivery_id == ^id
+          )
+        )
 
     %{eligible?: eligible, provider_delivery_id: id}
   end
@@ -551,22 +556,6 @@ defmodule Custyard.EmailSetup do
 
   def status_message_belongs?(_, _), do: false
 
-  def legacy_status_allowed?(%{"data" => %{"message_id" => id}}) do
-    tenant_id =
-      Repo.one(
-        from(m in Custyard.Message,
-          join: c in assoc(m, :conversation),
-          where: m.lettermint_message_id == ^id,
-          select: c.tenant_id,
-          limit: 1
-        )
-      )
-
-    is_nil(tenant_id) or default_tenant?(tenant_id)
-  end
-
-  def legacy_status_allowed?(_), do: true
-
   defp record_reply_evidence(nil, _field, _message_id), do: :ok
 
   defp record_reply_evidence(tenant_id, field, message_id) do
@@ -621,47 +610,20 @@ defmodule Custyard.EmailSetup do
          ]}
 
       {:error, :not_configured} = error ->
-        if default_tenant?(tenant_id),
-          do: {:ok, Application.get_env(:custyard, Custyard.Mailer, [])},
-          else: error
+        error
 
       error ->
         error
     end
   end
 
-  defp credential(connection, tenant_id, field) do
+  defp credential(connection, _tenant_id, field) do
     ciphertext =
       connection && Map.get(connection, String.to_existing_atom(field <> "_ciphertext"))
 
-    cond do
-      is_binary(ciphertext) -> Credentials.decrypt(ciphertext, secret_context(connection, field))
-      default_tenant?(tenant_id) -> env_credential(field)
-      true -> {:error, :not_configured}
-    end
-  end
-
-  defp env_credential("team_token") do
-    case Application.get_env(:custyard, :lettermint, [])[:team_token] do
-      token when is_binary(token) and token != "" -> {:ok, token}
-      _ -> {:error, :not_configured}
-    end
-  end
-
-  defp env_credential("project_token") do
-    case Application.get_env(:custyard, Custyard.Mailer, [])[:api_token] do
-      token when is_binary(token) and token != "" -> {:ok, token}
-      _ -> {:error, :not_configured}
-    end
-  end
-
-  def default_tenant?(nil), do: false
-
-  def default_tenant?(tenant_id) do
-    case Repo.get(Tenant, tenant_id) do
-      %{slug: "default"} -> true
-      _ -> false
-    end
+    if is_binary(ciphertext),
+      do: Credentials.decrypt(ciphertext, secret_context(connection, field)),
+      else: {:error, :not_configured}
   end
 
   def project_id(tenant_id) do
@@ -715,6 +677,10 @@ defmodule Custyard.EmailSetup do
   defp specific_error(:webhook_mismatch),
     do:
       "Check the webhook URL, scope, events and enabled state. Allow live deliveries and leave Basic Auth off."
+
+  defp specific_error(:status_webhook_scope),
+    do:
+      "This status webhook uses the wrong scope. In Lettermint Dashboard > Webhooks, edit it, choose Projects and select this sending project. Then save the binding again."
 
   defp specific_error(%Ecto.Changeset{errors: errors}) do
     if Keyword.has_key?(errors, :project_id),

@@ -46,11 +46,11 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
   end
 
   test "logs the request and provider acceptance with the response request ID" do
-    operator = insert_operator_account()
+    operator = insert_operator_account(role: "admin")
     {conn, log} = request_login(%{"email" => operator.email})
 
-    assert redirected_to(conn) == "/operator/login/sent"
-    assert log =~ "POST /operator/login"
+    assert redirected_to(conn) == "/app/login/sent"
+    assert log =~ "POST /app/login"
 
     assert_flow(log, conn, [
       "operator_login_requested",
@@ -64,7 +64,7 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
     assert_received {:login_delivery_attempt, email}
 
     token = Repo.get!(OperatorAccount, operator.id).login_token
-    assert email.text_body =~ "/operator/login/verify/#{token}"
+    assert email.text_body =~ "/app/login/verify/#{token}"
     assert email.to == [{"", operator.email}]
     assert_no_secrets(log, operator)
   end
@@ -73,7 +73,7 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
     email = "unknown-login-#{System.unique_integer([:positive])}@example.com"
     {conn, log} = request_login(%{"email" => email})
 
-    assert redirected_to(conn) == "/operator/login/sent"
+    assert redirected_to(conn) == "/app/login/sent"
     assert_flow(log, conn, ["operator_login_requested", "operator_login_skipped"])
     assert log =~ "reason=unknown_account"
     refute log =~ email
@@ -81,19 +81,21 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
     assert Repo.get_by(OperatorAccount, email: email) == nil
   end
 
-  test "logs a missing organization without generating a token or sending mail" do
+  test "deleting a customer leaves tenant staff login available" do
     organization = insert_organization()
-    operator = insert_operator_account(role: "admin", organization_id: organization.id)
+    operator = insert_operator_account(role: "admin", tenant_id: organization.tenant_id)
     Repo.delete!(organization)
-
     {conn, log} = request_login(%{"email" => operator.email})
+    assert redirected_to(conn) == "/app/login/sent"
 
-    assert redirected_to(conn) == "/operator/login/sent"
-    assert_flow(log, conn, ["operator_login_requested", "operator_login_skipped"])
-    assert log =~ "reason=no_organization"
-    assert log =~ "operator_id=#{operator.id}"
-    assert Repo.get!(OperatorAccount, operator.id).login_token == nil
-    refute_received {:login_delivery_attempt, _}
+    assert_flow(log, conn, [
+      "operator_login_requested",
+      "operator_login_delivery_started",
+      "operator_login_provider_accepted"
+    ])
+
+    assert Repo.get!(OperatorAccount, operator.id).login_token
+    assert_received {:login_delivery_attempt, _}
     assert_no_secrets(log, operator)
   end
 
@@ -107,8 +109,8 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
   end
 
   test "logs requests halted by the IP limiter and preserves the 429 response" do
-    operator = insert_operator_account()
-    exhaust_bucket(:operator_login_ip, "10.53.1.1")
+    operator = insert_operator_account(role: "admin")
+    exhaust_bucket(:operator_login_ip, {operator.tenant_id, "10.53.1.1"})
 
     {conn, log} = request_login(%{"email" => operator.email})
 
@@ -122,8 +124,8 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
   end
 
   test "logs the email rate limit and preserves the 429 response" do
-    operator = insert_operator_account()
-    exhaust_bucket(:operator_login_email, operator.email)
+    operator = insert_operator_account(role: "admin")
+    exhaust_bucket(:operator_login_email, {operator.tenant_id, operator.email})
 
     {conn, log} = request_login(%{"email" => operator.email})
 
@@ -142,10 +144,10 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
       result: :provider_rejected
     )
 
-    operator = insert_operator_account()
+    operator = insert_operator_account(role: "admin")
     {conn, log} = request_login(%{"email" => operator.email})
 
-    assert redirected_to(conn) == "/operator/login/sent"
+    assert redirected_to(conn) == "/app/login/sent"
 
     assert_flow(log, conn, [
       "operator_login_requested",
@@ -167,10 +169,10 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
       result: :transport_error
     )
 
-    operator = insert_operator_account()
+    operator = insert_operator_account(role: "admin")
     {conn, log} = request_login(%{"email" => operator.email})
 
-    assert redirected_to(conn) == "/operator/login/sent"
+    assert redirected_to(conn) == "/app/login/sent"
 
     assert_flow(log, conn, [
       "operator_login_requested",
@@ -208,7 +210,7 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
       with_log(capture_options, fn ->
         build_conn()
         |> Map.put(:remote_ip, @ip)
-        |> post("/operator/login", params)
+        |> post("/app/login", params)
       end)
     after
       Enum.each(modules, &Logger.delete_module_level/1)
@@ -235,7 +237,7 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
 
   defp assert_no_secrets(log, operator) do
     refute log =~ operator.email
-    refute log =~ "/operator/login/verify/"
+    refute log =~ "/app/login/verify/"
 
     if token = Repo.get!(OperatorAccount, operator.id).login_token do
       refute log =~ token

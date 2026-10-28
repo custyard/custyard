@@ -29,7 +29,7 @@ defmodule Custyard.InboundChannelRejection do
   ]
 
   schema "inbound_channel_rejections" do
-    field :tenant_id, :id, default: 1
+    field :tenant_id, :id
     belongs_to :tenant, Custyard.Tenant, define_field: false
     field :sender_email, :string
     field :recipient, :string

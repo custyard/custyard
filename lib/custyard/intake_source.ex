@@ -30,7 +30,7 @@ defmodule Custyard.IntakeSource do
   @max_link_url_length 2000
 
   schema "intake_sources" do
-    field :tenant_id, :id, default: 1
+    field :tenant_id, :id
     belongs_to :tenant, Custyard.Tenant, define_field: false
     field :key, :string
     field :name, :string
@@ -82,9 +82,9 @@ defmodule Custyard.IntakeSource do
     intake_source
     |> cast(attrs, [:key, :tenant_id | @update_fields])
     |> foreign_key_constraint(:tenant_id)
-    |> validate_required([:key, :name])
+    |> validate_required([:tenant_id, :key, :name])
     |> validate_format(:key, @key_format)
-    |> unique_constraint(:key)
+    |> unique_constraint(:key, name: :intake_sources_tenant_id_key_index)
     |> validate_content()
   end
 

@@ -1,6 +1,14 @@
 defmodule Custyard.ScoringTest do
   use Custyard.DataCase, async: true
 
+  setup do
+    tenant = Custyard.Factory.insert_tenant()
+    Process.put(:factory_tenant_id, tenant.id)
+    :ok
+  end
+
+  defp tenant_id, do: Process.get(:factory_tenant_id)
+
   alias Custyard.Scoring
 
   import Custyard.Factory
@@ -633,6 +641,7 @@ defmodule Custyard.ScoringTest do
         %Custyard.Conversation{}
         |> Custyard.Conversation.changeset(%{
           subject: "Disambiguation test",
+          tenant_id: tenant_id(),
           source: :disambiguation,
           organization_id: nil
         })
@@ -824,7 +833,10 @@ defmodule Custyard.ScoringTest do
     end
 
     test "tier component reads intake_config unlinked_tier_score" do
-      {:ok, _} = Custyard.Settings.update_intake_config(%{unlinked_tier_score: 42})
+      {:ok, _} =
+        Custyard.Settings.update_intake_config(Custyard.Factory.staff_scope(tenant_id()), %{
+          unlinked_tier_score: 42
+        })
 
       conv =
         insert_conversation(
@@ -872,7 +884,7 @@ defmodule Custyard.ScoringTest do
 
   describe "preload_settings/0" do
     test "carries every setting the per-conversation scoring functions need" do
-      settings = Scoring.preload_settings()
+      settings = Scoring.preload_settings(tenant_id())
 
       assert %{weights: weights, thresholds: thresholds, unlinked_tier_score: score} = settings
       assert is_map(weights)
@@ -892,7 +904,7 @@ defmodule Custyard.ScoringTest do
         )
 
       assert Scoring.breakdown(conversation) ==
-               Scoring.breakdown(conversation, settings: Scoring.preload_settings())
+               Scoring.breakdown(conversation, settings: Scoring.preload_settings(tenant_id()))
     end
 
     # The whole point of the bundle: on Turso the repo is across the
@@ -900,7 +912,7 @@ defmodule Custyard.ScoringTest do
     test "scoring a conversation with a bundle and a known count issues no queries" do
       org = insert_organization(tier: :standard)
       conversation = insert_conversation(organization_id: org.id) |> Repo.preload(:organization)
-      settings = Scoring.preload_settings()
+      settings = Scoring.preload_settings(tenant_id())
 
       queries =
         count_queries(fn ->

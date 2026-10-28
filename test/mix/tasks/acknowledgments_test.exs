@@ -12,6 +12,11 @@ defmodule Mix.Tasks.AcknowledgmentsTest do
   # MIX_ENV) would start the consumer against production with that
   # credential, plus the endpoint, pollers and mail queue.
   defp run_task(task, args) do
+    tenant_id =
+      Process.get(:ack_test_tenant_id) || Process.get(:factory_tenant_id) ||
+        Custyard.Factory.insert_tenant().id
+
+    args = args ++ ["--tenant", Integer.to_string(tenant_id)]
     Mix.Task.reenable("app.start")
 
     {result, output} =

@@ -24,6 +24,7 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     original = Application.get_env(:custyard, :rate_limit_buckets)
 
     Application.put_env(:custyard, :rate_limit_buckets,
+      public_instance_ip: @generous,
       intake_get: @generous,
       intake_post: @generous,
       conversation_mount: @generous,
@@ -72,7 +73,7 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     })
 
     Process.flag(:trap_exit, true)
-    {:ok, view, _html} = live(build_conn(), "/c/#{token}")
+    {:ok, view, _html} = live(build_conn(), "/threads/#{token}")
 
     # Force a crash: an event with no matching handle_event/3 clause. The LV
     # process dies and render_hook re-raises the exit into this process.
@@ -107,7 +108,9 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
 
   test "a real ConversationLive crash report is scrubbed of the raw access token" do
     source = insert_intake_source(mode: :active)
-    {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, "Hello crash")
+
+    {:ok, %{access_token: token}} =
+      Intake.create_intake_conversation(source.key, "Hello crash", tenant_id: source.tenant_id)
 
     report = capture_crash_report(token)
 

@@ -1,74 +1,35 @@
 defmodule Custyard.InboundRoute do
-  @moduledoc """
-  Represents an inbound route that maps to an organization and
-  optionally a project. Each route has a unique callback_token embedded
-  in its webhook URL for routing incoming messages.
-
-  Route types:
-  - `:general` — org-wide catch-all route
-  - `:project` — project-specific route (sets project_id on conversations)
-  - `:disambiguation` — handles ambiguous sender resolution via DM
-
-  Webhook sources:
-  - `:lettermint` — Lettermint email service
-  - `:zendesk` — Zendesk webhooks
-  - `:intercom` — Intercom conversation webhooks
-  - `:slack` — Slack events API
-
-  Lettermint routes also record where mail is received, captured from the
-  Lettermint API when the route is created (or backfilled via
-  `Custyard.InboundRoutes.sync_remote_route/1`):
-
-  - `lettermint_route_domain` — catch-all domain (`<id>.lettermint.app`);
-    any local part and plus tag reaches the route
-  - `lettermint_inbound_address` — permanent compatibility address
-    (`<uuid>@inbound.lettermint.co`)
-  - `lettermint_custom_domain` / `lettermint_custom_domain_verified_at` —
-    operator-configured domain and when Lettermint verified it
-
-  `ingress_domain/1` picks the domain operators should hand out for a legacy
-  route. Forwarding channels always use `forward_domain/1`, the catch-all
-  domain, so a custom domain added later for direct-MX channels never
-  changes an ingress address an operator has already configured. A custom
-  domain is exact (`help.example.com`) or a left-hand wildcard
-  (`*.m.example.com`, which does not cover `m.example.com` itself);
-  `custom_domain_covers?/2` applies that rule.
-  """
+  @moduledoc "Tenant-owned inbound provider infrastructure. Customer routing hints live on channels."
   use Ecto.Schema
   import Ecto.Changeset
 
-  @route_types [:general, :project, :disambiguation]
   # Sources must match adapter registry - see Custyard.Webhooks.Registry
   @sources [:lettermint, :zendesk, :intercom, :slack, :email]
 
   schema "inbound_routes" do
-    field :lettermint_route_id, :string
-    field :lettermint_route_domain, :string
-    field :lettermint_inbound_address, :string
-    field :lettermint_custom_domain, :string
-    field :lettermint_custom_domain_verified_at, :utc_datetime
-    field :lettermint_webhook_id, :string
-    field :webhook_secret_ciphertext, :string, redact: true
-    field :webhook_verified_at, :utc_datetime
-    field :callback_token, :string
-    field :route_type, Ecto.Enum, values: @route_types, default: :general
+    field(:lettermint_route_id, :string)
+    field(:lettermint_route_domain, :string)
+    field(:lettermint_inbound_address, :string)
+    field(:lettermint_custom_domain, :string)
+    field(:lettermint_custom_domain_verified_at, :utc_datetime)
+    field(:lettermint_webhook_id, :string)
+    field(:webhook_secret_ciphertext, :string, redact: true)
+    field(:webhook_verified_at, :utc_datetime)
+    field(:callback_token, :string)
     # Source determines which webhook adapter processes requests to this route.
     # This is a security control - prevents attackers from selecting adapters.
-    field :source, Ecto.Enum, values: @sources, default: :lettermint
+    field(:source, Ecto.Enum, values: @sources, default: :lettermint)
     # The email address outbound replies should come from for this route.
     # Ensures customer replies flow back through the same webhook/route.
-    field :from_address, :string
+    field(:from_address, :string)
 
-    belongs_to :organization, Custyard.Organization
-    belongs_to :tenant, Custyard.Tenant
-    belongs_to :project, Custyard.Project
-    has_many :webhooks, Custyard.InboundRouteWebhook
-    has_many :channels, Custyard.InboundChannel
+    belongs_to(:tenant, Custyard.Tenant)
+    has_many(:webhooks, Custyard.InboundRouteWebhook)
+    has_many(:channels, Custyard.InboundChannel)
 
     timestamps(type: :utc_datetime)
   end
 
-  def route_types, do: @route_types
   def sources, do: @sources
 
   @doc """
@@ -136,17 +97,12 @@ defmodule Custyard.InboundRoute do
       :lettermint_custom_domain,
       :lettermint_custom_domain_verified_at,
       :callback_token,
-      :route_type,
       :source,
       :from_address,
-      :organization_id,
-      :tenant_id,
-      :project_id
+      :tenant_id
     ])
     |> maybe_generate_callback_token()
-    |> validate_required([:callback_token, :route_type])
-    |> validate_owner()
-    |> validate_inclusion(:route_type, @route_types)
+    |> validate_required([:callback_token, :tenant_id])
     |> validate_token_strength()
     |> validate_format(:from_address, ~r/^[^\s]+@[^\s]+\.[^\s]+$/,
       message: "must be a valid email address"
@@ -155,30 +111,7 @@ defmodule Custyard.InboundRoute do
     |> validate_hostname(:lettermint_route_domain)
     |> validate_custom_domain()
     |> unique_constraint(:callback_token)
-    |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:tenant_id)
-    |> foreign_key_constraint(:project_id)
-    |> validate_project_route()
-  end
-
-  defp validate_owner(changeset) do
-    organization_id = get_field(changeset, :organization_id)
-    tenant_id = get_field(changeset, :tenant_id)
-    organization = organization_id && Custyard.Repo.get(Custyard.Organization, organization_id)
-
-    cond do
-      organization && tenant_id && tenant_id != organization.tenant_id ->
-        add_error(changeset, :organization_id, "must belong to the same tenant")
-
-      organization ->
-        put_change(changeset, :tenant_id, organization.tenant_id)
-
-      tenant_id || organization_id ->
-        changeset
-
-      true ->
-        add_error(changeset, :tenant_id, "must be selected")
-    end
   end
 
   # Same hostname rule as Custyard.Organization domains. Hostnames are
@@ -224,17 +157,6 @@ defmodule Custyard.InboundRoute do
   end
 
   defp normalize_hostname(value), do: value
-
-  defp validate_project_route(changeset) do
-    route_type = get_field(changeset, :route_type)
-    project_id = get_field(changeset, :project_id)
-
-    if route_type == :project and is_nil(project_id) do
-      add_error(changeset, :project_id, "is required for project routes")
-    else
-      changeset
-    end
-  end
 
   defp maybe_generate_callback_token(changeset) do
     case get_field(changeset, :callback_token) do

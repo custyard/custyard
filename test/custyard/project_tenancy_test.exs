@@ -1,6 +1,10 @@
 defmodule Custyard.ProjectTenancyTest do
   use Custyard.DataCase, async: true
   import Custyard.Factory
+
+  defp scope(staff),
+    do: Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+
   alias Custyard.{Project, Projects, Tenants}
 
   test "internal projects cannot be moved to another tenant through operator updates" do
@@ -13,15 +17,16 @@ defmodule Custyard.ProjectTenancyTest do
     admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
 
     {:ok, project} =
-      Projects.create_project_for_operator(
-        %{title: "Internal", project_type: :internal, portal_visible: false},
-        admin
-      )
+      Projects.create(scope(admin), %{
+        title: "Internal",
+        project_type: :internal,
+        portal_visible: false
+      })
 
     assert project.tenant_id == tenant.id
 
     assert {:error, changeset} =
-             Projects.update_project_for_operator(project, %{tenant_id: 1}, admin)
+             Projects.update(scope(admin), project, %{tenant_id: insert_tenant().id})
 
     assert "cannot be changed for an existing project" in errors_on(changeset).tenant_id
     assert Repo.reload!(project).tenant_id == tenant.id
@@ -49,24 +54,19 @@ defmodule Custyard.ProjectTenancyTest do
     admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
 
     assert {:error, changeset} =
-             Projects.create_project_for_operator(
-               %{
-                 title: "Forged scope",
-                 project_type: :internal,
-                 portal_visible: false,
-                 tenant_id: foreign.tenant_id,
-                 conversation_id: foreign.id
-               },
-               admin
-             )
+             Projects.create(scope(admin), %{
+               title: "Forged scope",
+               project_type: :internal,
+               portal_visible: false,
+               tenant_id: foreign.tenant_id,
+               conversation_id: foreign.id
+             })
 
     assert "must belong to the project's workspace" in errors_on(changeset).conversation_id
     project = insert_project(organization_id: org.id)
 
-    assert {:error, changeset} =
-             Projects.update_project(project, %{organization_id: foreign.organization_id})
-
-    assert "cannot be changed for an existing project" in errors_on(changeset).tenant_id
+    assert {:error, :unauthorized} =
+             Projects.update(scope(admin), project, %{organization_id: foreign.organization_id})
   end
 
   test "moving a project synchronizes its tasks and keeps them editable" do
@@ -77,11 +77,7 @@ defmodule Custyard.ProjectTenancyTest do
     {:ok, task} = Projects.create_task(project, %{title: "Follow up", portal_visible: true})
 
     assert {:ok, moved} =
-             Projects.update_project_for_operator(
-               project,
-               %{organization_id: destination.id},
-               admin
-             )
+             Projects.update(scope(admin), project, %{organization_id: destination.id})
 
     assert moved.organization_id == destination.id
     assert Repo.reload!(task).organization_id == destination.id
@@ -93,7 +89,7 @@ defmodule Custyard.ProjectTenancyTest do
              |> Custyard.Task.changeset(%{title: "Still editable"})
              |> Repo.update()
 
-    assert {:ok, _} = Projects.update_project(moved, %{organization_id: org.id})
+    assert {:ok, _} = Projects.update(staff_scope(), moved, %{organization_id: org.id})
     assert Repo.reload!(task).organization_id == org.id
   end
 
@@ -111,13 +107,9 @@ defmodule Custyard.ProjectTenancyTest do
       })
 
     for update <- [
-          fn -> Projects.update_project(project, %{organization_id: destination.id}) end,
+          fn -> Projects.update(staff_scope(), project, %{organization_id: destination.id}) end,
           fn ->
-            Projects.update_project_for_operator(
-              project,
-              %{organization_id: destination.id},
-              admin
-            )
+            Projects.update(scope(admin), project, %{organization_id: destination.id})
           end
         ] do
       assert {:error, changeset} = update.()

@@ -5,12 +5,12 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
-    case Projects.get_project_for_operator(id, socket.assigns.current_operator) do
+    case Projects.get(socket.assigns.current_scope, id) do
       nil ->
         {:ok,
          socket
          |> put_flash(:error, "Project not found")
-         |> push_navigate(to: ~p"/operator/projects")}
+         |> push_navigate(to: ~p"/app/projects")}
 
       project ->
         if connected?(socket) do
@@ -37,16 +37,13 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   defp current_project(socket) do
-    Projects.get_project_for_operator(
-      socket.assigns.project.id,
-      socket.assigns.current_operator
-    )
+    Projects.get(socket.assigns.current_scope, socket.assigns.project.id)
   end
 
   defp project_access_revoked(socket) do
     socket
     |> put_flash(:error, "You no longer have access to this project")
-    |> push_navigate(to: ~p"/operator/projects")
+    |> push_navigate(to: ~p"/app/projects")
   end
 
   @impl true
@@ -142,9 +139,9 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
   end
 
   defp project_mutation(socket, fun) do
-    Projects.with_operator_access(
+    Projects.with_access(
+      socket.assigns.current_scope,
       socket.assigns.project.id,
-      socket.assigns.current_operator,
       fun,
       broadcast_project?: true
     )
@@ -166,7 +163,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
     ~H"""
     <div class="max-w-4xl mx-auto py-8 px-4" data-testid="operator-project-detail">
       <.link
-        navigate={~p"/operator/projects"}
+        navigate={~p"/app/projects"}
         class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"
         data-testid="operator-back-link"
       >
@@ -185,7 +182,7 @@ defmodule CustyardWeb.Operator.ProjectDetailLive do
             <.project_type_badge type={@project.project_type} />
           </div>
           <.link
-            navigate={~p"/operator/projects"}
+            navigate={~p"/app/projects"}
             class="text-sm text-gray-500 hover:text-gray-700"
           >
             Edit

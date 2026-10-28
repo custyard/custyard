@@ -11,8 +11,7 @@ defmodule Custyard.InboundRouteTest do
 
       changeset =
         InboundRoute.changeset(%InboundRoute{}, %{
-          organization_id: org.id,
-          route_type: :general
+          tenant_id: org.tenant_id
         })
 
       assert changeset.valid?
@@ -24,44 +23,24 @@ defmodule Custyard.InboundRouteTest do
 
       route =
         %InboundRoute{}
-        |> InboundRoute.changeset(%{organization_id: org.id, route_type: :general})
+        |> InboundRoute.changeset(%{tenant_id: org.tenant_id})
         |> Repo.insert!()
 
       assert route.callback_token != nil
       assert String.length(route.callback_token) > 0
     end
 
-    test "requires a tenant or legacy organization owner" do
+    test "requires a tenant owner" do
       changeset = InboundRoute.changeset(%InboundRoute{}, %{route_type: :general})
       refute changeset.valid?
       assert errors_on(changeset)[:tenant_id]
     end
 
-    test "project route requires project_id" do
-      org = insert_organization()
-
-      changeset =
-        InboundRoute.changeset(%InboundRoute{}, %{
-          organization_id: org.id,
-          route_type: :project
-        })
-
-      refute changeset.valid?
-      assert errors_on(changeset)[:project_id]
-    end
-
-    test "valid project route with project_id" do
-      org = insert_organization()
-      project = insert_project(organization_id: org.id)
-
-      changeset =
-        InboundRoute.changeset(%InboundRoute{}, %{
-          organization_id: org.id,
-          project_id: project.id,
-          route_type: :project
-        })
-
-      assert changeset.valid?
+    test "routes have no customer or project ownership" do
+      fields = InboundRoute.__schema__(:fields)
+      refute :organization_id in fields
+      refute :project_id in fields
+      refute :route_type in fields
     end
 
     test "accepts from_address with valid email" do
@@ -69,8 +48,7 @@ defmodule Custyard.InboundRouteTest do
 
       changeset =
         InboundRoute.changeset(%InboundRoute{}, %{
-          organization_id: org.id,
-          route_type: :general,
+          tenant_id: org.tenant_id,
           from_address: "support@example.com"
         })
 
@@ -83,8 +61,7 @@ defmodule Custyard.InboundRouteTest do
 
       changeset =
         InboundRoute.changeset(%InboundRoute{}, %{
-          organization_id: org.id,
-          route_type: :general
+          tenant_id: org.tenant_id
         })
 
       assert changeset.valid?
@@ -96,8 +73,7 @@ defmodule Custyard.InboundRouteTest do
 
       changeset =
         InboundRoute.changeset(%InboundRoute{}, %{
-          organization_id: org.id,
-          route_type: :general,
+          tenant_id: org.tenant_id,
           from_address: "not-an-email"
         })
 
@@ -110,8 +86,7 @@ defmodule Custyard.InboundRouteTest do
 
       changeset =
         InboundRoute.changeset(%InboundRoute{}, %{
-          organization_id: org.id,
-          route_type: :general,
+          tenant_id: org.tenant_id,
           from_address: "bad email@example.com"
         })
 
@@ -125,8 +100,7 @@ defmodule Custyard.InboundRouteTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          route_type: :general,
+          tenant_id: org.tenant_id,
           callback_token: "unique-token-secure-32-chars-xyz"
         })
         |> Repo.insert!()
@@ -134,8 +108,7 @@ defmodule Custyard.InboundRouteTest do
       {:error, changeset} =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
-          route_type: :general,
+          tenant_id: org.tenant_id,
           callback_token: route.callback_token
         })
         |> Repo.insert()
@@ -150,7 +123,7 @@ defmodule Custyard.InboundRouteTest do
 
       route =
         %InboundRoute{}
-        |> InboundRoute.changeset(%{organization_id: org.id, route_type: :general})
+        |> InboundRoute.changeset(%{tenant_id: org.tenant_id})
         |> Repo.insert!()
 
       webhook =
@@ -171,7 +144,7 @@ defmodule Custyard.InboundRouteTest do
 
       route =
         %InboundRoute{}
-        |> InboundRoute.changeset(%{organization_id: org.id, route_type: :general})
+        |> InboundRoute.changeset(%{tenant_id: org.tenant_id})
         |> Repo.insert!()
 
       %InboundRouteWebhook{}

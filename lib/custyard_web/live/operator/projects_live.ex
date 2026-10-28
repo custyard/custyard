@@ -8,7 +8,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   @impl true
   def mount(_params, _session, socket) do
     organizations =
-      Organizations.list_organizations_for_operator(socket.assigns.current_operator)
+      Organizations.list(socket.assigns.current_scope)
       |> Enum.filter(&(&1.tenant_id == socket.assigns.current_tenant.id))
 
     socket =
@@ -38,7 +38,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
   @impl true
   def handle_event("filter_org", %{"org" => org_id}, socket) do
-    path = if org_id == "", do: ~p"/operator/projects", else: ~p"/operator/projects?org=#{org_id}"
+    path = if org_id == "", do: ~p"/app/projects", else: ~p"/app/projects?org=#{org_id}"
     {:noreply, push_patch(socket, to: path)}
   end
 
@@ -49,7 +49,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
      |> assign(:editing_project, nil)
      |> assign(:form_data, %{
        default_form_data()
-       | organization_id: to_string(socket.assigns.scoped_organization_id || "")
+       | organization_id: ""
      })}
   end
 
@@ -63,14 +63,14 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   def handle_event("edit_project", %{"id" => id}, socket) do
     operator = socket.assigns.current_operator
 
-    case Projects.get_project_for_operator(id, operator) do
+    case Projects.get(socket.assigns.current_scope, id) do
       nil ->
         {:noreply,
          socket
          |> put_flash(:error, "Project not found")
          |> load_projects()}
 
-      _project when operator.role not in ["admin", "super_admin"] ->
+      _project when operator.role != "admin" ->
         {:noreply, put_flash(socket, :error, "You do not have permission to edit this project")}
 
       project ->
@@ -104,18 +104,18 @@ defmodule CustyardWeb.Operator.ProjectsLive do
   end
 
   def handle_event("save_project", _params, socket) do
-    operator = socket.assigns.current_operator
+    scope = socket.assigns.current_scope
 
     attrs =
       build_project_attrs(socket.assigns.form_data)
       |> Map.put(:tenant_id, socket.assigns.current_tenant.id)
 
-    result = save_project(socket.assigns.editing_project, attrs, operator)
+    result = save_project(socket.assigns.editing_project, attrs, scope)
     handle_save_result(result, socket)
   end
 
   def handle_event("delete_project", %{"id" => id}, socket) do
-    case Projects.get_project_for_operator(id, socket.assigns.current_operator) do
+    case Projects.get(socket.assigns.current_scope, id) do
       nil ->
         {:noreply,
          socket
@@ -127,7 +127,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
              socket.assigns.current_operator,
              project.organization_id
            ) do
-          case Projects.delete_project_for_operator(project, socket.assigns.current_operator) do
+          case Projects.delete(socket.assigns.current_scope, project) do
             {:ok, _} ->
               {:noreply,
                socket
@@ -144,14 +144,14 @@ defmodule CustyardWeb.Operator.ProjectsLive do
     end
   end
 
-  defp save_project(nil, attrs, operator) do
-    Projects.create_project_for_operator(attrs, operator)
+  defp save_project(nil, attrs, scope) do
+    Projects.create(scope, attrs)
   end
 
-  defp save_project(project, attrs, operator) do
-    case Projects.get_project_for_operator(project.id, operator) do
+  defp save_project(project, attrs, scope) do
+    case Projects.get(scope, project.id) do
       nil -> {:error, :unauthorized}
-      current -> Projects.update_project_for_operator(current, attrs, operator)
+      current -> Projects.update(scope, current, attrs)
     end
   end
 
@@ -202,7 +202,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
     filter_org_id = parse_org_id(socket.assigns.filter_org)
 
     projects =
-      Projects.list_for_operator(socket.assigns.current_operator, organization_id: filter_org_id)
+      Projects.list(socket.assigns.current_scope, organization_id: filter_org_id)
       |> Enum.filter(&(&1.tenant_id == socket.assigns.current_tenant.id))
 
     assign(socket, :projects, projects)
@@ -480,7 +480,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
         <div class="flex-1">
           <div class="flex items-center gap-2 mb-1">
             <.link
-              navigate={~p"/operator/projects/#{@project.id}"}
+              navigate={~p"/app/projects/#{@project.id}"}
               class="font-semibold text-gray-900 dark:text-zinc-100 hover:text-indigo-600"
               data-testid="operator-project-title"
             >
@@ -525,7 +525,7 @@ defmodule CustyardWeb.Operator.ProjectsLive do
 
       <div class="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-zinc-700">
         <.link
-          navigate={~p"/operator/projects/#{@project.id}"}
+          navigate={~p"/app/projects/#{@project.id}"}
           class="text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50"
           data-testid={"operator-project-view-#{@project.id}"}
         >

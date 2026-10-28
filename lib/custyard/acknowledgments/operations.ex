@@ -10,16 +10,19 @@ defmodule Custyard.Acknowledgments.Operations do
   alias Custyard.Acknowledgments.{Audit, Broker, Config, Consumer, Evidence, Topology}
 
   @doc "Declares the work, retry and failure queues. Needs the provisioning credential."
-  def provision,
-    do: with_channel(fn channel, _connection, config -> Topology.provision(channel, config) end)
+  def provision(authority),
+    do:
+      with_channel(authority, fn channel, _connection, config ->
+        Topology.provision(channel, config)
+      end)
 
   @doc """
   Ready and consumer counts per queue, work queue first:
   `{:ok, [%{queue: name, role: role, ready: n, consumers: n} | %{queue: name, role: role, error: atom}]}`
   where role is `:work`, `{:retry, attempt}` or `:failed`.
   """
-  def status do
-    with_channel(fn _channel, connection, config ->
+  def status(authority) do
+    with_channel(authority, fn _channel, connection, config ->
       {:ok,
        Enum.map(queues(config), fn {role, queue} ->
          Map.merge(%{queue: queue, role: role}, counts(connection, queue))
@@ -43,8 +46,8 @@ defmodule Custyard.Acknowledgments.Operations do
   message goes back to its position when the operation's channel closes; an
   explicit requeue would move a quorum queue message to the back.
   """
-  def failure_summary do
-    with_channel(fn channel, _connection, config ->
+  def failure_summary(authority) do
+    with_channel(authority, fn channel, _connection, config ->
       case fetch_failure(channel, config) do
         {:ok, body, meta} -> {:ok, summarize(body, meta)}
         other -> other
@@ -57,8 +60,8 @@ defmodule Custyard.Acknowledgments.Operations do
   `{:ok, %{body: body, summary: summary}}`, `:empty` or `{:error, reason}`.
   The message stays in place.
   """
-  def inspect_failure do
-    with_channel(fn channel, _connection, config ->
+  def inspect_failure(authority) do
+    with_channel(authority, fn channel, _connection, config ->
       case fetch_failure(channel, config) do
         {:ok, body, meta} -> {:ok, %{body: body, summary: summarize(body, meta)}}
         other -> other
@@ -84,16 +87,21 @@ defmodule Custyard.Acknowledgments.Operations do
   in place and the result is `{:error, :changed}`. `actor` is an operator
   account or `"cli"`, `"mix"` or `"console"`.
   """
-  def replay(expected, actor) do
-    if !Audit.actor?(actor), do: raise(ArgumentError, "unknown audit actor")
+  def replay(authority, expected) do
+    case Custyard.Acknowledgments.authorize(authority) do
+      {:ok, tenant_id, actor} -> do_replay(authority, tenant_id, expected, actor)
+      error -> error
+    end
+  end
 
+  defp do_replay(authority, tenant_id, expected, actor) do
     {result, summary} =
-      case with_channel(&replay_message(&1, &2, &3, expected, actor)) do
+      case with_channel(authority, &replay_message(&1, &2, &3, expected, actor)) do
         {:replay, result, summary} -> {result, summary}
         other -> {other, %{}}
       end
 
-    Audit.record(:acknowledgment_replayed, actor, nil, replay_payload(summary, result))
+    Audit.record(tenant_id, :acknowledgment_replayed, actor, nil, replay_payload(summary, result))
 
     result
   end
@@ -134,7 +142,13 @@ defmodule Custyard.Acknowledgments.Operations do
             {:replay, {:error, :changed}, summary}
 
           # The attempt is on record before the message moves, or it does not move.
-          Audit.record(:acknowledgment_replayed, actor, nil, replay_payload(summary, :started)) ==
+          Audit.record(
+            config[:tenant_id],
+            :acknowledgment_replayed,
+            actor,
+            nil,
+            replay_payload(summary, :started)
+          ) ==
               :error ->
             {:replay, {:error, :audit_failed}, summary}
 
@@ -187,15 +201,18 @@ defmodule Custyard.Acknowledgments.Operations do
 
   @doc false
   # Public for the caller-death integration test.
-  def with_channel(operation) do
-    case validated_config() do
-      {:ok, config} -> guarded(config, operation)
+  def with_channel(authority, operation) do
+    with {:ok, tenant_id, _actor} <- Custyard.Acknowledgments.authorize(authority),
+         {:ok, config} <- validated_config(tenant_id) do
+      guarded(config, operation)
+    else
       :error -> {:error, :invalid_config}
+      error -> error
     end
   end
 
-  defp validated_config do
-    {:ok, Config.load() |> Config.validate!()}
+  defp validated_config(tenant_id) do
+    {:ok, Config.load(tenant_id) |> Config.validate!()}
   rescue
     ArgumentError -> :error
   end

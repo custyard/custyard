@@ -41,7 +41,7 @@ defmodule CustyardWeb.InlineImages do
           nil -> ~s( alt="")
         end
 
-      ~s(<img src="#{~p"/operator/attachments/#{id}/inline"}"#{alt} loading="lazy" />)
+      ~s(<img src="#{~p"/app/attachments/#{id}/inline"}"#{alt} loading="lazy" />)
     else
       _unresolved -> ""
     end
