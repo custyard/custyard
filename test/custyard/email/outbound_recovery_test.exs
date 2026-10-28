@@ -190,6 +190,7 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     channel =
       insert_inbound_channel(
         organization_id: context.conversation.organization_id,
+        tenant_id: context.conversation.tenant_id,
         public_address: "support@acme.example",
         sending_domain: "mail.acme.example",
         state: :active
@@ -239,6 +240,35 @@ defmodule Custyard.Email.OutboundRecoveryTest do
     assert %DateTime{} = sent.delivery_attempted_at
     assert_receive {:attempted_email, email}
     assert email.headers["X-LM-Preserve-Message-ID"] == "true"
+  end
+
+  test "missing tenant credentials still lock the return path before a retry", context do
+    tenant =
+      %Custyard.Tenant{}
+      |> Custyard.Tenant.changeset(%{
+        name: "Unconfigured tenant",
+        slug: "unconfigured-#{System.unique_integer([:positive])}"
+      })
+      |> Repo.insert!()
+
+    org = insert_organization(tenant_id: tenant.id)
+    contact = insert_contact(organization_id: org.id)
+    conversation = insert_conversation(organization_id: org.id, contact_id: contact.id)
+    {channel, message} = custom_domain_reply(%{conversation: conversation, contact: contact})
+
+    assert {:error, :not_configured, failed} = Outbound.deliver(message)
+    assert is_binary(failed.delivery_payload_hash)
+    assert is_nil(failed.delivery_attempted_at)
+    refute_receive {:attempted_email, _}
+
+    assert {:ok, _} =
+             InboundChannels.update_channel(channel, %{sending_domain: ""},
+               operator: context.operator
+             )
+
+    assert {:ok, retried} = Outbound.retry(failed, context.operator)
+    assert {:error, :envelope_changed, _} = Outbound.deliver(retried)
+    refute_receive {:attempted_email, _}
   end
 
   test "a missing platform From fails before recording a provider attempt", context do
