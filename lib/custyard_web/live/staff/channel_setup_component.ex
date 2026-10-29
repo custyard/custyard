@@ -653,7 +653,7 @@ defmodule CustyardWeb.Staff.ChannelSetupComponent do
             </option>
           </select>
           <p class="mt-1 text-xs text-gray-500 dark:text-zinc-400">
-            Shared support addresses use a general receiving route; project channels use that project's route.
+            Receiving routes belong to your tenant and can serve several addresses. Set customer, project and label defaults on each address after creating it.
           </p>
         </div>
         <div>

@@ -157,7 +157,9 @@ defmodule Custyard.InboundChannels do
   the setup screen shows the ingress address immediately, which is the D7
   trigger for that state. `attrs` carries `public_address`, optional
   `display_name`, `ingress_kind` (default `forward`), `provider`,
-  `reply_from`; route, organization and project come from the route.
+  `reply_from` and optional customer, project and label defaults. The route
+  supplies the receiving infrastructure and tenant ownership; routing defaults
+  belong to the channel.
 
   A direct-MX channel (`ingress_kind: :mx`) receives mail at its public
   address on the route's custom domain. Creating the first one sets that
