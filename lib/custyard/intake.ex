@@ -21,7 +21,8 @@ defmodule Custyard.Intake do
     Prospect,
     Repo,
     Scoring,
-    Slugs
+    Slugs,
+    Tenant
   }
 
   alias Custyard.Auth.Token
@@ -54,7 +55,11 @@ defmodule Custyard.Intake do
   table lookup — never converted to an atom.
   """
   def get_enabled_source(key, tenant_id) when is_binary(key) do
-    Repo.get_by(IntakeSource, key: key, tenant_id: tenant_id, enabled: true)
+    Repo.one(
+      from s in IntakeSource,
+        join: t in assoc(s, :tenant),
+        where: s.key == ^key and s.tenant_id == ^tenant_id and s.enabled and t.status == "active"
+    )
   end
 
   def get_enabled_source(_key, _tenant_id), do: nil
@@ -67,7 +72,7 @@ defmodule Custyard.Intake do
   stores the key string (not a foreign key), so a thread's source may
   be disabled or deleted after creation — the branded link on an existing
   thread survives a disable (the source still exists) and disappears on
-  delete. Public intake entry must keep using `get_enabled_source/1`.
+  delete. Public intake entry must keep using `get_enabled_source/2`.
   """
   def get_source_by_key(key, tenant_id) when is_binary(key) do
     Repo.get_by(IntakeSource, key: key, tenant_id: tenant_id)
@@ -199,6 +204,7 @@ defmodule Custyard.Intake do
       })
 
     Multi.new()
+    |> Multi.run(:source, fn _repo, _changes -> lock_enabled_source(source) end)
     |> Multi.insert(:thread, thread_changeset)
     |> Multi.insert(:prospect, fn %{thread: thread} ->
       Prospect.create_changeset(%Prospect{}, %{
@@ -380,11 +386,17 @@ defmodule Custyard.Intake do
       Callers that did not authenticate by token (the intake POST that just
       created it) omit the option.
   """
-  def add_prospect_reply(%Thread{id: thread_id}, body, opts \\ [])
+  def add_prospect_reply(%Thread{id: thread_id, tenant_id: tenant_id}, body, opts \\ [])
       when is_binary(body) do
     case Repo.get(Thread, thread_id) do
-      nil -> {:error, :no_prospect}
-      thread -> do_add_prospect_reply(thread, body, opts)
+      nil ->
+        {:error, :no_prospect}
+
+      %Thread{tenant_id: ^tenant_id} = thread ->
+        do_add_prospect_reply(thread, body, Keyword.put(opts, :tenant_id, tenant_id))
+
+      _ ->
+        {:error, :no_prospect}
     end
   end
 
@@ -404,6 +416,7 @@ defmodule Custyard.Intake do
       })
 
     Multi.new()
+    |> Multi.run(:current_thread, fn _repo, _changes -> lock_active_thread(thread.id, opts) end)
     |> Multi.run(:prospect, fn _repo, _changes -> authorized_prospect(thread.id, opts) end)
     |> Multi.run(:duplicate, fn _repo, _changes ->
       if duplicate_of_last_prospect_message?(thread.id, body) do
@@ -413,7 +426,9 @@ defmodule Custyard.Intake do
       end
     end)
     |> Multi.insert(:message, message_changeset)
-    |> Multi.update(:thread, reactivate_changeset(thread, now))
+    |> Multi.update(:thread, fn %{current_thread: current} ->
+      reactivate_changeset(current, now)
+    end)
     |> Repo.transaction()
     |> case do
       {:ok, %{thread: thread, message: message}} ->
@@ -421,6 +436,9 @@ defmodule Custyard.Intake do
         {:ok, %{thread: thread, message: message}}
 
       {:error, :prospect, reason, _changes} ->
+        {:error, reason}
+
+      {:error, :current_thread, reason, _changes} ->
         {:error, reason}
 
       {:error, :duplicate, reason, _changes} ->
@@ -477,19 +495,77 @@ defmodule Custyard.Intake do
   # rotation or revocation between the check and the write can't let a
   # stale/revoked token slip through.
   defp authorized_prospect(thread_id, opts) do
-    case Repo.get_by(Prospect, thread_id: thread_id) do
-      nil ->
-        {:error, :no_prospect}
+    with {:ok, thread} <- lock_active_thread(thread_id, opts),
+         %Prospect{revoked_at: nil} = prospect <- lock_prospect(thread),
+         true <- token_hash_current?(prospect, opts) do
+      {:ok, prospect}
+    else
+      _ -> {:error, :no_prospect}
+    end
+  end
 
-      %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
-        {:error, :no_prospect}
+  defp lock_prospect(thread) do
+    query =
+      from(p in Prospect,
+        where:
+          p.thread_id == ^thread.id and p.tenant_id == ^thread.tenant_id and is_nil(p.revoked_at),
+        update: [set: [updated_at: p.updated_at]]
+      )
 
-      %Prospect{} = prospect ->
-        if token_hash_current?(prospect, opts) do
-          {:ok, prospect}
-        else
-          {:error, :no_prospect}
-        end
+    case Repo.update_all(query, []) do
+      {1, _} -> Repo.get_by(Prospect, thread_id: thread.id, tenant_id: thread.tenant_id)
+      _ -> nil
+    end
+  end
+
+  # Serialize lifecycle changes with public writes. Reads alone are insufficient
+  # for a socket mounted before tenant suspension or thread reassignment.
+  defp lock_active_tenant(tenant_id) do
+    {count, _} =
+      Repo.update_all(
+        from(t in Tenant,
+          where: t.id == ^tenant_id and t.status == "active",
+          update: [set: [updated_at: t.updated_at]]
+        ),
+        []
+      )
+
+    count == 1
+  end
+
+  defp lock_enabled_source(source) do
+    if lock_active_tenant(source.tenant_id) do
+      {count, _} =
+        Repo.update_all(
+          from(s in IntakeSource,
+            where: s.id == ^source.id and s.tenant_id == ^source.tenant_id and s.enabled,
+            update: [set: [enabled: s.enabled]]
+          ),
+          []
+        )
+
+      if count == 1, do: {:ok, source}, else: {:error, :unknown_source}
+    else
+      {:error, :unknown_source}
+    end
+  end
+
+  defp lock_active_thread(thread_id, opts) do
+    with %Thread{} = thread <- Repo.get(Thread, thread_id),
+         true <- Keyword.get(opts, :tenant_id, thread.tenant_id) == thread.tenant_id,
+         true <- lock_active_tenant(thread.tenant_id) do
+      query =
+        from(t in Thread,
+          where: t.id == ^thread_id and t.tenant_id == ^thread.tenant_id,
+          update: [set: [updated_at: t.updated_at]]
+        )
+
+      case Repo.update_all(query, []) do
+        {1, _} -> {:ok, Repo.get!(Thread, thread_id)}
+        _ -> {:error, :no_prospect}
+      end
+    else
+      _ -> {:error, :no_prospect}
     end
   end
 
@@ -631,8 +707,10 @@ defmodule Custyard.Intake do
   deliverability (consent advisory, delivery expectations) without a manual
   refresh.
   """
-  def set_notification(%Thread{id: thread_id}, notify?, opts \\ [])
+  def set_notification(%Thread{id: thread_id, tenant_id: tenant_id}, notify?, opts \\ [])
       when is_boolean(notify?) do
+    opts = Keyword.put(opts, :tenant_id, tenant_id)
+
     result =
       Repo.transaction(fn ->
         case authorized_prospect(thread_id, opts) do
@@ -703,6 +781,7 @@ defmodule Custyard.Intake do
       email was captured
   """
   def capture_email(%Thread{} = thread, email, opts \\ []) do
+    opts = Keyword.put(opts, :tenant_id, thread.tenant_id)
     notify? = Keyword.get(opts, :notify, false)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -737,19 +816,8 @@ defmodule Custyard.Intake do
   # the write-once guard so a rotated-out handle cannot learn whether an
   # email was captured.
   defp capturable_prospect(thread_id, opts) do
-    case Repo.get_by(Prospect, thread_id: thread_id) do
-      nil ->
-        {:error, :no_prospect}
-
-      %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
-        {:error, :no_prospect}
-
-      %Prospect{} = prospect ->
-        cond do
-          not token_hash_current?(prospect, opts) -> {:error, :no_prospect}
-          not is_nil(prospect.email) -> {:error, :already_captured}
-          true -> {:ok, prospect}
-        end
+    with {:ok, prospect} <- authorized_prospect(thread_id, opts) do
+      if is_nil(prospect.email), do: {:ok, prospect}, else: {:error, :already_captured}
     end
   end
 
