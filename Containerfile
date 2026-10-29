@@ -52,7 +52,7 @@ RUN test -x _build/prod/rel/custyard/bin/operator && \
 # Debian 13 (trixie) is testing-branch and packages change unpredictably.
 FROM debian:12-slim
 
-LABEL org.opencontainers.image.source="https://github.com/onetimesecret/custyard"
+LABEL org.opencontainers.image.source="https://github.com/custyard/custyard"
 LABEL org.opencontainers.image.description="Custyard Service Platform"
 LABEL org.opencontainers.image.licenses="MIT"
 
