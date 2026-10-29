@@ -1,4 +1,12 @@
-"""Fail closed on incomplete Claude reviews without publishing raw SDK output."""
+"""Fail closed on incomplete Claude reviews without publishing raw SDK output.
+
+Partition limits accept positive-integer environment overrides:
+CLAUDE_REVIEW_MAX_FILES (50), CLAUDE_REVIEW_MAX_PATCH_LINES (1800), and
+CLAUDE_REVIEW_MAX_PATCH_CHARS (50000). Unset/blank values use the defaults.
+The workflow maps the same GitHub Actions repository variables into these
+environment variables. Limits split batches, never individual files: an
+oversized file remains intact in its own batch.
+"""
 
 import base64
 import json
@@ -10,8 +18,26 @@ import subprocess
 import sys
 
 
+DEFAULT_MAX_FILES = 50
+DEFAULT_MAX_PATCH_LINES = 1800
+DEFAULT_MAX_PATCH_CHARS = 50_000
+
+
 class IncompleteReview(Exception):
     pass
+
+
+def positive_env_limit(name, default):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        limit = int(value)
+    except ValueError:
+        raise IncompleteReview(f"{name} must be a positive integer.") from None
+    if limit <= 0:
+        raise IncompleteReview(f"{name} must be a positive integer.")
+    return limit
 
 
 BLOCKING_REASONS = {
@@ -165,12 +191,15 @@ def build_plan(event, run_id, attempt, current, files):
     paths = [f["filename"] for f in files]
     if len(paths) != len(set(paths)):
         raise IncompleteReview("The changed-file list contains duplicates.")
+    max_files = positive_env_limit("CLAUDE_REVIEW_MAX_FILES", DEFAULT_MAX_FILES)
+    max_lines = positive_env_limit("CLAUDE_REVIEW_MAX_PATCH_LINES", DEFAULT_MAX_PATCH_LINES)
+    max_chars = positive_env_limit("CLAUDE_REVIEW_MAX_PATCH_CHARS", DEFAULT_MAX_PATCH_CHARS)
     batches, batch, size, lines = [], [], 0, 0
     for file in files:
         text = file.get("patch") or file.get("source_text") or ""
         patch_size = len(text)
         patch_lines = len(text.splitlines())
-        if batch and (len(batch) >= 50 or size + patch_size > 50_000 or lines + patch_lines > 1800):
+        if batch and (len(batch) >= max_files or size + patch_size > max_chars or lines + patch_lines > max_lines):
             batches.append(batch)
             batch, size, lines = [], 0, 0
         batch.append(file)

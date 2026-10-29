@@ -29,6 +29,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REVIEW_PLAN_DIR: ${{ runner.temp }}/claude-review-plan
+          CLAUDE_REVIEW_MAX_FILES: ${{ vars.CLAUDE_REVIEW_MAX_FILES }}
+          CLAUDE_REVIEW_MAX_PATCH_LINES: ${{ vars.CLAUDE_REVIEW_MAX_PATCH_LINES }}
+          CLAUDE_REVIEW_MAX_PATCH_CHARS: ${{ vars.CLAUDE_REVIEW_MAX_PATCH_CHARS }}
         run: python3 -B .github/scripts/verify_claude_review.py plan
       - uses: actions/upload-artifact@v7
         with:

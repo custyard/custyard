@@ -17,6 +17,13 @@ from verify_claude_review import (
 
 class BoundedReviewTest(unittest.TestCase):
     def setUp(self):
+        limits = {name: "" for name in (
+            "CLAUDE_REVIEW_MAX_FILES", "CLAUDE_REVIEW_MAX_PATCH_LINES",
+            "CLAUDE_REVIEW_MAX_PATCH_CHARS",
+        )}
+        env = patch.dict(os.environ, limits)
+        env.start()
+        self.addCleanup(env.stop)
         self.event = {"repository": {"full_name": "custyard/custyard"},
                       "pull_request": {"number": 45, "head": {"sha": "abc123"}}}
         self.files = [{"filename": f"lib/file-{i}.ex", "patch": "small"} for i in range(101)]
@@ -44,6 +51,36 @@ class BoundedReviewTest(unittest.TestCase):
                  for i, size in enumerate([70_000, 40_000, 150_000, 1])]
         plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 4}, files)
         self.assertEqual([len(s["files"]) for s in plan["shards"]], [1, 1, 1, 1])
+
+    def test_environment_overrides_each_partition_limit(self):
+        files = [{"filename": str(i), "patch": "x\n" * 2} for i in range(3)]
+        cases = [("CLAUDE_REVIEW_MAX_FILES", "2", [2, 1]),
+                 ("CLAUDE_REVIEW_MAX_PATCH_LINES", "3", [1, 1, 1]),
+                 ("CLAUDE_REVIEW_MAX_PATCH_CHARS", "7", [1, 1, 1])]
+        for name, value, expected in cases:
+            with self.subTest(name=name), patch.dict(os.environ, {name: value}):
+                plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 3}, files)
+                self.assertEqual([len(s["files"]) for s in plan["shards"]], expected)
+
+    def test_invalid_environment_limits_fail_planning(self):
+        for name in ("CLAUDE_REVIEW_MAX_FILES", "CLAUDE_REVIEW_MAX_PATCH_LINES",
+                     "CLAUDE_REVIEW_MAX_PATCH_CHARS"):
+            for value in ("0", "-1", "lots", "2.5"):
+                with self.subTest(name=name, value=value), patch.dict(os.environ, {name: value}):
+                    with self.assertRaisesRegex(IncompleteReview, name):
+                        build_plan(self.event, "100", "1", self.current, self.files)
+
+    def test_unset_and_whitespace_environment_limits_use_defaults(self):
+        for value in (None, "   "):
+            with self.subTest(value=value), patch.dict(os.environ):
+                for name in ("CLAUDE_REVIEW_MAX_FILES", "CLAUDE_REVIEW_MAX_PATCH_LINES",
+                             "CLAUDE_REVIEW_MAX_PATCH_CHARS"):
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                plan = build_plan(self.event, "100", "1", self.current, self.files)
+                self.assertEqual([len(s["files"]) for s in plan["shards"]], [50, 50, 1])
 
     def test_patch_line_count_bounds_reader_input(self):
         files = [{"filename": str(i), "patch": "short\n" * count}
