@@ -104,11 +104,9 @@ defmodule Custyard.Application do
     end
   end
 
-  # Decided here rather than in config/runtime.exs, so release commands such as
-  # bin/staff still boot when acknowledgment configuration is incomplete.
-  # Incomplete or invalid configuration raises (without values) and the
-  # application refuses to start. The consumer loads its configuration itself:
-  # a child spec carrying the URL would put the password in supervisor reports.
+  # Consumers load credentials themselves, so supervisor reports never carry
+  # broker passwords. Invalid configuration and exhausted restart budgets are
+  # isolated to the affected tenant subscription.
   defp maybe_add_acknowledgment_consumer(children) do
     if Application.get_env(:custyard, :env) == :test,
       do: children,

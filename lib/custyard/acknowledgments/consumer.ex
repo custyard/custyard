@@ -20,13 +20,13 @@ defmodule Custyard.Acknowledgments.Consumer do
   def failure_categories, do: @failure_categories
 
   @doc """
-  `:connected` while this node's consumer holds a subscribed channel, otherwise
-  `:connecting`, including while the consumer is not running.
+  `:connected` while this node's consumer holds a subscribed channel,
+  `:connecting` while retrying a connection, and `:stopped` without a worker.
   """
   def status(tenant_id) do
     if :global.whereis_name({__MODULE__, tenant_id}) != :undefined,
       do: :persistent_term.get({@status_key, tenant_id}, :connecting),
-      else: :connecting
+      else: :stopped
   end
 
   @impl true
@@ -36,11 +36,22 @@ defmodule Custyard.Acknowledgments.Consumer do
     Process.put(:acknowledgment_tenant_id, tenant_id)
     publish_status(:connecting)
 
-    config =
-      Keyword.get_lazy(opts, :config, fn -> Config.load(tenant_id) end) |> Config.validate!()
+    config = Keyword.get_lazy(opts, :config, fn -> Config.load(tenant_id) end)
 
-    send(self(), :connect)
-    {:ok, %{config: config, connection: nil, channel: nil, monitors: [], consumer_tag: nil}}
+    case Config.validation_error(config) do
+      nil ->
+        send(self(), :connect)
+        {:ok, %{config: config, connection: nil, channel: nil, monitors: [], consumer_tag: nil}}
+
+      _error ->
+        publish_status(:invalid_config)
+
+        Logger.warning("Tenant acknowledgment subscription is invalid; consumer not started",
+          tenant_id: tenant_id
+        )
+
+        :ignore
+    end
   end
 
   # Crash reports and :sys.get_status/1 render the state; the URL carries the

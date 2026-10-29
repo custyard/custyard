@@ -170,7 +170,7 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
 
   test "status is published without calling the consumer", ctx do
     Application.put_env(:custyard, :acknowledgments, Keyword.put(ctx.config, :enabled, true))
-    assert Acknowledgments.subscription_status(ack_scope(tenant_id())) == :connecting
+    assert Acknowledgments.subscription_status(ack_scope(tenant_id())) == :stopped
 
     consumer = start_consumer(ctx.config)
 
@@ -184,7 +184,7 @@ defmodule Custyard.Acknowledgments.ConsumerIntegrationTest do
     :sys.resume(consumer)
 
     stop_supervised!(Consumer)
-    assert Acknowledgments.subscription_status(ack_scope(tenant_id())) == :connecting
+    assert Acknowledgments.subscription_status(ack_scope(tenant_id())) == :stopped
   end
 
   test "the consumer's status and crash reports never render the broker URL", ctx do

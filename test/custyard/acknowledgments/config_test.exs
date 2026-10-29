@@ -51,7 +51,7 @@ defmodule Custyard.Acknowledgments.ConfigTest do
     refute integration.url_ciphertext == url
     assert Config.load(a.id)[:url] == url
     assert Config.load(b.id)[:url] == nil
-    assert Acknowledgments.subscription_status(ack_scope(a.id)) == :connecting
+    assert Acknowledgments.subscription_status(ack_scope(a.id)) == :stopped
     assert Acknowledgments.subscription_status(ack_scope(b.id)) == :disabled
     refute inspect(Acknowledgments.subscription_overview(ack_scope(a.id))) =~ "broker-secret"
     refute inspect(Repo.get!(Integration, integration.id)) =~ "broker-secret"

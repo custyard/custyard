@@ -25,15 +25,22 @@ defmodule Custyard.Acknowledgments do
   }
 
   defp subscription_status_for_tenant(tenant_id) do
-    case Config.mode(Config.load(tenant_id)) do
-      :disabled -> :disabled
-      :configured -> Consumer.status(tenant_id)
-      _ -> :not_configured
+    config = Config.load(tenant_id)
+
+    case Config.mode(config) do
+      :disabled ->
+        :disabled
+
+      :configured ->
+        if Config.validation_error(config), do: :invalid_config, else: Consumer.status(tenant_id)
+
+      _ ->
+        :not_configured
     end
   end
 
   @doc """
-  `:disabled`, `:not_configured`, `:connecting` or `:connected`. Reads published
+  `:disabled`, `:not_configured`, `:invalid_config`, `:stopped`, `:connecting` or `:connected`. Reads published
   state only, so it never waits on the consumer.
   """
   def subscription_status(%Scope{} = scope) do

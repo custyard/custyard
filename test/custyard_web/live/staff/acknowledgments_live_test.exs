@@ -136,7 +136,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
       html = render_async(view, 10_000)
 
-      assert view |> element("[data-testid=acknowledgments-status]") |> render() =~ "Connecting"
+      assert view |> element("[data-testid=acknowledgments-status]") |> render() =~ "Stopped"
 
       assert view |> element("[data-testid=acknowledgments-counts-error]") |> render() =~
                "The broker is unreachable"

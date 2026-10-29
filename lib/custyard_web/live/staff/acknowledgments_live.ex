@@ -394,6 +394,11 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
 
   defp status_label(:connected), do: "Connected"
   defp status_label(:connecting), do: "Connecting"
+  defp status_label(:stopped), do: "Stopped — save the subscription to restart"
+
+  defp status_label(:invalid_config),
+    do: "Invalid configuration — correct the subscription settings"
+
   defp status_label(:not_configured), do: "Not configured"
   defp status_label(:disabled), do: "Disabled"
 

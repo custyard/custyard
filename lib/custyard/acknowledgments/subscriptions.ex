@@ -2,7 +2,7 @@ defmodule Custyard.Acknowledgments.Subscriptions do
   @moduledoc "Supervises each enabled tenant subscription independently."
   use Supervisor
   import Ecto.Query
-  alias Custyard.Acknowledgments.{Consumer, Integration}
+  alias Custyard.Acknowledgments.{Consumer, Integration, Subscription}
 
   def start_link(opts), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -24,7 +24,7 @@ defmodule Custyard.Acknowledgments.Subscriptions do
         _ ->
           Supervisor.start_child(
             __MODULE__,
-            Supervisor.child_spec({Consumer, [tenant_id: tenant_id]}, id: id)
+            {Subscription, [tenant_id: tenant_id]}
           )
       end
     else
@@ -42,7 +42,7 @@ defmodule Custyard.Acknowledgments.Subscriptions do
           select: i.tenant_id
       )
       |> Enum.map(fn tenant_id ->
-        Supervisor.child_spec({Consumer, [tenant_id: tenant_id]}, id: {Consumer, tenant_id})
+        {Subscription, [tenant_id: tenant_id]}
       end)
 
     Supervisor.init(children, strategy: :one_for_one)
