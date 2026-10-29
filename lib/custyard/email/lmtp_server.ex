@@ -692,11 +692,16 @@ defmodule Custyard.Email.LMTPServer do
   end
 
   defp accept_recipient(to, channel, state) do
-    if state.channel != nil and state.channel.tenant_id != channel.tenant_id do
-      Logger.warning("LMTP rejecting recipient from different tenant", recipient: to)
-      {:error, "550 5.1.1 All recipients must belong to the same tenant", state}
-    else
-      accept_within_limit(to, channel, state)
+    cond do
+      state.channel != nil and state.channel.tenant_id != channel.tenant_id ->
+        Logger.warning("LMTP rejecting recipient from different tenant", recipient: to)
+        {:error, "550 5.1.1 All recipients must belong to the same tenant", state}
+
+      state.channel != nil and state.channel.id != channel.id ->
+        {:error, "451 4.5.3 Deliver different receiving channels in separate transactions", state}
+
+      true ->
+        accept_within_limit(to, channel, state)
     end
   end
 

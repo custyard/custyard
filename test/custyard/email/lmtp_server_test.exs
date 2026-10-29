@@ -168,6 +168,19 @@ defmodule Custyard.Email.LMTPServerTest do
     assert Repo.aggregate(Custyard.Thread, :count) == 0
   end
 
+  test "a second same-tenant channel is deferred without changing the first envelope" do
+    state = %{to: [], channel: nil, from: "sender@external.example", max_recipients: 100}
+    assert {:ok, first} = LMTPServer.handle_RCPT("support@custyard.test", state)
+
+    assert {:error, "451 4.5.3 Deliver different receiving channels in separate transactions",
+            ^first} =
+             LMTPServer.handle_RCPT("team@custyard.test", first)
+
+    assert {:ok, same} = LMTPServer.handle_RCPT("support@custyard.test", first)
+    assert same.channel.id == first.channel.id
+    assert length(same.to) == 2
+  end
+
   test "suspended tenant recipients are refused and audited", c do
     Repo.get!(Custyard.Tenant, c.test_org.tenant_id)
     |> Ecto.Changeset.change(status: "suspended")
@@ -512,7 +525,7 @@ defmodule Custyard.Email.LMTPServerTest do
       :gen_tcp.close(socket)
     end
 
-    test "accepts multiple RCPT TO addresses within the same tenant" do
+    test "defers a different same-tenant channel for its own transaction" do
       {:ok, socket} =
         :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
 
@@ -524,14 +537,15 @@ defmodule Custyard.Email.LMTPServerTest do
       :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
       {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
 
-      # Both recipients belong to custyard.test org — should both succeed
+      # Same-tenant channels need separate dispatcher transactions
       :ok = :gen_tcp.send(socket, "RCPT TO:<support@custyard.test>\r\n")
       {:ok, rcpt1_resp} = :gen_tcp.recv(socket, 0, 5000)
       assert rcpt1_resp =~ "250"
 
       :ok = :gen_tcp.send(socket, "RCPT TO:<team@custyard.test>\r\n")
       {:ok, rcpt2_resp} = :gen_tcp.recv(socket, 0, 5000)
-      assert rcpt2_resp =~ "250"
+      assert rcpt2_resp =~ "451"
+      assert rcpt2_resp =~ "separate transactions"
 
       :gen_tcp.close(socket)
     end
@@ -2389,7 +2403,7 @@ defmodule Custyard.Email.LMTPServerTest do
     test "DATA is answered once per recipient (RFC 2033)" do
       socket = open_session()
 
-      replies = deliver(socket, ["support@custyard.test", "team@custyard.test"])
+      replies = deliver(socket, ["support@custyard.test", "support@custyard.test"])
 
       assert length(replies) == 2
       assert Enum.all?(replies, &(&1 =~ ~r/^250 2\.0\.0/))
