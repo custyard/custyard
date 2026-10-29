@@ -165,5 +165,6 @@ git clone https://github.com/owner/private-repo.git
 
 - [Development Guide](docs/development.md)
 - [P󠄁u󠄁b󠄁l󠄁i󠄁s󠄁h󠄁i󠄁n󠄁g󠄁 c󠄁o󠄁n󠄁t󠄁a󠄁i󠄁n󠄁e󠄁r󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁s󠄁 t󠄁o󠄁 G󠄁H󠄁C󠄁R󠄁](docs/ops/ghcr-publishing.md)
+- [B󠄁u󠄁n󠄁n󠄁y󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁n󠄁d󠄁 F󠄁l󠄁y󠄁 s󠄁t󠄁a󠄁g󠄁i󠄁n󠄁g󠄁 p󠄁l󠄁a󠄁n󠄁](docs/ops/bunny-production-fly-staging.md)
 - [LMTP Troubleshooting](docs/lmtp-troubleshooting.md)
 - [Email Test Strategy](docs/backlog/0323-email-test-strategy.md)
