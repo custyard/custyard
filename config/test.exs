@@ -1,6 +1,7 @@
 import Config
 
 config :custyard, env: :test
+config :custyard, :outbound_delivery_enabled, true
 
 config :custyard, Custyard.Repo,
   pool_size: 5,
@@ -65,7 +66,8 @@ config :phoenix_live_view,
 config :custyard,
   attachment_dir:
     Path.expand("../tmp/test_attachments#{System.get_env("MIX_TEST_PARTITION")}", __DIR__),
-  attachment_client: Custyard.Attachments.StubClient
+  attachment_client: Custyard.Attachments.StubClient,
+  attachment_scanner: Custyard.Attachments.TestScanner
 
 # Use test adapter for Swoosh to capture emails in tests
 config :custyard, Custyard.Mailer, adapter: Swoosh.Adapters.Test

@@ -92,6 +92,9 @@ defmodule Custyard.Release do
   @doc "Creates an installation administrator without starting the application."
   def setup_instance_admin(email), do: with_repo(fn -> InstanceAdmins.create_admin(email) end)
 
+  @doc "Rescan existing attachments with the configured scanner, returning verdict counts only."
+  def scan_attachments, do: with_repo(fn -> Custyard.Attachments.rescan_all() end)
+
   def bootstrap_instance_admin do
     case System.get_env("INSTANCE_ADMIN_EMAIL") do
       value when is_binary(value) ->

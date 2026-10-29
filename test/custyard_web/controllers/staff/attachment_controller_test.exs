@@ -5,6 +5,7 @@ defmodule CustyardWeb.Staff.AttachmentControllerTest do
 
   alias Custyard.Attachments
   alias Custyard.Attachments.StubClient
+  alias Custyard.Auth.Account
 
   setup %{conn: conn} do
     org = insert_organization()
@@ -84,6 +85,21 @@ defmodule CustyardWeb.Staff.AttachmentControllerTest do
   test "an anonymous request is sent to login", %{conn: conn, attachment: attachment} do
     conn = get(conn, ~p"/app/attachments/#{attachment.id}")
     assert redirected_to(conn) == "/app/login"
+  end
+
+  test "a revoked staff session loses existing download access", %{
+    conn: conn,
+    attachment: attachment
+  } do
+    staff = insert_staff_account(role: "admin")
+    conn = conn |> Phoenix.ConnTest.init_test_session(%{}) |> put_staff_session(staff)
+    assert get(conn, ~p"/app/attachments/#{attachment.id}").status == 200
+
+    staff
+    |> Ecto.Changeset.change(session_claim: Account.generate_session_claim())
+    |> Custyard.Repo.update!()
+
+    assert conn |> get(~p"/app/attachments/#{attachment.id}") |> redirected_to() == "/app/login"
   end
 
   describe "inline/2" do

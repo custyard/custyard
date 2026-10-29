@@ -36,6 +36,14 @@ defmodule Custyard.MessageAttachment do
     field :content_id, :string
     field :state, Ecto.Enum, values: @states
     field :skip_reason, :string
+    # Fetch completion and malware verdict are separate: a scanner outage must
+    # neither acknowledge an unsafe file as clean nor reject the email itself.
+    field :scan_status, Ecto.Enum,
+      values: [:pending, :clean, :infected, :error],
+      default: :pending
+
+    field :scanned_at, :utc_datetime
+    field :scan_token, :string
 
     belongs_to :tenant, Custyard.Tenant
     belongs_to :message, Custyard.Message

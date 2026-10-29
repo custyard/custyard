@@ -27,7 +27,8 @@ defmodule CustyardWeb.AttachmentDownload do
   # request input or the declared filename.
   # sobelow_skip ["XSS.ContentType", "Traversal.SendDownload"]
   def send_attachment(conn, %MessageAttachment{} = attachment) do
-    with path when is_binary(path) <- Attachments.file_path(attachment),
+    with true <- Attachments.downloadable?(attachment),
+         path when is_binary(path) <- Attachments.file_path(attachment),
          true <- File.regular?(path) do
       conn
       |> put_resp_content_type(served_type(attachment.sniffed_type), nil)
@@ -50,7 +51,7 @@ defmodule CustyardWeb.AttachmentDownload do
   Whether `attachment` may be shown inline as an email's `cid:` image: a
   fetched file whose bytes sniffed as a raster image.
   """
-  def inline_image?(%MessageAttachment{state: :fetched, sniffed_type: type}),
+  def inline_image?(%MessageAttachment{state: :fetched, scan_status: :clean, sniffed_type: type}),
     do: type in @inline_image_types
 
   def inline_image?(_attachment), do: false

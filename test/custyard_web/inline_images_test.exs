@@ -7,7 +7,13 @@ defmodule CustyardWeb.InlineImagesTest do
   defp attachment(id, content_id, attrs \\ []) do
     struct(
       MessageAttachment,
-      [id: id, content_id: content_id, state: :fetched, sniffed_type: "image/png"] ++ attrs
+      [
+        id: id,
+        content_id: content_id,
+        state: :fetched,
+        scan_status: :clean,
+        sniffed_type: "image/png"
+      ] ++ attrs
     )
   end
 
@@ -39,5 +45,13 @@ defmodule CustyardWeb.InlineImagesTest do
   test "survives a malformed escape" do
     assert InlineImages.render(~S|<img src="cid:%zz" />|, [attachment(1, "%zz")]) =~
              "/app/attachments/1/inline"
+  end
+
+  test "never renders quarantined or infected raster images" do
+    for status <- [:pending, :infected, :error] do
+      assert InlineImages.render(~S|<p>x<img src="cid:logo" /></p>|, [
+               attachment(1, "logo", scan_status: status)
+             ]) == "<p>x</p>"
+    end
   end
 end

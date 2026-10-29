@@ -56,6 +56,20 @@ outbound_delivery_enabled =
 
 config :custyard, :outbound_delivery_enabled, outbound_delivery_enabled
 
+# clamd must be reachable only through a trusted private network. Without an
+# endpoint attachments remain quarantined; receiving email remains available.
+if clamav_host = blank_to_nil.(System.get_env("CLAMAV_HOST")) do
+  clamav_port = parse_int.("CLAMAV_PORT", 3310)
+  clamav_timeout = parse_int.("CLAMAV_TIMEOUT_MS", 10_000)
+
+  if clamav_port not in 1..65_535 or clamav_timeout not in 100..60_000,
+    do: raise("CLAMAV_PORT or CLAMAV_TIMEOUT_MS is outside its allowed range")
+
+  config :custyard,
+    attachment_scanner: Custyard.Attachments.ClamAV,
+    attachment_scanner_options: [host: clamav_host, port: clamav_port, timeout: clamav_timeout]
+end
+
 # Configure Swoosh mailer for production
 if config_env() == :prod do
   # MAIL_ADAPTER is required in prod, and "local" must be chosen explicitly.

@@ -4,7 +4,7 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
   import Custyard.Factory
   import Phoenix.LiveViewTest
 
-  alias Custyard.Attachments
+  alias Custyard.{Attachments, PortalCredentials}
   alias Custyard.Attachments.StubClient
   alias Custyard.Repo
 
@@ -65,6 +65,30 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
                404
     end
 
+    test "revocation removes download access immediately", %{
+      conn: conn,
+      org: org,
+      attachment: attachment
+    } do
+      scope = portal_scope(org)
+      {:ok, credential, token} = PortalCredentials.issue(scope, org.id)
+      path = "/portal/#{token}/attachments/#{attachment.id}"
+      assert get(conn, path).status == 200
+      {:ok, _} = PortalCredentials.revoke(scope, credential)
+
+      assert get(conn, path).status == 404
+    end
+
+    test "a valid credential from another tenant cannot download on this host", %{
+      conn: conn,
+      attachment: attachment
+    } do
+      other = insert_organization(tenant_id: insert_tenant().id)
+
+      assert get(conn, "/portal/#{portal_token(other)}/attachments/#{attachment.id}").status ==
+               404
+    end
+
     test "unknown and malformed ids are 404", %{conn: conn, org: org} do
       assert get(conn, "/portal/#{portal_token(org)}/attachments/999999").status == 404
       assert get(conn, "/portal/#{portal_token(org)}/attachments/not-an-id").status == 404
@@ -114,6 +138,24 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
   end
 
   describe "portal thread" do
+    test "lists quarantined files without providing a download link", %{
+      conn: conn,
+      org: org,
+      conv: conv,
+      attachment: attachment
+    } do
+      attachment
+      |> Ecto.Changeset.change(scan_status: :pending, scanned_at: nil)
+      |> Repo.update!()
+
+      token = portal_token(org)
+      {:ok, view, _} = live(conn, "/portal/#{token}/request/#{conv.id}")
+
+      assert render(view) =~ "Quarantined: awaiting security scan"
+      refute has_element?(view, "a[data-testid=portal-attachment-#{attachment.id}]")
+      assert get(conn, "/portal/#{token}/attachments/#{attachment.id}").status == 404
+    end
+
     test "links each downloadable attachment under its message", %{
       conn: conn,
       org: org,

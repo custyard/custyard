@@ -19,7 +19,7 @@ defmodule Custyard.Attachments do
   import Ecto.Query
 
   alias Custyard.{Thread, Message, MessageAttachment, Repo, Scope}
-  alias Custyard.Attachments.{Client, Sniffer}
+  alias Custyard.Attachments.{Client, Scanner, Sniffer}
 
   require Logger
 
@@ -380,7 +380,7 @@ defmodule Custyard.Attachments do
       File.rename!(tmp, final)
     end
 
-    %{
+    attrs = %{
       state: :fetched,
       skip_reason: nil,
       sha256: sha,
@@ -388,6 +388,9 @@ defmodule Custyard.Attachments do
       size: byte_size(bytes),
       sniffed_type: Sniffer.sniff(bytes)
     }
+
+    status = Scanner.scan_file(final, sha)
+    Map.merge(attrs, %{scan_status: status, scanned_at: scan_time(status)})
   end
 
   defp descriptor_attrs(message_id, descriptor) when is_map(descriptor) do
@@ -440,6 +443,7 @@ defmodule Custyard.Attachments do
           on: c.id == m.thread_id,
           where: a.id == ^id and a.tenant_id == ^tenant_id and m.tenant_id == ^tenant_id,
           where: c.tenant_id == ^tenant_id and a.state == :fetched and is_nil(m.deleted_at),
+          where: a.scan_status == :clean,
           where: c.suspect == false,
           select: a
       )
@@ -461,7 +465,7 @@ defmodule Custyard.Attachments do
       join: c in Thread,
       on: c.id == m.thread_id,
       where:
-        a.id == ^id and a.state == :fetched and is_nil(m.deleted_at) and
+        a.id == ^id and a.state == :fetched and a.scan_status == :clean and is_nil(m.deleted_at) and
           m.is_internal_note == false and c.suspect == false and
           c.organization_id == ^organization_id
     )
@@ -477,6 +481,8 @@ defmodule Custyard.Attachments do
     do: Enum.map(messages, &%{&1 | attachments: []})
 
   def preload_for_portal(messages, %Thread{}) do
+    # Include quarantined files as visible placeholders; download authorization
+    # remains fail-closed in get_for_portal/2 and the download component.
     query = from(a in MessageAttachment, where: a.state == :fetched, order_by: a.position)
 
     messages
@@ -486,6 +492,86 @@ defmodule Custyard.Attachments do
       message -> %{message | attachments: []}
     end)
   end
+
+  @doc "Only a fetched file with a successful malware scan may leave storage."
+  def downloadable?(%MessageAttachment{state: :fetched, scan_status: :clean}), do: true
+  def downloadable?(_), do: false
+
+  def scan_label(%MessageAttachment{scan_status: :infected}), do: "Blocked: malware detected"
+  def scan_label(%MessageAttachment{scan_status: :error}), do: "Quarantined: security scan failed"
+  def scan_label(%MessageAttachment{scan_status: :clean}), do: "Security scan passed"
+  def scan_label(_), do: "Quarantined: awaiting security scan"
+
+  @doc "Rescan stored files after an authorized administrator explicitly requests it."
+  def rescan_thread(%Scope{role: "admin"} = scope, thread_id) do
+    case Scope.current_staff(scope) do
+      %{role: "admin"} ->
+        case Repo.get_by(Thread, id: thread_id, tenant_id: scope.tenant_id, suspect: false) do
+          nil -> {:error, :not_found}
+          thread -> {:ok, rescan_query(from(m in Message, where: m.thread_id == ^thread.id))}
+        end
+
+      _ ->
+        {:error, :unauthorized}
+    end
+  end
+
+  def rescan_thread(_, _), do: {:error, :unauthorized}
+
+  @doc "Operator release task: scan existing stored files; never assume old files are clean."
+  def rescan_all do
+    rescan_query(from(m in Message))
+  end
+
+  defp rescan_query(messages) do
+    ids =
+      from(a in MessageAttachment,
+        join: m in subquery(messages),
+        on: m.id == a.message_id and m.tenant_id == a.tenant_id,
+        join: t in Thread,
+        on: t.id == m.thread_id and t.tenant_id == m.tenant_id,
+        where: a.state == :fetched and is_nil(m.deleted_at) and t.suspect == false,
+        select: a.id
+      )
+      |> Repo.all()
+
+    Enum.reduce(ids, %{clean: 0, infected: 0, error: 0, pending: 0}, fn id, counts ->
+      case rescan_row(Repo.get(MessageAttachment, id)) do
+        nil -> counts
+        status -> Map.update!(counts, status, &(&1 + 1))
+      end
+    end)
+  end
+
+  defp rescan_row(nil), do: nil
+  defp rescan_row(%MessageAttachment{scan_status: :infected}), do: :infected
+
+  defp rescan_row(row) do
+    # Withdraw any prior clean verdict before starting a new scan. Concurrent
+    # download requests must observe quarantine while the verdict is unknown.
+    token = Ecto.UUID.generate()
+
+    row =
+      row
+      |> Ecto.Changeset.change(scan_status: :pending, scanned_at: nil, scan_token: token)
+      |> Repo.update!()
+
+    status = Scanner.scan_file(file_path(row), row.sha256)
+
+    # Fence concurrent rescans: an older scan cannot publish a clean verdict
+    # over a newer quarantine or failure.
+    {written, _} =
+      from(a in MessageAttachment, where: a.id == ^row.id and a.scan_token == ^token)
+      |> Repo.update_all(
+        set: [scan_status: status, scanned_at: scan_time(status), scan_token: nil]
+      )
+
+    current = Repo.get(MessageAttachment, row.id)
+    if written == 1 && current, do: current.scan_status, else: :pending
+  end
+
+  defp scan_time(:pending), do: nil
+  defp scan_time(_), do: now()
 
   @doc """
   Delete files in the attachment directory that no row references any more
