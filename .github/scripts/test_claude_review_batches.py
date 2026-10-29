@@ -148,9 +148,9 @@ class BoundedReviewTest(unittest.TestCase):
             matrix = json.loads(Path(env["GITHUB_OUTPUT"]).read_text().split("=", 1)[1])
             self.assertEqual(len(matrix["include"]), 3)
             assigned = json.loads((Path(env["REVIEW_PLAN_DIR"]) / "shard-0.json").read_text())
-            self.assertEqual(len(assigned["files"]), 5)
+            self.assertEqual(len(assigned["files"]), 50)
             self.assertNotIn("shards", assigned)
-            self.assertEqual(assigned["assigned_paths"], [f["filename"] for f in self.files[:5]])
+            self.assertEqual(assigned["assigned_paths"], [f["filename"] for f in self.files[:50]])
             self.assertEqual(assigned["files"][0]["patch_lines"], ["small"])
 
     def test_multiline_patches_remain_readable_without_one_long_escaped_line(self):
