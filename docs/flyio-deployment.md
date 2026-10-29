@@ -295,9 +295,12 @@ fly volumes list
 # Snapshot manually (automatic daily snapshots are enabled by default)
 fly volumes snapshots list <volume-id>
 
-# Restore from snapshot
-fly volumes snapshots restore <snapshot-id> --name custyard_data
+# Restore into a new volume (preserve the source during a drill)
+fly volumes create custyard_restore --snapshot-id <snapshot-id> --region <region> --size <GB>
 ```
+
+U󠄁s󠄁e󠄁 t󠄁h󠄁e󠄁 [b󠄁a󠄁c󠄁k󠄁u󠄁p󠄁 a󠄁n󠄁d󠄁 r󠄁e󠄁s󠄁t󠄁o󠄁r󠄁e󠄁 d󠄁r󠄁i󠄁l󠄁l󠄁](ops/backup-restore.md) t󠄁o󠄁 v󠄁e󠄁r󠄁i󠄁f󠄁y󠄁 t󠄁h󠄁e󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁,󠄁
+u󠄁p󠄁l󠄁o󠄁a󠄁d󠄁s󠄁 a󠄁n󠄁d󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁s󠄁 w󠄁i󠄁t󠄁h󠄁o󠄁u󠄁t󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁i󠄁n󠄁g󠄁 m󠄁a󠄁i󠄁l󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁.󠄁
 
 > **Single-node constraint:** a Fly volume attaches to exactly one machine, so
 > every extra machine gets its own volume with its own SQLite database, uploads
