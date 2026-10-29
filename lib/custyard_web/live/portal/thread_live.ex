@@ -132,42 +132,46 @@ defmodule CustyardWeb.Portal.ThreadLive do
 
   @impl true
   def handle_info({:message_added, _}, socket) do
-    {:noreply, socket |> load_messages() |> load_tasks()}
+    {:noreply, refresh_thread(socket)}
   end
 
   # Message-level change (staff soft delete, delivery status): refresh the
   # thread so tombstones replace deleted bodies in already-open tabs.
   @impl true
   def handle_info({:message_updated, _}, socket) do
-    {:noreply, load_messages(socket)}
+    {:noreply, refresh_thread(socket)}
   end
 
   @impl true
   def handle_info({:thread_updated, _}, socket) do
-    # Reload thread to get updated state, urgency, etc.
-    conv = socket.assigns.thread
-    org = socket.assigns.current_org
-
-    case Threads.get_thread_for_organization(conv.id, org.id) do
-      {:ok, updated_conv} ->
-        {:noreply,
-         socket
-         |> assign(:thread, updated_conv)
-         |> load_tasks()}
-
-      {:error, _} ->
-        # Thread no longer accessible (deleted or org changed)
-        {:noreply,
-         socket
-         |> put_flash(:info, "This request has been closed or moved")
-         |> push_navigate(to: socket.assigns.portal_home_path)}
-    end
+    {:noreply, refresh_thread(socket)}
   end
 
   # Catch-all for unexpected PubSub messages to prevent LiveView crashes
   @impl true
   def handle_info(_msg, socket) do
     {:noreply, socket}
+  end
+
+  # Recheck ownership for every subscribed update. A thread can move to another
+  # customer before its message notification reaches an already-open portal.
+  defp refresh_thread(socket) do
+    conv = socket.assigns.thread
+    org = socket.assigns.current_org
+
+    case Threads.get_thread_for_organization(conv.id, org.id) do
+      {:ok, updated_conv} ->
+        socket
+        |> assign(:thread, updated_conv)
+        |> load_messages()
+        |> load_tasks()
+
+      {:error, _} ->
+        # Thread no longer accessible (deleted or org changed)
+        socket
+        |> put_flash(:info, "This request has been closed or moved")
+        |> push_navigate(to: socket.assigns.portal_home_path)
+    end
   end
 
   @impl true
@@ -238,12 +242,16 @@ defmodule CustyardWeb.Portal.ThreadLive do
             <li :for={att <- msg.attachments} class="flex flex-wrap items-center gap-x-1.5">
               <.icon name="hero-paper-clip" class="h-4 w-4 text-gray-400 dark:text-zinc-500" />
               <a
+                :if={Attachments.downloadable?(att)}
                 href={"#{@portal_path}/attachments/#{att.id}"}
                 class="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
                 data-testid={"portal-attachment-#{att.id}"}
               >
                 {att.filename || "attachment"}
               </a>
+              <span :if={not Attachments.downloadable?(att)} class="break-all">
+                {att.filename || "attachment"} · {Attachments.scan_label(att)}
+              </span>
               <span class="text-xs text-gray-500 dark:text-zinc-400">
                 {Attachments.format_bytes(att.size)}
               </span>

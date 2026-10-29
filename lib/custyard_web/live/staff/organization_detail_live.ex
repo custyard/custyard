@@ -181,7 +181,11 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
       </section>
       <section :if={@current_role == "admin"} class="space-y-3">
         <h2 class="font-semibold">Portal access</h2><p>
-          Each credential grants access to this customer's portal and can be revoked independently.
+          Anyone with a portal link can access this customer's shared requests and projects.
+          Each link can be revoked independently.
+        </p><p class="text-sm text-gray-600 dark:text-zinc-400">
+          Contact attribution sets the name and reply address for requests made through this link.
+          It does not verify who opens the link or limit access to that contact's requests.
         </p><form phx-submit="issue_portal" class="space-y-2">
           <.input
             type="select"
@@ -189,7 +193,7 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
             name="contact_id"
             value=""
             label="Contact attribution (optional)"
-            prompt="Shared customer access"
+            prompt="Use customer default contact"
             options={Enum.map(@contacts, &{&1.name || &1.email, &1.id})}
           />
           <.button>Issue portal link</.button>
@@ -199,6 +203,9 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
         >
           Copy this link now: {@portal_url}
         </p><p :for={credential <- @credentials}>
+          {if credential.contact,
+            do: "Contact attribution: #{credential.contact.name || credential.contact.email}",
+            else: "Customer default contact"} ·
           Issued {credential.inserted_at} {if credential.revoked_at, do: "· revoked", else: "· active"}
           <button
             :if={is_nil(credential.revoked_at)}

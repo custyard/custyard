@@ -42,6 +42,9 @@ defmodule CustyardWeb.Staff.OrganizationDetailLiveTest do
       )
 
     assert credential.contact_id == contact.id
+    assert html =~ "Anyone with a portal link"
+    assert html =~ "It does not verify who opens the link"
+    assert html =~ "Contact attribution: #{contact.name || contact.email}"
     refute Map.has_key?(Map.from_struct(credential), :token)
     render_click(view, "revoke_portal", %{"id" => to_string(credential.id)})
     assert Repo.reload!(credential).revoked_at

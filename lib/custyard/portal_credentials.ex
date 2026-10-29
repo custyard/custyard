@@ -126,7 +126,8 @@ defmodule Custyard.PortalCredentials do
         Repo.all(
           from c in PortalCredential,
             where: c.tenant_id == ^tenant_id and c.organization_id == ^organization_id,
-            order_by: [desc: c.id]
+            order_by: [desc: c.id],
+            preload: [:contact]
         ),
       else: []
   end
