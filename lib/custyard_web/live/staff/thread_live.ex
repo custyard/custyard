@@ -134,6 +134,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
       |> assign(:other_threads, other_threads)
       |> assign(:reply_text, "")
       |> assign(:note_text, "")
+      |> assign(:composer_mode, :reply)
       |> assign(:new_task_title, "")
       |> assign(:new_task_due_at, "")
       |> assign(:new_task_portal_visible, false)
@@ -155,6 +156,16 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   @impl true
+  def handle_event("select_composer_mode", %{"mode" => mode}, socket)
+      when mode in ["reply", "note"] do
+    {:noreply, assign(socket, :composer_mode, if(mode == "note", do: :note, else: :reply))}
+  end
+
+  def handle_event("select_composer_mode", _params, socket), do: {:noreply, socket}
+
+  def handle_event("send_reply", _params, %{assigns: %{composer_mode: :note}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("send_reply", %{"body" => body} = params, socket) when byte_size(body) > 0 do
     thread = socket.assigns.thread
     staff = socket.assigns.current_staff
@@ -191,6 +202,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   def handle_event("send_reply", _params, socket), do: {:noreply, socket}
+
+  def handle_event("add_note", _params, %{assigns: %{composer_mode: :reply}} = socket),
+    do: {:noreply, socket}
 
   def handle_event("add_note", %{"body" => body}, socket) when byte_size(body) > 0 do
     thread = socket.assigns.thread
@@ -1065,7 +1079,51 @@ defmodule CustyardWeb.Staff.ThreadLive do
           <% end %>
         </div>
 
-        <div class="border-t border-gray-200 dark:border-zinc-700 p-3 space-y-2 bg-white dark:bg-zinc-800">
+        <div
+          class={[
+            "border-t p-3 space-y-3",
+            if(@composer_mode == :note,
+              do: "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40",
+              else: "border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800"
+            )
+          ]}
+          data-testid="staff-composer"
+        >
+          <div role="group" aria-label="Message audience" class="flex gap-2">
+            <button
+              :for={{mode, label} <- [{:reply, "Customer reply"}, {:note, "Internal note"}]}
+              type="button"
+              phx-click="select_composer_mode"
+              phx-value-mode={mode}
+              aria-pressed={to_string(@composer_mode == mode)}
+              data-testid={"composer-mode-#{mode}"}
+              class={[
+                "rounded border px-3 py-1.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2",
+                if(@composer_mode == mode,
+                  do: "border-zinc-500 bg-white text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100",
+                  else:
+                    "border-transparent text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-700"
+                )
+              ]}
+            >
+              {label}
+            </button>
+          </div>
+          <p
+            id="composer-audience"
+            class={[
+              "text-sm font-medium",
+              if(@composer_mode == :note,
+                do: "text-amber-900 dark:text-amber-200",
+                else: "text-gray-700 dark:text-zinc-200"
+              )
+            ]}
+            data-testid="composer-audience"
+          >
+            {if @composer_mode == :note,
+              do: "Internal note · only your team can see this",
+              else: "Customer reply · visible to the customer"}
+          </p>
           <%!-- Consent advisory: shown only when a prospect email was
           captured without the reply-notification opt-in. The reply still
           saves and stays visible via the thread link, so sending is never
@@ -1073,7 +1131,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
           out. No-email and revoked states are covered by the reply-channel
           badge, not this opt-in wording. --%>
           <p
-            :if={@reply_delivery == :prospect_no_consent}
+            :if={@composer_mode == :reply and @reply_delivery == :prospect_no_consent}
             class="text-xs text-amber-600 dark:text-amber-400"
             data-testid="staff-reply-consent-advisory"
           >
@@ -1081,6 +1139,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
             emailed, but stay visible via their thread link.
           </p>
           <p
+            :if={@composer_mode == :reply}
             class="text-xs text-gray-500 dark:text-zinc-400 truncate"
             data-testid="composer-from-identity"
             data-identity-source={@reply_identity.source}
@@ -1095,6 +1154,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
             </span>
           </p>
           <form
+            :if={@composer_mode == :reply}
             id="staff-reply-form"
             phx-submit="send_reply"
             phx-change="update_reply"
@@ -1137,6 +1197,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                 id="staff-reply-textarea"
                 placeholder="Reply to customer... (Ctrl+Enter to send)"
                 aria-label="Reply to customer"
+                aria-describedby="composer-audience"
                 data-testid="staff-reply-input"
                 class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y dark:bg-zinc-700 dark:text-zinc-100"
               >{@reply_text}</textarea>
@@ -1146,36 +1207,37 @@ defmodule CustyardWeb.Staff.ThreadLive do
                 class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
                 data-testid="staff-reply-submit"
               >
-                Send
+                Send reply
               </button>
             </div>
           </form>
 
           <form
+            :if={@composer_mode == :note}
             id="staff-note-form"
             phx-submit="add_note"
-            class="flex gap-2"
+            phx-change="update_note"
+            class="space-y-2"
             data-testid="staff-note-form"
           >
-            <input
-              type="text"
+            <textarea
               name="body"
-              value={@note_text}
-              phx-change="update_note"
+              rows="3"
               phx-hook="CtrlEnterSubmit"
               id="staff-note-input"
-              placeholder="Internal note (Ctrl+Enter to save)..."
+              placeholder="Write an internal note... (Ctrl+Enter to save)"
               aria-label="Internal note (not visible to customer)"
+              aria-describedby="composer-audience"
               data-testid="staff-note-input"
-              class="flex-1 border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 dark:text-zinc-100 rounded px-3 py-2 text-sm"
-            />
+              class="w-full resize-y border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
+            >{@note_text}</textarea>
             <button
               type="submit"
               phx-disable-with="Saving..."
-              class="bg-amber-500 text-white text-sm px-4 py-2 rounded hover:bg-amber-600"
+              class="bg-amber-400 text-amber-950 text-sm font-medium px-4 py-2 rounded hover:bg-amber-300"
               data-testid="staff-note-submit"
             >
-              Note
+              Save internal note
             </button>
           </form>
         </div>

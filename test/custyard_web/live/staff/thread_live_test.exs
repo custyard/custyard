@@ -921,6 +921,8 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+
       view
       |> form("form[phx-submit=add_note]", body: "Internal note content")
       |> render_submit()
@@ -929,6 +931,98 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       html = render(view)
       assert html =~ "Internal note content"
       assert html =~ "internal note"
+      assert [note] = Repo.all(Ecto.assoc(conv, :messages))
+      assert note.is_internal_note
+      assert is_nil(note.delivery_status)
+      assert Threads.list_public_messages(conv.id) == []
+    end
+  end
+
+  describe "composer audience and drafts" do
+    test "switching modes preserves separate drafts and hides customer recipients for notes", %{
+      conn: conn
+    } do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id)
+      {:ok, view, _} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      assert has_element?(view, "#staff-reply-form")
+      refute has_element?(view, "#staff-note-form")
+
+      view
+      |> form("#staff-reply-form", body: "Customer draft", cc: "copy@example.com")
+      |> render_change()
+
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+      assert has_element?(view, "[data-testid=composer-audience]", "only your team can see this")
+      assert has_element?(view, "[data-testid=composer-mode-note][aria-pressed=true]")
+      refute has_element?(view, "#staff-reply-form")
+      refute has_element?(view, "[data-testid=staff-reply-cc]")
+      refute has_element?(view, "[data-testid=composer-from-identity]")
+
+      assert view
+             |> element("#staff-note-input")
+             |> render()
+             |> Floki.parse_fragment!()
+             |> Floki.text() == ""
+
+      view |> form("#staff-note-form", body: "Private draft\nSecond line") |> render_change()
+      view |> element("[data-testid=composer-mode-reply]") |> render_click()
+      assert has_element?(view, "[data-testid=composer-audience]", "visible to the customer")
+      assert view |> element("#staff-reply-textarea") |> render() =~ "Customer draft"
+      refute view |> element("#staff-reply-textarea") |> render() =~ "Private draft"
+      assert has_element?(view, "[data-testid=staff-reply-cc][value='copy@example.com']")
+
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+      assert view |> element("#staff-note-input") |> render() =~ "Private draft"
+      view |> form("#staff-note-form", body: "Private draft\nSecond line") |> render_submit()
+
+      assert view
+             |> element("#staff-note-input")
+             |> render()
+             |> Floki.parse_fragment!()
+             |> Floki.text() == ""
+
+      assert has_element?(view, "[data-testid=composer-mode-note][aria-pressed=true]")
+      view |> element("[data-testid=composer-mode-reply]") |> render_click()
+      assert view |> element("#staff-reply-textarea") |> render() =~ "Customer draft"
+
+      assert [%{is_internal_note: true, body: "Private draft\nSecond line"}] =
+               Repo.all(Ecto.assoc(conv, :messages))
+
+      assert Threads.list_public_messages(conv.id) == []
+    end
+
+    test "sending a customer reply leaves the private draft untouched", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id)
+      {:ok, view, _} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+      view |> form("#staff-note-form", body: "Do not share this") |> render_change()
+      view |> element("[data-testid=composer-mode-reply]") |> render_click()
+      view |> form("#staff-reply-form", body: "Customer response") |> render_submit()
+
+      assert [%{body: "Customer response", is_internal_note: false}] =
+               Threads.list_public_messages(conv.id)
+
+      assert has_element?(view, "[data-testid=composer-mode-reply][aria-pressed=true]")
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+      assert view |> element("#staff-note-input") |> render() =~ "Do not share this"
+    end
+
+    test "the server rejects submissions for the inactive mode", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id)
+      {:ok, view, _} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      render_submit(view, "add_note", %{"body" => "Wrong mode"})
+      assert Repo.all(Ecto.assoc(conv, :messages)) == []
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+      render_submit(view, "send_reply", %{"body" => "Must stay private"})
+      assert Repo.all(Ecto.assoc(conv, :messages)) == []
+      render_click(view, "select_composer_mode", %{"mode" => "invalid"})
+      assert has_element?(view, "[data-testid=composer-mode-note][aria-pressed=true]")
     end
   end
 
