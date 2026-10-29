@@ -38,14 +38,24 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
   end
 
   def handle_event("set_default_contact", %{"contact_id" => contact_id}, socket) do
-    case Organizations.update(socket.assigns.current_scope, socket.assigns.organization, %{
-           default_contact_id: contact_id
-         }) do
+    result =
+      if socket.assigns.current_role == "admin" do
+        Organizations.update(socket.assigns.current_scope, socket.assigns.organization, %{
+          default_contact_id: contact_id
+        })
+      else
+        {:error, :unauthorized}
+      end
+
+    case result do
       {:ok, organization} ->
         {:noreply,
          socket
          |> assign(:organization, organization)
          |> put_flash(:info, "Default contact updated")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "Tenant administrator required")}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Choose a contact belonging to this customer")}

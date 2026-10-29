@@ -109,6 +109,36 @@ defmodule CustyardWeb.Staff.OrganizationDetailLiveTest do
     refute has_element?(view, "#customer-thread-#{hidden.id}")
   end
 
+  test "an agent cannot forge the default-contact event", %{conn: conn} do
+    agent = insert_staff_account(role: "agent")
+    customer = insert_organization()
+    contact = insert_contact(organization_id: customer.id)
+    conn = conn |> init_test_session(%{}) |> put_staff_session(agent)
+    {:ok, view, _} = live(conn, "/app/customers/#{customer.public_id}")
+    refute has_element?(view, "#customer-default-contact-form")
+
+    assert render_submit(view, "set_default_contact", %{"contact_id" => to_string(contact.id)}) =~
+             "Tenant administrator required"
+
+    assert is_nil(Repo.reload!(customer).default_contact_id)
+    scope = Scope.for_staff(agent, Custyard.Tenants.get_tenant!(agent.tenant_id))
+
+    assert {:error, :unauthorized} =
+             Custyard.Organizations.update(scope, customer, %{default_contact_id: contact.id})
+  end
+
+  test "a demoted administrator cannot change the default from an open page", %{
+    conn: conn,
+    staff: staff
+  } do
+    customer = insert_organization()
+    contact = insert_contact(organization_id: customer.id)
+    {:ok, view, _} = live(conn, "/app/customers/#{customer.public_id}")
+    Repo.update!(Ecto.Changeset.change(staff, role: "agent"))
+    render_submit(view, "set_default_contact", %{"contact_id" => to_string(contact.id)})
+    assert is_nil(Repo.reload!(customer).default_contact_id)
+  end
+
   test "customer routes reject internal numeric IDs and unknown public IDs", %{conn: conn} do
     customer = insert_organization()
     assert {:ok, _} = Ecto.UUID.cast(customer.public_id)
