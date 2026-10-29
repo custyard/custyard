@@ -6,7 +6,10 @@ defmodule Custyard.Acknowledgments.Config do
   values: the URL carries the broker password.
   """
   require Record
+  import Ecto.Query
+  alias Custyard.{Credentials, Repo}
   alias Custyard.Acknowledgments.Evidence
+  alias Custyard.Acknowledgments.Integration
 
   Record.defrecordp(
     :amqp_params_network,
@@ -35,7 +38,7 @@ defmodule Custyard.Acknowledgments.Config do
 
     defaults = Keyword.merge(defaults, knobs)
 
-    case Custyard.Repo.get_by(Custyard.Acknowledgments.Integration, tenant_id: tenant_id) do
+    case Repo.get_by(Integration, tenant_id: tenant_id) do
       nil ->
         Keyword.merge(defaults, tenant_id: tenant_id, enabled: false)
 
@@ -45,8 +48,12 @@ defmodule Custyard.Acknowledgments.Config do
                  integration.url_ciphertext,
                  "acknowledgments.#{tenant_id}.url"
                ) do
-            {:ok, value} -> value
-            _ -> nil
+            {:ok, value} ->
+              maybe_reencrypt(integration, value)
+              value
+
+            _ ->
+              nil
           end
 
         Keyword.merge(defaults,
@@ -56,6 +63,22 @@ defmodule Custyard.Acknowledgments.Config do
           queue: integration.queue,
           url: url
         )
+    end
+  end
+
+  # Rotate only the ciphertext that was actually decrypted. A concurrent
+  # administrator credential edit wins over this opportunistic rewrite.
+  defp maybe_reencrypt(%Integration{url_ciphertext: read} = integration, url) do
+    if Credentials.stale?(read) do
+      with {:ok, ciphertext} <-
+             Credentials.encrypt(url, "acknowledgments.#{integration.tenant_id}.url") do
+        from(i in Integration,
+          where:
+            i.id == ^integration.id and i.tenant_id == ^integration.tenant_id and
+              i.url_ciphertext == ^read
+        )
+        |> Repo.update_all(set: [url_ciphertext: ciphertext])
+      end
     end
   end
 
@@ -78,9 +101,10 @@ defmodule Custyard.Acknowledgments.Config do
   end
 
   @doc """
-  Decides at application start whether the consumer runs. Returns `:disabled`,
-  `:not_configured` (logged once) or `:enabled` after validation. Incomplete or
-  invalid configuration raises, so the application refuses to start.
+  Validates whether a subscription may run. Returns `:disabled` or `:enabled`;
+  incomplete or invalid configuration raises for the caller to handle. The
+  consumer uses `validation_error/1` to isolate invalid tenant configuration
+  instead of failing application startup.
   """
   def startup(config, _env \\ Application.get_env(:custyard, :env)) do
     case mode(config) do
