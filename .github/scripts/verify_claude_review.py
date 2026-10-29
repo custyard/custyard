@@ -170,7 +170,7 @@ def build_plan(event, run_id, attempt, current, files):
         text = file.get("patch") or file.get("source_text") or ""
         patch_size = len(text)
         patch_lines = len(text.splitlines())
-        if batch and (len(batch) >= 5 or size + patch_size > 50_000 or lines + patch_lines > 800):
+        if batch and (len(batch) >= 50 or size + patch_size > 50_000 or lines + patch_lines > 1800):
             batches.append(batch)
             batch, size, lines = [], 0, 0
         batch.append(file)
