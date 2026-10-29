@@ -8,8 +8,7 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   Direction matters for the content rules. `Intake.ClaimEmail` goes *to* a
   prospect, so it may carry no prospect-supplied content — it must be
-  useless as a spam relay. This one goes *to the staff* at the
-  tenant's staff (or the default instance's configured `:staff_email`), so it does
+  useless as a spam relay. This one goes *to the tenant's staff*, so it does
   carry the submission excerpt: without it the alert can't be triaged.
   Prospect text is HTML-escaped in the body and run through the shared
   `Custyard.Email.Headers` discipline in the subject, where a bare newline

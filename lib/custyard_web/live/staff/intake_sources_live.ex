@@ -446,7 +446,7 @@ defmodule CustyardWeb.Staff.IntakeSourcesLive do
           </div>
           <p class="text-xs text-gray-500 dark:text-zinc-400 mt-1">
             Optional link back to your product, shown to prospects on this source's
-            pages and their thread threads. Appears only when both title and
+            pages and their threads. Appears only when both title and
             URL (http/https) are set.
           </p>
         </div>

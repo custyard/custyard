@@ -177,4 +177,4 @@ inbound_route_webhooks
 | returned | bounced |
 | suppressed | suppressed |
 
-**UI implications:** Outbound messages in the thread thread show a delivery indicator (checkmark, warning icon for bounces). Critical bounces surface in the attention queue or trigger operator notification.
+**UI implications:** Outbound messages in the thread show a delivery indicator (checkmark, warning icon for bounces). Critical bounces surface in the attention queue or trigger operator notification.

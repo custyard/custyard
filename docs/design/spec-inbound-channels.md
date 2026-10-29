@@ -32,7 +32,7 @@ The one conceptual gap is that routes are documented as "invisible infrastructur
 
 ## Terminology
 
-- **Thread** is Custyard's thread. The portal calls it a request. One inbound email that does not match an existing thread creates one thread.
+- **Thread** is Custyard's u󠄁n󠄁i󠄁t󠄁 o󠄁f󠄁 c󠄁o󠄁r󠄁r󠄁e󠄁s󠄁p󠄁o󠄁n󠄁d󠄁e󠄁n󠄁c󠄁e󠄁 w󠄁i󠄁t󠄁h󠄁 a󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁.󠄁 The portal calls it a request. One inbound email that does not match an existing thread creates one thread.
 - **Route** is t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁-󠄁o󠄁w󠄁n󠄁e󠄁d󠄁 r󠄁e󠄁c󠄁e󠄁i󠄁v󠄁i󠄁n󠄁g󠄁 i󠄁n󠄁f󠄁r󠄁a󠄁s󠄁t󠄁r󠄁u󠄁c󠄁t󠄁u󠄁r󠄁e󠄁 w󠄁i󠄁t󠄁h󠄁 a󠄁 c󠄁a󠄁l󠄁l󠄁b󠄁a󠄁c󠄁k󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁.󠄁 S󠄁e󠄁v󠄁e󠄁r󠄁a󠄁l󠄁 c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁s󠄁 c󠄁a󠄁n󠄁 s󠄁h󠄁a󠄁r󠄁e󠄁 i󠄁t󠄁;󠄁 i󠄁t󠄁 h󠄁a󠄁s󠄁 n󠄁o󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 o󠄁r󠄁 C󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁 p󠄁r󠄁o󠄁j󠄁e󠄁c󠄁t󠄁 o󠄁w󠄁n󠄁e󠄁r󠄁s󠄁h󠄁i󠄁p󠄁.󠄁
 - **Channel** (new) is one public address an operator receives mail at, bound to a route, with its own secret ingress address, From identity, verification state and health.
 - **Public address** is what customers see and write to (`support@companyname.com`).
@@ -238,7 +238,7 @@ Email-sourced threads follow the existing portal rules: a contact with portal ac
 - **Sending-domain check.** `Lettermint.Client.list_domains/0` (team-level `GET /domains`, paginated) feeds `InboundChannels.check_sending_domain/2`; the result is stored on the channel and summarised as verified, pending, failed, not found or unchecked.
 - **Health.** `InboundChannels.check_quiet_channels/1` runs on the scoring scheduler tick, writes a `:channel_quiet` audit event once per quiet period and sends an operator email when email is enabled. `last_delivered_at` from D7 was not added; `last_received_at` is enough for the quiet alert.
 - **Retention.** `InboundChannels.sweep_expired/1` runs inside `Threads.RetentionSweep`: rejection rows after 14 days, expired verification captures, rotated tokens past their grace period.
-- **UI.** Channels tab on the organization page (the Routes tab survives as an "Advanced" disclosure inside it), setup wizard for Proton, Google and other providers with live verification capture, token reveal and rotation with confirmation, pause, resume and revoke. Thread thread shows channel and suspect badges, per-message To, CC, Reply-To, authentication and spam score, and the composer states which identity a reply will use. Attention queue rows show the same badges.
+- **UI.** Channels tab on the organization page (the Routes tab survives as an "Advanced" disclosure inside it), setup wizard for Proton, Google and other providers with live verification capture, token reveal and rotation with confirmation, pause, resume and revoke. The thread view shows channel and suspect badges, per-message To, CC, Reply-To, authentication and spam score, and the composer states which identity a reply will use. Attention queue rows show the same badges.
 - **Open.** Onetime Secret pilot on one `support@` channel; the Proton envelope and header check (Risks item 3) happens on that first forward.
 
 **Phase 2** (custyard/custyard#35) landed email fidelity with these notes:

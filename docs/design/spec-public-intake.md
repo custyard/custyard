@@ -145,7 +145,7 @@ The existing rule "portal-sourced threads are never anonymous" is unchanged; pub
 ## Acceptance Criteria
 
 - Submitting a message on an intake page creates a thread visible in the attention queue with the CTA source badge, with no authentication and no other fields completed.
-- The submission response includes a resume URL; visiting it from a fresh browser session shows the thread thread and accepts a reply.
+- The submission response includes a resume URL; visiting it from a fresh browser session shows the thread and accepts a reply.
 - Visiting a claimed slug's address without the resume token or a confirmed-email link exposes no thread content; possession of a thread identifier alone grants nothing.
 - A public-intake thread scores above zero on creation and appears in every operator role's queue, including organization-scoped operators'.
 - Claiming a slug with an email delivers a confirmation link; following it and confirming marks the claim confirmed. A prefetching link scanner that only issues GET requests consumes nothing. The same slug cannot be claimed by a second party while the first claim is live.

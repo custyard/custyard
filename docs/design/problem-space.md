@@ -51,7 +51,7 @@ A single self-hosted application, route-partitioned into three surfaces:
 
 - **Intake** — routed inbound webhooks (per-organization callback URLs carrying routing context in the channel), plus LMTP delivery and IMAP polling against operator-controlled mail infrastructure. All paths converge on one pipeline: verify, parse, resolve sender, thread, create or append to a thread.
 - **Operator surface** — the attention queue as the landing page; thread detail with reply, internal notes, tasks, and state control; organization view with relationship context; neglect report; settings for scoring weights and thresholds.
-- **Customer portal** — organization-scoped request list, thread threads, new-request filing, portal-visible tasks and projects; white-label branding and custom domains.
+- **Customer portal** — organization-scoped request list, threads, new-request filing, portal-visible tasks and projects; white-label branding and custom domains.
 
 The core object is the **thread**: a five-state machine (New, Active, Waiting, Dormant, Resolved) with automatic transitions, email threading metadata, an immutable message log, and a cached attention score.
 

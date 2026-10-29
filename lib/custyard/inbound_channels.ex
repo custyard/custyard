@@ -22,7 +22,7 @@ defmodule Custyard.InboundChannels do
       token or message content.
 
   PubSub: channel changes broadcast `{:channel_updated, channel_id}` on
-  `"channel:<id>"`, on `"organization:<org_id>:channels"` and on
+  `"channel:<id>"`, on `"tenant:<tenant_id>:channels"` and on
   `"inbound_channels"`. A quiet
   notice also broadcasts `{:channel_quiet, channel_id}` on
   `"staff:notifications"`.

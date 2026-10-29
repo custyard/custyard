@@ -232,8 +232,8 @@ Account creation/removal is audited and session claims prevent removed
 identities from retaining access when IDs are reused.
 
 Create tenants, register hostnames and provision their first staff admin through
-`/admin`. A tenant can explicitly claim the installation hostname; wildcard DNS
-is optional. Staff sign in at `/app/login` on their tenant's hostname. The header
+`/admin`. T󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁 i󠄁s󠄁 r󠄁e󠄁s󠄁e󠄁r󠄁v󠄁e󠄁d󠄁;󠄁 e󠄁v󠄁e󠄁r󠄁y󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 n󠄁e󠄁e󠄁d󠄁s󠄁 a󠄁 d󠄁i󠄁s󠄁t󠄁i󠄁n󠄁c󠄁t󠄁
+w󠄁o󠄁r󠄁k󠄁s󠄁p󠄁a󠄁c󠄁e󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁.󠄁 W󠄁i󠄁l󠄁d󠄁c󠄁a󠄁r󠄁d󠄁 D󠄁N󠄁S󠄁 is optional. Staff sign in at `/app/login` on their tenant's hostname. The header
 shows the tenant name, **Staff** and the signed-in email. Staff roles are admin
 or agent; memberships are tenant database records. Instance administration does
 not grant membership or access to customer data.

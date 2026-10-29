@@ -58,7 +58,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Delivery statuses are ranked: pending precedes sent precedes delivered; bounced, suppressed, and failed are terminal. An incoming status event updates a status only if its rank exceeds the current status or it is a terminal state different from the current one. Lower-ranked, equal, or duplicate events are ignored, so out-of-order event delivery does not regress a status.
 - The email service reports delivery per recipient. Each outbound message records the latest status of every address it was sent to (To, CC, archive copy), applying the rank rule to each recipient on its own and in the order of the events' own timestamps, so a late event never undoes a recipient's newer status.
 - The message's delivery status, and so its indicator, follows its primary recipient: the To address the reply was sent to. An event for a CC or other secondary recipient records that recipient's status and never changes the message's. A bounced CC address therefore leaves a reply the customer received marked delivered. An event that names no recipient, or one for a message that recorded no recipient lists, applies to the message as a whole.
-- Each outbound message in the thread thread displays a delivery indicator; bounce and suppression states are visually distinct. Failed CC and other secondary recipients are listed next to the message, apart from the indicator.
+- Each outbound message in the thread displays a delivery indicator; bounce and suppression states are visually distinct. Failed CC and other secondary recipients are listed next to the message, apart from the indicator.
 - Delivery audit events record the message's and the recipient's status before and after and the recipient's role (To, CC, other); never an address.
 - *Implemented:* `Custyard.Email.DeliveryStatus` keeps `message_recipient_statuses` (one row per message and address; `role` fixed from the To and CC lists captured at send time; `status_at` the provider's event time) and derives `messages.delivery_status` from the To recipient. The operator thread lists failed secondary recipients under the message. Erasing a data subject removes the rows that name the address.
 
@@ -72,7 +72,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 
 ### Portal
 
-- A contact with portal access sees the full thread thread, including operator replies and the thread's current state.
+- A contact with portal access sees the full thread, including operator replies and the thread's current state.
 - A portal reply appends to the same thread the operator sees and reactivates a Dormant or Resolved thread.
 
 ### Authorization
@@ -90,7 +90,7 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 ## In Scope
 
 - Routed webhook intake per organization.
-- Sender identity resolution and thread threading.
+- Sender identity resolution and threading.
 - Platform-composed outbound replies with email threading.
 - Delivery-status ingestion and per-message indicators.
 - Portal thread visibility and replies.
@@ -128,8 +128,8 @@ The end-to-end path from a prospect's first inbound contact to a tracked, thread
 - Redelivering the same inbound message produces no additional thread or message records.
 - A webhook request with an invalid signature or stale timestamp is rejected with no side effects.
 - An operator reply arrives in the customer's mailbox threaded under the original message in standard mail clients.
-- After the email service reports delivery lifecycle events, the message record reflects the corresponding status, and the thread thread displays it.
-- A bounced reply is visually distinguishable in the thread thread.
+- After the email service reports delivery lifecycle events, the message record reflects the corresponding status, and the thread displays it.
+- A bounced reply is visually distinguishable in the thread.
 - A contact with portal access sees the operator's reply in the portal thread without email access.
 - An operator without the admin role cannot create, modify, or delete routes or settings.
 - Setting an organization reply-from address that is not a verified sending domain is rejected at configuration time.

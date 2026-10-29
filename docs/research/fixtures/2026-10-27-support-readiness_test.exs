@@ -7,11 +7,11 @@ defmodule Custyard.AuditReplyAllTest do
   alias Custyard.Email.Outbound
   alias Custyard.Webhooks.Purposes.SenderMatching
 
-  # Audit reproducer, deliberately outside the normal test suite. These expectations describe the desired
-  # support workflow and intentionally fail against the audited checkout.
+  # Audit reproducer retained outside the normal test suite. These expectations
+  # describe the support workflow and use the current tenant-scoped API.
   test "reply-all includes the participant who most recently replied to an existing thread" do
     org = insert_organization(name: "Support inbox owner")
-    route = insert_inbound_route(organization_id: org.id, source: :lettermint)
+    route = insert_inbound_route(tenant_id: org.tenant_id, source: :lettermint)
 
     channel =
       insert_inbound_channel(
@@ -21,7 +21,7 @@ defmodule Custyard.AuditReplyAllTest do
       )
 
     context = %{
-      organization_id: org.id,
+      tenant_id: org.tenant_id,
       route_id: route.id,
       channel_id: channel.id,
       triage_class: :customer
@@ -47,7 +47,7 @@ defmodule Custyard.AuditReplyAllTest do
     continued = Repo.preload(continued, [:contact, :prospect])
     assert continued.contact.email == "alice@customer.example"
     assert {:ok, recipient} = Outbound.reply_recipient(continued)
-    cc = Threads.default_reply_cc(continued, operator_email: "agent@service.example")
+    cc = Threads.default_reply_cc(continued, staff_email: "agent@service.example")
 
     assert %{to: recipient, cc: cc} == %{
              to: "bob@customer.example",
@@ -67,7 +67,9 @@ defmodule Custyard.AuditReplyAllTest do
                due_at: DateTime.utc_now() |> DateTime.add(-86_400) |> DateTime.truncate(:second)
              })
 
-    attention = Threads.list_for_attention_queue(organization_id: org.id)
+    staff = insert_staff_account(tenant_id: org.tenant_id)
+    scope = Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(org.tenant_id))
+    attention = Threads.list(scope, organization_id: org.id)
     assert Enum.any?(attention, &(&1.thread.id == thread.id))
   end
 
