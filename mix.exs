@@ -48,7 +48,7 @@ defmodule Custyard.MixProject do
        compile: false,
        depth: 1},
       {:jason, "~> 1.4"},
-      {:bandit, "~> 1.0"},
+      {:bandit, "~> 1.0 and >= 1.14.1"},
       {:finch, "~> 0.18"},
       # HTTP client for the Turso driver (Custyard.Turso.HTTP); also under Finch.
       {:mint, "~> 1.6"},

@@ -2,6 +2,11 @@
 
 Deploy Custyard to [Fly.io](https://fly.io), with its SQLite database on a persistent volume or on [Turso](#turso-libsql).
 
+F󠄁o󠄁r󠄁 t󠄁h󠄁e󠄁 p󠄁r󠄁o󠄁p󠄁o󠄁s󠄁e󠄁d󠄁 m󠄁o󠄁v󠄁e󠄁 o󠄁f󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 t󠄁o󠄁 B󠄁u󠄁n󠄁n󠄁y󠄁 M󠄁a󠄁g󠄁i󠄁c󠄁 C󠄁o󠄁n󠄁t󠄁a󠄁i󠄁n󠄁e󠄁r󠄁s󠄁 a󠄁n󠄁d󠄁 c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁i󠄁o󠄁n󠄁 o󠄁f󠄁
+F󠄁l󠄁y󠄁 t󠄁o󠄁 `staging.custyard.com`,󠄁 s󠄁e󠄁e󠄁 t󠄁h󠄁e󠄁 [m󠄁i󠄁g󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 p󠄁l󠄁a󠄁n󠄁](ops/bunny-production-fly-staging.md).󠄁
+T󠄁h󠄁e󠄁 c󠄁o󠄁n󠄁f󠄁i󠄁g󠄁u󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 i󠄁n󠄁 t󠄁h󠄁i󠄁s󠄁 g󠄁u󠄁i󠄁d󠄁e󠄁 s󠄁t󠄁i󠄁l󠄁l󠄁 d󠄁e󠄁s󠄁c󠄁r󠄁i󠄁b󠄁e󠄁s󠄁 F󠄁l󠄁y󠄁 h󠄁o󠄁s󠄁t󠄁i󠄁n󠄁g󠄁;󠄁 t󠄁h󠄁e󠄁 m󠄁i󠄁g󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 h󠄁a󠄁s󠄁
+n󠄁o󠄁t󠄁 b󠄁e󠄁e󠄁n󠄁 a󠄁p󠄁p󠄁l󠄁i󠄁e󠄁d󠄁.󠄁
+
 > **Port restrictions:** Fly.io [blocks mail server ports](https://community.fly.io/t/allow-mailserver-ports/3215) (143, 465, 587, 993). Inbound email uses the webhook endpoint at `/api/webhook/inbound` instead. See [issue #10](https://github.com/onetimesecret/custyard/issues/10) for the full email architecture.
 
 ## Prerequisites
