@@ -13,7 +13,9 @@ defmodule Custyard.Auth.LoginEmail do
       new()
       |> to(account.email)
       |> from({"Custyard", from_address()})
-      |> subject("Your Custyard login link")
+      |> subject(
+        "| #{DateTime.to_iso8601(DateTime.utc_now(:microsecond))} Your Custyard login link"
+      )
       |> html_body(login_html(login_url))
       |> text_body(login_text(login_url))
 
