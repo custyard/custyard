@@ -168,6 +168,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
     } do
       org = insert_organization(name: "Acme Support")
       {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      render_async(view, 10_000)
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
@@ -205,6 +206,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
          %{conn: conn} do
       org = insert_organization(name: "Reviewed")
       {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      render_async(view, 10_000)
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
@@ -255,6 +257,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
         )
 
       {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      render_async(view, 10_000)
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
