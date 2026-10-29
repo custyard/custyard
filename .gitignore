@@ -2,6 +2,7 @@
 !priv/static/robots.txt
 .serena
 .claude
+/.codex/
 .remember
 .elixir_ls
 *.dump
