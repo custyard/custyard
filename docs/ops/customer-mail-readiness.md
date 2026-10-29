@@ -41,6 +41,18 @@ T󠄁h󠄁e󠄁 e󠄁x󠄁a󠄁c󠄁t󠄁 a󠄁p󠄁p󠄁l󠄁i󠄁c󠄁a󠄁t�
 
 S󠄁c󠄁a󠄁n󠄁n󠄁e󠄁r󠄁 h󠄁e󠄁a󠄁l󠄁t󠄁h󠄁 p󠄁a󠄁s󠄁s󠄁e󠄁d󠄁 a󠄁f󠄁t󠄁e󠄁r󠄁 e󠄁n󠄁a󠄁b󠄁l󠄁i󠄁n󠄁g󠄁 i󠄁t󠄁s󠄁 p󠄁r󠄁i󠄁v󠄁a󠄁t󠄁e󠄁 I󠄁P󠄁v󠄁4󠄁 h󠄁e󠄁a󠄁l󠄁t󠄁h󠄁-󠄁p󠄁r󠄁o󠄁b󠄁e󠄁 l󠄁i󠄁s󠄁t󠄁e󠄁n󠄁e󠄁r󠄁 a󠄁l󠄁o󠄁n󠄁g󠄁s󠄁i󠄁d󠄁e󠄁 p󠄁r󠄁i󠄁v󠄁a󠄁t󠄁e󠄁 I󠄁P󠄁v󠄁6󠄁.󠄁 I󠄁t󠄁s󠄁 p󠄁i󠄁n󠄁n󠄁e󠄁d󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁 i󠄁s󠄁 `sha256:96ba6697d9a7479baff0a03dedceb96e8c18d28f180fb0ed0046f935e6b90382`.󠄁 T󠄁h󠄁e󠄁 s󠄁c󠄁a󠄁n󠄁n󠄁e󠄁r󠄁 h󠄁a󠄁s󠄁 n󠄁o󠄁 p󠄁u󠄁b󠄁l󠄁i󠄁c󠄁 I󠄁P󠄁s󠄁 o󠄁r󠄁 p󠄁u󠄁b󠄁l󠄁i󠄁c󠄁 s󠄁e󠄁r󠄁v󠄁i󠄁c󠄁e󠄁s󠄁.󠄁
 
+## Production verification
+
+R󠄁e󠄁l󠄁e󠄁a󠄁s󠄁e󠄁 9󠄁1󠄁 r󠄁u󠄁n󠄁s󠄁 t󠄁h󠄁e󠄁 r󠄁e󠄁h󠄁e󠄁a󠄁r󠄁s󠄁e󠄁d󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁 o󠄁n󠄁 t󠄁h󠄁e󠄁 o󠄁r󠄁i󠄁g󠄁i󠄁n󠄁a󠄁l󠄁 s󠄁i󠄁n󠄁g󠄁l󠄁e󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁 a󠄁n󠄁d󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁.󠄁 B󠄁o󠄁t󠄁h󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁n󠄁d󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 H󠄁T󠄁T󠄁P󠄁S󠄁 h󠄁e󠄁a󠄁l󠄁t󠄁h󠄁 e󠄁n󠄁d󠄁p󠄁o󠄁i󠄁n󠄁t󠄁s󠄁 a󠄁n󠄁d󠄁 l󠄁o󠄁g󠄁i󠄁n󠄁 e󠄁n󠄁t󠄁r󠄁y󠄁 p󠄁o󠄁i󠄁n󠄁t󠄁s󠄁 p󠄁a󠄁s󠄁s󠄁e󠄁d󠄁.󠄁 L󠄁i󠄁v󠄁e󠄁 S󠄁Q󠄁L󠄁i󠄁t󠄁e󠄁 i󠄁n󠄁t󠄁e󠄁g󠄁r󠄁i󠄁t󠄁y󠄁 a󠄁n󠄁d󠄁 f󠄁o󠄁r󠄁e󠄁i󠄁g󠄁n󠄁-󠄁k󠄁e󠄁y󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁s󠄁 p󠄁a󠄁s󠄁s󠄁e󠄁d󠄁,󠄁 a󠄁l󠄁l󠄁 t󠄁e󠄁n󠄁 e󠄁x󠄁i󠄁s󠄁t󠄁i󠄁n󠄁g󠄁 m󠄁e󠄁s󠄁s󠄁a󠄁g󠄁e󠄁s󠄁 w󠄁e󠄁r󠄁e󠄁 p󠄁r󠄁e󠄁s󠄁e󠄁r󠄁v󠄁e󠄁d󠄁,󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁 o󠄁u󠄁t󠄁b󠄁o󠄁u󠄁n󠄁d󠄁 q󠄁u󠄁e󠄁u󠄁e󠄁 w󠄁a󠄁s󠄁 e󠄁m󠄁p󠄁t󠄁y󠄁.󠄁 T󠄁h󠄁e󠄁 p󠄁e󠄁r󠄁s󠄁o󠄁n󠄁a󠄁l󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 h󠄁a󠄁s󠄁 b󠄁o󠄁t󠄁h󠄁 a󠄁n󠄁 o󠄁p󠄁a󠄁q󠄁u󠄁e󠄁 p󠄁u󠄁b󠄁l󠄁i󠄁c󠄁 I󠄁D󠄁 a󠄁n󠄁d󠄁 a󠄁 d󠄁e󠄁f󠄁a󠄁u󠄁l󠄁t󠄁 c󠄁o󠄁n󠄁t󠄁a󠄁c󠄁t󠄁.󠄁
+
+P󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁-󠄁t󠄁o󠄁-󠄁s󠄁c󠄁a󠄁n󠄁n󠄁e󠄁r󠄁 p󠄁r󠄁o󠄁b󠄁e󠄁s󠄁 r󠄁e󠄁t󠄁u󠄁r󠄁n󠄁e󠄁d󠄁 c󠄁l󠄁e󠄁a󠄁n󠄁 f󠄁o󠄁r󠄁 b󠄁e󠄁n󠄁i󠄁g󠄁n󠄁 c󠄁o󠄁n󠄁t󠄁e󠄁n󠄁t󠄁,󠄁 i󠄁n󠄁f󠄁e󠄁c󠄁t󠄁e󠄁d󠄁 f󠄁o󠄁r󠄁 t󠄁h󠄁e󠄁 s󠄁t󠄁a󠄁n󠄁d󠄁a󠄁r󠄁d󠄁 h󠄁a󠄁r󠄁m󠄁l󠄁e󠄁s󠄁s󠄁 a󠄁n󠄁t󠄁i󠄁v󠄁i󠄁r󠄁u󠄁s󠄁 t󠄁e󠄁s󠄁t󠄁,󠄁 a󠄁n󠄁d󠄁 e󠄁r󠄁r󠄁o󠄁r󠄁 f󠄁o󠄁r󠄁 a󠄁n󠄁 u󠄁n󠄁a󠄁v󠄁a󠄁i󠄁l󠄁a󠄁b󠄁l󠄁e󠄁 d󠄁a󠄁e󠄁m󠄁o󠄁n󠄁.󠄁 T󠄁h󠄁e󠄁 s󠄁c󠄁a󠄁n󠄁n󠄁e󠄁r󠄁 h󠄁e󠄁a󠄁l󠄁t󠄁h󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁 p󠄁a󠄁s󠄁s󠄁e󠄁d󠄁.󠄁 D󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁 w󠄁a󠄁s󠄁 h󠄁e󠄁l󠄁d󠄁 d󠄁i󠄁s󠄁a󠄁b󠄁l󠄁e󠄁d󠄁 d󠄁u󠄁r󠄁i󠄁n󠄁g󠄁 d󠄁e󠄁p󠄁l󠄁o󠄁y󠄁m󠄁e󠄁n󠄁t󠄁 a󠄁n󠄁d󠄁 v󠄁e󠄁r󠄁i󠄁f󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁,󠄁 t󠄁h󠄁e󠄁n󠄁 r󠄁e󠄁s󠄁u󠄁m󠄁e󠄁d󠄁.󠄁 N󠄁o󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 e󠄁m󠄁a󠄁i󠄁l󠄁s󠄁 w󠄁e󠄁r󠄁e󠄁 s󠄁e󠄁n󠄁t󠄁 b󠄁y󠄁 t󠄁h󠄁i󠄁s󠄁 w󠄁o󠄁r󠄁k󠄁,󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁 e󠄁x󠄁i󠄁s󠄁t󠄁i󠄁n󠄁g󠄁 f󠄁a󠄁i󠄁l󠄁e󠄁d󠄁 p󠄁o󠄁r󠄁t󠄁a󠄁l󠄁 r󠄁e󠄁p󠄁l󠄁y󠄁 w󠄁a󠄁s󠄁 n󠄁o󠄁t󠄁 r󠄁e󠄁t󠄁r󠄁i󠄁e󠄁d󠄁 a󠄁u󠄁t󠄁o󠄁m󠄁a󠄁t󠄁i󠄁c󠄁a󠄁l󠄁l󠄁y󠄁.󠄁
+
+T󠄁h󠄁e󠄁 t󠄁e󠄁m󠄁p󠄁o󠄁r󠄁a󠄁r󠄁y󠄁 r󠄁e󠄁s󠄁t󠄁o󠄁r󠄁e󠄁 a󠄁p󠄁p󠄁,󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁,󠄁 a󠄁n󠄁d󠄁 c󠄁l󠄁o󠄁n󠄁e󠄁d󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁 w󠄁e󠄁r󠄁e󠄁 r󠄁e󠄁m󠄁o󠄁v󠄁e󠄁d󠄁 a󠄁f󠄁t󠄁e󠄁r󠄁 t󠄁h󠄁e󠄁 s󠄁u󠄁c󠄁c󠄁e󠄁s󠄁s󠄁f󠄁u󠄁l󠄁 r󠄁e󠄁h󠄁e󠄁a󠄁r󠄁s󠄁a󠄁l󠄁.󠄁 T󠄁h󠄁e󠄁 s󠄁o󠄁u󠄁r󠄁c󠄁e󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁 a󠄁n󠄁d󠄁 r󠄁e󠄁c󠄁o󠄁v󠄁e󠄁r󠄁y󠄁 s󠄁n󠄁a󠄁p󠄁s󠄁h󠄁o󠄁t󠄁 w󠄁e󠄁r󠄁e󠄁 r󠄁e󠄁t󠄁a󠄁i󠄁n󠄁e󠄁d󠄁.󠄁 T󠄁h󠄁e󠄁 s󠄁c󠄁a󠄁n󠄁n󠄁e󠄁r󠄁 r󠄁e󠄁m󠄁a󠄁i󠄁n󠄁s󠄁 a󠄁 s󠄁e󠄁p󠄁a󠄁r󠄁a󠄁t󠄁e󠄁 p󠄁r󠄁i󠄁v󠄁a󠄁t󠄁e󠄁 s󠄁e󠄁r󠄁v󠄁i󠄁c󠄁e󠄁 w󠄁i󠄁t󠄁h󠄁 t󠄁w󠄁o󠄁 s󠄁h󠄁a󠄁r󠄁e󠄁d󠄁 C󠄁P󠄁U󠄁s󠄁,󠄁 4󠄁 G󠄁i󠄁B󠄁 R󠄁A󠄁M󠄁 a󠄁n󠄁d󠄁 a󠄁 2󠄁 G󠄁i󠄁B󠄁 s󠄁i󠄁g󠄁n󠄁a󠄁t󠄁u󠄁r󠄁e󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁.󠄁
+
+T󠄁h󠄁e󠄁 r󠄁e󠄁m󠄁a󠄁i󠄁n󠄁i󠄁n󠄁g󠄁 m󠄁a󠄁i󠄁l󠄁b󠄁o󠄁x󠄁 a󠄁c󠄁c󠄁e󠄁p󠄁t󠄁a󠄁n󠄁c󠄁e󠄁 i󠄁s󠄁 a󠄁 f󠄁r󠄁e󠄁s󠄁h󠄁 s󠄁u󠄁p󠄁p󠄁o󠄁r󠄁t󠄁/󠄁b󠄁i󠄁l󠄁l󠄁i󠄁n󠄁g󠄁 r󠄁o󠄁u󠄁n󠄁d󠄁 t󠄁r󠄁i󠄁p󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁 p󠄁o󠄁r󠄁t󠄁a󠄁l󠄁-󠄁r󠄁e󠄁p󠄁l󠄁y󠄁 r󠄁e󠄁t󠄁r󠄁y󠄁 a󠄁f󠄁t󠄁e󠄁r󠄁 r󠄁e󠄁v󠄁i󠄁e󠄁w󠄁i󠄁n󠄁g󠄁 F󠄁r󠄁o󠄁m󠄁 a󠄁n󠄁d󠄁 T󠄁o󠄁.󠄁 S󠄁e󠄁t󠄁u󠄁p󠄁 c󠄁o󠄁m󠄁p󠄁l󠄁e󠄁t󠄁i󠄁o󠄁n󠄁 r󠄁e󠄁q󠄁u󠄁i󠄁r󠄁e󠄁s󠄁 n󠄁e󠄁w󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁 a󠄁n󠄁d󠄁 r󠄁e󠄁t󠄁u󠄁r󠄁n󠄁 e󠄁v󠄁i󠄁d󠄁e󠄁n󠄁c󠄁e󠄁;󠄁 p󠄁r󠄁e󠄁v󠄁i󠄁o󠄁u󠄁s󠄁l󠄁y󠄁 e󠄁r󠄁a󠄁s󠄁e󠄁d󠄁 e󠄁v󠄁i󠄁d󠄁e󠄁n󠄁c󠄁e󠄁 h󠄁a󠄁s󠄁 n󠄁o󠄁t󠄁 b󠄁e󠄁e󠄁n󠄁 f󠄁a󠄁b󠄁r󠄁i󠄁c󠄁a󠄁t󠄁e󠄁d󠄁 o󠄁r󠄁 r󠄁e󠄁p󠄁l󠄁a󠄁y󠄁e󠄁d󠄁.󠄁
+
+T󠄁h󠄁e󠄁 d󠄁e󠄁p󠄁e󠄁n󠄁d󠄁e󠄁n󠄁c󠄁y󠄁 u󠄁p󠄁d󠄁a󠄁t󠄁e󠄁 a󠄁d󠄁d󠄁r󠄁e󠄁s󠄁s󠄁e󠄁s󠄁 t󠄁h󠄁e󠄁 u󠄁p󠄁s󠄁t󠄁r󠄁e󠄁a󠄁m󠄁 [B󠄁a󠄁n󠄁d󠄁i󠄁t󠄁 H󠄁T󠄁T󠄁P󠄁/󠄁2󠄁 a󠄁d󠄁v󠄁i󠄁s󠄁o󠄁r󠄁y󠄁](https://github.com/mtrudel/bandit/security/advisories/GHSA-pxjf-g536-7r93).󠄁
+
 ## Deferred product features
 
 P󠄁r󠄁e󠄁s󠄁e󠄁n󠄁c󠄁e󠄁 i󠄁n󠄁d󠄁i󠄁c󠄁a󠄁t󠄁o󠄁r󠄁s󠄁,󠄁 a󠄁n󠄁 U󠄁n󠄁d󠄁o󠄁 S󠄁e󠄁n󠄁d󠄁 d󠄁e󠄁l󠄁a󠄁y󠄁,󠄁 t󠄁e󠄁m󠄁p󠄁l󠄁a󠄁t󠄁e󠄁s󠄁,󠄁 r󠄁i󠄁c󠄁h󠄁e󠄁r󠄁 s󠄁e󠄁a󠄁r󠄁c󠄁h󠄁,󠄁 a󠄁n󠄁d󠄁 r󠄁e󠄁p󠄁o󠄁r󠄁t󠄁i󠄁n󠄁g󠄁 c󠄁a󠄁n󠄁 f󠄁o󠄁l󠄁l󠄁o󠄁w󠄁 t󠄁h󠄁e󠄁 m󠄁o󠄁n󠄁i󠄁t󠄁o󠄁r󠄁e󠄁d󠄁 p󠄁i󠄁l󠄁o󠄁t󠄁.󠄁 T󠄁h󠄁e󠄁y󠄁 d󠄁o󠄁 n󠄁o󠄁t󠄁 r󠄁e󠄁p󠄁l󠄁a󠄁c󠄁e󠄁 r󠄁e󠄁c󠄁i󠄁p󠄁i󠄁e󠄁n󠄁t󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁s󠄁,󠄁 a󠄁t󠄁t󠄁r󠄁i󠄁b󠄁u󠄁t󠄁i󠄁o󠄁n󠄁,󠄁 i󠄁s󠄁o󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁,󠄁 o󠄁r󠄁 r󠄁e󠄁c󠄁o󠄁v󠄁e󠄁r󠄁y󠄁.󠄁
