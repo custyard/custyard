@@ -158,7 +158,7 @@ CREATE TABLE "staff_accounts" (
   inserted_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   "session_claim" TEXT,
-  tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE SET NULL,
+  tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
   CHECK(role IN ('admin','agent'))
 );
 
