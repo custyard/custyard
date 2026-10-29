@@ -527,7 +527,7 @@ defmodule Custyard.Email.Outbound do
 
     """
     <html>
-    <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 16px;">
+    <body style="margin: 0; padding: 0; text-align: left;">
     #{escaped}
     </body>
     </html>

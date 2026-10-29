@@ -359,12 +359,14 @@ defmodule Custyard.Email.OutboundTest do
       assert headers["Message-ID"] == "<first@custyard.local>"
     end
 
-    test "escapes HTML in body", %{thread: conv} do
+    test "renders a straightforward reply with escaped HTML and preserved line breaks", %{
+      thread: conv
+    } do
       msg =
         insert_message(
           thread_id: conv.id,
           source: :staff,
-          body: "Use <script>alert('xss')</script> safely",
+          body: "Hello,\n\nUse <script>alert('xss')</script> safely",
           delivery_status: :pending
         )
 
@@ -372,6 +374,11 @@ defmodule Custyard.Email.OutboundTest do
 
       refute email.html_body =~ "<script>"
       assert email.html_body =~ "&lt;script&gt;"
+      assert email.html_body =~ "Hello,<br>\n<br>\nUse"
+      assert email.text_body == msg.body
+      assert email.html_body =~ ~s(<body style="margin: 0; padding: 0; text-align: left;">)
+      refute email.html_body =~ "max-width"
+      refute email.html_body =~ "margin: 0 auto"
     end
   end
 
