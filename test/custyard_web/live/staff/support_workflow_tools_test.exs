@@ -131,7 +131,8 @@ defmodule CustyardWeb.Staff.SupportWorkflowToolsTest do
     before_count = Threads.count_messages(c.thread.id)
 
     html = render_submit(view, "send_reply", %{"body" => "Keep this draft"})
-    assert html =~ "The recipient changed. Review the updated reply before sending."
+    assert html =~ "New conversation activity needs your review before sending."
+    assert has_element?(view, "[data-testid=conversation-needs-review]")
     assert has_element?(view, "[data-testid=staff-reply-to]", "bob@example.com")
     assert has_element?(view, "textarea[name=body]", "Keep this draft")
     assert Threads.count_messages(c.thread.id) == before_count

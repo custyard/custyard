@@ -24,6 +24,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
     Threads,
     Labels,
     Message,
+    MessageDrafts,
     MessageRecipientStatus,
     Organizations,
     Scoring,
@@ -68,6 +69,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
       end
 
       Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{id}")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "tenant_outbound:#{thread.tenant_id}")
     end
 
     case activate_if_new(thread, socket.assigns.current_scope) do
@@ -135,6 +137,11 @@ defmodule CustyardWeb.Staff.ThreadLive do
       |> assign(:reply_text, "")
       |> assign(:note_text, "")
       |> assign(:composer_mode, :reply)
+      |> assign(:draft_version, 0)
+      |> assign(:draft_status, nil)
+      |> assign(:reviewed_activity_id, displayed_activity_id(thread))
+      |> restore_draft()
+      |> assign_outbound_pause()
       |> assign(:new_task_title, "")
       |> assign(:new_task_due_at, "")
       |> assign(:new_task_portal_visible, false)
@@ -166,6 +173,15 @@ defmodule CustyardWeb.Staff.ThreadLive do
   def handle_event("send_reply", _params, %{assigns: %{composer_mode: :note}} = socket),
     do: {:noreply, socket}
 
+  def handle_event("send_reply", _params, %{assigns: %{draft_status: :conflict}} = socket),
+    do:
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "This draft changed in another tab. Copy your text, then reload to review it."
+       )}
+
   def handle_event("send_reply", %{"body" => body} = params, socket) when byte_size(body) > 0 do
     thread = socket.assigns.thread
     staff = socket.assigns.current_staff
@@ -176,6 +192,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
            reply_channel_id: Map.get(params, "reply_channel_id", socket.assigns.reply_channel_id),
            expected_recipient:
              socket.assigns.reply_recipient && socket.assigns.reply_recipient.address,
+           expected_activity_id: socket.assigns.reviewed_activity_id,
+           expected_draft_version: socket.assigns.draft_version,
            cc: Map.get(params, "cc", socket.assigns.reply_cc)
          ) do
       {:ok, message} ->
@@ -184,6 +202,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
           |> assign(:reply_text, "")
           |> assign(:reply_cc_edited?, false)
           |> reload_thread()
+          |> review_displayed_activity()
+          |> persist_draft()
 
         {:noreply, flash_undeliverable_reply(socket, message)}
 
@@ -197,6 +217,17 @@ defmodule CustyardWeb.Staff.ThreadLive do
          |> reload_thread()
          |> put_flash(:error, "The recipient changed. Review the updated reply before sending.")}
 
+      {:error, :conversation_changed} ->
+        {:noreply,
+         socket
+         |> assign(:reply_text, body)
+         |> reload_thread()
+         |> persist_draft()
+         |> put_flash(:error, "New conversation activity needs your review before sending.")}
+
+      {:error, :draft_conflict} ->
+        {:noreply, assign(socket, :draft_status, :conflict)}
+
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, reply_error_message(reason))}
     end
@@ -207,17 +238,22 @@ defmodule CustyardWeb.Staff.ThreadLive do
   def handle_event("add_note", _params, %{assigns: %{composer_mode: :reply}} = socket),
     do: {:noreply, socket}
 
+  def handle_event("add_note", _params, %{assigns: %{draft_status: :conflict}} = socket),
+    do:
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "This draft changed in another tab. Copy your text, then reload to review it."
+       )}
+
   def handle_event("add_note", %{"body" => body}, socket) when byte_size(body) > 0 do
     thread = socket.assigns.thread
 
-    case thread_mutation(socket, fn current, _staff ->
-           Threads.create_message(%{
-             source: :staff,
-             body: body,
-             is_internal_note: true,
-             thread_id: current.id
-           })
-         end) do
+    case Threads.add_internal_note(thread, body,
+           staff: socket.assigns.current_staff,
+           expected_draft_version: socket.assigns.draft_version
+         ) do
       {:ok, _message} ->
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
@@ -225,10 +261,13 @@ defmodule CustyardWeb.Staff.ThreadLive do
           {:message_added, thread.id}
         )
 
-        {:noreply, socket |> assign(:note_text, "") |> reload_thread()}
+        {:noreply, socket |> assign(:note_text, "") |> reload_thread() |> persist_draft()}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
+
+      {:error, :draft_conflict} ->
+        {:noreply, assign(socket, :draft_status, :conflict)}
 
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, "Failed to add note")}
@@ -266,6 +305,14 @@ defmodule CustyardWeb.Staff.ThreadLive do
       {:ok, _thread} -> {:noreply, begin_attachment_recovery(socket)}
       _ -> {:noreply, access_revoked(socket)}
     end
+  end
+
+  def handle_event("rescan_attachments", _params, socket) do
+    scope = socket.assigns.current_scope
+    id = socket.assigns.thread.id
+
+    {:noreply,
+     start_async(socket, :rescan_attachments, fn -> Attachments.rescan_thread(scope, id) end)}
   end
 
   def handle_event("retry_reply", %{"id" => id}, socket) do
@@ -348,15 +395,25 @@ defmodule CustyardWeb.Staff.ThreadLive do
          |> assign(
            :reply_cc_edited?,
            socket.assigns.reply_cc_edited? or cc != socket.assigns.reply_cc
-         )}
+         )
+         |> persist_draft()}
 
       _no_cc ->
-        {:noreply, socket}
+        {:noreply, persist_draft(socket)}
     end
   end
 
   def handle_event("update_note", %{"body" => body}, socket) do
-    {:noreply, assign(socket, :note_text, body)}
+    {:noreply, socket |> assign(:note_text, body) |> persist_draft()}
+  end
+
+  def handle_event("review_latest_activity", _params, socket) do
+    socket = reload_thread(socket)
+
+    {:noreply,
+     socket
+     |> assign(:reviewed_activity_id, displayed_activity_id(socket.assigns.thread))
+     |> persist_draft()}
   end
 
   def handle_event("set_state", %{"state" => state}, socket)
@@ -619,6 +676,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   @impl true
+  def handle_info({:outbound_pause_changed, _tenant_id}, socket),
+    do: {:noreply, assign_outbound_pause(socket)}
+
   def handle_info({:message_added, _id}, socket) do
     {:noreply, reload_thread(socket)}
   end
@@ -756,6 +816,67 @@ defmodule CustyardWeb.Staff.ThreadLive do
     Ecto.Query.CastError -> nil
   end
 
+  defp displayed_activity_id(thread), do: Enum.reduce(thread.messages, 0, &max(&1.id, &2))
+
+  defp review_displayed_activity(socket),
+    do: assign(socket, :reviewed_activity_id, displayed_activity_id(socket.assigns.thread))
+
+  defp restore_draft(socket) do
+    case MessageDrafts.get(socket.assigns.current_scope, socket.assigns.thread.id) do
+      nil ->
+        socket
+
+      draft ->
+        socket
+        |> assign(:reply_text, draft.reply_text)
+        |> assign(:note_text, draft.note_text)
+        |> assign(:reply_cc, draft.reply_cc)
+        |> assign(:reply_cc_edited?, true)
+        |> assign(:reply_channel_id, draft.reply_channel_id)
+        |> assign(:reply_channel_selected?, true)
+        |> assign(:reviewed_activity_id, draft.reviewed_activity_id)
+        |> assign(:draft_version, draft.lock_version)
+        |> assign(:draft_status, :restored)
+        |> assign_reply_identity(socket.assigns.thread)
+    end
+  end
+
+  defp persist_draft(socket) do
+    channel_id =
+      case Ecto.Type.cast(:id, socket.assigns.reply_channel_id) do
+        {:ok, id} -> id
+        _ -> nil
+      end
+
+    attrs =
+      Map.take(socket.assigns, [:reply_text, :note_text, :reply_cc, :reviewed_activity_id])
+      |> Map.put(:reply_channel_id, channel_id)
+
+    case MessageDrafts.save(
+           socket.assigns.current_scope,
+           socket.assigns.thread.id,
+           attrs,
+           socket.assigns.draft_version
+         ) do
+      {:ok, draft} ->
+        socket |> assign(:draft_version, draft.lock_version) |> assign(:draft_status, :saved)
+
+      {:error, :draft_conflict} ->
+        assign(socket, :draft_status, :conflict)
+
+      {:error, :unauthorized} ->
+        access_revoked(socket)
+
+      {:error, _} ->
+        assign(socket, :draft_status, :failed)
+    end
+  end
+
+  defp assign_outbound_pause(socket) do
+    tenant = Custyard.Tenants.get_tenant!(socket.assigns.thread.tenant_id)
+    assign(socket, :outbound_paused, tenant.outbound_paused or not Outbound.enabled?())
+  end
+
   # A LiveView stays connected after mount. Check the current database row before
   # every client event so a prospect linked to another organization cannot keep
   # mutating it through an already-open socket.
@@ -790,6 +911,26 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   @impl true
+  def handle_async(:rescan_attachments, {:ok, {:ok, counts}}, socket) do
+    {:noreply,
+     socket
+     |> reload_thread()
+     |> put_flash(
+       :info,
+       "Attachment scan finished: #{counts.clean} clean, #{counts.infected} blocked, #{counts.error + counts.pending} awaiting a successful scan."
+     )}
+  end
+
+  def handle_async(:rescan_attachments, _result, socket),
+    do:
+      {:noreply,
+       socket
+       |> reload_thread()
+       |> put_flash(
+         :error,
+         "Attachment scan unavailable or access revoked. Files remain quarantined."
+       )}
+
   def handle_async(:recover_attachments, {:ok, :ok}, socket) do
     {:noreply, reload_thread(socket)}
   end
@@ -1050,6 +1191,24 @@ defmodule CustyardWeb.Staff.ThreadLive do
           >
             Retry attachment recovery
           </button>
+          <button
+            :if={
+              @current_scope.role == "admin" and
+                Enum.any?(@thread.messages, fn message ->
+                  Enum.any?(
+                    message_attachments(message),
+                    &(&1.state == :fetched and not Attachments.downloadable?(&1))
+                  )
+                end)
+            }
+            type="button"
+            phx-click="rescan_attachments"
+            phx-disable-with="Scanning…"
+            class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+            data-testid="rescan-attachments"
+          >
+            Rescan quarantined attachments
+          </button>
           <span
             :if={@thread.suspect}
             class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
@@ -1130,6 +1289,43 @@ defmodule CustyardWeb.Staff.ThreadLive do
           ]}
           data-testid="staff-composer"
         >
+          <p
+            :if={@outbound_paused}
+            role="status"
+            class="text-sm font-medium text-amber-700 dark:text-amber-300"
+            data-testid="outbound-paused"
+          >
+            Outbound email is paused. Replies stay queued until sending is resumed by a tenant or installation administrator.
+          </p>
+          <div
+            :if={
+              @composer_mode == :reply and
+                Enum.any?(@thread.messages, &(&1.id > @reviewed_activity_id))
+            }
+            role="alert"
+            class="rounded border border-amber-400 p-2 text-sm"
+            data-testid="conversation-needs-review"
+          >
+            New conversation activity arrived. Read the updated thread before sending.
+            <button type="button" phx-click="review_latest_activity" class="font-medium underline">I have reviewed the latest activity</button>
+          </div>
+          <p
+            :if={@draft_status}
+            role="status"
+            class="text-xs text-gray-600 dark:text-zinc-300"
+            data-testid="draft-status"
+          >
+            <%= case @draft_status do %>
+              <% :saved -> %>
+                Draft saved privately. Unedited drafts expire after 30 days.
+              <% :restored -> %>
+                Your private draft was restored. Review the recipients before sending.
+              <% :conflict -> %>
+                Draft changed in another tab. Copy your text, then reload to review it.
+              <% _ -> %>
+                Draft could not be saved. Keep this page open and copy your text before leaving.
+            <% end %>
+          </p>
           <div role="group" aria-label="Message audience" class="flex gap-2">
             <button
               :for={{mode, label} <- [{:reply, "Customer reply"}, {:note, "Internal note"}]}
@@ -1241,6 +1437,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
               <input
                 type="text"
                 name="cc"
+                phx-debounce="500"
                 value={@reply_cc}
                 placeholder="Nobody else"
                 aria-label="CC addresses, comma separated"
@@ -1251,6 +1448,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
             <div class="flex gap-2">
               <textarea
                 name="body"
+                phx-debounce="500"
                 rows="2"
                 phx-hook="CtrlEnterSubmit"
                 id="staff-reply-textarea"
@@ -1281,6 +1479,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
           >
             <textarea
               name="body"
+              phx-debounce="500"
               rows="3"
               phx-hook="CtrlEnterSubmit"
               id="staff-note-input"
@@ -1950,7 +2149,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
     <ul class="mt-2 space-y-0.5 text-xs" data-testid="message-attachments">
       <li :for={att <- @attachments} class="flex flex-wrap items-center gap-x-1.5">
         <.icon name="hero-paper-clip" class="h-3 w-3 text-gray-400 dark:text-zinc-500" />
-        <%= if att.state == :fetched do %>
+        <%= if Attachments.downloadable?(att) do %>
           <a
             href={~p"/app/attachments/#{att.id}"}
             class="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
@@ -1973,7 +2172,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
             title={attachment_skip_title(att.skip_reason)}
             data-testid={"attachment-skipped-#{att.id}"}
           >
-            not fetched · {attachment_skip_label(att.skip_reason)}
+            {if att.state == :fetched,
+              do: Attachments.scan_label(att),
+              else: "not fetched · #{attachment_skip_label(att.skip_reason)}"}
           </span>
         <% end %>
       </li>
@@ -2278,10 +2479,21 @@ defmodule CustyardWeb.Staff.ThreadLive do
 
   defp sender_name(message) do
     cond do
-      message.triage_class == :staff_sent -> message.sender_email || "Staff"
-      message.source == :staff -> "You"
-      message.sender_email -> message.sender_email
-      true -> "Customer"
+      message.triage_class == :staff_sent ->
+        message.sender_email || "Staff"
+
+      message.source == :staff and Ecto.assoc_loaded?(message.author_staff) and
+          message.author_staff ->
+        message.author_staff.email
+
+      message.source == :staff ->
+        "Staff (author unavailable)"
+
+      message.sender_email ->
+        message.sender_email
+
+      true ->
+        "Customer"
     end
   end
 
