@@ -219,7 +219,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLive do
         <button
           :if={not @show_task_form}
           phx-click="toggle_task_form"
-          class="text-sm text-indigo-600 hover:text-indigo-800"
+          class="rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
           data-testid="staff-add-task-btn"
         >
           + Add task

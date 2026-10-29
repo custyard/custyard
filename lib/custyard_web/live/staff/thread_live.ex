@@ -1422,23 +1422,30 @@ defmodule CustyardWeb.Staff.ThreadLive do
               </select>
               <button type="submit" class="text-xs text-indigo-600">Add</button>
             </form>
-            <form
+            <details
               :if={@current_staff.role == "admin"}
-              id="create-label-form"
-              phx-submit="create_label"
-              class="flex gap-1"
+              class="mt-2 text-xs text-gray-500 dark:text-zinc-400"
             >
-              <input
-                name="name"
-                type="text"
-                required
-                maxlength="40"
-                placeholder="New label"
-                aria-label="New label name"
-                class="min-w-0 flex-1 rounded text-xs dark:bg-zinc-800"
-              />
-              <button type="submit" class="text-xs text-indigo-600">Create</button>
-            </form>
+              <summary class="cursor-pointer hover:text-gray-700 dark:hover:text-zinc-200">
+                New label
+              </summary>
+              <form
+                id="create-label-form"
+                phx-submit="create_label"
+                class="mt-2 flex gap-1"
+              >
+                <input
+                  name="name"
+                  type="text"
+                  required
+                  maxlength="40"
+                  placeholder="New label"
+                  aria-label="New label name"
+                  class="min-w-0 flex-1 rounded text-xs dark:bg-zinc-800"
+                />
+                <button type="submit" class="text-xs text-gray-600 dark:text-zinc-300 hover:underline">Create</button>
+              </form>
+            </details>
             <p class="mt-1 text-xs text-gray-500">
               Labels are internal and shared across your workspace.
             </p>
@@ -1522,10 +1529,10 @@ defmodule CustyardWeb.Staff.ThreadLive do
                 <div class="flex gap-2">
                   <button
                     type="submit"
-                    class="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                    class="text-sm font-medium bg-indigo-600 text-white px-3 py-2 rounded hover:bg-indigo-700"
                     data-testid="staff-task-add-btn"
                   >
-                    Add
+                    Add task
                   </button>
                   <button
                     type="button"
@@ -1540,7 +1547,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
             <% else %>
               <button
                 phx-click="toggle_task_form"
-                class="mt-2 text-xs text-indigo-600 hover:underline"
+                class="mt-3 w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
                 data-testid="staff-add-task-btn"
               >
                 + Add task
