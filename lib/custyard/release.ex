@@ -109,6 +109,8 @@ defmodule Custyard.Release do
             {:error, reason} ->
               raise "Could not create instance administrator: #{inspect(reason)}"
           end
+        else
+          :ok
         end
 
       _ ->
@@ -118,22 +120,46 @@ defmodule Custyard.Release do
 
   def instance_admin_cli(argv), do: argv |> run_instance_admin_cli() |> System.halt()
 
-  def run_instance_admin_cli(["help"]) do
-    IO.write(@instance_admin_usage)
-    0
+  def run_instance_admin_cli(argv) do
+    case parse_admin_command(argv) do
+      :help ->
+        IO.write(@instance_admin_usage)
+        0
+
+      :usage ->
+        IO.write(:stderr, @instance_admin_usage)
+        1
+
+      {:ok, command} ->
+        with_repo(fn -> admin_command(command) end)
+        |> print_admin_result()
+    end
   end
 
-  def run_instance_admin_cli(argv) do
-    case with_repo(fn -> admin_command(argv) end) do
+  defp parse_admin_command(["help"]), do: :help
+  defp parse_admin_command(["list"] = command), do: {:ok, command}
+
+  defp parse_admin_command([action, email] = command)
+       when action in ["add", "remove"] and is_binary(email) do
+    {:ok, command}
+  end
+
+  defp parse_admin_command(_), do: :usage
+
+  defp print_admin_result(result) do
+    case result do
       {:ok, lines} ->
         Enum.each(lines, &IO.puts/1)
         0
 
       {:error, reason} ->
-        IO.puts(:stderr, "Error: #{inspect(reason)}")
+        IO.puts(:stderr, "Error: #{admin_error_message(reason)}")
         1
     end
   end
+
+  defp admin_error_message(reason) when is_binary(reason), do: reason
+  defp admin_error_message(reason), do: inspect(reason)
 
   defp admin_command(["add", email]) do
     case InstanceAdmins.create_admin(email) do
@@ -155,7 +181,6 @@ defmodule Custyard.Release do
     end
   end
 
-  defp admin_command(_), do: {:error, @instance_admin_usage}
   def dsar_cli(argv), do: argv |> Dsar.run() |> System.halt()
 
   @doc false
