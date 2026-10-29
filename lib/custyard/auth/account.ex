@@ -56,7 +56,9 @@ defmodule Custyard.Auth.Account do
   def session_claim(%{session_claim: claim}), do: claim
 
   def session_claim_matches?(%{session_claim: stored}, claim)
-      when is_binary(stored) and is_binary(claim), do: Plug.Crypto.secure_compare(stored, claim)
+      when is_binary(stored) and is_binary(claim) do
+    Plug.Crypto.secure_compare(stored, claim)
+  end
 
   def session_claim_matches?(_, _), do: false
 

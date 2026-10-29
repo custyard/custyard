@@ -10,7 +10,9 @@ defmodule Custyard.Authorization do
   def has_minimum_role?(_, _), do: false
 
   def can_create_organization?(%StaffAccount{role: "admin", tenant_id: id})
-      when is_integer(id), do: true
+      when is_integer(id) do
+    true
+  end
 
   def can_create_organization?(_), do: false
 
@@ -25,13 +27,17 @@ defmodule Custyard.Authorization do
   def can_modify_settings?(_), do: false
 
   def can_manage_project?(%StaffAccount{role: "admin", tenant_id: id}, nil)
-      when is_integer(id), do: true
+      when is_integer(id) do
+    true
+  end
 
   def can_manage_project?(staff, id), do: can_manage_organization?(staff, id)
   def can_set_thread_state?(staff), do: has_minimum_role?(staff, "admin")
 
   def can_access_thread?(%StaffAccount{tenant_id: id}, %{tenant_id: id})
-      when is_integer(id), do: true
+      when is_integer(id) do
+    true
+  end
 
   def can_access_thread?(%Scope{} = scope, resource), do: Scope.tenant?(scope, resource)
   def can_access_thread?(_, _), do: false

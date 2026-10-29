@@ -51,7 +51,9 @@ defmodule Custyard.StaffAccount do
   defdelegate generate_session_claim(), to: Account
 
   def orphaned?(%__MODULE__{tenant_id: id, role: role})
-      when is_integer(id) and role in ~w(admin agent), do: false
+      when is_integer(id) and role in ~w(admin agent) do
+    false
+  end
 
   def orphaned?(_), do: true
 
