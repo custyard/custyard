@@ -2,6 +2,7 @@ defmodule Custyard.OrganizationsTest do
   use Custyard.DataCase, async: true
 
   alias Custyard.{AuditEvent, Contact, Thread, Organizations, Prospect, Repo, Slugs}
+  alias Ecto.Adapters.SQL
 
   import Custyard.Factory
 
@@ -21,6 +22,40 @@ defmodule Custyard.OrganizationsTest do
     do: Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
 
   defp default_scope, do: Process.get(:customer_scope)
+
+  test "customer public identifiers are generated, immutable and tenant scoped" do
+    org = insert_organization()
+    other = insert_organization(tenant_id: insert_tenant().id)
+    assert {:ok, _} = Ecto.UUID.cast(org.public_id)
+    assert org.public_id != other.public_id
+    assert Organizations.get_by_public_id(default_scope(), org.public_id).id == org.id
+    assert is_nil(Organizations.get_by_public_id(default_scope(), other.public_id))
+    assert is_nil(Organizations.get_by_public_id(default_scope(), to_string(org.id)))
+
+    assert {:ok, updated} =
+             Organizations.update(default_scope(), org, %{
+               public_id: other.public_id,
+               name: "Updated"
+             })
+
+    assert updated.public_id == org.public_id
+  end
+
+  test "database rejects missing and duplicate customer public identifiers" do
+    org = insert_organization()
+    other = insert_organization()
+
+    for public_id <- [nil, "", other.public_id] do
+      assert {:error, _} =
+               SQL.query(
+                 Repo,
+                 "UPDATE organizations SET public_id = ? WHERE id = ?",
+                 [public_id, org.id]
+               )
+    end
+
+    assert Repo.reload!(org).public_id == org.public_id
+  end
 
   describe "get_organization/1" do
     test "returns organization by id" do

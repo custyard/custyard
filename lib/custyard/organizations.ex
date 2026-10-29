@@ -31,6 +31,12 @@ defmodule Custyard.Organizations do
       do: Repo.get_by(Organization, id: id, tenant_id: tenant_id)
   end
 
+  def get_by_public_id(%Custyard.Scope{tenant_id: tenant_id} = scope, public_id)
+      when is_binary(public_id) do
+    if Custyard.Scope.current_staff(scope),
+      do: Repo.get_by(Organization, public_id: public_id, tenant_id: tenant_id)
+  end
+
   def create(%Custyard.Scope{} = scope, attrs) do
     with_scope(scope, fn _staff ->
       attrs =

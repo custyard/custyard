@@ -985,12 +985,25 @@ defmodule CustyardWeb.Staff.ThreadLive do
           >
             &larr; Queue
           </.link>
-          <span
-            class="font-semibold text-gray-900 dark:text-zinc-100 truncate flex-1"
-            data-testid="staff-thread-subject"
-          >
-            {@thread.subject}
-          </span>
+          <div class="flex-1 min-w-0">
+            <.link
+              :if={@thread.organization}
+              navigate={~p"/app/customers/#{@thread.organization.public_id}"}
+              class="block text-lg font-semibold text-indigo-700 dark:text-indigo-300 hover:underline truncate"
+              data-testid="staff-thread-customer-link"
+            >
+              {@thread.organization.name}
+            </.link>
+            <p :if={is_nil(@thread.organization)} class="text-sm text-gray-600 dark:text-zinc-300">
+              Unlinked prospect
+            </p>
+            <h1
+              class="font-semibold text-gray-900 dark:text-zinc-100 truncate"
+              data-testid="staff-thread-subject"
+            >
+              {@thread.subject}
+            </h1>
+          </div>
           <span
             :if={@thread.inbound_channel}
             class="text-xs px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300 truncate max-w-[14rem]"
@@ -1292,12 +1305,12 @@ defmodule CustyardWeb.Staff.ThreadLive do
           <%!-- Organization --%>
           <div data-testid="staff-sidebar-org">
             <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-1">
-              Organization
+              Customer
             </div>
             <%= if @thread.organization do %>
               <.link
-                navigate={~p"/app/customers/#{@thread.organization.id}"}
-                class="text-sm text-indigo-600 hover:underline font-medium"
+                navigate={~p"/app/customers/#{@thread.organization.public_id}"}
+                class="text-sm text-indigo-700 dark:text-indigo-300 hover:underline font-medium"
                 data-testid="staff-sidebar-org-link"
               >
                 {@thread.organization.name}

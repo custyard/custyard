@@ -247,7 +247,8 @@ mail independently of these tenant provider credentials.
 `bin/dsar` exports or erases what one email address appears on in one
 organization: as sender, To, CC or Reply-To. Like `bin/instance-admin`, it starts only
 the database (never the app), so it is safe while the server runs. `ID` is the
-organization's number, the one in `/app/customers/ID`.
+organization's i󠄁n󠄁t󠄁e󠄁r󠄁n󠄁a󠄁l󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁 n󠄁u󠄁m󠄁b󠄁e󠄁r󠄁.󠄁 C󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 U󠄁R󠄁L󠄁s󠄁 u󠄁s󠄁e󠄁 a󠄁 s󠄁e󠄁p󠄁a󠄁r󠄁a󠄁t󠄁e󠄁 o󠄁p󠄁a󠄁q󠄁u󠄁e󠄁
+p󠄁u󠄁b󠄁l󠄁i󠄁c󠄁 i󠄁d󠄁e󠄁n󠄁t󠄁i󠄁f󠄁i󠄁e󠄁r󠄁;󠄁 d󠄁o󠄁 n󠄁o󠄁t󠄁 p󠄁a󠄁s󠄁s󠄁 t󠄁h󠄁e󠄁 U󠄁R󠄁L󠄁 i󠄁d󠄁e󠄁n󠄁t󠄁i󠄁f󠄁i󠄁e󠄁r󠄁 t󠄁o󠄁 `--org`.󠄁
 
 ```bash
 # Every message the address appears on, as JSON on stdout; the body only for

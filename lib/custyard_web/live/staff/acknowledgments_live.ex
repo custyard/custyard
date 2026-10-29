@@ -740,7 +740,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
               <td class="py-1 break-all">{binding.source_organization_id}</td>
               <td class="py-1">
                 <.link
-                  navigate={~p"/app/customers/#{binding.organization_id}?tab=acknowledgments"}
+                  navigate={~p"/app/customers/#{binding.organization_public_id}?tab=acknowledgments"}
                   class="text-blue-600 hover:text-blue-800"
                 >
                   {binding.organization_name}

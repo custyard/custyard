@@ -5,6 +5,7 @@ defmodule Custyard.Organization do
 
   schema "organizations" do
     belongs_to(:tenant, Custyard.Tenant)
+    field(:public_id, :string, autogenerate: {Ecto.UUID, :generate, []})
     field(:identity_kind, Ecto.Enum, values: [:domain, :email, :manual], default: :manual)
     field(:identity_value, :string)
     field(:name, :string)

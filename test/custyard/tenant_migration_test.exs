@@ -46,7 +46,10 @@ defmodule Custyard.TenantMigrationTest do
         end
 
       start_supervised!({Repo, [pool_size: 2, log: false] ++ opts})
-      assert [_] = Ecto.Migrator.run(Repo, context.migrations, :up, all: true, log: false)
+
+      assert Ecto.Migrator.run(Repo, context.migrations, :up, all: true, log: false) ==
+               Enum.map(context.migrations, &elem(&1, 0))
+
       assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
 
       for table <-
@@ -68,10 +71,64 @@ defmodule Custyard.TenantMigrationTest do
 
       assert "identity_kind" in names
       assert "identity_value" in names
+      assert "public_id" in names
       %{rows: staff_columns} = Repo.query!("PRAGMA table_info(staff_accounts)")
       refute Enum.any?(staff_columns, &(Enum.at(&1, 1) == "organization_id"))
       assert %{rows: []} = Repo.query!("SELECT * FROM tenants")
       assert %{rows: []} = Repo.query!("SELECT * FROM instance_admins")
+    end
+
+    @tag backend: backend
+    test "#{backend}: customer public IDs preserve existing records and relationships", context do
+      opts =
+        case context.backend do
+          :sqlite ->
+            [database: Path.join(context.tmp_dir, "upgrade.db")]
+
+          :turso ->
+            server =
+              start_supervised!(
+                {Custyard.TursoTestServer, database: Path.join(context.tmp_dir, "upgrade.db")}
+              )
+
+            [turso_url: Custyard.TursoTestServer.url(server)]
+        end
+
+      start_supervised!({Repo, [pool_size: 2, log: false] ++ opts})
+      [{baseline, _} | _] = context.migrations
+
+      assert [^baseline] =
+               Ecto.Migrator.run(Repo, context.migrations, :up, to: baseline, log: false)
+
+      Repo.query!(
+        "INSERT INTO tenants (id, name, slug, inserted_at, updated_at) VALUES (1, 'Tenant', 'tenant', '2026-10-29 00:00:00', '2026-10-29 00:00:00')"
+      )
+
+      for id <- [1, 2] do
+        Repo.query!(
+          "INSERT INTO organizations (id, name, tenant_id, identity_value, inserted_at, updated_at) VALUES (?, 'Customer', 1, ?, '2026-10-29 00:00:00', '2026-10-29 00:00:00')",
+          [id, "customer-#{id}"]
+        )
+      end
+
+      Repo.query!(
+        "INSERT INTO contacts (id, organization_id, tenant_id, email, inserted_at, updated_at) VALUES (1, 1, 1, 'contact@example.com', '2026-10-29 00:00:00', '2026-10-29 00:00:00')"
+      )
+
+      Ecto.Migrator.run(Repo, context.migrations, :up, all: true, log: false)
+
+      assert %{rows: [[1, first], [2, second]]} =
+               Repo.query!("SELECT id, public_id FROM organizations ORDER BY id")
+
+      assert {:ok, _} = Ecto.UUID.cast(first)
+      assert {:ok, _} = Ecto.UUID.cast(second)
+      assert first != second
+      assert %{rows: [[1, 1]]} = Repo.query!("SELECT id, organization_id FROM contacts")
+      assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
+      assert {:error, _} = Repo.query("UPDATE organizations SET public_id = NULL WHERE id = 1")
+
+      assert {:error, _} =
+               Repo.query("UPDATE organizations SET public_id = ? WHERE id = 2", [first])
     end
   end
 end

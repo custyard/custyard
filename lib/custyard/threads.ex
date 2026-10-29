@@ -185,6 +185,7 @@ defmodule Custyard.Threads do
   Options:
     - :include_resolved - include resolved threads (default: false)
     - :contact_id - filter to only this contact's threads (default: nil = all)
+    - :order - :recently_updated sorts by latest activity, otherwise newest first
   """
   def list_for_organization(org_id, opts \\ []) do
     include_resolved = Keyword.get(opts, :include_resolved, false)
@@ -193,9 +194,13 @@ defmodule Custyard.Threads do
     query =
       from(c in Thread,
         where: c.organization_id == ^org_id,
-        order_by: [desc: c.inserted_at],
         preload: [:contact]
       )
+
+    query =
+      if Keyword.get(opts, :order) == :recently_updated,
+        do: from(c in query, order_by: [desc: c.updated_at, desc: c.id]),
+        else: from(c in query, order_by: [desc: c.inserted_at, desc: c.id])
 
     query =
       if contact_id do

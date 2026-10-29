@@ -14,7 +14,7 @@ defmodule CustyardWeb.Staff.OrganizationDetailLiveTest do
     contact = insert_contact(organization_id: customer.id, name: "Alice")
     thread = insert_thread(organization_id: customer.id, subject: "Onboarding question")
     project = insert_project(organization_id: customer.id, title: "Launch")
-    {:ok, _, html} = live(conn, "/app/customers/#{customer.id}")
+    {:ok, _, html} = live(conn, "/app/customers/#{customer.public_id}")
 
     for text <- [customer.name, contact.name, thread.subject, project.title, "Portal access"] do
       assert html =~ text
@@ -31,7 +31,7 @@ defmodule CustyardWeb.Staff.OrganizationDetailLiveTest do
   } do
     customer = insert_organization()
     contact = insert_contact(organization_id: customer.id)
-    {:ok, view, _} = live(conn, "/app/customers/#{customer.id}")
+    {:ok, view, _} = live(conn, "/app/customers/#{customer.public_id}")
     html = render_submit(view, "issue_portal", %{"contact_id" => to_string(contact.id)})
     assert html =~ "Copy this link now"
 
@@ -51,6 +51,50 @@ defmodule CustyardWeb.Staff.OrganizationDetailLiveTest do
     customer = insert_organization(tenant_id: insert_tenant().id)
 
     assert {:error, {:redirect, %{to: "/app/customers"}}} =
-             live(conn, "/app/customers/#{customer.id}")
+             live(conn, "/app/customers/#{customer.public_id}")
+  end
+
+  test "customer history includes resolved threads ordered by last update", %{conn: conn} do
+    customer = insert_organization()
+
+    oldest =
+      insert_thread(organization_id: customer.id, subject: "Recently answered", state: :resolved)
+
+    newest = insert_thread(organization_id: customer.id, subject: "Recently created")
+    hidden = insert_thread(organization_id: insert_organization().id, subject: "Another customer")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    Repo.update!(
+      Ecto.Changeset.change(oldest, inserted_at: DateTime.add(now, -3600), updated_at: now)
+    )
+
+    Repo.update!(Ecto.Changeset.change(newest, updated_at: DateTime.add(now, -60)))
+
+    {:ok, view, _} = live(conn, "/app/customers/#{customer.public_id}")
+
+    rows =
+      view
+      |> element("#customer-thread-history")
+      |> render()
+      |> Floki.parse_fragment!()
+      |> Floki.find("li")
+
+    assert Enum.map(rows, &Floki.attribute(&1, "id")) == [
+             ["customer-thread-#{oldest.id}"],
+             ["customer-thread-#{newest.id}"]
+           ]
+
+    assert has_element?(view, "#customer-thread-#{oldest.id}", "resolved")
+    assert has_element?(view, "#customer-thread-#{oldest.id} time[datetime]")
+    refute has_element?(view, "#customer-thread-#{hidden.id}")
+  end
+
+  test "customer routes reject internal numeric IDs and unknown public IDs", %{conn: conn} do
+    customer = insert_organization()
+    assert {:ok, _} = Ecto.UUID.cast(customer.public_id)
+
+    for id <- [to_string(customer.id), Ecto.UUID.generate()] do
+      assert {:error, {:redirect, %{to: "/app/customers"}}} = live(conn, "/app/customers/#{id}")
+    end
   end
 end

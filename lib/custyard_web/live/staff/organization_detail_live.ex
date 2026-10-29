@@ -1,10 +1,11 @@
 defmodule CustyardWeb.Staff.OrganizationDetailLive do
   @moduledoc "Customer contacts, threads, projects and independently revocable portal credentials."
   use CustyardWeb, :live_view
+  import CustyardWeb.StaffComponents, only: [state_badge: 1]
   alias Custyard.{Acknowledgments, Threads, Organizations, PortalCredentials, Projects}
 
   def mount(%{"id" => id}, _, socket) do
-    case Organizations.get(socket.assigns.current_scope, id) do
+    case Organizations.get_by_public_id(socket.assigns.current_scope, id) do
       nil ->
         {:ok,
          socket |> put_flash(:error, "Customer unavailable") |> redirect(to: ~p"/app/customers")}
@@ -18,7 +19,7 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
          |> assign(:contacts, Organizations.list_contacts(socket.assigns.current_scope, org.id))
          |> assign(
            :threads,
-           Threads.list_for_organization(org.id, include_resolved: true)
+           Threads.list_for_organization(org.id, include_resolved: true, order: :recently_updated)
          )
          |> assign(
            :projects,
@@ -96,13 +97,31 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
         {@organization.name}
         <:subtitle>{@organization.domain} · {@organization.tier}</:subtitle>
       </.header>
-      <section>
-        <h2 class="font-semibold mb-3">Threads</h2><p :if={@threads == []}>No threads yet.</p><p :for={
-          thread <- @threads
-        }>
-          <.link navigate={~p"/app/threads/#{thread.id}"}>{thread.subject || "Untitled thread"}</.link>
-          · {thread.state}
+      <section aria-labelledby="customer-thread-history-title">
+        <h2 id="customer-thread-history-title" class="font-semibold">Thread history</h2>
+        <p class="mt-1 mb-3 text-sm text-gray-600 dark:text-zinc-300">
+          Most recently updated first, including resolved threads.
         </p>
+        <p :if={@threads == []}>No threads yet.</p>
+        <ul id="customer-thread-history" class="divide-y divide-gray-200 dark:divide-zinc-700">
+          <li
+            :for={thread <- @threads}
+            id={"customer-thread-#{thread.id}"}
+            class="py-3 flex flex-wrap items-center justify-between gap-2"
+          >
+            <.link
+              navigate={~p"/app/threads/#{thread.id}"}
+              class="font-medium text-indigo-700 dark:text-indigo-300 hover:underline"
+            >{thread.subject || "Untitled thread"}</.link>
+            <div class="flex items-center gap-3 text-sm text-gray-600 dark:text-zinc-300">
+              <.state_badge state={thread.state} />
+              <time datetime={DateTime.to_iso8601(thread.updated_at)}>Updated {Calendar.strftime(
+                thread.updated_at,
+                "%Y-%m-%d %H:%M UTC"
+              )}</time>
+            </div>
+          </li>
+        </ul>
       </section>
       <section>
         <h2 class="font-semibold mb-3">Contacts</h2><p :if={@contacts == []}>No contacts yet.</p><p :for={
@@ -129,15 +148,15 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
         <h2 class="font-semibold">Portal access</h2><p>
           Each credential grants access to this customer's portal and can be revoked independently.
         </p><form phx-submit="issue_portal" class="space-y-2">
-          <label>
-            Contact attribution (optional)
-            <select name="contact_id"><option value="">Shared customer access</option><option
-              :for={contact <- @contacts}
-              value={contact.id}
-            >
-              {contact.name || contact.email}
-            </option></select>
-          </label>
+          <.input
+            type="select"
+            id="portal-contact"
+            name="contact_id"
+            value=""
+            label="Contact attribution (optional)"
+            prompt="Shared customer access"
+            options={Enum.map(@contacts, &{&1.name || &1.email, &1.id})}
+          />
           <.button>Issue portal link</.button>
         </form><p
           :if={@portal_url}

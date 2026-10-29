@@ -14,8 +14,10 @@ defmodule CustyardWeb.Staff.OrganizationsLiveTest do
   } do
     own = insert_organization(name: "Visible customer")
     insert_organization(tenant_id: insert_tenant().id, name: "Foreign customer")
-    {:ok, _, html} = live(conn, "/app/customers")
+    {:ok, view, html} = live(conn, "/app/customers")
     assert html =~ own.name
+    assert has_element?(view, "a[href='/app/customers/#{own.public_id}']", own.name)
+    refute has_element?(view, "a[href='/app/customers/#{own.id}']")
     refute html =~ "Foreign customer"
     refute html =~ "Custom domain"
     refute html =~ "Primary Color"

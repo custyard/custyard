@@ -110,7 +110,7 @@ defmodule CustyardWeb.Staff.OrganizationsLive do
       </.simple_form>
       <div class="grid md:grid-cols-2 gap-4">
         <article :for={org <- @organizations} class="rounded border p-4 space-y-2">
-          <.link navigate={~p"/app/customers/#{org.id}"} class="font-semibold">{org.name}</.link>
+          <.link navigate={~p"/app/customers/#{org.public_id}"} class="font-semibold">{org.name}</.link>
           <p>{org.domain} · {org.tier}</p>
           <button :if={@current_role == "admin"} phx-click="edit_org" phx-value-id={org.id}>Edit customer</button>
         </article>

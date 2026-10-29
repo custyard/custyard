@@ -315,6 +315,7 @@ defmodule Custyard.Acknowledgments do
         source_organization_id: b.source_organization_id,
         organization_id: b.organization_id,
         organization_name: o.name,
+        organization_public_id: o.public_id,
         inserted_at: b.inserted_at
       }
   end

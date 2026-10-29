@@ -57,10 +57,22 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       conv = insert_thread(organization_id: org.id)
       insert_message(thread_id: conv.id, body: "Hello from customer")
 
-      {:ok, _view, html} = live(conn, ~p"/app/threads/#{conv.id}")
+      {:ok, view, html} = live(conn, ~p"/app/threads/#{conv.id}")
 
       assert html =~ conv.subject
       assert html =~ "Hello from customer"
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-thread-customer-link][href='/app/customers/#{org.public_id}']",
+               org.name
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-sidebar-org-link][href='/app/customers/#{org.public_id}']",
+               org.name
+             )
     end
 
     test "renders a stored HTML body as markup with the plain text behind a toggle",
