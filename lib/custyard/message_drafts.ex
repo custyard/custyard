@@ -10,6 +10,8 @@ defmodule Custyard.MessageDrafts do
   end
 
   def save(scope, thread_id, attrs, expected_version) do
+    attrs = infer_cc_intent(attrs)
+
     Repo.transaction(fn ->
       staff = Scope.current_staff(scope) || Repo.rollback(:unauthorized)
       current = StaffAccess.lock_current(staff) || Repo.rollback(:unauthorized)
@@ -21,6 +23,18 @@ defmodule Custyard.MessageDrafts do
       validate_channel(scope, attrs)
       persist(current.id, thread_id, attrs, expected_version)
     end)
+  end
+
+  # Context callers that supply CC without a separate intent flag are making
+  # an explicit override, including choosing nobody. The composer always
+  # supplies its own flag so untouched reply-all defaults remain automatic.
+  defp infer_cc_intent(attrs) do
+    cond do
+      Map.has_key?(attrs, :reply_cc_edited) or Map.has_key?(attrs, "reply_cc_edited") -> attrs
+      Map.has_key?(attrs, :reply_cc) -> Map.put(attrs, :reply_cc_edited, true)
+      Map.has_key?(attrs, "reply_cc") -> Map.put(attrs, "reply_cc_edited", true)
+      true -> attrs
+    end
   end
 
   defp persist(staff_id, thread_id, attrs, expected_version) do
@@ -65,6 +79,34 @@ defmodule Custyard.MessageDrafts do
            do: :ok,
            else: Repo.rollback(:draft_conflict)
     end
+  end
+
+  @doc """
+  Clear the submitted mode inside its authorized message transaction.
+
+  A submission advances exactly one draft version, including the first
+  submission when no draft row exists. The other mode remains unchanged.
+  Callers retain that next version without re-reading or overwriting a draft
+  another tab may have edited after the transaction commits.
+  """
+  def complete_submission!(staff_id, thread_id, mode, expected_version, activity_id)
+      when mode in [:reply, :note] do
+    attrs =
+      case mode do
+        :reply ->
+          %{
+            reply_text: "",
+            reply_cc: "",
+            reply_cc_edited: false,
+            reviewed_activity_id: activity_id
+          }
+
+        :note ->
+          %{note_text: ""}
+      end
+
+    persist(staff_id, thread_id, attrs, expected_version)
+    :ok
   end
 
   defp validate_channel(scope, attrs) do

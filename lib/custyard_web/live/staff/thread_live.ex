@@ -201,9 +201,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
           socket
           |> assign(:reply_text, "")
           |> assign(:reply_cc_edited?, false)
+          |> acknowledge_submitted_draft()
           |> reload_thread()
           |> review_displayed_activity()
-          |> persist_draft()
 
         {:noreply, flash_undeliverable_reply(socket, message)}
 
@@ -261,7 +261,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
           {:message_added, thread.id}
         )
 
-        {:noreply, socket |> assign(:note_text, "") |> reload_thread() |> persist_draft()}
+        {:noreply,
+         socket |> assign(:note_text, "") |> acknowledge_submitted_draft() |> reload_thread()}
 
       {:error, :unauthorized} ->
         {:noreply, access_revoked(socket)}
@@ -830,8 +831,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
         socket
         |> assign(:reply_text, draft.reply_text)
         |> assign(:note_text, draft.note_text)
-        |> assign(:reply_cc, draft.reply_cc)
-        |> assign(:reply_cc_edited?, true)
+        |> restore_draft_cc(draft)
         |> assign(:reply_channel_id, draft.reply_channel_id)
         |> assign(:reply_channel_selected?, true)
         |> assign(:reviewed_activity_id, draft.reviewed_activity_id)
@@ -839,6 +839,17 @@ defmodule CustyardWeb.Staff.ThreadLive do
         |> assign(:draft_status, :restored)
         |> assign_reply_identity(socket.assigns.thread)
     end
+  end
+
+  defp restore_draft_cc(socket, %{reply_cc_edited: false}), do: socket
+
+  defp restore_draft_cc(socket, draft),
+    do: socket |> assign(:reply_cc, draft.reply_cc) |> assign(:reply_cc_edited?, true)
+
+  defp acknowledge_submitted_draft(socket) do
+    socket
+    |> assign(:draft_version, socket.assigns.draft_version + 1)
+    |> assign(:draft_status, :saved)
   end
 
   defp persist_draft(socket) do
@@ -851,6 +862,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
     attrs =
       Map.take(socket.assigns, [:reply_text, :note_text, :reply_cc, :reviewed_activity_id])
       |> Map.put(:reply_channel_id, channel_id)
+      |> Map.put(:reply_cc_edited, socket.assigns.reply_cc_edited?)
 
     case MessageDrafts.save(
            socket.assigns.current_scope,

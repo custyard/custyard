@@ -66,6 +66,28 @@ defmodule Custyard.MessageDraftsTest do
     assert updated.note_text == "Separate note"
   end
 
+  test "CC values supplied by context callers record explicit recipient intent", c do
+    assert {:ok, draft} =
+             MessageDrafts.save(c.scope, c.thread.id, %{reply_cc: "copy@example.org"}, 0)
+
+    assert draft.reply_cc_edited
+
+    assert {:ok, empty} =
+             MessageDrafts.save(c.scope, c.thread.id, %{"reply_cc" => ""}, draft.lock_version)
+
+    assert empty.reply_cc_edited
+
+    assert {:ok, automatic} =
+             MessageDrafts.save(
+               c.scope,
+               c.thread.id,
+               %{reply_cc: "default@example.org", reply_cc_edited: false},
+               empty.lock_version
+             )
+
+    refute automatic.reply_cc_edited
+  end
+
   test "foreign sending addresses are rejected and old drafts expire", c do
     channel = insert_inbound_channel(tenant_id: insert_tenant().id)
 

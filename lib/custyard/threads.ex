@@ -645,6 +645,7 @@ defmodule Custyard.Threads do
             {:ok, message} ->
               ReplyAudit.record!(:internal_note_created, message, current, current_staff)
               touch_thread_updated_at(current.id)
+              complete_draft_submission!(message, current_staff, opts, :note)
               {:ok, message}
 
             error ->
@@ -803,6 +804,7 @@ defmodule Custyard.Threads do
       with {:ok, message} <- insert_reply_message(thread, body, attempt_delivery?, opts),
            {:ok, _conv} <- update_thread_after_reply(thread) do
         ReplyAudit.record!(:reply_queued, message, thread, opts[:staff])
+        complete_draft_submission!(message, opts[:staff], opts, :reply)
         {message, thread, attempt_delivery?}
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -824,6 +826,18 @@ defmodule Custyard.Threads do
 
   defp check_draft_version!(_thread, _staff, opts) do
     if Keyword.has_key?(opts, :expected_draft_version), do: Repo.rollback(:unauthorized)
+  end
+
+  defp complete_draft_submission!(message, staff, opts, mode) do
+    if Keyword.has_key?(opts, :expected_draft_version) do
+      MessageDrafts.complete_submission!(
+        staff.id,
+        message.thread_id,
+        mode,
+        opts[:expected_draft_version],
+        message.id
+      )
+    end
   end
 
   defp load_reply_thread(id, opts) do
