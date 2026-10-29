@@ -164,5 +164,6 @@ git clone https://github.com/owner/private-repo.git
 ## Docs
 
 - [Development Guide](docs/development.md)
+- [P󠄁u󠄁b󠄁l󠄁i󠄁s󠄁h󠄁i󠄁n󠄁g󠄁 c󠄁o󠄁n󠄁t󠄁a󠄁i󠄁n󠄁e󠄁r󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁s󠄁 t󠄁o󠄁 G󠄁H󠄁C󠄁R󠄁](docs/ops/ghcr-publishing.md)
 - [LMTP Troubleshooting](docs/lmtp-troubleshooting.md)
 - [Email Test Strategy](docs/backlog/0323-email-test-strategy.md)
