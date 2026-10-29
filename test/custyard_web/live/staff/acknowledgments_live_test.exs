@@ -228,6 +228,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
     test "cancel leaves nothing bound", %{conn: conn} do
       org = insert_organization()
       {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      render_async(view, 10_000)
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
