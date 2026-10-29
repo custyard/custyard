@@ -45,6 +45,17 @@ acknowledgments_prefetch =
 
 config :custyard, :acknowledgments, prefetch: acknowledgments_prefetch
 
+# An installation-level stop for recovery and provider incidents. Never start
+# restored mail workers until an operator has reconciled the archived queue.
+outbound_delivery_enabled =
+  case System.get_env("OUTBOUND_DELIVERY_ENABLED") do
+    value when value in [nil, "true"] -> true
+    "false" -> false
+    _ -> raise "OUTBOUND_DELIVERY_ENABLED must be true or false"
+  end
+
+config :custyard, :outbound_delivery_enabled, outbound_delivery_enabled
+
 # Configure Swoosh mailer for production
 if config_env() == :prod do
   # MAIL_ADAPTER is required in prod, and "local" must be chosen explicitly.

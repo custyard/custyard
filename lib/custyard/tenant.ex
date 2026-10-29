@@ -6,6 +6,7 @@ defmodule Custyard.Tenant do
     field :name, :string
     field :slug, :string
     field :status, :string, default: "active"
+    field :outbound_paused, :boolean, default: false
     has_many :hosts, Custyard.TenantHost
     field :logo_url, :string
     field :primary_color, :string

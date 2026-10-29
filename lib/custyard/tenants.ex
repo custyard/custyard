@@ -14,6 +14,7 @@ defmodule Custyard.Tenants do
   }
 
   alias Custyard.Acknowledgments.Subscriptions
+  alias Custyard.Email.OutboundQueue
 
   def get_tenant(id), do: Repo.get(Tenant, id)
   def get_tenant!(id), do: Repo.get!(Tenant, id)
@@ -90,6 +91,45 @@ defmodule Custyard.Tenants do
 
   def can_manage?(_, _), do: false
 
+  @doc "Pause outbound replies without affecting intake, staff access, or saved messages."
+  def set_outbound_paused(%StaffAccount{} = staff, tenant_id, paused) when is_boolean(paused) do
+    Repo.transaction(fn ->
+      current = lock_manager!(staff, tenant_id)
+      tenant = get_tenant!(tenant_id)
+
+      if tenant.outbound_paused == paused do
+        tenant
+      else
+        updated = tenant |> Ecto.Changeset.change(outbound_paused: paused) |> Repo.update!()
+
+        case AuditEvent.create(%{
+               tenant_id: tenant_id,
+               event_type: :outbound_pause_changed,
+               source: "tenant:#{tenant_id}:staff:#{current.id}",
+               payload: %{staff_id: current.id, paused: paused}
+             }) do
+          {:ok, _} -> updated
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end
+    end)
+    |> tap(fn
+      {:ok, _} ->
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          "tenant_outbound:#{tenant_id}",
+          {:outbound_pause_changed, tenant_id}
+        )
+
+        if not paused, do: OutboundQueue.wake()
+
+      _ ->
+        :ok
+    end)
+  end
+
+  def set_outbound_paused(_, _, _), do: {:error, :unauthorized}
+
   def update_tenant_for_staff(%StaffAccount{} = staff, tenant_id, attrs) do
     Repo.transaction(fn ->
       lock_manager!(staff, tenant_id)
@@ -163,6 +203,8 @@ defmodule Custyard.Tenants do
       forwarded_message_ids =
         detach_message_actor(tenant_id, target.id, :forwarded_by_staff_id)
 
+      authored_message_ids = detach_message_actor(tenant_id, target.id, :author_staff_id)
+
       deleted = Repo.delete!(target)
 
       case AuditEvent.create(%{
@@ -173,7 +215,8 @@ defmodule Custyard.Tenants do
                staff_id: target.id,
                role: target.role,
                deleted_message_ids: deleted_message_ids,
-               forwarded_message_ids: forwarded_message_ids
+               forwarded_message_ids: forwarded_message_ids,
+               authored_message_ids: authored_message_ids
              }
            }) do
         {:ok, _} -> deleted

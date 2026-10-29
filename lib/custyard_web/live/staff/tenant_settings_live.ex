@@ -6,6 +6,13 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
 
   def mount(_, _, socket) do
     if Tenants.can_manage?(socket.assigns.current_staff, socket.assigns.current_tenant) do
+      if connected?(socket) do
+        Phoenix.PubSub.subscribe(
+          Custyard.PubSub,
+          "tenant_outbound:#{socket.assigns.current_tenant.id}"
+        )
+      end
+
       {:ok,
        socket
        |> assign(:page_title, "Tenant settings")
@@ -17,6 +24,27 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
        ), layout: {CustyardWeb.Layouts, :staff}}
     else
       {:ok, redirect(socket, to: ~p"/app")}
+    end
+  end
+
+  def handle_event("set_outbound_pause", %{"paused" => paused}, socket)
+      when paused in ["true", "false"] do
+    case Tenants.set_outbound_paused(
+           socket.assigns.current_staff,
+           socket.assigns.current_tenant.id,
+           paused == "true"
+         ) do
+      {:ok, tenant} ->
+        message =
+          if tenant.outbound_paused,
+            do: "Outbound email paused. Incoming mail and saved replies are preserved.",
+            else: "Outbound email resumed. Queued replies can now be sent."
+
+        {:noreply,
+         socket |> assign(:current_tenant, tenant) |> load() |> put_flash(:info, message)}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "Tenant administrator required")}
     end
   end
 
@@ -89,6 +117,12 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
     end
   end
 
+  def handle_info({:outbound_pause_changed, tenant_id}, socket) do
+    if tenant_id == socket.assigns.current_tenant.id,
+      do: {:noreply, load(socket)},
+      else: {:noreply, socket}
+  end
+
   defp save_tenant(socket, attrs) do
     if logo_ready?(socket) do
       save_tenant_logo(socket, attrs)
@@ -137,9 +171,10 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
   end
 
   defp load(socket) do
-    tenant = socket.assigns.current_tenant
+    tenant = Tenants.get_tenant!(socket.assigns.current_tenant.id)
 
     socket
+    |> assign(:current_tenant, tenant)
     |> assign(:form, to_form(Tenants.change_tenant(tenant)))
     |> assign(:remove_logo, false)
     |> assign(:staff_form, to_form(%{"email" => "", "role" => "agent"}, as: :staff))
@@ -208,6 +243,34 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
         <:actions><.button>Save tenant</.button></:actions>
       </.simple_form>
       <.link navigate={~p"/app/settings/email"} class="text-indigo-600">Set up support email</.link>
+      <section
+        id="outbound-email-control"
+        class="rounded-lg border border-gray-300 dark:border-gray-600 p-4 space-y-3"
+      >
+        <h2 class="font-semibold">Outbound email</h2>
+        <p
+          :if={@current_tenant.outbound_paused}
+          role="status"
+          class="font-semibold text-amber-800 dark:text-amber-300"
+        >
+          Sending is paused. Queued replies are held until an administrator resumes sending.
+        </p>
+        <p :if={not @current_tenant.outbound_paused} class="text-sm">
+          Sending is enabled. Pause it to hold queued replies while you investigate a problem.
+        </p>
+        <p class="text-sm">
+          Incoming mail, portal access and saved messages continue. Email already handed to the provider cannot be recalled.
+        </p>
+        <button
+          type="button"
+          phx-click="set_outbound_pause"
+          phx-value-paused={if @current_tenant.outbound_paused, do: "false", else: "true"}
+          phx-disable-with="Updating..."
+          class="rounded border px-3 py-2 font-semibold border-gray-400 dark:border-gray-500"
+        >{if @current_tenant.outbound_paused,
+          do: "Resume sending queued replies",
+          else: "Pause outbound email"}</button>
+      </section>
       <section>
         <h2 class="font-semibold">Staff</h2>
         <p class="text-sm">Staff can work with every customer organization in this tenant.</p>

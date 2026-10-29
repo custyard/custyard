@@ -12,7 +12,7 @@ defmodule Custyard.Email.OutboundQueue do
 
   import Ecto.Query
 
-  alias Custyard.{Message, Repo}
+  alias Custyard.{Message, Repo, Tenant}
   alias Custyard.Email.Outbound
 
   require Logger
@@ -36,11 +36,18 @@ defmodule Custyard.Email.OutboundQueue do
 
   @doc "Drain one batch synchronously, used by the worker and focused tests."
   def drain_pending do
+    if Outbound.enabled?(), do: drain_enabled(), else: 0
+  end
+
+  defp drain_enabled do
     fail_stale_sending()
 
     pending =
       from(m in Message,
+        join: t in Tenant,
+        on: t.id == m.tenant_id,
         where: m.source == :staff and m.delivery_status == :pending,
+        where: t.outbound_paused == false,
         order_by: [asc: m.inserted_at, asc: m.id],
         limit: @batch_size
       )

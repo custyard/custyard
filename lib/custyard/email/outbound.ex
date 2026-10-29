@@ -21,7 +21,7 @@ defmodule Custyard.Email.Outbound do
 
   require Logger
 
-  alias Custyard.Email.{Headers, OutboundQueue, ReplyRecipients, ThreadHeaders}
+  alias Custyard.Email.{Headers, OutboundQueue, ReplyAudit, ReplyRecipients, ThreadHeaders}
 
   alias Custyard.{
     Threads,
@@ -76,6 +76,9 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
+  @doc "Whether the installation permits queued customer replies to reach the provider."
+  def enabled?, do: Application.get_env(:custyard, :outbound_delivery_enabled, true)
+
   @doc "Unattempted configuration failures can retry; provider attempts retain the 24-hour deduplication window."
   def retryable?(%Message{} = message) do
     message.source == :staff and message.delivery_status == :failed and
@@ -99,17 +102,27 @@ defmodule Custyard.Email.Outbound do
   @doc "Requeue a confirmed failed reply under current staff authorization. Unknown sends never retry blindly."
   def retry(%Custyard.Scope{} = scope, %Message{} = message, opts \\ []) do
     result =
-      Threads.with_access(scope, message.thread_id, fn thread, _staff ->
+      Threads.with_access(scope, message.thread_id, fn thread, staff ->
         case Repo.get_by(Message, id: message.id, thread_id: thread.id) do
           %Message{} = current ->
             if retryable?(current) do
               with {:ok, changeset} <- refresh_unattempted_envelope(current, thread, opts) do
-                changeset
-                |> Message.delivery_status_changeset(:pending, %{
-                  delivery_failure_kind: nil,
-                  delivery_error_code: nil
-                })
-                |> Repo.update()
+                result =
+                  changeset
+                  |> Message.delivery_status_changeset(:pending, %{
+                    delivery_failure_kind: nil,
+                    delivery_error_code: nil
+                  })
+                  |> Repo.update()
+
+                case result do
+                  {:ok, updated} ->
+                    ReplyAudit.record!(:reply_retried, updated, thread, staff)
+                    {:ok, updated}
+
+                  error ->
+                    error
+                end
               end
             else
               {:error, :reconciliation_required}
@@ -212,7 +225,7 @@ defmodule Custyard.Email.Outbound do
          do: %{message.thread | inbound_channel: message.inbound_channel},
          else: message.thread
 
-    with :ok <- active_tenant(thread.tenant_id),
+    with :ok <- delivery_allowed(message),
          {:ok, recipient} <- delivery_recipient(message, thread),
          {:ok, from_addr} <- resolve_from_address(message, thread),
          email <- compose(message, thread, recipient, from_addr),
@@ -234,9 +247,48 @@ defmodule Custyard.Email.Outbound do
 
   defp active_tenant(tenant_id) do
     case Repo.get(Tenant, tenant_id) do
+      %Tenant{status: "active", outbound_paused: true} -> {:error, :outbound_paused}
       %Tenant{status: "active"} -> :ok
       _ -> {:error, :tenant_suspended}
     end
+  end
+
+  # Read live tenant and channel state, never a preloaded queue snapshot.
+  # This runs during preparation and again immediately before provider handoff.
+  defp delivery_allowed(message) do
+    with :ok <- installation_delivery_allowed(),
+         :ok <- active_tenant(message.tenant_id) do
+      case message.inbound_channel_id do
+        nil ->
+          :ok
+
+        id ->
+          case Repo.get(InboundChannel, id) do
+            %InboundChannel{tenant_id: tenant_id, state: :active} = channel
+            when tenant_id == message.tenant_id ->
+              validate_current_sender(message, channel)
+
+            _ ->
+              {:error, :reply_channel_inactive}
+          end
+      end
+    end
+  end
+
+  defp installation_delivery_allowed do
+    if enabled?(), do: :ok, else: {:error, :outbound_paused}
+  end
+
+  defp validate_current_sender(%Message{sender_email: nil}, _channel), do: :ok
+
+  defp validate_current_sender(message, channel) do
+    channel = Repo.preload(channel, :inbound_route)
+
+    if InboundChannels.from_address(channel) == message.sender_email,
+      do: :ok,
+      else:
+        {:error,
+         if(message.delivery_payload_hash, do: :envelope_changed, else: :reply_identity_changed)}
   end
 
   # Recheck consent and whether the relationship still exists, but never let a
@@ -256,6 +308,7 @@ defmodule Custyard.Email.Outbound do
   defp deliver_claimed(message, email) do
     with {:ok, config} <- Custyard.EmailSetup.sending_config(message.thread.tenant_id),
          :ok <- validate_delivery_config(config),
+         :ok <- delivery_allowed(message),
          {:ok, attempted} <- record_attempt(message) do
       deliver_attempted(attempted, email, config)
     else
@@ -279,23 +332,23 @@ defmodule Custyard.Email.Outbound do
   end
 
   defp deliver_attempted(message, email, config) do
-    case deliver_with_config(email, config) do
-      {:ok, metadata} ->
-        updated =
-          message
-          |> mark_status(
-            :sent,
-            Map.merge(provider_attrs(metadata), %{
-              delivery_failure_kind: nil,
-              delivery_error_code: nil
-            })
-          )
-          |> broadcast_delivery_update()
+    with :ok <- delivery_allowed(message),
+         {:ok, metadata} <- deliver_with_config(email, config) do
+      updated =
+        message
+        |> mark_status(
+          :sent,
+          Map.merge(provider_attrs(metadata), %{
+            delivery_failure_kind: nil,
+            delivery_error_code: nil
+          })
+        )
+        |> broadcast_delivery_update()
 
-        Custyard.EmailSetup.record_reply_accepted(updated)
+      Custyard.EmailSetup.record_reply_accepted(updated)
 
-        {:ok, updated}
-
+      {:ok, updated}
+    else
       {:error, reason} ->
         delivery_error(message, reason)
     end
@@ -307,6 +360,11 @@ defmodule Custyard.Email.Outbound do
     # Adapter exceptions can contain request bodies and credentials. Treat
     # acceptance as unknown and retain only a bounded diagnostic code.
     _error -> {:error, :delivery_exception}
+  end
+
+  defp delivery_error(message, :outbound_paused) do
+    # The provider was never called. Keep the reply recoverable for resume.
+    {:error, :outbound_paused, message |> mark_status(:pending) |> broadcast_delivery_update()}
   end
 
   defp delivery_error(message, :no_consent) do
@@ -345,6 +403,8 @@ defmodule Custyard.Email.Outbound do
               :sending_not_configured,
               :project_token_missing,
               :connection_not_found,
+              :reply_channel_inactive,
+              :reply_identity_changed,
               :envelope_changed
             ],
        do: {:configuration, Atom.to_string(reason)}
