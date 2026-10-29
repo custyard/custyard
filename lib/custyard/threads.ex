@@ -1340,7 +1340,7 @@ defmodule Custyard.Threads do
   end
 
   @doc """
-  Delete contacts that have no threads.
+  Delete contacts with no thread, customer-default, or portal-credential references.
   These can accumulate when threads are deleted.
   Returns the number of contacts deleted.
 
@@ -1350,7 +1350,8 @@ defmodule Custyard.Threads do
   def cleanup_orphaned_contacts(opts \\ []) do
     dry_run = Keyword.get(opts, :dry_run, false)
 
-    # Find contacts with no threads. Expressed as NOT EXISTS rather
+    # Keep contacts that still supply portal reply addresses or attribution,
+    # including revoked credentials retained as history. Expressed as NOT EXISTS rather
     # than an anti-join because SQLite rejects JOINs in DELETE statements,
     # and this query is used for both the count and the delete.
     query =
@@ -1362,6 +1363,20 @@ defmodule Custyard.Threads do
               where: c.contact_id == parent_as(:contact).id,
               select: 1
             )
+          ),
+        where:
+          not exists(
+            from(o in Custyard.Organization,
+              where: o.default_contact_id == parent_as(:contact).id,
+              select: 1
+            )
+          ),
+        where:
+          not exists(
+            from(p in Custyard.PortalCredential,
+              where: p.contact_id == parent_as(:contact).id,
+              select: 1
+            )
           )
       )
 
@@ -1369,11 +1384,6 @@ defmodule Custyard.Threads do
       Repo.aggregate(query, :count)
     else
       Repo.transaction(fn ->
-        contact_ids = from(ct in query, select: ct.id)
-
-        from(c in Custyard.PortalCredential, where: c.contact_id in subquery(contact_ids))
-        |> Repo.update_all(set: [contact_id: nil])
-
         {count, _} = Repo.delete_all(query)
         count
       end)
