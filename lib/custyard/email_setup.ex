@@ -55,13 +55,7 @@ defmodule Custyard.EmailSetup do
                  )
                ) do
         connection
-        |> Ecto.Changeset.change(
-          default_channel_id: id,
-          last_reply_accepted_at: nil,
-          last_reply_delivered_at: nil,
-          last_returning_reply_at: nil,
-          reply_evidence_after_message_id: message_high_water_mark()
-        )
+        |> Ecto.Changeset.change(default_channel_id: id)
         |> Ecto.Changeset.foreign_key_constraint(:default_channel_id)
         |> Repo.update()
       else
@@ -406,6 +400,7 @@ defmodule Custyard.EmailSetup do
       do_record_inbound(route, thread, normalized, id)
     end)
 
+    broadcast(route.tenant_id)
     :ok
   end
 
@@ -448,7 +443,6 @@ defmodule Custyard.EmailSetup do
       )
 
       Repo.update_all(from(c in EmailConnection, where: c.tenant_id == ^tenant_id), set: evidence)
-      broadcast(tenant_id)
     end
 
     :ok
@@ -721,7 +715,10 @@ defmodule Custyard.EmailSetup do
           {:cont, {:ok, acc}}
 
         value ->
-          case encrypt_secret(value, secret_context(connection, field)) do
+          case encrypt_changed_secret(connection, field, value) do
+            {:ok, nil} ->
+              {:cont, {:ok, acc}}
+
             {:ok, ciphertext} ->
               {:cont,
                {:ok, Map.put(acc, String.to_existing_atom(field <> "_ciphertext"), ciphertext)}}
@@ -731,6 +728,16 @@ defmodule Custyard.EmailSetup do
           end
       end
     end)
+  end
+
+  defp encrypt_changed_secret(connection, field, value) do
+    context = secret_context(connection, field)
+    current = Map.get(connection, String.to_existing_atom(field <> "_ciphertext"))
+
+    case Credentials.decrypt(current, context) do
+      {:ok, ^value} -> {:ok, nil}
+      _ -> encrypt_secret(value, context)
+    end
   end
 
   defp normalize_secret_input(value) when is_binary(value), do: String.trim(value)

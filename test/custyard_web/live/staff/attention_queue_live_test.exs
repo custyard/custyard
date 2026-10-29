@@ -27,6 +27,53 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
   end
 
   describe "mount/3" do
+    test "email setup completion refreshes from the tenant's setup events", %{
+      conn: conn,
+      staff: staff
+    } do
+      {:ok, connection} = Custyard.EmailSetup.ensure_connection(staff, staff.tenant_id)
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      Repo.update!(
+        Ecto.Changeset.change(connection,
+          project_id: "tenant-project",
+          last_signed_inbound_at: now,
+          last_reply_delivered_at: now,
+          last_returning_reply_at: now
+        )
+      )
+
+      {:ok, view, _} = live(conn, ~p"/app")
+      assert has_element?(view, "[data-testid=email-setup-prompt]", "Finish email setup")
+
+      assert has_element?(
+               view,
+               "[data-testid=email-setup-missing-evidence] li",
+               "A reply sent from Custyard"
+             )
+
+      refute has_element?(
+               view,
+               "[data-testid=email-setup-missing-evidence] li",
+               "A new email received"
+             )
+
+      thread = insert_thread()
+
+      outgoing =
+        insert_message(
+          thread_id: thread.id,
+          source: :staff,
+          lettermint_message_id: "accepted-message"
+        )
+
+      Custyard.EmailSetup.record_reply_accepted(outgoing)
+      refute has_element?(view, "[data-testid=email-setup-prompt]")
+
+      Custyard.EmailSetup.invalidate_receiving(staff.tenant_id)
+      assert has_element?(view, "[data-testid=email-setup-prompt]")
+    end
+
     test "renders attention queue page", %{conn: conn} do
       org = insert_organization()
       conv = insert_thread(organization_id: org.id, state: :new)

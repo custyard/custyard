@@ -109,6 +109,46 @@ defmodule Custyard.EmailSetupTest do
     assert EmailSetup.connection(c.tenant.id).team_token_ciphertext == saved.team_token_ciphertext
   end
 
+  test "resaving unchanged provider tokens preserves checks and mail evidence; rotation resets them",
+       c do
+    {:ok, connection} = save(c)
+    observed = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    connection =
+      Repo.update!(
+        Ecto.Changeset.change(connection,
+          project_check_status: "verified",
+          sending_check_status: "verified",
+          last_signed_inbound_at: observed,
+          last_reply_accepted_at: observed,
+          last_reply_delivered_at: observed,
+          last_returning_reply_at: observed
+        )
+      )
+
+    assert {:ok, unchanged} =
+             EmailSetup.save_credentials(c.admin, c.tenant.id, %{
+               "project_id" => "project-1",
+               "project_token" => " project-secret ",
+               "team_token" => "team-secret"
+             })
+
+    assert EmailSetup.summary(c.tenant.id).complete?
+    assert unchanged.project_token_ciphertext == connection.project_token_ciphertext
+    assert unchanged.team_token_ciphertext == connection.team_token_ciphertext
+    assert unchanged.project_check_status == "verified"
+    assert unchanged.sending_check_status == "verified"
+
+    assert {:ok, rotated} =
+             EmailSetup.save_credentials(c.admin, c.tenant.id, %{"project_token" => "new-secret"})
+
+    refute EmailSetup.summary(c.tenant.id).complete?
+    refute EmailSetup.summary(c.tenant.id).receiving?
+    refute EmailSetup.summary(c.tenant.id).sending?
+    assert rotated.project_check_status == "unchecked"
+    assert rotated.sending_check_status == "unchecked"
+  end
+
   test "connection checks authenticate independently without creating delivery evidence", c do
     save(c)
     assert {:ok, checked} = EmailSetup.check_connection(c.admin, c.tenant.id)
@@ -292,6 +332,30 @@ defmodule Custyard.EmailSetupTest do
   test "a legacy route does not prevent the first explicit project selection", c do
     reply_channel(c.tenant.id, "legacy@example.com")
     assert {:ok, %{project_id: "project-1"}} = save(c)
+  end
+
+  test "choosing or resaving a portal reply default preserves observed mail delivery", c do
+    {:ok, connection} = save(c)
+    first = reply_channel(c.tenant.id, "support@example.com")
+    second = reply_channel(c.tenant.id, "billing@example.com")
+    observed = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    connection =
+      Repo.update!(
+        Ecto.Changeset.change(connection,
+          last_signed_inbound_at: observed,
+          last_reply_accepted_at: observed,
+          last_reply_delivered_at: observed,
+          last_returning_reply_at: observed
+        )
+      )
+
+    for id <- [first.id, first.id, second.id, nil] do
+      assert {:ok, current} = EmailSetup.set_default_channel(c.admin, c.tenant.id, id)
+      assert current.default_channel_id == id
+      assert EmailSetup.summary(c.tenant.id).complete?
+      assert current.reply_evidence_after_message_id == connection.reply_evidence_after_message_id
+    end
   end
 
   test "changing a legacy sender records the evidence boundary before the wizard is opened", c do

@@ -13,6 +13,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "email_setup:#{socket.assigns.current_tenant.id}")
       Process.send_after(self(), :refresh_deadlines, 60_000)
     end
 
@@ -135,6 +136,10 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   end
 
   @impl true
+  def handle_info(:email_setup_updated, socket) do
+    {:noreply, assign(socket, :email_setup, EmailSetup.summary(socket.assigns.current_tenant.id))}
+  end
+
   def handle_info({:thread_updated, _id}, socket) do
     {:noreply, schedule_reload(socket)}
   end
@@ -273,9 +278,22 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100">
           {if @email_setup.configured?, do: "Finish email setup", else: "Connect support email"}
         </h2>
-        <p class="mt-1 text-sm text-gray-600 dark:text-zinc-300">
+        <p :if={not @email_setup.configured?} class="mt-1 text-sm text-gray-600 dark:text-zinc-300">
           Forward your support mailbox, verify the sending address and test a reply.
         </p>
+        <div :if={@email_setup.configured?} class="mt-1 text-sm text-gray-600 dark:text-zinc-300">
+          <p>Still waiting for:</p>
+          <ul class="mt-1 list-disc pl-5 space-y-1" data-testid="email-setup-missing-evidence">
+            <li :if={not @email_setup.receiving?}>A new email received at a connected address.</li>
+            <li :if={not @email_setup.sending?}>A reply sent from Custyard.</li>
+            <li :if={not @email_setup.delivered?}>
+              The email provider's delivery confirmation for that reply.
+            </li>
+            <li :if={not @email_setup.returning?}>
+              A reply back from the customer's mailbox to the Custyard reply.
+            </li>
+          </ul>
+        </div>
         <.link
           navigate={~p"/app/settings/email"}
           class="mt-2 inline-block text-sm font-medium text-indigo-600 dark:text-indigo-300"

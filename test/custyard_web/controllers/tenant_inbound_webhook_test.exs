@@ -112,7 +112,9 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
         "references" => "<initial@acme.example> #{outgoing.message_id}"
       })
 
+    Phoenix.PubSub.subscribe(Custyard.PubSub, "email_setup:#{c.tenant.id}")
     response = signed_post(path, returned, "route-secret") |> json_response(200)
+    assert_receive :email_setup_updated
     assert response["thread_id"] == thread_id
     assert EmailSetup.summary(c.tenant.id).returning?
     assert EmailSetup.summary(c.tenant.id).complete?
