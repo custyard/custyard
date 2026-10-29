@@ -23,6 +23,7 @@ defmodule Custyard.AuditEvent do
                    :staff_created,
                    :staff_removed,
                    :tenant_status_changed,
+                   :tenant_host_removed,
                    :acknowledgment_replayed,
                    :acknowledgment_binding_created,
                    # Provider delivery-status webhook advanced an outbound message's status

@@ -269,13 +269,49 @@ defmodule Custyard.Tenants do
 
   def remove_host(%InstanceAdmin{} = admin, tenant_id, host_id) do
     Repo.transaction(fn ->
-      lock_admin!(admin)
+      current_admin = lock_admin!(admin)
+      lock_host_registry!(tenant_id)
 
       host =
         Repo.get_by(TenantHost, tenant_id: tenant_id, id: host_id) || Repo.rollback(:not_found)
 
-      Repo.delete!(host)
+      installation_host = normalize_host(app_host())
+
+      unless Repo.exists?(
+               from h in TenantHost,
+                 where:
+                   h.tenant_id == ^tenant_id and h.id != ^host.id and
+                     h.hostname != ^installation_host
+             ),
+             do: Repo.rollback(:last_host)
+
+      deleted = Repo.delete!(host)
+
+      case AuditEvent.create(%{
+             tenant_id: tenant_id,
+             event_type: :tenant_host_removed,
+             source: "instance_admin",
+             payload: %{
+               instance_admin_id: current_admin.id,
+               host_id: host.id,
+               hostname: host.hostname
+             }
+           }) do
+        {:ok, _} -> deleted
+        {:error, reason} -> Repo.rollback(reason)
+      end
     end)
+  end
+
+  # Serialize host removal across different instance administrators. Locking
+  # only each actor cannot protect the last-host invariant on PostgreSQL.
+  defp lock_host_registry!(tenant_id) do
+    query = from t in Tenant, where: t.id == ^tenant_id, update: [set: [updated_at: t.updated_at]]
+
+    case Repo.update_all(query, []) do
+      {1, _} -> :ok
+      _ -> Repo.rollback(:not_found)
+    end
   end
 
   def add_host_for_admin(%InstanceAdmin{} = admin, tenant_id, hostname) do

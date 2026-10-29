@@ -93,6 +93,9 @@ defmodule CustyardWeb.Admin.TenantsLive do
            Custyard.Repo.preload(socket.assigns.tenant, :hosts, force: true)
          )}
 
+      {:error, :last_host} ->
+        {:noreply, put_flash(socket, :error, "Add another hostname before removing this one")}
+
       _ ->
         {:noreply, put_flash(socket, :error, "Could not remove hostname")}
     end

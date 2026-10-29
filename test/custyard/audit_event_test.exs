@@ -19,6 +19,7 @@ defmodule Custyard.AuditEventTest do
                :staff_created,
                :staff_removed,
                :tenant_status_changed,
+               :tenant_host_removed,
                :acknowledgment_replayed,
                :acknowledgment_binding_created,
                :delivery_status_updated,
