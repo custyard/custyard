@@ -7,12 +7,13 @@ defmodule Custyard.Threads do
     Thread,
     EmailAddress,
     Message,
+    MessageDrafts,
     StaffAccess,
     StaffAccount,
     Repo
   }
 
-  alias Custyard.Email.{OutboundQueue, ReplyRecipients}
+  alias Custyard.Email.{OutboundQueue, ReplyAudit, ReplyRecipients}
   import Ecto.Query
 
   def list(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
@@ -248,7 +249,9 @@ defmodule Custyard.Threads do
       # Channel badge and the reply From identity (spec-inbound-channels D3)
       inbound_channel: :inbound_route,
       # Attachments and per-recipient delivery outcomes for the thread
-      messages: {from(m in Message, order_by: m.inserted_at), [:attachments, :recipient_statuses]}
+      messages:
+        {from(m in Message, order_by: m.inserted_at),
+         [:attachments, :recipient_statuses, :author_staff]}
     ])
   end
 
@@ -621,6 +624,44 @@ defmodule Custyard.Threads do
     message
   end
 
+  @doc "Create an internal note with the currently authorized staff author and audit trail."
+  def add_internal_note(%Thread{} = thread, body, opts) do
+    case Keyword.get(opts, :staff) do
+      %StaffAccount{} = staff ->
+        with_staff_access(thread.id, staff, fn current, current_staff ->
+          check_draft_version!(current, current_staff, opts)
+
+          changeset =
+            %Message{}
+            |> Message.changeset(%{
+              source: :staff,
+              body: body,
+              is_internal_note: true,
+              thread_id: current.id
+            })
+            |> Message.put_author(current_staff)
+
+          case Repo.insert(changeset) do
+            {:ok, message} ->
+              ReplyAudit.record!(:internal_note_created, message, current, current_staff)
+              touch_thread_updated_at(current.id)
+              {:ok, message}
+
+            error ->
+              error
+          end
+        end)
+
+      _ ->
+        {:error, :unauthorized}
+    end
+  end
+
+  @doc "The latest message activity observed by a staff composer, including private notes."
+  def latest_activity_id(thread_id) do
+    Repo.one(from m in Message, where: m.thread_id == ^thread_id, select: max(m.id)) || 0
+  end
+
   @doc """
   Soft-delete a message (GitHub-style tombstone).
 
@@ -750,6 +791,8 @@ defmodule Custyard.Threads do
   defp reply_transaction(thread, body, opts) do
     Repo.transaction(fn ->
       {thread, opts} = load_reply_thread(thread.id, opts)
+      check_reply_activity!(thread, opts)
+      check_draft_version!(thread, opts[:staff], opts)
 
       # Recipient and consent decisions use the row and associations read after
       # acquiring the scope lock, never the LiveView's earlier snapshot.
@@ -759,6 +802,7 @@ defmodule Custyard.Threads do
 
       with {:ok, message} <- insert_reply_message(thread, body, attempt_delivery?, opts),
            {:ok, _conv} <- update_thread_after_reply(thread) do
+        ReplyAudit.record!(:reply_queued, message, thread, opts[:staff])
         {message, thread, attempt_delivery?}
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -766,24 +810,53 @@ defmodule Custyard.Threads do
     end)
   end
 
+  defp check_reply_activity!(thread, opts) do
+    if Keyword.has_key?(opts, :expected_activity_id) and
+         opts[:expected_activity_id] != latest_activity_id(thread.id),
+       do: Repo.rollback(:conversation_changed)
+  end
+
+  defp check_draft_version!(thread, %StaffAccount{} = staff, opts) do
+    if Keyword.has_key?(opts, :expected_draft_version) do
+      MessageDrafts.verify_version!(staff.id, thread.id, opts[:expected_draft_version])
+    end
+  end
+
+  defp check_draft_version!(_thread, _staff, opts) do
+    if Keyword.has_key?(opts, :expected_draft_version), do: Repo.rollback(:unauthorized)
+  end
+
   defp load_reply_thread(id, opts) do
     case Keyword.get(opts, :staff) do
       %StaffAccount{} = staff ->
         current_staff = StaffAccess.lock_current(staff)
 
-        case current_staff && lock_thread_for_staff(id, current_staff) do
+        case valid_reply_staff?(current_staff, staff) &&
+               lock_thread_for_staff(id, current_staff) do
+          false ->
+            Repo.rollback(:unauthorized)
+
           nil ->
             Repo.rollback(:unauthorized)
 
           current ->
             {Repo.preload(current, [:contact, :organization, :prospect]),
-             Keyword.put(opts, :staff_email, current_staff.email)}
+             opts
+             |> Keyword.put(:staff, current_staff)
+             |> Keyword.put(:staff_email, current_staff.email)}
         end
 
       nil ->
         {Repo.get!(Thread, id) |> Repo.preload([:contact, :organization, :prospect]), opts}
     end
   end
+
+  defp valid_reply_staff?(%StaffAccount{} = current, staff) do
+    StaffAccount.session_claim_matches?(current, staff.session_claim) and
+      Custyard.Tenants.active?(current.tenant_id)
+  end
+
+  defp valid_reply_staff?(_, _), do: false
 
   defp handle_reply_transaction({:ok, {message, thread, attempt_delivery?}}) do
     # The pending message becomes a delivery job only after the transaction
@@ -835,6 +908,7 @@ defmodule Custyard.Threads do
 
     %Message{}
     |> Message.changeset(attrs)
+    |> Message.put_author(opts[:staff])
     |> Ecto.Changeset.change(delivery_recipients_locked: true)
     |> Repo.insert()
   end

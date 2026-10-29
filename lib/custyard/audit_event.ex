@@ -27,6 +27,10 @@ defmodule Custyard.AuditEvent do
                    :acknowledgment_binding_created,
                    # Provider delivery-status webhook advanced an outbound message's status
                    :delivery_status_updated,
+                   :reply_queued,
+                   :internal_note_created,
+                   :reply_retried,
+                   :outbound_pause_changed,
                    # Inbound channels (spec-inbound-channels D6/D7): admin actions and
                    # lifecycle transitions, the quiet-channel notice, and triage outcomes
                    # that did not become a customer message

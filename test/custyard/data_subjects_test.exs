@@ -78,6 +78,38 @@ defmodule Custyard.DataSubjectsTest do
     assert Repo.get(Custyard.Message, ctx.sent.id).body == "I wrote this"
   end
 
+  test "erasure removes private drafts without affecting other customers", ctx do
+    current_scope = scope(ctx.org)
+
+    {:ok, draft} =
+      Custyard.MessageDrafts.save(
+        current_scope,
+        ctx.sent.thread_id,
+        %{reply_text: "Unsaved quote", reply_cc: "pat@example.com"},
+        0
+      )
+
+    {:ok, other} =
+      Custyard.MessageDrafts.save(
+        current_scope,
+        ctx.foreign.thread_id,
+        %{note_text: "Other customer"},
+        0
+      )
+
+    assert {:ok, _} = DataSubjects.erase_subject(current_scope, "pat@example.com", ctx.org.id)
+    refute Repo.get(Custyard.StaffMessageDraft, draft.id)
+    assert Repo.get(Custyard.StaffMessageDraft, other.id)
+
+    assert {:error, :draft_conflict} =
+             Custyard.MessageDrafts.save(
+               current_scope,
+               ctx.sent.thread_id,
+               %{reply_text: "Stale copy"},
+               draft.lock_version
+             )
+  end
+
   defp assert_scope_denied(ctx, stale_scope) do
     assert_raise Ecto.NoResultsError, fn ->
       DataSubjects.export(stale_scope, "pat@example.com", ctx.org.id)

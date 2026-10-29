@@ -40,7 +40,8 @@ defmodule Custyard.Threads.RetentionSweep do
     channel_rejections: 0,
     channel_verifications: 0,
     channel_tokens: 0,
-    attachment_files: 0
+    attachment_files: 0,
+    message_drafts: 0
   }
 
   def start_link(opts) do
@@ -100,7 +101,8 @@ defmodule Custyard.Threads.RetentionSweep do
         :channel_rejections,
         :channel_verifications,
         :channel_tokens,
-        :attachment_files
+        :attachment_files,
+        :message_drafts
       ])
     else
       %{rejections: rejections, verifications: verifications, tokens: tokens} =
@@ -111,7 +113,8 @@ defmodule Custyard.Threads.RetentionSweep do
         channel_verifications: verifications,
         channel_tokens: tokens,
         # Files whose attachment rows went with their swept threads.
-        attachment_files: Custyard.Attachments.sweep_orphan_files()
+        attachment_files: Custyard.Attachments.sweep_orphan_files(),
+        message_drafts: Custyard.MessageDrafts.sweep_expired()
       }
     end
   end

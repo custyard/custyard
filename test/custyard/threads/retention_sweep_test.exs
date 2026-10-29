@@ -13,7 +13,8 @@ defmodule Custyard.Threads.RetentionSweepTest do
     channel_rejections: 0,
     channel_verifications: 0,
     channel_tokens: 0,
-    attachment_files: 0
+    attachment_files: 0,
+    message_drafts: 0
   }
 
   # cleanup_resolved_threads/2 bounds on :updated_at, so ageing a row

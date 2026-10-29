@@ -79,6 +79,75 @@ defmodule Custyard.TenantMigrationTest do
     end
 
     @tag backend: backend
+    test "#{backend}: message author migration preserves history and tenant boundaries",
+         context do
+      opts =
+        case context.backend do
+          :sqlite ->
+            [database: Path.join(context.tmp_dir, "authors.db")]
+
+          :turso ->
+            server =
+              start_supervised!(
+                {Custyard.TursoTestServer, database: Path.join(context.tmp_dir, "authors.db")}
+              )
+
+            [turso_url: Custyard.TursoTestServer.url(server)]
+        end
+
+      start_supervised!({Repo, [pool_size: 2, log: false] ++ opts})
+      Ecto.Migrator.run(Repo, context.migrations, :up, to: 20_261_029_010_000, log: false)
+
+      for id <- [1, 2] do
+        Repo.query!(
+          "INSERT INTO tenants (id, name, slug, inserted_at, updated_at) VALUES (?, 'Tenant', ?, '2026-10-29 00:00:00', '2026-10-29 00:00:00')",
+          [id, "tenant-#{id}"]
+        )
+
+        Repo.query!(
+          "INSERT INTO staff_accounts (id, tenant_id, email, inserted_at, updated_at) VALUES (?, ?, 'staff@example.com', '2026-10-29 00:00:00', '2026-10-29 00:00:00')",
+          [id, id]
+        )
+      end
+
+      Repo.query!(
+        "INSERT INTO threads (id, tenant_id, subject, inserted_at, updated_at) VALUES (1, 1, 'Historical thread', '2026-10-29 00:00:00', '2026-10-29 00:00:00')"
+      )
+
+      Repo.query!(
+        "INSERT INTO messages (id, tenant_id, thread_id, source, body, inserted_at) VALUES (1, 1, 1, 'staff', 'Historical reply', '2026-10-29 00:00:00')"
+      )
+
+      assert [20_261_029_020_000] =
+               Ecto.Migrator.run(Repo, context.migrations, :up,
+                 to: 20_261_029_020_000,
+                 log: false
+               )
+
+      assert %{rows: [["Historical reply", nil]]} =
+               Repo.query!("SELECT body, author_staff_id FROM messages WHERE id = 1")
+
+      assert {:error, _} = Repo.query("UPDATE messages SET author_staff_id = 2 WHERE id = 1")
+      Repo.query!("UPDATE messages SET author_staff_id = 1 WHERE id = 1")
+      assert {:error, _} = Repo.query("UPDATE staff_accounts SET tenant_id = 2 WHERE id = 1")
+      Repo.query!("DELETE FROM staff_accounts WHERE id = 1")
+
+      assert %{rows: [["Historical reply", nil]]} =
+               Repo.query!("SELECT body, author_staff_id FROM messages WHERE id = 1")
+
+      assert [20_261_029_020_000] =
+               Ecto.Migrator.run(Repo, context.migrations, :down,
+                 to: 20_261_029_020_000,
+                 log: false
+               )
+
+      assert %{rows: [["Historical reply"]]} =
+               Repo.query!("SELECT body FROM messages WHERE id = 1")
+
+      assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
+    end
+
+    @tag backend: backend
     test "#{backend}: customer public IDs preserve existing records and relationships", context do
       opts =
         case context.backend do

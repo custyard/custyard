@@ -59,6 +59,9 @@ defmodule Custyard.Message do
     # e.g., a message with source: :email might have origin: :lettermint
     field :origin, Ecto.Enum, values: @origins
     field :sender_email, :string
+    # The authenticated human author is independent of the tenant's shared
+    # sending identity. Set only by the authorized staff mutation context.
+    belongs_to :author_staff, Custyard.StaffAccount
     field :body, :string
     field :is_internal_note, :boolean, default: false
     field :message_id, :string
@@ -119,6 +122,19 @@ defmodule Custyard.Message do
   def origins, do: @origins
   def delivery_statuses, do: @delivery_statuses
   def triage_classes, do: @triage_classes
+
+  @doc "Attach an already authorized staff author; public message attrs cannot set it."
+  def put_author(changeset, %Custyard.StaffAccount{id: id, tenant_id: tenant_id}) do
+    if get_field(changeset, :tenant_id) == tenant_id do
+      changeset
+      |> put_change(:author_staff_id, id)
+      |> foreign_key_constraint(:author_staff_id)
+    else
+      add_error(changeset, :author_staff_id, "must belong to the message tenant")
+    end
+  end
+
+  def put_author(changeset, nil), do: changeset
 
   @doc false
   def changeset(message, attrs) do

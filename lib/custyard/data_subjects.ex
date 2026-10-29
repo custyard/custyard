@@ -117,6 +117,7 @@ defmodule Custyard.DataSubjects do
       {sent, received} = locked_participations(email, organization_id)
       count = Enum.count(received, &scrub!(&1, email))
       erase_recipient_statuses!(email, organization_id)
+      erase_drafts!(organization_id)
       payload = %{"erased" => count, "sent_by_subject" => length(sent)}
       audit!(organization_id, payload)
       %{erased: count, sent_by_subject: length(sent)}
@@ -149,6 +150,7 @@ defmodule Custyard.DataSubjects do
       erased = Enum.count(received, &scrub!(&1, email))
       scrub_audit_identity!(scope.tenant_id, email, organization_id, sent)
       erase_recipient_statuses!(email, organization_id)
+      erase_drafts!(organization_id)
       sent_ids = Enum.map(sent, & &1.id)
       Enum.each(sent, &erase_sent!/1)
       Repo.delete_all(from(r in MessageRecipientStatus, where: r.message_id in ^sent_ids))
@@ -177,6 +179,14 @@ defmodule Custyard.DataSubjects do
   end
 
   @erased_subject "(erased)"
+
+  # Drafts can contain unsent quotes or addresses and have no reliable
+  # participant metadata. Drop the customer's drafts rather than retaining
+  # a private copy of erased data or repopulating an erased recipient.
+  defp erase_drafts!(organization_id) do
+    ids = from(t in Thread, where: t.organization_id == ^organization_id, select: t.id)
+    Repo.delete_all(from(d in Custyard.StaffMessageDraft, where: d.thread_id in subquery(ids)))
+  end
 
   # Acquire SQLite's write reservation before reading, or lock matching
   # PostgreSQL rows. Concurrent erasures must never overwrite one another's
