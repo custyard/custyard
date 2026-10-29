@@ -68,8 +68,8 @@ defmodule CustyardWeb.Portal.ThreadLive do
 
   defp submit_reply(socket, conv, org, body) do
     if String.trim(body) != "" do
-      sender_email =
-        socket.assigns.portal_credential.contact && socket.assigns.portal_credential.contact.email
+      contact = Custyard.PortalCredentials.reply_contact(socket.assigns.portal_credential)
+      sender_email = contact && contact.email
 
       case Threads.create_message(%{
              tenant_id: org.tenant_id,

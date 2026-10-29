@@ -54,6 +54,23 @@ defmodule CustyardWeb.Staff.OrganizationDetailLiveTest do
              live(conn, "/app/customers/#{customer.public_id}")
   end
 
+  test "administrators choose a default contact only from this customer", %{conn: conn} do
+    customer = insert_organization()
+    contact = insert_contact(organization_id: customer.id)
+    other = insert_contact(organization_id: insert_organization().id)
+    {:ok, view, _} = live(conn, "/app/customers/#{customer.public_id}")
+
+    view
+    |> form("#customer-default-contact-form", contact_id: to_string(contact.id))
+    |> render_submit()
+
+    assert Repo.reload!(customer).default_contact_id == contact.id
+    render_submit(view, "set_default_contact", %{"contact_id" => to_string(other.id)})
+    assert Repo.reload!(customer).default_contact_id == contact.id
+    view |> form("#customer-default-contact-form", contact_id: "") |> render_submit()
+    assert is_nil(Repo.reload!(customer).default_contact_id)
+  end
+
   test "customer history includes resolved threads ordered by last update", %{conn: conn} do
     customer = insert_organization()
 

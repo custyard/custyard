@@ -26,12 +26,13 @@ defmodule Custyard.Email.SenderMatcherTest do
     assert contact_a.id != contact_b.id
     assert {org_a.identity_kind, org_a.identity_value} == {:domain, "acme.example"}
     assert contact_a.tenant_id == a.id
+    assert is_nil(org_a.default_contact_id)
   end
 
   test "personal mailboxes create independent sender named customers" do
     tenant = tenant()
 
-    assert {:ok, alice, _} =
+    assert {:ok, alice, alice_contact} =
              SenderMatcher.match_within_tenant("Alice Smith <alice@gmail.com>", tenant.id)
 
     assert {:ok, bob, _} = SenderMatcher.match_within_tenant("bob@gmail.com", tenant.id)
@@ -40,6 +41,8 @@ defmodule Custyard.Email.SenderMatcherTest do
     assert alice.identity_value == "alice@gmail.com"
     assert alice.id != bob.id
     assert is_nil(alice.domain)
+    assert alice.default_contact_id == alice_contact.id
+    assert Repo.reload!(alice).default_contact_id == alice_contact.id
   end
 
   test "unidentifiable senders leave the customer unassigned" do

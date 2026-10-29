@@ -173,6 +173,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
     case Threads.send_reply(thread, body,
            staff: staff,
            staff_email: staff.email,
+           reply_channel_id: Map.get(params, "reply_channel_id", socket.assigns.reply_channel_id),
            expected_recipient:
              socket.assigns.reply_recipient && socket.assigns.reply_recipient.address,
            cc: Map.get(params, "cc", socket.assigns.reply_cc)
@@ -273,12 +274,28 @@ defmodule CustyardWeb.Staff.ThreadLive do
         {:noreply, put_flash(socket, :error, "Message not found")}
 
       message ->
-        case Outbound.retry(socket.assigns.current_scope, message) do
+        case Outbound.retry(socket.assigns.current_scope, message,
+               reply_channel_id: socket.assigns.reply_channel_id,
+               expected_recipient:
+                 socket.assigns.reply_recipient && socket.assigns.reply_recipient.address
+             ) do
           {:ok, _} ->
             {:noreply, reload_thread(socket)}
 
           {:error, :unauthorized} ->
             {:noreply, access_revoked(socket)}
+
+          {:error, :reply_channel_required} ->
+            {:noreply, put_flash(socket, :error, reply_error_message(:reply_channel_required))}
+
+          {:error, :recipient_changed} ->
+            {:noreply,
+             socket
+             |> reload_thread()
+             |> put_flash(
+               :error,
+               "The recipient changed. Review the updated reply before retrying."
+             )}
 
           {:error, _} ->
             {:noreply,
@@ -312,6 +329,16 @@ defmodule CustyardWeb.Staff.ThreadLive do
 
   def handle_event("update_reply", %{"body" => body} = params, socket) do
     socket = assign(socket, :reply_text, body)
+
+    socket =
+      if Map.has_key?(params, "reply_channel_id") do
+        socket
+        |> assign(:reply_channel_selected?, true)
+        |> assign(:reply_channel_id, params["reply_channel_id"])
+        |> assign_reply_identity(socket.assigns.thread)
+      else
+        socket
+      end
 
     case Map.fetch(params, "cc") do
       {:ok, cc} when is_binary(cc) ->
@@ -866,6 +893,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
   defp reply_error_message({:invalid_cc, invalid}),
     do: "Invalid CC address: #{Enum.join(invalid, ", ")}"
 
+  defp reply_error_message(:reply_channel_required),
+    do: "Choose an active tenant email address in From before sending."
+
   defp reply_error_message(_reason), do: "Failed to send reply"
 
   # Reply-all CC the composer starts from (spec-inbound-channels D5). A list
@@ -883,40 +913,38 @@ defmodule CustyardWeb.Staff.ThreadLive do
     assign(socket, :reply_cc, Enum.join(cc, ", "))
   end
 
-  # The From identity the next reply will carry (spec-inbound-channels D3).
-  # The platform fallback has no address of its own on the thread, so
-  # the configured instance sender is shown instead.
+  # Only tenant-owned channels are offered as a support reply identity.
   defp assign_reply_identity(socket, thread) do
-    identity =
-      Threads.reply_identity(thread,
-        staff_email: socket.assigns.current_staff.email
-      )
+    channels = Threads.reply_channels(thread.tenant_id)
 
-    identity =
-      case identity do
-        %{source: :platform, address: nil} = id ->
-          %{
-            id
-            | address:
-                Application.get_env(:custyard, :email_from_address, "support@custyard.local")
-          }
-
-        id ->
-          id
+    preferred =
+      if socket.assigns[:reply_channel_selected?] do
+        socket.assigns[:reply_channel_id]
+      else
+        case Threads.reply_sending_channel(thread) do
+          nil -> nil
+          channel -> channel.id
+        end
       end
 
+    channel = Enum.find(channels, &(to_string(&1.id) == to_string(preferred)))
+    channel_id = channel && channel.id
+    identity = Threads.reply_identity(thread, reply_channel_id: channel_id)
+
     socket
+    |> assign(:reply_channels, channels)
+    |> assign(:reply_channel_id, channel_id)
     |> assign(:reply_identity, identity)
-    |> assign(:archive_copy_address, archive_copy_address(thread))
+    |> assign(:archive_copy_address, channel && channel.archive_copy && channel.public_address)
   end
 
-  # D4: the mailbox that receives a BCC of every reply, when the channel asks.
-  defp archive_copy_address(%Thread{
-         inbound_channel: %Custyard.InboundChannel{archive_copy: true, public_address: address}
-       }),
-       do: address
+  defp reply_address_label(channel) do
+    address = Custyard.InboundChannels.from_address(channel)
 
-  defp archive_copy_address(_thread), do: nil
+    if address == channel.public_address,
+      do: address,
+      else: "#{channel.public_address} (sends as #{address})"
+  end
 
   defp fetch_other_org_threads(%{organization_id: nil}), do: []
 
@@ -1157,11 +1185,15 @@ defmodule CustyardWeb.Staff.ThreadLive do
             data-testid="composer-from-identity"
             data-identity-source={@reply_identity.source}
           >
-            Replies go out as
-            <span :if={@reply_identity.name} class="text-gray-700 dark:text-zinc-300">
+            <span :if={is_nil(@reply_identity.address)}>Choose a tenant sending address below.</span>
+            <span :if={@reply_identity.address}>Replies go out as</span>
+            <span
+              :if={@reply_identity.address && @reply_identity.name}
+              class="text-gray-700 dark:text-zinc-300"
+            >
               {@reply_identity.name}
             </span>
-            <code class="text-gray-700 dark:text-zinc-300">&lt;{@reply_identity.address}&gt;</code>
+            <code :if={@reply_identity.address} class="text-gray-700 dark:text-zinc-300">&lt;{@reply_identity.address}&gt;</code>
             <span :if={@archive_copy_address} data-testid="composer-archive-copy">
               · a copy is kept in {@archive_copy_address}
             </span>
@@ -1174,6 +1206,20 @@ defmodule CustyardWeb.Staff.ThreadLive do
             class="space-y-1.5"
             data-testid="staff-reply-form"
           >
+            <.input
+              type="select"
+              name="reply_channel_id"
+              id="staff-reply-from"
+              value={@reply_channel_id}
+              label="From"
+              prompt="Choose a sending address"
+              options={
+                Enum.map(
+                  @reply_channels,
+                  &{reply_address_label(&1), &1.id}
+                )
+              }
+            />
             <p
               :if={@reply_recipient}
               class="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400"

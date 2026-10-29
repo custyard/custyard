@@ -61,6 +61,22 @@ defmodule Custyard.PortalCredentials do
 
   def authenticate(_, _), do: {:error, :not_found}
 
+  @doc "Contact attribution for portal requests; an explicit credential contact wins over the customer default."
+  def reply_contact(%PortalCredential{
+        tenant_id: tenant_id,
+        organization_id: org_id,
+        contact_id: id
+      }) do
+    if id do
+      Repo.get_by(Contact, id: id, tenant_id: tenant_id, organization_id: org_id)
+    else
+      case Repo.get_by(Organization, id: org_id, tenant_id: tenant_id) do
+        nil -> nil
+        org -> Custyard.Organizations.default_contact(org)
+      end
+    end
+  end
+
   def revoke(
         %Scope{tenant_id: tenant_id, role: "admin"} = scope,
         %PortalCredential{tenant_id: tenant_id} = credential

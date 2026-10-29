@@ -25,7 +25,8 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       |> Phoenix.ConnTest.init_test_session(%{})
       |> put_staff_session(staff.id)
 
-    {:ok, conn: conn, staff: staff}
+    sending_channel = insert_inbound_channel(state: :active)
+    {:ok, conn: conn, staff: staff, sending_channel: sending_channel}
   end
 
   test "clearing suspect starts recovery and retains an explicit retry when unavailable", %{
@@ -1653,7 +1654,11 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert identity =~ ~s(data-identity-source="channel")
     end
 
-    test "composer falls back to the platform sender for public intake", %{conn: conn} do
+    test "composer requires a tenant sender instead of showing the installation sender", %{
+      conn: conn,
+      sending_channel: channel
+    } do
+      Repo.update!(Ecto.Changeset.change(channel, state: :paused))
       conv = insert_thread(source: :public_intake)
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
@@ -1661,7 +1666,9 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       identity = view |> element("[data-testid=composer-from-identity]") |> render()
       assert identity =~ ~s(data-identity-source="platform")
 
-      assert identity =~
+      assert identity =~ "Choose a tenant sending address"
+
+      refute identity =~
                Application.get_env(:custyard, :email_from_address, "support@custyard.local")
     end
   end

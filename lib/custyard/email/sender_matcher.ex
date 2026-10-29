@@ -16,7 +16,7 @@ defmodule Custyard.Email.SenderMatcher do
         {:ok, nil, nil}
 
       {_email, {:contact, contact}} ->
-        {:ok, Repo.get!(Organization, contact.organization_id), contact}
+        with_default_contact(Repo.get!(Organization, contact.organization_id), contact)
 
       {email, {:organization, org}} ->
         with_contact(org, email, from)
@@ -125,15 +125,27 @@ defmodule Custyard.Email.SenderMatcher do
 
     case result do
       {:ok, contact} ->
-        {:ok, org, contact}
+        with_default_contact(org, contact)
 
       {:error, changeset} ->
         case Repo.get_by(Contact, organization_id: org.id, email: email) do
           nil -> {:error, changeset}
-          contact -> {:ok, org, contact}
+          contact -> with_default_contact(org, contact)
         end
     end
   end
+
+  defp with_default_contact(%Organization{identity_kind: :email} = org, contact) do
+    from(o in Organization,
+      where: o.id == ^org.id and o.tenant_id == ^contact.tenant_id,
+      where: is_nil(o.default_contact_id) and o.identity_value == ^contact.email
+    )
+    |> Repo.update_all(set: [default_contact_id: contact.id])
+
+    {:ok, Repo.reload!(org), contact}
+  end
+
+  defp with_default_contact(org, contact), do: {:ok, org, contact}
 
   def extract_email(from) when is_binary(from) do
     candidate =

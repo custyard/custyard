@@ -37,6 +37,19 @@ defmodule Custyard.Organizations do
       do: Repo.get_by(Organization, public_id: public_id, tenant_id: tenant_id)
   end
 
+  @doc "Resolve the customer's designated contact without borrowing another customer's contact."
+  def default_contact(%Organization{id: id, tenant_id: tenant_id}) do
+    Repo.one(
+      from o in Organization,
+        join: c in Contact,
+        on:
+          c.id == o.default_contact_id and c.organization_id == o.id and
+            c.tenant_id == o.tenant_id,
+        where: o.id == ^id and o.tenant_id == ^tenant_id,
+        select: c
+    )
+  end
+
   def create(%Custyard.Scope{} = scope, attrs) do
     with_scope(scope, fn _staff ->
       attrs =

@@ -115,6 +115,10 @@ defmodule Custyard.TenantMigrationTest do
         "INSERT INTO contacts (id, organization_id, tenant_id, email, inserted_at, updated_at) VALUES (1, 1, 1, 'contact@example.com', '2026-10-29 00:00:00', '2026-10-29 00:00:00')"
       )
 
+      Repo.query!(
+        "UPDATE organizations SET identity_kind = 'email', identity_value = 'contact@example.com' WHERE id = 1"
+      )
+
       Ecto.Migrator.run(Repo, context.migrations, :up, all: true, log: false)
 
       assert %{rows: [[1, first], [2, second]]} =
@@ -124,6 +128,13 @@ defmodule Custyard.TenantMigrationTest do
       assert {:ok, _} = Ecto.UUID.cast(second)
       assert first != second
       assert %{rows: [[1, 1]]} = Repo.query!("SELECT id, organization_id FROM contacts")
+
+      assert %{rows: [[1, 1], [2, nil]]} =
+               Repo.query!("SELECT id, default_contact_id FROM organizations ORDER BY id")
+
+      assert {:error, _} =
+               Repo.query("UPDATE organizations SET default_contact_id = 1 WHERE id = 2")
+
       assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
       assert {:error, _} = Repo.query("UPDATE organizations SET public_id = NULL WHERE id = 1")
 

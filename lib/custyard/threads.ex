@@ -432,6 +432,7 @@ defmodule Custyard.Threads do
 
     cond do
       email = contact_email(thread.contact) -> {:contact, email}
+      email = customer_default_email(thread) -> {:contact, email}
       email = prospect_email(thread.prospect) -> {:prospect, email}
       true -> :none
     end
@@ -449,6 +450,16 @@ defmodule Custyard.Threads do
     do: email
 
   defp contact_email(_contact), do: nil
+
+  defp customer_default_email(%Thread{source: source, organization_id: id, tenant_id: tenant_id})
+       when source in [:portal, :email, :lettermint] and is_integer(id) do
+    case Repo.get_by(Custyard.Organization, id: id, tenant_id: tenant_id) do
+      nil -> nil
+      org -> contact_email(Custyard.Organizations.default_contact(org))
+    end
+  end
+
+  defp customer_default_email(_thread), do: nil
 
   # Prospect email counts only while thread access is not revoked
   defp prospect_email(%Custyard.Prospect{email: email, revoked_at: nil})
@@ -669,9 +680,8 @@ defmodule Custyard.Threads do
 
   ## Options
 
-    * `:staff_email` - email of the staff sending the reply (optional;
-      never used for public-intake threads, which always send from the
-      platform address)
+    * `:reply_channel_id` - active tenant sending channel selected in the
+      composer; its identity is snapshotted on the queued reply
     * `:staff` - staff account whose current organization scope must be
       locked and authorized before the reply is inserted
     * `:cc` - CC addresses (list or comma-separated string); each must be a
@@ -790,7 +800,8 @@ defmodule Custyard.Threads do
   # Build and insert the staff reply message with email metadata.
   defp insert_reply_message(thread, body, attempt_delivery?, opts) do
     last_customer_msg = find_last_customer_message(thread.id)
-    channel = reply_sending_channel(thread)
+
+    channel = reply_message_channel(thread, attempt_delivery?, opts)
 
     recipient =
       case ReplyRecipients.recipient(thread) do
@@ -815,7 +826,7 @@ defmodule Custyard.Threads do
       delivery_status: if(attempt_delivery?, do: :pending, else: :withheld),
       message_id: generate_outbound_message_id(thread),
       in_reply_to: last_customer_msg && last_customer_msg.message_id,
-      sender_email: resolve_sender_email(thread, opts),
+      sender_email: reply_sender_address(channel),
       inbound_channel_id: channel && channel.id,
       to_addresses: if(recipient, do: [recipient], else: []),
       # Reply-all CC (D5): accepted or edited by the staff in the composer.
@@ -826,6 +837,19 @@ defmodule Custyard.Threads do
     |> Message.changeset(attrs)
     |> Ecto.Changeset.change(delivery_recipients_locked: true)
     |> Repo.insert()
+  end
+
+  defp reply_sender_address(nil), do: nil
+  defp reply_sender_address(channel), do: Custyard.InboundChannels.from_address(channel)
+
+  # Resolve and validate the address inside the reply transaction.
+  defp reply_message_channel(thread, attempt_delivery?, opts) do
+    if attempt_delivery? and Keyword.has_key?(opts, :reply_channel_id) do
+      selected_reply_channel(thread.tenant_id, opts[:reply_channel_id]) ||
+        Repo.rollback(:reply_channel_required)
+    else
+      reply_sending_channel(thread)
+    end
   end
 
   # Update thread state and timestamps after a staff reply.
@@ -888,23 +912,17 @@ defmodule Custyard.Threads do
 
   Returns `%{address, name, source}` where `source` is:
 
-    * `:channel` - the thread arrived on an inbound channel; `address`
+    * `:channel` - an active sending channel was selected, or the thread
+      arrived on a channel, or the tenant has a default; `address`
       is the public mailbox local part at the channel's sending domain
       (or its ingress address when the
       channel falls back to that identity) and `name` its display name when
-      set, else the organization name
-    * `:route` - the project or general inbound route's `from_address`
-    * `:staff` - `opts[:staff_email]`, when no channel or route
-      identity exists
-    * `:platform` - nothing above applies; `address` is nil and the
-      configured `:email_from_address` fallback is used at delivery. Always
-      the case for public-intake threads, whose `name` is nil because
-      the instance branding name applies.
+      set, else the tenant name
+    * `:platform` - no tenant sending channel is available; `address` is nil
 
   ## Options
 
-    * `:staff_email` - the replying staff's address, used only for the
-      `:staff` source
+    * `:reply_channel_id` - explicitly selected tenant sending channel
   """
   @spec reply_identity(struct(), keyword()) :: %{
           address: String.t() | nil,
@@ -913,8 +931,8 @@ defmodule Custyard.Threads do
         }
   def reply_identity(thread, opts \\ [])
 
-  def reply_identity(%Thread{} = thread, _opts) do
-    case reply_sending_channel(thread) do
+  def reply_identity(%Thread{} = thread, opts) do
+    case reply_sending_channel(thread, opts) do
       %Custyard.InboundChannel{} = channel ->
         %{
           address: Custyard.InboundChannels.from_address(channel),
@@ -927,17 +945,40 @@ defmodule Custyard.Threads do
     end
   end
 
-  # Determine the from address for outbound email: the address of
-  # reply_identity/2, nil when the platform fallback applies.
-  defp resolve_sender_email(thread, opts), do: reply_identity(thread, opts).address
+  @doc "Active sending addresses belonging to this tenant."
+  def reply_channels(tenant_id) do
+    Repo.all(
+      from c in Custyard.InboundChannel,
+        where: c.tenant_id == ^tenant_id and c.state == :active,
+        order_by: c.public_address,
+        preload: [:inbound_route]
+    )
+  end
+
+  defp selected_reply_channel(tenant_id, id) when is_integer(id) or is_binary(id) do
+    case Ecto.Type.cast(:id, id) do
+      {:ok, id} ->
+        Repo.get_by(Custyard.InboundChannel, id: id, tenant_id: tenant_id, state: :active)
+        |> Repo.preload(:inbound_route)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp selected_reply_channel(_tenant_id, _id), do: nil
 
   @doc "The tenant-owned sending channel, snapshotted on an outbound reply at enqueue."
-  def reply_sending_channel(%Thread{} = thread) do
-    reply_channel_record(thread) ||
-      case Custyard.EmailSetup.default_reply_channel(thread.tenant_id) do
-        {:ok, channel} -> channel
-        {:error, _reason} -> nil
-      end
+  def reply_sending_channel(%Thread{} = thread, opts \\ []) do
+    if Keyword.has_key?(opts, :reply_channel_id) do
+      selected_reply_channel(thread.tenant_id, opts[:reply_channel_id])
+    else
+      reply_channel_record(thread) ||
+        case Custyard.EmailSetup.default_reply_channel(thread.tenant_id) do
+          {:ok, channel} -> channel
+          {:error, _reason} -> nil
+        end
+    end
   end
 
   defp tenant_name(tenant_id) do

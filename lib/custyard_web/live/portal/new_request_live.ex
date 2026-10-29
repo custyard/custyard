@@ -26,6 +26,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
       when urgency in @allowed_urgencies do
     org = socket.assigns.current_org
     portal_path = socket.assigns.portal_path
+    contact = Custyard.PortalCredentials.reply_contact(socket.assigns.portal_credential)
 
     result =
       Multi.new()
@@ -34,7 +35,8 @@ defmodule CustyardWeb.Portal.NewRequestLive do
         Thread.changeset(%Thread{}, %{
           tenant_id: org.tenant_id,
           organization_id: org.id,
-          contact_id: socket.assigns.portal_credential.contact_id,
+          contact_id: contact && contact.id,
+          source: :portal,
           subject: params["subject"],
           state: :new,
           urgency: String.to_existing_atom(urgency),
@@ -46,9 +48,7 @@ defmodule CustyardWeb.Portal.NewRequestLive do
           tenant_id: org.tenant_id,
           thread_id: conv.id,
           source: :portal,
-          sender_email:
-            socket.assigns.portal_credential.contact &&
-              socket.assigns.portal_credential.contact.email,
+          sender_email: contact && contact.email,
           body: params["body"],
           is_internal_note: false
         })

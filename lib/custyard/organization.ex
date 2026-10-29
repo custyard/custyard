@@ -5,6 +5,7 @@ defmodule Custyard.Organization do
 
   schema "organizations" do
     belongs_to(:tenant, Custyard.Tenant)
+    belongs_to(:default_contact, Custyard.Contact)
     field(:public_id, :string, autogenerate: {Ecto.UUID, :generate, []})
     field(:identity_kind, Ecto.Enum, values: [:domain, :email, :manual], default: :manual)
     field(:identity_value, :string)
@@ -20,18 +21,52 @@ defmodule Custyard.Organization do
 
   def changeset(organization, attrs) do
     organization
-    |> cast(attrs, [:tenant_id, :identity_kind, :identity_value, :name, :domain, :tier])
+    |> cast(attrs, [
+      :tenant_id,
+      :identity_kind,
+      :identity_value,
+      :name,
+      :domain,
+      :tier,
+      :default_contact_id
+    ])
     |> update_change(:domain, &normalize/1)
     |> update_change(:identity_value, &normalize/1)
     |> put_identity()
     |> immutable_tenant()
     |> validate_identity()
+    |> validate_default_contact()
     |> validate_required([:tenant_id, :name, :identity_kind, :identity_value])
     |> validate_length(:name, max: 255)
     |> validate_format(:domain, ~r/\A[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}\z/)
     |> unique_constraint([:tenant_id, :identity_kind, :identity_value])
     |> unique_constraint([:tenant_id, :domain])
     |> foreign_key_constraint(:tenant_id)
+    |> foreign_key_constraint(:default_contact_id)
+  end
+
+  defp validate_default_contact(changeset) do
+    case get_field(changeset, :default_contact_id) do
+      nil ->
+        changeset
+
+      id ->
+        case Custyard.Repo.get(Custyard.Contact, id) do
+          %Custyard.Contact{organization_id: org_id, tenant_id: tenant_id}
+          when org_id == changeset.data.id ->
+            if tenant_id == get_field(changeset, :tenant_id),
+              do: changeset,
+              else:
+                add_error(
+                  changeset,
+                  :default_contact_id,
+                  "must belong to this customer and tenant"
+                )
+
+          _ ->
+            add_error(changeset, :default_contact_id, "must belong to this customer and tenant")
+        end
+    end
   end
 
   defp validate_identity(changeset) do

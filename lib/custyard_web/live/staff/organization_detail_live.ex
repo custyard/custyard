@@ -37,6 +37,21 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
     end
   end
 
+  def handle_event("set_default_contact", %{"contact_id" => contact_id}, socket) do
+    case Organizations.update(socket.assigns.current_scope, socket.assigns.organization, %{
+           default_contact_id: contact_id
+         }) do
+      {:ok, organization} ->
+        {:noreply,
+         socket
+         |> assign(:organization, organization)
+         |> put_flash(:info, "Default contact updated")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Choose a contact belonging to this customer")}
+    end
+  end
+
   def handle_event("issue_portal", params, socket) do
     if socket.assigns.current_role == "admin" do
       case PortalCredentials.issue(
@@ -129,6 +144,26 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
         }>
           {contact.name || contact.email} · {contact.email}
         </p>
+        <form
+          :if={@current_role == "admin" and @contacts != []}
+          id="customer-default-contact-form"
+          phx-submit="set_default_contact"
+          class="mt-4 space-y-2"
+        >
+          <.input
+            type="select"
+            id="customer-default-contact"
+            name="contact_id"
+            value={@organization.default_contact_id || ""}
+            label="Default contact for shared portal requests"
+            prompt="No default contact"
+            options={Enum.map(@contacts, &{&1.email, &1.id})}
+          />
+          <p class="text-sm text-gray-600 dark:text-zinc-300">
+            Shared portal requests use this contact for email replies. A portal link issued for a specific contact uses that contact instead.
+          </p>
+          <.button>Save default contact</.button>
+        </form>
       </section>
       <section>
         <h2 class="font-semibold mb-3">Projects</h2><p :if={@projects == []}>No projects yet.</p><p :for={

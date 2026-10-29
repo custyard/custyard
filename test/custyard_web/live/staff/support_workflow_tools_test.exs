@@ -105,6 +105,7 @@ defmodule CustyardWeb.Staff.SupportWorkflowToolsTest do
   end
 
   test "a recipient change preserves the draft and requires review before sending", c do
+    insert_inbound_channel(state: :active)
     contact = insert_contact(organization_id: c.org.id, email: "alice@example.com")
     {:ok, _} = Threads.update_thread(c.thread, %{contact_id: contact.id})
 

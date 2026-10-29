@@ -97,19 +97,20 @@ defmodule Custyard.Email.Outbound do
   defp retry_window_open?(_message), do: false
 
   @doc "Requeue a confirmed failed reply under current staff authorization. Unknown sends never retry blindly."
-  def retry(%Custyard.Scope{} = scope, %Message{} = message) do
+  def retry(%Custyard.Scope{} = scope, %Message{} = message, opts \\ []) do
     result =
       Threads.with_access(scope, message.thread_id, fn thread, _staff ->
         case Repo.get_by(Message, id: message.id, thread_id: thread.id) do
           %Message{} = current ->
             if retryable?(current) do
-              current
-              |> refresh_unattempted_identity(thread)
-              |> Message.delivery_status_changeset(:pending, %{
-                delivery_failure_kind: nil,
-                delivery_error_code: nil
-              })
-              |> Repo.update()
+              with {:ok, changeset} <- refresh_unattempted_envelope(current, thread, opts) do
+                changeset
+                |> Message.delivery_status_changeset(:pending, %{
+                  delivery_failure_kind: nil,
+                  delivery_error_code: nil
+                })
+                |> Repo.update()
+              end
             else
               {:error, :reconciliation_required}
             end
@@ -129,19 +130,55 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
-  defp refresh_unattempted_identity(
-         %Message{delivery_payload_hash: nil, sender_email: nil} = message,
-         thread
+  defp refresh_unattempted_envelope(
+         %Message{delivery_payload_hash: nil, delivery_attempted_at: nil} = message,
+         thread,
+         opts
        ) do
-    channel = Threads.reply_sending_channel(thread)
-
-    Message.changeset(message, %{
-      sender_email: Threads.reply_identity(thread).address,
-      inbound_channel_id: channel && channel.id
-    })
+    with {:ok, attrs} <- refreshed_identity(message, thread, opts),
+         {:ok, attrs} <- refreshed_recipient(message, thread, attrs, opts) do
+      {:ok, Message.changeset(message, attrs)}
+    end
   end
 
-  defp refresh_unattempted_identity(message, _thread), do: message
+  defp refresh_unattempted_envelope(message, _thread, _opts),
+    do: {:ok, Ecto.Changeset.change(message)}
+
+  defp refreshed_identity(%Message{sender_email: nil}, thread, opts) do
+    channel = Threads.reply_sending_channel(thread, opts)
+
+    if Keyword.has_key?(opts, :reply_channel_id) and is_nil(channel) do
+      {:error, :reply_channel_required}
+    else
+      {:ok,
+       %{
+         sender_email: channel && Custyard.InboundChannels.from_address(channel),
+         inbound_channel_id: channel && channel.id
+       }}
+    end
+  end
+
+  defp refreshed_identity(_message, _thread, _opts), do: {:ok, %{}}
+
+  defp refreshed_recipient(
+         %Message{delivery_error_code: "no_recipient_email", to_addresses: addresses},
+         thread,
+         attrs,
+         opts
+       )
+       when addresses in [nil, []] do
+    case reply_recipient(thread) do
+      {:ok, address} ->
+        if Keyword.has_key?(opts, :expected_recipient) and opts[:expected_recipient] != address,
+          do: {:error, :recipient_changed},
+          else: {:ok, Map.put(attrs, :to_addresses, [address])}
+
+      _ ->
+        {:ok, attrs}
+    end
+  end
+
+  defp refreshed_recipient(_message, _thread, attrs, _opts), do: {:ok, attrs}
 
   # Claim, reload current recipients and save the envelope under one write
   # transaction. A stale queue snapshot must not restore recipients erased
