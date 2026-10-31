@@ -184,7 +184,7 @@ defmodule Custyard.Log do
   @levels ~w(debug info notice warning error critical alert emergency)a
   @transport_reasons ~w(timeout closed econnrefused econnreset enetunreach ehostunreach nxdomain etimedout ssl_closed tls_alert certificate_expired unknown_ca from_not_set no_recipients no_recipient_email missing_credentials missing_project_credentials no_consent delivery_exception smtp_down)a
   @reason_values @transport_reasons ++
-                   ~w(unknown_account no_organization missing_email email_rate_limited ip_rate_limited rate_limited no_consent exception validation_failed provider_response invalid_provider_response unclassified_error repository_unavailable database_unavailable constraint_error not_configured disabled not_found unauthorized forbidden invalid_signature missing_signature missing_secret unknown_source unknown_event unknown_message_source invalid_configuration invalid_payload invalid_header invalid_encoding oversized_message recipient_limit organization_mismatch unknown_recipient mail_loop ip_not_allowed temporary permanent invalid_response task_capacity no_matching_sender multiple_matches ambiguous manual own_echo no_channel tenant_not_found tenant_disabled missing_recipient delivery_error already_exist worker_exit invalid_context dropped other retry_scheduled acceptance_unknown invalid_domain capacity_exceeded no_operator_accounts no_staff sending_not_configured project_token_missing connection_not_found envelope_changed missing_raw_body missing_timestamp invalid_timestamp stale_timestamp invalid_signature_format normalization_collision invalid_utf8 invalid_or_expired_token eacces enoent eio enospc erofs enotdir eperm emfile enfile einval)a
+                   ~w(unknown_account no_organization missing_email email_rate_limited ip_rate_limited rate_limited no_consent exception validation_failed provider_response invalid_provider_response unclassified_error repository_unavailable database_unavailable constraint_error not_configured disabled not_found unauthorized forbidden invalid_signature missing_signature missing_secret unknown_source unknown_event unknown_message_source invalid_configuration invalid_payload invalid_header invalid_encoding oversized_message recipient_limit organization_mismatch unknown_recipient mail_loop ip_not_allowed temporary permanent invalid_response task_capacity no_matching_sender multiple_matches ambiguous manual own_echo no_channel tenant_not_found tenant_disabled missing_recipient delivery_error already_exist worker_exit invalid_context dropped other retry_scheduled acceptance_unknown invalid_domain capacity_exceeded no_operator_accounts no_staff sending_not_configured project_token_missing connection_not_found envelope_changed missing_raw_body missing_timestamp invalid_timestamp stale_timestamp invalid_signature_format normalization_collision invalid_utf8 invalid_or_expired_token eacces enoent eio enospc erofs enotdir eperm emfile enfile einval message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error attachment_fetch_failed attachment_processing_failed channel_route_mismatch concurrent_update invalid_enabled_value invalid_url channel_failed connection_failed unreachable auth_failed access_refused tls_failed ack_failed subscription_failed subscription_cancelled publication_failed publication_unconfirmed publication_rejected unroutable)a
   @enums %{
     reason: @reason_values,
     outcome:
@@ -197,7 +197,7 @@ defmodule Custyard.Log do
     stage:
       ~w(startup connect poll fetch parse dispatch persist deliver notify audit sweep retry shutdown weights intake_config neglect_thresholds)a,
     purpose:
-      ~w(sender_matching enrichment notification audit attachments login claim arrival receipt neglect quiet_channel delivery_failure)a,
+      ~w(sender_matching enrichment notification audit attachments disambiguation login claim arrival receipt neglect quiet_channel delivery_failure)a,
     notification_level:
       ~w(info warning critical urgent high medium low neglect quiet delivery_failure)a,
     bucket:
@@ -216,7 +216,61 @@ defmodule Custyard.Log do
       ~w(acknowledgment_binding_created acknowledgment_replayed channel_created channel_deleted channel_quiet channel_sending_domain_checked channel_state_changed channel_token_revealed channel_token_rotated channel_updated channel_verification_captured data_subject_erasure delivery_status_updated inbound_triaged operator_created operator_removed operator_tenant_access_granted prospect_converted slug_released webhook_error webhook_processed webhook_received)a
   }
   @provider_codes ~w(validation_failed validation_error invalid_request invalid_payload invalid_api_token invalid_token unauthorized unauthenticated forbidden access_denied domain_not_verified sender_not_verified unverified_domain invalid_sender invalid_recipient invalid_email account_not_verified production_not_verified project_not_verified quota_exceeded rate_limit_exceeded too_many_requests insufficient_credits daily_limit_exceeded message_too_large invalid_attachment duplicate_request idempotency_conflict internal_error server_error service_unavailable sandbox_recipient_not_allowed)
-  @validation_fields ~w(from to cc bcc reply_to subject text html headers attachments filename content content_type content_id tag tags metadata route scheduled_at settings sandbox_result api_token domain email role organization_id tenant_id channel_id project_id name slug source enabled status event_type payload message_id conversation_id submission_id received_at)
+  @validation_fields ~w(
+    access_token_hash acknowledged_at actor_id actor_role actor_type address
+    api_token archive_copy attachment_limit_mb attachments attention_bonus authentication
+    batch_processing_expires_at batch_processing_token bcc body branding cached_score
+    callback_token cc cc_addresses channel_id channels classification
+    confirmation_token_hash confirmed_at contact contact_id contacts content
+    content_id content_type conversation conversation_id conversations custom_domain
+    dedup_scope default_channel default_channel_id deleted_at deleted_by_operator deleted_by_operator_id
+    delivery_attempted_at delivery_error_code delivery_failure_kind delivery_payload_hash delivery_recipients_locked delivery_status
+    description descriptor_hash display_name domain due_at email
+    email_captured_at email_status email_status_at enabled endpoint_url event_type
+    expires_at filename forwarded_by_email forwarded_by_operator forwarded_by_operator_id from
+    from_address headers headline html html_body id
+    imap_auth_failed_at imap_auth_failures imap_consecutive_failures imap_folder imap_host imap_last_error
+    imap_last_polled_at imap_last_uid imap_message_attempts imap_password imap_password_ciphertext imap_port
+    imap_uid_validity imap_username in_reply_to inbound_channel inbound_channel_id inbound_channels
+    inbound_route inbound_route_id inbound_routes ingress_kind ingress_local ingress_token
+    inserted_at intake_config intake_key intake_source_key intro_copy is_admin
+    is_internal_note is_template key label label_id language
+    last_customer_action_at last_neglect_notification last_operator_action_at last_received_at last_reply_accepted_at last_reply_delivered_at
+    last_returning_reply_at last_signed_inbound_at last_status_event_at latest_received_conversation latest_received_conversation_id lettermint_custom_domain
+    lettermint_custom_domain_verified_at lettermint_inbound_address lettermint_message_id lettermint_project_id lettermint_route_domain lettermint_route_id
+    lettermint_webhook_id link_title link_url login_token login_token_expires_at logo_url
+    message message_id messages metadata mode name
+    neglect_thresholds normalized_name notify_on_reply operator_accounts organization organization_id
+    organizations origin password password_hash paused_at payload
+    portal_visible position previous_ingress_token previous_token_expires_at primary_color processing_expires_at
+    processing_token progress project project_check_status project_checked_at project_id
+    project_token_ciphertext project_type projects prospect provider provider_delivery_id
+    public_address purpose questions quiet_after_hours quiet_notified_at received_at
+    recipient recipient_statuses reply_evidence_after_message_id reply_from reply_to revoked_at
+    role route route_type sandbox_result scheduled_at schema_version
+    score_weights secondary_color sender_email sending_check_status sending_checked_at sending_domain
+    sending_domain_checked_at sending_domain_status session_claim settings sha256 sieve_header_mappings
+    singleton size skip_reason slug sniffed_type snoozed_until
+    source source_organization_id spam_score start_date state statement_hash
+    statement_key statement_text statement_version status status_at status_callback_token
+    status_secret_ciphertext status_webhook_id storage_path subject submission_id suspect
+    tag tags target_completion_date tasks team_token_ciphertext tenant
+    tenant_id text tier title to to_addresses
+    token triage_class updated_at urgency verification_captured_at verification_code
+    verification_expires_at verification_link verified_at webhook_secret_ciphertext webhook_verified_at webhooks
+  )
+
+  @metadata_keys Enum.uniq(
+                   @integer_fields ++
+                     @boolean_fields ++
+                     @id_fields ++
+                     @reference_fields ++
+                     Map.keys(@enums) ++
+                     ~w(provider_status http_status provider_code validation_fields event origin error_code)a
+                 )
+
+  @doc false
+  def metadata_keys, do: @metadata_keys
 
   for level <- @levels do
     defmacro unquote(level)(event, fields \\ []) do
@@ -357,23 +411,7 @@ defmodule Custyard.Log do
   defp known_key(key) when is_atom(key), do: key
 
   defp known_key(key) when is_binary(key) do
-    Enum.find(
-      @integer_fields ++
-        @boolean_fields ++
-        @id_fields ++
-        @reference_fields ++
-        Map.keys(@enums) ++
-        [
-          :provider_status,
-          :http_status,
-          :provider_code,
-          :validation_fields,
-          :event,
-          :origin,
-          :error_code
-        ],
-      &(Atom.to_string(&1) == key)
-    )
+    Enum.find(@metadata_keys, &(Atom.to_string(&1) == key))
   end
 
   defp known_key(_key), do: nil
@@ -474,6 +512,16 @@ defmodule Custyard.Log do
   defp classify_failure({:api_error, status, body}, depth) when is_integer(status),
     do: classify_failure({status, body}, depth + 1)
 
+  defp classify_failure({:provider_status, status}, depth) when status in 100..599 do
+    classify_failure({status, nil}, depth + 1)
+  end
+
+  defp classify_failure({:parse_failed, reason}, depth), do: classify_failure(reason, depth + 1)
+
+  defp classify_failure({kind, reason}, depth) when kind in [:exit, :throw] do
+    reason |> classify_failure(depth + 1) |> Keyword.put_new(:error_type, kind)
+  end
+
   defp classify_failure({:request_failed, reason}, depth), do: classify_failure(reason, depth + 1)
   defp classify_failure({:error, reason}, depth), do: classify_failure(reason, depth + 1)
 
@@ -507,7 +555,7 @@ defmodule Custyard.Log do
 
   defp classify_failure(reason, _depth) when reason in @transport_reasons, do: [reason: reason]
 
-  defp classify_failure({reason, _details}, _depth) when reason in @transport_reasons,
+  defp classify_failure({reason, _details}, _depth) when reason in @reason_values,
     do: [reason: reason]
 
   defp classify_failure(reason, _depth) when reason in @reason_values, do: [reason: reason]

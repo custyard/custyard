@@ -68,12 +68,12 @@ defmodule Custyard.Acknowledgments.Consumer do
             publish_status(:connected)
             {:noreply, %{state | connection: connection, channel: channel, consumer_tag: tag}}
 
-          _ ->
-            reconnect(state)
+          error ->
+            reconnect(state, error)
         end
 
-      {:error, _} ->
-        reconnect(state)
+      {:error, reason} ->
+        reconnect(state, reason)
     end
   end
 
@@ -94,7 +94,7 @@ defmodule Custyard.Acknowledgments.Consumer do
 
           case ack(state.channel, meta.delivery_tag) do
             :ok -> {:noreply, state}
-            _ -> reconnect(state)
+            error -> reconnect(state, error)
           end
 
         {:error, reason} ->
@@ -126,7 +126,7 @@ defmodule Custyard.Acknowledgments.Consumer do
                :ok <- ack(state.channel, meta.delivery_tag) do
             {:noreply, state}
           else
-            _ -> reconnect(state)
+            error -> reconnect(state, error)
           end
       end
     end)
@@ -134,12 +134,12 @@ defmodule Custyard.Acknowledgments.Consumer do
 
   def handle_info({:basic_deliver, _, _}, state), do: {:noreply, state}
 
-  def handle_info({:DOWN, ref, :process, _, _}, state) do
-    if ref in state.monitors, do: reconnect(state), else: {:noreply, state}
+  def handle_info({:DOWN, ref, :process, _, reason}, state) do
+    if ref in state.monitors, do: reconnect(state, reason), else: {:noreply, state}
   end
 
   def handle_info({:basic_cancel, %{consumer_tag: tag}}, %{consumer_tag: tag} = state),
-    do: reconnect(state)
+    do: reconnect(state, :subscription_cancelled)
 
   def handle_info({:basic_cancel, _}, state), do: {:noreply, state}
   def handle_info({:basic_consume_ok, _}, state), do: {:noreply, state}
@@ -208,8 +208,12 @@ defmodule Custyard.Acknowledgments.Consumer do
 
   defp publish_status(status), do: :persistent_term.put(@status_key, status)
 
-  defp reconnect(state) do
-    Log.warning(:acknowledgment_broker_unavailable, reason: :retry_scheduled)
+  defp reconnect(state, reason) do
+    Log.warning(
+      :acknowledgment_broker_unavailable,
+      [outcome: :retrying, retry_after_ms: state.config[:reconnect_delay]] ++ Log.failure(reason)
+    )
+
     publish_status(:connecting)
     Enum.each(state.monitors, &Process.demonitor(&1, [:flush]))
     close_subscription(state)

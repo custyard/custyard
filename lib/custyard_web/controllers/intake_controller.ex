@@ -258,7 +258,13 @@ defmodule CustyardWeb.IntakeController do
   end
 
   defp render_not_found(conn, reason) do
-    Log.warning(:intake_source_unavailable, reason: reason)
+    log_reason =
+      case reason do
+        :unknown_key -> :unknown_source
+        :disabled_mid_submission -> :disabled
+      end
+
+    Log.warning(:intake_source_unavailable, reason: log_reason)
 
     :telemetry.execute(
       [:custyard, :intake, :unknown_source],
@@ -267,10 +273,9 @@ defmodule CustyardWeb.IntakeController do
     )
 
     # Capture only the same bounded diagnostic fields used in runtime logs.
-    Sentry.capture_message("intake: no enabled source for key",
+    Sentry.capture_message("intake_source_unavailable",
       level: if(reason == :disabled_mid_submission, do: :error, else: :warning),
-      fingerprint: ["intake-unknown-source", to_string(reason)],
-      extra: %{reason: reason}
+      extra: Map.merge(Log.context(), %{reason: log_reason})
     )
 
     conn
@@ -318,11 +323,13 @@ defmodule CustyardWeb.IntakeController do
       %{mode: source.mode}
     )
 
-    Sentry.capture_message("intake: submission rejected by the database",
+    Sentry.capture_message("intake_submission_rejected",
       level: :error,
-      fingerprint: ["intake-submission-rejected"],
       extra:
-        Map.new([source_id: source.id, tenant_id: source.tenant_id] ++ Log.failure(changeset))
+        Map.merge(
+          Log.context(),
+          Map.new([source_id: source.id, tenant_id: source.tenant_id] ++ Log.failure(changeset))
+        )
     )
   end
 end

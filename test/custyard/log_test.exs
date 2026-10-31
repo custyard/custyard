@@ -15,6 +15,7 @@ end
 defmodule Custyard.LogTest do
   use ExUnit.Case, async: false
 
+  alias Custyard.Acknowledgments.Consumer
   alias Custyard.Log.Formatter
 
   require Custyard.Log, as: Log
@@ -110,6 +111,28 @@ defmodule Custyard.LogTest do
              error_type: RuntimeError
            ]
 
+    assert Custyard.Log.failure({:provider_status, 422}) == [
+             reason: :provider_response,
+             provider_status: 422
+           ]
+
+    assert Custyard.Log.failure({:provider_status, 999}) == [reason: :unclassified_error]
+
+    assert Custyard.Log.failure({:parse_failed, %RuntimeError{message: @canary}}) == [
+             reason: :exception,
+             error_type: RuntimeError
+           ]
+
+    assert Map.new(Custyard.Log.failure({:exit, @canary})) == %{
+             reason: :unclassified_error,
+             error_type: :exit
+           }
+
+    assert Map.new(Custyard.Log.failure({:throw, @canary})) == %{
+             reason: :unclassified_error,
+             error_type: :throw
+           }
+
     assert Custyard.Log.failure("invalid signature") == [reason: :invalid_signature]
     assert Custyard.Log.failure("invalid signature " <> @canary) == [reason: :unclassified_error]
 
@@ -178,6 +201,7 @@ defmodule Custyard.LogTest do
   end
 
   test "the real logger boundary protects every handler and JSON keeps diagnostics" do
+    assert List.keymember?(:logger.get_primary_config()[:filters], :custyard_log_privacy, 0)
     handler = :custyard_policy_test_handler
 
     assert :ok =
@@ -198,6 +222,7 @@ defmodule Custyard.LogTest do
       )
 
       Logger.error(@canary, raw_payload: @canary)
+      assert List.keymember?(:logger.get_primary_config()[:filters], :custyard_log_privacy, 0)
     end)
 
     assert_receive {:policy_log, safe, json}
@@ -347,6 +372,95 @@ defmodule Custyard.LogTest do
     end
   end
 
+  test "domain failure and purpose catalogs survive the logging schema" do
+    for purpose <- Custyard.InboundRouteWebhook.purposes() do
+      assert Custyard.Log.sanitize_metadata(purpose: purpose) == %{purpose: to_string(purpose)}
+    end
+
+    categories = Consumer.failure_categories()
+
+    for category <- categories do
+      reason = String.to_existing_atom(category)
+
+      for failure <- [reason, {reason, @canary}] do
+        fields = Custyard.Log.failure(failure)
+        assert fields[:reason] == reason
+        assert Custyard.Log.sanitize_metadata(fields)[:reason] == category
+        refute inspect(fields) =~ @canary
+      end
+    end
+
+    for reason <-
+          ~w(attachment_fetch_failed attachment_processing_failed channel_route_mismatch concurrent_update invalid_enabled_value)a do
+      assert Custyard.Log.failure(reason) == [reason: reason]
+      assert Custyard.Log.sanitize_metadata(reason: reason) == %{reason: Atom.to_string(reason)}
+    end
+  end
+
+  test "logged changeset fields remain diagnostic without retaining values" do
+    for schema <- [
+          Custyard.Message,
+          Custyard.Conversation,
+          Custyard.InboundChannel,
+          Custyard.InboundRoute,
+          Custyard.OperatorAccount,
+          Custyard.AuditEvent
+        ],
+        field <- schema.__schema__(:fields) ++ schema.__schema__(:virtual_fields) do
+      fields = Custyard.Log.failure(%Ecto.Changeset{errors: [{field, {@canary, []}}]})
+      assert fields[:validation_fields] == [Atom.to_string(field)]
+      refute inspect(fields) =~ @canary
+    end
+  end
+
+  test "literal operational metadata uses declared fields and accepted values" do
+    root = Path.expand("../..", __DIR__)
+
+    sources =
+      Enum.flat_map(["lib/**/*.ex", "priv/repo/migrations/*.exs"], fn pattern ->
+        Path.wildcard(Path.join(root, pattern))
+      end)
+
+    violations =
+      Enum.flat_map(sources, fn path ->
+        {_, failures} =
+          Macro.prewalk(Code.string_to_quoted!(File.read!(path)), [], fn
+            {{:., location, [{:__aliases__, _, name}, level]}, _, [_event, metadata]} = node, acc
+            when name in [[:Log], [:Custyard, :Log]] and
+                   level in [
+                     :debug,
+                     :info,
+                     :notice,
+                     :warning,
+                     :error,
+                     :critical,
+                     :alert,
+                     :emergency
+                   ] ->
+              failures =
+                for {key, value} <- literal_metadata(metadata),
+                    not declared_literal_metadata?(key, value),
+                    do: {path, location[:line], key}
+
+              {node, failures ++ acc}
+
+            {{:., location, [{:__aliases__, _, [:Sentry]}, :capture_message]}, _, [name | _]} =
+                node,
+            acc ->
+              if Custyard.Log.safe_event_name(name),
+                do: {node, acc},
+                else: {node, [{path, location[:line], :unregistered_sentry_event} | acc]}
+
+            node, acc ->
+              {node, acc}
+          end)
+
+        failures
+      end)
+
+    assert violations == []
+  end
+
   test "application code cannot bypass the structured event API" do
     root = Path.expand("../..", __DIR__)
 
@@ -428,5 +542,25 @@ defmodule Custyard.LogTest do
           do: item
 
     assert violations == []
+  end
+
+  defp literal_metadata(fields) when is_list(fields) do
+    if Keyword.keyword?(fields), do: fields, else: []
+  end
+
+  defp literal_metadata({:%{}, _, fields}), do: fields
+
+  defp literal_metadata({:++, _, [left, right]}),
+    do: literal_metadata(left) ++ literal_metadata(right)
+
+  defp literal_metadata(_fields), do: []
+
+  defp declared_literal_metadata?(key, value) do
+    declared? = key in Custyard.Log.metadata_keys()
+    literal? = is_atom(value) or is_binary(value) or is_number(value)
+
+    declared? and
+      (is_nil(value) or not literal? or
+         map_size(Custyard.Log.sanitize_metadata(%{key => value})) == 1)
   end
 end
