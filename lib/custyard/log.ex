@@ -501,7 +501,9 @@ defmodule Custyard.Log do
   end
 
   defp classify_failure({%{__struct__: module, __exception__: true} = error, _stack}, depth)
-       when is_atom(module), do: classify_failure(error, depth + 1)
+       when is_atom(module) do
+    classify_failure(error, depth + 1)
+  end
 
   defp classify_failure(reason, _depth) when reason in @transport_reasons, do: [reason: reason]
 
