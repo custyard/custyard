@@ -94,6 +94,18 @@ defmodule Custyard.Sentry do
   # inspected term's closing delimiter is never consumed.
   @userinfo_pattern ~r{([a-z][a-z0-9+.\-]*://)[^/?#\s"\\]+@}i
 
+  @doc false
+  def logger_handler_config do
+    %{
+      config: %{
+        capture_log_messages: true,
+        capture_level: :error,
+        capture_metadata: :all,
+        tags_from_metadata: [:custyard_event, :request_id, :operation_id, :error_type]
+      }
+    }
+  end
+
   @doc """
   `:url_scrubber` for `Sentry.PlugContext` — `(Plug.Conn.t()) -> String.t()`.
 

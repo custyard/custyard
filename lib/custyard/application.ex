@@ -61,14 +61,11 @@ defmodule Custyard.Application do
   # expected and fine; any other error is logged rather than silently dropped.
   defp maybe_add_sentry_logger_handler do
     if Application.get_env(:sentry, :dsn) do
-      case :logger.add_handler(:custyard_sentry_handler, Sentry.LoggerHandler, %{
-             config: %{
-               capture_log_messages: true,
-               capture_level: :error,
-               capture_metadata: :all,
-               tags_from_metadata: [:custyard_event, :request_id, :operation_id, :error_type]
-             }
-           }) do
+      case :logger.add_handler(
+             :custyard_sentry_handler,
+             Sentry.LoggerHandler,
+             Custyard.Sentry.logger_handler_config()
+           ) do
         :ok ->
           :ok
 
