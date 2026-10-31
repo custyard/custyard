@@ -34,7 +34,7 @@ defmodule CustyardWeb.Plugs.CustomDomain do
     but a path-rewriting concern where untrusted Host headers could influence routing.
     The proper fix is infrastructure-level Host header validation, not application code.
   """
-  require Logger
+  require Custyard.Log, as: Log
 
   import Plug.Conn
   alias Custyard.{Organization, Repo}
@@ -115,9 +115,9 @@ defmodule CustyardWeb.Plugs.CustomDomain do
       "/requests" ->
         put_path(conn, "/p/#{org.token}")
 
-      "/p/" <> _ = path ->
+      "/p/" <> _ ->
         # Guard against double-prefix if path already starts with /p/
-        Logger.warning("CustomDomain plug received path already prefixed with /p/: #{path}")
+        Log.warning(:portal_path_already_prefixed)
         conn
 
       path ->

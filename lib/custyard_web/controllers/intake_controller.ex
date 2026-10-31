@@ -17,7 +17,7 @@ defmodule CustyardWeb.IntakeController do
 
   use CustyardWeb, :controller
 
-  require Logger
+  require Custyard.Log, as: Log
 
   import Phoenix.Component, only: [to_form: 2]
 
@@ -258,12 +258,7 @@ defmodule CustyardWeb.IntakeController do
   end
 
   defp render_not_found(conn, reason) do
-    source_key = conn.path_params["source_key"]
-
-    Logger.warning("intake: no enabled source for key",
-      source_key: inspect(source_key),
-      reason: reason
-    )
+    Log.warning(:intake_source_unavailable, reason: reason)
 
     :telemetry.execute(
       [:custyard, :intake, :unknown_source],
@@ -271,19 +266,11 @@ defmodule CustyardWeb.IntakeController do
       %{reason: reason}
     )
 
-    # First manual capture in the tree. The global before_send
-    # ({Custyard.Sentry, :before_send}) still applies — it drops only
-    # Phoenix.Router.NoRouteError, and /i/ is not a scrubbed path prefix, so
-    # the key survives for diagnosis. Intake source keys are public URL
-    # components, not credentials.
-    #
-    # Fingerprinted by reason alone, deliberately: a scanner spraying keys
-    # must collapse into one issue whose event stream carries the keys, not
-    # thousands of separate issues.
+    # Capture only the same bounded diagnostic fields used in runtime logs.
     Sentry.capture_message("intake: no enabled source for key",
       level: if(reason == :disabled_mid_submission, do: :error, else: :warning),
       fingerprint: ["intake-unknown-source", to_string(reason)],
-      extra: %{source_key: source_key, reason: reason}
+      extra: %{reason: reason}
     )
 
     conn
@@ -301,8 +288,9 @@ defmodule CustyardWeb.IntakeController do
   defp emit_submission(source, capture_result, receipt_result) do
     email_captured = match?({:ok, _}, capture_result)
 
-    Logger.info("intake: submission accepted",
-      source_key: source.key,
+    Log.info(:intake_submission_accepted,
+      source_id: source.id,
+      tenant_id: source.tenant_id,
       mode: source.mode,
       email_captured: email_captured,
       receipt: receipt_result
@@ -319,14 +307,9 @@ defmodule CustyardWeb.IntakeController do
   # reported — never the values, which are untrusted prospect input and the
   # message body itself.
   defp emit_submission_rejected(source, changeset) do
-    errors =
-      changeset
-      |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
-      |> inspect()
-
-    Logger.error("intake: submission rejected by the database",
-      source_key: source.key,
-      reason: errors
+    Log.error(
+      :intake_submission_rejected,
+      [source_id: source.id, tenant_id: source.tenant_id] ++ Log.failure(changeset)
     )
 
     :telemetry.execute(
@@ -338,7 +321,8 @@ defmodule CustyardWeb.IntakeController do
     Sentry.capture_message("intake: submission rejected by the database",
       level: :error,
       fingerprint: ["intake-submission-rejected"],
-      extra: %{source_key: source.key, errors: errors}
+      extra:
+        Map.new([source_id: source.id, tenant_id: source.tenant_id] ++ Log.failure(changeset))
     )
   end
 end

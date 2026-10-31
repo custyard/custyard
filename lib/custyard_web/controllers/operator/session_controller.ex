@@ -8,13 +8,15 @@ defmodule CustyardWeb.Operator.SessionController do
   alias CustyardWeb.Live.OperatorAuth
   alias CustyardWeb.Plugs.PublicRateLimit
 
-  require Logger
+  require Custyard.Log, as: Log
 
   # Base64url character class for validating token format
   @token_pattern ~r/^[A-Za-z0-9_-]+$/
 
-  plug :rate_limit_login,
-       [bucket: :operator_login_ip] when action == :create
+  plug(
+    :rate_limit_login,
+    [bucket: :operator_login_ip] when action == :create
+  )
 
   # Shows the flash set by whatever sent the operator here: the
   # :require_operator plug, the LiveView auth hooks, or logout.
@@ -34,7 +36,7 @@ defmodule CustyardWeb.Operator.SessionController do
 
     case RateLimit.check_rate(:operator_login_email, email) do
       {:deny, retry_after_ms} ->
-        Logger.info("operator_login_skipped", reason: :email_rate_limited)
+        Log.info(:operator_login_skipped, reason: :email_rate_limited)
 
         retry_after_s = max(div(retry_after_ms + 999, 1000), 1)
 
@@ -50,7 +52,7 @@ defmodule CustyardWeb.Operator.SessionController do
   end
 
   def create(conn, _params) do
-    Logger.info("operator_login_skipped", reason: :missing_email)
+    Log.info(:operator_login_skipped, reason: :missing_email)
 
     render(conn, :new,
       error: "Email is required.",
@@ -63,12 +65,12 @@ defmodule CustyardWeb.Operator.SessionController do
   defp rate_limit_login(conn, opts) do
     # Log before the IP limiter can halt, without recording submitted params.
     # Plug.RequestId metadata follows this synchronous request through delivery.
-    Logger.info("operator_login_requested")
+    Log.info(:operator_login_requested)
 
     conn = PublicRateLimit.call(conn, PublicRateLimit.init(opts))
 
     if conn.halted do
-      Logger.info("operator_login_skipped", reason: :ip_rate_limited)
+      Log.info(:operator_login_skipped, reason: :ip_rate_limited)
     end
 
     conn
@@ -78,16 +80,13 @@ defmodule CustyardWeb.Operator.SessionController do
     case Repo.get_by(OperatorAccount, email: email) do
       nil ->
         # Don't reveal whether the email exists — always show success page
-        Logger.info("operator_login_skipped", reason: :unknown_account)
+        Log.info(:operator_login_skipped, reason: :unknown_account)
 
       %OperatorAccount{} = operator ->
         if OperatorAccount.orphaned?(operator) do
           # An admin or agent whose organization was deleted gets no link;
           # the response below stays identical so this reveals nothing.
-          Logger.info("operator_login_skipped",
-            reason: :no_organization,
-            operator_id: operator.id
-          )
+          Log.info(:operator_login_skipped, reason: :no_organization, operator_id: operator.id)
         else
           send_login_link(operator)
         end
@@ -170,6 +169,8 @@ defmodule CustyardWeb.Operator.SessionController do
   def consume(conn, %{"token" => token}) do
     with {:ok, operator} <- lookup_login_token(token),
          :ok <- clear_login_token(operator, token) do
+      Log.info(:operator_login_succeeded, operator_id: operator.id)
+
       conn
       |> configure_session(renew: true)
       |> put_session(:operator_id, operator.id)
@@ -179,9 +180,17 @@ defmodule CustyardWeb.Operator.SessionController do
       |> put_flash(:info, "Welcome back")
       |> redirect(to: ~p"/operator")
     else
-      {:error, :expired} -> render_expired_token(conn)
-      {:error, :invalid} -> render_invalid_token(conn)
-      {:error, :no_organization} -> render_no_organization(conn)
+      {:error, :expired} ->
+        Log.info(:operator_login_rejected, reason: :invalid_or_expired_token)
+        render_expired_token(conn)
+
+      {:error, :invalid} ->
+        Log.info(:operator_login_rejected, reason: :invalid_or_expired_token)
+        render_invalid_token(conn)
+
+      {:error, :no_organization} ->
+        Log.info(:operator_login_rejected, reason: :no_organization)
+        render_no_organization(conn)
     end
   end
 
@@ -221,6 +230,11 @@ defmodule CustyardWeb.Operator.SessionController do
   end
 
   def delete(conn, _params) do
+    # This is a signed session's identity snapshot, not a newly validated
+    # account. Keep it separate from operator_id and preserve logout's lack of
+    # a database dependency, including for expired or deleted accounts.
+    Log.info(:operator_logout, session_operator_id: get_session(conn, :operator_id))
+
     conn
     |> delete_session(:operator_id)
     |> delete_session(:operator_claim)

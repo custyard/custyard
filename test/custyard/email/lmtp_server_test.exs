@@ -1143,7 +1143,7 @@ defmodule Custyard.Email.LMTPServerTest do
                      1000
 
       assert is_integer(measurements.system_time)
-      assert is_tuple(metadata.peer)
+      refute Map.has_key?(metadata, :peer)
 
       :gen_tcp.close(socket)
     end

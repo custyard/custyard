@@ -7,7 +7,7 @@ defmodule Custyard.Webhooks.Purposes.Audit do
   Tolerates duplicates using message_id as a deduplication key at query time.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.AuditEvent
 
@@ -29,19 +29,18 @@ defmodule Custyard.Webhooks.Purposes.Audit do
 
     case AuditEvent.create(attrs) do
       {:ok, _event} ->
-        Logger.info(
-          "Webhook audit: conversation=#{conversation.id} " <>
-            "source=#{attrs.source} " <>
-            "message_id=#{attrs.message_id} " <>
-            "org=#{route_context[:organization_id]} " <>
-            "project=#{route_context[:project_id]}"
+        Log.info(:webhook_audit_recorded,
+          conversation_id: conversation.id,
+          organization_id: route_context[:organization_id],
+          project_id: route_context[:project_id]
         )
 
         :ok
 
       {:error, changeset} ->
-        Logger.error(
-          "Audit persistence failed for conversation #{conversation.id}: #{inspect(changeset.errors)}"
+        Log.error(
+          :webhook_audit_record_failed,
+          [conversation_id: conversation.id] ++ Log.failure(changeset)
         )
 
         # Still return :ok to avoid blocking the webhook pipeline
@@ -49,7 +48,7 @@ defmodule Custyard.Webhooks.Purposes.Audit do
     end
   rescue
     error ->
-      Logger.error("Audit logging failed for conversation #{conversation.id}: #{inspect(error)}")
+      Log.error(:webhook_audit_failed, [conversation_id: conversation.id] ++ Log.failure(error))
 
       :ok
   end
@@ -59,8 +58,6 @@ defmodule Custyard.Webhooks.Purposes.Audit do
   defp build_payload(normalized) do
     %{
       source: normalized[:source],
-      sender_email: normalized[:from],
-      subject: normalized[:subject],
       timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
     }
   end

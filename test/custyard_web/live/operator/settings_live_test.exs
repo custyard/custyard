@@ -1,6 +1,7 @@
 defmodule CustyardWeb.Operator.SettingsLiveTest do
-  use CustyardWeb.ConnCase, async: true
+  use CustyardWeb.ConnCase, async: false
 
+  import ExUnit.CaptureIO, only: [capture_io: 2]
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
@@ -396,30 +397,35 @@ defmodule CustyardWeb.Operator.SettingsLiveTest do
 
   describe "score weights" do
     test "shows every weight and accepts an edit", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/operator/settings")
+      stderr =
+        capture_io(:stderr, fn ->
+          {:ok, view, html} = live(conn, ~p"/operator/settings")
 
-      for key <- ~w(idle state tier urgency velocity neglect) do
-        assert html =~ "operator-settings-weight-#{key}"
-      end
+          for key <- ~w(idle state tier urgency velocity neglect) do
+            assert html =~ "operator-settings-weight-#{key}"
+          end
 
-      view |> element("[phx-click=edit_weights]") |> render_click()
+          view |> element("[phx-click=edit_weights]") |> render_click()
 
-      weights = %{
-        "idle" => "0.5",
-        "state" => "1.0",
-        "tier" => "1.0",
-        "urgency" => "1.0",
-        "velocity" => "1.0",
-        "neglect" => "1.0"
-      }
+          weights = %{
+            "idle" => "0.5",
+            "state" => "1.0",
+            "tier" => "1.0",
+            "urgency" => "1.0",
+            "velocity" => "1.0",
+            "neglect" => "1.0"
+          }
 
-      html =
-        view
-        |> element("[data-testid=operator-settings-weights-form]")
-        |> render_submit(%{"weights" => weights})
+          html =
+            view
+            |> element("[data-testid=operator-settings-weights-form]")
+            |> render_submit(%{"weights" => weights})
 
-      assert html =~ "Weights updated successfully"
-      assert Settings.get_weights().idle == 0.5
+          assert html =~ "Weights updated successfully"
+          assert Settings.get_weights().idle == 0.5
+        end)
+
+      refute stderr =~ "a map with atom keys was given to a form"
     end
   end
 end

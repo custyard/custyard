@@ -53,7 +53,7 @@ defmodule Custyard.Webhooks.Dispatcher do
   reworking the entire dispatch pipeline.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{
     AuditEvent,
@@ -325,8 +325,9 @@ defmodule Custyard.Webhooks.Dispatcher do
         {:ignored, :verification_captured}
 
       {:error, changeset} ->
-        Logger.warning(
-          "Verification capture failed on channel #{channel.id}: #{inspect(Keyword.keys(changeset.errors))}"
+        Log.warning(
+          :channel_verification_capture_failed,
+          [channel_id: channel.id] ++ Log.failure(changeset)
         )
 
         log_rejection(route, channel, :provider_notice, normalized)
@@ -487,8 +488,9 @@ defmodule Custyard.Webhooks.Dispatcher do
         :ok
 
       {:error, changeset} ->
-        Logger.warning(
-          "mark_received failed on channel #{channel.id}: #{inspect(Keyword.keys(changeset.errors))}"
+        Log.warning(
+          :channel_mark_received_failed,
+          [channel_id: channel.id] ++ Log.failure(changeset)
         )
 
         :ok
@@ -530,9 +532,7 @@ defmodule Custyard.Webhooks.Dispatcher do
         :ok
 
       {:error, changeset} ->
-        Logger.error(
-          "Triage audit event failed on route #{route.id}: #{inspect(Keyword.keys(changeset.errors))}"
-        )
+        Log.error(:triage_audit_record_failed, [route_id: route.id] ++ Log.failure(changeset))
 
         :ok
     end
@@ -544,25 +544,29 @@ defmodule Custyard.Webhooks.Dispatcher do
   # - Tasks are awaited during shutdown
   # - Errors are logged without crashing the dispatcher
   defp start_purpose_task(purpose, fun) do
-    case Task.Supervisor.start_child(@task_supervisor, fn ->
-           try do
-             fun.()
-           rescue
-             e ->
-               Logger.error(
-                 "Webhook purpose #{purpose} failed: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-               )
-           end
-         end) do
+    case Task.Supervisor.start_child(
+           @task_supervisor,
+           Log.task(
+             fn ->
+               try do
+                 fun.()
+               rescue
+                 e ->
+                   Log.error(:webhook_purpose_failed, [purpose: purpose] ++ Log.failure(e))
+               end
+             end,
+             purpose: purpose
+           )
+         ) do
       {:ok, _pid} ->
         :ok
 
       {:error, :max_children} ->
-        Logger.warning("Webhook purpose #{purpose} dropped: task supervisor at capacity")
+        Log.warning(:webhook_purpose_dropped, purpose: purpose, reason: :capacity_exceeded)
         :dropped
 
       {:error, reason} ->
-        Logger.error("Failed to start webhook purpose #{purpose}: #{inspect(reason)}")
+        Log.error(:webhook_purpose_start_failed, [purpose: purpose] ++ Log.failure(reason))
         :error
     end
   end

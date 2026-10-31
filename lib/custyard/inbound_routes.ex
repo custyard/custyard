@@ -20,7 +20,7 @@ defmodule Custyard.InboundRoutes do
   following the context pattern used elsewhere in the application.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Ecto.Changeset
   alias Custyard.{InboundRoute, InboundRouteWebhook, Repo}
@@ -208,8 +208,9 @@ defmodule Custyard.InboundRoutes do
           %{acc | synced: acc.synced + 1}
 
         {:error, reason} ->
-          Logger.warning(
-            "Failed to sync Lettermint route #{route.id}: #{inspect(error_summary(reason))}"
+          Log.warning(
+            :inbound_route_sync_failed,
+            [route_id: route.id, tenant_id: route.tenant_id] ++ Log.failure(reason)
           )
 
           %{acc | failed: acc.failed + 1}
@@ -325,10 +326,6 @@ defmodule Custyard.InboundRoutes do
 
   # Keep response bodies (which may echo the request or route details) out
   # of the logs; the status and error class are enough to act on.
-  defp error_summary({:api_error, status, _body}), do: {:api_error, status}
-  defp error_summary({:request_failed, %{__struct__: mod}}), do: {:request_failed, mod}
-  defp error_summary(%Changeset{errors: errors}), do: {:invalid, Keyword.keys(errors)}
-  defp error_summary(other), do: other
 
   # Tolerates older API responses that omit these keys: missing values stay nil.
   defp remote_domain_attrs(remote) when is_map(remote) do
@@ -385,8 +382,9 @@ defmodule Custyard.InboundRoutes do
         :ok
 
       {:error, reason} = error ->
-        Logger.error(
-          "Failed to delete Lettermint route #{route.id}: #{inspect(error_summary(reason))}"
+        Log.error(
+          :inbound_route_delete_failed,
+          [route_id: route.id, tenant_id: route.tenant_id] ++ Log.failure(reason)
         )
 
         error

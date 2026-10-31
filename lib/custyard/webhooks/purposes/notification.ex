@@ -6,7 +6,7 @@ defmodule Custyard.Webhooks.Purposes.Notification do
   extensible to Slack, push notifications, email).
   """
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @doc """
   Notify operators about the new/updated conversation.
@@ -22,7 +22,11 @@ defmodule Custyard.Webhooks.Purposes.Notification do
     :ok
   rescue
     error ->
-      Logger.error("Notification failed for conversation #{conversation.id}: #{inspect(error)}")
+      Log.error(
+        :webhook_notification_failed,
+        [conversation_id: conversation.id] ++ Log.failure(error)
+      )
+
       :ok
   end
 end

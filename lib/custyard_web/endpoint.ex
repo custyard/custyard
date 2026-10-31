@@ -67,11 +67,12 @@ defmodule CustyardWeb.Endpoint do
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :custyard
   end
 
-  plug Plug.RequestId
+  plug :server_request_id
+  plug CustyardWeb.Plugs.RequestLog
 
   plug Plug.Telemetry,
     event_prefix: [:phoenix, :endpoint],
-    log: {__MODULE__, :request_log_level, []}
+    log: false
 
   @doc false
   # Custyard's bearer credentials travel in the path: conversation resume
@@ -84,20 +85,13 @@ defmodule CustyardWeb.Endpoint do
     if Custyard.Sentry.token_path?(path), do: false, else: :info
   end
 
-  # Debug plug for origin header diagnosis. Uncomment to trace check_origin issues.
-  # See: docs/lessons-learned/06-phoenix-check-origin-fly.md, PR #34
-  # plug :log_origin_header
-  #
-  # defp log_origin_header(conn, _opts) do
-  #   require Logger
-  #   origin = Plug.Conn.get_req_header(conn, "origin")
-  #   host_header = Plug.Conn.get_req_header(conn, "host")
-  #   Logger.debug(
-  #     "[OriginDebug] path=#{conn.request_path} origin=#{inspect(origin)} " <>
-  #       "host=#{inspect(host_header)} conn.host=#{inspect(conn.host)} conn.scheme=#{inspect(conn.scheme)}"
-  #   )
-  #   conn
-  # end
+  # Incoming request IDs are untrusted strings and can themselves contain a
+  # credential or personal data. Correlation uses a fresh server-generated ID.
+  defp server_request_id(conn, _opts) do
+    conn
+    |> Plug.Conn.delete_req_header("x-request-id")
+    |> Plug.RequestId.call(Plug.RequestId.init([]))
+  end
 
   # Parsers for supported content types.
   # pass: restricts which additional content types pass through unparsed.

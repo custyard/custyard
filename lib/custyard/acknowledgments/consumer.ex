@@ -1,7 +1,7 @@
 defmodule Custyard.Acknowledgments.Consumer do
   @moduledoc "Single bounded consumer: commit first, acknowledge second; transfers confirm first."
   use GenServer
-  require Logger
+  require Custyard.Log, as: Log
   alias Custyard.Acknowledgments.{Broker, Config, Evidence, Topology}
 
   # Failure headers, and so the operator UI, only ever carry one of these.
@@ -83,50 +83,53 @@ defmodule Custyard.Acknowledgments.Consumer do
         {:basic_deliver, body, %{consumer_tag: tag} = meta},
         %{consumer_tag: tag} = state
       ) do
-    case process(body, state.config[:source]) do
-      {:ok, record} ->
-        Logger.info("Acknowledgment committed",
-          source: record.source,
-          submission_id: record.submission_id
-        )
+    Log.operation([], fn ->
+      case process(body, state.config[:source]) do
+        {:ok, record} ->
+          Log.info(:acknowledgment_committed,
+            acknowledgment_id: record.id,
+            submission_ref:
+              Log.reference(:erlang.term_to_binary({record.source, record.submission_id}))
+          )
 
-        case ack(state.channel, meta.delivery_tag) do
-          :ok -> {:noreply, state}
-          _ -> reconnect(state)
-        end
+          case ack(state.channel, meta.delivery_tag) do
+            :ok -> {:noreply, state}
+            _ -> reconnect(state)
+          end
 
-      {:error, reason} ->
-        attempt = attempts(meta[:headers]) + 1
+        {:error, reason} ->
+          attempt = attempts(meta[:headers]) + 1
 
-        queue =
-          if attempt <= length(state.config[:retry_delays]),
-            do: Topology.retry(state.config, attempt),
-            else: Topology.failure(state.config)
+          queue =
+            if attempt <= length(state.config[:retry_delays]),
+              do: Topology.retry(state.config, attempt),
+              else: Topology.failure(state.config)
 
-        headers = [
-          {"custyard-attempt", :long, attempt},
-          {"custyard-failure", :longstr, failure_reason(reason)}
-        ]
+          headers = [
+            {"custyard-attempt", :long, attempt},
+            {"custyard-failure", :longstr, failure_reason(reason)}
+          ]
 
-        Logger.warning(
-          "Acknowledgment processing failed; transferring to #{queue}: #{failure_reason(reason)}",
-          trace(body, state.config[:source])
-        )
+          Log.warning(
+            :acknowledgment_processing_failed,
+            trace(body, state.config[:source]) ++ Log.failure(reason)
+          )
 
-        with :ok <-
-               Broker.publish(
-                 state.connection,
-                 queue,
-                 body,
-                 headers,
-                 state.config[:confirm_timeout]
-               ),
-             :ok <- ack(state.channel, meta.delivery_tag) do
-          {:noreply, state}
-        else
-          _ -> reconnect(state)
-        end
-    end
+          with :ok <-
+                 Broker.publish(
+                   state.connection,
+                   queue,
+                   body,
+                   headers,
+                   state.config[:confirm_timeout]
+                 ),
+               :ok <- ack(state.channel, meta.delivery_tag) do
+            {:noreply, state}
+          else
+            _ -> reconnect(state)
+          end
+      end
+    end)
   end
 
   def handle_info({:basic_deliver, _, _}, state), do: {:noreply, state}
@@ -187,9 +190,9 @@ defmodule Custyard.Acknowledgments.Consumer do
          {:ok, event} when is_map(event) <- Jason.decode(body),
          id when is_binary(id) <- event["submission_id"],
          true <- Evidence.valid_identity?(id) do
-      [source: source, submission_id: id]
+      [submission_ref: Log.reference(:erlang.term_to_binary({source, id}))]
     else
-      _ -> [source: source]
+      _ -> []
     end
   end
 
@@ -206,7 +209,7 @@ defmodule Custyard.Acknowledgments.Consumer do
   defp publish_status(status), do: :persistent_term.put(@status_key, status)
 
   defp reconnect(state) do
-    Logger.warning("Acknowledgment broker unavailable; connection retry scheduled")
+    Log.warning(:acknowledgment_broker_unavailable, reason: :retry_scheduled)
     publish_status(:connecting)
     Enum.each(state.monitors, &Process.demonitor(&1, [:flush]))
     close_subscription(state)

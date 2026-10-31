@@ -165,7 +165,8 @@ defmodule Custyard.Email.SenderMatcherTest do
           assert resolved.id == older.id
         end)
 
-      assert log =~ "Multi-org sender ambiguity"
+      assert log =~ "sender_organization_ambiguous"
+      refute log =~ "shared@example.com"
     end
 
     test "resolves from Name <email> format" do

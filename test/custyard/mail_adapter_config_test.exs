@@ -37,10 +37,14 @@ defmodule Custyard.MailAdapterConfigTest do
       assert_raise RuntimeError, ~r/MAIL_ADAPTER is not set/, &read_prod_config!/0
     end
 
-    test "an unrecognized value refuses to boot and names it" do
-      System.put_env("MAIL_ADAPTER", "lettermnit")
+    test "an unrecognized value refuses to boot without exposing configuration" do
+      secret = "provider-token-person@example.test\r\nFORGED EVENT"
+      System.put_env("MAIL_ADAPTER", secret)
 
-      assert_raise RuntimeError, ~r/"lettermnit", which is not recognized/, &read_prod_config!/0
+      error = assert_raise RuntimeError, ~r/MAIL_ADAPTER is not recognized/, &read_prod_config!/0
+      refute error.message =~ secret
+      refute error.message =~ "person@example.test"
+      refute error.message =~ "FORGED EVENT"
     end
 
     test "the error lists the accepted values" do

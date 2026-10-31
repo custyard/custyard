@@ -23,7 +23,7 @@ defmodule CustyardWeb.Plugs.PublicRateLimit do
 
   @behaviour Plug
 
-  require Logger
+  require Custyard.Log, as: Log
 
   import Plug.Conn
 
@@ -56,7 +56,7 @@ defmodule CustyardWeb.Plugs.PublicRateLimit do
   # per rejected request. The log line and the counter are what distinguish
   # "the limiter is rejecting everyone" from "nobody is submitting".
   defp deny(conn, bucket, retry_after_ms) do
-    Logger.warning("public rate limit exceeded", bucket: bucket)
+    Log.warning(:public_rate_limit_exceeded, bucket: bucket)
 
     :telemetry.execute(
       [:custyard, :public_rate_limit, :exceeded],

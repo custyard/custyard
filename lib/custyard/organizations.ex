@@ -3,7 +3,7 @@ defmodule Custyard.Organizations do
   Context for organization operations including custom domain management.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{
     AuditEvent,
@@ -296,11 +296,8 @@ defmodule Custyard.Organizations do
       Repo.aggregate(from(c in Conversation, where: c.organization_id == ^org.id), :count)
 
     # Log deletion details before executing
-    Logger.warning(
-      "Deleting organization",
+    Log.warning(:organization_deletion_started,
       organization_id: org.id,
-      organization_name: org.name,
-      organization_domain: org.domain,
       contacts_to_delete: contact_count,
       conversations_to_delete: conversation_count
     )
@@ -309,11 +306,7 @@ defmodule Custyard.Organizations do
 
     case result do
       {:ok, deleted} ->
-        Logger.info(
-          "Organization deleted successfully",
-          organization_id: deleted.id,
-          organization_name: deleted.name
-        )
+        Log.info(:organization_deleted, organization_id: deleted.id)
 
         # Emit telemetry for monitoring
         :telemetry.execute(
@@ -325,7 +318,7 @@ defmodule Custyard.Organizations do
         {:ok, deleted}
 
       {:error, _} = error ->
-        Logger.error("Failed to delete organization", organization_id: org.id)
+        Log.error(:organization_deletion_failed, organization_id: org.id)
         error
     end
   end
@@ -500,9 +493,7 @@ defmodule Custyard.Organizations do
            event_type: :prospect_converted,
            source: "operator",
            payload: %{
-             "organization_name" => organization.name,
-             "operator_id" => operator.id,
-             "operator_email" => operator.email
+             "operator_id" => operator.id
            },
            conversation_id: conversation.id,
            organization_id: organization.id
@@ -511,9 +502,7 @@ defmodule Custyard.Organizations do
         :ok
 
       {:error, changeset} ->
-        Logger.error(
-          "Failed to record prospect conversion audit event: #{inspect(changeset.errors)}"
-        )
+        Log.error(:prospect_conversion_audit_record_failed, Log.failure(changeset))
 
         :ok
     end

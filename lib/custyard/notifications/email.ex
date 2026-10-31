@@ -5,7 +5,7 @@ defmodule Custyard.Notifications.Email do
   The default instance retains its configured operator notification address.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
   alias Custyard.Notifications.TenantDelivery
 
   @doc """
@@ -62,9 +62,10 @@ defmodule Custyard.Notifications.Email do
   end
 
   defp log_channel_quiet(channel) do
-    Logger.info(
-      "[Email stub] Quiet channel notice would be sent: channel #{channel.id} " <>
-        "quiet for more than #{channel.quiet_after_hours}h"
+    Log.info(:channel_quiet_notification_stubbed,
+      channel_id: channel.id,
+      quiet_after_hours: channel.quiet_after_hours,
+      mode: :stub
     )
 
     :ok
@@ -90,7 +91,10 @@ defmodule Custyard.Notifications.Email do
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to send quiet channel notice for channel #{channel.id}")
+        Log.error(
+          :channel_quiet_notification_failed,
+          [channel_id: channel.id] ++ Log.failure(reason)
+        )
 
         {:error, reason}
     end
@@ -140,9 +144,11 @@ defmodule Custyard.Notifications.Email do
   end
 
   defp log_delivery_failure(conversation, status) do
-    Logger.info(
-      "[Email stub] Delivery failure notice would be sent: conversation #{conversation.id} " <>
-        "reply #{status}"
+    Log.info(:delivery_failure_notification_stubbed,
+      conversation_id: conversation.id,
+      tenant_id: conversation.tenant_id,
+      status: status,
+      mode: :stub
     )
 
     :ok
@@ -168,7 +174,11 @@ defmodule Custyard.Notifications.Email do
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to send delivery failure notice for conversation #{conversation.id}")
+        Log.error(
+          :delivery_failure_notification_failed,
+          [conversation_id: conversation.id, tenant_id: conversation.tenant_id] ++
+            Log.failure(reason)
+        )
 
         {:error, reason}
     end
@@ -241,13 +251,12 @@ defmodule Custyard.Notifications.Email do
   defp channel_organization(_channel), do: nil
 
   defp log_neglect_alert(conversation, level) do
-    Logger.info("""
-    [Email stub] Neglect alert would be sent:
-      Level: #{level}
-      Conversation: #{conversation.id} - #{conversation.subject}
-      Organization: #{organization_display(conversation.organization)}
-      Contact: #{contact_display(conversation.contact)}
-    """)
+    Log.info(:neglect_notification_stubbed,
+      conversation_id: conversation.id,
+      tenant_id: conversation.tenant_id,
+      notification_level: level,
+      mode: :stub
+    )
 
     :ok
   end
@@ -272,7 +281,12 @@ defmodule Custyard.Notifications.Email do
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to send neglect alert email")
+        Log.error(
+          :neglect_notification_failed,
+          [conversation_id: conversation.id, tenant_id: conversation.tenant_id] ++
+            Log.failure(reason)
+        )
+
         {:error, reason}
     end
   end

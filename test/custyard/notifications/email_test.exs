@@ -1,10 +1,22 @@
 defmodule Custyard.Notifications.EmailTest do
-  use Custyard.DataCase, async: true
+  use Custyard.DataCase, async: false
 
   import Custyard.Factory
   import Swoosh.TestAssertions
 
   alias Custyard.Notifications.Email
+
+  defp capture_info_log(fun) do
+    previous = Logger.get_module_level(Email)
+    Logger.put_module_level(Email, :info)
+
+    try do
+      ExUnit.CaptureLog.capture_log([metadata: [:conversation_id, :channel_id, :mode]], fun)
+    after
+      Logger.delete_module_level(Email)
+      Enum.each(previous, fn {module, level} -> Logger.put_module_level(module, level) end)
+    end
+  end
 
   setup do
     # Create test data with preloaded associations
@@ -24,8 +36,13 @@ defmodule Custyard.Notifications.EmailTest do
 
   describe "deliver_neglect_alert/2" do
     test "logs alert when email is disabled", %{conversation: conv} do
-      # Default config has email_enabled=false
-      assert Email.deliver_neglect_alert(conv, :warning) == :ok
+      log = capture_info_log(fn -> assert Email.deliver_neglect_alert(conv, :warning) == :ok end)
+      assert log =~ "neglect_notification_stubbed"
+      assert log =~ "conversation_id=#{conv.id}"
+
+      for private <- [conv.subject, "Acme Corp", "Alice", "alice@acme.com"],
+          do: refute(log =~ private)
+
       assert_no_email_sent()
     end
 
@@ -175,13 +192,12 @@ defmodule Custyard.Notifications.EmailTest do
     end
 
     test "logs instead of sending when email is disabled", %{channel: channel} do
-      # The stub logs at info, below the test logger level; what matters here
-      # is that nothing is sent and nothing sensitive reaches the log.
       log =
-        ExUnit.CaptureLog.capture_log(fn ->
+        capture_info_log(fn ->
           assert Email.deliver_channel_quiet(channel) == :ok
         end)
 
+      assert log =~ "channel_quiet_notification_stubbed"
       refute log =~ "support@acme.example.com"
       refute log =~ channel.ingress_token
       assert_no_email_sent()
@@ -242,10 +258,11 @@ defmodule Custyard.Notifications.EmailTest do
   describe "deliver_delivery_failure/3" do
     test "logs instead of sending when email is disabled", %{conversation: conv} do
       log =
-        ExUnit.CaptureLog.capture_log(fn ->
+        capture_info_log(fn ->
           assert Email.deliver_delivery_failure(conv, :bounced, "alice@acme.com") == :ok
         end)
 
+      assert log =~ "delivery_failure_notification_stubbed"
       refute log =~ "alice@acme.com"
       refute log =~ "Urgent support needed"
       assert_no_email_sent()

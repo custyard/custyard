@@ -5,7 +5,7 @@ defmodule Custyard.Acknowledgments.Config do
   Messages raised or logged here name environment variables, never their
   values: the URL carries the broker password.
   """
-  require Logger
+  require Custyard.Log, as: Log
   require Record
   alias Custyard.Acknowledgments.Evidence
 
@@ -67,10 +67,7 @@ defmodule Custyard.Acknowledgments.Config do
         :disabled
 
       :not_configured ->
-        Logger.warning(
-          "Colonel acknowledgments are enabled but not configured; set #{@url_variable} " <>
-            "and #{@source_variable}, or ACKNOWLEDGMENTS_ENABLED=false"
-        )
+        Log.warning(:acknowledgment_configuration_missing)
 
         :not_configured
 
@@ -83,11 +80,7 @@ defmodule Custyard.Acknowledgments.Config do
         validate!(config)
 
         if env == :prod and plaintext_remote?(config[:url]),
-          do:
-            Logger.warning(
-              "#{@url_variable} uses plaintext amqp to a host outside localhost, " <>
-                "*.internal and *.flycast; use amqps with verify=verify_peer"
-            )
+          do: Log.warning(:acknowledgment_transport_insecure)
 
         :enabled
     end

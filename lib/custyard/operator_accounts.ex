@@ -12,7 +12,7 @@ defmodule Custyard.OperatorAccounts do
 
   alias Custyard.{AuditEvent, Message, OperatorAccount, Organization, Repo}
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @placeholder_email "admin@custyard.local"
 
@@ -142,9 +142,10 @@ defmodule Custyard.OperatorAccounts do
 
     case result do
       {:ok, operator} ->
-        Logger.info(
-          "Created operator #{operator.id} #{operator.email} " <>
-            "(role #{operator.role}, organization #{operator.organization_id || "none"}) via #{via}"
+        Log.info(:operator_account_created,
+          operator_id: operator.id,
+          role: operator.role,
+          organization_id: operator.organization_id
         )
 
         {:created, operator}
@@ -214,8 +215,11 @@ defmodule Custyard.OperatorAccounts do
       Repo.transaction(
         fn ->
           case find_for_removal(email) do
-            {:ok, operator} -> delete_with_audit(operator, via)
-            {:error, message} -> Repo.rollback(message)
+            {:ok, operator} ->
+              delete_with_audit(operator, via, Keyword.get(opts, :actor_operator_id))
+
+            {:error, message} ->
+              Repo.rollback(message)
           end
         end,
         mode: :immediate
@@ -223,9 +227,10 @@ defmodule Custyard.OperatorAccounts do
 
     case result do
       {:ok, {operator, message_ids}} ->
-        Logger.info(
-          "Removed operator #{operator.id} #{operator.email} " <>
-            "(role #{operator.role}, organization #{operator.organization_id || "none"}) via #{via}"
+        Log.info(:operator_account_removed,
+          operator_id: operator.id,
+          role: operator.role,
+          organization_id: operator.organization_id
         )
 
         {:ok, %{operator: operator, soft_deleted_message_ids: message_ids}}
@@ -267,7 +272,7 @@ defmodule Custyard.OperatorAccounts do
   end
 
   # Runs inside remove_operator/2's transaction; returns its result or rolls back.
-  defp delete_with_audit(operator, via) do
+  defp delete_with_audit(operator, via, actor_operator_id) do
     message_ids =
       Repo.all(
         from(m in Message,
@@ -277,12 +282,16 @@ defmodule Custyard.OperatorAccounts do
         )
       )
 
+    payload = %{"soft_deleted_message_ids" => message_ids}
+
+    payload =
+      if is_nil(actor_operator_id),
+        do: payload,
+        else: Map.put(payload, "actor_operator_id", actor_operator_id)
+
     with :ok <- delete(operator),
          :ok <- keep_a_super_admin(operator),
-         :ok <-
-           audit(:operator_removed, operator, via, %{
-             "soft_deleted_message_ids" => message_ids
-           }) do
+         :ok <- audit(:operator_removed, operator, via, payload) do
       {operator, message_ids}
     else
       {:error, reason} -> Repo.rollback(reason)
@@ -344,7 +353,7 @@ defmodule Custyard.OperatorAccounts do
         Map.merge(
           %{
             "operator_id" => operator.id,
-            "email" => operator.email,
+            "tenant_id" => operator.tenant_id,
             "role" => operator.role,
             "organization_id" => operator.organization_id,
             "via" => via

@@ -109,7 +109,7 @@ if config_env() == :prod do
 
     mail_adapter not in known_mail_adapters ->
       raise """
-      MAIL_ADAPTER is set to #{inspect(mail_adapter)}, which is not recognized.
+      MAIL_ADAPTER is not recognized.
 
       Set it to one of: #{Enum.join(known_mail_adapters, ", ")}
 

@@ -44,7 +44,7 @@ defmodule Custyard.Email.DeliveryStatus do
 
   import Ecto.Query
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{AuditEvent, Contact, Conversation, Message, MessageRecipientStatus, Repo}
   alias Custyard.Email.Outbound
@@ -379,7 +379,6 @@ defmodule Custyard.Email.DeliveryStatus do
         "recipient_role" => atom_string(recipient.role),
         "recipient_from" => atom_string(recipient.from),
         "recipient_to" => atom_string(recipient.to),
-        "reason" => scalar(data["reason"]),
         "reason_code" => scalar(data["reason_code"]),
         "status_code" => scalar(response["status_code"]),
         "enhanced_status_code" => scalar(response["enhanced_status_code"])
@@ -391,9 +390,9 @@ defmodule Custyard.Email.DeliveryStatus do
         :ok
 
       {:error, changeset} ->
-        Logger.error(
-          "Delivery status audit failed for message #{message.id} " <>
-            "(#{from_status} -> #{message.delivery_status}): #{inspect(changeset.errors)}"
+        Log.error(
+          :delivery_status_audit_record_failed,
+          [message_id: message.id, status: message.delivery_status] ++ Log.failure(changeset)
         )
 
         {:error, changeset}
@@ -484,8 +483,9 @@ defmodule Custyard.Email.DeliveryStatus do
     NotificationEmail.deliver_delivery_failure(conversation, status, recipient, role)
   rescue
     exception ->
-      Logger.error(
-        "Delivery failure notice for message #{message.id} raised #{inspect(exception.__struct__)}"
+      Log.error(
+        :delivery_failure_notice_failed,
+        [message_id: message.id] ++ Log.failure(exception)
       )
 
       :error

@@ -6,7 +6,7 @@ config :custyard, Custyard.Repo,
   database: Path.expand("../priv/repo/custyard_dev.db", __DIR__),
   pool_size: 5,
   stacktrace: true,
-  show_sensitive_data_on_connection_error: true,
+  show_sensitive_data_on_connection_error: false,
   journal_mode: :wal,
   busy_timeout: 5000
 
@@ -35,8 +35,6 @@ config :custyard, dev_routes: true
 
 # Allow ?as=<contact_id> param for testing contact impersonation
 config :custyard, allow_contact_impersonation: true
-
-config :logger, :console, format: "[$level] $message\n"
 
 config :phoenix, :stacktrace_depth, 20
 

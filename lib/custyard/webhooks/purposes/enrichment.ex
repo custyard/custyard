@@ -12,7 +12,7 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
   alias Custyard.{Conversation, Message, Repo, Scoring}
   alias Custyard.Email.LanguageDetector
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @doc """
   Enrich a conversation with additional metadata from the normalized payload.
@@ -36,8 +36,9 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
           )
 
         {:error, changeset} ->
-          Logger.error(
-            "Failed to enrich conversation #{conversation.id}: #{inspect(changeset.errors)}"
+          Log.error(
+            :conversation_enrichment_record_failed,
+            [conversation_id: conversation.id] ++ Log.failure(changeset)
           )
       end
     end
@@ -45,7 +46,11 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
     :ok
   rescue
     error ->
-      Logger.error("Enrichment failed for conversation #{conversation.id}: #{inspect(error)}")
+      Log.error(
+        :conversation_enrichment_failed,
+        [conversation_id: conversation.id] ++ Log.failure(error)
+      )
+
       :ok
   end
 

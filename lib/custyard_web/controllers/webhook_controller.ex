@@ -78,11 +78,9 @@ defmodule CustyardWeb.WebhookController do
       {:error, reason} ->
         # Return generic error to prevent information leakage.
         # Log specific error server-side for debugging.
-        require Logger
+        require Custyard.Log, as: Log
 
-        Logger.warning(
-          "Webhook auth failed for token #{String.slice(callback_token, 0, 8)}...: #{reason}"
-        )
+        Log.warning(:webhook_auth_rejected, Log.failure(reason))
 
         conn |> put_status(401) |> json(%{status: "error", reason: "unauthorized"})
     end
@@ -115,10 +113,11 @@ defmodule CustyardWeb.WebhookController do
         json(conn, %{status: "ignored", event: info.event})
 
       {:error, reason} ->
-        require Logger
+        require Custyard.Log, as: Log
 
-        Logger.warning(
-          "Webhook payload rejected on route #{route.id} (#{route.source}): #{inspect(reason)}"
+        Log.warning(
+          :webhook_payload_rejected,
+          [route_id: route.id, source: route.source] ++ Log.failure(reason)
         )
 
         conn |> put_status(422) |> json(%{status: "error", reason: "invalid payload"})
@@ -193,8 +192,8 @@ defmodule CustyardWeb.WebhookController do
     case Registry.get_adapter(source) do
       nil ->
         # Log specific error but return generic message
-        require Logger
-        Logger.error("Unknown webhook source configured on route: #{source}")
+        require Custyard.Log, as: Log
+        Log.error(:webhook_source_unconfigured)
         {:error, "internal configuration error"}
 
       adapter ->
@@ -221,17 +220,14 @@ defmodule CustyardWeb.WebhookController do
   defp verify_without_secret(source) do
     # No secret configured — skip in dev/test with warning, fail closed in prod
     if Application.get_env(:custyard, :env, :prod) in [:dev, :test] do
-      require Logger
+      require Custyard.Log, as: Log
 
-      Logger.warning(
-        "Webhook signature verification SKIPPED for source #{source} (no secret configured). " <>
-          "Set :webhook_secrets in config to enable verification."
-      )
+      Log.warning(:webhook_verification_skipped, source: source, reason: :not_configured)
 
       :ok
     else
-      require Logger
-      Logger.error("Webhook secret not configured for source: #{source}")
+      require Custyard.Log, as: Log
+      Log.error(:webhook_secret_missing, source: source)
       {:error, "unauthorized"}
     end
   end

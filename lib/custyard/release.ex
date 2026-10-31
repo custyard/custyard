@@ -16,7 +16,7 @@ defmodule Custyard.Release do
   alias Custyard.Repo.Adapter
   alias Custyard.Release.Dsar
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @app :custyard
 
@@ -39,18 +39,29 @@ defmodule Custyard.Release do
   """
 
   def migrate do
-    load_app()
-    Custyard.Storage.validate_fly_storage!()
+    startup_task(:migrate, fn ->
+      load_app()
+      Custyard.Storage.validate_fly_storage!()
 
-    for repo <- repos() do
-      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
-    end
+      for repo <- repos() do
+        case Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true)) do
+          {:ok, _, _} = result -> result
+          {:error, reason} -> throw({:custyard_release_failure, reason})
+        end
+      end
+    end)
   end
 
   def rollback(repo, version) do
-    load_app()
-    Custyard.Storage.validate_fly_storage!()
-    {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
+    startup_task(:rollback, fn ->
+      load_app()
+      Custyard.Storage.validate_fly_storage!()
+
+      case Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version)) do
+        {:ok, _, _} = result -> result
+        {:error, reason} -> throw({:custyard_release_failure, reason})
+      end
+    end)
   end
 
   @doc """
@@ -139,18 +150,16 @@ defmodule Custyard.Release do
 
   `OPERATOR_EMAIL` set: creates that super_admin if absent, or reports it
   unmodified. Unset (or blank): logs how to create the first operator.
-  An invalid value prints the reason and halts with status 1, so the boot
-  fails instead of starting a server nobody can log in to.
+  An invalid value emits a bounded diagnostic and fixed failure notice,
+  then halts with status 1 so the boot fails before starting the server.
   """
   def bootstrap_operator do
-    case bootstrap_operator(System.get_env("OPERATOR_EMAIL")) do
-      :ok ->
-        :ok
-
-      {:error, message} ->
-        IO.puts(:stderr, "OPERATOR_EMAIL: #{message}")
-        System.halt(1)
-    end
+    startup_task(:bootstrap, fn ->
+      case bootstrap_operator(System.get_env("OPERATOR_EMAIL")) do
+        :ok -> :ok
+        {:error, reason} -> startup_failed!(:bootstrap, reason)
+      end
+    end)
   end
 
   @doc false
@@ -166,12 +175,9 @@ defmodule Custyard.Release do
 
   defp bootstrap_from_env(nil) do
     if Repo.aggregate(OperatorAccount, :count) == 0 do
-      Logger.warning(
-        "No operator accounts exist. Create the first super_admin by setting OPERATOR_EMAIL " <>
-          "(created on the next boot) or with `bin/operator add you@example.com`."
-      )
+      Log.warning(:operator_bootstrap_required, reason: :no_operator_accounts)
     else
-      Logger.info("OPERATOR_EMAIL is not set; add operators with `bin/operator add EMAIL`.")
+      Log.info(:operator_bootstrap_skipped, reason: :not_configured)
     end
 
     :ok
@@ -184,8 +190,9 @@ defmodule Custyard.Release do
           :ok
 
         {:exists, operator} ->
-          Logger.info(
-            "OPERATOR_EMAIL=#{operator.email} exists (role #{operator.role}), not modified"
+          Log.info(:operator_bootstrap_account_exists,
+            operator_id: operator.id,
+            role: operator.role
           )
 
           :ok
@@ -195,10 +202,7 @@ defmodule Custyard.Release do
       end
 
     if result == :ok do
-      Logger.warning(
-        "OPERATOR_EMAIL is set. Unset it after the first login: while it is set, " <>
-          "a removed operator with that address is recreated on the next boot."
-      )
+      Log.warning(:operator_bootstrap_environment_retained)
     end
 
     result
@@ -209,11 +213,7 @@ defmodule Custyard.Release do
 
     case OperatorAccounts.get_by_email(placeholder) do
       %OperatorAccount{role: "super_admin", id: id} ->
-        Logger.warning(
-          "Operator #{placeholder} (super_admin, id #{id}) has a non-routable address and can " <>
-            "never receive a login link. Add your own super_admin, then run " <>
-            "`bin/operator remove #{placeholder}`."
-        )
+        Log.warning(:operator_placeholder_unroutable, operator_id: id)
 
       _ ->
         :ok
@@ -431,13 +431,63 @@ defmodule Custyard.Release do
     Custyard.Storage.validate_fly_storage!()
 
     case Ecto.Migrator.with_repo(Repo, fn _repo -> fun.() end) do
-      {:ok, result, _started} -> result
-      {:error, reason} -> {:error, "could not start the database: #{inspect(reason)}"}
+      {:ok, result, _started} ->
+        result
+
+      {:error, reason} ->
+        Log.error(:release_repository_start_failed, Log.failure(reason))
+        {:error, "could not start the database; see structured diagnostics"}
     end
   end
 
+  # The eval runner prints uncaught exceptions directly to stderr. Do not let
+  # dependency exception messages, arguments or exit reasons reach that path.
+  defp startup_task(task, fun) do
+    fun.()
+  rescue
+    error -> startup_failed!(task, error)
+  catch
+    :throw, {:custyard_release_failure, reason} -> startup_failed!(task, reason)
+    _kind, reason -> startup_failed!(task, reason)
+  end
+
+  defp startup_failed!(:migrate, reason) do
+    Log.error(:release_migration_failed, Log.failure(reason))
+    raise "Database migration failed; see structured diagnostics"
+  end
+
+  defp startup_failed!(:rollback, reason) do
+    Log.error(:release_rollback_failed, Log.failure(reason))
+    raise "Database rollback failed; see structured diagnostics"
+  end
+
+  defp startup_failed!(:bootstrap, reason) do
+    Log.error(:operator_bootstrap_failed, bootstrap_failure_fields(reason))
+    Logger.flush()
+    IO.puts(:stderr, "OPERATOR_EMAIL: operator bootstrap failed; see structured diagnostics")
+    System.halt(1)
+  end
+
+  defp bootstrap_failure_fields(reason) when is_binary(reason) do
+    fields =
+      for field <- ~w(email role organization_id tenant_id source),
+          String.starts_with?(reason, field <> ": ") or
+            String.contains?(reason, "; " <> field <> ": "),
+          do: field
+
+    if fields == [],
+      do: Log.failure(reason),
+      else: [reason: :validation_failed, validation_fields: fields]
+  end
+
+  defp bootstrap_failure_fields(reason), do: Log.failure(reason)
+
   defp load_app do
     Application.load(@app)
+    # Release eval/CLI tasks deliberately do not start Custyard.Application.
+    # Install privacy before storage validation, Repo startup or migrations can
+    # emit dependency errors containing credentials or query values.
+    Custyard.Log.install!()
   end
 
   defp repos do

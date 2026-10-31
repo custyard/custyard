@@ -4,12 +4,23 @@ defmodule Custyard.AuditEvent do
   such as slug release, operator accounts created or removed outside the UI,
   and acknowledgment replays and bindings).
 
-  Provides an append-only audit log for compliance and debugging.
-  Records are queryable by conversation, organization, or message_id.
+  Records are queryable by conversation, organization, or message_id. New
+  payloads use event-specific allowlists and internal IDs rather than duplicate
+  addresses or correspondence. External acknowledgment identities and body
+  digests remain exact evidence, with restricted access and separate retention.
+  RFC Message-IDs are also retained for correlation; they can identify a
+  mailbox and are subject to scoped contact erasure. The source column names
+  an internal action channel or integration and is not a contact address.
+
+  Events are append-only except for explicit contact-erasure redaction of
+  legacy correspondence. That operation preserves event identity and time;
+  a new erasure event records the affected event IDs.
   """
 
   use Ecto.Schema
   import Ecto.Changeset
+
+  alias Custyard.AuditEvent.{LegacyRedaction, Payload}
 
   @event_types [
     :webhook_received,
@@ -43,6 +54,10 @@ defmodule Custyard.AuditEvent do
     :data_subject_erasure
   ]
 
+  # Fixed action channels and registered webhook adapters. External
+  # acknowledgment source identities belong in their explicit payload schema.
+  @sources ~w(email lettermint zendesk intercom slack portal webhook unknown operator boot cli mix console inbound_channels dsar test)
+
   schema "audit_events" do
     field :event_type, Ecto.Enum, values: @event_types
     field :source, :string
@@ -72,7 +87,9 @@ defmodule Custyard.AuditEvent do
     ])
     |> validate_required([:event_type, :source])
     |> validate_length(:source, max: 100)
+    |> validate_inclusion(:source, @sources)
     |> validate_length(:message_id, max: 500)
+    |> minimize_payload()
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:project_id)
@@ -88,4 +105,27 @@ defmodule Custyard.AuditEvent do
     |> changeset(attrs)
     |> Custyard.Repo.insert()
   end
+
+  defp minimize_payload(changeset) do
+    case get_change(changeset, :payload) do
+      payload when is_map(payload) ->
+        put_change(
+          changeset,
+          :payload,
+          Payload.minimize(payload, get_field(changeset, :event_type))
+        )
+
+      _ ->
+        changeset
+    end
+  end
+
+  @doc """
+  Redacts legacy customer data during an explicit contact-erasure transaction.
+  Event identity, time and unrelated actor data remain intact. Matching
+  mailbox identifiers in RFC Message-IDs are also replaced with [ERASED]. The caller
+  records the returned IDs in its new data-subject-erasure audit event.
+  """
+  def redact_subject_data(email, organization_id, owned_conversation_ids),
+    do: LegacyRedaction.redact(email, organization_id, owned_conversation_ids)
 end

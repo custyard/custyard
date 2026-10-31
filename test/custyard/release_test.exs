@@ -6,7 +6,13 @@ defmodule Custyard.ReleaseTest do
   import ExUnit.CaptureIO
   import ExUnit.CaptureLog
 
+  require Logger
+
   alias Custyard.{AuditEvent, Message, OperatorAccount, OperatorAccounts, Organization, Release}
+
+  defmodule UnavailableRepo do
+    def config, do: raise("RELEASE_FAILURE_PRIVATE_CANARY")
+  end
 
   # Returns {exit_status, stdout, stderr} without halting the VM.
   defp run_cli(argv) do
@@ -29,7 +35,7 @@ defmodule Custyard.ReleaseTest do
     Enum.each(modules, &Logger.put_module_level(&1, :info))
 
     try do
-      capture_log(fun)
+      capture_log([metadata: [:operator_id, :organization_id, :role]], fun)
     after
       Enum.each(modules, &Logger.delete_module_level/1)
     end
@@ -39,6 +45,72 @@ defmodule Custyard.ReleaseTest do
 
   defp audit_events(type) do
     Repo.all(from(a in AuditEvent, where: a.event_type == ^type, order_by: a.id))
+  end
+
+  test "release repository entry points install privacy before running work" do
+    :ok = :logger.remove_primary_filter(:custyard_log_privacy)
+
+    try do
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   Release.with_repo(fn ->
+                     filters = :logger.get_primary_config()[:filters]
+                     assert List.keymember?(filters, :custyard_log_privacy, 0)
+
+                     Logger.error("RELEASE_ENTRYPOINT_PRIVATE_CANARY")
+                     :ok
+                   end)
+        end)
+
+      assert log =~ "external_log"
+      refute log =~ "RELEASE_ENTRYPOINT_PRIVATE_CANARY"
+
+      assert {:ok, %{formatter: {Custyard.Log.Formatter, _}}} =
+               :logger.get_handler_config(:default)
+    after
+      Custyard.Log.install!()
+    end
+  end
+
+  test "migration and rollback failures cannot escape eval with private exception text" do
+    previous_app = System.get_env("FLY_APP_NAME")
+    previous_repos = Application.fetch_env!(:custyard, :ecto_repos)
+    private = "RELEASE_FAILURE_PRIVATE_CANARY"
+
+    try do
+      System.delete_env("FLY_APP_NAME")
+      Application.put_env(:custyard, :ecto_repos, [UnavailableRepo])
+
+      tasks = [
+        {&Release.migrate/0, "release_migration_failed", "Database migration failed"},
+        {fn -> Release.rollback(UnavailableRepo, 1) end, "release_rollback_failed",
+         "Database rollback failed"}
+      ]
+
+      for {task, event, message} <- tasks do
+        log =
+          capture_log(fn ->
+            try do
+              task.()
+              flunk("release task should fail before starting the repository")
+            rescue
+              error in RuntimeError ->
+                assert Exception.message(error) == message <> "; see structured diagnostics"
+                refute Exception.format(:error, error, __STACKTRACE__) =~ private
+            end
+          end)
+
+        assert log =~ event
+        refute log =~ private
+      end
+    after
+      Application.put_env(:custyard, :ecto_repos, previous_repos)
+
+      if previous_app,
+        do: System.put_env("FLY_APP_NAME", previous_app),
+        else: System.delete_env("FLY_APP_NAME")
+    end
   end
 
   describe "run_operator_cli/1 usage" do
@@ -316,9 +388,7 @@ defmodule Custyard.ReleaseTest do
     test "unset with no operators logs how to create the first one" do
       for value <- [nil, "", "   "] do
         log = capture_info_log(fn -> assert :ok = Release.bootstrap_operator(value) end)
-        assert log =~ "No operator accounts exist"
-        assert log =~ "OPERATOR_EMAIL"
-        assert log =~ "bin/operator add"
+        assert log =~ "operator_bootstrap_required"
       end
 
       assert operator_count() == 0
@@ -328,8 +398,8 @@ defmodule Custyard.ReleaseTest do
       insert_operator_account(email: "ops@example.com")
 
       log = capture_info_log(fn -> assert :ok = Release.bootstrap_operator(nil) end)
-      assert log =~ "OPERATOR_EMAIL is not set; add operators with `bin/operator add EMAIL`"
-      refute log =~ "No operator accounts exist"
+      assert log =~ "operator_bootstrap_skipped"
+      refute log =~ "operator_bootstrap_required"
     end
 
     test "set creates a super_admin via boot and recommends unsetting it" do
@@ -338,12 +408,16 @@ defmodule Custyard.ReleaseTest do
 
       operator = Repo.get_by!(OperatorAccount, email: "first@example.com")
       assert operator.role == "super_admin"
-      assert log =~ "Created operator #{operator.id} first@example.com"
-      assert log =~ "via boot"
-      assert log =~ "Unset it after the first login"
+      assert log =~ "operator_account_created"
+      assert log =~ "operator_id=#{operator.id}"
+      assert log =~ "operator_bootstrap_environment_retained"
+      refute log =~ "first@example.com"
 
-      assert [%{source: "boot", payload: %{"via" => "boot", "email" => "first@example.com"}}] =
+      assert [%{source: "boot", payload: %{"via" => "boot", "operator_id" => id} = payload}] =
                audit_events(:operator_created)
+
+      assert id == operator.id
+      refute Map.has_key?(payload, "email")
     end
 
     test "set to an existing account reports it unmodified" do
@@ -356,8 +430,10 @@ defmodule Custyard.ReleaseTest do
 
       log = capture_info_log(fn -> assert :ok = Release.bootstrap_operator("OPS@example.com") end)
 
-      assert log =~ "OPERATOR_EMAIL=ops@example.com exists (role admin), not modified"
-      assert log =~ "Unset it after the first login"
+      assert log =~ "operator_bootstrap_account_exists"
+      assert log =~ "operator_id=#{existing.id}"
+      assert log =~ "operator_bootstrap_environment_retained"
+      refute log =~ "ops@example.com"
       assert Repo.get!(OperatorAccount, existing.id) == before
       assert audit_events(:operator_created) == []
     end
@@ -380,8 +456,9 @@ defmodule Custyard.ReleaseTest do
 
       for value <- [nil, "admin@custyard.local", "ops@example.com"] do
         log = capture_info_log(fn -> assert :ok = Release.bootstrap_operator(value) end)
-        assert log =~ "admin@custyard.local (super_admin, id #{placeholder.id})"
-        assert log =~ "bin/operator remove admin@custyard.local"
+        assert log =~ "operator_placeholder_unroutable"
+        assert log =~ "operator_id=#{placeholder.id}"
+        refute log =~ "admin@custyard.local"
       end
 
       assert Repo.get!(OperatorAccount, placeholder.id) == before

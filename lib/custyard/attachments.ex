@@ -21,7 +21,7 @@ defmodule Custyard.Attachments do
   alias Custyard.{Authorization, Conversation, Message, MessageAttachment, Repo}
   alias Custyard.Attachments.{Client, Sniffer}
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @default_limit_mb 10
   @megabyte 1_048_576
@@ -346,7 +346,7 @@ defmodule Custyard.Attachments do
           {skipped("too_large"), used}
 
         {:error, _reason} ->
-          Logger.warning("Attachment fetch failed")
+          Log.warning(:attachment_fetch_failed)
           {%{state: :failed, skip_reason: "fetch_failed"}, used}
       end
     end

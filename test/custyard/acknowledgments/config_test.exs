@@ -114,12 +114,11 @@ defmodule Custyard.Acknowledgments.ConfigTest do
                ""
     end
 
-    test "enabled without URL or source logs the variable names once" do
+    test "enabled without URL or source logs a bounded configuration event" do
       log =
         capture_log(fn -> assert Config.startup(config([]), :prod) == :not_configured end)
 
-      assert log =~ "ACKNOWLEDGMENTS_AMQP_URL"
-      assert log =~ "ACKNOWLEDGMENTS_SOURCE"
+      assert log =~ "acknowledgment_configuration_missing"
     end
 
     test "exactly one of URL and source refuses to start, naming the missing one" do
@@ -161,7 +160,7 @@ defmodule Custyard.Acknowledgments.ConfigTest do
       remote = config(url: "amqp://custyard:#{@password}@broker.example.com", source: "ots.test")
 
       log = capture_log(fn -> assert Config.startup(remote, :prod) == :enabled end)
-      assert log =~ "plaintext amqp"
+      assert log =~ "acknowledgment_transport_insecure"
       refute log =~ @password
       refute log =~ "broker.example.com"
 
@@ -179,7 +178,7 @@ defmodule Custyard.Acknowledgments.ConfigTest do
             assert Config.startup(config(url: url, source: "ots.test"), :prod) == :enabled
           end)
 
-        refute log =~ "plaintext", "unexpected warning for #{url}"
+        refute log =~ "acknowledgment_transport_insecure", "unexpected warning for #{url}"
       end
     end
 
@@ -215,7 +214,7 @@ defmodule Custyard.Acknowledgments.ConfigTest do
             assert Config.startup(config(url: url, source: "ots.test"), :prod) == :enabled
           end)
 
-        refute log =~ "plaintext", "unexpected warning for #{url}"
+        refute log =~ "acknowledgment_transport_insecure", "unexpected warning for #{url}"
       end
     end
   end

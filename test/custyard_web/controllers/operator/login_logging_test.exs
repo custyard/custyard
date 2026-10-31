@@ -1,18 +1,25 @@
 defmodule CustyardWeb.Operator.LoginLoggingTest.MailerAdapter do
   use Swoosh.Adapter
 
-  require Logger
+  require Custyard.Log, as: Log
 
   def deliver(email, config) do
     send(self(), {:login_delivery_attempt, email})
-    Logger.info("login_test_adapter_called")
+    Log.info(:logging_self_test, stage: :deliver)
 
     case Keyword.get(config, :result, :accepted) do
       :accepted ->
         {:ok, %{id: "login-test-message", status: "queued"}}
 
       :provider_rejected ->
-        {:error, {422, %{message: "UNTRUSTED_PROVIDER_ECHO", submitted_email: email}}}
+        {:error,
+         {422,
+          %{
+            code: "validation_failed",
+            errors: %{"from" => [email.html_body]},
+            message: "UNTRUSTED_PROVIDER_ECHO",
+            submitted_email: email
+          }}}
 
       :transport_error ->
         {:error,
@@ -50,7 +57,9 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
     {conn, log} = request_login(%{"email" => operator.email})
 
     assert redirected_to(conn) == "/operator/login/sent"
-    assert log =~ "POST /operator/login"
+    assert log =~ "http_request_started"
+    assert log =~ "method=POST"
+    assert log =~ "route=operator_login"
 
     assert_flow(log, conn, [
       "operator_login_requested",
@@ -59,8 +68,8 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
     ])
 
     assert log =~ "operator_id=#{operator.id}"
-    assert_before(log, "operator_login_delivery_started", "login_test_adapter_called")
-    assert_before(log, "login_test_adapter_called", "operator_login_provider_accepted")
+    assert_before(log, "operator_login_delivery_started", "logging_self_test")
+    assert_before(log, "logging_self_test", "operator_login_provider_accepted")
     assert_received {:login_delivery_attempt, email}
 
     token = Repo.get!(OperatorAccount, operator.id).login_token
@@ -156,6 +165,7 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
     assert log =~ "operator_id=#{operator.id}"
     assert log =~ "provider_status=422"
     assert log =~ "reason=provider_response"
+    assert log =~ "provider_code=validation_failed"
     refute log =~ "UNTRUSTED_PROVIDER_ECHO"
     assert_received {:login_delivery_attempt, _}
     assert_no_secrets(log, operator)
@@ -178,7 +188,7 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
       "operator_login_provider_rejected"
     ])
 
-    assert log =~ "reason=delivery_error"
+    assert log =~ "reason=unclassified_error"
     refute log =~ "provider_status="
     refute log =~ "untrusted_transport_error"
     refute log =~ "UNTRUSTED_TRANSPORT_ECHO"
@@ -186,7 +196,196 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
     assert_no_secrets(log, operator)
   end
 
+  test "safe provider validation fields reach the production JSON formatter" do
+    Application.put_env(:custyard, Custyard.Mailer,
+      adapter: MailerAdapter,
+      result: :provider_rejected
+    )
+
+    operator = insert_operator_account()
+    Logger.put_module_level(Custyard.Auth.LoginEmail, :info)
+    on_exit(fn -> Logger.delete_module_level(Custyard.Auth.LoginEmail) end)
+
+    {conn, records} =
+      Custyard.LogCapture.with_json(fn ->
+        build_conn()
+        |> Map.put(:remote_ip, @ip)
+        |> post("/operator/login", %{"email" => operator.email})
+      end)
+
+    assert redirected_to(conn) == "/operator/login/sent"
+    rejected = Enum.find(records, &(&1["event"] == "operator_login_provider_rejected"))
+    assert rejected["provider_code"] == "validation_failed"
+    assert rejected["provider_status"] == 422
+    assert rejected["validation_fields"] == ["from"]
+    assert rejected["request_id"] == hd(get_resp_header(conn, "x-request-id"))
+    refute Jason.encode!(records) =~ operator.email
+    refute Jason.encode!(records) =~ "/operator/login/verify/"
+  end
+
+  test "a supplied request ID cannot smuggle personal data into logging" do
+    private = "PRIVATE-HEADER-CANARY-/operator/login/verify/request-secret"
+    Logger.put_module_level(CustyardWeb.Plugs.RequestLog, :info)
+    Logger.put_module_level(CustyardWeb.Operator.SessionController, :info)
+
+    on_exit(fn ->
+      Logger.delete_module_level(CustyardWeb.Plugs.RequestLog)
+      Logger.delete_module_level(CustyardWeb.Operator.SessionController)
+    end)
+
+    {conn, log} =
+      with_log(Application.fetch_env!(:logger, :console), fn ->
+        build_conn()
+        |> Map.put(:remote_ip, @ip)
+        |> put_req_header("x-request-id", private)
+        |> post("/operator/login", %{})
+      end)
+
+    assert [request_id] = get_resp_header(conn, "x-request-id")
+    refute request_id == private
+    assert log =~ request_id
+    refute log =~ private
+    refute log =~ "request-secret"
+  end
+
+  test "successful token consumption records the authenticated operator without a request URL" do
+    operator =
+      insert_operator_account()
+      |> OperatorAccount.login_token_changeset()
+      |> Repo.update!()
+
+    token = operator.login_token
+    {conn, log} = capture_login(fn -> post(build_conn(), "/operator/login/verify/#{token}") end)
+
+    assert redirected_to(conn) == "/operator"
+    assert get_session(conn, :operator_id) == operator.id
+    assert get_session(conn, :operator_claim) == OperatorAccount.session_claim(operator)
+    assert Repo.get!(OperatorAccount, operator.id).login_token == nil
+    assert_flow(log, conn, ["operator_login_succeeded"])
+    assert log =~ "operator_id=#{operator.id}"
+    refute log =~ "http_request_started"
+    refute log =~ "http_request_completed"
+    refute log =~ token
+    assert_no_secrets(log, operator)
+
+    {replayed, replay_log} =
+      capture_login(fn -> post(build_conn(), "/operator/login/verify/#{token}") end)
+
+    assert html_response(replayed, 200) =~ "Invalid or expired login link"
+    refute get_session(replayed, :operator_id)
+    assert_flow(replay_log, replayed, ["operator_login_rejected"])
+    assert replay_log =~ "reason=invalid_or_expired_token"
+    refute replay_log =~ "operator_id="
+    refute replay_log =~ token
+  end
+
+  test "expired, unknown and malformed token attempts get a fixed token-free rejection" do
+    operator =
+      insert_operator_account()
+      |> OperatorAccount.login_token_changeset()
+      |> Repo.update!()
+
+    expired_at = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
+    operator |> Ecto.Changeset.change(login_token_expires_at: expired_at) |> Repo.update!()
+
+    for {token, response} <- [
+          {operator.login_token, "has expired"},
+          {String.duplicate("x", 43), "Invalid or expired login link"},
+          {"not%20a%20token", "Invalid or expired login link"}
+        ] do
+      {conn, log} = capture_login(fn -> post(build_conn(), "/operator/login/verify/#{token}") end)
+
+      assert html_response(conn, 200) =~ response
+      refute get_session(conn, :operator_id)
+      assert_flow(log, conn, ["operator_login_rejected"])
+      assert log =~ "reason=invalid_or_expired_token"
+      refute log =~ "operator_id="
+      refute log =~ "http_request_started"
+      refute log =~ "http_request_completed"
+      refute log =~ token
+      assert_no_secrets(log, operator)
+    end
+  end
+
+  test "a valid token with no organization is rejected without naming an account" do
+    organization = insert_organization()
+
+    operator =
+      insert_operator_account(role: "admin", organization_id: organization.id)
+      |> OperatorAccount.login_token_changeset()
+      |> Repo.update!()
+
+    Repo.delete!(organization)
+
+    {conn, log} =
+      capture_login(fn ->
+        post(build_conn(), "/operator/login/verify/#{operator.login_token}")
+      end)
+
+    assert html_response(conn, 200) =~ "No organization assigned; ask a super admin."
+    refute get_session(conn, :operator_id)
+    assert_flow(log, conn, ["operator_login_rejected"])
+    assert log =~ "reason=no_organization"
+    refute log =~ "operator_id="
+    refute log =~ operator.login_token
+    assert_no_secrets(log, operator)
+  end
+
+  test "logout records the signed session identity without claiming current account validation" do
+    operator = insert_operator_account()
+
+    {conn, log} =
+      capture_login(fn ->
+        build_conn()
+        |> init_test_session(%{operator_id: operator.id, operator_claim: "stale-session-claim"})
+        |> delete("/operator/logout")
+      end)
+
+    assert redirected_to(conn) == "/operator/login"
+    refute get_session(conn, :operator_id)
+    refute get_session(conn, :operator_claim)
+    assert [request_id] = get_resp_header(conn, "x-request-id")
+    assert log =~ "operator_logout"
+    assert log =~ "request_id=#{request_id}"
+    assert log =~ "session_operator_id=#{operator.id}"
+    refute Regex.match?(~r/(?:^|\s)operator_id=/, log)
+    refute log =~ "stale-session-claim"
+    assert_no_secrets(log, operator)
+  end
+
+  test "logout remains available without a numeric session identity and never logs session claims" do
+    for operator_id <- [nil, "PRIVATE-SESSION-IDENTITY-CANARY"] do
+      {conn, log} =
+        capture_login(fn ->
+          build_conn()
+          |> init_test_session(%{
+            operator_id: operator_id,
+            operator_claim: "PRIVATE-CLAIM-CANARY"
+          })
+          |> delete("/operator/logout")
+        end)
+
+      assert redirected_to(conn) == "/operator/login"
+      refute get_session(conn, :operator_id)
+      refute get_session(conn, :operator_claim)
+      assert log =~ "operator_logout"
+      assert log =~ "request_id=#{hd(get_resp_header(conn, "x-request-id"))}"
+      refute log =~ "session_operator_id="
+      refute Regex.match?(~r/(?:^|\s)operator_id=/, log)
+      refute log =~ "PRIVATE-SESSION-IDENTITY-CANARY"
+      refute log =~ "PRIVATE-CLAIM-CANARY"
+    end
+  end
+
   defp request_login(params) do
+    capture_login(fn ->
+      build_conn()
+      |> Map.put(:remote_ip, @ip)
+      |> post("/operator/login", params)
+    end)
+  end
+
+  defp capture_login(fun) do
     # Use the application's real formatter and metadata allowlist so these
     # assertions also catch fields accidentally hidden from production logs.
     capture_options = Application.fetch_env!(:logger, :console) |> Keyword.put(:level, :info)
@@ -195,6 +394,7 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
       CustyardWeb.Operator.SessionController,
       Custyard.Auth.LoginEmail,
       Phoenix.Logger,
+      CustyardWeb.Plugs.RequestLog,
       MailerAdapter
     ]
 
@@ -205,11 +405,7 @@ defmodule CustyardWeb.Operator.LoginLoggingTest do
     Enum.each(modules, &Logger.put_module_level(&1, :info))
 
     try do
-      with_log(capture_options, fn ->
-        build_conn()
-        |> Map.put(:remote_ip, @ip)
-        |> post("/operator/login", params)
-      end)
+      with_log(capture_options, fun)
     after
       Enum.each(modules, &Logger.delete_module_level/1)
       Enum.each(previous_levels, fn {module, level} -> Logger.put_module_level(module, level) end)

@@ -3,7 +3,7 @@ defmodule Custyard.Repo.Migrations.NormalizeOperatorAccountEmailsUnicode do
 
   import Ecto.Query
 
-  require Logger
+  require Custyard.Log, as: Log
 
   # 20261012022249 folded only ASCII letters, and neither trimmed nor
   # NFC-normalized emails. OperatorAccount.normalize_email/1 stores
@@ -29,13 +29,12 @@ defmodule Custyard.Repo.Migrations.NormalizeOperatorAccountEmailsUnicode do
           owners
 
         :invalid ->
-          Logger.warning("operator_accounts id=#{id}: email is not valid UTF-8, left as is")
+          Log.warning(:operator_email_normalization_skipped, operator_id: id, reason: :invalid_utf8)
           owners
 
         normalized when is_map_key(owners, normalized) ->
-          Logger.warning(
-            "operator_accounts id=#{id}: email left as is, its normalized form " <>
-              "belongs to id=#{owners[normalized]}; this account cannot log in"
+          Log.warning(:operator_email_normalization_skipped,
+            operator_id: id, conflicting_operator_id: owners[normalized], reason: :normalization_collision
           )
 
           owners

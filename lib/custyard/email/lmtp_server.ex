@@ -164,34 +164,36 @@ defmodule Custyard.Email.LMTPServer do
 
   - `[:custyard, :lmtp, :connection, :open]` - Emitted when a client connects
     - Measurements: `%{system_time: integer()}`
-    - Metadata: `%{peer: tuple(), tls_enabled: boolean()}`
+    - Metadata: `%{tls_enabled: boolean()}`
 
   - `[:custyard, :lmtp, :connection, :close]` - Emitted when a connection closes
     - Measurements: `%{duration: native_time()}`
-    - Metadata: `%{peer: tuple(), reason: term(), messages_processed: integer()}`
+    - Metadata: `%{messages_processed: integer()}`
 
   - `[:custyard, :lmtp, :connection, :rejected]` - Emitted when a connection is rejected
     - Measurements: `%{count: 1}`
-    - Metadata: `%{peer: tuple(), reason: :ip_not_allowed}`
+    - Metadata: `%{reason: :ip_not_allowed}`
 
   ### Email Processing Events
 
   - `[:custyard, :lmtp, :email, :start]` - Emitted when email processing begins
     - Measurements: `%{system_time: integer()}`
-    - Metadata: `%{size: integer(), from: binary(), to: list()}`
+    - Metadata: `%{size: integer(), recipient_count: integer()}`
 
   - `[:custyard, :lmtp, :email, :stop]` - Emitted when email processing completes
     - Measurements: `%{duration: native_time()}`
-    - Metadata: `%{size: integer(), from: binary(), to: list(), result: :ok | :error}`
-    - On error, additional metadata: `%{error_type: :temporary | :permanent, reason: term()}`
+    - Metadata: `%{size: integer(), recipient_count: integer(), result: :ok | :error}`
+    - On error, additional metadata: `%{error_type: :temporary | :permanent}` plus bounded `Custyard.Log.failure/1` classifications
 
   ### Rate Limit Events
 
   - `[:custyard, :lmtp, :rate_limit, :exceeded]` - Emitted when rate limits are hit
     - Measurements: `%{count: 1}`
-    - Metadata: `%{limit_type: :connection | :global, peer: tuple()}`
+    - Metadata: `%{limit_type: :connection | :global}`
 
   ### Example: Logging Handler
+
+      require Custyard.Log, as: Log
 
       :telemetry.attach_many(
         "lmtp-logger",
@@ -199,8 +201,8 @@ defmodule Custyard.Email.LMTPServer do
           [:custyard, :lmtp, :email, :stop],
           [:custyard, :lmtp, :rate_limit, :exceeded]
         ],
-        fn event, measurements, metadata, _config ->
-          Logger.info("LMTP event", event: event, measurements: measurements, metadata: metadata)
+        fn _event, measurements, metadata, _config ->
+          Log.info(:lmtp_telemetry_event, size_bytes: measurements[:size], outcome: metadata[:result])
         end,
         nil
       )
@@ -233,7 +235,7 @@ defmodule Custyard.Email.LMTPServer do
   # Metrics can attach to [:custyard, :lmtp, :email, :stop] for durations
   @telemetry_prefix [:custyard, :lmtp, :email]
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @behaviour :gen_smtp_server_session
 
@@ -341,9 +343,9 @@ defmodule Custyard.Email.LMTPServer do
     ]
 
     if tls_enabled?(tls_opts) do
-      Logger.info("Starting LMTP server on port #{port} with STARTTLS support")
+      Log.info(:lmtp_server_started, port: port, tls_enabled: true)
     else
-      Logger.info("Starting LMTP server on port #{port}")
+      Log.info(:lmtp_server_started, port: port, tls_enabled: false)
     end
 
     :gen_smtp_server.start(server_name, __MODULE__, server_opts)
@@ -507,15 +509,13 @@ defmodule Custyard.Email.LMTPServer do
     if ip_allowed?(peer_address, allowed_ips) do
       init_accepted(hostname, peer_address, options)
     else
-      Logger.warning("LMTP connection rejected: IP not in allowlist",
-        peer: inspect(peer_address)
-      )
+      Log.warning(:lmtp_connection_rejected, reason: :ip_not_allowed)
 
       # Emit telemetry for rejected connections
       :telemetry.execute(
         [:custyard, :lmtp, :connection, :rejected],
         %{count: 1},
-        %{peer: peer_address, reason: :ip_not_allowed}
+        %{reason: :ip_not_allowed}
       )
 
       {:stop, :normal, "554 5.7.1 Connection refused - IP not authorized"}
@@ -541,7 +541,7 @@ defmodule Custyard.Email.LMTPServer do
     :telemetry.execute(
       [:custyard, :lmtp, :connection, :open],
       %{system_time: System.system_time()},
-      %{peer: peer_address, tls_enabled: tls_enabled}
+      %{tls_enabled: tls_enabled}
     )
 
     state = %{
@@ -552,6 +552,7 @@ defmodule Custyard.Email.LMTPServer do
       tls_enabled: tls_enabled,
       peer_address: peer_address,
       connected_at: System.monotonic_time(),
+      log_operation_id: Log.new_id(),
       # Loop detection config
       hostname: hostname_string,
       max_received_count: max_received_count,
@@ -586,24 +587,22 @@ defmodule Custyard.Email.LMTPServer do
     Enum.member?(allowed_ips, ip)
   end
 
-  defp ip_allowed?(peer_address, allowed_ips) when is_list(allowed_ips) do
+  defp ip_allowed?(_peer_address, allowed_ips) when is_list(allowed_ips) do
     # Fallback for unexpected peer_address formats
-    Logger.debug("Unexpected peer_address format in ip_allowed?",
-      peer: inspect(peer_address)
-    )
+    Log.debug(:lmtp_peer_format_invalid)
 
     false
   end
 
   @impl true
-  def handle_HELO(hostname, state) do
-    Logger.debug("LMTP HELO received", client_hostname: hostname)
+  def handle_HELO(_hostname, state) do
+    Log.debug(:lmtp_helo_received, operation_id: state[:log_operation_id])
     {:ok, state}
   end
 
   @impl true
-  def handle_EHLO(hostname, extensions, state) do
-    Logger.debug("LMTP EHLO received", client_hostname: hostname)
+  def handle_EHLO(_hostname, extensions, state) do
+    Log.debug(:lmtp_ehlo_received, operation_id: state[:log_operation_id])
 
     # Add STARTTLS extension if TLS is configured
     # gen_smtp will handle the actual TLS negotiation
@@ -630,13 +629,13 @@ defmodule Custyard.Email.LMTPServer do
 
   @impl true
   def handle_MAIL(from, state) do
-    Logger.debug("LMTP MAIL FROM received", sender: from)
+    Log.debug(:lmtp_sender_received, operation_id: state[:log_operation_id])
     {:ok, %{state | from: from}}
   end
 
   @impl true
   def handle_MAIL_extension(extension, state) do
-    Logger.debug("LMTP MAIL extension received", extension: extension)
+    Log.debug(:lmtp_mail_extension_received, operation_id: state[:log_operation_id])
     handle_mail_extension_impl(extension, state)
   end
 
@@ -651,10 +650,9 @@ defmodule Custyard.Email.LMTPServer do
             {:ok, %{state | declared_size: declared_size}}
 
           declared_size > max_size ->
-            Logger.warning("LMTP rejecting oversized message",
+            Log.warning(:lmtp_message_size_rejected,
               declared_size: declared_size,
-              max_size: max_size,
-              sender: state[:from]
+              max_size: max_size
             )
 
             {:error, "552 5.3.4 Message size exceeds fixed maximum message size", state}
@@ -676,7 +674,7 @@ defmodule Custyard.Email.LMTPServer do
 
   @impl true
   def handle_RCPT(to, state) do
-    Logger.debug("LMTP RCPT TO received", recipient: to)
+    Log.debug(:lmtp_recipient_received, operation_id: state[:log_operation_id])
     current_count = length(state.to)
     max_recipients = Map.get(state, :max_recipients, @default_max_recipients)
 
@@ -687,10 +685,10 @@ defmodule Custyard.Email.LMTPServer do
         # If we already have an org set and the new recipient resolves to a
         # different one, reject — LMTP sessions should not span orgs.
         if state.organization != nil and state.organization.id != org.id do
-          Logger.warning("LMTP rejecting recipient from different organization",
-            recipient: to,
-            existing_org_id: state.organization.id,
-            new_org_id: org.id
+          Log.warning(:lmtp_recipient_organization_mismatch,
+            operation_id: state[:log_operation_id],
+            existing_organization_id: state.organization.id,
+            organization_id: org.id
           )
 
           {:error, "550 5.1.1 All recipients must belong to the same organization", state}
@@ -707,13 +705,13 @@ defmodule Custyard.Email.LMTPServer do
               :telemetry.execute(
                 [:custyard, :lmtp, :recipient_limit, :exceeded],
                 %{count: 1},
-                %{peer: state[:peer_address], current_count: current_count, max: max_recipients}
+                %{current_count: current_count, max: max_recipients}
               )
 
-              Logger.warning("LMTP recipient limit exceeded",
+              Log.warning(:lmtp_recipient_limit_exceeded,
+                operation_id: state[:log_operation_id],
                 current_count: current_count,
-                max_recipients: max_recipients,
-                sender: state[:from]
+                max_recipients: max_recipients
               )
 
               {:error, "452 4.5.3 Too many recipients", state}
@@ -721,9 +719,9 @@ defmodule Custyard.Email.LMTPServer do
         end
 
       {:error, :invalid_domain} ->
-        Logger.warning("LMTP rejecting unknown recipient domain",
-          recipient: to,
-          sender: state[:from]
+        Log.warning(:lmtp_recipient_domain_rejected,
+          operation_id: state[:log_operation_id],
+          reason: :invalid_domain
         )
 
         {:error, "550 5.1.1 Unknown recipient domain", state}
@@ -773,8 +771,8 @@ defmodule Custyard.Email.LMTPServer do
   end
 
   @impl true
-  def handle_RCPT_extension(extension, state) do
-    Logger.debug("LMTP RCPT extension received", extension: extension)
+  def handle_RCPT_extension(_extension, state) do
+    Log.debug(:lmtp_recipient_extension_received, operation_id: state[:log_operation_id])
     {:ok, state}
   end
 
@@ -786,14 +784,16 @@ defmodule Custyard.Email.LMTPServer do
 
   @impl true
   def handle_DATA(from, to, data, state) do
+    Log.with_context([operation_id: state[:log_operation_id] || Log.new_id()], fn ->
+      receive_data(from, to, data, state)
+    end)
+  end
+
+  defp receive_data(_from, to, data, state) do
     data_size = byte_size(data)
     recipient_count = length(to)
 
-    Logger.info("LMTP DATA received",
-      sender: from,
-      recipient_count: recipient_count,
-      size_bytes: data_size
-    )
+    Log.info(:lmtp_message_received, recipient_count: recipient_count, size_bytes: data_size)
 
     with :ok <- check_message_size(data_size, state),
          :ok <- check_mail_loop(data, state),
@@ -801,11 +801,7 @@ defmodule Custyard.Email.LMTPServer do
       process_and_respond(data, to, state)
     else
       {:error, :message_too_large, actual_size, max_size} ->
-        Logger.warning("LMTP message too large",
-          actual_size: actual_size,
-          max_size: max_size,
-          sender: state[:from]
-        )
+        Log.warning(:lmtp_message_size_rejected, actual_size: actual_size, max_size: max_size)
 
         reply(:error, "552 5.3.4 Message size exceeds fixed maximum message size", to, state)
 
@@ -813,14 +809,10 @@ defmodule Custyard.Email.LMTPServer do
         :telemetry.execute(
           [:custyard, :lmtp, :mail_loop, :detected],
           %{count: count},
-          %{hostname: state[:hostname], peer: state[:peer_address]}
+          %{}
         )
 
-        Logger.warning("LMTP mail loop detected",
-          hostname: state[:hostname],
-          received_count: count,
-          sender: state[:from]
-        )
+        Log.warning(:lmtp_mail_loop_detected, received_count: count)
 
         reply(:error, "554 5.4.6 Mail loop detected", to, state)
 
@@ -828,13 +820,12 @@ defmodule Custyard.Email.LMTPServer do
         :telemetry.execute(
           [:custyard, :lmtp, :rate_limit, :exceeded],
           %{count: 1},
-          %{limit_type: :connection, peer: state[:peer_address]}
+          %{limit_type: :connection}
         )
 
-        Logger.warning("LMTP rate limit exceeded",
+        Log.warning(:lmtp_rate_limit_exceeded,
           limit_type: :connection,
-          message_count: state[:message_count],
-          sender: state[:from]
+          message_count: state[:message_count]
         )
 
         reply(:error, "421 4.7.1 Too many messages on this connection", to, state)
@@ -843,13 +834,10 @@ defmodule Custyard.Email.LMTPServer do
         :telemetry.execute(
           [:custyard, :lmtp, :rate_limit, :exceeded],
           %{count: 1},
-          %{limit_type: :global, peer: state[:peer_address]}
+          %{limit_type: :global}
         )
 
-        Logger.warning("LMTP rate limit exceeded",
-          limit_type: :global,
-          sender: state[:from]
-        )
+        Log.warning(:lmtp_rate_limit_exceeded, limit_type: :global)
 
         reply(:error, "421 4.7.1 Server busy, try again later", to, state)
     end
@@ -862,7 +850,9 @@ defmodule Custyard.Email.LMTPServer do
   # bounced as a cross-organization delivery and the recipient count keeps
   # growing until every RCPT TO is refused.
   defp reset_transaction(state) do
-    %{state | from: nil, to: [], data: nil, declared_size: nil, organization: nil}
+    state
+    |> Map.merge(%{from: nil, to: [], data: nil, declared_size: nil, organization: nil})
+    |> Map.put(:log_operation_id, Log.new_id())
   end
 
   # LMTP (RFC 2033 section 4.2) answers DATA with one reply per accepted
@@ -880,8 +870,7 @@ defmodule Custyard.Email.LMTPServer do
   defp process_and_respond(data, recipients, state) do
     metadata = %{
       size: byte_size(data),
-      from: state[:from],
-      to: state[:to]
+      recipient_count: length(state[:to] || [])
     }
 
     start_time = System.monotonic_time()
@@ -916,24 +905,25 @@ defmodule Custyard.Email.LMTPServer do
         :telemetry.execute(
           @telemetry_prefix ++ [:stop],
           %{duration: duration},
-          Map.merge(metadata, %{result: :error, error_type: error_type, reason: reason})
+          Map.merge(
+            metadata,
+            Map.new([result: :error, error_type: error_type] ++ Log.failure(reason))
+          )
         )
 
         case error_type do
           :temporary ->
-            Logger.warning("LMTP temporary processing error",
-              error_type: :temporary,
-              reason: inspect(reason),
-              sender: state[:from]
+            Log.warning(
+              :lmtp_processing_failed,
+              [failure_kind: :temporary] ++ Log.failure(reason)
             )
 
             reply(:error, "421 4.7.0 Temporary failure, try again later", recipients, state)
 
           :permanent ->
-            Logger.warning("LMTP permanent processing error",
-              error_type: :permanent,
-              reason: inspect(reason),
-              sender: state[:from]
+            Log.warning(
+              :lmtp_processing_failed,
+              [failure_kind: :permanent] ++ Log.failure(reason)
             )
 
             reply(:error, "550 5.7.0 Permanent failure", recipients, state)
@@ -943,7 +933,7 @@ defmodule Custyard.Email.LMTPServer do
 
   @impl true
   def handle_RSET(state) do
-    {:ok, %{state | from: nil, to: [], data: nil, declared_size: nil, organization: nil}}
+    {:ok, reset_transaction(state)}
   end
 
   @impl true
@@ -952,8 +942,8 @@ defmodule Custyard.Email.LMTPServer do
   end
 
   @impl true
-  def handle_other(verb, _args, state) do
-    Logger.warning("LMTP unrecognized command received", command: verb)
+  def handle_other(_verb, _args, state) do
+    Log.warning(:lmtp_command_unrecognized, operation_id: state[:log_operation_id])
     {:noreply, state}
   end
 
@@ -966,7 +956,7 @@ defmodule Custyard.Email.LMTPServer do
   def handle_STARTTLS(state) do
     # This callback is invoked AFTER TLS negotiation succeeds
     # gen_smtp handles the actual TLS handshake; we just receive notification
-    Logger.info("LMTP STARTTLS negotiation completed", peer: inspect(state[:peer_address]))
+    Log.info(:lmtp_starttls_completed, operation_id: state[:log_operation_id])
     state
   end
 
@@ -994,15 +984,16 @@ defmodule Custyard.Email.LMTPServer do
       [:custyard, :lmtp, :connection, :close],
       %{duration: duration},
       %{
-        peer: Map.get(state, :peer_address),
-        reason: reason,
         messages_processed: Map.get(state, :message_count, 0)
       }
     )
 
-    Logger.debug("LMTP session terminated",
-      reason: inspect(reason),
-      messages_processed: Map.get(state, :message_count, 0)
+    Log.debug(
+      :lmtp_session_terminated,
+      [
+        operation_id: state[:log_operation_id],
+        messages_processed: Map.get(state, :message_count, 0)
+      ] ++ Log.failure(reason)
     )
 
     {:ok, reason, state}

@@ -59,7 +59,70 @@ step() { echo "==> $*"; }
 
 step "migrate and bootstrap OPERATOR_EMAIL before the server starts (entrypoint.sh)"
 OPERATOR_EMAIL=" Boot@Example.COM " \
-  "$rel" eval 'Custyard.Release.migrate(); Custyard.Release.bootstrap_operator()'
+  "$rel" eval '
+    require Logger
+    app_started? = fn -> Enum.any?(Application.started_applications(), fn {app, _, _} -> app == :custyard end) end
+    false = app_started?.()
+    Custyard.Release.migrate()
+    true = List.keymember?(:logger.get_primary_config()[:filters], :custyard_log_privacy, 0)
+    {:ok, %{formatter: {Custyard.Log.Formatter, _}}} = :logger.get_handler_config(:default)
+    Logger.error("RELEASE_BOOT_PRIVATE_CANARY")
+    Custyard.Release.bootstrap_operator()
+    Logger.flush()
+    false = app_started?.()
+  ' >"$work/bootstrap.log" 2>&1
+
+if grep -q 'RELEASE_BOOT_PRIVATE_CANARY' "$work/bootstrap.log"; then
+  echo "release eval leaked a raw diagnostic before server startup" >&2
+  exit 1
+fi
+if ! grep -Fq '"event":"external_log"' "$work/bootstrap.log" ||
+   ! grep -Fq '"event":"operator_account_created"' "$work/bootstrap.log"; then
+  echo "release eval did not emit expected structured privacy-safe events:" >&2
+  cat "$work/bootstrap.log" >&2
+  exit 1
+fi
+cat "$work/bootstrap.log"
+
+step "migration and rollback failures exit nonzero with sanitized exceptions"
+for task in migrate rollback; do
+  if "$rel" eval '
+    defmodule ReleasePrivacyProbeRepo do
+      def config, do: raise("RELEASE_TASK_PRIVATE_CANARY")
+    end
+    Application.load(:custyard)
+    System.delete_env("FLY_APP_NAME")
+    Application.put_env(:custyard, :ecto_repos, [ReleasePrivacyProbeRepo])
+    case System.argv() do
+      ["migrate"] -> Custyard.Release.migrate()
+      ["rollback"] -> Custyard.Release.rollback(ReleasePrivacyProbeRepo, 1)
+    end
+  ' "$task" >"$work/$task-failure.log" 2>&1; then
+    echo "release $task unexpectedly succeeded with a failing repository" >&2
+    exit 1
+  fi
+  if grep -q 'RELEASE_TASK_PRIVATE_CANARY' "$work/$task-failure.log"; then
+    echo "release $task leaked private exception content" >&2
+    exit 1
+  fi
+  grep -Eq '"event":"release_(migration|rollback)_failed"' "$work/$task-failure.log"
+  grep -Eq 'Database (migration|rollback) failed; see structured diagnostics' "$work/$task-failure.log"
+done
+
+step "bootstrap failure exits nonzero without raw input or exception output"
+if OPERATOR_EMAIL="RELEASE_BOOT_FAILURE_PRIVATE_CANARY" \
+  "$rel" eval 'Custyard.Release.bootstrap_operator()' >"$work/bootstrap-failure.log" 2>&1; then
+  echo "invalid operator bootstrap unexpectedly succeeded" >&2
+  exit 1
+fi
+if grep -q 'RELEASE_BOOT_FAILURE_PRIVATE_CANARY' "$work/bootstrap-failure.log"; then
+  echo "operator bootstrap leaked private failure content" >&2
+  exit 1
+fi
+grep -Fq '"event":"operator_bootstrap_failed"' "$work/bootstrap-failure.log"
+grep -Fq '"reason":"validation_failed"' "$work/bootstrap-failure.log"
+grep -Fq '"validation_fields":["email"]' "$work/bootstrap-failure.log"
+grep -Fq 'OPERATOR_EMAIL: operator bootstrap failed; see structured diagnostics' "$work/bootstrap-failure.log"
 
 # curl exits 7 only when the connection is refused. Anything else, a reply or
 # a listener that accepts and never answers, means the port is taken, and the

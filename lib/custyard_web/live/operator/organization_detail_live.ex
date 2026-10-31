@@ -15,7 +15,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   import CustyardWeb.Operator.ChannelSetupComponent,
     only: [channel_state_badge: 1, sending_domain_pill: 1]
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{
     Conversations,
@@ -345,7 +345,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
             {:noreply, put_flash(socket, :error, "Failed to create route: #{message}")}
 
           {:error, reason} ->
-            Logger.error("Failed to create route: #{Custyard.EmailSetup.error_message(reason)}")
+            Log.error(:inbound_route_create_failed, Log.failure(reason))
             {:noreply, put_flash(socket, :error, "Failed to create route")}
         end
       else
@@ -465,7 +465,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
   # Runs `fun` on the route the page referred to, once it is known to still
   # exist and to belong to this organization; the stale and foreign cases
   # are answered here.
-  defp with_org_route(socket, id, action, fun) do
+  defp with_org_route(socket, id, _action, fun) do
     org = socket.assigns.organization
 
     case InboundRoutes.get_route(id) do
@@ -476,7 +476,11 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         fun.(route)
 
       route ->
-        Logger.warning("Unauthorized #{action} on route #{route.id} by operator in org #{org.id}")
+        Log.warning(:inbound_route_action_unauthorized,
+          route_id: route.id,
+          organization_id: org.id
+        )
+
         {:noreply, put_flash(socket, :error, "You do not have permission to manage this route")}
     end
   end
@@ -494,7 +498,11 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
         {:noreply, load_tab_data(socket, socket.assigns.organization, "routes")}
 
       {:error, reason} ->
-        Logger.error("Failed to toggle webhook: #{Custyard.EmailSetup.error_message(reason)}")
+        Log.error(
+          :inbound_route_webhook_toggle_failed,
+          [route_id: route.id, purpose: purpose] ++ Log.failure(reason)
+        )
+
         {:noreply, put_flash(socket, :error, "Failed to toggle webhook")}
     end
   end
@@ -538,7 +546,7 @@ defmodule CustyardWeb.Operator.OrganizationDetailLive do
           {:noreply, socket}
 
         {:error, reason} ->
-          Logger.error("Failed to delete route: #{Custyard.EmailSetup.error_message(reason)}")
+          Log.error(:inbound_route_delete_failed, Log.failure(reason))
           {:noreply, put_flash(socket, :error, "Failed to delete route")}
       end
     end

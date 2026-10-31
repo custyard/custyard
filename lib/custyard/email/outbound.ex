@@ -19,7 +19,7 @@ defmodule Custyard.Email.Outbound do
       end
   """
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Email.{Headers, OutboundQueue, ReplyRecipients, ThreadHeaders}
 
@@ -277,17 +277,16 @@ defmodule Custyard.Email.Outbound do
   end
 
   defp delivery_error(message, :no_consent) do
-    Logger.info("Outbound email withheld for message #{message.id}: prospect has not opted in")
+    Log.info(:outbound_delivery_withheld, message_id: message.id, reason: :no_consent)
     {:error, :no_consent, message |> mark_status(:withheld) |> broadcast_delivery_update()}
   end
 
   defp delivery_error(message, reason) do
     {kind, code} = failure_category(reason)
 
-    Logger.warning("outbound_delivery_failed",
-      message_id: message.id,
-      failure_kind: kind,
-      error_code: code
+    Log.warning(
+      :outbound_delivery_failed,
+      [message_id: message.id, failure_kind: kind, error_code: code] ++ Log.failure(reason)
     )
 
     attrs = %{
@@ -577,8 +576,9 @@ defmodule Custyard.Email.Outbound do
         updated
 
       {:error, changeset} ->
-        Logger.error(
-          "Failed to update delivery_status to #{status} for message #{message.id}: #{inspect(changeset.errors)}"
+        Log.error(
+          :outbound_status_update_failed,
+          [message_id: message.id, status: status] ++ Log.failure(changeset)
         )
 
         # Return the message with the status set in memory even if DB update fails

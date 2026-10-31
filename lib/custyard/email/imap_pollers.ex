@@ -96,8 +96,6 @@ defmodule Custyard.Email.ImapPollers do
     @moduledoc false
     use GenServer
 
-    require Logger
-
     alias Custyard.Email.ImapPollers
 
     @sweep_interval_ms 5 * 60_000
