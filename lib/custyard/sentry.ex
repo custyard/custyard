@@ -23,9 +23,14 @@ defmodule Custyard.Sentry do
       source (Plug capture, `Sentry.LoggerHandler` process/LiveView crashes,
       or manual `Sentry.capture_*`).
 
-  Scrubbing is **fail-closed**: if anything raises mid-scrub, the affected field
-  is replaced with `#{"[SCRUBBING_FAILED]"}` rather than left intact, so a bug
-  in this module can never leak the value it was meant to hide.
+  The send boundary rebuilds an event from a small allowlist rather than trying
+  to recognize every possible piece of personal data in an arbitrary message.
+  Rendered exception messages, socket state, request payloads, headers, cookies,
+  breadcrumbs, user profiles, source context and attachments are omitted. Loaded
+  exception classes, code locations and approved operational metadata remain.
+
+  If minimization fails, a new, fixed diagnostic event is returned. None of the
+  original event's compartments survive that failure path.
   """
 
   @redacted "[REDACTED]"
@@ -116,10 +121,9 @@ defmodule Custyard.Sentry do
   @doc """
   Global `:before_send` callback — `(Sentry.Event.t()) -> Sentry.Event.t() | nil`.
 
-  Drops known-noise events (unmatched-route 404s) and scrubs the request URL,
-  query string and message on everything else. Fail-closed: on any error the
-  request URL/message are redacted with a placeholder and the (scrubbed) event
-  is still reported, so genuine errors are never silently swallowed.
+  Drops unmatched-route 404s and reconstructs every other event using approved
+  diagnostics only. Free-form strings are not treated as safe merely because
+  they do not match a credential regex. Unexpected input is dropped.
   """
   @spec before_send(Sentry.Event.t()) :: Sentry.Event.t() | nil
   def before_send(%Sentry.Event{} = event) do
@@ -133,7 +137,7 @@ defmodule Custyard.Sentry do
   end
 
   # Non-event input should not occur, but never crash the send pipeline.
-  def before_send(other), do: other
+  def before_send(_other), do: nil
 
   @doc """
   Scrubs a full URL string: redacts sensitive path segments and query-param
@@ -224,6 +228,11 @@ defmodule Custyard.Sentry do
     end)
   end
 
+  defp sensitive_key?(key) when is_binary(key),
+    do: String.downcase(key) in @sensitive_keys
+
+  defp sensitive_key?(key), do: sensitive_key?(to_string(key))
+
   # -- internals -------------------------------------------------------------
 
   # Single place for event filtering (noise drops). Deliberately narrow: only
@@ -233,166 +242,362 @@ defmodule Custyard.Sentry do
   defp drop?(%Sentry.Event{original_exception: %Phoenix.Router.NoRouteError{}}), do: true
   defp drop?(_event), do: false
 
+  # Start from a fresh struct. A newly added SDK field is private until it is
+  # explicitly reviewed here, including fields used outside JSON serialization
+  # (attachments and original_exception).
   defp scrub_event(event) do
-    event
-    |> scrub_request()
-    |> scrub_message()
-    |> scrub_exceptions()
-    |> scrub_extra()
-  end
+    logger_metadata = field(event.extra, :logger_metadata)
 
-  # An exception's value is its rendered message; a MatchError on an
-  # amqp_client parse error, for one, renders the broker URI with its password.
-  defp scrub_exceptions(%Sentry.Event{exception: exceptions} = event) when is_list(exceptions) do
-    %{
-      event
-      | exception:
-          Enum.map(exceptions, fn
-            %Sentry.Interfaces.Exception{value: value} = exception when is_binary(value) ->
-              %{exception | value: scrub_text(value)}
+    event_name =
+      Custyard.Log.safe_event_name(field(logger_metadata, :custyard_event)) ||
+        Custyard.Log.safe_event_name(field(event.extra, :event)) ||
+        Custyard.Log.safe_event_name(field(event.tags, :custyard_event)) ||
+        Custyard.Log.safe_event_name(field(event.tags, :event)) ||
+        message_event_name(event.message)
 
-            other ->
-              other
-          end)
+    origin =
+      Custyard.Log.safe_origin(field(logger_metadata, :origin)) ||
+        Custyard.Log.safe_origin(field(logger_metadata, :mfa)) ||
+        Custyard.Log.safe_origin(field(event.extra, :origin)) ||
+        Custyard.Log.safe_origin(field(event.tags, :origin))
+
+    diagnostics = Custyard.Log.sanitize_metadata(%{event: event_name, origin: origin})
+
+    extra =
+      event.extra
+      |> safe_metadata()
+      |> Map.merge(safe_metadata(logger_metadata))
+      |> Map.merge(diagnostics)
+
+    tags = event.tags |> safe_metadata() |> Map.merge(diagnostics)
+    exceptions = safe_exceptions(event.exception)
+    threads = safe_threads(event.threads)
+
+    %Sentry.Event{
+      event_id: safe_event_id(event.event_id),
+      timestamp: safe_timestamp(event.timestamp),
+      platform: :elixir,
+      environment: safe_environment(),
+      release: safe_release(),
+      level: safe_level(event.level),
+      exception: exceptions,
+      message: safe_message(event.message, event_name),
+      request: safe_request(event.request),
+      threads: threads,
+      extra: extra,
+      tags: tags,
+      fingerprint: safe_fingerprint(event_name, origin, exceptions, threads, extra),
+      sdk: %Sentry.Interfaces.SDK{
+        name: "sentry-elixir",
+        version: Application.spec(:sentry, :vsn) |> to_string()
+      }
     }
   end
 
-  defp scrub_exceptions(event), do: event
+  defp safe_metadata(value) when is_map(value) and not is_struct(value),
+    do: Custyard.Log.sanitize_metadata(value)
 
-  defp scrub_request(%Sentry.Event{request: %Sentry.Interfaces.Request{} = req} = event) do
-    scrubbed = %{
-      req
-      | url: scrub_url(req.url),
-        query_string: scrub_query_field(req.query_string)
-    }
+  defp safe_metadata(_value), do: %{}
 
-    %{event | request: scrubbed}
+  defp field(value, key) when is_map(value) and not is_struct(value),
+    do: Map.get(value, key, Map.get(value, Atom.to_string(key)))
+
+  defp field(_value, _key), do: nil
+
+  defp message_event_name(%Sentry.Interfaces.Message{} = message),
+    do:
+      Custyard.Log.safe_event_name(message.formatted) ||
+        Custyard.Log.safe_event_name(message.message)
+
+  defp message_event_name(_message), do: nil
+
+  # Every component is reconstructed from registered events, loaded code,
+  # exception identity, or bounded numeric line information. Client-supplied
+  # fingerprint values never participate in grouping.
+  defp safe_fingerprint(event, origin, exceptions, threads, extra) do
+    types = Enum.map_join(exceptions, "|", & &1.type)
+    class = if types == "", do: extra[:error_type] || "UnknownError", else: types
+
+    location =
+      origin || first_frame_location(exceptions ++ List.wrap(threads)) || "unknown_origin"
+
+    ["custyard", event || "application_error", class, location]
   end
 
-  defp scrub_request(event), do: event
+  defp first_frame_location(interfaces) do
+    Enum.find_value(interfaces, fn
+      %{stacktrace: %Sentry.Interfaces.Stacktrace{frames: frames}} when is_list(frames) ->
+        Enum.find_value(frames, fn
+          %Sentry.Interfaces.Stacktrace.Frame{module: module, lineno: line} ->
+            "#{module}:#{line || 0}"
 
-  # LiveView/process crashes reported via Sentry.LoggerHandler never pass
-  # through PlugContext: the token surfaces inside the inspected crash state in
-  # the message, as `access_token: "..."` — scrub_text redacts both URL tokens
-  # and keyed values there.
-  defp scrub_message(%Sentry.Event{message: %Sentry.Interfaces.Message{} = msg} = event) do
-    scrubbed = %{
-      msg
-      | message: scrub_text(msg.message),
-        formatted: scrub_text(msg.formatted)
-    }
+          _ ->
+            nil
+        end)
 
-    %{event | message: scrubbed}
-  end
-
-  defp scrub_message(event), do: event
-
-  # :extra carries `crash_reason` (an inspected exit reason that, for a crashed
-  # LiveView, embeds the socket state and its raw access token), and may hold
-  # arbitrary nested terms that Sentry serializes/inspects *after* before_send.
-  # deep_scrub walks the whole structure so a token or keyed secret buried in a
-  # nested map/list/tuple/struct cannot slip past.
-  defp scrub_extra(%Sentry.Event{extra: extra} = event) when is_map(extra) do
-    %{event | extra: deep_scrub_map(extra)}
-  end
-
-  defp scrub_extra(event), do: event
-
-  # Recursively scrub an arbitrary term: redact values under a sensitive key,
-  # scrub sensitive keyed values / URL tokens out of strings, and recurse into
-  # containers (maps, lists, tuples, keyword pairs). Plain scalars (numbers,
-  # atoms, nil) are safe as-is; any other non-container term (struct, ref, pid,
-  # fun) is inspected and string-scrubbed so its representation can't leak — an
-  # inspected struct renders `key: "value"`, which scrub_text redacts.
-  defp deep_scrub(value) when is_binary(value), do: scrub_text(value)
-  defp deep_scrub(value) when is_map(value) and not is_struct(value), do: deep_scrub_map(value)
-  defp deep_scrub(value) when is_list(value), do: Enum.map(value, &deep_scrub/1)
-
-  # A `{key, value}` pair (keyword-list element / 2-tuple) is treated like a map
-  # entry so a sensitive key redacts its value even outside a map.
-  defp deep_scrub({key, value}) when is_atom(key) or is_binary(key) do
-    if sensitive_key?(key), do: {key, @redacted}, else: {key, deep_scrub(value)}
-  end
-
-  defp deep_scrub(value) when is_tuple(value) do
-    value |> Tuple.to_list() |> Enum.map(&deep_scrub/1) |> List.to_tuple()
-  end
-
-  defp deep_scrub(value) when is_number(value) or is_atom(value), do: value
-  defp deep_scrub(value), do: value |> inspect() |> scrub_text()
-
-  defp deep_scrub_map(map) do
-    Map.new(map, fn {key, value} ->
-      if sensitive_key?(key), do: {key, @redacted}, else: {key, deep_scrub(value)}
+      _ ->
+        nil
     end)
   end
 
-  # query_string may be a raw string, a map, or a keyword-ish list.
-  defp scrub_query_field(nil), do: nil
-  defp scrub_query_field(query) when is_binary(query), do: scrub_query(query)
-
-  defp scrub_query_field(query) when is_map(query) do
-    Map.new(query, fn {k, v} -> {k, if(sensitive_key?(k), do: @redacted, else: v)} end)
+  defp safe_event_id(id) when is_binary(id) do
+    if byte_size(id) == 32 and Regex.match?(~r/\A[0-9a-f]{32}\z/, id),
+      do: id,
+      else: new_event_id()
   end
 
-  defp scrub_query_field(query) when is_list(query) do
-    Enum.map(query, fn {k, v} -> {k, if(sensitive_key?(k), do: @redacted, else: v)} end)
+  defp safe_event_id(_id), do: new_event_id()
+  defp new_event_id, do: :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
+
+  defp safe_timestamp(timestamp) when is_binary(timestamp) and byte_size(timestamp) <= 40 do
+    case DateTime.from_iso8601(timestamp) do
+      {:ok, time, _offset} -> DateTime.to_iso8601(time)
+      _ -> DateTime.utc_now() |> DateTime.to_iso8601()
+    end
   end
 
-  defp scrub_query_field(other), do: other
+  defp safe_timestamp(_timestamp), do: DateTime.utc_now() |> DateTime.to_iso8601()
 
-  defp sensitive_key?(key) when is_binary(key),
-    do: String.downcase(key) in @sensitive_keys
+  defp safe_environment do
+    allowed = Application.get_env(:custyard, :log_environments, ~w(dev test prod))
 
-  defp sensitive_key?(key), do: sensitive_key?(to_string(key))
+    configured =
+      case Application.get_env(:sentry, :environment_name) do
+        value when is_binary(value) -> value
+        value when is_atom(value) -> Atom.to_string(value)
+        _ -> nil
+      end
 
-  # Last-resort redaction when scrubbing itself raised: never keep any
-  # potentially-sensitive field, but still report the event so the underlying
-  # error stays visible. Blanks the request URL/query, the crash message, and
-  # every :extra value.
-  defp fail_closed(%Sentry.Event{} = event) do
-    event
-    |> put_in_request(:url, @scrub_failed)
-    |> put_in_request(:query_string, @scrub_failed)
-    |> blank_message()
-    |> blank_exceptions()
-    |> blank_extra()
+    if is_list(allowed) and configured in allowed do
+      configured
+    else
+      case Application.get_env(:custyard, :env) do
+        env when env in [:dev, :test, :prod] -> Atom.to_string(env)
+        _ -> "unknown"
+      end
+    end
   end
 
-  defp fail_closed(event), do: event
+  defp safe_release do
+    case Application.get_env(:sentry, :release) do
+      value when is_binary(value) and byte_size(value) <= 80 ->
+        if Regex.match?(~r/\A(?:[0-9a-f]{7,64}|v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\z/, value),
+          do: value,
+          else: nil
 
-  defp blank_exceptions(%Sentry.Event{exception: exceptions} = event) when is_list(exceptions) do
-    %{
-      event
-      | exception:
-          Enum.map(exceptions, fn
-            %Sentry.Interfaces.Exception{} = exception -> %{exception | value: @scrub_failed}
-            other -> other
-          end)
+      _ ->
+        nil
+    end
+  end
+
+  defp safe_level(level) when level in [:debug, :info, :warning, :error, :fatal],
+    do: Atom.to_string(level)
+
+  defp safe_level(level) when level in ["debug", "info", "warning", "error", "fatal"], do: level
+  defp safe_level(_level), do: "error"
+
+  defp safe_message(nil, nil), do: nil
+
+  defp safe_message(_message, event_name) do
+    name = event_name || "application_error"
+    %Sentry.Interfaces.Message{message: name, formatted: name, params: []}
+  end
+
+  # The host, arbitrary path segments, query names and query values can all be
+  # user controlled. Retain only a known route template, never the original URL.
+  defp safe_request(%Sentry.Interfaces.Request{} = request) do
+    %Sentry.Interfaces.Request{
+      method: safe_method(request.method),
+      url: safe_route(request.url)
     }
   end
 
-  defp blank_exceptions(event), do: event
+  defp safe_request(_request), do: %Sentry.Interfaces.Request{}
 
-  defp put_in_request(
-         %Sentry.Event{request: %Sentry.Interfaces.Request{} = req} = event,
-         key,
-         value
-       ) do
-    %{event | request: Map.put(req, key, value)}
+  defp safe_method(method)
+       when method in ~w(GET POST PUT PATCH DELETE HEAD OPTIONS CONNECT TRACE),
+       do: method
+
+  defp safe_method(_method), do: nil
+
+  defp safe_route(nil), do: nil
+
+  defp safe_route(url) when is_binary(url) and byte_size(url) <= 8192 do
+    url |> URI.parse() |> Map.get(:path) |> safe_route_path()
   end
 
-  defp put_in_request(event, _key, _value), do: event
+  defp safe_route(_url), do: nil
 
-  defp blank_message(%Sentry.Event{message: %Sentry.Interfaces.Message{} = msg} = event) do
-    %{event | message: %{msg | message: @scrub_failed, formatted: @scrub_failed}}
+  defp safe_route_path(path)
+       when path in ["/", "/operator", "/operator/login", "/operator/login/sent", "/api/health"],
+       do: path
+
+  defp safe_route_path("/operator/login/verify/" <> _token),
+    do: "/operator/login/verify/[REDACTED]"
+
+  defp safe_route_path("/api/webhook/route/" <> _token),
+    do: "/api/webhook/route/[REDACTED]"
+
+  defp safe_route_path("/claim/" <> _token), do: "/claim/[REDACTED]"
+  defp safe_route_path("/c/" <> _token), do: "/c/[REDACTED]"
+  defp safe_route_path("/p/" <> _token), do: "/p/[REDACTED]"
+  defp safe_route_path("/i/" <> _source), do: "/i/[REDACTED]"
+  defp safe_route_path("/operator/" <> _path), do: "/operator/[OTHER]"
+  defp safe_route_path(_path), do: "/[OTHER]"
+
+  defp safe_exceptions(exceptions) when is_list(exceptions) do
+    exceptions
+    |> Enum.take(8)
+    |> Enum.flat_map(fn
+      %Sentry.Interfaces.Exception{} = exception ->
+        [
+          %Sentry.Interfaces.Exception{
+            type: safe_exception_type(exception.type),
+            value: @redacted,
+            stacktrace: safe_stacktrace(exception.stacktrace),
+            mechanism: safe_mechanism(exception.mechanism)
+          }
+        ]
+
+      _ ->
+        []
+    end)
   end
 
-  defp blank_message(event), do: event
+  defp safe_exceptions(_exceptions), do: []
 
-  defp blank_extra(%Sentry.Event{extra: extra} = event) when is_map(extra) do
-    %{event | extra: Map.new(extra, fn {key, _value} -> {key, @scrub_failed} end)}
+  defp safe_exception_type(type) when is_binary(type) and byte_size(type) <= 160 do
+    name = if String.starts_with?(type, "Elixir."), do: type, else: "Elixir." <> type
+    module = String.to_existing_atom(name)
+
+    if :code.is_loaded(module) != false and function_exported?(module, :exception, 1),
+      do: inspect(module),
+      else: "UnknownError"
+  rescue
+    _ -> "UnknownError"
   end
 
-  defp blank_extra(event), do: event
+  defp safe_exception_type(_type), do: "UnknownError"
+
+  defp safe_mechanism(%Sentry.Interfaces.Exception.Mechanism{} = mechanism) do
+    %Sentry.Interfaces.Exception.Mechanism{
+      type: "generic",
+      handled: safe_boolean(mechanism.handled),
+      synthetic: safe_boolean(mechanism.synthetic)
+    }
+  end
+
+  defp safe_mechanism(_mechanism), do: nil
+
+  defp safe_stacktrace(%Sentry.Interfaces.Stacktrace{frames: frames}) when is_list(frames) do
+    %Sentry.Interfaces.Stacktrace{
+      frames: frames |> Enum.take(100) |> Enum.flat_map(&safe_frame/1)
+    }
+  end
+
+  defp safe_stacktrace(_stacktrace), do: nil
+
+  defp safe_frame(%Sentry.Interfaces.Stacktrace.Frame{} = frame) do
+    case safe_module(frame.module) do
+      nil ->
+        []
+
+      module ->
+        [
+          %Sentry.Interfaces.Stacktrace.Frame{
+            module: module,
+            function: safe_function(frame.function, module),
+            filename: module_filename(module),
+            lineno: safe_positive_integer(frame.lineno, 1_000_000),
+            colno: safe_positive_integer(frame.colno, 10_000),
+            in_app:
+              String.starts_with?(Atom.to_string(module), [
+                "Elixir.Custyard.",
+                "Elixir.CustyardWeb."
+              ])
+          }
+        ]
+    end
+  end
+
+  defp safe_frame(_frame), do: []
+
+  defp safe_module(module) when is_atom(module) and not is_nil(module) do
+    if :code.is_loaded(module) != false, do: module, else: nil
+  end
+
+  defp safe_module(_module), do: nil
+
+  # SDK function strings are reconstructed from an actual exported MFA. Private
+  # or unusual function formats retain the module and line instead of echoing
+  # an unverifiable string supplied on an event.
+  defp safe_function(function, module) when is_binary(function) and byte_size(function) <= 200 do
+    Enum.find_value(module.module_info(:exports), fn {name, arity} ->
+      known = Exception.format_mfa(module, name, arity)
+      if function == known, do: known
+    end)
+  rescue
+    _ -> nil
+  end
+
+  defp safe_function(_function, _module), do: nil
+
+  defp module_filename(module) do
+    case module.module_info(:compile)[:source] do
+      source when is_list(source) -> source |> List.to_string() |> Path.basename()
+      source when is_binary(source) -> Path.basename(source)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp safe_threads(threads) when is_list(threads) do
+    threads
+    |> Enum.take(16)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn
+      {%Sentry.Interfaces.Thread{} = thread, index} ->
+        [
+          %Sentry.Interfaces.Thread{
+            id: index,
+            crashed: safe_boolean(thread.crashed),
+            current: safe_boolean(thread.current),
+            main: safe_boolean(thread.main),
+            stacktrace: safe_stacktrace(thread.stacktrace)
+          }
+        ]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp safe_threads(_threads), do: nil
+
+  defp safe_boolean(value) when is_boolean(value), do: value
+  defp safe_boolean(_value), do: nil
+
+  defp safe_positive_integer(value, limit)
+       when is_integer(value) and value > 0 and value <= limit,
+       do: value
+
+  defp safe_positive_integer(_value, _limit), do: nil
+
+  # This path deliberately does not call any minimization helper or retain any
+  # original field, so a broken helper cannot turn the fallback into a leak.
+  defp fail_closed(_event) do
+    %Sentry.Event{
+      event_id: new_event_id(),
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+      environment: "unknown",
+      platform: :elixir,
+      level: "error",
+      message: %Sentry.Interfaces.Message{
+        message: "sentry_scrubbing_failed",
+        formatted: "sentry_scrubbing_failed",
+        params: []
+      }
+    }
+  end
 end

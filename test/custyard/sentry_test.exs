@@ -240,132 +240,407 @@ defmodule Custyard.SentryTest do
     end
   end
 
-  describe "before_send/1 — invoked exactly as Sentry invokes it (arity 1)" do
-    test "scrubs the request url and query_string" do
-      event =
+  describe "before_send/1 — a complete event minimization boundary" do
+    test "retains only a known method and route template from the request" do
+      scrubbed =
         event(
           request: %Request{
-            url: "https://custyard.fly.dev/operator/login/verify/magiclink?token=abc",
-            query_string: "token=abc&keep=1"
+            method: "POST",
+            url:
+              "https://customer.example/operator/login/verify/magiclink?token=abc&name=private",
+            query_string: "token=abc&keep=private",
+            data: %{body: "customer message"},
+            headers: %{"authorization" => "secret", "x-custom" => "private"},
+            cookies: %{session: "secret"},
+            env: %{remote_addr: "192.0.2.1"}
           }
         )
+        |> Scrub.before_send()
 
-      scrubbed = Scrub.before_send(event)
-
-      assert scrubbed.request.url =~ "/operator/login/verify/#{@redacted}"
-      refute scrubbed.request.url =~ "magiclink"
-      assert scrubbed.request.query_string == "token=#{@redacted}&keep=1"
+      assert scrubbed.request == %Request{
+               method: "POST",
+               url: "/operator/login/verify/[REDACTED]"
+             }
     end
 
-    test "scrubs the access token from an inspected-crash-state message + extra" do
-      # Shape taken from a real ConversationLive crash: the token appears as a
-      # bare keyed value in both the message and extra.crash_reason.
-      state = ~s|#Socket<assigns: %{access_token: "leaktok", branding: nil}>|
+    test "unknown path segments and query keys never become diagnostics" do
+      scrubbed =
+        event(request: %Request{url: "https://private.example/patient-name?diagnosis=private"})
+        |> Scrub.before_send()
 
-      event =
+      assert scrubbed.request.url == "/[OTHER]"
+      refute inspect(scrubbed) =~ "patient-name"
+      refute inspect(scrubbed) =~ "private.example"
+    end
+
+    test "rendered messages and unstructured extras are omitted, including unlabelled content" do
+      private = "A patient's unlabelled medical history"
+
+      scrubbed =
         event(
-          message: %Message{formatted: state, message: state},
-          extra: %{crash_reason: "** (exit) #{state}", other: "keep me"}
-        )
-
-      scrubbed = Scrub.before_send(event)
-
-      refute scrubbed.message.formatted =~ "leaktok"
-      refute scrubbed.message.message =~ "leaktok"
-      refute scrubbed.extra.crash_reason =~ "leaktok"
-      assert scrubbed.extra.crash_reason =~ ~s|access_token: "#{@redacted}"|
-      # Non-sensitive extra is preserved for debugging.
-      assert scrubbed.extra.other == "keep me"
-    end
-
-    test "redacts a whole extra value stored under a sensitive key" do
-      event = event(extra: %{token: "rawsecret", access_token: "raw2", note: "fine"})
-      scrubbed = Scrub.before_send(event)
-
-      assert scrubbed.extra.token == @redacted
-      assert scrubbed.extra.access_token == @redacted
-      assert scrubbed.extra.note == "fine"
-    end
-
-    test "redacts IMAP channel passwords nested in event params" do
-      event =
-        event(
+          message: %Message{formatted: private, message: private, params: [private]},
           extra: %{
-            params: %{"channel" => %{"imap_password" => "plainpw", "imap_host" => "imap.x"}},
-            channel: %{imap_password_ciphertext: "v1:sealed"}
+            crash_reason: private,
+            note: private,
+            operator_id: 7,
+            tenant_id: 9,
+            request_id: "req_12345678901234567890",
+            operation_id: "op_12345678901234567890"
           }
         )
+        |> Scrub.before_send()
 
-      scrubbed = Custyard.Sentry.before_send(event)
+      assert scrubbed.message == %Message{
+               formatted: "application_error",
+               message: "application_error",
+               params: []
+             }
 
-      assert scrubbed.extra.params["channel"]["imap_password"] == @redacted
-      assert scrubbed.extra.params["channel"]["imap_host"] == "imap.x"
-      assert scrubbed.extra.channel.imap_password_ciphertext == @redacted
+      assert scrubbed.extra.operator_id == 7
+      assert scrubbed.extra.tenant_id == 9
+      assert scrubbed.extra.request_id == "req_12345678901234567890"
+      assert scrubbed.extra.operation_id == "op_12345678901234567890"
+      refute Map.has_key?(scrubbed.extra, :crash_reason)
+      refute inspect(scrubbed, limit: :infinity) =~ private
     end
 
-    test "deep-scrubs sensitive values nested inside extra (maps, lists, tuples)" do
-      event =
+    test "every event compartment is minimized, including private SDK fields" do
+      private = "PRIVATE-CUSTOMER-CONTENT-CANARY"
+      stacktrace = private_stacktrace(private)
+
+      scrubbed =
         event(
-          extra: %{
-            context: %{"org_token" => "nestedsecret", "ok" => "keep"},
-            items: [%{token: "listsecret"}],
-            pair: {:access_token, "tuplesecret"}
-          }
+          event_id: private,
+          timestamp: private,
+          environment: private,
+          release: private,
+          dist: private,
+          platform: private,
+          logger: private,
+          server_name: private,
+          transaction: private,
+          culprit: private,
+          source: private,
+          modules: %{private => private},
+          user: %{email: private, id: private, custom: private},
+          contexts: %{private => %{private => private}},
+          breadcrumbs: [
+            %Sentry.Interfaces.Breadcrumb{
+              type: private,
+              category: private,
+              message: private,
+              data: %{private => private},
+              timestamp: private,
+              level: private
+            }
+          ],
+          fingerprint: [private],
+          tags: %{private => private, :operator_id => 12},
+          extra: %{private => private, :operator_id => 12},
+          request: %Request{
+            url: "https://#{private}/i/#{private}?#{private}=#{private}",
+            method: private,
+            query_string: private,
+            data: %{private => private},
+            cookies: private,
+            headers: %{private => private},
+            env: %{private => private}
+          },
+          message: %Message{formatted: private, message: private, params: [private]},
+          exception: [
+            %Sentry.Interfaces.Exception{
+              type: "RuntimeError",
+              value: private,
+              module: private,
+              stacktrace: stacktrace,
+              mechanism: %Sentry.Interfaces.Exception.Mechanism{
+                type: private,
+                data: %{private => private},
+                meta: %{private => private},
+                help_link: private,
+                handled: true
+              }
+            }
+          ],
+          threads: [
+            %Sentry.Interfaces.Thread{
+              id: private,
+              name: private,
+              state: %{private => private},
+              held_locks: [private],
+              stacktrace: stacktrace,
+              crashed: true
+            }
+          ],
+          sdk: %Sentry.Interfaces.SDK{name: private, version: private},
+          attachments: [%{filename: private, data: private}],
+          original_exception: RuntimeError.exception(private),
+          integration_meta: %{private => private}
         )
+        |> Scrub.before_send()
 
-      scrubbed = Scrub.before_send(event)
-
-      assert scrubbed.extra.context["org_token"] == @redacted
-      assert scrubbed.extra.context["ok"] == "keep"
-      assert [%{token: @redacted}] = scrubbed.extra.items
-      # A tuple is inspected + string-scrubbed; the raw secret must be gone.
-      refute inspect(scrubbed.extra.pair) =~ "tuplesecret"
+      refute inspect(scrubbed, limit: :infinity, printable_limit: :infinity) =~ private
+      assert scrubbed.environment == "test"
+      assert scrubbed.extra == %{operator_id: 12}
+      assert scrubbed.tags == %{operator_id: 12}
+      assert scrubbed.attachments == []
+      assert scrubbed.original_exception == nil
+      assert scrubbed.user == %{}
+      assert scrubbed.breadcrumbs == []
+      assert scrubbed.contexts == nil
+      assert scrubbed.request == %Request{url: "/i/[REDACTED]"}
+      assert [%{type: "RuntimeError", value: @redacted} = exception] = scrubbed.exception
+      assert exception.module == nil
+      assert exception.mechanism == %Sentry.Interfaces.Exception.Mechanism{handled: true}
+      assert [%{module: __MODULE__, lineno: 123} = frame] = exception.stacktrace.frames
+      assert frame.function == Exception.format_mfa(__MODULE__, :__info__, 1)
+      assert frame.filename == "sentry_test.exs"
+      assert frame.vars == nil
+      assert frame.context_line == nil
+      assert frame.pre_context == []
+      assert frame.post_context == []
+      assert [%{id: 0, crashed: true, state: nil, held_locks: nil}] = scrubbed.threads
+      assert Regex.match?(~r/\A[0-9a-f]{32}\z/, scrubbed.event_id)
+      assert {:ok, _, _} = DateTime.from_iso8601(scrubbed.timestamp)
     end
 
-    test "drops unmatched-route 404 noise" do
-      event = event(original_exception: %Phoenix.Router.NoRouteError{})
-      assert Scrub.before_send(event) == nil
-    end
+    test "a failed minimization rebuilds a minimal event without any original compartment" do
+      private = "SCRUB-FAILURE-PRIVATE-CANARY"
 
-    test "keeps a normal event" do
-      event = event(request: %Request{url: "https://custyard.fly.dev/operator"})
-      assert %Sentry.Event{} = Scrub.before_send(event)
-    end
+      # Struct-tagged terms can arrive from third-party context integrations.
+      # This deliberately malformed interface raises when its missing type is read.
+      malformed_exception = %{__struct__: Sentry.Interfaces.Exception, value: private}
 
-    test "fails closed: redacts rather than leaks if scrubbing raises" do
-      # A non-binary url forces scrub_url/1 to raise; the rescue must redact,
-      # never pass the raw value through, and still return a reportable event.
-      event = event(request: %Request{url: {:not, "a string"}})
-
-      scrubbed = Scrub.before_send(event)
+      scrubbed =
+        event(
+          exception: [malformed_exception],
+          request: %Request{data: private, headers: %{private => private}},
+          extra: %{private => private},
+          tags: %{private => private},
+          user: %{email: private},
+          contexts: %{private => private},
+          fingerprint: [private],
+          transaction: private,
+          attachments: [%{data: private}],
+          original_exception: RuntimeError.exception(private)
+        )
+        |> Scrub.before_send()
 
       assert %Sentry.Event{} = scrubbed
-      assert scrubbed.request.url == "[SCRUBBING_FAILED]"
+      assert scrubbed.message.formatted == "sentry_scrubbing_failed"
+      assert scrubbed.request == %Request{}
+      assert scrubbed.exception == []
+      assert scrubbed.extra == %{}
+      assert scrubbed.attachments == []
+      assert scrubbed.original_exception == nil
+      refute inspect(scrubbed, limit: :infinity, printable_limit: :infinity) =~ private
     end
 
-    test "scrubs broker credentials from messages, exception values and extra" do
-      uri = "amqp://custyard:brokerpass@broker.internal/ots"
-      crash = "** (MatchError) no match of right hand side value: {:error, ~c\"#{uri}\"}"
+    test "unknown exception and frame strings are never accepted as code identity" do
+      private = "CustomerDataCanary"
 
-      event =
+      scrubbed =
         event(
-          message: %Message{formatted: crash, message: crash},
-          exception: [%Sentry.Interfaces.Exception{type: "MatchError", value: crash}],
-          extra: %{crash_reason: crash}
+          exception: [
+            %Sentry.Interfaces.Exception{
+              type: private,
+              value: private,
+              stacktrace: %Sentry.Interfaces.Stacktrace{
+                frames: [
+                  %Sentry.Interfaces.Stacktrace.Frame{
+                    module: private,
+                    function: private,
+                    filename: private,
+                    vars: %{data: private}
+                  }
+                ]
+              }
+            }
+          ]
         )
+        |> Scrub.before_send()
 
-      scrubbed = Scrub.before_send(event)
-
-      for text <- [
-            scrubbed.message.formatted,
-            scrubbed.message.message,
-            hd(scrubbed.exception).value,
-            scrubbed.extra.crash_reason
-          ] do
-        refute text =~ "brokerpass"
-        assert text =~ "amqp://#{@redacted}@broker.internal/ots"
-      end
+      assert [%{type: "UnknownError", stacktrace: %{frames: []}}] = scrubbed.exception
+      refute inspect(scrubbed) =~ private
     end
+
+    test "logger events retain approved event, origin and correlation with distinct grouping" do
+      origin = {__MODULE__, :__info__, 1}
+      origin_string = "#{__MODULE__}.__info__/1"
+
+      atom_keys =
+        event(
+          message: %Message{formatted: "PRIVATE-RENDERED-CONTENT"},
+          extra: %{
+            logger_metadata: %{
+              custyard_event: :outbound_status_update_failed,
+              mfa: origin,
+              error_type: RuntimeError,
+              request_id: "req_12345678901234567890",
+              operation_id: "op_12345678901234567890",
+              message_id: 17,
+              private: "PRIVATE-RENDERED-CONTENT"
+            }
+          }
+        )
+        |> Scrub.before_send()
+
+      string_keys =
+        event(
+          message: %Message{formatted: "PRIVATE-RENDERED-CONTENT"},
+          extra: %{
+            "logger_metadata" => %{
+              "custyard_event" => "webhook_purpose_failed",
+              "mfa" => origin_string,
+              "error_type" => "Elixir.RuntimeError",
+              "request_id" => "req_12345678901234567890"
+            }
+          }
+        )
+        |> Scrub.before_send()
+
+      assert atom_keys.message.formatted == "outbound_status_update_failed"
+      assert atom_keys.extra.event == "outbound_status_update_failed"
+      assert atom_keys.extra.origin == origin_string
+      assert atom_keys.extra.error_type == "Elixir.RuntimeError"
+      assert atom_keys.extra.message_id == 17
+      assert atom_keys.extra.request_id == "req_12345678901234567890"
+      assert atom_keys.extra.operation_id == "op_12345678901234567890"
+      refute Map.has_key?(atom_keys.extra, :logger_metadata)
+      assert atom_keys.tags == %{event: "outbound_status_update_failed", origin: origin_string}
+
+      assert atom_keys.fingerprint == [
+               "custyard",
+               "outbound_status_update_failed",
+               "Elixir.RuntimeError",
+               origin_string
+             ]
+
+      assert string_keys.message.formatted == "webhook_purpose_failed"
+      assert string_keys.extra.origin == origin_string
+      assert string_keys.extra.request_id == "req_12345678901234567890"
+      assert atom_keys.fingerprint != string_keys.fingerprint
+      refute inspect(atom_keys, limit: :infinity) =~ "PRIVATE-RENDERED-CONTENT"
+      refute inspect(string_keys, limit: :infinity) =~ "PRIVATE-RENDERED-CONTENT"
+    end
+
+    test "spoofed event, message and code identity are discarded instead of fingerprinted" do
+      private = "PRIVATE-SPOOFED-CONTENT"
+
+      scrubbed =
+        event(
+          message: %Message{formatted: "operator_login_requested\n#{private}"},
+          extra: %{
+            logger_metadata: %{
+              custyard_event: private,
+              mfa: {private, private, private},
+              origin: private
+            },
+            event: private,
+            origin: private
+          },
+          tags: %{event: private, origin: private},
+          fingerprint: [private]
+        )
+        |> Scrub.before_send()
+
+      assert scrubbed.message.formatted == "application_error"
+      assert scrubbed.extra == %{}
+      assert scrubbed.tags == %{}
+
+      assert scrubbed.fingerprint == [
+               "custyard",
+               "application_error",
+               "UnknownError",
+               "unknown_origin"
+             ]
+
+      refute inspect(scrubbed, limit: :infinity) =~ private
+    end
+
+    test "safe code location keeps independent exception sites grouped separately" do
+      first = private_stacktrace("private")
+      second = put_in(first.frames, [%{hd(first.frames) | lineno: 124}])
+
+      make_event = fn stack ->
+        event(
+          exception: [
+            %Sentry.Interfaces.Exception{
+              type: "RuntimeError",
+              value: "private",
+              stacktrace: stack
+            }
+          ]
+        )
+        |> Scrub.before_send()
+      end
+
+      assert make_event.(first).fingerprint != make_event.(second).fingerprint
+    end
+
+    test "invalid UTF-8, multiline values and oversized content cannot escape" do
+      private = <<255>> <> "\r\nPRIVATE-CUSTOMER-CONTENT" <> String.duplicate("x", 20_000)
+
+      scrubbed =
+        event(
+          message: %Message{formatted: private, message: private, params: [private]},
+          request: %Request{url: private, method: private, data: private},
+          extra: %{body: private, error: RuntimeError.exception(private)}
+        )
+        |> Scrub.before_send()
+
+      assert scrubbed.message.formatted == "application_error"
+      assert scrubbed.request.url == nil
+      refute inspect(scrubbed, limit: :infinity) =~ "PRIVATE-CUSTOMER-CONTENT"
+      assert String.valid?(scrubbed.message.formatted)
+    end
+
+    test "drops unmatched-route 404 noise and unexpected callback values" do
+      assert event(original_exception: %Phoenix.Router.NoRouteError{}) |> Scrub.before_send() ==
+               nil
+
+      assert Scrub.before_send(%{message: "private"}) == nil
+      assert Scrub.before_send(nil) == nil
+    end
+
+    test "keeps a normal exception event and bounds frame collection" do
+      frame = hd(private_stacktrace("private").frames)
+
+      scrubbed =
+        event(
+          exception:
+            for _ <- 1..12 do
+              %Sentry.Interfaces.Exception{
+                type: "RuntimeError",
+                value: "private",
+                stacktrace: %Sentry.Interfaces.Stacktrace{frames: List.duplicate(frame, 120)}
+              }
+            end
+        )
+        |> Scrub.before_send()
+
+      assert length(scrubbed.exception) == 8
+      assert Enum.all?(scrubbed.exception, &(length(&1.stacktrace.frames) == 100))
+    end
+  end
+
+  defp private_stacktrace(private) do
+    %Sentry.Interfaces.Stacktrace{
+      frames: [
+        %Sentry.Interfaces.Stacktrace.Frame{
+          module: __MODULE__,
+          function: Exception.format_mfa(__MODULE__, :__info__, 1),
+          filename: private,
+          lineno: 123,
+          colno: 4,
+          in_app: true,
+          vars: %{customer: private},
+          context_line: private,
+          pre_context: [private],
+          post_context: [private]
+        }
+      ]
+    }
   end
 
   describe "PlugContext wiring — the scrubber is actually called and stored" do
@@ -410,4 +685,72 @@ defmodule Custyard.SentryTest do
       refute Scrub.token_path?(nil)
     end
   end
+end
+
+defmodule Custyard.SentryEnvironmentTest do
+  # Environment labels are application configuration, so isolate these changes
+  # from tests that depend on the normal test label.
+  use ExUnit.Case, async: false
+
+  setup do
+    sentry_environment = Application.fetch_env(:sentry, :environment_name)
+    allowed_environments = Application.fetch_env(:custyard, :log_environments)
+    runtime_environment = Application.fetch_env(:custyard, :env)
+
+    # Other controller tests deliberately remove their runtime override. Set
+    # this test's fallback explicitly instead of relying on suite order.
+    Application.put_env(:custyard, :env, :test)
+
+    on_exit(fn ->
+      restore(:sentry, :environment_name, sentry_environment)
+      restore(:custyard, :log_environments, allowed_environments)
+      restore(:custyard, :env, runtime_environment)
+    end)
+
+    :ok
+  end
+
+  test "reviewed deployment labels preserve staging and deployment identity" do
+    for label <- ["staging", :staging, "custyard-eu-prod", :test] do
+      Application.put_env(:sentry, :environment_name, label)
+      assert minimized_environment() == to_string(label)
+    end
+  end
+
+  test "unknown and malformed labels fall back to the application environment" do
+    for label <- ["PRIVATE-DEPLOYMENT-CANARY", <<255>>, %{secret: "private"}, nil] do
+      Application.put_env(:sentry, :environment_name, label)
+      assert minimized_environment() == "test"
+    end
+  end
+
+  test "a deployment label must be explicitly admitted by the reviewed configuration" do
+    Application.put_env(:sentry, :environment_name, "staging")
+    Application.put_env(:custyard, :log_environments, ["test"])
+    assert minimized_environment() == "test"
+
+    Application.put_env(:custyard, :log_environments, :invalid)
+    assert minimized_environment() == "test"
+  end
+
+  test "fallback uses the explicit runtime environment and is unknown when unset" do
+    Application.put_env(:sentry, :environment_name, "UNREVIEWED-DEPLOYMENT")
+
+    for environment <- [:prod, :dev, :test] do
+      Application.put_env(:custyard, :env, environment)
+      assert minimized_environment() == Atom.to_string(environment)
+    end
+
+    Application.delete_env(:custyard, :env)
+    assert minimized_environment() == "unknown"
+  end
+
+  defp minimized_environment do
+    %Sentry.Event{event_id: String.duplicate("a", 32), timestamp: "2026-10-31T00:00:00Z"}
+    |> Custyard.Sentry.before_send()
+    |> Map.fetch!(:environment)
+  end
+
+  defp restore(app, key, {:ok, value}), do: Application.put_env(app, key, value)
+  defp restore(app, key, :error), do: Application.delete_env(app, key)
 end

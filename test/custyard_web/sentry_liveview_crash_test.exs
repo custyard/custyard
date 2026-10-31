@@ -2,12 +2,10 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
   @moduledoc """
   End-to-end proof for the LiveView/process-crash scrubbing path.
 
-  A crashed `ConversationLive` never passes through `Sentry.PlugContext`;
-  `Sentry.LoggerHandler` reports it by `inspect/1`-ing the crashed socket state
-  into the event message and `:extra.crash_reason`. Because the raw access
-  token lives in socket assigns, it surfaces there as a bare `access_token:
-  "..."` value — the exact shape this test drives with a real crash (not a
-  fabricated string) and then confirms `Custyard.Sentry.before_send/1` removes.
+  A crashed `ConversationLive` never passes through `Sentry.PlugContext`.
+  The global logger boundary must remove its socket state before any handler
+  receives the report. The Sentry send boundary independently minimizes the
+  resulting event. Both boundaries are exercised with a real crash.
   """
   use CustyardWeb.ConnCase, async: false
 
@@ -50,8 +48,8 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     )
   end
 
-  # Crash a real ConversationLive and return the inspected raw :logger crash
-  # report — i.e. what Sentry.LoggerHandler would turn into an event.
+  # Capture after the primary logger filter, at the same boundary used by
+  # console and Sentry handlers. A handler must never receive raw socket state.
   defp capture_crash_report(token) do
     {:ok, agent} = Agent.start_link(fn -> [] end)
 
@@ -71,25 +69,24 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
       ]
     })
 
-    Process.flag(:trap_exit, true)
-    {:ok, view, _html} = live(build_conn(), "/c/#{token}")
+    previous_trap_exit = Process.flag(:trap_exit, true)
 
-    # Force a crash: an event with no matching handle_event/3 clause. The LV
-    # process dies and render_hook re-raises the exit into this process.
     try do
-      render_hook(view, "definitely_unhandled_event", %{})
-    catch
-      _kind, _reason -> :ok
-    end
+      {:ok, view, _html} = live(build_conn(), "/c/#{token}")
 
-    # Let the crash report propagate to the logger handler.
-    report =
+      # An event with no matching handle_event/3 clause crashes the actual LV.
+      try do
+        render_hook(view, "definitely_unhandled_event", %{})
+      catch
+        _kind, _reason -> :ok
+      end
+
       wait_for(agent, 50)
-
-    :logger.remove_handler(:crash_capture)
-    Agent.stop(agent)
-
-    report
+    after
+      :logger.remove_handler(:crash_capture)
+      Agent.stop(agent)
+      Process.flag(:trap_exit, previous_trap_exit)
+    end
   end
 
   defp wait_for(_agent, 0), do: nil
@@ -97,7 +94,7 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
   defp wait_for(agent, attempts) do
     case Agent.get(agent, & &1) do
       [ev | _] ->
-        inspect(ev.msg, limit: :infinity, printable_limit: :infinity)
+        inspect(ev, limit: :infinity, printable_limit: :infinity)
 
       [] ->
         Process.sleep(20)
@@ -105,33 +102,28 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     end
   end
 
-  test "a real ConversationLive crash report is scrubbed of the raw access token" do
+  test "a real ConversationLive crash is safe before handlers and before Sentry export" do
     source = insert_intake_source(mode: :active)
-    {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, "Hello crash")
+    private = "UNLABELLED-CUSTOMER-CONTENT-CANARY"
+    {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, private)
 
     report = capture_crash_report(token)
 
-    # Sanity: the raw report really does leak the token (else the test proves
-    # nothing). If this fails, the crash shape changed — re-probe.
     assert is_binary(report), "no crash report captured"
-    assert report =~ token, "expected the raw crash report to contain the token"
-    assert report =~ "access_token:"
+    refute report =~ token, "access token reached a logger handler"
+    refute report =~ private, "customer content reached a logger handler"
+    refute report =~ "access_token:"
 
-    # Feed the real report into the two fields Sentry.LoggerHandler populates
-    # from it, then run the actual before_send callback.
     scrubbed =
       event(
         message: %Message{formatted: report, message: report},
-        extra: %{crash_reason: report}
+        extra: %{crash_reason: report, operator_id: 7}
       )
       |> Custyard.Sentry.before_send()
 
-    refute scrubbed.message.formatted =~ token,
-           "access token leaked into the scrubbed crash message"
-
-    refute scrubbed.extra.crash_reason =~ token,
-           "access token leaked into scrubbed extra.crash_reason"
-
-    assert scrubbed.message.formatted =~ ~s|access_token: "[REDACTED]"|
+    assert scrubbed.message.formatted == "application_error"
+    assert scrubbed.extra == %{operator_id: 7}
+    refute inspect(scrubbed, limit: :infinity) =~ token
+    refute inspect(scrubbed, limit: :infinity) =~ private
   end
 end
