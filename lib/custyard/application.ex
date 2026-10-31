@@ -3,7 +3,7 @@ defmodule Custyard.Application do
 
   use Application
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Acknowledgments.Config, as: AcknowledgmentsConfig
   alias Custyard.Acknowledgments.Consumer, as: AcknowledgmentsConsumer
@@ -12,16 +12,7 @@ defmodule Custyard.Application do
 
   @impl true
   def start(_type, _args) do
-    # Debug logging for check_origin config. Uncomment to trace.
-    # See: docs/lessons-learned/06-phoenix-check-origin-fly.md, PR #34
-    #
-    # endpoint_config = Application.get_env(:custyard, CustyardWeb.Endpoint, [])
-    # url_config = Keyword.get(endpoint_config, :url, [])
-    # check_origin = Keyword.get(endpoint_config, :check_origin)
-    # Logger.info(
-    #   "[Startup] Endpoint config - url: #{inspect(url_config)}, " <>
-    #     "check_origin: #{inspect(check_origin)} (type: #{origin_type(check_origin)})"
-    # )
+    Custyard.Log.install!()
 
     # Fail before starting the Repo when Fly's persistent volume is missing.
     Custyard.Storage.validate_fly_storage!()
@@ -58,7 +49,7 @@ defmodule Custyard.Application do
     # Setup operator account after supervisor fully starts
     # Use Task to avoid blocking application startup
     if Application.get_env(:custyard, :env) == :dev do
-      Task.start(fn -> setup_dev_operator() end)
+      Task.start(Log.task(fn -> setup_dev_operator() end))
     end
 
     result
@@ -70,9 +61,11 @@ defmodule Custyard.Application do
   # expected and fine; any other error is logged rather than silently dropped.
   defp maybe_add_sentry_logger_handler do
     if Application.get_env(:sentry, :dsn) do
-      case :logger.add_handler(:custyard_sentry_handler, Sentry.LoggerHandler, %{
-             config: %{metadata: [:file, :line]}
-           }) do
+      case :logger.add_handler(
+             :custyard_sentry_handler,
+             Sentry.LoggerHandler,
+             Custyard.Sentry.logger_handler_config()
+           ) do
         :ok ->
           :ok
 
@@ -80,7 +73,7 @@ defmodule Custyard.Application do
           :ok
 
         {:error, reason} ->
-          Logger.warning("Could not attach Sentry logger handler: #{inspect(reason)}")
+          Log.warning(:sentry_handler_attach_failed, Log.failure(reason))
       end
     end
   end
@@ -181,7 +174,7 @@ defmodule Custyard.Application do
     do_setup_dev_operator()
   rescue
     e ->
-      Logger.warning("Failed to setup dev operator: #{inspect(e)}")
+      Log.warning(:dev_operator_setup_failed, Log.failure(e))
   end
 
   # Poll for Repo availability with exponential backoff
@@ -211,32 +204,14 @@ defmodule Custyard.Application do
            via: "boot",
            allow_placeholder: true
          ) do
-      {:created, _operator} ->
-        Logger.info("""
+      {:created, operator} ->
+        Log.info(:dev_operator_created, operator_id: operator.id, mode: :development)
 
-        ========================================
-        DEV OPERATOR ACCOUNT CREATED
-        ========================================
-        Email: #{@default_operator_email}
+      {:exists, operator} ->
+        Log.debug(:dev_operator_exists, operator_id: operator.id, mode: :development)
 
-        Login at: /operator/login
-        A magic link will be sent to your email.
-        (In dev, check the Swoosh local mailbox at /dev/mailbox)
-        ========================================
-        """)
-
-      {:exists, _operator} ->
-        Logger.debug("Dev operator account exists, skipping creation")
-
-      {:error, message} ->
-        Logger.warning("Failed to setup dev operator: #{message}")
+      {:error, reason} ->
+        Log.warning(:dev_operator_setup_failed, Log.failure(reason))
     end
   end
-
-  # Helper for startup logging (uncomment with debug block above)
-  # defp origin_type({m, f, a}) when is_atom(m) and is_atom(f) and is_list(a), do: "MFA"
-  # defp origin_type(:conn), do: ":conn atom"
-  # defp origin_type(list) when is_list(list), do: "static list"
-  # defp origin_type(bool) when is_boolean(bool), do: "boolean"
-  # defp origin_type(_), do: "unknown"
 end

@@ -1,5 +1,5 @@
 defmodule Custyard.Email.Parser do
-  require Logger
+  require Custyard.Log, as: Log
 
   @moduledoc """
   Parse RFC 5322 raw email into normalized map for Processor.
@@ -359,10 +359,7 @@ defmodule Custyard.Email.Parser do
     convert_charset(decoded, charset)
   rescue
     e ->
-      Logger.warning(
-        "Failed to decode RFC 2047 encoded word: charset=#{inspect(charset)}, " <>
-          "encoding=#{inspect(encoding)}, text=#{inspect(text)}, error=#{inspect(e)}"
-      )
+      Log.warning(:email_header_decode_failed, Log.failure(e))
 
       text
   end

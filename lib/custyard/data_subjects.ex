@@ -19,8 +19,9 @@ defmodule Custyard.DataSubjects do
     * `erase_subject/2` is the contact-level erasure: the participation
       erasure, plus the person's own messages, their attachments, their
       contact record, the subjects of their conversations and their
-      rejection-log entries. Operator replies keep their text, without the
-      person's address.
+      rejection-log entries. Legacy customer audit payloads are redacted in
+      the same transaction; event IDs, time and unrelated actors remain intact.
+      Operator replies keep their text, without the person's address.
 
   `bin/dsar` (`Custyard.Release.Dsar`; `mix custyard.dsar` in development)
   wraps them for operators until a UI exists.
@@ -127,7 +128,10 @@ defmodule Custyard.DataSubjects do
       removes the files once nothing references them;
     * the person's contact record is deleted, and the conversations it
       owned lose the contact and their subject;
-    * rejection-log entries from the address are deleted.
+    * rejection-log entries from the address are deleted;
+    * legacy customer audit payloads lose the address and correspondence of
+      the person's conversations; a new erasure event identifies changed rows.
+      Acknowledgment evidence and operator-account history remain intact.
 
   Operator replies keep their text. Returns `{:ok, counts}` and writes a
   `data_subject_erasure` audit event with the same counts and no address.
@@ -146,8 +150,11 @@ defmodule Custyard.DataSubjects do
       {attachments, _} =
         Repo.delete_all(from(a in MessageAttachment, where: a.message_id in ^sent_ids))
 
-      {conversations, contacts} = erase_contact!(email, organization_id)
+      {conversations, contacts, owned_conversation_ids} = erase_contact!(email, organization_id)
       rejections = erase_rejections!(email, organization_id)
+
+      redacted_audit_ids =
+        AuditEvent.redact_subject_data(email, organization_id, owned_conversation_ids)
 
       counts = %{
         erased: erased,
@@ -155,10 +162,16 @@ defmodule Custyard.DataSubjects do
         attachments_removed: attachments,
         conversations_retitled: conversations,
         contacts_removed: contacts,
-        rejections_removed: rejections
+        rejections_removed: rejections,
+        audit_events_redacted: length(redacted_audit_ids)
       }
 
-      audit!(organization_id, Map.new(counts, fn {key, value} -> {to_string(key), value} end))
+      payload =
+        counts
+        |> Map.new(fn {key, value} -> {to_string(key), value} end)
+        |> Map.put("redacted_audit_event_ids", redacted_audit_ids)
+
+      audit!(organization_id, payload)
       counts
     end)
   end
@@ -228,14 +241,21 @@ defmodule Custyard.DataSubjects do
       )
       |> Repo.all()
 
+    owned_conversation_ids =
+      from(c in Conversation,
+        where: c.organization_id == ^organization_id and c.contact_id in ^contact_ids,
+        select: c.id
+      )
+      |> Repo.all()
+
     {conversations, _} =
-      from(c in Conversation, where: c.contact_id in ^contact_ids)
+      from(c in Conversation, where: c.id in ^owned_conversation_ids)
       |> Repo.update_all(
         set: [subject: @erased_subject, contact_id: nil, updated_at: DateTime.utc_now(:second)]
       )
 
     {contacts, _} = Repo.delete_all(from(c in Contact, where: c.id in ^contact_ids))
-    {conversations, contacts}
+    {conversations, contacts, owned_conversation_ids}
   end
 
   defp erase_rejections!(email, organization_id) do

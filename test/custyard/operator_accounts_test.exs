@@ -11,7 +11,7 @@ defmodule Custyard.OperatorAccountsTest do
     Logger.put_module_level(OperatorAccounts, :info)
 
     try do
-      capture_log(fun)
+      capture_log([metadata: [:operator_id, :organization_id, :role]], fun)
     after
       Logger.delete_module_level(OperatorAccounts)
     end
@@ -45,9 +45,10 @@ defmodule Custyard.OperatorAccountsTest do
       assert operator.role == "super_admin"
       assert operator.organization_id == nil
 
-      assert log =~ "Created operator #{operator.id} new.op@example.com"
-      assert log =~ "role super_admin, organization none"
-      assert log =~ "via cli"
+      assert log =~ "operator_account_created"
+      assert log =~ "operator_id=#{operator.id}"
+      assert log =~ "role=super_admin"
+      refute log =~ operator.email
 
       assert [event] = audit_events(:operator_created)
       assert event.source == "cli"
@@ -56,7 +57,7 @@ defmodule Custyard.OperatorAccountsTest do
 
       assert event.payload == %{
                "operator_id" => operator.id,
-               "email" => "new.op@example.com",
+               "tenant_id" => nil,
                "role" => "super_admin",
                "organization_id" => nil,
                "via" => "cli"
@@ -252,7 +253,9 @@ defmodule Custyard.OperatorAccountsTest do
           assert removed.id == agent.id
         end)
 
-      assert log =~ "Removed operator #{agent.id} agent@example.com"
+      assert log =~ "operator_account_removed"
+      assert log =~ "operator_id=#{agent.id}"
+      refute log =~ agent.email
       assert Repo.get(OperatorAccount, agent.id) == nil
 
       assert [%{source: "cli", organization_id: nil, payload: payload}] =
@@ -260,7 +263,7 @@ defmodule Custyard.OperatorAccountsTest do
 
       assert payload == %{
                "operator_id" => agent.id,
-               "email" => "agent@example.com",
+               "tenant_id" => nil,
                "role" => "agent",
                "organization_id" => org.id,
                "via" => "cli",

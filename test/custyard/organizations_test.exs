@@ -329,7 +329,7 @@ defmodule Custyard.OrganizationsTest do
 
       assert event.organization_id == converted.organization_id
       assert event.payload["operator_id"] == operator.id
-      assert event.payload["operator_email"] == operator.email
+      assert event.payload == %{"operator_id" => operator.id}
     end
 
     test "refuses a conversation already linked to an organization", %{operator: operator} do

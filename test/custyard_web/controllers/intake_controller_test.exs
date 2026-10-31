@@ -584,13 +584,20 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert metadata.receipt == :sent
     end
 
-    test "an unknown key emits unknown_source tagged :unknown_key", %{conn: conn} do
-      events =
-        capture_events([:custyard, :intake, :unknown_source], fn ->
-          get(conn, ~p"/i/no-such-key")
+    test "unknown keys retain the log reason and original telemetry tag", %{conn: conn} do
+      {events, records} =
+        Custyard.LogCapture.with_json(fn ->
+          capture_events([:custyard, :intake, :unknown_source], fn ->
+            rejected = get(conn, ~p"/i/no-such-key")
+            assert rejected.status == 404
+            assert rejected.resp_body =~ ~s(data-testid="error-404")
+          end)
         end)
 
       assert [{%{count: 1}, %{reason: :unknown_key}}] = events
+      assert [record] = Enum.filter(records, &(&1["event"] == "intake_source_unavailable"))
+      assert record["reason"] == "unknown_source"
+      refute Jason.encode!(records) =~ "no-such-key"
     end
 
     # The alarming variant: the source survived load_source and was disabled
@@ -609,14 +616,24 @@ defmodule CustyardWeb.IntakeControllerTest do
 
       {:ok, _disabled} = Custyard.Intake.update_source(source, %{enabled: false})
 
-      events =
-        capture_events([:custyard, :intake, :unknown_source], fn ->
-          assert CustyardWeb.IntakeController.create(conn, %{
-                   "submission" => %{"body" => "Lost to a race"}
-                 }).status == 404
+      {events, records} =
+        Custyard.LogCapture.with_json(fn ->
+          capture_events([:custyard, :intake, :unknown_source], fn ->
+            rejected =
+              CustyardWeb.IntakeController.create(conn, %{
+                "submission" => %{"body" => "PRIVATE_SUBMISSION_CANARY"}
+              })
+
+            assert rejected.status == 404
+            assert rejected.resp_body =~ ~s(data-testid="error-404")
+          end)
         end)
 
       assert [{%{count: 1}, %{reason: :disabled_mid_submission}}] = events
+      assert [record] = Enum.filter(records, &(&1["event"] == "intake_source_unavailable"))
+      assert record["reason"] == "disabled"
+      refute Jason.encode!(records) =~ "PRIVATE_SUBMISSION_CANARY"
+      refute Jason.encode!(records) =~ source.key
       assert Repo.aggregate(Conversation, :count) == 0
     end
 

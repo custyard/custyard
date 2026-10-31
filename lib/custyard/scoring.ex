@@ -18,7 +18,7 @@ defmodule Custyard.Scoring do
   tier) and neglect tracking uses the standard-tier thresholds.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
   import Ecto.Query
   alias Custyard.{Conversation, Message, Repo, Settings}
 
@@ -358,23 +358,19 @@ defmodule Custyard.Scoring do
   rescue
     e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
       # Expected errors during first boot or if Settings row doesn't exist yet
-      Logger.warning("Settings not available for score weights, using defaults: #{inspect(e)}")
+      Log.warning(:scoring_settings_defaulted, [stage: :weights] ++ Log.failure(e))
       @default_weights
 
     e in [DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->
       # Database connectivity issues - this is more serious
-      Logger.error(
-        "DATABASE ERROR loading score weights, using defaults. This may indicate DB issues: #{inspect(e)}"
-      )
+      Log.error(:scoring_settings_database_failed, [stage: :weights] ++ Log.failure(e))
 
       emit_settings_error_telemetry(:weights, e)
       @default_weights
 
     e ->
       # Unexpected error - log and emit telemetry for investigation
-      Logger.error(
-        "Unexpected error loading score weights, using defaults: #{Exception.format(:error, e)}"
-      )
+      Log.error(:scoring_settings_unexpected_failure, [stage: :weights] ++ Log.failure(e))
 
       emit_settings_error_telemetry(:weights, e)
       @default_weights
@@ -387,23 +383,19 @@ defmodule Custyard.Scoring do
   rescue
     e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
       # Expected errors during first boot or if Settings row doesn't exist yet
-      Logger.warning("Settings not available for intake config, using defaults: #{inspect(e)}")
+      Log.warning(:scoring_settings_defaulted, [stage: :intake_config] ++ Log.failure(e))
       @default_unlinked_tier_score
 
     e in [DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->
       # Database connectivity issues - this is more serious
-      Logger.error(
-        "DATABASE ERROR loading intake config, using defaults. This may indicate DB issues: #{inspect(e)}"
-      )
+      Log.error(:scoring_settings_database_failed, [stage: :intake_config] ++ Log.failure(e))
 
       emit_settings_error_telemetry(:intake_config, e)
       @default_unlinked_tier_score
 
     e ->
       # Unexpected error - log and emit telemetry for investigation
-      Logger.error(
-        "Unexpected error loading intake config, using defaults: #{Exception.format(:error, e)}"
-      )
+      Log.error(:scoring_settings_unexpected_failure, [stage: :intake_config] ++ Log.failure(e))
 
       emit_settings_error_telemetry(:intake_config, e)
       @default_unlinked_tier_score
@@ -414,25 +406,22 @@ defmodule Custyard.Scoring do
   rescue
     e in [Ecto.Query.CastError, Ecto.NoResultsError, ArgumentError] ->
       # Expected errors during first boot
-      Logger.warning(
-        "Settings not available for neglect thresholds, using defaults: #{inspect(e)}"
-      )
+      Log.warning(:scoring_settings_defaulted, [stage: :neglect_thresholds] ++ Log.failure(e))
 
       @default_neglect_thresholds
 
     e in [DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->
       # Database connectivity issues
-      Logger.error(
-        "DATABASE ERROR loading neglect thresholds, using defaults. This may indicate DB issues: #{inspect(e)}"
-      )
+      Log.error(:scoring_settings_database_failed, [stage: :neglect_thresholds] ++ Log.failure(e))
 
       emit_settings_error_telemetry(:neglect_thresholds, e)
       @default_neglect_thresholds
 
     e ->
       # Unexpected error
-      Logger.error(
-        "Unexpected error loading neglect thresholds, using defaults: #{Exception.format(:error, e)}"
+      Log.error(
+        :scoring_settings_unexpected_failure,
+        [stage: :neglect_thresholds] ++ Log.failure(e)
       )
 
       emit_settings_error_telemetry(:neglect_thresholds, e)
@@ -445,8 +434,7 @@ defmodule Custyard.Scoring do
       %{count: 1},
       %{
         setting: setting_type,
-        error_type: exception.__struct__,
-        message: Exception.message(exception)
+        error_type: exception.__struct__
       }
     )
   end

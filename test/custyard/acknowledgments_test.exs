@@ -136,7 +136,6 @@ defmodule Custyard.AcknowledgmentsTest do
       assert event.payload == %{
                "actor" => "operator",
                "operator_id" => operator.id,
-               "operator_email" => operator.email,
                "source" => "ots.test",
                "source_organization_id" => "org-audited",
                "organization_id" => binding.organization_id

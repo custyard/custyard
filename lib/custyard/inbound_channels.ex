@@ -30,7 +30,7 @@ defmodule Custyard.InboundChannels do
 
   import Ecto.Query
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{
     AuditEvent,
@@ -1013,10 +1013,7 @@ defmodule Custyard.InboundChannels do
     # minute for as long as the mailer is down.
     case NotificationEmail.deliver_channel_quiet(channel) do
       {:error, reason} ->
-        Logger.warning(
-          "Quiet notice email for channel #{channel.id} failed (#{inspect(reason)}); " <>
-            "the audit event and in-app notice were recorded"
-        )
+        Log.warning(:channel_quiet_email_failed, [channel_id: channel.id] ++ Log.failure(reason))
 
       _ok ->
         :ok
@@ -1027,8 +1024,9 @@ defmodule Custyard.InboundChannels do
         true
 
       {:error, changeset} ->
-        Logger.warning(
-          "Quiet notice for channel #{channel.id} could not be recorded: #{inspect(Keyword.keys(changeset.errors))}"
+        Log.warning(
+          :channel_quiet_record_failed,
+          [channel_id: channel.id] ++ Log.failure(changeset)
         )
 
         false
@@ -1063,15 +1061,16 @@ defmodule Custyard.InboundChannels do
         {:ok, rejection}
 
       {:error, changeset} ->
-        Logger.warning(
-          "Inbound rejection log insert failed on route #{route.id}: #{inspect(Keyword.keys(changeset.errors))}"
+        Log.warning(
+          :inbound_rejection_record_failed,
+          [route_id: route.id] ++ Log.failure(changeset)
         )
 
         {:error, changeset}
     end
   rescue
     e in Ecto.ConstraintError ->
-      Logger.warning("Inbound rejection log insert failed on route #{route.id}: constraint error")
+      Log.warning(:inbound_rejection_record_failed, [route_id: route.id] ++ Log.failure(e))
       {:error, e}
   end
 
@@ -1189,8 +1188,9 @@ defmodule Custyard.InboundChannels do
         :ok
 
       {:error, changeset} ->
-        Logger.warning(
-          "Audit event #{event_type} for channel #{channel.id} failed: #{inspect(Keyword.keys(changeset.errors))}"
+        Log.warning(
+          :channel_audit_record_failed,
+          [channel_id: channel.id, event_type: event_type] ++ Log.failure(changeset)
         )
 
         :ok

@@ -15,7 +15,7 @@ defmodule Custyard.Slugs.ClaimExpiry do
 
   use GenServer
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Slugs
 
@@ -44,16 +44,20 @@ defmodule Custyard.Slugs.ClaimExpiry do
   failure is logged and the next interval retries.
   """
   def sweep(now \\ DateTime.utc_now()) do
+    Log.operation([], fn -> do_sweep(now) end)
+  end
+
+  defp do_sweep(now) do
     count = Slugs.delete_expired_claims(now)
 
     if count > 0 do
-      Logger.info("Slugs.ClaimExpiry: released #{count} expired slug claims")
+      Log.info(:slug_claim_expiry_completed, count: count)
     end
 
     count
   rescue
     e ->
-      Logger.error("Slugs.ClaimExpiry: sweep failed: #{inspect(e)}")
+      Log.error(:slug_claim_expiry_failed, Log.failure(e))
       0
   end
 

@@ -26,7 +26,9 @@ defmodule CustyardWeb.TenantStaffRemovalTest do
     refute has_element?(admin_view, "[data-testid=staff-#{c.agent.id}]")
     audit = Repo.get_by!(AuditEvent, event_type: :operator_removed)
     assert audit.payload["operator_id"] == c.agent.id
-    assert audit.source == "tenant:#{c.tenant.id}:operator:#{c.admin.id}"
+    assert audit.source == "operator"
+    assert audit.payload["actor_operator_id"] == c.admin.id
+    assert audit.payload["tenant_id"] == c.tenant.id
     render_click(agent_view, "toggle_score", %{"id" => "1"})
     assert_redirect(agent_view, "/operator/login")
   end
@@ -79,9 +81,11 @@ defmodule CustyardWeb.TenantStaffRemovalTest do
     refute converted.session_claim == legacy.session_claim
     assert OperatorAccount.can_access_organization?(converted, other.id)
 
-    assert Repo.get_by!(AuditEvent, event_type: :operator_tenant_access_granted).payload[
-             "operator_id"
-           ] == legacy.id
+    audit = Repo.get_by!(AuditEvent, event_type: :operator_tenant_access_granted)
+    assert audit.source == "operator"
+    assert audit.payload["operator_id"] == legacy.id
+    assert audit.payload["actor_operator_id"] == super_admin.id
+    assert audit.payload["tenant_id"] == c.tenant.id
 
     render_click(old_view, "toggle_score", %{"id" => "1"})
     assert_redirect(old_view, "/operator/login")

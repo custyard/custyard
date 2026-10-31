@@ -22,7 +22,7 @@ defmodule CustyardWeb.HealthController do
 
   alias Ecto.Adapters.SQL
 
-  require Logger
+  require Custyard.Log, as: Log
 
   def index(conn, _params) do
     checks = %{
@@ -37,7 +37,7 @@ defmodule CustyardWeb.HealthController do
     if Enum.empty?(failed) do
       json(conn, %{status: "ok", checks: format_checks(checks)})
     else
-      Logger.error("Health check failed: #{inspect(failed)}")
+      Log.error(:health_check_failed, count: length(failed))
 
       conn
       |> put_status(503)
@@ -48,8 +48,12 @@ defmodule CustyardWeb.HealthController do
   defp check_database do
     case SQL.query(Custyard.Repo, "SELECT 1") do
       {:ok, _} -> :ok
-      {:error, reason} -> {:error, inspect(reason)}
+      {:error, _reason} -> {:error, "database_unavailable"}
     end
+  rescue
+    _ -> {:error, "database_unavailable"}
+  catch
+    :exit, _ -> {:error, "database_unavailable"}
   end
 
   defp check_pubsub do

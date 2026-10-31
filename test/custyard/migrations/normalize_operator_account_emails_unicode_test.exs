@@ -30,7 +30,10 @@ defmodule Custyard.Migrations.NormalizeOperatorAccountEmailsUnicodeTest do
         "fine@example.com"
       ])
 
-    log = capture_log(fn -> migrate() end)
+    log =
+      capture_log([metadata: [:operator_id, :conflicting_operator_id, :reason]], fn ->
+        migrate()
+      end)
 
     assert emails() == %{
              rows["ÜNAL@BÜCHER.DE"] => "ünal@bücher.de",
@@ -42,25 +45,36 @@ defmodule Custyard.Migrations.NormalizeOperatorAccountEmailsUnicodeTest do
              rows["fine@example.com"] => "fine@example.com"
            }
 
-    assert log =~
-             "id=#{rows["ZOË@Example.com"]}: email left as is, its normalized form " <>
-               "belongs to id=#{rows["zoë@example.com"]}"
+    assert log =~ "operator_email_normalization_skipped"
+    assert log =~ "reason=normalization_collision"
 
-    assert log =~
-             "id=#{rows["ANA@example.es"]}: email left as is, its normalized form " <>
-               "belongs to id=#{rows["Ana@Example.ES"]}"
+    for {skipped, owner} <- [
+          {"ZOË@Example.com", "zoë@example.com"},
+          {"ANA@example.es", "Ana@Example.ES"}
+        ] do
+      assert Enum.any?(String.split(log, "\n"), fn line ->
+               String.contains?(line, "operator_id=#{rows[skipped]} ") and
+                 String.contains?(line, "conflicting_operator_id=#{rows[owner]} ")
+             end)
+    end
 
-    refute log =~ "id=#{rows["fine@example.com"]}:"
+    for email <- Map.keys(rows), do: refute(log =~ email)
   end
 
   test "leaves an email that is not valid UTF-8 alone and logs it" do
     bad = <<0xFF>> <> "Ops@example.com"
     rows = insert_emails([bad])
 
-    log = capture_log(fn -> migrate() end)
+    log =
+      capture_log([metadata: [:operator_id, :conflicting_operator_id, :reason]], fn ->
+        migrate()
+      end)
 
     assert emails() == %{rows[bad] => bad}
-    assert log =~ "id=#{rows[bad]}: email is not valid UTF-8, left as is"
+    assert log =~ "operator_email_normalization_skipped"
+    assert log =~ "operator_id=#{rows[bad]} "
+    assert log =~ "reason=invalid_utf8"
+    refute log =~ bad
   end
 
   defp migrate do

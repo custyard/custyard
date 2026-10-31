@@ -28,7 +28,7 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   import Swoosh.Email
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Email.Headers
   alias Custyard.{Conversation, IntakeSource, RateLimit, Tenants}
@@ -62,9 +62,10 @@ defmodule Custyard.Intake.ArrivalEmail do
       with :ok <- TenantDelivery.ready?(source.tenant_id) do
         case RateLimit.check_rate(:intake_arrival_email, source.key) do
           {:deny, _retry_after_ms} ->
-            Logger.warning(
-              "Intake arrival notification rate-limited for source #{source.key}; " <>
-                "conversation #{conversation.id} is in the queue but unannounced"
+            Log.warning(:intake_arrival_email_rate_limited,
+              conversation_id: conversation.id,
+              source_id: source.id,
+              tenant_id: source.tenant_id
             )
 
             {:error, :rate_limited}
@@ -97,9 +98,16 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   defp deliver(email, conversation) do
     if Application.get_env(:custyard, :deliver_replies_async?, true) do
-      case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn ->
-             do_deliver(email, conversation)
-           end) do
+      case Task.Supervisor.start_child(
+             Custyard.TaskSupervisor,
+             Log.task(
+               fn ->
+                 do_deliver(email, conversation)
+               end,
+               conversation_id: conversation.id,
+               tenant_id: conversation.tenant_id
+             )
+           ) do
         {:ok, _pid} -> {:ok, :queued}
         {:error, _reason} -> {:error, :queue_failed}
       end
@@ -111,15 +119,20 @@ defmodule Custyard.Intake.ArrivalEmail do
   defp do_deliver(email, conversation) do
     case TenantDelivery.deliver(email, conversation.tenant_id) do
       {:ok, _metadata} = result ->
-        Logger.info("Intake arrival notification sent for conversation #{conversation.id}")
+        Log.info(:intake_arrival_email_accepted,
+          conversation_id: conversation.id,
+          tenant_id: conversation.tenant_id
+        )
+
         result
 
-      {:error, _reason} = error ->
+      {:error, reason} = error ->
         # The conversation is committed and already in the queue; a failed
         # alert costs triage latency, not data.
-        Logger.error(
-          "Failed to send intake arrival notification for conversation " <>
-            "#{conversation.id}"
+        Log.error(
+          :intake_arrival_email_failed,
+          [conversation_id: conversation.id, tenant_id: conversation.tenant_id] ++
+            Log.failure(reason)
         )
 
         error

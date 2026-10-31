@@ -34,7 +34,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
       assert event.project_id == project.id
     end
 
-    test "builds payload with normalized data" do
+    test "keeps event metadata without copying sender addresses or subjects" do
       org = insert_organization()
       conv = insert_conversation(organization_id: org.id)
 
@@ -50,8 +50,8 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
       assert event.payload["source"] == "zendesk"
-      assert event.payload["sender_email"] == "bob@example.com"
-      assert event.payload["subject"] == "Zendesk ticket"
+      refute Map.has_key?(event.payload, "sender_email")
+      refute Map.has_key?(event.payload, "subject")
       assert Map.has_key?(event.payload, "timestamp")
     end
 
@@ -91,6 +91,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
       assert event.source == "unknown"
+      assert event.message_id == nil
     end
 
     test "handles nil message_id" do
@@ -108,6 +109,7 @@ defmodule Custyard.Webhooks.Purposes.AuditTest do
 
       event = Repo.get_by!(AuditEvent, conversation_id: conv.id)
       assert event.message_id == nil
+      assert event.source == "portal"
     end
   end
 

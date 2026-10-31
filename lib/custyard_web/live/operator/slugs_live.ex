@@ -15,7 +15,7 @@ defmodule CustyardWeb.Operator.SlugsLive do
 
   use CustyardWeb, :live_view
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{AuditEvent, Authorization, Slug, Slugs}
 
@@ -96,7 +96,7 @@ defmodule CustyardWeb.Operator.SlugsLive do
         :ok
 
       {:error, changeset} ->
-        Logger.error("Failed to record slug release audit event: #{inspect(changeset.errors)}")
+        Log.error(:slug_release_audit_record_failed, Log.failure(changeset))
         :ok
     end
   end

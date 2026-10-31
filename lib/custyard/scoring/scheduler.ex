@@ -12,7 +12,7 @@ defmodule Custyard.Scoring.Scheduler do
   """
 
   use GenServer
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Conversations.DormancyChecker
   alias Custyard.Email.LMTPServer
@@ -46,22 +46,22 @@ defmodule Custyard.Scoring.Scheduler do
   defp run_recalculate do
     # Run all checks in parallel Tasks to avoid blocking the GenServer
     # This prevents long-running recalculations from blocking dormancy/neglect checks
-    Task.start(fn -> run_recalculate_task() end)
-    Task.start(fn -> run_dormancy_check() end)
-    Task.start(fn -> run_neglect_notifications() end)
-    Task.start(fn -> run_quiet_channel_check() end)
-    Task.start(fn -> run_lmtp_cleanup() end)
+    Task.start(Log.task(fn -> run_recalculate_task() end))
+    Task.start(Log.task(fn -> run_dormancy_check() end))
+    Task.start(Log.task(fn -> run_neglect_notifications() end))
+    Task.start(Log.task(fn -> run_quiet_channel_check() end))
+    Task.start(Log.task(fn -> run_lmtp_cleanup() end))
   end
 
   defp run_recalculate_task do
-    Logger.info("Scoring.Scheduler: starting recalculation")
+    Log.info(:scoring_recalculation_started)
 
     case safe_recalculate() do
       {:ok, count} ->
-        Logger.info("Scoring.Scheduler: recalculated #{count} conversations")
+        Log.info(:scoring_recalculation_completed, count: count)
 
       {:error, reason} ->
-        Logger.error("Scoring.Scheduler: recalculation failed: #{inspect(reason)}")
+        Log.error(:scoring_recalculation_failed, Log.failure(reason))
     end
   end
 
@@ -71,10 +71,10 @@ defmodule Custyard.Scoring.Scheduler do
         :ok
 
       {:ok, count} ->
-        Logger.info("Scoring.Scheduler: transitioned #{count} conversations to dormant")
+        Log.info(:dormancy_check_completed, count: count)
 
       {:error, reason} ->
-        Logger.error("Scoring.Scheduler: dormancy check failed: #{inspect(reason)}")
+        Log.error(:dormancy_check_failed, Log.failure(reason))
     end
   end
 
@@ -84,10 +84,10 @@ defmodule Custyard.Scoring.Scheduler do
         :ok
 
       {:ok, count} ->
-        Logger.info("Scoring.Scheduler: sent #{count} neglect notifications")
+        Log.info(:neglect_check_completed, count: count)
 
       {:error, reason} ->
-        Logger.error("Scoring.Scheduler: neglect notification check failed: #{inspect(reason)}")
+        Log.error(:neglect_check_failed, Log.failure(reason))
     end
   end
 
@@ -97,10 +97,10 @@ defmodule Custyard.Scoring.Scheduler do
         :ok
 
       {:ok, count} ->
-        Logger.info("Scoring.Scheduler: sent #{count} quiet channel notices")
+        Log.info(:quiet_channel_check_completed, count: count)
 
       {:error, reason} ->
-        Logger.error("Scoring.Scheduler: quiet channel check failed: #{inspect(reason)}")
+        Log.error(:quiet_channel_check_failed, Log.failure(reason))
     end
   end
 
@@ -144,10 +144,10 @@ defmodule Custyard.Scoring.Scheduler do
         :ok
 
       {:ok, count} ->
-        Logger.debug("Scoring.Scheduler: cleaned up #{count} LMTP rate limit entries")
+        Log.debug(:lmtp_rate_limit_cleanup_completed, count: count)
 
       {:error, reason} ->
-        Logger.error("Scoring.Scheduler: LMTP rate limit cleanup failed: #{inspect(reason)}")
+        Log.error(:lmtp_rate_limit_cleanup_failed, Log.failure(reason))
     end
   end
 

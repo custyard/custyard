@@ -15,7 +15,7 @@ defmodule Custyard.Storage do
 
   alias Custyard.Repo.Adapter
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @data_dir "/data"
 
@@ -79,12 +79,7 @@ defmodule Custyard.Storage do
       end)
 
     if File.exists?(path) do
-      Logger.warning(
-        "The database is Turso (DATABASE_URL), but #{path} still has a SQLite " <>
-          "database this app no longer reads. Delete it once Turso has its data " <>
-          "(docs/ops/database.md); if DATABASE_URL was set by mistake, unset it " <>
-          "to serve #{path} again."
-      )
+      Log.warning(:unused_local_database_detected)
     end
   end
 
@@ -103,11 +98,7 @@ defmodule Custyard.Storage do
         :ok
 
       :unknown ->
-        Logger.warning(
-          "Cannot determine how many machines this Fly app has, so the " <>
-            "single-machine requirement for data under #{@data_dir} is unverified. " <>
-            "Confirm with `fly scale show`."
-        )
+        Log.warning(:fly_machine_count_unknown)
     end
   end
 
@@ -156,14 +147,14 @@ defmodule Custyard.Storage do
 
   defp raise_multiple_machines!(ids, on_volume) do
     raise """
-    This Fly app has #{length(ids)} machines (#{Enum.join(ids, ", ")}) and keeps
+    This Fly app has #{length(ids)} machines and keeps
     #{join_with_and(on_volume)} under #{@data_dir}. A Fly volume attaches to one
     machine, so every machine has its own volume and its own copy of that data,
     and the copies diverge from the moment they are created.
 
     Run a single machine:
 
-        fly scale count 1 -a #{System.get_env("FLY_APP_NAME")}
+        fly scale count 1 -a YOUR_APP_NAME
 
     `min_machines_running` does not prevent this. It is a floor on how many
     machines stay warm, not a cap on how many exist.
@@ -184,6 +175,7 @@ defmodule Custyard.Storage do
   defp require_data_mount!(opts) do
     mountinfo =
       case Keyword.fetch(opts, :mountinfo) do
+        {:ok, {:error, _reason} = error} -> error
         {:ok, contents} -> {:ok, contents}
         :error -> File.read("/proc/self/mountinfo")
       end
@@ -193,7 +185,8 @@ defmodule Custyard.Storage do
         if not mounted_data_volume?(contents), do: raise_missing_volume!()
 
       {:error, reason} ->
-        raise "Cannot verify Fly volume mount at /data: #{inspect(reason)}"
+        Log.error(:fly_mount_verification_failed, Log.failure(reason))
+        raise "Cannot verify Fly volume mount at /data; check the filesystem error event"
     end
   end
 
@@ -201,7 +194,7 @@ defmodule Custyard.Storage do
     expanded = Path.expand(path)
 
     unless String.starts_with?(expanded, @data_dir <> "/") do
-      raise "#{env_var} must point inside the mounted /data volume on Fly.io (got #{inspect(path)})"
+      raise "#{env_var} must point inside the mounted /data volume on Fly.io"
     end
   end
 

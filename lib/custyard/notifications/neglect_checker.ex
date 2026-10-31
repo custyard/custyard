@@ -16,7 +16,7 @@ defmodule Custyard.Notifications.NeglectChecker do
   """
 
   import Ecto.Query
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{Conversation, Repo, Settings}
   alias Custyard.Notifications.Email, as: NotificationEmail
@@ -200,9 +200,10 @@ defmodule Custyard.Notifications.NeglectChecker do
   end
 
   defp dispatch_notification(conversation, level) do
-    Logger.info(
-      "Neglect notification: conversation #{conversation.id} (#{conversation.subject}) " <>
-        "reached #{level} for org #{org_label(conversation.organization)}"
+    Log.info(:neglect_notification_dispatched,
+      conversation_id: conversation.id,
+      tenant_id: conversation.tenant_id,
+      notification_level: level
     )
 
     # Delegate to email module when configured
@@ -212,6 +213,4 @@ defmodule Custyard.Notifications.NeglectChecker do
 
   # Unlinked conversations now reach this path; the log line must not
   # dereference a nil organization.
-  defp org_label(nil), do: "(unlinked)"
-  defp org_label(organization), do: organization.name
 end

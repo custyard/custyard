@@ -30,7 +30,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
       |> assign(:editing_thresholds, false)
       |> assign(:editing_intake, false)
       |> assign(:editing_branding, false)
-      |> assign(:weight_form, to_form(weights, as: "weights"))
+      |> assign(:weight_form, weights_form(weights))
       |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
       |> assign(:branding_form, branding_form_from(branding))
       |> allow_upload(:logo,
@@ -190,7 +190,7 @@ defmodule CustyardWeb.Operator.SettingsLive do
            socket
            |> assign(:weights, saved)
            |> assign(:editing_weights, false)
-           |> assign(:weight_form, to_form(saved, as: "weights"))
+           |> assign(:weight_form, weights_form(saved))
            |> put_flash(:info, "Weights updated successfully")}
 
         {:error, _changeset} ->
@@ -408,6 +408,15 @@ defmodule CustyardWeb.Operator.SettingsLive do
 
   defp parse_int(num) when is_integer(num), do: num
   defp parse_int(_), do: :error
+
+  # Phoenix.HTML renders invalid atom-keyed form maps to stderr, bypassing
+  # Logger's privacy filter. Forms use string parameter keys; scoring keeps
+  # its separate atom-keyed weights map.
+  defp weights_form(weights) do
+    weights
+    |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    |> to_form(as: "weights")
+  end
 
   defp flatten_thresholds(thresholds) do
     Enum.reduce(thresholds, %{}, fn {tier, [warning, critical]}, acc ->

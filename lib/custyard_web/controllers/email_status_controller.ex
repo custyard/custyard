@@ -17,7 +17,7 @@ defmodule CustyardWeb.EmailStatusController do
 
   use CustyardWeb, :controller
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Email.DeliveryStatus
   alias Custyard.Webhooks.Adapters.Lettermint
@@ -45,9 +45,7 @@ defmodule CustyardWeb.EmailStatusController do
           else: json(conn, %{status: "ignored", reason: "unknown_message"})
 
       {:error, reason} ->
-        Logger.warning(
-          "Lettermint status webhook rejected (delivery #{delivery_id(params)}): #{reason}"
-        )
+        Log.warning(:email_status_auth_rejected, Log.failure(reason))
 
         conn |> put_status(401) |> json(%{status: "error", reason: "unauthorized"})
     end
@@ -74,9 +72,9 @@ defmodule CustyardWeb.EmailStatusController do
         json(conn, %{status: "ignored", reason: to_string(reason)})
 
       {:error, reason} ->
-        Logger.warning(
-          "Lettermint status webhook failed (delivery #{delivery_id(params)}, " <>
-            "event #{event}): #{inspect(reason)}"
+        Log.warning(
+          :email_status_processing_failed,
+          [tenant_id: tenant_id] ++ Log.failure(reason)
         )
 
         conn |> put_status(422) |> json(%{status: "error", reason: "processing failed"})
@@ -96,14 +94,11 @@ defmodule CustyardWeb.EmailStatusController do
 
   defp verify_without_secret do
     if Application.get_env(:custyard, :env, :prod) in [:dev, :test] do
-      Logger.warning(
-        "Lettermint status webhook signature verification SKIPPED (no secret configured). " <>
-          "Set :webhook_secrets[:lettermint_status] to enable verification."
-      )
+      Log.warning(:email_status_verification_skipped, reason: :not_configured)
 
       :ok
     else
-      Logger.error("Webhook secret not configured for lettermint_status")
+      Log.error(:email_status_secret_missing)
       {:error, "unauthorized"}
     end
   end
@@ -123,8 +118,4 @@ defmodule CustyardWeb.EmailStatusController do
       _ -> nil
     end
   end
-
-  # Only the provider's delivery id is logged; never recipient or subject.
-  defp delivery_id(%{"id" => id}) when is_binary(id), do: String.slice(id, 0, 64)
-  defp delivery_id(_params), do: "unknown"
 end

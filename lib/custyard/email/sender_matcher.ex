@@ -7,7 +7,7 @@ defmodule Custyard.Email.SenderMatcher do
   remains the legacy fallback for unrouted integrations.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
   alias Custyard.{Contact, EmailAddress, Organization, Repo}
   import Ecto.Query
 
@@ -142,12 +142,9 @@ defmodule Custyard.Email.SenderMatcher do
         org = Repo.get!(Organization, contact.organization_id)
 
         # Log warning for visibility into multi-org routing decisions
-        other_org_ids = Enum.map(rest, & &1.organization_id)
-
-        Logger.warning(
-          "Multi-org sender ambiguity: email #{email} exists in #{length(rest) + 1} organizations. " <>
-            "Routing to org #{org.id} (#{org.name}). Other org IDs: #{inspect(other_org_ids)}. " <>
-            "Consider using route-context matching to avoid ambiguity."
+        Log.warning(:sender_organization_ambiguous,
+          organization_id: org.id,
+          organization_count: length(rest) + 1
         )
 
         {:ok, org, contact}
@@ -220,12 +217,10 @@ defmodule Custyard.Email.SenderMatcher do
 
       [contact | rest] ->
         # Oldest contact (first relationship) wins — same tie-break as match/1.
-        other_org_ids = Enum.map(rest, & &1.organization_id)
-
-        Logger.warning(
-          "Multi-org sender ambiguity: email #{email} exists in #{length(rest) + 1} organizations. " <>
-            "Resolving to oldest contact #{contact.id} (org #{contact.organization_id}). " <>
-            "Other org IDs: #{inspect(other_org_ids)}."
+        Log.warning(:sender_organization_ambiguous,
+          contact_id: contact.id,
+          organization_id: contact.organization_id,
+          organization_count: length(rest) + 1
         )
 
         {:contact, contact}

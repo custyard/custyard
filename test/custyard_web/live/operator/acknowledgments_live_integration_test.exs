@@ -91,7 +91,7 @@ defmodule CustyardWeb.Operator.AcknowledgmentsLiveIntegrationTest do
              replay_audits()
 
     assert payload["operator_id"] == ctx.operator.id
-    assert payload["operator_email"] == ctx.operator.email
+    refute Map.has_key?(payload, "operator_email")
     assert payload["submission_id"] == "ui-1"
     assert payload["outcome"] == "replayed"
   end

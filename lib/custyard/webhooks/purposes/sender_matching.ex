@@ -21,7 +21,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   alias Custyard.{Conversation, Conversations, Message, Repo, Scoring}
   alias Custyard.Email.{Normalizer, SenderMatcher, SieveHeaderMapper, ThreadMatcher}
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @doc """
   Process an incoming normalized payload and create/update a conversation.
@@ -198,9 +198,9 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
         {:replay, conversation}
 
       %Conversation{organization_id: other_org_id} ->
-        Logger.warning(
-          "Provider delivery id already stored for organization #{other_org_id}, " <>
-            "resolved to organization #{org_id}; processing as a new message"
+        Log.warning(:provider_delivery_organization_mismatch,
+          existing_organization_id: other_org_id,
+          organization_id: org_id
         )
 
         :not_found
@@ -506,8 +506,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp message_source(:public_intake), do: :prospect
   defp message_source(source) when source in [:email, :portal, :operator], do: source
 
-  defp message_source(other) do
-    Logger.warning("Unknown message source #{inspect(other)}, defaulting to :email")
+  defp message_source(_other) do
+    Log.warning(:message_source_defaulted, reason: :unknown_source)
     :email
   end
 

@@ -99,7 +99,8 @@ defmodule CustyardWeb.Operator.SlugsLiveTest do
       assert event.conversation_id == conversation.id
       assert event.payload["slug"] == "give-back"
       assert event.payload["status"] == "claimed"
-      assert event.payload["email"] == "buyer@example.com"
+      refute Map.has_key?(event.payload, "email")
+      refute Map.has_key?(event.payload, "operator_email")
       assert event.payload["operator_id"] == operator.id
 
       # Released means claimable again — by anyone.

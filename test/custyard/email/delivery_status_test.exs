@@ -143,7 +143,6 @@ defmodule Custyard.Email.DeliveryStatusTest do
                "recipient_role" => "to",
                "recipient_from" => nil,
                "recipient_to" => "delivered",
-               "reason" => nil,
                "reason_code" => nil,
                "status_code" => 250,
                "enhanced_status_code" => "2.0.0"
@@ -240,7 +239,7 @@ defmodule Custyard.Email.DeliveryStatusTest do
                [{"bounced", "failed"}, {"sent", "bounced"}]
 
       failed = Enum.find(audits, &(&1.payload["to"] == "failed"))
-      assert failed.payload["reason"] == "rejected"
+      refute Map.has_key?(failed.payload, "reason")
       assert failed.payload["reason_code"] == "policy"
     end
 

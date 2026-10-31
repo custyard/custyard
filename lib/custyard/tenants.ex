@@ -133,7 +133,8 @@ defmodule Custyard.Tenants do
       protect_last_admin!(staff, tenant_id)
 
       case Custyard.OperatorAccounts.remove_operator(staff.email,
-             via: "tenant:#{tenant_id}:operator:#{current.id}"
+             via: "operator",
+             actor_operator_id: current.id
            ) do
         {:ok, result} -> result
         {:error, reason} -> Repo.rollback(reason)
@@ -169,9 +170,10 @@ defmodule Custyard.Tenants do
 
       Custyard.AuditEvent.create(%{
         event_type: :operator_tenant_access_granted,
-        source: "tenant:#{tenant_id}:operator:#{current.id}",
+        source: "operator",
         payload: %{
           operator_id: staff.id,
+          actor_operator_id: current.id,
           tenant_id: tenant_id,
           previous_organization_id: organization_id,
           role: staff.role

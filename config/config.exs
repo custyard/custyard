@@ -1,5 +1,10 @@
 import Config
 
+# Only reviewed deployment labels may enter operational error events.
+config :custyard,
+       :log_environments,
+       ~w(dev test prod development production staging custyard-eu-prod)
+
 config :custyard,
   ecto_repos: [Custyard.Repo],
   repo_adapter: Custyard.Repo.Adapter,
@@ -44,43 +49,24 @@ config :tailwind,
     cd: Path.expand("../assets", __DIR__)
   ]
 
+# The application installs a JSON formatter and a privacy filter before its
+# children start. This text formatter is also used by ExUnit capture helpers;
+# the primary filter has already restricted every metadata field.
 config :logger, :console,
-  format: "$time $metadata[$level] $message\n",
-  metadata: [
-    :request_id,
-    :actual_size,
-    :bucket,
-    :client_hostname,
-    :command,
-    :current_count,
-    :declared_size,
-    :email_captured,
-    :error_type,
-    :extension,
-    :hostname,
-    :limit_type,
-    :max_recipients,
-    :max_size,
-    :message_count,
-    :messages_processed,
-    :mode,
-    :operator_id,
-    :peer,
-    :provider_status,
-    :reason,
-    :receipt,
-    :received_count,
-    :recipient,
-    :recipient_count,
-    :sender,
-    :size_bytes,
-    :source_key,
-    :source,
-    :submission_id
-  ]
+  format: "$dateT$timeZ $metadata[$level] $message\n",
+  metadata: :all
+
+config :logger, :default_formatter,
+  format: "$dateT$timeZ $metadata[$level] $message\n",
+  metadata: :all,
+  utc_log: true
+
+config :custyard, Custyard.Repo,
+  log: false,
+  show_sensitive_data_on_connection_error: false
 
 config :phoenix, :json_library, Jason
-config :phoenix, :filter_parameters, ["password", "token", "secret", "api_key", "authorization"]
+config :phoenix, :filter_parameters, {:keep, []}
 
 # Error tracking (self-hosted Sentry at catch.onetimesecret.com).
 #

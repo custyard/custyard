@@ -12,20 +12,36 @@ defmodule Mix.Tasks.AcknowledgmentsTest do
   # MIX_ENV) would start the consumer against production with that
   # credential, plus the endpoint, pollers and mail queue.
   defp run_task(task, args) do
+    project = Mix.Project.get()
+    keys = [{:task, "app.start", project}, {:alias, "app.start", project}]
+    previously_run = Enum.filter(keys, &Mix.TasksServer.get/1)
+    filters = :logger.get_primary_config()[:filters]
+    logger = Process.whereis(Logger.Supervisor)
     Mix.Task.reenable("app.start")
 
-    {result, output} =
-      with_io(fn ->
-        try do
-          task.run(args)
-        catch
-          :exit, {:shutdown, status} -> {:exit, status}
-        end
-      end)
+    try do
+      {result, output} =
+        with_io(fn ->
+          try do
+            task.run(args)
+          catch
+            :exit, {:shutdown, status} -> {:exit, status}
+          end
+        end)
 
-    # app.start reports :noop only once it has run since the reenable above.
-    refute Mix.Task.run("app.start") == :noop, "#{inspect(task)} ran app.start"
-    {result, output}
+      # Inspect execution state; running app.start here stops Logger and removes
+      # application-installed primary filters even when Custyard already runs.
+      for key <- keys do
+        refute Mix.TasksServer.get(key), "#{inspect(task)} ran app.start"
+      end
+
+      assert :logger.get_primary_config()[:filters] == filters
+      assert Process.whereis(Logger.Supervisor) == logger
+      {result, output}
+    after
+      Mix.Task.reenable("app.start")
+      Enum.each(previously_run, &Mix.TasksServer.put/1)
+    end
   end
 
   test "no task starts the application, whatever the configuration says" do
