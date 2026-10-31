@@ -272,6 +272,9 @@ defmodule Custyard.Log do
   @doc false
   def metadata_keys, do: @metadata_keys
 
+  @doc false
+  def enum_values(field), do: Map.get(@enums, field, [])
+
   for level <- @levels do
     defmacro unquote(level)(event, fields \\ []) do
       unless event in @events do
@@ -474,9 +477,9 @@ defmodule Custyard.Log do
   defp safe_value(:error_type, value) when value in @known_exception_names, do: value
 
   defp safe_value(:error_type, value) when is_binary(value) do
-    # Only names of already loaded exception modules survive a second filter pass.
+    # Preserve declared categories and names of already loaded exception modules.
     module = String.to_existing_atom(value)
-    if exception_module?(module), do: value
+    if exception_module?(module), do: value, else: enum_value(:error_type, value)
   rescue
     _ -> enum_value(:error_type, value)
   end

@@ -77,6 +77,42 @@ defmodule Custyard.LogTest do
     assert Custyard.Log.sanitize_metadata([@canary]) == %{}
   end
 
+  test "every declared enum survives repeated sanitization and real JSON emission" do
+    cases =
+      for field <- Custyard.Log.metadata_keys(), value <- Custyard.Log.enum_values(field) do
+        {field, value}
+      end
+
+    assert cases != []
+
+    {_result, records} =
+      Custyard.LogCapture.with_json(fn ->
+        for {field, value} <- cases do
+          once = Custyard.Log.sanitize_metadata([{field, value}])
+          assert once == %{field => to_string(value)}
+          assert Custyard.Log.sanitize_metadata(once) == once
+
+          Log.info(:logging_self_test, [{field, value}, {:email, @canary}])
+        end
+      end)
+
+    events = Enum.filter(records, &(&1["event"] == "logging_self_test"))
+    assert length(events) == length(cases)
+
+    for {{field, value}, record} <- Enum.zip(cases, events) do
+      assert record[Atom.to_string(field)] == to_string(value)
+      refute Map.has_key?(record, "email")
+    end
+
+    error_types = for record <- events, value = record["error_type"], value, do: value
+
+    for value <- ~w(temporary permanent exception exit throw validation transport provider) do
+      assert value in error_types
+    end
+
+    refute Jason.encode!(records) =~ "person@example.test"
+  end
+
   test "provider diagnostics retain only known codes and validation field names" do
     error =
       {422,
