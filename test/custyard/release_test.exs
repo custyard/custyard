@@ -47,30 +47,29 @@ defmodule Custyard.ReleaseTest do
     Repo.all(from(a in AuditEvent, where: a.event_type == ^type, order_by: a.id))
   end
 
-  test "release repository entry points install privacy before running work" do
-    :ok = :logger.remove_primary_filter(:custyard_log_privacy)
+  test "release repository entry points preserve privacy before running work" do
+    filters = :logger.get_primary_config()[:filters]
+    assert List.keymember?(filters, :custyard_log_privacy, 0)
 
-    try do
-      log =
-        capture_log(fn ->
-          assert :ok =
-                   Release.with_repo(fn ->
-                     filters = :logger.get_primary_config()[:filters]
-                     assert List.keymember?(filters, :custyard_log_privacy, 0)
+    log =
+      capture_log(fn ->
+        assert :ok =
+                 Release.with_repo(fn ->
+                   assert List.keymember?(
+                            :logger.get_primary_config()[:filters],
+                            :custyard_log_privacy,
+                            0
+                          )
 
-                     Logger.error("RELEASE_ENTRYPOINT_PRIVATE_CANARY")
-                     :ok
-                   end)
-        end)
+                   Logger.error("RELEASE_ENTRYPOINT_PRIVATE_CANARY")
+                   :ok
+                 end)
+      end)
 
-      assert log =~ "external_log"
-      refute log =~ "RELEASE_ENTRYPOINT_PRIVATE_CANARY"
-
-      assert {:ok, %{formatter: {Custyard.Log.Formatter, _}}} =
-               :logger.get_handler_config(:default)
-    after
-      Custyard.Log.install!()
-    end
+    assert log =~ "external_log"
+    refute log =~ "RELEASE_ENTRYPOINT_PRIVATE_CANARY"
+    assert :logger.get_primary_config()[:filters] == filters
+    assert {:ok, %{formatter: {Custyard.Log.Formatter, _}}} = :logger.get_handler_config(:default)
   end
 
   test "migration and rollback failures cannot escape eval with private exception text" do

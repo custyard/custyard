@@ -57,6 +57,26 @@ curl_opts=(--connect-timeout 2 --max-time 5)
 
 step() { echo "==> $*"; }
 
+step "fresh repository eval installs privacy without starting the application"
+"$rel" eval '
+  require Logger
+  app_started? = fn -> Enum.any?(Application.started_applications(), fn {app, _, _} -> app == :custyard end) end
+  false = app_started?.()
+  false = List.keymember?(:logger.get_primary_config()[:filters], :custyard_log_privacy, 0)
+  :ok = Custyard.Release.with_repo(fn ->
+    true = List.keymember?(:logger.get_primary_config()[:filters], :custyard_log_privacy, 0)
+    Logger.error("REPOSITORY_BOOT_PRIVATE_CANARY")
+    :ok
+  end)
+  Logger.flush()
+  false = app_started?.()
+' >"$work/repository-boot.log" 2>&1
+if grep -q 'REPOSITORY_BOOT_PRIVATE_CANARY' "$work/repository-boot.log"; then
+  echo "fresh repository eval leaked private diagnostic content" >&2
+  exit 1
+fi
+grep -Fq '"event":"external_log"' "$work/repository-boot.log"
+
 step "migrate and bootstrap OPERATOR_EMAIL before the server starts (entrypoint.sh)"
 OPERATOR_EMAIL=" Boot@Example.COM " \
   "$rel" eval '
