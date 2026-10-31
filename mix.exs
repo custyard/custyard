@@ -32,7 +32,7 @@ defmodule Custyard.MixProject do
     [
       {:phoenix, "~> 1.8"},
       {:phoenix_live_view, "~> 1.0"},
-      {:phoenix_html, "~> 4.0"},
+      {:phoenix_html, "~> 4.4"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
