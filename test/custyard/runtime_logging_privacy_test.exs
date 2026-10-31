@@ -77,6 +77,20 @@ defmodule Custyard.RuntimeLoggingPrivacyTest do
     assert Logger.metadata() == metadata_before
   end
 
+  test "LMTP error telemetry preserves retry categories when the reason is an exception" do
+    private = "PROVIDER_EXCEPTION_CANARY-person@example.test\r\nFORGED EVENT"
+    reason = %RuntimeError{message: private}
+
+    for category <- [:temporary, :permanent] do
+      metadata = LMTPServer.error_telemetry_metadata(category, reason)
+
+      assert metadata == %{result: :error, error_type: category, reason: :exception}
+      refute inspect(metadata) =~ private
+      refute inspect(metadata) =~ "person@example.test"
+      refute inspect(metadata) =~ "FORGED EVENT"
+    end
+  end
+
   test "LMTP telemetry exporters receive counts rather than peer or termination contents" do
     handler_id = "runtime-logging-privacy-#{System.unique_integer([:positive])}"
     caller = self()

@@ -867,6 +867,13 @@ defmodule Custyard.Email.LMTPServer do
 
   defp reply(status, message, [], state), do: {status, message, reset_transaction(state)}
 
+  @doc false
+  def error_telemetry_metadata(error_type, reason) when error_type in [:temporary, :permanent] do
+    # The LMTP category is a telemetry contract. Log.failure/1 may also return
+    # :error_type for an exception class; keep that class in the runtime event.
+    Map.new(Log.failure(reason) ++ [result: :error, error_type: error_type])
+  end
+
   defp process_and_respond(data, recipients, state) do
     metadata = %{
       size: byte_size(data),
@@ -907,7 +914,7 @@ defmodule Custyard.Email.LMTPServer do
           %{duration: duration},
           Map.merge(
             metadata,
-            Map.new([result: :error, error_type: error_type] ++ Log.failure(reason))
+            error_telemetry_metadata(error_type, reason)
           )
         )
 
