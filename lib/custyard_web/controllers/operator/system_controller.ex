@@ -3,7 +3,9 @@ defmodule CustyardWeb.Operator.SystemController do
   `/operator/system`: the boot verdict, first-run progress, last outbound
   mail result and the ground-truth block, inspectable after login
   (docs/backlog/1103-first-run-experience.md). A dead view behind
-  `:require_operator`.
+  `:require_operator`, and super_admin only: it lists environment variable
+  names and the database path, which an organization admin or agent has no
+  business seeing.
 
   Migration and operator counts come from the boot probe when it recorded
   them; otherwise they are read live, which is fine here because this page
@@ -18,6 +20,17 @@ defmodule CustyardWeb.Operator.SystemController do
   alias Custyard.{OperatorAccount, OperatorAccounts, Repo}
 
   plug :put_layout, html: {CustyardWeb.Layouts, :operator}
+  plug :require_super_admin
+
+  defp require_super_admin(%{assigns: %{current_operator: %{role: "super_admin"}}} = conn, _),
+    do: conn
+
+  defp require_super_admin(conn, _) do
+    conn
+    |> put_flash(:error, "Only a super admin can view the system page")
+    |> redirect(to: ~p"/operator")
+    |> halt()
+  end
 
   def index(conn, _params) do
     state = State.get()

@@ -25,6 +25,12 @@ defmodule CustyardWeb.Operator.SystemControllerTest do
     assert redirected_to(conn) == "/operator/login"
   end
 
+  test "refuses an organization admin", %{conn: conn} do
+    admin = insert_operator_account(%{role: "admin"})
+    conn = conn |> log_in(admin) |> get(~p"/operator/system")
+    assert redirected_to(conn) == "/operator"
+  end
+
   test "renders mode, steps, last mail, facts and warnings without values", %{conn: conn} do
     operator = insert_operator_account()
 

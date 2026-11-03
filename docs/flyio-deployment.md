@@ -164,7 +164,7 @@ TLS, the operator page at `/operator/acknowledgments`, and the full command set.
 
 ## Health check
 
-`GET /api/health` returns `{"status":"ok"}` with a 200 status. Fly.io uses this to verify machine readiness. Configured in `fly.toml` under `[checks.health]`.
+`GET /api/health` returns `{"status":"ok"}` with a 200 status once the app is fully up, and 503 while it is in doctor mode (configuration or database problem). Fly's machine check in `fly.toml` under `[checks.health]` uses `GET /api/health/live`, which answers 200 whenever the process is up, so a machine in doctor mode keeps serving its setup page.
 
 ## Deployment lifecycle
 
