@@ -7,10 +7,12 @@ defmodule Custyard.Storage do
   volume, so its path is not checked. Uploads and attachments still are, so
   the app still runs on one machine.
 
-  The check runs before the Repo and release migrations start, so a missing
-  volume cannot silently create a fresh database on the container filesystem,
-  and a second machine cannot silently create a second copy of what the volume
-  stores.
+  `check/1` runs before the Repo starts (`Custyard.Boot.Probe` at boot, the
+  release CLI before opening the database), so a missing volume cannot
+  silently create a fresh database on the container filesystem, and a second
+  machine cannot silently create a second copy of what the volume stores. It
+  returns the problem; `validate_fly_storage!/1` raises it for the release
+  tasks that still stop on it.
   """
 
   alias Custyard.Repo.Adapter
@@ -18,25 +20,61 @@ defmodule Custyard.Storage do
   require Custyard.Log, as: Log
 
   @data_dir "/data"
+  @mountinfo "/proc/self/mountinfo"
 
   # Internal Fly DNS, so a lookup should answer in well under a second. Boot
   # continues when it does not: an unreachable resolver is not evidence of a
   # second machine.
   @machine_dns_timeout 2_000
 
-  def validate_fly_storage!(opts \\ []) do
+  @type problem :: :volume_missing | :multiple_machines
+
+  @doc """
+  `:ok`, or `{:error, problem, detail}` where `detail` names no configured
+  path or machine id. Off Fly (no `FLY_APP_NAME`) nothing is checked.
+
+  Options, mostly for tests: `:fly_app_name`, `:repo_config`, `:upload_dir`,
+  `:attachment_dir`, `:mountinfo` (contents or `{:error, reason}`),
+  `:machine_ids` (`{:ok, ids}` or `:unknown`), `:sqlite_path`.
+  """
+  @spec check(keyword) :: :ok | {:error, problem, String.t()}
+  def check(opts \\ []) do
     if Keyword.get(opts, :fly_app_name, System.get_env("FLY_APP_NAME")) do
       repo_config =
         Keyword.get(opts, :repo_config, Application.get_env(:custyard, Custyard.Repo, []))
 
-      validate_fly_paths!(repo_config, opts)
-      if Adapter.turso?(repo_config), do: warn_about_left_behind_sqlite(opts)
+      with :ok <- check_fly_paths(repo_config, opts) do
+        if Adapter.turso?(repo_config), do: warn_about_left_behind_sqlite(opts)
+        :ok
+      end
+    else
+      :ok
     end
-
-    :ok
   end
 
-  defp validate_fly_paths!(repo_config, opts) do
+  @doc "`check/1`, raising a `RuntimeError` with the detail on a problem."
+  @spec validate_fly_storage!(keyword) :: :ok
+  def validate_fly_storage!(opts \\ []) do
+    case check(opts) do
+      :ok -> :ok
+      {:error, _problem, detail} -> raise detail
+    end
+  end
+
+  @doc """
+  Whether `path` is on a mounted filesystem other than the root one,
+  according to `/proc/self/mountinfo`. `nil` where that file does not exist
+  (macOS, some sandboxes), so callers can say "unknown" instead of "no".
+  """
+  @spec mounted?(Path.t(), {:ok, String.t()} | {:error, term} | nil) :: boolean | nil
+  def mounted?(path, mountinfo \\ nil) do
+    case mountinfo || File.read(@mountinfo) do
+      {:ok, contents} -> mount_point_of(contents, Path.expand(path)) not in [nil, "/"]
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp check_fly_paths(repo_config, opts) do
     upload_dir = Keyword.get(opts, :upload_dir, Application.get_env(:custyard, :upload_dir))
 
     attachment_dir =
@@ -44,10 +82,6 @@ defmodule Custyard.Storage do
 
     database_path = Keyword.get(repo_config, :database)
     local_database? = local_database?(repo_config)
-
-    if local_database?, do: require_data_path!(database_path, "DATABASE_PATH")
-    if is_binary(upload_dir), do: require_data_path!(upload_dir, "UPLOAD_DIR")
-    if is_binary(attachment_dir), do: require_data_path!(attachment_dir, "ATTACHMENT_DIR")
 
     on_volume =
       [
@@ -57,9 +91,14 @@ defmodule Custyard.Storage do
       ]
       |> Enum.filter(& &1)
 
-    if on_volume != [] do
-      require_data_mount!(opts)
-      require_single_machine!(on_volume, opts)
+    with :ok <- data_path(local_database? && database_path, "DATABASE_PATH"),
+         :ok <- data_path(upload_dir, "UPLOAD_DIR"),
+         :ok <- data_path(attachment_dir, "ATTACHMENT_DIR") do
+      if on_volume == [] do
+        :ok
+      else
+        with :ok <- data_mount(opts), do: single_machine(on_volume, opts)
+      end
     end
   end
 
@@ -89,16 +128,17 @@ defmodule Custyard.Storage do
   # health check, and a write lands on whichever machine the proxy happened to
   # route to. A remote database does not change this, because uploads and
   # attachments stay on the volume.
-  defp require_single_machine!(on_volume, opts) do
+  defp single_machine(on_volume, opts) do
     case Keyword.get_lazy(opts, :machine_ids, &deployed_machine_ids/0) do
       {:ok, [_, _ | _] = ids} ->
-        raise_multiple_machines!(ids, on_volume)
+        {:error, :multiple_machines, multiple_machines_detail(ids, on_volume)}
 
       {:ok, _one} ->
         :ok
 
       :unknown ->
         Log.warning(:fly_machine_count_unknown)
+        :ok
     end
   end
 
@@ -145,8 +185,8 @@ defmodule Custyard.Storage do
     String.length(token) >= 8 and String.match?(token, ~r/^[0-9a-f]+$/)
   end
 
-  defp raise_multiple_machines!(ids, on_volume) do
-    raise """
+  defp multiple_machines_detail(ids, on_volume) do
+    """
     This Fly app has #{length(ids)} machines and keeps
     #{join_with_and(on_volume)} under #{@data_dir}. A Fly volume attaches to one
     machine, so every machine has its own volume and its own copy of that data,
@@ -172,44 +212,60 @@ defmodule Custyard.Storage do
     Enum.join(init, ", ") <> " and " <> last
   end
 
-  defp require_data_mount!(opts) do
+  defp data_mount(opts) do
     mountinfo =
       case Keyword.fetch(opts, :mountinfo) do
         {:ok, {:error, _reason} = error} -> error
         {:ok, contents} -> {:ok, contents}
-        :error -> File.read("/proc/self/mountinfo")
+        :error -> File.read(@mountinfo)
       end
 
     case mountinfo do
       {:ok, contents} ->
-        if not mounted_data_volume?(contents), do: raise_missing_volume!()
+        if mount_point?(contents, @data_dir),
+          do: :ok,
+          else: {:error, :volume_missing, missing_volume_detail()}
 
       {:error, reason} ->
         Log.error(:fly_mount_verification_failed, Log.failure(reason))
-        raise "Cannot verify Fly volume mount at /data; check the filesystem error event"
+
+        {:error, :volume_missing,
+         "Cannot verify Fly volume mount at /data; check the filesystem error event"}
     end
   end
 
-  defp require_data_path!(path, env_var) do
+  defp data_path(path, _env_var) when not is_binary(path), do: :ok
+
+  defp data_path(path, env_var) do
     expanded = Path.expand(path)
 
-    unless String.starts_with?(expanded, @data_dir <> "/") do
-      raise "#{env_var} must point inside the mounted /data volume on Fly.io"
-    end
+    if String.starts_with?(expanded, @data_dir <> "/"),
+      do: :ok,
+      else:
+        {:error, :volume_missing,
+         "#{env_var} must point inside the mounted #{@data_dir} volume on Fly.io"}
   end
 
-  defp mounted_data_volume?(mountinfo) do
+  defp mount_point?(mountinfo, dir), do: dir in mount_points(mountinfo)
+
+  # The deepest mount point that contains `path`, or nil.
+  defp mount_point_of(mountinfo, path) do
+    mountinfo
+    |> mount_points()
+    |> Enum.filter(&(&1 == "/" or path == &1 or String.starts_with?(path, &1 <> "/")))
+    |> Enum.max_by(&String.length/1, fn -> nil end)
+  end
+
+  # Field 5 of each mountinfo line is the mount point.
+  defp mount_points(mountinfo) do
     mountinfo
     |> String.split("\n", trim: true)
-    |> Enum.any?(fn line ->
-      line
-      |> String.split(" ", parts: 6)
-      |> Enum.at(4) == @data_dir
-    end)
+    |> Enum.map(&(&1 |> String.split(" ", parts: 6) |> Enum.at(4)))
+    |> Enum.reject(&is_nil/1)
   end
 
-  defp raise_missing_volume! do
-    raise """
+  defp missing_volume_detail do
+    """
     Fly.io has no mounted volume at /data. Refusing to start because SQLite or
     uploads would be written to the ephemeral container filesystem. Create a
     custyard_data volume and enable the /data mount in fly.toml.

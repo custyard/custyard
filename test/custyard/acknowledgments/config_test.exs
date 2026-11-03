@@ -86,13 +86,19 @@ defmodule Custyard.Acknowledgments.ConfigTest do
       assert acknowledgments(:dev)[:enabled] == true
     end
 
-    test "any other value, or a bad prefetch, refuses to boot" do
+    # The shape problems are reported by Custyard.Boot.Env (and make a
+    # production boot unconfigured); runtime.exs itself never raises.
+    test "any other value, or a bad prefetch, falls back to the default" do
       System.put_env("ACKNOWLEDGMENTS_ENABLED", "yes")
-      assert_raise RuntimeError, ~r/must be true or false/, fn -> acknowledgments(:dev) end
+      assert acknowledgments(:dev)[:enabled] == false
+      assert prod_acknowledgments()[:enabled] == true
 
       System.delete_env("ACKNOWLEDGMENTS_ENABLED")
       System.put_env("ACKNOWLEDGMENTS_PREFETCH", "0")
-      assert_raise RuntimeError, ~r/between 1 and 100/, fn -> acknowledgments(:dev) end
+      assert acknowledgments(:dev)[:prefetch] == 1
+
+      System.put_env("ACKNOWLEDGMENTS_PREFETCH", "7")
+      assert acknowledgments(:dev)[:prefetch] == 7
     end
 
     # Completeness is decided at application start, so bin/operator still

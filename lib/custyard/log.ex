@@ -30,6 +30,15 @@ defmodule Custyard.Log do
     acknowledgment_processing_failed
     acknowledgment_transport_insecure
     attachment_fetch_failed
+    boot_database_probe_failed
+    boot_database_recovered
+    boot_first_run_completed
+    boot_first_run_step
+    boot_migration_failed
+    boot_mode_decided
+    boot_unconfigured
+    boot_welcome_mail_accepted
+    boot_welcome_mail_failed
     channel_audit_record_failed
     channel_mark_received_failed
     channel_quiet_email_failed
@@ -113,11 +122,6 @@ defmodule Custyard.Log do
     neglect_notification_stubbed
     operator_account_created
     operator_account_removed
-    operator_bootstrap_account_exists
-    operator_bootstrap_environment_retained
-    operator_bootstrap_failed
-    operator_bootstrap_required
-    operator_bootstrap_skipped
     operator_email_normalization_skipped
     operator_login_delivery_started
     operator_login_provider_accepted
@@ -127,7 +131,6 @@ defmodule Custyard.Log do
     operator_login_skipped
     operator_login_succeeded
     operator_logout
-    operator_placeholder_unroutable
     organization_deleted
     organization_deletion_failed
     organization_deletion_started
@@ -206,6 +209,10 @@ defmodule Custyard.Log do
       ~w(create update delete enable disable release claim login logout add remove retry cancel revoke export erase)a,
     status:
       ~w(pending queued sending sent accepted delivered deferred bounced suppressed failed withheld unknown dormant active resolved closed)a,
+    boot_mode: ~w(unconfigured database_unavailable first_run ready)a,
+    database_category:
+      ~w(unreachable auth_rejected not_writable locked migration_failed volume_missing unknown)a,
+    step: ~w(schema operator mail sign_in)a,
     failure_kind: ~w(rejected unknown temporary permanent configuration transport provider)a,
     error_type: ~w(temporary permanent exception exit throw validation transport provider)a,
     limit_type: ~w(connection global recipient size ip email)a,
@@ -266,7 +273,7 @@ defmodule Custyard.Log do
                      @id_fields ++
                      @reference_fields ++
                      Map.keys(@enums) ++
-                     ~w(provider_status http_status provider_code validation_fields event origin error_code)a
+                     ~w(provider_status http_status provider_code provider_message validation_fields event origin error_code)a
                  )
 
   @doc false
@@ -458,6 +465,7 @@ defmodule Custyard.Log do
   defp safe_value(:event, value), do: safe_event_name(value)
   defp safe_value(:origin, value), do: safe_origin(value)
   defp safe_value(:provider_code, value) when value in @provider_codes, do: value
+  defp safe_value(:provider_message, value), do: provider_message(value)
 
   defp safe_value(:validation_fields, value) when is_list(value) do
     value
@@ -500,6 +508,34 @@ defmodule Custyard.Log do
         end)
     end
   end
+
+  @provider_message_limit 200
+
+  @doc """
+  A mail provider's own error sentence, bounded for the first-run mail check
+  (docs/backlog/1103-first-run-experience.md): the reason a sender was
+  rejected is operational, not personal. Valid UTF-8 only, control and
+  format characters removed, every token carrying an address or URL
+  replaced, and cut to #{@provider_message_limit} characters. Anything else
+  is dropped.
+  """
+  def provider_message(value) when is_binary(value) do
+    if String.valid?(value) do
+      message =
+        value
+        |> String.replace(~r/\p{C}+/u, " ")
+        |> String.split(" ", trim: true)
+        |> Enum.map_join(" ", fn token ->
+          if String.contains?(token, ["@", "://"]), do: "[redacted]", else: token
+        end)
+        |> String.slice(0, @provider_message_limit)
+        |> String.trim()
+
+      if message == "", do: nil, else: message
+    end
+  end
+
+  def provider_message(_value), do: nil
 
   @doc "Bounded diagnostics without exception messages, response bodies or headers."
   def failure(reason) do
