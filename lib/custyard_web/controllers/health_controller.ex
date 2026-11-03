@@ -25,11 +25,28 @@ defmodule CustyardWeb.HealthController do
   """
   use CustyardWeb, :controller
 
+  alias Custyard.Boot.State
   alias Ecto.Adapters.SQL
 
   require Custyard.Log, as: Log
 
+  # Readiness. In a doctor mode the Repo is not running, so the verdict is
+  # the answer; the BootGate lets this path through for exactly this reason.
   def index(conn, _params) do
+    case State.mode() do
+      :unconfigured -> not_ready(conn, "setup_required", :unconfigured)
+      :database_unavailable -> not_ready(conn, "database_unavailable", :database_unavailable)
+      _ -> ready_checks(conn)
+    end
+  end
+
+  defp not_ready(conn, status, mode) do
+    conn
+    |> put_status(503)
+    |> json(%{status: status, mode: mode})
+  end
+
+  defp ready_checks(conn) do
     checks = %{
       database: check_database(),
       pubsub: check_pubsub(),

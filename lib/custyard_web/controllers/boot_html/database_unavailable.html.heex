@@ -1,0 +1,64 @@
+<%!-- Category and which variables to check; hostnames and raw errors stay in
+     the log. Self-refreshing: Boot.Monitor exits 0 once the database answers
+     and the platform restarts into a normal boot. --%>
+<div
+  class="rounded-lg border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-700 dark:bg-zinc-800"
+  data-testid="boot-card-database"
+>
+  <h1 class="text-xl font-semibold">Custyard cannot reach its database</h1>
+  <p class="mt-2 text-zinc-600 dark:text-zinc-400">
+    Configuration is complete. The database connection failed, so the application has not started.
+  </p>
+
+  <dl class="mt-6 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
+    <dt class="text-zinc-500">Database</dt>
+    <dd>{database_kind(@state) || "unknown"}</dd>
+    <dt class="text-zinc-500">Problem</dt>
+    <dd data-testid="boot-database-problem">
+      {category_label(@db.category)}<span
+        :if={@db.detail}
+        class="text-zinc-600 dark:text-zinc-400"
+      > · {@db.detail}</span>
+    </dd>
+    <dt class="text-zinc-500">Last attempt</dt>
+    <dd data-testid="boot-database-attempt">
+      <%= if @db.last_attempt_at do %>
+        {seconds_ago(@db.last_attempt_at)} s ago
+      <% else %>
+        none yet
+      <% end %>
+      <%= if @migration_failed? do %>
+        · restart after fixing the migration
+      <% else %>
+        · retrying every {div(@db.retry_every_ms, 1000)} s · {@db.attempts} {if @db.attempts == 1,
+          do: "attempt",
+          else: "attempts"}
+      <% end %>
+    </dd>
+  </dl>
+
+  <h2 class="mt-6 text-sm font-medium">Check</h2>
+  <ul
+    class="mt-2 space-y-1 text-sm text-zinc-700 dark:text-zinc-300"
+    data-testid="boot-database-checks"
+  >
+    <li :for={check <- category_checks(@db.category)} class="flex gap-3">
+      <span class="text-zinc-400" aria-hidden="true">·</span>
+      <span>{check}</span>
+    </li>
+  </ul>
+
+  <p :if={not @migration_failed?} class="mt-6 text-sm text-zinc-600 dark:text-zinc-400">
+    When the database answers, Custyard restarts into normal mode on its own.
+    The full error is in the container log.
+  </p>
+  <p :if={@migration_failed?} class="mt-6 text-sm text-zinc-600 dark:text-zinc-400">
+    Custyard does not restart on its own after a failed migration. Fix it, then restart the
+    container. The migration name and the full error are in the container log.
+  </p>
+
+  <div class="mt-8 border-t border-zinc-200 pt-4 dark:border-zinc-700">
+    <.ground_truth state={@state} />
+    <p class="mt-3 text-xs text-zinc-500">The full report is also in the container log.</p>
+  </div>
+</div>

@@ -135,6 +135,10 @@ defmodule CustyardWeb.Router do
     get "/attachments/:id/inline", AttachmentController, :inline
     post "/tenants/:id/select", TenantController, :select
 
+    # Boot verdict, first-run progress and last mail result after login
+    # (docs/backlog/1103-first-run-experience.md). A dead view.
+    get "/system", SystemController, :index
+
     # All authenticated operators
     live_session :operator,
       on_mount: [{CustyardWeb.Live.OperatorAuth, :default}] do
