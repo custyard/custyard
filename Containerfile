@@ -26,6 +26,13 @@ COPY priv/static priv/static
 COPY priv/gettext priv/gettext
 RUN mix assets.deploy
 
+# Build identity, baked into the release by config/config.exs and reported
+# on every boot (Custyard.Boot.Build). CI passes both; a local build reads
+# "unknown". Declared after deps so a new commit does not rebuild them.
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+ENV GIT_SHA=$GIT_SHA BUILD_TIME=$BUILD_TIME
+
 # Compile application
 RUN mix compile
 
@@ -52,7 +59,9 @@ RUN test -x _build/prod/rel/custyard/bin/operator && \
 # Debian 13 (trixie) is testing-branch and packages change unpredictably.
 FROM debian:12-slim
 
+ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.source="https://github.com/custyard/custyard"
+LABEL org.opencontainers.image.revision=$GIT_SHA
 LABEL org.opencontainers.image.description="Custyard Service Platform"
 LABEL org.opencontainers.image.licenses="MIT"
 
@@ -92,8 +101,10 @@ USER custyard
 # Expose port
 EXPOSE 4000
 
+# Liveness only: a container in doctor mode must stay up to serve the card.
+# /api/health keeps readiness semantics for monitoring.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD curl -f http://localhost:${PORT:-4000}/api/health
+  CMD curl -f http://localhost:${PORT:-4000}/api/health/live
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bin/custyard", "start"]

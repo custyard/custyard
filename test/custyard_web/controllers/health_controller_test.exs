@@ -13,4 +13,10 @@ defmodule CustyardWeb.HealthControllerTest do
     assert is_map(response["checks"])
     assert response["checks"]["database"] == "ok"
   end
+
+  test "GET /api/health/live is 200 with no checks", %{conn: conn} do
+    conn = get(conn, ~p"/api/health/live")
+
+    assert json_response(conn, 200) == %{"status" => "live"}
+  end
 end

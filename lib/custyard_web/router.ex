@@ -100,7 +100,10 @@ defmodule CustyardWeb.Router do
   scope "/api", CustyardWeb do
     pipe_through :api
 
+    # Readiness (database and core processes) for monitoring; liveness for
+    # platform checks, so a doctor-mode container is not restarted.
     get "/health", HealthController, :index
+    get "/health/live", HealthController, :live
 
     # Routed webhooks — dispatched by callback_token with source-specific adapters
     post "/webhook/route/:callback_token", WebhookController, :routed

@@ -178,6 +178,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Record build time
+        id: build_time
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Build release image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -185,6 +188,9 @@ jobs:
           file: ./Containerfile
           platforms: linux/amd64
           push: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.build_time.outputs.value }}
           cache-from: type=gha,scope=custyard-container
           cache-to: type=gha,mode=max,scope=custyard-container
 
@@ -212,6 +218,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Record build time
+        id: build_time
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Build and publish release image
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -222,6 +231,10 @@ jobs:
           push: true
           tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
+          # Baked into the release for Custyard.Boot.Build (boot report, doctor card).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.build_time.outputs.value }}
           cache-from: type=gha,scope=custyard-container
           cache-to: type=gha,mode=max,scope=custyard-container
       - name: Record published image

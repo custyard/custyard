@@ -10,6 +10,11 @@ defmodule CustyardWeb.HealthController do
 
   Returns 503 with details when any check fails.
 
+  `GET /api/health/live` is liveness only: 200 whenever the HTTP process
+  answers. Platform checks (Containerfile `HEALTHCHECK`, `fly.toml`, Bunny)
+  use it so a container in doctor mode stays up and keeps serving the card
+  instead of being restarted (docs/backlog/1103-first-run-experience.md).
+
   ## Security Notes
 
   This endpoint is intentionally unauthenticated to allow container orchestrators
@@ -43,6 +48,11 @@ defmodule CustyardWeb.HealthController do
       |> put_status(503)
       |> json(%{status: "error", checks: format_checks(checks)})
     end
+  end
+
+  # Touches no Repo and no named process on purpose.
+  def live(conn, _params) do
+    json(conn, %{status: "live"})
   end
 
   defp check_database do

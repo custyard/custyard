@@ -12,12 +12,13 @@ defmodule CustyardWeb.HealthCheck do
   """
 
   @health_path Application.compile_env(:custyard, [:health_check, :path], "/api/health")
+  @live_path Application.compile_env(:custyard, [:health_check, :live_path], "/api/health/live")
 
   @doc """
-  Returns `true` for connections targeting the health check path,
-  telling Plug.SSL to skip the HTTPS redirect.
+  Returns `true` for connections targeting the readiness or liveness
+  path, telling Plug.SSL to skip the HTTPS redirect.
   """
   def skip_ssl?(%Plug.Conn{request_path: path}) do
-    path == @health_path
+    path in [@health_path, @live_path]
   end
 end
