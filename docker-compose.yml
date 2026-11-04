@@ -1,10 +1,17 @@
 # Local container testing / deployment reference
 # Usage: docker compose up --build
+#
+# The boot report and /operator/system name the image build. Compose cannot
+# run git, so pass the values in when you want them (otherwise "unknown"):
+#   GIT_SHA=$(git rev-parse HEAD) BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose up --build
 services:
   custyard:
     build:
       context: .
       dockerfile: Containerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     ports:
       - "4000:4000"
     volumes:
