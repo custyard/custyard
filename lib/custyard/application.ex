@@ -1,20 +1,34 @@
 defmodule Custyard.Application do
   @moduledoc """
-  Starts one of three supervision trees, by boot verdict
+  Starts one of four supervision tree shapes, by boot verdict
   (docs/backlog/1103-first-run-experience.md).
 
   In production `config/runtime.exs` stores the parsed environment as
-  `:boot_env`. An `:unconfigured` verdict starts only the telemetry and the
-  endpoint, which serves the doctor card. A `:configured` one probes the
-  database (`Custyard.Boot.Probe`) and runs migrations
-  (`Custyard.Boot.FirstRun.migrate/2`) before the tree starts; a failure
-  there starts the same two children plus `Custyard.Boot.Monitor`, which
-  exits the VM once the database answers. Otherwise the full tree starts,
-  with `Custyard.Boot.FirstRun` finishing the operator and mail steps after
-  the Repo is up.
+  `:boot_env`.
 
-  Development and test have no `:boot_env`: they start the full tree as
-  before, and development creates its placeholder operator.
+    * `:unconfigured` starts only the telemetry and the endpoint, which
+      serves the doctor card.
+    * `:configured` starts the same two children first, in mode `:starting`,
+      so `/api/health/live` answers while the database is probed
+      (`Custyard.Boot.Probe`) and migrations run
+      (`Custyard.Boot.FirstRun.migrate/2`). Over libSQL HTTP against a cold
+      database, migrations can outlast a platform's start grace; a container
+      killed mid-migration restarts into a half-applied schema.
+    * When the probe and migrations succeed, the remaining children are added
+      to the running supervisor one at a time, in the order
+      `deferred_children/1` lists them, with `Custyard.Boot.FirstRun`
+      finishing the operator and mail steps after the Repo is up.
+    * When they fail, `Custyard.Boot.Monitor` is added instead; it exits the
+      VM once the database answers.
+
+  In production the Endpoint therefore starts before the Repo and PubSub, and
+  is stopped after them on shutdown. `CustyardWeb.Plugs.BootGate` blocks
+  everything but health and static assets while the mode is `:starting`, so
+  no request reaches the Repo or PubSub before they exist.
+
+  Development and test have no `:boot_env`: they start the full tree in one
+  `Supervisor.start_link`, in the order they always have (Endpoint after the
+  Repo and PubSub), and development creates its placeholder operator.
   """
 
   use Application
@@ -63,29 +77,53 @@ defmodule Custyard.Application do
   end
 
   defp boot(%Env{verdict: :configured} = env, booted_at) do
-    State.put(%State{mode: :ready, env: env, booted_at: booted_at})
+    State.put(%State{mode: :starting, env: env, booted_at: booted_at})
     print_report(env, booted_at)
+    Log.info(:boot_mode_decided, boot_mode: :starting)
 
-    with :ok <- Probe.run(env),
-         {:ok, schema} <- migrate() do
-      mode = if schema.operators > 0, do: :ready, else: :first_run
-      State.update(&%{&1 | mode: mode})
-      Log.info(:boot_mode_decided, boot_mode: mode)
-      supervise(full_children(first_run: [env: env, schema: schema]))
-    else
-      {:error, category, detail} ->
-        State.update(fn state ->
-          database = %{state.database | status: :error, category: category, detail: detail}
-          %{state | mode: :database_unavailable, database: database}
-        end)
+    # Telemetry and the Endpoint come up first so liveness answers while the
+    # probe and migrations run; the BootGate serves the starting card.
+    with {:ok, sup} <- supervise(doctor_children([])) do
+      case probe_and_migrate(env) do
+        {:ok, schema} ->
+          mode = if schema.operators > 0, do: :ready, else: :first_run
+          State.update(&%{&1 | mode: mode})
+          Log.info(:boot_mode_decided, boot_mode: mode)
+          start_children(sup, deferred_children(first_run: [env: env, schema: schema]))
 
-        Log.info(:boot_mode_decided,
-          boot_mode: :database_unavailable,
-          database_category: category
-        )
+        {:error, category, detail} ->
+          State.update(fn state ->
+            database = %{state.database | status: :error, category: category, detail: detail}
+            %{state | mode: :database_unavailable, database: database}
+          end)
 
-        supervise(doctor_children([{Monitor, env: env}]))
+          Log.info(:boot_mode_decided,
+            boot_mode: :database_unavailable,
+            database_category: category
+          )
+
+          start_children(sup, [{Monitor, env: env}])
+      end
     end
+  end
+
+  defp probe_and_migrate(env) do
+    with :ok <- Probe.run(env) do
+      migrate()
+    end
+  end
+
+  # Adds children to the running supervisor in order. A child that cannot
+  # start fails the application start, as it would have under start_link.
+  defp start_children(sup, children) do
+    Enum.reduce_while(children, {:ok, sup}, fn child, acc ->
+      spec = Supervisor.child_spec(child, [])
+
+      case Supervisor.start_child(sup, spec) do
+        {:ok, _} -> {:cont, acc}
+        {:error, reason} -> {:halt, {:error, {:boot_child_failed, spec.id, reason}}}
+      end
+    end)
   end
 
   # Migrations run here, synchronously, on a temporary Repo: see the
@@ -110,12 +148,31 @@ defmodule Custyard.Application do
   end
 
   defp doctor_children(extra) do
-    [CustyardWeb.Telemetry, CustyardWeb.Endpoint] ++ extra
+    early_children() ++ extra
   end
 
+  # Dev and test: the whole tree in one start_link, Endpoint after the Repo
+  # and PubSub as it always was.
   defp full_children(opts) do
+    [CustyardWeb.Telemetry | core_children(opts)]
+    |> Kernel.++([CustyardWeb.Endpoint])
+    |> add_optional_children()
+  end
+
+  @doc false
+  # What a production `:configured` boot starts before the probe: enough to
+  # answer liveness and serve the starting card.
+  @spec early_children() :: [Supervisor.child_spec() | module]
+  def early_children, do: [CustyardWeb.Telemetry, CustyardWeb.Endpoint]
+
+  @doc false
+  # Everything else, added after the probe and migrations succeed. Same order
+  # as `full_children/1` minus the two early children.
+  @spec deferred_children(keyword) :: [Supervisor.child_spec() | {module, term} | module]
+  def deferred_children(opts), do: core_children(opts) |> add_optional_children()
+
+  defp core_children(opts) do
     [
-      CustyardWeb.Telemetry,
       Custyard.Repo,
       {DNSCluster, query: Application.get_env(:custyard, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Custyard.PubSub},
@@ -126,7 +183,10 @@ defmodule Custyard.Application do
       {Task.Supervisor, name: Custyard.TaskSupervisor, max_children: 100}
     ]
     |> maybe_add_first_run(opts[:first_run])
-    |> Kernel.++([CustyardWeb.Endpoint])
+  end
+
+  defp add_optional_children(children) do
+    children
     |> maybe_add_scheduler()
     |> maybe_add_outbound_queue()
     |> maybe_add_acknowledgment_consumer()
@@ -135,7 +195,7 @@ defmodule Custyard.Application do
     |> maybe_add_imap_pollers()
   end
 
-  # After Finch (API mail adapters send through it), before the Endpoint.
+  # After Finch (API mail adapters send through it), before the workers.
   defp maybe_add_first_run(children, nil), do: children
   defp maybe_add_first_run(children, opts), do: children ++ [{FirstRun, opts}]
 

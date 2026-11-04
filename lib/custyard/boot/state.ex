@@ -12,6 +12,8 @@ defmodule Custyard.Boot.State do
 
     * `:unconfigured` — `Custyard.Boot.Env` found problems; only the endpoint
       runs and every page is the doctor card.
+    * `:starting` — configuration is complete; the endpoint is up and serving
+      liveness while the database is probed and migrations run.
     * `:database_unavailable` — configuration is complete but the database
       probe failed; the endpoint serves the database card while
       `Custyard.Boot.Monitor` retries.
@@ -25,7 +27,7 @@ defmodule Custyard.Boot.State do
   @key {__MODULE__, :state}
   @retry_every_ms 10_000
 
-  @type mode :: :unconfigured | :database_unavailable | :first_run | :ready
+  @type mode :: :unconfigured | :starting | :database_unavailable | :first_run | :ready
 
   @type database_category ::
           :unreachable
@@ -122,7 +124,7 @@ defmodule Custyard.Boot.State do
 
   @doc "True while the endpoint should serve a doctor card instead of the app."
   @spec doctor?() :: boolean
-  def doctor?, do: mode() in [:unconfigured, :database_unavailable]
+  def doctor?, do: mode() in [:unconfigured, :starting, :database_unavailable]
 
   @doc "Sets one first-run step; unknown keys are appended."
   @spec put_step(step_key, step_status, String.t() | nil) :: t

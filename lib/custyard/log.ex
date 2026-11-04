@@ -209,7 +209,7 @@ defmodule Custyard.Log do
       ~w(create update delete enable disable release claim login logout add remove retry cancel revoke export erase)a,
     status:
       ~w(pending queued sending sent accepted delivered deferred bounced suppressed failed withheld unknown dormant active resolved closed)a,
-    boot_mode: ~w(unconfigured database_unavailable first_run ready)a,
+    boot_mode: ~w(unconfigured starting database_unavailable first_run ready)a,
     database_category:
       ~w(unreachable auth_rejected not_writable locked migration_failed volume_missing unknown)a,
     step: ~w(schema operator mail sign_in)a,

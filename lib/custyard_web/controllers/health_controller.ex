@@ -35,6 +35,7 @@ defmodule CustyardWeb.HealthController do
   def index(conn, _params) do
     case State.mode() do
       :unconfigured -> not_ready(conn, "setup_required", :unconfigured)
+      :starting -> not_ready(conn, "starting", :starting)
       :database_unavailable -> not_ready(conn, "database_unavailable", :database_unavailable)
       _ -> ready_checks(conn)
     end

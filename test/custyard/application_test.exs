@@ -1,6 +1,43 @@
 defmodule Custyard.ApplicationTest do
   use ExUnit.Case, async: false
 
+  alias Custyard.Application, as: App
+
+  defp ids(children), do: Enum.map(children, &Supervisor.child_spec(&1, []).id)
+
+  describe "child lists" do
+    test "early children are exactly telemetry and the endpoint" do
+      assert App.early_children() == [CustyardWeb.Telemetry, CustyardWeb.Endpoint]
+    end
+
+    test "deferred children hold the Repo and PubSub and none of the early ones" do
+      children = App.deferred_children([])
+      deferred = ids(children)
+
+      assert Custyard.Repo in deferred
+      assert {Phoenix.PubSub, name: Custyard.PubSub} in children
+
+      for early <- ids(App.early_children()) do
+        refute early in deferred
+      end
+    end
+
+    test "first run is placed after Finch when requested, absent otherwise" do
+      refute Custyard.Boot.FirstRun in ids(App.deferred_children([]))
+
+      children = App.deferred_children(first_run: [env: %{}, schema: %{}])
+      assert {Custyard.Boot.FirstRun, [env: %{}, schema: %{}]} in children
+
+      ids = ids(children)
+      finch = Enum.find_index(ids, &(&1 == Custyard.Finch))
+      first_run = Enum.find_index(ids, &(&1 == Custyard.Boot.FirstRun))
+
+      assert is_integer(finch)
+      assert is_integer(first_run)
+      assert first_run > finch
+    end
+  end
+
   describe "scheduler configuration" do
     test "scheduler is disabled in test environment" do
       # In test.exs, :start_scheduler is set to false

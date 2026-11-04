@@ -30,6 +30,17 @@ defmodule Custyard.Boot.StateTest do
     assert State.doctor?()
   end
 
+  test "doctor? is true while starting" do
+    State.update(&%{&1 | mode: :starting})
+    assert State.doctor?()
+
+    State.update(&%{&1 | mode: :database_unavailable})
+    assert State.doctor?()
+
+    State.update(&%{&1 | mode: :first_run})
+    refute State.doctor?()
+  end
+
   test "put_step replaces a known step and appends an unknown one" do
     State.put_step(:schema, :ok, "41 migrations")
     State.put_step(:volume, :failed, "not a mount")

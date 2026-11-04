@@ -12,6 +12,7 @@ defmodule CustyardWeb.Plugs.BootGate do
   | `:ready`                 | pass           | pass           | pass (*)       | pass            |
   | `:first_run`             | pass           | pass           | first-run card | pass            |
   | `:unconfigured`          | pass           | 503 JSON       | doctor card    | doctor card     |
+  | `:starting`              | pass           | 503 JSON       | starting card  | starting card   |
   | `:database_unavailable`  | pass           | 503 JSON       | doctor card    | doctor card     |
 
   The health controller answers readiness itself in doctor modes without the
@@ -42,6 +43,7 @@ defmodule CustyardWeb.Plugs.BootGate do
       :ready -> completed_first_run(conn)
       :first_run -> first_run(conn)
       :unconfigured -> doctor(conn, :unconfigured, "setup_required")
+      :starting -> doctor(conn, :starting, "starting")
       :database_unavailable -> doctor(conn, :database_unavailable, "database_unavailable")
     end
   end

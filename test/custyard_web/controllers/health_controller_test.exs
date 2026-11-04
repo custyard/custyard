@@ -44,6 +44,13 @@ defmodule CustyardWeb.HealthControllerTest do
              "mode" => "unconfigured"
            }
 
+    State.update(&%{&1 | mode: :starting})
+
+    assert json_response(get(build_conn(), ~p"/api/health"), 503) == %{
+             "status" => "starting",
+             "mode" => "starting"
+           }
+
     State.update(&%{&1 | mode: :database_unavailable})
 
     assert json_response(get(build_conn(), ~p"/api/health"), 503) == %{

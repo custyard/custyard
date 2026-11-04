@@ -41,6 +41,20 @@ defmodule CustyardWeb.BootController do
     )
   end
 
+  @doc "Probe and migrations in progress; refreshes until the mode changes."
+  def starting(conn, _params) do
+    state = State.get()
+
+    conn
+    |> put_status(503)
+    |> render(:starting,
+      page_title: "Custyard is starting",
+      refresh: 3,
+      state: state,
+      db: state.database
+    )
+  end
+
   @doc "Database probe failed; refreshes while Boot.Monitor retries."
   def database_unavailable(conn, _params) do
     state = State.get()
