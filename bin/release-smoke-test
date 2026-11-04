@@ -7,11 +7,15 @@
 #   $ MIX_ENV=prod mix release
 #   $ bin/release-smoke-test [path/to/bin/custyard]
 #
-# Guards the Custyard.Release tasks (the OPERATOR_EMAIL bootstrap,
-# setup_operator and bin/operator): they must start only the Repo. If one
+# Guards the Custyard.Release tasks (migrate, setup_operator and
+# bin/operator): they must start only the Repo. If one
 # starts the application, running it on a live machine (the documented
 # `fly ssh console` commands) brings up a second Endpoint, which fails to
 # bind the port the server holds.
+#
+# Also runs bin/doctor, which has to work under `bin/custyard eval` with no
+# application started: the report, both probes and the :ssl start the HTTPS
+# probe depends on.
 #
 # Uses a throwaway SQLite database, or the empty database at DATABASE_URL
 # when set (CI runs it again against a libSQL server), and MAIL_ADAPTER=local.
@@ -21,8 +25,9 @@ set -euo pipefail
 
 rel=${1:-_build/prod/rel/custyard/bin/custyard}
 operator="$(dirname "$rel")/operator"
+doctor="$(dirname "$rel")/doctor"
 
-if [ ! -x "$rel" ] || [ ! -x "$operator" ]; then
+if [ ! -x "$rel" ] || [ ! -x "$operator" ] || [ ! -x "$doctor" ]; then
   echo "release not found at $rel (build it with: MIX_ENV=prod mix release)" >&2
   exit 1
 fi
@@ -41,6 +46,8 @@ trap cleanup EXIT
 
 SECRET_KEY_BASE=$(openssl rand -hex 64)
 export SECRET_KEY_BASE
+CREDENTIAL_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export CREDENTIAL_ENCRYPTION_KEY
 export MAIL_ADAPTER=local
 export PHX_HOST=localhost
 export PORT=${PORT:-4099}
@@ -56,6 +63,13 @@ health="http://localhost:$PORT/api/health"
 curl_opts=(--connect-timeout 2 --max-time 5)
 
 step() { echo "==> $*"; }
+
+# fail_with_log MESSAGE LOG: report a failed step with its captured output.
+fail_with_log() {
+  echo "$1" >&2
+  cat "$2" >&2
+  exit 1
+}
 
 step "fresh repository eval installs privacy without starting the application"
 "$rel" eval '
@@ -77,32 +91,27 @@ if grep -q 'REPOSITORY_BOOT_PRIVATE_CANARY' "$work/repository-boot.log"; then
 fi
 grep -Fq '"event":"external_log"' "$work/repository-boot.log"
 
-step "migrate and bootstrap OPERATOR_EMAIL before the server starts (entrypoint.sh)"
-OPERATOR_EMAIL=" Boot@Example.COM " \
-  "$rel" eval '
-    require Logger
-    app_started? = fn -> Enum.any?(Application.started_applications(), fn {app, _, _} -> app == :custyard end) end
-    false = app_started?.()
-    Custyard.Release.migrate()
-    true = List.keymember?(:logger.get_primary_config()[:filters], :custyard_log_privacy, 0)
-    {:ok, %{formatter: {Custyard.Log.Formatter, _}}} = :logger.get_handler_config(:default)
-    Logger.error("RELEASE_BOOT_PRIVATE_CANARY")
-    Custyard.Release.bootstrap_operator()
-    Logger.flush()
-    false = app_started?.()
-  ' >"$work/bootstrap.log" 2>&1
+step "migrate before the server starts without starting the application"
+"$rel" eval '
+  require Logger
+  app_started? = fn -> Enum.any?(Application.started_applications(), fn {app, _, _} -> app == :custyard end) end
+  false = app_started?.()
+  Custyard.Release.migrate()
+  true = List.keymember?(:logger.get_primary_config()[:filters], :custyard_log_privacy, 0)
+  {:ok, %{formatter: {Custyard.Log.Formatter, _}}} = :logger.get_handler_config(:default)
+  Logger.error("RELEASE_BOOT_PRIVATE_CANARY")
+  Logger.flush()
+  false = app_started?.()
+' >"$work/migrate.log" 2>&1
 
-if grep -q 'RELEASE_BOOT_PRIVATE_CANARY' "$work/bootstrap.log"; then
+if grep -q 'RELEASE_BOOT_PRIVATE_CANARY' "$work/migrate.log"; then
   echo "release eval leaked a raw diagnostic before server startup" >&2
   exit 1
 fi
-if ! grep -Fq '"event":"external_log"' "$work/bootstrap.log" ||
-   ! grep -Fq '"event":"operator_account_created"' "$work/bootstrap.log"; then
-  echo "release eval did not emit expected structured privacy-safe events:" >&2
-  cat "$work/bootstrap.log" >&2
-  exit 1
+if ! grep -Fq '"event":"external_log"' "$work/migrate.log"; then
+  fail_with_log "release eval did not emit the structured privacy-safe event:" "$work/migrate.log"
 fi
-cat "$work/bootstrap.log"
+cat "$work/migrate.log"
 
 step "migration and rollback failures exit nonzero with sanitized exceptions"
 for task in migrate rollback; do
@@ -129,20 +138,55 @@ for task in migrate rollback; do
   grep -Eq 'Database (migration|rollback) failed; see structured diagnostics' "$work/$task-failure.log"
 done
 
-step "bootstrap failure exits nonzero without raw input or exception output"
-if OPERATOR_EMAIL="RELEASE_BOOT_FAILURE_PRIVATE_CANARY" \
-  "$rel" eval 'Custyard.Release.bootstrap_operator()' >"$work/bootstrap-failure.log" 2>&1; then
-  echo "invalid operator bootstrap unexpectedly succeeded" >&2
+step "a malformed OPERATOR_EMAIL is a doctor problem, named but never printed"
+rc=0
+OPERATOR_EMAIL="RELEASE_BOOT_FAILURE_PRIVATE_CANARY" "$doctor" >"$work/doctor-bad-email.log" 2>&1 || rc=$?
+if [ "$rc" -ne 1 ]; then
+  fail_with_log "bin/doctor exited $rc instead of 1 with a malformed OPERATOR_EMAIL:" "$work/doctor-bad-email.log"
+fi
+if grep -q 'RELEASE_BOOT_FAILURE_PRIVATE_CANARY' "$work/doctor-bad-email.log"; then
+  echo "bin/doctor printed the malformed OPERATOR_EMAIL value" >&2
   exit 1
 fi
-if grep -q 'RELEASE_BOOT_FAILURE_PRIVATE_CANARY' "$work/bootstrap-failure.log"; then
-  echo "operator bootstrap leaked private failure content" >&2
-  exit 1
+grep -Fq 'OPERATOR_EMAIL' "$work/doctor-bad-email.log" ||
+  fail_with_log "bin/doctor did not name OPERATOR_EMAIL:" "$work/doctor-bad-email.log"
+
+step "bin/doctor prints a complete report and no values"
+"$doctor" >"$work/doctor-report.log" 2>&1 ||
+  fail_with_log "bin/doctor exited nonzero on a complete configuration:" "$work/doctor-report.log"
+grep -Fq 'configuration is complete' "$work/doctor-report.log" ||
+  fail_with_log "bin/doctor did not report a complete configuration:" "$work/doctor-report.log"
+# The log is not echoed here: on failure it holds the value that leaked.
+for name in SECRET_KEY_BASE CREDENTIAL_ENCRYPTION_KEY; do
+  if grep -Fq -- "${!name}" "$work/doctor-report.log"; then
+    echo "bin/doctor printed the value of $name" >&2
+    exit 1
+  fi
+done
+cat "$work/doctor-report.log"
+
+step "bin/doctor exits 1 and names the missing variable"
+rc=0
+env -u SECRET_KEY_BASE "$doctor" >"$work/doctor-missing.log" 2>&1 || rc=$?
+if [ "$rc" -ne 1 ]; then
+  fail_with_log "bin/doctor exited $rc instead of 1 without SECRET_KEY_BASE:" "$work/doctor-missing.log"
 fi
-grep -Fq '"event":"operator_bootstrap_failed"' "$work/bootstrap-failure.log"
-grep -Fq '"reason":"validation_failed"' "$work/bootstrap-failure.log"
-grep -Fq '"validation_fields":["email"]' "$work/bootstrap-failure.log"
-grep -Fq 'OPERATOR_EMAIL: operator bootstrap failed; see structured diagnostics' "$work/bootstrap-failure.log"
+grep -Fq 'SECRET_KEY_BASE' "$work/doctor-missing.log" ||
+  fail_with_log "bin/doctor did not name the missing SECRET_KEY_BASE:" "$work/doctor-missing.log"
+
+step "bin/doctor --probe-database connects without the application"
+"$doctor" --probe-database >"$work/doctor-probe.log" 2>&1 ||
+  fail_with_log "bin/doctor --probe-database failed:" "$work/doctor-probe.log"
+grep -Fq 'connected and ran SELECT 1' "$work/doctor-probe.log" ||
+  fail_with_log "bin/doctor --probe-database did not report the SELECT 1:" "$work/doctor-probe.log"
+
+# The libSQL URL carries tls=0, so no --token; the SQLite path is absolute.
+step "bin/doctor --probe-database URL creates and drops its throwaway table"
+"$doctor" --probe-database "${DATABASE_URL:-$DATABASE_PATH}" >"$work/doctor-migration.log" 2>&1 ||
+  fail_with_log "bin/doctor --probe-database URL failed:" "$work/doctor-migration.log"
+grep -Fq 'committed; nothing left behind' "$work/doctor-migration.log" ||
+  fail_with_log "bin/doctor --probe-database URL did not commit its throwaway migration:" "$work/doctor-migration.log"
+cat "$work/doctor-migration.log"
 
 # curl exits 7 only when the connection is refused. Anything else, a reply or
 # a listener that accepts and never answers, means the port is taken, and the
@@ -155,8 +199,8 @@ if [ "$rc" -ne 7 ]; then
   exit 1
 fi
 
-step "start the server on port $PORT"
-"$rel" start >"$work/server.log" 2>&1 &
+step "start the server on port $PORT; its first run creates OPERATOR_EMAIL"
+OPERATOR_EMAIL=" Boot@Example.COM " "$rel" start >"$work/server.log" 2>&1 &
 server_pid=$!
 
 for _ in $(seq 1 60); do
@@ -167,6 +211,36 @@ done
 if ! curl -fsS "${curl_opts[@]}" "$health" >/dev/null 2>&1 || ! kill -0 "$server_pid" 2>/dev/null; then
   echo "server did not come up on port $PORT:" >&2
   cat "$work/server.log" >&2
+  exit 1
+fi
+
+# A TLS libsql URL at the server's plain-HTTP port: TCP connects, the TLS
+# handshake fails, the probe reports the host as unreachable, and nothing
+# leaves the machine. Under `bin/custyard eval` nothing starts :ssl for us;
+# without it :ssl.connect fails right after the TCP connect with
+# :ssl_not_started, the regression this step pins. An unresolvable host would
+# not do: DNS fails before :ssl is consulted, started or not.
+step "bin/doctor --probe-database over HTTPS starts :ssl in eval mode"
+rc=0
+"$doctor" --probe-database "libsql://127.0.0.1:$PORT" --token smoke \
+  >"$work/doctor-https.log" 2>&1 || rc=$?
+if [ "$rc" -ne 1 ]; then
+  fail_with_log "bin/doctor HTTPS probe exited $rc instead of 1:" "$work/doctor-https.log"
+fi
+grep -Fq 'did not answer' "$work/doctor-https.log" ||
+  fail_with_log "bin/doctor HTTPS probe did not report the host as unreachable:" "$work/doctor-https.log"
+if grep -q 'not_started' "$work/doctor-https.log"; then
+  fail_with_log "bin/doctor HTTPS probe ran without :ssl started:" "$work/doctor-https.log"
+fi
+
+for _ in $(seq 1 30); do
+  grep -Fq '"event":"boot_first_run_completed"' "$work/server.log" && break
+  sleep 1
+done
+grep -Fq '"event":"boot_first_run_completed"' "$work/server.log" ||
+  fail_with_log "the first run did not complete:" "$work/server.log"
+if grep -q 'boot@example.com' "$work/server.log"; then
+  echo "the server log printed the OPERATOR_EMAIL value" >&2
   exit 1
 fi
 
