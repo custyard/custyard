@@ -8,6 +8,7 @@ defmodule Custyard.ReleaseTest do
 
   require Logger
 
+  alias Custyard.Boot.Env
   alias Custyard.{AuditEvent, Message, OperatorAccount, Organization, Release}
 
   defmodule UnavailableRepo do
@@ -398,7 +399,7 @@ defmodule Custyard.ReleaseTest do
 
   describe "with_repo/1 and the boot verdict" do
     test "an unconfigured verdict prints the report to stderr and refuses" do
-      env = Custyard.Boot.Env.read(%{"MAIL_ADAPTOR" => "x"}, config_env: :prod)
+      env = Env.read(%{"MAIL_ADAPTOR" => "x"}, config_env: :prod)
 
       with_boot_env(env, fn ->
         stderr =
@@ -418,7 +419,7 @@ defmodule Custyard.ReleaseTest do
 
     test "a configured verdict opens the repo" do
       env =
-        Custyard.Boot.Env.read(
+        Env.read(
           %{
             "SECRET_KEY_BASE" => String.duplicate("s", 64),
             "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32)),
@@ -454,7 +455,7 @@ defmodule Custyard.ReleaseTest do
       canary = "CANARY-" <> String.duplicate("z", 60)
 
       with_boot_env(
-        Custyard.Boot.Env.read(%{"SECRET_KEY_BASE" => canary}, config_env: :prod),
+        Env.read(%{"SECRET_KEY_BASE" => canary}, config_env: :prod),
         fn ->
           assert {1, stdout, ""} = run_doctor([])
           assert stdout =~ "Custyard is not configured yet"
@@ -466,7 +467,7 @@ defmodule Custyard.ReleaseTest do
       )
 
       configured =
-        Custyard.Boot.Env.read(
+        Env.read(
           %{
             "SECRET_KEY_BASE" => String.duplicate("s", 64),
             "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32)),
