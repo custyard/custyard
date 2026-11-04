@@ -63,26 +63,53 @@ mix dev.create_operator --email you@example.com
 
 ### Production (Docker / Fly)
 
-Login links need a real mailer, so set `MAIL_ADAPTER` (`lettermint` | `postmark` |
-`sendgrid` | `mailgun` | `smtp`) and its credentials (see `.env.sample`). Then create
-the first `super_admin` in one of two ways.
+A new install needs five variables. SQLite lives on the `/data` volume, so
+there are no database variables.
 
-For Lettermint, `LETTERMINT_PROJECT_TOKEN` sends installation mail (including
-login links), while the separate `LETTERMINT_TEAM_TOKEN` authorizes management
-reads. `LETTERMINT_API_KEY` remains a deprecated sending-only fallback. A missing
-Team token disables production management; it never creates mock routes.
+```bash
+SECRET_KEY_BASE=              # mix phx.gen.secret
+PHX_HOST=custyard.example.com
+OPERATOR_EMAIL=you@example.com
+MAIL_ADAPTER=lettermint       # or smtp | postmark | sendgrid | mailgun
+LETTERMINT_PROJECT_TOKEN=     # the credential for the chosen adapter; see .env.sample
+```
 
-After login, choose the tenant and open **Email setup** at
-`/operator/email-setup`. The migration places existing customer organizations,
-conversations and channels in the **Default** tenant. Global environment tokens
-only bootstrap that tenant. Each additional tenant saves its own encrypted
-project token, Team token, selected project and webhook secrets; set
-`CREDENTIAL_ENCRYPTION_KEY` before doing so. See the [support email setup
-guide](docs/ops/lettermint-email-setup.md) for manual Lettermint steps and the
-receive/reply verification checklist.
+On Fly, `PHX_HOST` falls back to `FLY_APP_NAME.fly.dev`. `CREDENTIAL_ENCRYPTION_KEY`
+is derived from `SECRET_KEY_BASE` unless set explicitly. `EMAIL_FROM_ADDRESS`
+defaults to `noreply@PHX_HOST` and must be a sender the provider has verified;
+otherwise the welcome mail and the login links fail the same way.
 
-On the next boot: set `OPERATOR_EMAIL` and the entrypoint creates that account if
-it does not exist. An existing account is never modified.
+#### What happens on boot
+
+With variables missing or malformed, the container stays up and serves a doctor
+card at every HTML path (HTTP 503). The card names the variables and gives a
+paste block; the same report prints to the log. Fix them and restart. With
+variables set but no reachable database, it serves a database card and retries
+every 10 s; once the database answers it exits so the platform restarts it into
+a normal boot. A failed migration does not retry. With an empty database it runs
+the migrations, creates the `super_admin` from `OPERATOR_EMAIL`, sends a welcome
+mail through the real adapter, and shows the setup checklist on `/` for the rest
+of that boot; sign in at `/operator/login`. Variable values never appear on a
+card or in the log, only names.
+
+Platform health checks must use `/api/health/live`, which is 200 whenever the
+process answers. `/api/health` is readiness and returns 503 in doctor modes.
+
+`bin/doctor` prints the same report from a shell (exit 1 unless complete);
+`--probe-database` also connects to the configured database. Before deploying
+against a remote database, probe a disposable one from your laptop:
+
+```bash
+docker run --rm ghcr.io/custyard/custyard bin/doctor --probe-database libsql://scratch.turso.io --token "$TURSO_AUTH_TOKEN"
+```
+
+After login, `/operator/system` shows the same report plus the last mail
+delivery result (`super_admin` only).
+
+#### Operators
+
+The account named by `OPERATOR_EMAIL` is created on the first run if absent and
+never modified afterwards.
 
 ```bash
 fly secrets set OPERATOR_EMAIL=you@example.com
@@ -92,9 +119,21 @@ Log in at `/operator/login`, then `fly secrets unset OPERATOR_EMAIL`. While it i
 set, every boot logs a reminder, and an operator you remove with that address is
 recreated on the next boot.
 
+For Lettermint, `LETTERMINT_PROJECT_TOKEN` sends installation mail, including
+login links; `LETTERMINT_TEAM_TOKEN` authorizes management reads in Email setup
+(without it, management is disabled, never mocked). `LETTERMINT_API_KEY` is a
+deprecated name for the project token and logs a warning; rename it.
+
+After login, choose the tenant and open **Email setup** at
+`/operator/email-setup`. The environment tokens configure only the **Default**
+tenant; each additional tenant stores its own encrypted project token, Team
+token, project and webhook secrets. See the [support email setup
+guide](docs/ops/lettermint-email-setup.md) for the verification checklist.
+
 From a shell on the running machine: `bin/operator` starts only the database,
 never the app, so it is safe while the server runs. Under `fly ssh console` it
-switches to the `custyard` user itself.
+switches to the `custyard` user itself. In a doctor mode it prints the boot
+report and exits 1.
 
 ```bash
 fly ssh console -a custyard -C "/app/bin/operator add you@example.com"
@@ -130,6 +169,16 @@ fly ssh console -a custyard -C "/app/bin/operator remove admin@custyard.local"
 Erlang distribution is off in the release, so `bin/custyard remote` and
 `bin/custyard rpc` do not work. Use `bin/operator`, or `bin/custyard eval` for
 one-off code (a separate VM with the app's configuration; the app is not started).
+
+Local Docker run (plain `docker compose up --build` also works and reports the
+build as unknown):
+
+```bash
+GIT_SHA=$(git rev-parse HEAD) BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose up --build
+```
+
+Then open http://localhost:4000. With no environment set it shows the doctor
+card; add the five variables to `docker-compose.yml` and run it again.
 
 ## Phoenix.new / Remote VM Setup
 
