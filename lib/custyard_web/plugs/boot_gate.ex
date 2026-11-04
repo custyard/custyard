@@ -9,13 +9,19 @@ defmodule CustyardWeb.Plugs.BootGate do
 
   | mode                     | `/api/health*` | other `/api/*` | `GET /`        | everything else |
   |--------------------------|----------------|----------------|----------------|-----------------|
-  | `:ready`                 | pass           | pass           | pass           | pass            |
+  | `:ready`                 | pass           | pass           | pass (*)       | pass            |
   | `:first_run`             | pass           | pass           | first-run card | pass            |
   | `:unconfigured`          | pass           | 503 JSON       | doctor card    | doctor card     |
   | `:database_unavailable`  | pass           | 503 JSON       | doctor card    | doctor card     |
 
   The health controller answers readiness itself in doctor modes without the
   Repo; the liveness path keeps platform checks green so the card stays up.
+
+  (*) When this boot completed the first run (`first_run.completed_at` is
+  set), `GET /` keeps showing the finished checklist until the next restart,
+  so the operator who set `OPERATOR_EMAIL` sees what happened and where to
+  sign in instead of an unexplained landing page. The state is not persisted,
+  so the next boot serves the landing page as usual.
   """
 
   @behaviour Plug
@@ -33,7 +39,7 @@ defmodule CustyardWeb.Plugs.BootGate do
   @impl true
   def call(conn, _opts) do
     case State.mode() do
-      :ready -> conn
+      :ready -> completed_first_run(conn)
       :first_run -> first_run(conn)
       :unconfigured -> doctor(conn, :unconfigured, "setup_required")
       :database_unavailable -> doctor(conn, :database_unavailable, "database_unavailable")
@@ -45,6 +51,12 @@ defmodule CustyardWeb.Plugs.BootGate do
   end
 
   defp first_run(conn), do: conn
+
+  defp completed_first_run(%Plug.Conn{method: "GET", path_info: []} = conn) do
+    if State.get().first_run.completed_at, do: first_run(conn), else: conn
+  end
+
+  defp completed_first_run(conn), do: conn
 
   defp doctor(%Plug.Conn{request_path: path} = conn, _action, _status)
        when path in @health_paths do

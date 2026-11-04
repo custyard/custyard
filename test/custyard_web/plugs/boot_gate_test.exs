@@ -276,5 +276,27 @@ defmodule CustyardWeb.Plugs.BootGateTest do
       refute conn.resp_body =~ "Setting up Custyard"
       refute conn.resp_body =~ "Custyard is not configured yet"
     end
+
+    test "keeps the finished checklist on GET / for the boot that completed first run",
+         %{conn: conn} do
+      State.update(fn state ->
+        %{
+          state
+          | first_run: %{
+              state.first_run
+              | completed_at: DateTime.utc_now(),
+                operator_email: "you@example.com"
+            }
+        }
+      end)
+
+      State.put_step(:sign_in, :ok, "an operator can sign in")
+
+      body = html_response(get(conn, "/"), 200)
+      assert body =~ "Setting up Custyard"
+      assert body =~ ~s(href="/operator/login")
+
+      assert html_response(get(build_conn(), "/operator/login"), 200) =~ "Operator Login"
+    end
   end
 end
