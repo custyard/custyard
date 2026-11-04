@@ -115,9 +115,19 @@ Boot.Monitor (db tier only: probes,    {Ecto.Migrator, repos: ...}
 | Mode | Browser paths | `/api/health` | `/api/health/live` | Webhooks, LMTP |
 |---|---|---|---|---|
 | unconfigured | doctor card | 503 `setup_required` | 200 | 503 / not started |
+| starting | starting card | 503 `starting` | 200 | 503 / not started |
 | db unavailable | doctor card, DB variant | 503 `database_unavailable` | 200 | 503 / not started |
 | first run | `/` is the setup card; all else normal | 200 | 200 | normal |
 | ready | normal | 200 | 200 | normal |
+
+Implemented 2026-11-03 with one change to the tree above: a configured boot
+starts Telemetry and the Endpoint first, in a `starting` mode, and only then
+probes the database and runs the migrations synchronously. The remaining
+children are added to the running supervisor afterwards. Liveness therefore
+answers during a long migration over libSQL HTTP, which would otherwise exceed
+a platform's start grace and leave a half-applied schema. The Endpoint starts
+before the Repo and PubSub in production; the BootGate blocks everything but
+health and static assets until the mode changes, so nothing reaches them early.
 
 Platform health checks (Containerfile `HEALTHCHECK`, `fly.toml`, Bunny) use
 `/api/health/live` so the doctor page stays reachable. `/api/health` keeps

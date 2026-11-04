@@ -84,7 +84,9 @@ otherwise the welcome mail and the login links fail the same way.
 With variables missing or malformed, the container stays up and serves a doctor
 card at every HTML path (HTTP 503). The card names the variables and gives a
 paste block; the same report prints to the log. Fix them and restart. With
-variables set but no reachable database, it serves a database card and retries
+variables set, the HTTP endpoint comes up first and serves a starting card while
+the database is probed and migrations run, so liveness answers throughout. With
+no reachable database it then serves a database card and retries
 every 10 s; once the database answers it exits so the platform restarts it into
 a normal boot. A failed migration does not retry. With an empty database it runs
 the migrations, creates the `super_admin` from `OPERATOR_EMAIL`, sends a welcome
