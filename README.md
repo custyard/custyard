@@ -67,19 +67,19 @@ Login links need a real mailer, so set `MAIL_ADAPTER` (`lettermint` | `postmark`
 `sendgrid` | `mailgun` | `smtp`) and its credentials (see `.env.sample`). Then create
 the first `super_admin` in one of two ways.
 
-F󠄁o󠄁r󠄁 L󠄁e󠄁t󠄁t󠄁e󠄁r󠄁m󠄁i󠄁n󠄁t󠄁,󠄁 `LETTERMINT_PROJECT_TOKEN` s󠄁e󠄁n󠄁d󠄁s󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 m󠄁a󠄁i󠄁l󠄁 (󠄁i󠄁n󠄁c󠄁l󠄁u󠄁d󠄁i󠄁n󠄁g󠄁
-l󠄁o󠄁g󠄁i󠄁n󠄁 l󠄁i󠄁n󠄁k󠄁s󠄁)󠄁,󠄁 w󠄁h󠄁i󠄁l󠄁e󠄁 t󠄁h󠄁e󠄁 s󠄁e󠄁p󠄁a󠄁r󠄁a󠄁t󠄁e󠄁 `LETTERMINT_TEAM_TOKEN` a󠄁u󠄁t󠄁h󠄁o󠄁r󠄁i󠄁z󠄁e󠄁s󠄁 m󠄁a󠄁n󠄁a󠄁g󠄁e󠄁m󠄁e󠄁n󠄁t󠄁
-r󠄁e󠄁a󠄁d󠄁s󠄁.󠄁 `LETTERMINT_API_KEY` r󠄁e󠄁m󠄁a󠄁i󠄁n󠄁s󠄁 a󠄁 d󠄁e󠄁p󠄁r󠄁e󠄁c󠄁a󠄁t󠄁e󠄁d󠄁 s󠄁e󠄁n󠄁d󠄁i󠄁n󠄁g󠄁-󠄁o󠄁n󠄁l󠄁y󠄁 f󠄁a󠄁l󠄁l󠄁b󠄁a󠄁c󠄁k󠄁.󠄁 A󠄁 m󠄁i󠄁s󠄁s󠄁i󠄁n󠄁g󠄁
-T󠄁e󠄁a󠄁m󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁 d󠄁i󠄁s󠄁a󠄁b󠄁l󠄁e󠄁s󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 m󠄁a󠄁n󠄁a󠄁g󠄁e󠄁m󠄁e󠄁n󠄁t󠄁;󠄁 i󠄁t󠄁 n󠄁e󠄁v󠄁e󠄁r󠄁 c󠄁r󠄁e󠄁a󠄁t󠄁e󠄁s󠄁 m󠄁o󠄁c󠄁k󠄁 r󠄁o󠄁u󠄁t󠄁e󠄁s󠄁.󠄁
+For Lettermint, `LETTERMINT_PROJECT_TOKEN` sends installation mail (including
+login links), while the separate `LETTERMINT_TEAM_TOKEN` authorizes management
+reads. `LETTERMINT_API_KEY` remains a deprecated sending-only fallback. A missing
+Team token disables production management; it never creates mock routes.
 
-A󠄁f󠄁t󠄁e󠄁r󠄁 l󠄁o󠄁g󠄁i󠄁n󠄁,󠄁 c󠄁h󠄁o󠄁o󠄁s󠄁e󠄁 t󠄁h󠄁e󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 a󠄁n󠄁d󠄁 o󠄁p󠄁e󠄁n󠄁 **E󠄁m󠄁a󠄁i󠄁l󠄁 s󠄁e󠄁t󠄁u󠄁p󠄁** a󠄁t󠄁
-`/operator/email-setup`.󠄁 T󠄁h󠄁e󠄁 m󠄁i󠄁g󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 p󠄁l󠄁a󠄁c󠄁e󠄁s󠄁 e󠄁x󠄁i󠄁s󠄁t󠄁i󠄁n󠄁g󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 o󠄁r󠄁g󠄁a󠄁n󠄁i󠄁z󠄁a󠄁t󠄁i󠄁o󠄁n󠄁s󠄁,󠄁
-c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁s󠄁 a󠄁n󠄁d󠄁 c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁s󠄁 i󠄁n󠄁 t󠄁h󠄁e󠄁 **D󠄁e󠄁f󠄁a󠄁u󠄁l󠄁t󠄁** t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁.󠄁 G󠄁l󠄁o󠄁b󠄁a󠄁l󠄁 e󠄁n󠄁v󠄁i󠄁r󠄁o󠄁n󠄁m󠄁e󠄁n󠄁t󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁s󠄁
-o󠄁n󠄁l󠄁y󠄁 b󠄁o󠄁o󠄁t󠄁s󠄁t󠄁r󠄁a󠄁p󠄁 t󠄁h󠄁a󠄁t󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁.󠄁 E󠄁a󠄁c󠄁h󠄁 a󠄁d󠄁d󠄁i󠄁t󠄁i󠄁o󠄁n󠄁a󠄁l󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 s󠄁a󠄁v󠄁e󠄁s󠄁 i󠄁t󠄁s󠄁 o󠄁w󠄁n󠄁 e󠄁n󠄁c󠄁r󠄁y󠄁p󠄁t󠄁e󠄁d󠄁
-p󠄁r󠄁o󠄁j󠄁e󠄁c󠄁t󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁,󠄁 T󠄁e󠄁a󠄁m󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁,󠄁 s󠄁e󠄁l󠄁e󠄁c󠄁t󠄁e󠄁d󠄁 p󠄁r󠄁o󠄁j󠄁e󠄁c󠄁t󠄁 a󠄁n󠄁d󠄁 w󠄁e󠄁b󠄁h󠄁o󠄁o󠄁k󠄁 s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁s󠄁;󠄁 s󠄁e󠄁t󠄁
-`CREDENTIAL_ENCRYPTION_KEY` b󠄁e󠄁f󠄁o󠄁r󠄁e󠄁 d󠄁o󠄁i󠄁n󠄁g󠄁 s󠄁o󠄁.󠄁 S󠄁e󠄁e󠄁 t󠄁h󠄁e󠄁 [s󠄁u󠄁p󠄁p󠄁o󠄁r󠄁t󠄁 e󠄁m󠄁a󠄁i󠄁l󠄁 s󠄁e󠄁t󠄁u󠄁p󠄁
-g󠄁u󠄁i󠄁d󠄁e󠄁](docs/ops/lettermint-email-setup.md) f󠄁o󠄁r󠄁 m󠄁a󠄁n󠄁u󠄁a󠄁l󠄁 L󠄁e󠄁t󠄁t󠄁e󠄁r󠄁m󠄁i󠄁n󠄁t󠄁 s󠄁t󠄁e󠄁p󠄁s󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁
-r󠄁e󠄁c󠄁e󠄁i󠄁v󠄁e󠄁/󠄁r󠄁e󠄁p󠄁l󠄁y󠄁 v󠄁e󠄁r󠄁i󠄁f󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁l󠄁i󠄁s󠄁t󠄁.󠄁
+After login, choose the tenant and open **Email setup** at
+`/operator/email-setup`. The migration places existing customer organizations,
+conversations and channels in the **Default** tenant. Global environment tokens
+only bootstrap that tenant. Each additional tenant saves its own encrypted
+project token, Team token, selected project and webhook secrets; set
+`CREDENTIAL_ENCRYPTION_KEY` before doing so. See the [support email setup
+guide](docs/ops/lettermint-email-setup.md) for manual Lettermint steps and the
+receive/reply verification checklist.
 
 On the next boot: set `OPERATOR_EMAIL` and the entrypoint creates that account if
 it does not exist. An existing account is never modified.
@@ -164,7 +164,7 @@ git clone https://github.com/owner/private-repo.git
 ## Docs
 
 - [Development Guide](docs/development.md)
-- [P󠄁u󠄁b󠄁l󠄁i󠄁s󠄁h󠄁i󠄁n󠄁g󠄁 c󠄁o󠄁n󠄁t󠄁a󠄁i󠄁n󠄁e󠄁r󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁s󠄁 t󠄁o󠄁 G󠄁H󠄁C󠄁R󠄁](docs/ops/ghcr-publishing.md)
-- [B󠄁u󠄁n󠄁n󠄁y󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁n󠄁d󠄁 F󠄁l󠄁y󠄁 s󠄁t󠄁a󠄁g󠄁i󠄁n󠄁g󠄁 p󠄁l󠄁a󠄁n󠄁](docs/ops/bunny-production-fly-staging.md)
+- [Publishing container images to GHCR](docs/ops/ghcr-publishing.md)
+- [Bunny production and Fly staging plan](docs/ops/bunny-production-fly-staging.md)
 - [LMTP Troubleshooting](docs/lmtp-troubleshooting.md)
 - [Email Test Strategy](docs/backlog/0323-email-test-strategy.md)
