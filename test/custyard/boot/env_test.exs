@@ -358,9 +358,22 @@ defmodule Custyard.Boot.EnvTest do
 
     test "POOL_SIZE parses and falls back" do
       assert prod(Map.put(@minimal, "POOL_SIZE", "4")).settings.pool_size == 4
-      env = prod(Map.put(@minimal, "POOL_SIZE", "many"))
-      assert [%{kind: :malformed}] = problems_for(env, "POOL_SIZE")
-      assert env.settings.pool_size == 10
+
+      for value <- ["many", "0", "-3"] do
+        env = prod(Map.put(@minimal, "POOL_SIZE", value))
+        assert [%{kind: :malformed}] = problems_for(env, "POOL_SIZE"), value
+        assert env.settings.pool_size == 10
+      end
+    end
+
+    test "PORT must be a positive integer" do
+      assert prod(Map.put(@minimal, "PORT", "8080")).settings.port == 8080
+
+      for value <- ["0", "-1", "http"] do
+        env = prod(Map.put(@minimal, "PORT", value))
+        assert [%{kind: :malformed}] = problems_for(env, "PORT"), value
+        assert env.settings.port == 4000
+      end
     end
   end
 

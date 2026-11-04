@@ -16,8 +16,10 @@ defmodule Custyard.Application do
       killed mid-migration restarts into a half-applied schema.
     * When the probe and migrations succeed, the remaining children are added
       to the running supervisor one at a time, in the order
-      `deferred_children/1` lists them, with `Custyard.Boot.FirstRun`
-      finishing the operator and mail steps after the Repo is up.
+      `deferred_children/1` lists them. `Custyard.Boot.FirstRun`, which comes
+      after the Repo, PubSub and the HTTP client, moves the mode out of
+      `:starting` as its first step and then finishes the operator and mail
+      steps.
     * When they fail, `Custyard.Boot.Monitor` is added instead; it exits the
       VM once the database answers.
 
@@ -86,9 +88,9 @@ defmodule Custyard.Application do
     with {:ok, sup} <- supervise(doctor_children([])) do
       case probe_and_migrate(env) do
         {:ok, schema} ->
-          mode = if schema.operators > 0, do: :ready, else: :first_run
-          State.update(&%{&1 | mode: mode})
-          Log.info(:boot_mode_decided, boot_mode: mode)
+          # The mode stays :starting until FirstRun runs, which is after the
+          # Repo, PubSub and the HTTP client in deferred_children/1; publishing
+          # it here would let a request through to children not yet started.
           start_children(sup, deferred_children(first_run: [env: env, schema: schema]))
 
         {:error, category, detail} ->

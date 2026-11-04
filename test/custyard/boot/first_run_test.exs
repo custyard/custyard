@@ -118,6 +118,9 @@ defmodule Custyard.Boot.FirstRunTest do
       assert State.get().last_mail == nil
       # An admin whose organization exists can log in.
       assert State.mode() == :ready
+      # Nothing was set up this boot, so "/" stays the landing page.
+      assert State.get().first_run.completed_at == nil
+      assert step(:sign_in).status == :ok
     end
 
     test "records the provider's status and message when the mail is rejected" do
@@ -200,6 +203,28 @@ defmodule Custyard.Boot.FirstRunTest do
   end
 
   describe "first-run mode" do
+    test "leaves :starting for :ready when operators exist, before the operator step" do
+      org = insert_organization()
+      insert_operator_account(email: "ops@example.com", role: "admin", organization_id: org.id)
+      State.put(%State{mode: :starting})
+
+      run(env())
+
+      assert State.mode() == :ready
+      assert step(:operator).detail == "exists, not modified"
+      assert State.get().first_run.completed_at == nil
+    end
+
+    test "leaves :starting for :first_run on an empty database and completes it" do
+      State.put(%State{mode: :starting})
+
+      run(env())
+
+      assert State.mode() == :ready
+      assert step(:operator).status == :ok
+      assert %DateTime{} = State.get().first_run.completed_at
+    end
+
     test "stays first_run without OPERATOR_EMAIL and flips to ready when an operator appears" do
       run(env(%{"OPERATOR_EMAIL" => ""}))
 

@@ -724,12 +724,12 @@ defmodule Custyard.Boot.Env do
 
       value ->
         case Integer.parse(value) do
-          {int, ""} ->
+          {int, ""} when int > 0 ->
             put(acc, key, int)
 
           _ ->
             acc
-            |> problem(name, :malformed, "must be an integer; using #{default}")
+            |> problem(name, :malformed, "must be a positive integer; using #{default}")
             |> put(key, default)
         end
     end

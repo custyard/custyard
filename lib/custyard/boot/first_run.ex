@@ -12,15 +12,19 @@ defmodule Custyard.Boot.FirstRun do
   a migrator child that raises takes the Repo down with it and the tree
   restarts in a loop with nothing to serve, while a failure returned here
   becomes the `:database_unavailable` card with category `:migration_failed`
-  and no automatic restart. The same pass counts the operators who can log
-  in, so the mode is `:first_run` or `:ready` before the endpoint accepts a
-  request.
+  and no automatic restart.
 
   ## Process
 
-  The GenServer starts after the Repo and the mailer's HTTP client and does
-  its work in `handle_continue/2`, so the rest of the tree keeps starting:
+  The GenServer starts after the Repo, PubSub and the mailer's HTTP client
+  and does its work in `handle_continue/2`, so the rest of the tree keeps
+  starting:
 
+    0. the mode leaves `:starting` for `:first_run` or `:ready` by the count
+       of operators who can log in. It happens here and not in
+       `Custyard.Application` because a request let through now finds the
+       Repo and PubSub running, and because `Custyard.Boot.State` is a
+       read-modify-write with no lock, so it wants one writer;
     1. the operator from `OPERATOR_EMAIL` is created if absent
        (`Custyard.OperatorAccounts.create_operator/2`, `via: "boot"`); an
        existing account is never modified;
@@ -30,6 +34,11 @@ defmodule Custyard.Boot.FirstRun do
     3. while no operator can log in, the mode stays `:first_run` and the
        check repeats every `recheck_every_ms` (5 s), so an account added
        with `bin/operator add` flips the mode to `:ready` without a restart.
+
+  A boot that created the operator or waited in `:first_run` records
+  `first_run.completed_at`, and `CustyardWeb.Plugs.BootGate` keeps the
+  checklist on `GET /` until the next restart. A boot that found its
+  operators leaves it nil, so `/` is the landing page.
 
   Options: `env:` (required), `schema:` (the `migrate/2` result),
   `recheck_every_ms:`, and `deliver:` (a function taking a `Swoosh.Email`,
@@ -155,6 +164,7 @@ defmodule Custyard.Boot.FirstRun do
     state = %{
       env: Keyword.fetch!(opts, :env),
       schema: Keyword.get(opts, :schema),
+      created?: false,
       recheck_every_ms: Keyword.get(opts, :recheck_every_ms, @recheck_every_ms),
       deliver: Keyword.get(opts, :deliver, &Custyard.Mailer.deliver/1)
     }
@@ -165,28 +175,29 @@ defmodule Custyard.Boot.FirstRun do
   @impl true
   def handle_continue(:run, state) do
     if state.schema, do: step(:schema, :ok, schema_detail(state.schema))
+    open_gate()
 
     created = bootstrap_operator(state.env)
     welcome_mail(created, state)
-    {:noreply, decide(state)}
+    {:noreply, decide(%{state | created?: created != nil})}
   end
 
   @impl true
   def handle_info(:recheck, state), do: {:noreply, decide(state)}
 
+  # Step 0 of the moduledoc. Dev, test and a restarted FirstRun are never in
+  # :starting and skip this.
+  defp open_gate do
+    if State.mode() == :starting do
+      mode = if count_operators() > 0, do: :ready, else: :first_run
+      State.update(&%{&1 | mode: mode})
+      Log.info(:boot_mode_decided, boot_mode: mode)
+    end
+  end
+
   defp decide(state) do
     if count_operators() > 0 do
-      if State.get().first_run.completed_at == nil do
-        previous = State.mode()
-
-        State.update(fn s ->
-          %{s | mode: :ready, first_run: %{s.first_run | completed_at: DateTime.utc_now()}}
-        end)
-
-        step(:sign_in, :ok, "an operator can sign in")
-        if previous != :ready, do: Log.info(:boot_mode_decided, boot_mode: :ready)
-        if previous == :first_run, do: Log.info(:boot_first_run_completed)
-      end
+      finish(state, State.mode())
     else
       if State.mode() != :first_run do
         State.update(&%{&1 | mode: :first_run})
@@ -197,6 +208,21 @@ defmodule Custyard.Boot.FirstRun do
     end
 
     state
+  end
+
+  # Runs once per process: no recheck is scheduled after it. A supervisor
+  # restart finds the operator in place and completed_at already set.
+  defp finish(state, previous) do
+    first_run? = state.created? or previous == :first_run
+
+    State.update(fn s ->
+      completed_at = s.first_run.completed_at || if(first_run?, do: DateTime.utc_now())
+      %{s | mode: :ready, first_run: %{s.first_run | completed_at: completed_at}}
+    end)
+
+    step(:sign_in, :ok, "an operator can sign in")
+    if previous != :ready, do: Log.info(:boot_mode_decided, boot_mode: :ready)
+    if first_run?, do: Log.info(:boot_first_run_completed)
   end
 
   # Returns the operator this boot created, or nil.
