@@ -4,13 +4,15 @@ defmodule Custyard.Boot.EnvTest do
   alias Custyard.Boot.Env
 
   @secret String.duplicate("s", 64)
+  @credential_key :crypto.strong_rand_bytes(32)
 
   @minimal %{
     "SECRET_KEY_BASE" => @secret,
     "PHX_HOST" => "custyard.example.com",
     "MAIL_ADAPTER" => "lettermint",
     "LETTERMINT_PROJECT_TOKEN" => "lm_project_token",
-    "OPERATOR_EMAIL" => "ops@example.com"
+    "OPERATOR_EMAIL" => "ops@example.com",
+    "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(@credential_key)
   }
 
   defp prod(env), do: Env.read(env, config_env: :prod)
@@ -29,13 +31,14 @@ defmodule Custyard.Boot.EnvTest do
       %{env: prod(%{})}
     end
 
-    test "reports exactly the three required variables as missing", %{env: env} do
+    test "reports exactly the four required variables as missing", %{env: env} do
       assert env.verdict == :unconfigured
 
       assert kinds(env) == [
                {"SECRET_KEY_BASE", :missing},
                {"PHX_HOST", :missing},
-               {"MAIL_ADAPTER", :missing}
+               {"MAIL_ADAPTER", :missing},
+               {"CREDENTIAL_ENCRYPTION_KEY", :missing}
              ]
     end
 
@@ -92,11 +95,9 @@ defmodule Custyard.Boot.EnvTest do
              }
     end
 
-    test "derives a deterministic 32-byte credential key with a warning", %{env: env} do
-      %{current: key, previous: []} = env.settings.credential_keys
-      assert byte_size(key) == 32
-      assert prod(@minimal).settings.credential_keys.current == key
-      assert warning?(env, "CREDENTIAL_ENCRYPTION_KEY", "derived from SECRET_KEY_BASE")
+    test "decodes the credential key without warnings", %{env: env} do
+      assert env.settings.credential_keys == %{current: @credential_key, previous: []}
+      refute warning?(env, "CREDENTIAL_ENCRYPTION_KEY", "")
     end
 
     test "turns notifications on with a noreply sender", %{env: env} do
@@ -110,7 +111,7 @@ defmodule Custyard.Boot.EnvTest do
 
     test "lists the present names sorted", %{env: env} do
       assert env.present == Enum.sort(Map.keys(@minimal))
-      assert env.variable_count == 5
+      assert env.variable_count == 6
     end
   end
 
@@ -146,7 +147,8 @@ defmodule Custyard.Boot.EnvTest do
       env = prod(Map.put(@minimal, "SECRET_KEY_BASE", "short"))
       assert [%{kind: :malformed}] = problems_for(env, "SECRET_KEY_BASE")
       assert env.settings.secret_key_base == nil
-      assert env.settings.credential_keys.current == nil
+      # The credential key does not depend on SECRET_KEY_BASE.
+      assert env.settings.credential_keys.current == @credential_key
     end
   end
 
@@ -363,6 +365,23 @@ defmodule Custyard.Boot.EnvTest do
   end
 
   describe "CREDENTIAL_ENCRYPTION_KEY" do
+    test "is required in prod and never derived from SECRET_KEY_BASE" do
+      env = prod(Map.delete(@minimal, "CREDENTIAL_ENCRYPTION_KEY"))
+      assert env.verdict == :unconfigured
+      assert [%{kind: :missing, detail: detail}] = problems_for(env, "CREDENTIAL_ENCRYPTION_KEY")
+      assert detail =~ "encrypts stored tenant credentials"
+      assert detail =~ "openssl rand -base64 32"
+      assert env.settings.credential_keys == %{current: nil, previous: []}
+      assert env.warnings == []
+    end
+
+    test "is not required outside prod" do
+      env = Env.read(Map.delete(@minimal, "CREDENTIAL_ENCRYPTION_KEY"), config_env: :dev)
+      assert env.verdict == :configured
+      assert problems_for(env, "CREDENTIAL_ENCRYPTION_KEY") == []
+      assert env.settings.credential_keys == %{current: nil, previous: []}
+    end
+
     test "a 65-byte hex value with a trailing newline reports both facts" do
       hex = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
       env = prod(Map.put(@minimal, "CREDENTIAL_ENCRYPTION_KEY", hex <> "\n"))
@@ -374,14 +393,16 @@ defmodule Custyard.Boot.EnvTest do
       assert detail =~ "trailing newline"
       assert detail =~ "openssl rand -base64 32"
       assert env.settings.credential_keys.current == nil
-      refute warning?(env, "CREDENTIAL_ENCRYPTION_KEY", "derived")
+      # Only the trim warning; nothing stands in for the malformed key.
+      assert warning?(env, "CREDENTIAL_ENCRYPTION_KEY", "trimmed")
+      assert Enum.count(env.warnings, &(&1.variable == "CREDENTIAL_ENCRYPTION_KEY")) == 1
     end
 
-    test "a valid key wins over derivation" do
+    test "a valid key is decoded to its 32 bytes" do
       key = :crypto.strong_rand_bytes(32)
       env = prod(Map.put(@minimal, "CREDENTIAL_ENCRYPTION_KEY", Base.encode64(key)))
       assert env.settings.credential_keys.current == key
-      refute warning?(env, "CREDENTIAL_ENCRYPTION_KEY", "derived")
+      refute warning?(env, "CREDENTIAL_ENCRYPTION_KEY", "")
     end
 
     test "previous key is decoded into the list" do
@@ -491,7 +512,7 @@ defmodule Custyard.Boot.EnvTest do
         )
 
       assert env.near_misses == []
-      assert env.variable_count == 11
+      assert env.variable_count == 12
     end
   end
 

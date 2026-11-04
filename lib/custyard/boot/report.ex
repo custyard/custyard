@@ -43,12 +43,16 @@ defmodule Custyard.Boot.Report do
 
   @doc """
   Copy-paste environment block for the doctor card: one line per required
-  variable that is still missing, with a freshly generated SECRET_KEY_BASE.
+  variable that is still missing, with a freshly generated SECRET_KEY_BASE and
+  CREDENTIAL_ENCRYPTION_KEY.
   """
   @spec paste_block(Env.t()) :: String.t()
   def paste_block(%Env{settings: settings}) do
     [
       if(is_nil(settings.secret_key_base), do: "SECRET_KEY_BASE=#{generate_secret()}"),
+      if(is_nil(settings.credential_keys.current),
+        do: "CREDENTIAL_ENCRYPTION_KEY=#{generate_credential_key()}"
+      ),
       if(is_nil(settings.host), do: "PHX_HOST=#{@placeholder_host}"),
       if(is_nil(settings.operator_email), do: "OPERATOR_EMAIL=#{@placeholder_email}"),
       mail_lines(settings.mail)
@@ -182,4 +186,5 @@ defmodule Custyard.Boot.Report do
   end
 
   defp generate_secret, do: Base.encode64(:crypto.strong_rand_bytes(64))
+  defp generate_credential_key, do: Base.encode64(:crypto.strong_rand_bytes(32))
 end

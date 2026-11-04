@@ -12,7 +12,8 @@ defmodule Custyard.Boot.RuntimeConfigTest do
     "PHX_HOST" => "custyard.example.com",
     "MAIL_ADAPTER" => "lettermint",
     "LETTERMINT_PROJECT_TOKEN" => "lm_project_token",
-    "OPERATOR_EMAIL" => "ops@example.com"
+    "OPERATOR_EMAIL" => "ops@example.com",
+    "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32))
   }
 
   setup do

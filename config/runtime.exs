@@ -150,8 +150,9 @@ config :custyard,
 # Encryption key for stored third-party credentials such as IMAP channel
 # passwords (Custyard.Credentials), Base64 of 32 bytes. Outside production
 # an explicit key is read here; a malformed one is ignored (config/test.exs
-# sets a test key). Production takes it, or the one derived from
-# SECRET_KEY_BASE, from Custyard.Boot.Env below.
+# sets a test key). Production requires it and takes it from Custyard.Boot.Env
+# below; it is never derived from SECRET_KEY_BASE, so the two rotate
+# independently.
 if config_env() != :prod do
   parse_credential_key = fn encoded ->
     case Base.decode64(String.trim(encoded)) do

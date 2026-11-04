@@ -421,6 +421,7 @@ defmodule Custyard.ReleaseTest do
         Custyard.Boot.Env.read(
           %{
             "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32)),
             "PHX_HOST" => "custyard.example.com",
             "MAIL_ADAPTER" => "local"
           },
@@ -468,6 +469,7 @@ defmodule Custyard.ReleaseTest do
         Custyard.Boot.Env.read(
           %{
             "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32)),
             "PHX_HOST" => "custyard.example.com",
             "MAIL_ADAPTER" => "local"
           },

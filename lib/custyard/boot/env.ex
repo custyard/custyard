@@ -5,15 +5,13 @@ defmodule Custyard.Boot.Env do
   `config/runtime.exs` calls `read/2` and configures whatever is valid; the
   verdict decides which supervision tree `Custyard.Application` starts. This
   module is the only place variable names are spelled out, so it depends on
-  nothing started: Elixir stdlib, `:crypto`, and `Plug.Crypto.KeyGenerator`.
+  nothing started: Elixir stdlib and `:crypto`.
 
   Every value is trimmed of surrounding whitespace and newlines (with a
   warning). A value wrapped in matching quote characters is reported as
   malformed and otherwise treated as unset; silently stripping quotes would
   hide the next problem.
   """
-
-  alias Plug.Crypto.KeyGenerator
 
   defstruct verdict: :configured,
             problems: [],
@@ -503,8 +501,16 @@ defmodule Custyard.Boot.Env do
   defp credential_keys(acc) do
     {acc, current} =
       case get(acc, "CREDENTIAL_ENCRYPTION_KEY") do
-        nil -> derived_credential_key(acc)
-        encoded -> decode_credential_key(acc, "CREDENTIAL_ENCRYPTION_KEY", encoded)
+        nil ->
+          {require(
+             acc,
+             "CREDENTIAL_ENCRYPTION_KEY",
+             "encrypts stored tenant credentials such as IMAP passwords and Lettermint tokens; " <>
+               "generate with `openssl rand -base64 32`"
+           ), nil}
+
+        encoded ->
+          decode_credential_key(acc, "CREDENTIAL_ENCRYPTION_KEY", encoded)
       end
 
     {acc, previous} =
@@ -514,22 +520,6 @@ defmodule Custyard.Boot.Env do
       end
 
     put(acc, :credential_keys, %{current: current, previous: List.wrap(previous)})
-  end
-
-  defp derived_credential_key(acc) do
-    case acc.settings.secret_key_base do
-      nil ->
-        {acc, nil}
-
-      secret ->
-        key = KeyGenerator.generate(secret, "credential_encryption", length: 32)
-
-        {warn(
-           acc,
-           "CREDENTIAL_ENCRYPTION_KEY",
-           "derived from SECRET_KEY_BASE; set CREDENTIAL_ENCRYPTION_KEY to rotate it independently"
-         ), key}
-    end
   end
 
   defp decode_credential_key(acc, name, encoded) do

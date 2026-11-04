@@ -4,6 +4,7 @@ defmodule Custyard.Boot.ReportTest do
   alias Custyard.Boot.{Env, Report}
 
   @canary "CANARY-" <> String.duplicate("z", 60)
+  @credential_key Base.encode64(:crypto.strong_rand_bytes(32))
 
   @full %{
     "SECRET_KEY_BASE" => @canary,
@@ -33,12 +34,13 @@ defmodule Custyard.Boot.ReportTest do
       assert text =~ "remote libSQL · DATABASE_URL is set, so remote libSQL"
     end
 
-    test "zero environment shows the three problems and the SQLite default" do
+    test "zero environment shows the four problems and the SQLite default" do
       text = Report.to_text(Env.read(%{}, config_env: :prod))
 
-      assert text =~ "✗  SECRET_KEY_BASE  missing"
+      assert text =~ "✗  SECRET_KEY_BASE            missing"
       assert text =~ "✗  PHX_HOST"
       assert text =~ "✗  MAIL_ADAPTER"
+      assert text =~ "✗  CREDENTIAL_ENCRYPTION_KEY  missing"
       assert text =~ "SQLite file /data/custyard.db"
       assert text =~ "0 visible"
       assert text =~ "Near misses  none"
@@ -49,6 +51,7 @@ defmodule Custyard.Boot.ReportTest do
         Env.read(
           %{
             "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "CREDENTIAL_ENCRYPTION_KEY" => @credential_key,
             "PHX_HOST" => "custyard.example.com",
             "MAIL_ADAPTER" => "local"
           },
@@ -63,7 +66,7 @@ defmodule Custyard.Boot.ReportTest do
 
       assert text =~ "Custyard configuration is complete"
       assert text =~ "⚠  MAIL_ADAPTER"
-      assert text =~ "⚠  CREDENTIAL_ENCRYPTION_KEY"
+      refute text =~ "⚠  CREDENTIAL_ENCRYPTION_KEY"
       assert text =~ "Image        custyard 0.9.3 · git 7f3a2c1 · built 2026-11-03 14:02:00 UTC"
       assert text =~ "Booted       2026-11-03 21:14:08 UTC"
       refute text =~ "✗"
@@ -71,13 +74,15 @@ defmodule Custyard.Boot.ReportTest do
   end
 
   describe "paste_block/1" do
-    test "zero environment lists all five lines with a fresh secret" do
+    test "zero environment lists all six lines with fresh secrets" do
       block = Report.paste_block(Env.read(%{}, config_env: :prod))
       lines = String.split(block, "\n")
 
-      assert ["SECRET_KEY_BASE=" <> secret | rest] = lines
+      assert ["SECRET_KEY_BASE=" <> secret, "CREDENTIAL_ENCRYPTION_KEY=" <> key | rest] = lines
       assert {:ok, bytes} = Base.decode64(secret)
       assert byte_size(bytes) == 64
+      assert {:ok, key_bytes} = Base.decode64(key)
+      assert byte_size(key_bytes) == 32
 
       assert rest == [
                "PHX_HOST=‹custyard.example.com›",
@@ -89,11 +94,35 @@ defmodule Custyard.Boot.ReportTest do
       refute Report.paste_block(Env.read(%{}, config_env: :prod)) == block
     end
 
+    test "generates a credential key only while it is missing or malformed" do
+      missing = Report.paste_block(Env.read(%{}, config_env: :prod))
+      assert [_, "CREDENTIAL_ENCRYPTION_KEY=" <> generated | _] = String.split(missing, "\n")
+      assert {:ok, bytes} = Base.decode64(generated)
+      assert byte_size(bytes) == 32
+      refute Report.paste_block(Env.read(%{}, config_env: :prod)) =~ generated
+
+      malformed =
+        Report.paste_block(
+          Env.read(%{"CREDENTIAL_ENCRYPTION_KEY" => "not-base64"}, config_env: :prod)
+        )
+
+      assert malformed =~ "CREDENTIAL_ENCRYPTION_KEY="
+
+      set =
+        Report.paste_block(
+          Env.read(%{"CREDENTIAL_ENCRYPTION_KEY" => @credential_key}, config_env: :prod)
+        )
+
+      refute set =~ "CREDENTIAL_ENCRYPTION_KEY"
+      assert set =~ "SECRET_KEY_BASE="
+    end
+
     test "omits variables that are already set" do
       env =
         Env.read(
           %{
             "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "CREDENTIAL_ENCRYPTION_KEY" => @credential_key,
             "MAIL_ADAPTER" => "mailgun",
             "MAILGUN_API_KEY" => "k"
           },
@@ -112,6 +141,7 @@ defmodule Custyard.Boot.ReportTest do
         Env.read(
           %{
             "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "CREDENTIAL_ENCRYPTION_KEY" => @credential_key,
             "PHX_HOST" => "custyard.example.com",
             "OPERATOR_EMAIL" => "ops@example.com",
             "MAIL_ADAPTER" => "local"

@@ -326,10 +326,11 @@ during boot.
 
 ## Reducing the environment
 
-Target for a new install: four variables plus one mail credential.
+Target for a new install: five variables plus one mail credential.
 
 ```
 SECRET_KEY_BASE=…
+CREDENTIAL_ENCRYPTION_KEY=…
 PHX_HOST=custyard.example.com
 OPERATOR_EMAIL=you@example.com
 MAIL_ADAPTER=lettermint
@@ -341,7 +342,7 @@ LETTERMINT_PROJECT_TOKEN=…
 | `EMAIL_FROM_ADDRESS` defaults to `noreply@PHX_HOST`, `EMAIL_FROM_NAME` to `Custyard` | sender still needs provider verification; the card says so |
 | `OPERATOR_NOTIFICATION_EMAIL` defaults to `OPERATOR_EMAIL`, then the first super_admin | none |
 | `EMAIL_NOTIFICATIONS_ENABLED` defaults on unless `MAIL_ADAPTER=local` | set `false` for silence |
-| `CREDENTIAL_ENCRYPTION_KEY` derived from `SECRET_KEY_BASE` (`Plug.Crypto.KeyGenerator`) when unset; explicit value wins; `_PREVIOUS` rotation unchanged | rotating the base secret rotates this key too; same mechanism as the session and LiveView salts; removes the malformed-key failure class |
+| `CREDENTIAL_ENCRYPTION_KEY` stays required and random (`openssl rand -base64 32`); the doctor card generates one in its paste block; `_PREVIOUS` rotation unchanged | deriving it from `SECRET_KEY_BASE` was rejected because it couples two secrets with different rotation needs: rotating the session secret would silently make every stored tenant credential undecryptable |
 | `BUNNY_DATABASE_URL` / `BUNNY_DATABASE_AUTH_TOKEN` accepted as fallbacks for `DATABASE_URL` / `TURSO_AUTH_TOKEN` | already proposed in docs/ops/bunny-production-fly-staging.md |
 | `PHX_HOST` required in prod; falls back to `FLY_APP_NAME.fly.dev` on Fly | replaces the silent `localhost` default |
 | `postgres://` on the SQLite build is a doctor problem ("image built for SQLite/libSQL") | compiled Postgres adapter unchanged |
@@ -413,7 +414,7 @@ the deployment notes.
 
 ```
 docker compose up, empty environment      →  doctor card: unconfigured
-set the five variables from the card      →  first-run card: schema, operator,
+set the six variables from the card       →  first-run card: schema, operator,
                                              welcome mail accepted (or the 422)
 open the welcome mail, sign in            →  dashboard; /operator/system green
 mail the support address, reply           →  conversation appears; reply lands

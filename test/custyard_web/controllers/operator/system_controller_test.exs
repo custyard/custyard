@@ -38,6 +38,7 @@ defmodule CustyardWeb.Operator.SystemControllerTest do
       Env.read(
         %{
           "SECRET_KEY_BASE" => @canary,
+          "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32)),
           "PHX_HOST" => "custyard.example.com",
           "MAIL_ADAPTER" => "lettermint",
           "LETTERMINT_API_KEY" => "lm_" <> @canary,
@@ -79,7 +80,6 @@ defmodule CustyardWeb.Operator.SystemControllerTest do
     # Warnings from the env, by name.
     assert body =~ "LETTERMINT_API_KEY"
     assert body =~ "deprecated name"
-    assert body =~ "CREDENTIAL_ENCRYPTION_KEY"
     # Database facts: probe facts plus live counts.
     assert body =~ "SQLite file at /data/custyard.db"
     assert body =~ ~r/\d+ migrations/

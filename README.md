@@ -63,11 +63,12 @@ mix dev.create_operator --email you@example.com
 
 ### Production (Docker / Fly)
 
-A new install needs five variables. SQLite lives on the `/data` volume, so
+A new install needs six variables. SQLite lives on the `/data` volume, so
 there are no database variables.
 
 ```bash
 SECRET_KEY_BASE=              # mix phx.gen.secret
+CREDENTIAL_ENCRYPTION_KEY=    # openssl rand -base64 32
 PHX_HOST=custyard.example.com
 OPERATOR_EMAIL=you@example.com
 MAIL_ADAPTER=lettermint       # or smtp | postmark | sendgrid | mailgun
@@ -75,9 +76,10 @@ LETTERMINT_PROJECT_TOKEN=     # the credential for the chosen adapter; see .env.
 ```
 
 On Fly, `PHX_HOST` falls back to `FLY_APP_NAME.fly.dev`. `CREDENTIAL_ENCRYPTION_KEY`
-is derived from `SECRET_KEY_BASE` unless set explicitly. `EMAIL_FROM_ADDRESS`
-defaults to `noreply@PHX_HOST` and must be a sender the provider has verified;
-otherwise the welcome mail and the login links fail the same way.
+encrypts stored tenant credentials; rotate it by moving the old value to
+`CREDENTIAL_ENCRYPTION_KEY_PREVIOUS`. `EMAIL_FROM_ADDRESS` defaults to
+`noreply@PHX_HOST` and must be a sender the provider has verified; otherwise
+the welcome mail and the login links fail the same way.
 
 #### What happens on boot
 
@@ -180,7 +182,7 @@ GIT_SHA=$(git rev-parse HEAD) BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker c
 ```
 
 Then open http://localhost:4000. With no environment set it shows the doctor
-card; add the five variables to `docker-compose.yml` and run it again.
+card; add the six variables to `docker-compose.yml` and run it again.
 
 ## Phoenix.new / Remote VM Setup
 

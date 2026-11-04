@@ -72,10 +72,12 @@ defmodule CustyardWeb.Plugs.BootGateTest do
       assert body =~ "2026-11-03 21:14:08 UTC"
       assert body =~ "custyard "
       assert body =~ "SQLite file at /data/custyard.db"
-      # Paste block generates a fresh secret only for what is missing.
+      # Paste block generates a fresh secret only for what is missing or
+      # malformed: the quoted key gets a replacement, the valid base does not.
       assert body =~ ~s(data-testid="boot-paste-block")
       assert body =~ "PHX_HOST=‹custyard.example.com›"
       refute body =~ "SECRET_KEY_BASE="
+      assert body =~ "CREDENTIAL_ENCRYPTION_KEY="
       assert body =~ "MAIL_ADAPTER=lettermint"
       # Nothing from the environment's values leaks.
       refute body =~ @canary
@@ -95,6 +97,7 @@ defmodule CustyardWeb.Plugs.BootGateTest do
       body = html_response(get(conn, "/operator/login"), 503)
 
       assert body =~ "SECRET_KEY_BASE="
+      assert body =~ "CREDENTIAL_ENCRYPTION_KEY="
       assert body =~ "PHX_HOST=‹custyard.example.com›"
       assert body =~ "OPERATOR_EMAIL=‹you@example.com›"
       assert body =~ "LETTERMINT_PROJECT_TOKEN=‹project token›"
