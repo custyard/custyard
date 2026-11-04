@@ -183,6 +183,10 @@ defmodule Custyard.Boot.Probe do
   end
 
   defp connect({:turso, url, token}) do
+    # `bin/doctor` runs under `bin/custyard eval`, where no application has been
+    # started; Mint needs :ssl for the HTTPS connection. A no-op in the app.
+    {:ok, _} = Application.ensure_all_started(:ssl)
+
     opts = [
       turso_url: url,
       turso_auth_token: token,
