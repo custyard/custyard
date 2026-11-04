@@ -308,7 +308,7 @@ defmodule Custyard.Boot.FirstRun do
   defp provider_text(body) when is_map(body) do
     [
       body["message"],
-      get_in(body, ["error", "message"]),
+      nested_message(body["error"]),
       body["error"],
       body["detail"],
       body["errors"]
@@ -322,6 +322,11 @@ defmodule Custyard.Boot.FirstRun do
 
   defp provider_text(body) when is_binary(body), do: Log.provider_message(body)
   defp provider_text(body), do: Log.provider_message(inspect(body))
+
+  # `{"error": "Invalid token"}` is as common as `{"error": {"message": ...}}`;
+  # get_in/2 would raise on the string.
+  defp nested_message(%{} = error), do: error["message"]
+  defp nested_message(_other), do: nil
 
   defp step(key, status, detail) do
     State.put_step(key, status, detail)

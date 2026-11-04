@@ -26,6 +26,7 @@ defmodule Custyard.Boot.ProbeTest do
             "eacces",
             "erofs",
             "enotdir",
+            "eexist",
             "enoent",
             "permission denied"
           ] do

@@ -278,6 +278,9 @@ defmodule Custyard.Boot.FirstRunTest do
       assert FirstRun.provider_error({401, %{"error" => %{"message" => "token for x@y.z"}}}) ==
                {401, "token for [redacted]"}
 
+      assert FirstRun.provider_error({401, %{"error" => "Invalid token"}}) ==
+               {401, "Invalid token"}
+
       assert FirstRun.provider_error({500, "<html>oops</html>"}) == {500, "<html>oops</html>"}
       assert FirstRun.provider_error(:smtp_down) == {nil, "smtp_down"}
 

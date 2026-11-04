@@ -511,7 +511,8 @@ defmodule Custyard.ReleaseTest do
     test "reports an unopenable path with the category and the driver error" do
       assert {1, stdout, ""} = run_doctor(["--probe-database", "/dev/null/doctor.db"])
       assert stdout =~ "failed  not_writable: the SQLite file cannot be opened"
-      assert stdout =~ "error   enotdir"
+      # macOS reports enotdir for a parent that is not a directory, Linux eexist.
+      assert stdout =~ ~r/error   e(notdir|exist)/
       refute stdout =~ "custyard_doctor_probe"
     end
 

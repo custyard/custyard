@@ -247,7 +247,8 @@ defmodule Custyard.Boot.Probe do
     {:error, category, detail(category), if(is_exception(error), do: error, else: nil)}
   end
 
-  @posix_not_writable ~w(eacces erofs enotdir enoent eperm eisdir enospc eio)
+  # Linux SQLite reports a parent that is not a directory as eexist; macOS as enotdir.
+  @posix_not_writable ~w(eacces erofs enotdir eexist enoent eperm eisdir enospc eio)
 
   defp sqlite_category(message) do
     text = String.downcase(message)
