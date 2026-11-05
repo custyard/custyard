@@ -111,7 +111,7 @@ defmodule Custyard.Application do
 
   defp probe_and_migrate(env) do
     with :ok <- Probe.run(env) do
-      migrate()
+      migrate(env.settings.skip_migrations)
     end
   end
 
@@ -130,8 +130,8 @@ defmodule Custyard.Application do
 
   # Migrations run here, synchronously, on a temporary Repo: see the
   # moduledoc of Custyard.Boot.FirstRun for why not an Ecto.Migrator child.
-  defp migrate do
-    case FirstRun.migrate(Custyard.Repo, skip: System.get_env("SKIP_MIGRATIONS") == "true") do
+  defp migrate(skip?) do
+    case FirstRun.migrate(Custyard.Repo, skip: skip?) do
       {:ok, schema} ->
         {:ok, schema}
 

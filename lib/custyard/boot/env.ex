@@ -141,6 +141,7 @@ defmodule Custyard.Boot.Env do
       |> credential_keys()
       |> notifications()
       |> acknowledgments()
+      |> skip_migrations()
       |> imap()
       |> directories_and_platform()
 
@@ -562,6 +563,9 @@ defmodule Custyard.Boot.Env do
     |> update_in([:settings], &Map.delete(&1, :notifications_enabled))
     |> put(:notifications, notifications)
   end
+
+  # Read by Custyard.Application before the migrations run.
+  defp skip_migrations(acc), do: boolean(acc, "SKIP_MIGRATIONS", false, :skip_migrations)
 
   defp acknowledgments(acc) do
     acc

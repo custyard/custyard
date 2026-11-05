@@ -441,6 +441,15 @@ defmodule Custyard.Boot.EnvTest do
   end
 
   describe "notifications" do
+    test "SKIP_MIGRATIONS is a trimmed boolean, false by default" do
+      assert prod(@minimal).settings.skip_migrations == false
+      assert prod(Map.put(@minimal, "SKIP_MIGRATIONS", " true ")).settings.skip_migrations
+
+      env = prod(Map.put(@minimal, "SKIP_MIGRATIONS", "yes"))
+      assert [%{kind: :malformed}] = problems_for(env, "SKIP_MIGRATIONS")
+      assert env.settings.skip_migrations == false
+    end
+
     test "EMAIL_NOTIFICATIONS_ENABLED=false turns them off" do
       env = prod(Map.put(@minimal, "EMAIL_NOTIFICATIONS_ENABLED", "false"))
       assert env.settings.notifications.enabled == false
