@@ -120,6 +120,7 @@ defmodule CustyardWeb.Plugs.BootGateTest do
       unconfigured()
 
       assert json_response(get(conn, "/api/health/live"), 200) == %{"status" => "live"}
+      assert json_response(get(build_conn(), "/api/health/live/"), 200) == %{"status" => "live"}
 
       assert json_response(get(build_conn(), "/api/health"), 503) == %{
                "status" => "setup_required",

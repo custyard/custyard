@@ -32,7 +32,9 @@ defmodule CustyardWeb.Plugs.BootGate do
   alias Custyard.Boot.State
   alias CustyardWeb.BootController
 
-  @health_paths ["/api/health", "/api/health/live"]
+  # Segments, not the raw path: the router ignores a trailing slash, so a
+  # checker configured with `/api/health/live/` must pass here too.
+  @health_paths [~w(api health), ~w(api health live)]
 
   @impl true
   def init(opts), do: opts
@@ -60,7 +62,7 @@ defmodule CustyardWeb.Plugs.BootGate do
 
   defp completed_first_run(conn), do: conn
 
-  defp doctor(%Plug.Conn{request_path: path} = conn, _action, _status)
+  defp doctor(%Plug.Conn{path_info: path} = conn, _action, _status)
        when path in @health_paths do
     conn
   end
