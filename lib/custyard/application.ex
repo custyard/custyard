@@ -15,7 +15,7 @@ defmodule Custyard.Application do
     Custyard.Log.install!()
 
     # Fail before starting the Repo when Fly's persistent volume is missing.
-    Custyard.Storage.validate_fly_storage!()
+    Custyard.Storage.validate!()
 
     # Report crashed-process and LiveView exceptions to Sentry. These never pass
     # through Sentry.PlugCapture (they run off the request path), so the logger

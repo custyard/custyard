@@ -6,7 +6,8 @@ defmodule Custyard.Turso.RuntimeConfigTest do
 
   @config Path.expand("../../../config/config.exs", __DIR__)
   @runtime_config Path.expand("../../../config/runtime.exs", __DIR__)
-  @env_vars ~w(DATABASE_URL TURSO_AUTH_TOKEN DATABASE_PATH MAIL_ADAPTER SECRET_KEY_BASE)
+  @database_vars ~w(DATABASE_PROVIDER DATABASE_URL TURSO_AUTH_TOKEN DATABASE_PATH BUNNY_DATABASE_URL BUNNY_DATABASE_AUTH_TOKEN)
+  @env_vars @database_vars ++ ~w(MAIL_ADAPTER SECRET_KEY_BASE)
 
   setup do
     saved = Map.new(@env_vars, &{&1, System.get_env(&1)})
@@ -18,7 +19,7 @@ defmodule Custyard.Turso.RuntimeConfigTest do
       end)
     end)
 
-    Enum.each(~w(DATABASE_URL TURSO_AUTH_TOKEN DATABASE_PATH), &System.delete_env/1)
+    Enum.each(@database_vars, &System.delete_env/1)
     # The settings prod refuses to boot without.
     System.put_env("MAIL_ADAPTER", "local")
     System.put_env("SECRET_KEY_BASE", String.duplicate("k", 64))
@@ -81,5 +82,76 @@ defmodule Custyard.Turso.RuntimeConfigTest do
     config = prod_repo_config()
     assert config[:database] == "/data/custyard.db"
     refute Keyword.has_key?(config, :turso_url)
+  end
+
+  test "Bunny aliases select v2 provider without a SQLite fallback" do
+    System.put_env("BUNNY_DATABASE_URL", "https://test.lite.bunnydb.net")
+    System.put_env("BUNNY_DATABASE_AUTH_TOKEN", "private-test-token")
+    config = prod_repo_config()
+    assert config[:turso_provider] == :bunny
+    assert config[:turso_url] == "https://test.lite.bunnydb.net"
+    assert config[:turso_auth_token] == "private-test-token"
+    refute Keyword.has_key?(config, :database)
+  end
+
+  test "explicit Bunny provider accepts existing names and identical aliases" do
+    System.put_env("DATABASE_PROVIDER", "bunny")
+    System.put_env("DATABASE_URL", "libsql://test.lite.bunnydb.net")
+    System.put_env("TURSO_AUTH_TOKEN", "private-test-token")
+    assert prod_repo_config()[:turso_provider] == :bunny
+    System.put_env("BUNNY_DATABASE_URL", "libsql://test.lite.bunnydb.net")
+    System.put_env("BUNNY_DATABASE_AUTH_TOKEN", "private-test-token")
+    assert prod_repo_config()[:turso_provider] == :bunny
+  end
+
+  test "Bunny settings never silently start a local database" do
+    System.put_env("DATABASE_PROVIDER", "bunny")
+    assert_raise RuntimeError, ~r/is required/, &prod_repo_config/0
+    System.put_env("BUNNY_DATABASE_URL", "https://test.lite.bunnydb.net")
+    assert_raise RuntimeError, ~r/BUNNY_DATABASE_AUTH_TOKEN/, &prod_repo_config/0
+    System.put_env("BUNNY_DATABASE_AUTH_TOKEN", "")
+    assert_raise RuntimeError, ~r/BUNNY_DATABASE_AUTH_TOKEN/, &prod_repo_config/0
+  end
+
+  test "conflicting aliases reject configuration without exposing values" do
+    System.put_env("BUNNY_DATABASE_URL", "https://test.lite.bunnydb.net")
+    System.put_env("BUNNY_DATABASE_AUTH_TOKEN", "private-test-token")
+    System.put_env("DATABASE_URL", "libsql://other.invalid")
+    error = assert_raise RuntimeError, ~r/BUNNY_DATABASE_URL conflicts/, &prod_repo_config/0
+    refute Exception.message(error) =~ "other.invalid"
+    System.delete_env("DATABASE_URL")
+    System.put_env("TURSO_AUTH_TOKEN", "another-private-token")
+
+    error =
+      assert_raise RuntimeError, ~r/BUNNY_DATABASE_AUTH_TOKEN conflicts/, &prod_repo_config/0
+
+    refute Exception.message(error) =~ "private-token"
+  end
+
+  test "provider choice rejects stale settings and unsafe Bunny URLs" do
+    System.put_env("DATABASE_PROVIDER", "turso")
+    System.put_env("BUNNY_DATABASE_URL", "https://test.lite.bunnydb.net")
+    assert_raise RuntimeError, ~r/conflict/, &prod_repo_config/0
+    System.put_env("DATABASE_PROVIDER", "bunny")
+    System.put_env("BUNNY_DATABASE_AUTH_TOKEN", "test-token")
+
+    for url <- [
+          "http://test.invalid",
+          "libsql://test.invalid?tls=0",
+          "https://user:pass@test.invalid"
+        ] do
+      System.put_env("BUNNY_DATABASE_URL", url)
+      assert_raise RuntimeError, ~r/Bunny database URL/, &prod_repo_config/0
+    end
+  end
+
+  test "explicit remote provider requires a URL and tokens cannot select SQLite" do
+    System.put_env("DATABASE_PROVIDER", "turso")
+    assert_raise RuntimeError, ~r/is required/, &prod_repo_config/0
+    System.delete_env("DATABASE_PROVIDER")
+    System.put_env("TURSO_AUTH_TOKEN", "orphan-token")
+    assert_raise RuntimeError, ~r/without DATABASE_URL/, &prod_repo_config/0
+    System.put_env("DATABASE_PROVIDER", "sqlite")
+    assert_raise RuntimeError, ~r/conflicts/, &prod_repo_config/0
   end
 end

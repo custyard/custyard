@@ -1,6 +1,6 @@
 defmodule Custyard.Turso.Connection do
   @moduledoc """
-  A `DBConnection` to a Turso (libSQL) database over HTTP.
+  A `DBConnection` to a Turso or Bunny (libSQL) database over HTTP.
 
   It speaks Exqlite's terms to `Ecto.Adapters.SQLite3`'s SQL layer: it takes
   `Exqlite.Query` structs and returns `Exqlite.Result` and `Exqlite.Error`.
@@ -27,6 +27,11 @@ defmodule Custyard.Turso.Connection do
     * `:turso_url` - required. A `libsql://` URL; `?tls=0` selects plain HTTP
       for a local libSQL server. `https://` and `http://` also work.
     * `:turso_auth_token` - the database token, sent as a bearer token.
+    * `:turso_provider` - `:turso` (default, Hrana v3) or `:bunny` (v2).
+      Bunny checks interactive sessions at connect and wraps standalone
+      statements in conditional transactions so reads reach the primary.
+      A reserved savepoint guards explicit transactions: a statement that
+      automatically rolls back cannot make later statements commit alone.
     * `:foreign_keys` - `:on` (default) or `:off`.
     * `:default_transaction_mode` - `:deferred` (default), `:immediate` or
       `:exclusive`, as for `Ecto.Adapters.SQLite3`.
@@ -50,6 +55,8 @@ defmodule Custyard.Turso.Connection do
     :baton,
     :headers,
     :setup,
+    provider: :turso,
+    protocol: :v3,
     default_transaction_mode: :deferred,
     transaction_status: :idle
   ]
@@ -65,6 +72,8 @@ defmodule Custyard.Turso.Connection do
         endpoint: endpoint,
         headers: headers(opts),
         setup: setup(opts),
+        provider: Keyword.get(opts, :turso_provider, :turso),
+        protocol: protocol(opts),
         default_transaction_mode: Keyword.get(opts, :default_transaction_mode, :deferred)
       }
 
@@ -72,7 +81,7 @@ defmodule Custyard.Turso.Connection do
       # connection error, instead of on the first query.
       case run(state, [Protocol.execute("SELECT 1", [])], opts) do
         {:ok, _responses, state} ->
-          {:ok, state}
+          check_interactive(state, opts)
 
         {:error, error, state} ->
           HTTP.close(state.http)
@@ -86,9 +95,31 @@ defmodule Custyard.Turso.Connection do
   end
 
   defp endpoint(opts) do
-    case Protocol.parse_url(Keyword.fetch!(opts, :turso_url)) do
+    case Protocol.parse_url(Keyword.fetch!(opts, :turso_url), protocol(opts)) do
       {:ok, endpoint} -> {:ok, endpoint}
       {:error, message} -> {:error, connection_error(message)}
+    end
+  end
+
+  defp protocol(opts), do: if(Keyword.get(opts, :turso_provider) == :bunny, do: :v2, else: :v3)
+
+  # Bunny's SQL API requires account support for interactive sessions. Fail
+  # before migrations if batons cannot span requests, without writing data.
+  defp check_interactive(%{provider: :turso} = state, _opts), do: {:ok, state}
+
+  defp check_interactive(state, opts) do
+    with {:ok, _, state} <- handle_begin([], state),
+         {:ok, _, state} <- run(state, [Protocol.execute("SELECT 1", [])], opts),
+         {:ok, _, state} <- handle_rollback([], state) do
+      {:ok, state}
+    else
+      {_, _error, state} ->
+        HTTP.close(state.http)
+
+        {:error,
+         connection_error(
+           "Bunny Database requires working interactive sessions (batons); verify database access and session support"
+         )}
     end
   end
 
@@ -155,7 +186,8 @@ defmodule Custyard.Turso.Connection do
     query = put_command(query, opts)
     sql = IO.iodata_to_binary(query.statement)
 
-    with {:ok, args} <- encode_args(params, sql, state),
+    with :ok <- allow_statement(sql, state),
+         {:ok, args} <- encode_args(params, sql, state),
          {:ok, [response], state} <-
            statement(run(state, [Protocol.execute(sql, args)], opts), sql) do
       case Protocol.statement_result(response) do
@@ -167,6 +199,25 @@ defmodule Custyard.Turso.Connection do
       end
     end
   end
+
+  # V2 cannot inspect autocommit after arbitrary SQL transaction control. Only the
+  # DBConnection transaction callbacks may end a transaction; otherwise a
+  # later statement could silently commit after a caller-issued COMMIT.
+  defp allow_statement(sql, %{protocol: :v2} = state) do
+    if Regex.match?(
+         ~r/\A(?:\s|;|\x{FEFF}|--[^\n]*(?:\n|$)|\/\*.*?\*\/)*(?:BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/isu,
+         sql
+       ),
+       do:
+         {:error,
+          %Error{
+            message: "Use Ecto transaction callbacks for Bunny transaction control",
+            statement: sql
+          }, state},
+       else: :ok
+  end
+
+  defp allow_statement(_sql, _state), do: :ok
 
   defp put_command(query, opts) do
     case Keyword.get(opts, :command) do
@@ -305,7 +356,7 @@ defmodule Custyard.Turso.Connection do
   defp transaction(call, statements, trailer, state, opts) do
     requests = Enum.map(statements, &Protocol.execute(&1, []))
 
-    case run(state, requests, opts, trailer) do
+    case run(state, requests, Keyword.put(opts, :turso_transition, true), trailer) do
       {:ok, _responses, state} ->
         {:ok, %Result{command: call, rows: [], columns: [], num_rows: 0}, state}
 
@@ -324,14 +375,53 @@ defmodule Custyard.Turso.Connection do
   # stream is then closed (`:close`) or kept for the transaction (`:keep`),
   # in which case the server also reports whether SQLite is still in it:
   # SQLite rolls back on its own after some errors.
-  defp run(state, statements, opts, trailer \\ nil) do
+  defp run(state, statements, opts, trailer \\ nil)
+
+  defp run(%{provider: :bunny, transaction_status: :idle} = state, statements, opts, trailer)
+       when trailer in [nil, :close] do
+    requests = state.setup ++ [Protocol.primary_batch(statements), Protocol.close()]
+
+    with {:ok, response, state} <- pipeline(state, requests, opts) do
+      {setup_results, rest} = Enum.split(response.results, length(state.setup))
+
+      with :ok <- check_setup(setup_results, state) do
+        primary_result(rest, end_stream(state))
+      end
+    end
+  end
+
+  defp run(%{protocol: :v2, transaction_status: status} = state, statements, opts, trailer)
+       when trailer == :keep or (is_nil(trailer) and status == :transaction) do
+    setup = if state.baton, do: [], else: state.setup
+
+    {batch, offset} =
+      Protocol.guarded_batch(statements, opts[:turso_transition] == true, status == :transaction)
+
+    with {:ok, response, state} <- pipeline(state, setup ++ [batch], opts) do
+      {setup_results, rest} = Enum.split(response.results, length(setup))
+
+      with :ok <- check_setup(setup_results, state) do
+        guarded_result(
+          rest,
+          response,
+          state,
+          offset,
+          length(statements),
+          length(batch["batch"]["steps"])
+        )
+      end
+    end
+  end
+
+  defp run(state, statements, opts, trailer) do
     trailer = trailer || if state.transaction_status == :transaction, do: :keep, else: :close
     setup = if state.baton, do: [], else: state.setup
-    requests = setup ++ statements ++ [trailer_request(trailer)]
+    requests = setup ++ statements ++ trailer_requests(trailer, state.protocol)
 
     with {:ok, response, state} <- pipeline(state, requests, opts) do
       {setup_results, rest} = Enum.split(response.results, length(setup))
-      {statement_results, [trailer_result]} = Enum.split(rest, length(statements))
+      {statement_results, trailer_results} = Enum.split(rest, length(statements))
+      trailer_result = List.first(trailer_results)
 
       failed =
         Enum.find_value(statement_results, fn
@@ -348,8 +438,84 @@ defmodule Custyard.Turso.Connection do
     end
   end
 
-  defp trailer_request(:close), do: Protocol.close()
-  defp trailer_request(:keep), do: Protocol.get_autocommit()
+  defp primary_result(
+         [{:ok, %{"type" => "batch", "result" => result}}, {:ok, %{"type" => "close"}}],
+         state
+       ) do
+    errors = result["step_errors"] || []
+
+    case Enum.find(errors, &is_map/1) do
+      nil ->
+        case result["step_results"] do
+          [begin_result, statement, commit_result]
+          when is_map(begin_result) and is_map(statement) and is_map(commit_result) ->
+            {:ok, [%{"type" => "execute", "result" => statement}], state}
+
+          _ ->
+            {:disconnect, connection_error("Bunny primary transaction did not complete"), state}
+        end
+
+      error ->
+        {:error, error, state}
+    end
+  end
+
+  defp primary_result(_results, state),
+    do: {:disconnect, connection_error("Bunny primary transaction failed"), state}
+
+  defp guarded_result(
+         [{:ok, %{"type" => "batch", "result" => result}}],
+         response,
+         state,
+         offset,
+         count,
+         expected
+       ) do
+    results = result["step_results"] || []
+    errors = result["step_errors"] || []
+
+    if valid_guard?(results, errors, expected, response.baton) do
+      state = %{
+        state
+        | baton: response.baton,
+          stream_endpoint: stream_endpoint(response.base_url, state),
+          transaction_status: :transaction
+      }
+
+      case Enum.find(Enum.slice(errors, offset, count), &is_map/1) do
+        nil ->
+          guarded_statements(Enum.slice(results, offset, count), count, response, state)
+
+        error ->
+          {:error, error, state}
+      end
+    else
+      {:disconnect, connection_error("Bunny transaction ended or interactive session was lost"),
+       abandon_stream(response, state)}
+    end
+  end
+
+  defp guarded_result(_results, response, state, _offset, _count, _expected),
+    do:
+      {:disconnect, connection_error("Bunny transaction guard failed"),
+       abandon_stream(response, state)}
+
+  defp valid_guard?(results, errors, expected, baton) do
+    length(results) == expected and length(errors) == expected and
+      is_map(List.last(results)) and is_binary(baton) and baton != ""
+  end
+
+  defp guarded_statements(statements, count, response, state) do
+    if length(statements) == count and Enum.all?(statements, &is_map/1),
+      do: {:ok, Enum.map(statements, &%{"type" => "execute", "result" => &1}), state},
+      else:
+        {:disconnect, connection_error("Bunny transaction response is incomplete"),
+         abandon_stream(response, state)}
+  end
+
+  defp trailer_requests(:close, _protocol), do: [Protocol.close()]
+  defp trailer_requests(:keep, :v2), do: []
+  defp trailer_requests(:keep, :v3), do: [Protocol.get_autocommit()]
 
   defp check_setup(results, state) do
     case Enum.find(results, &match?({:error, _}, &1)) do
@@ -399,11 +565,21 @@ defmodule Custyard.Turso.Connection do
   defp end_stream(state),
     do: %{state | baton: nil, stream_endpoint: nil, transaction_status: :idle}
 
+  defp abandon_stream(%{baton: baton} = response, state) when is_binary(baton) do
+    state = %{state | baton: baton, stream_endpoint: stream_endpoint(response.base_url, state)}
+
+    case pipeline(state, [Protocol.close()], []) do
+      {_, _, state} -> end_stream(state)
+    end
+  end
+
+  defp abandon_stream(_response, state), do: end_stream(state)
+
   # The server may route the rest of a stream to another URL.
   defp stream_endpoint(nil, state), do: state.stream_endpoint
 
   defp stream_endpoint(base_url, state) do
-    case Protocol.parse_url(base_url) do
+    case Protocol.parse_url(base_url, state.protocol) do
       {:ok, endpoint} -> endpoint
       {:error, _} -> state.stream_endpoint
     end
@@ -412,7 +588,7 @@ defmodule Custyard.Turso.Connection do
   defp pipeline(state, requests, opts) do
     endpoint = state.stream_endpoint || state.endpoint
     body = Protocol.encode_pipeline(state.baton, requests)
-    path = Protocol.pipeline_path(endpoint)
+    path = Protocol.pipeline_path(endpoint, state.protocol)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
     case HTTP.post(state.http, endpoint, path, state.headers, body, timeout) do
