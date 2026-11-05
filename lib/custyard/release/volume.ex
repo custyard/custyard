@@ -8,6 +8,8 @@ defmodule Custyard.Release.Volume do
 
   alias Custyard.Storage
 
+  @max_manifest_bytes 16_777_216
+
   @usage """
   Usage: bin/data-volume init | backup DIRECTORY | restore DIRECTORY
 
@@ -60,6 +62,7 @@ defmodule Custyard.Release.Volume do
     destination = external_directory!(destination, data_dir)
     roots = roots(opts)
     manifest = manifest(roots, identity(opts))
+    encoded_manifest = encode_manifest!(manifest)
     require_absent!(destination)
     File.mkdir!(destination)
     File.chmod!(destination, 0o700)
@@ -70,7 +73,7 @@ defmodule Custyard.Release.Volume do
     unless manifest(backup_roots(destination), identity(opts)) == manifest,
       do: raise("File snapshot changed during backup; keep the app stopped and retry")
 
-    File.write!(Path.join(destination, "manifest.json"), Jason.encode!(manifest))
+    File.write!(Path.join(destination, "manifest.json"), encoded_manifest)
     File.chmod!(Path.join(destination, "manifest.json"), 0o600)
     :ok
   end
@@ -128,11 +131,13 @@ defmodule Custyard.Release.Volume do
     do: Keyword.get(opts, :data_volume_id, Application.get_env(:custyard, :data_volume_id))
 
   defp roots(opts) do
-    roots = [
-      {"uploads", Keyword.get(opts, :upload_dir, Application.get_env(:custyard, :upload_dir))},
-      {"attachments",
-       Keyword.get(opts, :attachment_dir, Application.get_env(:custyard, :attachment_dir))}
-    ]
+    roots =
+      [
+        {"uploads", Keyword.get(opts, :upload_dir, Application.get_env(:custyard, :upload_dir))},
+        {"attachments",
+         Keyword.get(opts, :attachment_dir, Application.get_env(:custyard, :attachment_dir))}
+      ]
+      |> Enum.map(fn {label, directory} -> {label, Path.expand(directory)} end)
 
     [{_, uploads}, {_, attachments}] = roots
 
@@ -212,8 +217,7 @@ defmodule Custyard.Release.Volume do
     path = Path.join(source, "manifest.json")
     require_type!(path, :regular)
 
-    if File.stat!(path).size > 16_777_216,
-      do: raise("File snapshot manifest exceeds the supported size")
+    require_manifest_size!(File.stat!(path).size)
 
     case Jason.decode!(File.read!(path)) do
       %{"version" => 1, "volume_id" => id, "entries" => entries} = manifest
@@ -223,6 +227,18 @@ defmodule Custyard.Release.Volume do
       _ ->
         raise "Unsupported file snapshot manifest"
     end
+  end
+
+  @doc false
+  def encode_manifest!(manifest) do
+    encoded = Jason.encode!(manifest)
+    require_manifest_size!(byte_size(encoded))
+    encoded
+  end
+
+  defp require_manifest_size!(size) do
+    if size > @max_manifest_bytes,
+      do: raise("File snapshot manifest exceeds the supported size")
   end
 
   defp external_directory!(directory, data_dir) do

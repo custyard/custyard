@@ -163,4 +163,50 @@ defmodule Custyard.Release.VolumeTest do
 
     refute File.exists?(Path.join(context.tmp_dir, "escaped"))
   end
+
+  test "backup manifest encoding uses the restore size boundary" do
+    max_bytes = 16_777_216
+    overhead = byte_size(Jason.encode!(%{"payload" => ""}))
+    payload = String.duplicate("x", max_bytes - overhead)
+
+    assert byte_size(Volume.encode_manifest!(%{"payload" => payload})) == max_bytes
+
+    assert_raise RuntimeError, ~r/manifest exceeds the supported size/, fn ->
+      Volume.encode_manifest!(%{"payload" => payload <> "x"})
+    end
+  end
+
+  test "equivalent and nested root aliases fail before creating snapshot or restore state",
+       context do
+    snapshot = Path.join(context.tmp_dir, "snapshot")
+    Volume.backup!(snapshot, context.opts)
+    nested = Path.join(context.uploads, "nested")
+    File.mkdir!(nested)
+    data_entries = context.data_dir |> File.ls!() |> Enum.sort()
+
+    aliases = [
+      {context.uploads, context.uploads <> "/./"},
+      {nested <> "/..", context.uploads <> "/"},
+      {context.uploads <> "/./", nested <> "/."},
+      {nested <> "/.", nested <> "/.."}
+    ]
+
+    for {{uploads, attachments}, index} <- Enum.with_index(aliases) do
+      opts = Keyword.merge(context.opts, upload_dir: uploads, attachment_dir: attachments)
+      rejected_snapshot = Path.join(context.tmp_dir, "rejected-snapshot-#{index}")
+
+      assert_raise RuntimeError, ~r/directories must not overlap/, fn ->
+        Volume.backup!(rejected_snapshot, opts)
+      end
+
+      refute File.exists?(rejected_snapshot)
+
+      assert_raise RuntimeError, ~r/directories must not overlap/, fn ->
+        Volume.restore!(snapshot, opts)
+      end
+
+      assert context.data_dir |> File.ls!() |> Enum.sort() == data_entries
+      refute File.exists?(Path.join(context.data_dir, ".custyard-restore-in-progress"))
+    end
+  end
 end
