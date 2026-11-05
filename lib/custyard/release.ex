@@ -54,6 +54,7 @@ defmodule Custyard.Release do
         when the configuration is complete, 1 when it is not.
     --probe-database
         Also connect to the configured database and report what happened.
+        Exits 1 when either the configuration or the connection has a problem.
     --probe-database URL [--token TOKEN]
         Connect to URL instead (libsql://... with its token, or an absolute
         SQLite path), then create and drop a throwaway table inside a
@@ -228,7 +229,8 @@ defmodule Custyard.Release do
         env = boot_env()
         IO.write(report_text(env))
         IO.puts("")
-        probe_database(env, migrate?: false)
+        report_status = if env.verdict == :configured, do: 0, else: 1
+        max(report_status, probe_database(env, migrate?: false))
 
       {:probe, target, token} ->
         probe_database(override_env(target, token), migrate?: true)
@@ -241,13 +243,19 @@ defmodule Custyard.Release do
   defp parse_doctor_argv(["--probe-database" | args]) do
     case OptionParser.parse(args, strict: [token: [:string, :keep]]) do
       {[], [], []} -> {:probe, nil, nil}
-      {[], [target], []} -> {:probe, target, nil}
-      {[token: token], [target], []} -> {:probe, target, token}
+      {[], [target], []} -> probe_target(target, nil)
+      {[token: token], [target], []} -> probe_target(target, token)
       _ -> :usage
     end
   end
 
   defp parse_doctor_argv(_argv), do: :usage
+
+  # `--probe-database "$URL"` with URL unset would otherwise probe, and run
+  # the throwaway migration on, the default production database.
+  defp probe_target(target, token) do
+    if String.trim(target) == "", do: :usage, else: {:probe, target, token}
+  end
 
   # The parsed environment the release booted with; outside a release (mix),
   # parsed now.

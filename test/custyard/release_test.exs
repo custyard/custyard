@@ -443,6 +443,8 @@ defmodule Custyard.ReleaseTest do
       for argv <- [
             ["bogus"],
             ["--probe-database", "a", "b"],
+            ["--probe-database", ""],
+            ["--probe-database", "  ", "--token", "t"],
             ["--probe-database", "--token"],
             ["--probe-database", "x", "--token", "a", "--token", "b"]
           ] do
@@ -480,6 +482,24 @@ defmodule Custyard.ReleaseTest do
       with_boot_env(configured, fn ->
         assert {0, stdout, ""} = run_doctor([])
         assert stdout =~ "Custyard configuration is complete"
+      end)
+    end
+
+    test "--probe-database without a target exits 1 while the configuration is incomplete",
+         %{tmp_dir: dir} do
+      env =
+        Env.read(
+          %{
+            "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "DATABASE_PATH" => Path.join(dir, "d.db")
+          },
+          config_env: :prod
+        )
+
+      with_boot_env(env, fn ->
+        assert {1, stdout, ""} = run_doctor(["--probe-database"])
+        assert stdout =~ "Custyard is not configured yet"
+        assert stdout =~ "ok      connected and ran SELECT 1"
       end)
     end
 
