@@ -59,7 +59,7 @@ defmodule Custyard.Boot.MonitorTest do
         assert_receive {:probed, :ok}
         assert_receive {:probed, :ok}
         assert_receive {:probed, :ok}
-        assert_receive {:stopped, 0}
+        assert_receive {:stopped, 1}
       end)
 
     assert log =~ "boot_database_recovered"
@@ -68,7 +68,7 @@ defmodule Custyard.Boot.MonitorTest do
   test "stops only once", %{env: env} do
     capture_log(fn ->
       start(env, scripted_probe([:ok]), successes: 2)
-      assert_receive {:stopped, 0}
+      assert_receive {:stopped, 1}
       refute_receive {:stopped, _}, 30
     end)
   end

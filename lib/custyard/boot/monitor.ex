@@ -6,9 +6,11 @@ defmodule Custyard.Boot.Monitor do
   Every `retry_every_ms` (from `Custyard.Boot.State`, 10 s) it calls
   `Custyard.Boot.Probe.run/1`, which also refreshes the attempt count the
   doctor card shows. After three consecutive successes it logs
-  `boot_database_recovered` and calls `System.stop(0)`: the platform's
-  restart policy then runs the normal boot. No supervision tree is swapped
-  at runtime.
+  `boot_database_recovered` and calls `System.stop(1)`: the platform's
+  restart policy then runs the normal boot. The status is nonzero because
+  Fly's default policy (`on-failure`) does not restart a clean exit, while
+  compose `unless-stopped` and systemd `on-failure` restart either. No
+  supervision tree is swapped at runtime.
 
   A `:migration_failed` category is never probed and never counts as a
   success: the database answered, the schema did not apply, and nothing
@@ -56,7 +58,7 @@ defmodule Custyard.Boot.Monitor do
 
     if state.successes >= state.needed do
       Log.warning(:boot_database_recovered, count: state.successes)
-      state.stop.(0)
+      state.stop.(1)
     else
       schedule(state)
     end
