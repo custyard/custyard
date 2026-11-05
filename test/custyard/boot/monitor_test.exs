@@ -45,7 +45,7 @@ defmodule Custyard.Boot.MonitorTest do
     )
   end
 
-  test "exits 0 after three consecutive successes, resetting on a failure", %{env: env} do
+  test "exits 1 after three consecutive successes, resetting on a failure", %{env: env} do
     failure = {:error, :unreachable, "nope"}
 
     log =

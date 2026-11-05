@@ -88,7 +88,7 @@ database-locked page, not the Gitea install wizard.
                    └────────┬────────┘                └───────────┬────────────┘
                             │ 3 consecutive ok              operators who can
                             ▼                               log in == 0 ?
-                   System.stop(0); platform            yes   │   no
+                   System.stop(1); platform            yes   │   no
                    restarts into normal boot    ┌───────────┴───────────┐
                                                 ▼                       ▼
                                       ┌─────────────────┐    ┌─────────────────┐
@@ -106,7 +106,7 @@ unconfigured / db unavailable          ready / first run
 Telemetry                              Telemetry
 Endpoint  (BootGate short-circuits)    Repo
 Boot.Monitor (db tier only: probes,    {Ecto.Migrator, repos: ...}
-  exits 0 after 3 successes)           Boot.FirstRun (operator bootstrap,
+  exits 1 after 3 successes)           Boot.FirstRun (operator bootstrap,
                                          welcome mail, progress state)
                                        DNSCluster, PubSub, Finch, RateLimit,
                                        TaskSupervisor, Endpoint, workers
@@ -150,8 +150,9 @@ readiness semantics for monitoring.
   two; a migration failure becomes a doctor state with the migration name in
   the log.
 - `entrypoint.sh` becomes the `MAINTENANCE_MODE` check and `exec`.
-- Auto-recovery by exit: `Boot.Monitor` exits 0 after three consecutive
-  successful probes; the platform restart policy runs the normal boot. No
+- Auto-recovery by exit: `Boot.Monitor` exits 1 after three consecutive
+  successful probes; the platform restart policy runs the normal boot (Fly's
+  default `on-failure` ignores a clean exit, hence nonzero). No
   hot-swapping the supervision tree. Migration failure never auto-restarts.
 - Same report, two renderers: `Custyard.Boot.Report.to_text/1` prints at boot
   through the privacy logger; the card renders the same struct.

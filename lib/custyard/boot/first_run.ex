@@ -195,8 +195,8 @@ defmodule Custyard.Boot.FirstRun do
   @impl true
   def handle_info(:recheck, state), do: {:noreply, decide(state)}
 
-  # Step 0 of the moduledoc. Dev, test and a restarted FirstRun are never in
-  # :starting and skip this.
+  # Step 0 of the moduledoc. Dev and test are never in :starting and skip
+  # this; a restarted FirstRun is only if the count failed before.
   defp open_gate(state) do
     if State.mode() == :starting do
       case count_operators(state.count) do
