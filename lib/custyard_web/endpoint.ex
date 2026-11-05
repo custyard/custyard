@@ -57,6 +57,11 @@ defmodule CustyardWeb.Endpoint do
     gzip: false,
     only: CustyardWeb.static_paths()
 
+  # Boot verdict gate: doctor cards and 503s while the app cannot run, the
+  # first-run card on "/". Before anything that could touch the Repo or the
+  # session (UploadedFiles reads config only, but keep the gate first).
+  plug CustyardWeb.Plugs.BootGate
+
   # Serve uploaded files from persistent storage directory (configurable via :upload_dir)
   plug CustyardWeb.Plugs.UploadedFiles
 

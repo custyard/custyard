@@ -1,18 +1,24 @@
 defmodule Custyard.Release do
   @moduledoc """
-  Release tasks run with `bin/custyard eval`: migrations, the operator
-  bootstrap the container entrypoint runs before the server, the
-  `bin/operator` and `bin/dsar` command lines (`rel/overlays/bin/operator`,
-  `rel/overlays/bin/dsar`; the latter's commands are `Custyard.Release.Dsar`),
-  and the SQLite export for moving the database to Turso.
+  Release tasks run with `bin/custyard eval`: migrations, the `bin/operator`,
+  `bin/dsar` and `bin/doctor` command lines (`rel/overlays/bin/*`; dsar's
+  commands are `Custyard.Release.Dsar`), and the SQLite export for moving the
+  database to Turso.
 
   None of these start the application. They load its configuration and start
   only the Repo (`Ecto.Migrator.with_repo/2`), so they are safe to run on a
   machine whose server is already up, and they never start the endpoint,
-  mail pollers or background workers.
+  mail pollers or background workers. Commands that need the database first
+  check the boot verdict (`Custyard.Boot.Env`) and print the boot report
+  instead of opening a database the running app would refuse too.
+
+  Migrations and the operator bootstrap moved out of the container entrypoint
+  into `Custyard.Application` (docs/backlog/1103-first-run-experience.md);
+  `migrate/0` and `rollback/2` remain for manual use.
   """
 
   alias Custyard.{OperatorAccount, OperatorAccounts, Repo}
+  alias Custyard.Boot.{Build, Env, Probe, Report}
   alias Custyard.Repo.Adapter
   alias Custyard.Release.Dsar
 
@@ -37,6 +43,31 @@ defmodule Custyard.Release do
   Emails are case-insensitive. Operators log in with a link emailed to them;
   there are no passwords.
   """
+
+  @doctor_usage """
+  Usage: bin/doctor [--probe-database [URL] [--token TOKEN]]
+
+  Commands:
+    (none)
+        Print the boot report: the configuration verdict, every missing or
+        malformed variable, the image build and the database choice. Exits 0
+        when the configuration is complete, 1 when it is not.
+    --probe-database
+        Also connect to the configured database and report what happened.
+        Exits 1 when either the configuration or the connection has a problem.
+    --probe-database URL [--token TOKEN]
+        Connect to URL instead (libsql://... with its token, or an absolute
+        SQLite path), then create and drop a throwaway table inside a
+        transaction, reporting each step. Run from a laptop against a
+        disposable database before deploying.
+    help
+        Show this help.
+
+  Values are never printed; the error from a failed probe is, since this is
+  your terminal.
+  """
+
+  @doctor_table "custyard_doctor_probe"
 
   def migrate do
     startup_task(:migrate, fn ->
@@ -145,82 +176,6 @@ defmodule Custyard.Release do
   end
 
   @doc """
-  Boot-time operator bootstrap. `entrypoint.sh` runs it after `migrate/0`,
-  in the same eval, before the server starts.
-
-  `OPERATOR_EMAIL` set: creates that super_admin if absent, or reports it
-  unmodified. Unset (or blank): logs how to create the first operator.
-  An invalid value emits a bounded diagnostic and fixed failure notice,
-  then halts with status 1 so the boot fails before starting the server.
-  """
-  def bootstrap_operator do
-    startup_task(:bootstrap, fn ->
-      case bootstrap_operator(System.get_env("OPERATOR_EMAIL")) do
-        :ok -> :ok
-        {:error, reason} -> startup_failed!(:bootstrap, reason)
-      end
-    end)
-  end
-
-  @doc false
-  # The testable half of bootstrap_operator/0: takes the variable's value
-  # and returns instead of halting.
-  def bootstrap_operator(env_value) do
-    with_repo(fn ->
-      result = env_value |> blank_to_nil() |> bootstrap_from_env()
-      if result == :ok, do: warn_about_placeholder()
-      result
-    end)
-  end
-
-  defp bootstrap_from_env(nil) do
-    if Repo.aggregate(OperatorAccount, :count) == 0 do
-      Log.warning(:operator_bootstrap_required, reason: :no_operator_accounts)
-    else
-      Log.info(:operator_bootstrap_skipped, reason: :not_configured)
-    end
-
-    :ok
-  end
-
-  defp bootstrap_from_env(email) do
-    result =
-      case OperatorAccounts.create_operator(email, via: "boot") do
-        {:created, _operator} ->
-          :ok
-
-        {:exists, operator} ->
-          Log.info(:operator_bootstrap_account_exists,
-            operator_id: operator.id,
-            role: operator.role
-          )
-
-          :ok
-
-        {:error, _message} = error ->
-          error
-      end
-
-    if result == :ok do
-      Log.warning(:operator_bootstrap_environment_retained)
-    end
-
-    result
-  end
-
-  defp warn_about_placeholder do
-    placeholder = OperatorAccounts.placeholder_email()
-
-    case OperatorAccounts.get_by_email(placeholder) do
-      %OperatorAccount{role: "super_admin", id: id} ->
-        Log.warning(:operator_placeholder_unroutable, operator_id: id)
-
-      _ ->
-        :ok
-    end
-  end
-
-  @doc """
   Entry point for `rel/overlays/bin/operator`; `argv` arrives from
   `System.argv()`, never interpolated into code. Halts with the exit status
   (0 on success, 1 on a usage error or failure). Run `bin/operator help`.
@@ -237,6 +192,227 @@ defmodule Custyard.Release do
   """
   def dsar_cli(argv) do
     argv |> Dsar.run() |> System.halt()
+  end
+
+  @doc """
+  Entry point for `rel/overlays/bin/doctor`: the boot report and the
+  database probe (`Custyard.Boot.Probe`). `argv` arrives from
+  `System.argv()`, never interpolated into code. Halts with the exit status
+  (0 when configured and, with `--probe-database`, reachable; 1 otherwise).
+  Run `bin/doctor help`.
+  """
+  def doctor_cli(argv) do
+    argv |> run_doctor_cli() |> System.halt()
+  end
+
+  @doc false
+  # Does the work of doctor_cli/1, printing to stdout and stderr, and
+  # returns the exit status instead of halting.
+  def run_doctor_cli(argv) when is_list(argv) do
+    load_app()
+
+    case parse_doctor_argv(argv) do
+      :help ->
+        IO.write(@doctor_usage)
+        0
+
+      :usage ->
+        IO.write(:stderr, @doctor_usage)
+        1
+
+      :report ->
+        env = boot_env()
+        IO.write(report_text(env))
+        if env.verdict == :configured, do: 0, else: 1
+
+      {:probe, nil, nil} ->
+        env = boot_env()
+        IO.write(report_text(env))
+        IO.puts("")
+        report_status = if env.verdict == :configured, do: 0, else: 1
+        max(report_status, probe_database(env, migrate?: false))
+
+      {:probe, target, token} ->
+        probe_database(override_env(target, token), migrate?: true)
+    end
+  end
+
+  defp parse_doctor_argv([]), do: :report
+  defp parse_doctor_argv(["help"]), do: :help
+
+  defp parse_doctor_argv(["--probe-database" | args]) do
+    case OptionParser.parse(args, strict: [token: [:string, :keep]]) do
+      {[], [], []} -> {:probe, nil, nil}
+      {[], [target], []} -> probe_target(target, nil)
+      {[token: token], [target], []} -> probe_target(target, token)
+      _ -> :usage
+    end
+  end
+
+  defp parse_doctor_argv(_argv), do: :usage
+
+  # `--probe-database "$URL"` with URL unset would otherwise probe, and run
+  # the throwaway migration on, the default production database.
+  defp probe_target(target, token) do
+    if String.trim(target) == "", do: :usage, else: {:probe, target, token}
+  end
+
+  # The parsed environment the release booted with; outside a release (mix),
+  # parsed now.
+  defp boot_env do
+    Application.get_env(:custyard, :boot_env) ||
+      Env.read(System.get_env(), config_env: Application.get_env(:custyard, :env, :prod))
+  end
+
+  # The environment with the database replaced by the one named on the
+  # command line, so Env's own rules (scheme, token, absolute path) apply.
+  defp override_env(target, token) do
+    base =
+      System.get_env()
+      |> Map.drop(
+        ~w(DATABASE_URL BUNNY_DATABASE_URL TURSO_AUTH_TOKEN BUNNY_DATABASE_AUTH_TOKEN DATABASE_PATH)
+      )
+
+    overrides =
+      if String.contains?(target, "://"),
+        do: %{"DATABASE_URL" => target},
+        else: %{"DATABASE_PATH" => target}
+
+    overrides = if token, do: Map.put(overrides, "TURSO_AUTH_TOKEN", token), else: overrides
+    Env.read(Map.merge(base, overrides), config_env: :prod)
+  end
+
+  defp report_text(env) do
+    Report.to_text(env, build: Build.describe(), booted_at: DateTime.utc_now())
+  end
+
+  defp probe_database(env, opts) do
+    case database_problems(env) do
+      [] ->
+        IO.puts("Database probe")
+        Enum.each(fact_lines(Probe.facts(env)), &IO.puts("  " <> &1))
+
+        case Probe.check(env) do
+          :ok ->
+            IO.puts("  ok      connected and ran SELECT 1")
+            if opts[:migrate?], do: probe_migration(env), else: 0
+
+          {:error, category, detail, raw} ->
+            IO.puts("  failed  #{category}: #{detail}")
+            if raw, do: IO.puts("  error   #{Exception.message(raw)}")
+            1
+        end
+
+      problems ->
+        IO.puts(:stderr, "The database configuration has problems:")
+        Enum.each(problems, &IO.puts(:stderr, "  #{&1.variable}  #{&1.kind}  #{&1.detail}"))
+        1
+    end
+  end
+
+  @database_variables ~w(DATABASE_URL BUNNY_DATABASE_URL TURSO_AUTH_TOKEN DATABASE_PATH)
+
+  defp database_problems(%Env{problems: problems, settings: settings}) do
+    problems = Enum.filter(problems, &(&1.variable in @database_variables))
+
+    if problems == [] and is_nil(settings[:database]),
+      do: [%{variable: "DATABASE_URL", kind: :missing, detail: "no database is configured"}],
+      else: problems
+  end
+
+  defp fact_lines(facts) do
+    [
+      "kind    #{facts[:kind] || "none"}",
+      facts[:path] && "path    #{facts[:path]}",
+      Map.has_key?(facts, :mounted?) && "mounted #{tri(facts[:mounted?])}",
+      Map.has_key?(facts, :file_exists?) &&
+        "file    #{if facts[:file_exists?], do: "exists", else: "absent"}"
+    ]
+    |> Enum.filter(&is_binary/1)
+  end
+
+  defp tri(true), do: "yes"
+  defp tri(false), do: "no"
+  defp tri(nil), do: "unknown (no /proc/self/mountinfo)"
+
+  # A throwaway migration, up and down, in one transaction on a one-off Repo
+  # configured for the probed database.
+  defp probe_migration(env) do
+    IO.puts("Throwaway migration")
+
+    with_probe_repo(Probe.repo_config(env), fn ->
+      result =
+        Repo.transaction(fn ->
+          doctor_step("create table #{@doctor_table}", fn ->
+            Repo.query!("CREATE TABLE #{@doctor_table} (id INTEGER PRIMARY KEY, note TEXT)")
+          end)
+
+          doctor_step("insert and read a row", fn ->
+            Repo.query!("INSERT INTO #{@doctor_table} (note) VALUES ('doctor')")
+            %{rows: [["doctor"]]} = Repo.query!("SELECT note FROM #{@doctor_table}")
+          end)
+
+          doctor_step("drop table #{@doctor_table}", fn ->
+            Repo.query!("DROP TABLE #{@doctor_table}")
+          end)
+        end)
+
+      case result do
+        {:ok, _} ->
+          IO.puts("  ok      committed; nothing left behind")
+          0
+
+        {:error, {step, error}} ->
+          IO.puts("  failed  #{step}")
+          IO.puts("  error   #{Exception.message(error)}")
+          1
+      end
+    end)
+  end
+
+  defp doctor_step(label, fun) do
+    fun.()
+    IO.puts("  ok      #{label}")
+  rescue
+    error -> Repo.rollback({label, error})
+  end
+
+  defp with_probe_repo(config, fun) do
+    previous_config = Application.get_env(:custyard, Repo, [])
+
+    config =
+      previous_config
+      |> Keyword.drop([:database, :turso_url, :turso_auth_token, :url, :pool, :pool_size])
+      |> Keyword.merge(config)
+      |> Keyword.put(:pool_size, 1)
+
+    {:ok, _} = Application.ensure_all_started(:ecto_sql)
+    {:ok, _} = Repo.__adapter__().ensure_all_started(config, :temporary)
+    Application.put_env(:custyard, Repo, config)
+
+    try do
+      case Repo.start_link(name: nil) do
+        {:ok, pid} ->
+          previous_repo = Repo.put_dynamic_repo(pid)
+
+          try do
+            fun.()
+          rescue
+            error ->
+              IO.puts("  error   #{Exception.message(error)}")
+              1
+          after
+            Repo.put_dynamic_repo(previous_repo)
+            Supervisor.stop(pid)
+          end
+
+        {:error, _reason} ->
+          IO.puts("  failed  could not start a connection pool for the probe")
+          1
+      end
+    after
+      Application.put_env(:custyard, Repo, previous_config)
+    end
   end
 
   @doc false
@@ -416,18 +592,27 @@ defmodule Custyard.Release do
     end
   end
 
-  defp blank_to_nil(nil), do: nil
-
-  defp blank_to_nil(value) when is_binary(value),
-    do: if(String.trim(value) == "", do: nil, else: value)
-
   @doc false
   # Loads config and starts only the Repo for `fun`. Never starts the app.
-  # The storage check runs before the Repo starts, as migrate/0 does: opening
+  # An unconfigured boot verdict prints the boot report and refuses: the
+  # Repo config may be incomplete, and the running app refuses it too. The
+  # storage check runs before the Repo starts, as migrate/0 does: opening
   # SQLite first would create an empty database on the container's root
   # filesystem when the Fly volume is missing. Shared with Custyard.Release.Dsar.
   def with_repo(fun) when is_function(fun, 0) do
     load_app()
+
+    case Application.get_env(:custyard, :boot_env) do
+      %Env{verdict: :unconfigured} = env ->
+        IO.write(:stderr, report_text(env))
+        {:error, "configuration is incomplete; see the report above"}
+
+      _ ->
+        start_repo_for(fun)
+    end
+  end
+
+  defp start_repo_for(fun) do
     Custyard.Storage.validate_fly_storage!()
 
     case Ecto.Migrator.with_repo(Repo, fn _repo -> fun.() end) do
@@ -460,27 +645,6 @@ defmodule Custyard.Release do
     Log.error(:release_rollback_failed, Log.failure(reason))
     raise "Database rollback failed; see structured diagnostics"
   end
-
-  defp startup_failed!(:bootstrap, reason) do
-    Log.error(:operator_bootstrap_failed, bootstrap_failure_fields(reason))
-    Logger.flush()
-    IO.puts(:stderr, "OPERATOR_EMAIL: operator bootstrap failed; see structured diagnostics")
-    System.halt(1)
-  end
-
-  defp bootstrap_failure_fields(reason) when is_binary(reason) do
-    fields =
-      for field <- ~w(email role organization_id tenant_id source),
-          String.starts_with?(reason, field <> ": ") or
-            String.contains?(reason, "; " <> field <> ": "),
-          do: field
-
-    if fields == [],
-      do: Log.failure(reason),
-      else: [reason: :validation_failed, validation_fields: fields]
-  end
-
-  defp bootstrap_failure_fields(reason), do: Log.failure(reason)
 
   defp load_app do
     Application.load(@app)

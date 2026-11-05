@@ -10,6 +10,11 @@ defmodule CustyardWeb.HealthController do
 
   Returns 503 with details when any check fails.
 
+  `GET /api/health/live` is liveness only: 200 whenever the HTTP process
+  answers. Platform checks (Containerfile `HEALTHCHECK`, `fly.toml`, Bunny)
+  use it so a container in doctor mode stays up and keeps serving the card
+  instead of being restarted (docs/backlog/1103-first-run-experience.md).
+
   ## Security Notes
 
   This endpoint is intentionally unauthenticated to allow container orchestrators
@@ -20,11 +25,29 @@ defmodule CustyardWeb.HealthController do
   """
   use CustyardWeb, :controller
 
+  alias Custyard.Boot.State
   alias Ecto.Adapters.SQL
 
   require Custyard.Log, as: Log
 
+  # Readiness. In a doctor mode the Repo is not running, so the verdict is
+  # the answer; the BootGate lets this path through for exactly this reason.
   def index(conn, _params) do
+    case State.mode() do
+      :unconfigured -> not_ready(conn, "setup_required", :unconfigured)
+      :starting -> not_ready(conn, "starting", :starting)
+      :database_unavailable -> not_ready(conn, "database_unavailable", :database_unavailable)
+      _ -> ready_checks(conn)
+    end
+  end
+
+  defp not_ready(conn, status, mode) do
+    conn
+    |> put_status(503)
+    |> json(%{status: status, mode: mode})
+  end
+
+  defp ready_checks(conn) do
     checks = %{
       database: check_database(),
       pubsub: check_pubsub(),
@@ -43,6 +66,11 @@ defmodule CustyardWeb.HealthController do
       |> put_status(503)
       |> json(%{status: "error", checks: format_checks(checks)})
     end
+  end
+
+  # Touches no Repo and no named process on purpose.
+  def live(conn, _params) do
+    json(conn, %{status: "live"})
   end
 
   defp check_database do

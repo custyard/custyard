@@ -60,13 +60,25 @@ defmodule Custyard.Turso.RuntimeConfigTest do
     assert config[:database] == nil
   end
 
-  test "a libsql:// DATABASE_URL without a token refuses to boot" do
-    System.put_env("DATABASE_URL", "libsql://custyard-acme.turso.io")
+  # The boot verdict carries the problem (Custyard.Boot.Env); the Repo is
+  # still configured so the doctor report can describe the choice.
+  test "a libsql:// DATABASE_URL without a token is a boot problem, not a raise" do
+    for token <- [nil, ""] do
+      if token,
+        do: System.put_env("TURSO_AUTH_TOKEN", token),
+        else: System.delete_env("TURSO_AUTH_TOKEN")
 
-    assert_raise RuntimeError, ~r/TURSO_AUTH_TOKEN is not set/, &prod_repo_config/0
+      System.put_env("DATABASE_URL", "libsql://custyard-acme.turso.io")
 
-    System.put_env("TURSO_AUTH_TOKEN", "")
-    assert_raise RuntimeError, ~r/TURSO_AUTH_TOKEN is not set/, &prod_repo_config/0
+      {config, _warnings} =
+        with_io(:stderr, fn -> Config.Reader.read!(@runtime_config, env: :prod) end)
+
+      env = config[:custyard][:boot_env]
+      assert env.verdict == :unconfigured
+      assert Enum.any?(env.problems, &(&1.variable == "TURSO_AUTH_TOKEN" and &1.kind == :missing))
+      assert config[:custyard][Custyard.Repo][:turso_url] == "libsql://custyard-acme.turso.io"
+      assert config[:custyard][Custyard.Repo][:turso_auth_token] == nil
+    end
   end
 
   test "a libSQL server on plain HTTP may run without a token" do

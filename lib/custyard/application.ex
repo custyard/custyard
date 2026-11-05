@@ -1,5 +1,37 @@
 defmodule Custyard.Application do
-  @moduledoc false
+  @moduledoc """
+  Starts one of four supervision tree shapes, by boot verdict
+  (docs/backlog/1103-first-run-experience.md).
+
+  In production `config/runtime.exs` stores the parsed environment as
+  `:boot_env`.
+
+    * `:unconfigured` starts only the telemetry and the endpoint, which
+      serves the doctor card.
+    * `:configured` starts the same two children first, in mode `:starting`,
+      so `/api/health/live` answers while the database is probed
+      (`Custyard.Boot.Probe`) and migrations run
+      (`Custyard.Boot.FirstRun.migrate/2`). Over libSQL HTTP against a cold
+      database, migrations can outlast a platform's start grace; a container
+      killed mid-migration restarts into a half-applied schema.
+    * When the probe and migrations succeed, the remaining children are added
+      to the running supervisor one at a time, in the order
+      `deferred_children/1` lists them. `Custyard.Boot.FirstRun`, which comes
+      after the Repo, PubSub and the HTTP client, moves the mode out of
+      `:starting` as its first step and then finishes the operator and mail
+      steps.
+    * When they fail, `Custyard.Boot.Monitor` is added instead; it exits the
+      VM once the database answers.
+
+  In production the Endpoint therefore starts before the Repo and PubSub, and
+  is stopped after them on shutdown. `CustyardWeb.Plugs.BootGate` blocks
+  everything but health and static assets while the mode is `:starting`, so
+  no request reaches the Repo or PubSub before they exist.
+
+  Development and test have no `:boot_env`: they start the full tree in one
+  `Supervisor.start_link`, in the order they always have (Endpoint after the
+  Repo and PubSub), and development creates its placeholder operator.
+  """
 
   use Application
 
@@ -7,6 +39,7 @@ defmodule Custyard.Application do
 
   alias Custyard.Acknowledgments.Config, as: AcknowledgmentsConfig
   alias Custyard.Acknowledgments.Consumer, as: AcknowledgmentsConsumer
+  alias Custyard.Boot.{Build, Console, Env, FirstRun, Monitor, Probe, Report, State}
 
   @default_operator_email "admin@custyard.local"
 
@@ -14,46 +47,159 @@ defmodule Custyard.Application do
   def start(_type, _args) do
     Custyard.Log.install!()
 
-    # Fail before starting the Repo when Fly's persistent volume is missing.
-    Custyard.Storage.validate_fly_storage!()
-
     # Report crashed-process and LiveView exceptions to Sentry. These never pass
     # through Sentry.PlugCapture (they run off the request path), so the logger
     # handler is what captures them. Only added when a DSN is configured, so
     # dev/test are unaffected.
     maybe_add_sentry_logger_handler()
 
-    children =
-      [
-        CustyardWeb.Telemetry,
-        Custyard.Repo,
-        {DNSCluster, query: Application.get_env(:custyard, :dns_cluster_query) || :ignore},
-        {Phoenix.PubSub, name: Custyard.PubSub},
-        {Finch, name: Custyard.Finch},
-        # Sliding-window rate limiter (owns its ETS table, sweeps stale entries)
-        {Custyard.RateLimit, []},
-        # Task supervisor for async webhook purposes (enrichment, notification, audit)
-        {Task.Supervisor, name: Custyard.TaskSupervisor, max_children: 100},
-        CustyardWeb.Endpoint
-      ]
-      |> maybe_add_scheduler()
-      |> maybe_add_outbound_queue()
-      |> maybe_add_acknowledgment_consumer()
-      |> maybe_add_intake_sweeps()
-      |> maybe_add_lmtp_server()
-      |> maybe_add_imap_pollers()
+    case Application.get_env(:custyard, :boot_env) do
+      %Env{} = env -> boot(env, DateTime.utc_now())
+      nil -> start_without_verdict()
+    end
+  end
 
-    opts = [strategy: :one_for_one, name: Custyard.Supervisor]
-    result = Supervisor.start_link(children, opts)
+  # Dev and test: today's tree, and the dev operator after it is up.
+  defp start_without_verdict do
+    result = supervise(full_children([]))
 
-    # Setup operator account after supervisor fully starts
-    # Use Task to avoid blocking application startup
     if Application.get_env(:custyard, :env) == :dev do
       Task.start(Log.task(fn -> setup_dev_operator() end))
     end
 
     result
   end
+
+  defp boot(%Env{verdict: :unconfigured} = env, booted_at) do
+    State.put(%State{mode: :unconfigured, env: env, booted_at: booted_at})
+    print_report(env, booted_at)
+    Log.warning(:boot_unconfigured, count: length(env.problems))
+    Log.info(:boot_mode_decided, boot_mode: :unconfigured)
+    supervise(doctor_children([]))
+  end
+
+  defp boot(%Env{verdict: :configured} = env, booted_at) do
+    State.put(%State{mode: :starting, env: env, booted_at: booted_at})
+    print_report(env, booted_at)
+    Log.info(:boot_mode_decided, boot_mode: :starting)
+
+    # Telemetry and the Endpoint come up first so liveness answers while the
+    # probe and migrations run; the BootGate serves the starting card.
+    with {:ok, sup} <- supervise(doctor_children([])) do
+      case probe_and_migrate(env) do
+        {:ok, schema} ->
+          # The mode stays :starting until FirstRun runs, which is after the
+          # Repo, PubSub and the HTTP client in deferred_children/1; publishing
+          # it here would let a request through to children not yet started.
+          start_children(sup, deferred_children(first_run: [env: env, schema: schema]))
+
+        {:error, category, detail} ->
+          State.update(fn state ->
+            database = %{state.database | status: :error, category: category, detail: detail}
+            %{state | mode: :database_unavailable, database: database}
+          end)
+
+          Log.info(:boot_mode_decided,
+            boot_mode: :database_unavailable,
+            database_category: category
+          )
+
+          start_children(sup, [{Monitor, env: env}])
+      end
+    end
+  end
+
+  defp probe_and_migrate(env) do
+    with :ok <- Probe.run(env) do
+      migrate(env.settings.skip_migrations)
+    end
+  end
+
+  # Adds children to the running supervisor in order. A child that cannot
+  # start fails the application start, as it would have under start_link.
+  defp start_children(sup, children) do
+    Enum.reduce_while(children, {:ok, sup}, fn child, acc ->
+      spec = Supervisor.child_spec(child, [])
+
+      case Supervisor.start_child(sup, spec) do
+        {:ok, _} -> {:cont, acc}
+        {:error, reason} -> {:halt, {:error, {:boot_child_failed, spec.id, reason}}}
+      end
+    end)
+  end
+
+  # Migrations run here, synchronously, on a temporary Repo: see the
+  # moduledoc of Custyard.Boot.FirstRun for why not an Ecto.Migrator child.
+  defp migrate(skip?) do
+    case FirstRun.migrate(Custyard.Repo, skip: skip?) do
+      {:ok, schema} ->
+        {:ok, schema}
+
+      {:error, detail, reason} ->
+        Log.error(:boot_migration_failed, Log.failure(reason))
+        {:error, :migration_failed, detail}
+    end
+  end
+
+  defp print_report(env, booted_at) do
+    Console.puts(Report.to_text(env, build: Build.describe(), booted_at: booted_at))
+  end
+
+  defp supervise(children) do
+    Supervisor.start_link(children, strategy: :one_for_one, name: Custyard.Supervisor)
+  end
+
+  defp doctor_children(extra) do
+    early_children() ++ extra
+  end
+
+  # Dev and test: the whole tree in one start_link, Endpoint after the Repo
+  # and PubSub as it always was.
+  defp full_children(opts) do
+    [CustyardWeb.Telemetry | core_children(opts)]
+    |> Kernel.++([CustyardWeb.Endpoint])
+    |> add_optional_children()
+  end
+
+  @doc false
+  # What a production `:configured` boot starts before the probe: enough to
+  # answer liveness and serve the starting card.
+  @spec early_children() :: [Supervisor.child_spec() | module]
+  def early_children, do: [CustyardWeb.Telemetry, CustyardWeb.Endpoint]
+
+  @doc false
+  # Everything else, added after the probe and migrations succeed. Same order
+  # as `full_children/1` minus the two early children.
+  @spec deferred_children(keyword) :: [Supervisor.child_spec() | {module, term} | module]
+  def deferred_children(opts), do: core_children(opts) |> add_optional_children()
+
+  defp core_children(opts) do
+    [
+      Custyard.Repo,
+      {DNSCluster, query: Application.get_env(:custyard, :dns_cluster_query) || :ignore},
+      {Phoenix.PubSub, name: Custyard.PubSub},
+      {Finch, name: Custyard.Finch},
+      # Sliding-window rate limiter (owns its ETS table, sweeps stale entries)
+      {Custyard.RateLimit, []},
+      # Task supervisor for async webhook purposes (enrichment, notification, audit)
+      {Task.Supervisor, name: Custyard.TaskSupervisor, max_children: 100}
+    ]
+    |> maybe_add_first_run(opts[:first_run])
+  end
+
+  defp add_optional_children(children) do
+    children
+    |> maybe_add_scheduler()
+    |> maybe_add_outbound_queue()
+    |> maybe_add_acknowledgment_consumer()
+    |> maybe_add_intake_sweeps()
+    |> maybe_add_lmtp_server()
+    |> maybe_add_imap_pollers()
+  end
+
+  # After Finch (API mail adapters send through it), before the workers.
+  defp maybe_add_first_run(children, nil), do: children
+  defp maybe_add_first_run(children, opts), do: children ++ [{FirstRun, opts}]
 
   # Attach Sentry.LoggerHandler when (and only when) a DSN is configured.
   # :logger.add_handler/3 signals failure by return value, not by raising, so we
@@ -145,21 +291,19 @@ defmodule Custyard.Application do
   end
 
   # IMAP channels replaced the global poller (spec-inbound-channels D8). A
-  # deployment that still sets IMAP_ENABLED expects mail that would silently
-  # stop arriving, so it refuses to start until the variable is removed.
+  # deployment that still sets IMAP_ENABLED is reported by Custyard.Boot.Env;
+  # here it only means no pollers start.
   defp maybe_add_imap_pollers(children) do
-    if Application.get_env(:custyard, :legacy_imap_enabled, false) do
-      raise """
-      IMAP_ENABLED is no longer supported. Connect the mailbox as an IMAP channel
-      instead (organization page > Channels > New channel > "Read a mailbox over
-      IMAP"), then unset IMAP_ENABLED, IMAP_ORGANIZATION_ID, IMAP_HOST, IMAP_PORT,
-      IMAP_USERNAME, IMAP_PASSWORD, IMAP_FOLDER, IMAP_POLL_INTERVAL and IMAP_SSL.
-      """
-    end
+    cond do
+      Application.get_env(:custyard, :legacy_imap_enabled, false) ->
+        children
 
-    if Application.get_env(:custyard, :start_imap_pollers, true),
-      do: children ++ [Custyard.Email.ImapPollers],
-      else: children
+      Application.get_env(:custyard, :start_imap_pollers, true) ->
+        children ++ [Custyard.Email.ImapPollers]
+
+      true ->
+        children
+    end
   end
 
   @impl true
