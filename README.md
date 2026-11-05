@@ -89,22 +89,25 @@ paste block; the same report prints to the log. Fix them and restart. With
 variables set, the HTTP endpoint comes up first and serves a starting card while
 the database is probed and migrations run, so liveness answers throughout. With
 no reachable database it then serves a database card and retries
-every 10 s; once the database answers it exits so the platform restarts it into
-a normal boot. A failed migration does not retry. With an empty database it runs
+every 10 s; once the database answers it exits with status 1 so the platform's
+restart policy (Fly's default `on-failure`, compose `unless-stopped`) runs a
+normal boot. A failed migration does not retry. With an empty database it runs
 the migrations, creates the `super_admin` from `OPERATOR_EMAIL`, sends a welcome
 mail through the real adapter, and shows the setup checklist on `/` for the rest
-of that boot; sign in at `/operator/login`. Variable values never appear on a
-card or in the log, only names.
+of that boot; sign in at `/operator/login`. Credential values never appear on a
+card or in the log, only variable names; the SQLite path is the one value shown.
 
 Platform health checks must use `/api/health/live`, which is 200 whenever the
 process answers. `/api/health` is readiness and returns 503 in doctor modes.
 
 `bin/doctor` prints the same report from a shell (exit 1 unless complete);
-`--probe-database` also connects to the configured database. Before deploying
-against a remote database, probe a disposable one from your laptop:
+`--probe-database` also connects to the configured database and exits 1 if
+either has a problem. Before deploying against a remote database, probe a
+disposable one from your laptop. Images are published per commit as
+`sha-<commit>`; there is no `latest` tag:
 
 ```bash
-docker run --rm ghcr.io/custyard/custyard bin/doctor --probe-database libsql://scratch.turso.io --token "$TURSO_AUTH_TOKEN"
+docker run --rm ghcr.io/custyard/custyard:sha-<commit> bin/doctor --probe-database libsql://scratch.turso.io --token "$TURSO_AUTH_TOKEN"
 ```
 
 After login, `/operator/system` shows the same report plus the last mail

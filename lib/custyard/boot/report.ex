@@ -2,8 +2,10 @@ defmodule Custyard.Boot.Report do
   @moduledoc """
   Renders a `Custyard.Boot.Env` for the boot log and the doctor card.
 
-  Names only, never values: the text goes through the privacy logger and the
-  card is public while the instance is unconfigured.
+  Variable names and problem kinds, never credential values: the text goes
+  through the privacy logger and the card is public while the instance is
+  unconfigured. The SQLite path is the one configured value shown; it names a
+  file, not a secret.
   """
 
   alias Custyard.Boot.Env
