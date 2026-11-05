@@ -44,7 +44,8 @@ COPY rel rel
 # Build release
 RUN mix release
 RUN test -x _build/prod/rel/custyard/bin/operator && \
-    test -x _build/prod/rel/custyard/bin/acknowledgments
+    test -x _build/prod/rel/custyard/bin/acknowledgments && \
+    test -x _build/prod/rel/custyard/bin/data-volume
 
 # Runtime stage
 # Use Debian 12 (bookworm) to match the Elixir builder image base.

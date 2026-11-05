@@ -190,8 +190,12 @@ jobs:
           file: ./Containerfile
           platforms: linux/amd64
           push: false
+          load: true
+          tags: custyard:test
           cache-from: type=gha,scope=custyard-container
           cache-to: type=gha,mode=max,scope=custyard-container
+      - name: Smoke test release image
+        run: bin/container-smoke-test custyard:test
 
   publish:
     needs: [test, turso, release, security]
