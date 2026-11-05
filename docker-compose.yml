@@ -30,7 +30,9 @@ services:
     restart: unless-stopped
     healthcheck:
       # Liveness only: the container stays up in doctor mode to serve the card.
-      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-4000}/api/health/live"]
+      # $$ defers the expansion to the container shell; a plain $ would be
+      # the host's PORT at compose time.
+      test: ["CMD-SHELL", "curl -f http://localhost:$${PORT:-4000}/api/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 15s
