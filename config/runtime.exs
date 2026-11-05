@@ -384,22 +384,82 @@ if config_env() == :prod do
     session_signing_salt: session_signing_salt,
     session_encryption_salt: session_encryption_salt
 
-  database_url =
-    case System.get_env("DATABASE_URL") do
-      nil -> nil
-      "" -> nil
-      url -> url
+  generic_url = blank_to_nil.(System.get_env("DATABASE_URL"))
+  generic_token = blank_to_nil.(System.get_env("TURSO_AUTH_TOKEN"))
+  bunny_url = blank_to_nil.(System.get_env("BUNNY_DATABASE_URL"))
+  bunny_token = blank_to_nil.(System.get_env("BUNNY_DATABASE_AUTH_TOKEN"))
+  bunny_settings? = not is_nil(bunny_url) or not is_nil(bunny_token)
+
+  database_provider =
+    case blank_to_nil.(System.get_env("DATABASE_PROVIDER")) do
+      nil -> if bunny_settings?, do: "bunny", else: "auto"
+      value when value in ~w(sqlite turso bunny postgres) -> value
+      _ -> raise "DATABASE_PROVIDER must be sqlite, turso, bunny or postgres"
     end
+
+  if bunny_settings? and database_provider != "bunny",
+    do: raise("BUNNY_DATABASE_* settings conflict with DATABASE_PROVIDER")
+
+  if database_provider == "bunny" do
+    if bunny_url && generic_url && bunny_url != generic_url,
+      do:
+        raise("BUNNY_DATABASE_URL conflicts with DATABASE_URL; set one URL or identical aliases")
+
+    if bunny_token && generic_token && bunny_token != generic_token,
+      do: raise("BUNNY_DATABASE_AUTH_TOKEN conflicts with TURSO_AUTH_TOKEN")
+  end
+
+  database_url = if database_provider == "bunny", do: bunny_url || generic_url, else: generic_url
+
+  database_token =
+    if database_provider == "bunny", do: bunny_token || generic_token, else: generic_token
+
+  if database_provider in ~w(bunny turso postgres) and is_nil(database_url),
+    do:
+      raise(
+        "DATABASE_URL (or BUNNY_DATABASE_URL for Bunny) is required for the selected DATABASE_PROVIDER"
+      )
+
+  if database_provider == "sqlite" and (database_url || generic_token),
+    do: raise("DATABASE_PROVIDER=sqlite conflicts with remote database settings")
+
+  if database_provider == "auto" and is_nil(database_url) and generic_token,
+    do: raise("TURSO_AUTH_TOKEN is set without DATABASE_URL")
 
   pool_size = parse_int.("POOL_SIZE", 10)
   repo_adapter = Application.get_env(:custyard, :repo_adapter, Custyard.Repo.Adapter)
 
   cond do
-    is_binary(database_url) and String.starts_with?(database_url, "libsql://") and
+    database_provider == "bunny" and repo_adapter == Custyard.Repo.Adapter ->
+      uri =
+        case URI.new(database_url) do
+          {:ok, uri} -> uri
+          {:error, _} -> raise "Bunny database URL is invalid"
+        end
+
+      if uri.scheme not in ["libsql", "https"] or is_nil(uri.host) or uri.host == "" or
+           uri.query != nil or uri.userinfo != nil or uri.fragment != nil,
+         do:
+           raise(
+             "Bunny database URL must be an HTTPS or libsql URL without credentials or query parameters"
+           )
+
+      if is_nil(database_token),
+        do:
+          raise("BUNNY_DATABASE_AUTH_TOKEN (or TURSO_AUTH_TOKEN) is required for Bunny Database")
+
+      config :custyard, Custyard.Repo,
+        turso_url: database_url,
+        turso_auth_token: database_token,
+        turso_provider: :bunny,
+        pool_size: pool_size
+
+    database_provider in ["auto", "turso"] and is_binary(database_url) and
+      String.starts_with?(database_url, "libsql://") and
         repo_adapter == Custyard.Repo.Adapter ->
       # Turso: the same SQLite database, reached over HTTP by
       # Custyard.Turso.Connection. `turso db show --url` prints this URL.
-      turso_auth_token = blank_to_nil.(System.get_env("TURSO_AUTH_TOKEN"))
+      turso_auth_token = database_token
 
       plain_http? =
         database_url
@@ -423,9 +483,11 @@ if config_env() == :prod do
       config :custyard, Custyard.Repo,
         turso_url: database_url,
         turso_auth_token: turso_auth_token,
+        turso_provider: :turso,
         pool_size: pool_size
 
-    is_binary(database_url) and repo_adapter == Ecto.Adapters.Postgres and
+    database_provider in ["auto", "postgres"] and is_binary(database_url) and
+      repo_adapter == Ecto.Adapters.Postgres and
         (String.starts_with?(database_url, "postgres://") or
            String.starts_with?(database_url, "postgresql://")) ->
       config :custyard, Custyard.Repo,
@@ -438,7 +500,7 @@ if config_env() == :prod do
     repo_adapter == Ecto.Adapters.Postgres ->
       raise "DATABASE_URL is required when the app is compiled with Ecto.Adapters.Postgres"
 
-    repo_adapter == Custyard.Repo.Adapter ->
+    database_provider in ["auto", "sqlite"] and repo_adapter == Custyard.Repo.Adapter ->
       database_path = System.get_env("DATABASE_PATH") || "/data/custyard.db"
 
       if Path.type(database_path) != :absolute do

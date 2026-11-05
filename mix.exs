@@ -34,7 +34,7 @@ defmodule Custyard.MixProject do
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix_html, "~> 4.4"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
-      {:ecto, "~> 3.13"},
+      {:ecto, "~> 3.14 and >= 3.14.3"},
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, "~> 0.15"},
       {:postgrex, "~> 0.19", optional: true},

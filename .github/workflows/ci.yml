@@ -73,6 +73,10 @@ jobs:
   turso:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [turso, bunny]
 
     services:
       libsql:
@@ -82,6 +86,7 @@ jobs:
 
     env:
       TURSO_TEST_URL: libsql://127.0.0.1:8080?tls=0
+      TURSO_TEST_PROVIDER: ${{ matrix.provider }}
 
     steps:
       - uses: actions/checkout@v7
