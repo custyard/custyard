@@ -225,6 +225,34 @@ defmodule Custyard.Boot.FirstRunTest do
       assert %DateTime{} = State.get().first_run.completed_at
     end
 
+    test "a failed operator count stays in :starting and decides on the recheck" do
+      insert_operator_account(email: "ops@example.com")
+      State.put(%State{mode: :starting})
+      {:ok, database} = Agent.start_link(fn -> :down end)
+
+      count = fn ->
+        if Agent.get(database, & &1) == :down,
+          do: raise(RuntimeError, "COUNT_FAILURE_PRIVATE_CANARY"),
+          else: Custyard.OperatorAccounts.count_can_log_in()
+      end
+
+      log =
+        capture_log(fn ->
+          run(env(%{"OPERATOR_EMAIL" => ""}), count: count)
+          Process.sleep(60)
+        end)
+
+      # An unknown count is not "no operators": the mode is undecided.
+      assert State.mode() == :starting
+      assert log =~ "boot_operator_count_failed"
+      refute log =~ "COUNT_FAILURE_PRIVATE_CANARY"
+
+      Agent.update(database, fn _ -> :up end)
+      wait_for(fn -> State.mode() == :ready end)
+      # The operators were there all along, so this was not a first run.
+      assert State.get().first_run.completed_at == nil
+    end
+
     test "stays first_run without OPERATOR_EMAIL and flips to ready when an operator appears" do
       run(env(%{"OPERATOR_EMAIL" => ""}))
 

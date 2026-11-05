@@ -36,6 +36,7 @@ defmodule Custyard.Log do
     boot_first_run_step
     boot_migration_failed
     boot_mode_decided
+    boot_operator_count_failed
     boot_unconfigured
     boot_welcome_mail_accepted
     boot_welcome_mail_failed

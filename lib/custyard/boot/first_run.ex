@@ -24,7 +24,10 @@ defmodule Custyard.Boot.FirstRun do
        of operators who can log in. It happens here and not in
        `Custyard.Application` because a request let through now finds the
        Repo and PubSub running, and because `Custyard.Boot.State` is a
-       read-modify-write with no lock, so it wants one writer;
+       read-modify-write with no lock, so it wants one writer. A count that
+       fails (a remote database dropping one query) leaves the mode where
+       it is and is retried on the next check: an established install must
+       never look like a first run;
     1. the operator from `OPERATOR_EMAIL` is created if absent
        (`Custyard.OperatorAccounts.create_operator/2`, `via: "boot"`); an
        existing account is never modified;
@@ -41,8 +44,9 @@ defmodule Custyard.Boot.FirstRun do
   operators leaves it nil, so `/` is the landing page.
 
   Options: `env:` (required), `schema:` (the `migrate/2` result),
-  `recheck_every_ms:`, and `deliver:` (a function taking a `Swoosh.Email`,
-  default `Custyard.Mailer.deliver/1`).
+  `recheck_every_ms:`, `deliver:` (a function taking a `Swoosh.Email`,
+  default `Custyard.Mailer.deliver/1`) and `count:` (the operator count,
+  default `Custyard.OperatorAccounts.count_can_log_in/0`; tests make it fail).
   """
 
   use GenServer
@@ -59,7 +63,7 @@ defmodule Custyard.Boot.FirstRun do
           total: non_neg_integer,
           applied: non_neg_integer,
           skipped: boolean,
-          operators: non_neg_integer
+          operators: non_neg_integer | :unknown
         }
 
   # ---------------------------------------------------------------------------
@@ -122,7 +126,11 @@ defmodule Custyard.Boot.FirstRun do
            total: length(Ecto.Migrator.migrated_versions(repo)),
            applied: applied,
            skipped: skip,
-           operators: count_operators()
+           operators:
+             case count_operators() do
+               {:ok, count} -> count
+               {:error, _} -> :unknown
+             end
          }}
 
       {:error, _detail, _reason} = error ->
@@ -135,11 +143,12 @@ defmodule Custyard.Boot.FirstRun do
 
   defp migration_detail(version, name, _reason), do: "migration #{version}_#{name} failed"
 
-  # With migrations skipped the table may not exist yet.
-  defp count_operators do
-    OperatorAccounts.count_can_log_in()
+  # With migrations skipped the table may not exist yet, and a remote
+  # database can fail one query. Callers treat an error as unknown, never as 0.
+  defp count_operators(count \\ &OperatorAccounts.count_can_log_in/0) do
+    {:ok, count.()}
   rescue
-    _ -> 0
+    error -> {:error, error}
   end
 
   @doc "The `:schema` step text for a `migrate/2` result."
@@ -166,7 +175,8 @@ defmodule Custyard.Boot.FirstRun do
       schema: Keyword.get(opts, :schema),
       created?: false,
       recheck_every_ms: Keyword.get(opts, :recheck_every_ms, @recheck_every_ms),
-      deliver: Keyword.get(opts, :deliver, &Custyard.Mailer.deliver/1)
+      deliver: Keyword.get(opts, :deliver, &Custyard.Mailer.deliver/1),
+      count: Keyword.get(opts, :count, &OperatorAccounts.count_can_log_in/0)
     }
 
     {:ok, state, {:continue, :run}}
@@ -175,7 +185,7 @@ defmodule Custyard.Boot.FirstRun do
   @impl true
   def handle_continue(:run, state) do
     if state.schema, do: step(:schema, :ok, schema_detail(state.schema))
-    open_gate()
+    open_gate(state)
 
     created = bootstrap_operator(state.env)
     welcome_mail(created, state)
@@ -187,28 +197,43 @@ defmodule Custyard.Boot.FirstRun do
 
   # Step 0 of the moduledoc. Dev, test and a restarted FirstRun are never in
   # :starting and skip this.
-  defp open_gate do
+  defp open_gate(state) do
     if State.mode() == :starting do
-      mode = if count_operators() > 0, do: :ready, else: :first_run
-      State.update(&%{&1 | mode: mode})
-      Log.info(:boot_mode_decided, boot_mode: mode)
+      case count_operators(state.count) do
+        {:ok, count} -> publish(if count > 0, do: :ready, else: :first_run)
+        {:error, reason} -> count_failed(reason)
+      end
     end
   end
 
+  # A failed count stays in :starting (or :first_run) and lands here again
+  # through the recheck, so a database that recovers still gets a decision.
   defp decide(state) do
-    if count_operators() > 0 do
-      finish(state, State.mode())
-    else
-      if State.mode() != :first_run do
-        State.update(&%{&1 | mode: :first_run})
-        Log.info(:boot_mode_decided, boot_mode: :first_run)
-      end
+    case count_operators(state.count) do
+      {:ok, count} when count > 0 ->
+        finish(state, State.mode())
 
-      Process.send_after(self(), :recheck, state.recheck_every_ms)
+      {:ok, 0} ->
+        if State.mode() != :first_run, do: publish(:first_run)
+        recheck(state)
+
+      {:error, reason} ->
+        count_failed(reason)
+        recheck(state)
     end
 
     state
   end
+
+  defp publish(mode) do
+    State.update(&%{&1 | mode: mode})
+    Log.info(:boot_mode_decided, boot_mode: mode)
+  end
+
+  defp count_failed(reason),
+    do: Log.warning(:boot_operator_count_failed, Log.failure(reason))
+
+  defp recheck(state), do: Process.send_after(self(), :recheck, state.recheck_every_ms)
 
   # Runs once per process: no recheck is scheduled after it. A supervisor
   # restart finds the operator in place and completed_at already set.
