@@ -64,6 +64,8 @@ jobs:
       - run: mix format --check-formatted
       - run: mix test
       - run: mix credo --strict
+      - name: Test promotion validation
+        run: python3 -m unittest discover -s .github/scripts -p promotion_test.py
 
   # The suite again over the Turso driver (Custyard.Turso.Connection, Hrana
   # over HTTP) against a real libSQL server, the server Turso runs. One test

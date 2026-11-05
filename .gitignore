@@ -60,3 +60,6 @@ custyard-*.tar
 .env.secrets
 .env.local
 .env.*.local
+__pycache__/
+/.env.staging
+/.env.staging.secrets
