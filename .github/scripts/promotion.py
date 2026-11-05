@@ -4,6 +4,7 @@
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -13,11 +14,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
 REPOSITORY = "custyard/custyard"
 IMAGE = "ghcr.io/custyard/custyard"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+RECORD_FILE = "published-image.json"
+MAX_RECORD_SIZE = 4096
+MAX_RECORD_ARCHIVE = 65_536
 MANIFEST_TYPES = ", ".join([
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.oci.image.manifest.v1+json",
@@ -40,8 +45,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def read_bytes(url, headers=None, redirects=0, method="GET", data=None):
-    """Never forward credentials when GHCR redirects a blob to signed storage."""
+def read_bytes(url, headers=None, redirects=0, method="GET", data=None, limit=16_777_216):
+    """Never forward credentials when registries or artifacts redirect to storage."""
     require(redirects <= 3, "Remote response redirected too many times")
     parts = urllib.parse.urlsplit(url)
     require(parts.scheme == "https" and not parts.username, "Remote URL must use HTTPS")
@@ -53,25 +58,29 @@ def read_bytes(url, headers=None, redirects=0, method="GET", data=None):
                 # The successful PATCH body is irrelevant and may contain app
                 # configuration. Do not parse it, retain it or print it.
                 return b""
-            body = response.read(16_777_217)
-            require(len(body) <= 16_777_216, "Remote metadata exceeds the supported size")
+            body = response.read(limit + 1)
+            require(len(body) <= limit, "Remote metadata exceeds the supported size")
             return body
     except urllib.error.HTTPError as error:
         if error.code in (301, 302, 303, 307, 308) and error.headers.get("Location"):
             require(method == "GET", "Bunny container update redirected unexpectedly")
             target = urllib.parse.urljoin(url, error.headers["Location"])
-            return read_bytes(target, redirects=redirects + 1)
+            return read_bytes(target, redirects=redirects + 1, limit=limit)
         raise ValidationError("Remote metadata request failed") from None
 
 
-def github(path):
+def github_bytes(path, limit=16_777_216):
     token = os.environ.get("GITHUB_TOKEN", "")
     require(bool(token), "GITHUB_TOKEN is required")
-    return json.loads(read_bytes(f"https://api.github.com/repos/{REPOSITORY}/{path}", {
+    return read_bytes(f"https://api.github.com/repos/{REPOSITORY}/{path}", {
         "Authorization": "Bearer " + token,
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2026-03-10",
-    }))
+    }, limit=limit)
+
+
+def github(path):
+    return json.loads(github_bytes(path))
 
 
 def validate_inputs(environment, digest, source_sha, previous_digest, acceptance_record, health_url):
@@ -111,7 +120,7 @@ def validate_environment(environment):
                 "Production environment must have required reviewers")
 
 
-def validate_ci(source_sha):
+def validate_ci(source_sha, digest):
     query = urllib.parse.urlencode({"head_sha": source_sha, "branch": "main", "event": "push", "status": "success", "per_page": 100})
     runs = github("actions/workflows/ci.yml/runs?" + query).get("workflow_runs", [])
     for run in runs:
@@ -119,12 +128,66 @@ def validate_ci(source_sha):
                 and run.get("event") == "push" and run.get("status") == "completed"
                 and run.get("conclusion") == "success"):
             continue
-        jobs = github(f"actions/runs/{run['id']}/jobs?per_page=100").get("jobs", [])
+        run_id, attempt = run.get("id"), run.get("run_attempt")
+        if not (type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0):
+            continue
+        jobs = github(f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100").get("jobs", [])
         required = {"test", "turso (turso)", "turso (bunny)", "release", "security", "publish"}
         successful = {job.get("name") for job in jobs if job.get("conclusion") == "success"}
         if required <= successful:
-            return run["html_url"]
-    raise ValidationError("Candidate has no successful push-to-main CI run with all release/publish gates")
+            try:
+                validate_published_record(run_id, attempt, source_sha, digest)
+            except ValidationError:
+                continue
+            return run["html_url"] + f"/attempts/{attempt}"
+    raise ValidationError("Candidate has no successful push-to-main CI run with all release/publish gates and a matching published image record")
+
+
+def validate_published_record(run_id, attempt, source_sha, digest):
+    # Attempt-specific immutable names prevent a rerun from using the record
+    # of an earlier publish. Legacy, expired or incomplete records fail closed.
+    name = f"published-image-{run_id}-{attempt}"
+    query = urllib.parse.urlencode({"name": name, "per_page": 100})
+    listing = github(f"actions/runs/{run_id}/artifacts?{query}")
+    require(isinstance(listing, dict), "CI published image record list is invalid")
+    artifacts = listing.get("artifacts", [])
+    require(isinstance(artifacts, list) and type(listing.get("total_count")) is int
+            and listing["total_count"] == len(artifacts)
+            and len(artifacts) == 1, "CI published image record is missing or ambiguous")
+    artifact = artifacts[0]
+    require(isinstance(artifact, dict), "CI published image record metadata is invalid")
+    origin = artifact.get("workflow_run") or {}
+    require(isinstance(origin, dict), "CI published image record origin is invalid")
+    artifact_id, size = artifact.get("id"), artifact.get("size_in_bytes")
+    archive_digest = artifact.get("digest", "")
+    require(artifact.get("name") == name and artifact.get("expired") is False
+            and origin.get("id") == run_id and origin.get("head_sha") == source_sha
+            and origin.get("head_branch") == "main"
+            and type(artifact_id) is int and artifact_id > 0
+            and type(size) is int and 0 < size <= MAX_RECORD_ARCHIVE
+            and isinstance(archive_digest, str) and bool(DIGEST.fullmatch(archive_digest)),
+            "CI published image record is expired or invalid")
+    body = github_bytes(f"actions/artifacts/{artifact_id}/zip", limit=MAX_RECORD_ARCHIVE)
+    require(len(body) == size and "sha256:" + hashlib.sha256(body).hexdigest() == archive_digest,
+            "CI published image record archive does not match its digest")
+    try:
+        # Read one bounded member in memory; never extract supplied paths.
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            entries = archive.infolist()
+            require(len(entries) == 1 and entries[0].filename == RECORD_FILE
+                    and 0 < entries[0].file_size <= MAX_RECORD_SIZE,
+                    "CI published image record archive has invalid contents")
+            with archive.open(entries[0]) as member:
+                record_bytes = member.read(MAX_RECORD_SIZE + 1)
+            require(len(record_bytes) <= MAX_RECORD_SIZE, "CI published image record exceeds the supported size")
+            record = json.loads(record_bytes)
+    except (ValueError, OSError, RuntimeError, zipfile.BadZipFile):
+        raise ValidationError("CI published image record could not be decoded") from None
+    expected = {"version": 1, "repository": REPOSITORY, "image": IMAGE,
+                "source_sha": source_sha, "digest": digest, "run_id": run_id, "run_attempt": attempt}
+    require(isinstance(record, dict)
+            and all(type(record.get(key)) is int for key in ("version", "run_id", "run_attempt"))
+            and record == expected, "Candidate digest does not match the image published by this CI run attempt")
 
 
 def verify_hash(body, digest):
@@ -255,7 +318,7 @@ def main():
         update_bunny(digest, source_sha, previous_digest)
         return
     validate_environment(environment)
-    ci_url = validate_ci(source_sha)
+    ci_url = validate_ci(source_sha, digest)
     validate_image(digest, source_sha)
     if environment == "production":
         validate_bunny_previous(previous_digest)

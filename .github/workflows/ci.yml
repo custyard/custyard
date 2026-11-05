@@ -240,5 +240,28 @@ jobs:
           COMMIT: ${{ github.sha }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          digest = os.environ["DIGEST"]
+          assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), "Build did not return an immutable digest"
+          record = {"version": 1, "repository": os.environ["GITHUB_REPOSITORY"],
+                    "image": os.environ["IMAGE"], "source_sha": os.environ["COMMIT"],
+                    "digest": digest, "run_id": int(os.environ["GITHUB_RUN_ID"]),
+                    "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"])}
+          with open("published-image.json", "w", encoding="utf-8") as output:
+              json.dump(record, output, sort_keys=True)
+              output.write("\n")
+          PY
           printf 'Published: %s:sha-%s\n\nDeploy by digest: %s@%s\n' \
             "$IMAGE" "$COMMIT" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - name: Save immutable published image record
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: published-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: published-image.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+          archive: true
