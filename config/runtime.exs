@@ -302,15 +302,44 @@ else
   end
 end
 
-# Rate limiting keys on the client IP. Behind Fly's edge proxy every
-# request arrives from the proxy address, so without header trust all
-# visitors would collapse into one shared bucket. FLY_APP_NAME is set by
-# the Fly platform itself; trust is never enabled off-Fly, where the
-# spoofable headers would come straight from clients. CustyardWeb.ClientIP
-# only honors proxy-authoritative values (Fly-Client-IP, rightmost
-# X-Forwarded-For), so enabling trust here does not open a spoof bypass.
-if config_env() == :prod and System.get_env("FLY_APP_NAME") do
-  config :custyard, :trust_proxy_headers, true
+# Hosting, proxy trust and database provider are independent. Fly staging
+# may use Bunny Database while retaining Fly's proxy and file-volume checks.
+# Bunny origin authentication runs before trusting its forwarded headers.
+if config_env() == :prod do
+  storage_provider =
+    case blank_to_nil.(System.get_env("STORAGE_PROVIDER")) do
+      nil -> if System.get_env("FLY_APP_NAME"), do: :fly, else: :local
+      "local" -> :local
+      "fly" -> :fly
+      "bunny" -> :bunny
+      _ -> raise "STORAGE_PROVIDER must be local, fly or bunny"
+    end
+
+  proxy_provider =
+    case blank_to_nil.(System.get_env("PROXY_PROVIDER")) do
+      nil -> if System.get_env("FLY_APP_NAME"), do: :fly, else: :none
+      "none" -> :none
+      "fly" -> :fly
+      "bunny" -> :bunny
+      _ -> raise "PROXY_PROVIDER must be none, fly or bunny"
+    end
+
+  origin_secret = blank_to_nil.(System.get_env("BUNNY_ORIGIN_SECRET"))
+
+  if proxy_provider == :bunny and (is_nil(origin_secret) or byte_size(origin_secret) < 32),
+    do: raise("BUNNY_ORIGIN_SECRET must contain at least 32 bytes when PROXY_PROVIDER=bunny")
+
+  volume_id = blank_to_nil.(System.get_env("DATA_VOLUME_ID"))
+
+  if storage_provider == :bunny and is_nil(volume_id),
+    do: raise("DATA_VOLUME_ID is required when STORAGE_PROVIDER=bunny")
+
+  config :custyard,
+    storage_provider: storage_provider,
+    data_volume_id: volume_id,
+    proxy_provider: proxy_provider,
+    bunny_origin_secret: origin_secret,
+    trust_proxy_headers: proxy_provider == :fly
 end
 
 if config_env() == :prod do

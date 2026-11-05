@@ -41,7 +41,7 @@ defmodule Custyard.Release do
   def migrate do
     startup_task(:migrate, fn ->
       load_app()
-      Custyard.Storage.validate_fly_storage!()
+      Custyard.Storage.validate!()
 
       for repo <- repos() do
         case Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true)) do
@@ -55,7 +55,7 @@ defmodule Custyard.Release do
   def rollback(repo, version) do
     startup_task(:rollback, fn ->
       load_app()
-      Custyard.Storage.validate_fly_storage!()
+      Custyard.Storage.validate!()
 
       case Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version)) do
         {:ok, _, _} = result -> result
@@ -428,7 +428,7 @@ defmodule Custyard.Release do
   # filesystem when the Fly volume is missing. Shared with Custyard.Release.Dsar.
   def with_repo(fun) when is_function(fun, 0) do
     load_app()
-    Custyard.Storage.validate_fly_storage!()
+    Custyard.Storage.validate!()
 
     case Ecto.Migrator.with_repo(Repo, fn _repo -> fun.() end) do
       {:ok, result, _started} ->
