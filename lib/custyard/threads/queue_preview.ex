@@ -44,13 +44,15 @@ defmodule Custyard.Threads.QueuePreview do
 
     * `:count` – every message on the thread
     * `:exchanged` – messages exchanged with the customer
+    * `:recent` – messages since `since` (24 hours ago by default) that are
+      not automatic replies: the count `Custyard.Scoring` uses for velocity
     * `:last_id` – id of the newest exchanged message
     * `:last_staff_id` – id of the newest exchanged message from staff
 
   Staff spoke last exactly when `last_staff_id == last_id`. Pass the tenant id
   to keep the scan to that tenant's messages.
   """
-  def message_facts(tenant_id) do
+  def message_facts(tenant_id, since \\ DateTime.add(DateTime.utc_now(), -24, :hour)) do
     query =
       from(m in Message,
         group_by: m.thread_id,
@@ -58,6 +60,14 @@ defmodule Custyard.Threads.QueuePreview do
           thread_id: m.thread_id,
           count: count(m.id),
           exchanged: count(fragment("CASE WHEN ? THEN 1 END", exchanged(m))),
+          recent:
+            count(
+              fragment(
+                "CASE WHEN ? THEN 1 END",
+                m.inserted_at >= ^since and
+                  (is_nil(m.triage_class) or m.triage_class != :auto_response)
+              )
+            ),
           last_id: max(fragment("CASE WHEN ? THEN ? END", exchanged(m), m.id)),
           last_staff_id:
             max(fragment("CASE WHEN ? THEN ? END", exchanged(m) and staff_voice(m), m.id))
