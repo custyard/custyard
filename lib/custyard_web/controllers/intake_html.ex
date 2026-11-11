@@ -3,7 +3,7 @@ defmodule CustyardWeb.IntakeHTML do
   Templates for the public intake pages.
 
   `active.html.heex` and `passive.html.heex` are the two page modes;
-  `message_form.html.heex`, `conversation_banner.html.heex`, and
+  `message_form.html.heex`, `thread_banner.html.heex`, and
   `source_link.html.heex` embed as shared function components.
   """
 

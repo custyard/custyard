@@ -8,8 +8,8 @@ defmodule Custyard.MessageTest do
   describe "changeset/2" do
     test "valid with required fields" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_message(conversation_id: conv.id)
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_message(thread_id: conv.id)
       changeset = Message.changeset(%Message{}, attrs)
 
       assert changeset.valid?
@@ -17,8 +17,8 @@ defmodule Custyard.MessageTest do
 
     test "requires source" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_message(conversation_id: conv.id) |> Map.delete(:source)
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_message(thread_id: conv.id) |> Map.delete(:source)
       changeset = Message.changeset(%Message{}, attrs)
 
       refute changeset.valid?
@@ -27,26 +27,26 @@ defmodule Custyard.MessageTest do
 
     test "requires body" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_message(conversation_id: conv.id) |> Map.delete(:body)
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_message(thread_id: conv.id) |> Map.delete(:body)
       changeset = Message.changeset(%Message{}, attrs)
 
       refute changeset.valid?
       assert "can't be blank" in errors_on(changeset).body
     end
 
-    test "requires conversation_id" do
-      attrs = build_message() |> Map.delete(:conversation_id)
+    test "requires thread_id" do
+      attrs = build_message() |> Map.delete(:thread_id)
       changeset = Message.changeset(%Message{}, attrs)
 
       refute changeset.valid?
-      assert "can't be blank" in errors_on(changeset).conversation_id
+      assert "can't be blank" in errors_on(changeset).thread_id
     end
 
     test "validates body max length" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_message(conversation_id: conv.id, body: String.duplicate("a", 100_001))
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_message(thread_id: conv.id, body: String.duplicate("a", 100_001))
       changeset = Message.changeset(%Message{}, attrs)
 
       refute changeset.valid?
@@ -55,8 +55,8 @@ defmodule Custyard.MessageTest do
 
     test "accepts delivery_status in cast" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_message(conversation_id: conv.id, delivery_status: :pending)
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_message(thread_id: conv.id, delivery_status: :pending)
       changeset = Message.changeset(%Message{}, attrs)
 
       assert changeset.valid?
@@ -65,8 +65,8 @@ defmodule Custyard.MessageTest do
 
     test "delivery_status defaults to nil for inbound messages" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_message(conversation_id: conv.id)
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_message(thread_id: conv.id)
       changeset = Message.changeset(%Message{}, attrs)
 
       assert changeset.valid?
@@ -75,8 +75,8 @@ defmodule Custyard.MessageTest do
 
     test "rejects invalid delivery_status" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_message(conversation_id: conv.id, delivery_status: :invalid_status)
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_message(thread_id: conv.id, delivery_status: :invalid_status)
       changeset = Message.changeset(%Message{}, attrs)
 
       refute changeset.valid?
@@ -87,8 +87,8 @@ defmodule Custyard.MessageTest do
   describe "delivery_status_changeset/2" do
     test "sets a valid delivery status" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, delivery_status: :pending)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, delivery_status: :pending)
 
       for status <- [:sent, :failed, :bounced] do
         changeset = Message.delivery_status_changeset(message, status)
@@ -99,8 +99,8 @@ defmodule Custyard.MessageTest do
 
     test "rejects invalid delivery status" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, delivery_status: :pending)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, delivery_status: :pending)
 
       changeset = Message.delivery_status_changeset(message, :invalid)
       refute changeset.valid?
@@ -109,8 +109,8 @@ defmodule Custyard.MessageTest do
 
     test "requires delivery_status" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id)
 
       changeset = Message.delivery_status_changeset(message, nil)
       refute changeset.valid?
@@ -134,8 +134,8 @@ defmodule Custyard.MessageTest do
 
     test "delivery_status_changeset accepts :withheld" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, delivery_status: :pending)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, delivery_status: :pending)
 
       changeset = Message.delivery_status_changeset(message, :withheld)
       assert changeset.valid?
@@ -146,8 +146,8 @@ defmodule Custyard.MessageTest do
   describe "lettermint_message_id field" do
     test "changeset accepts lettermint_message_id" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      attrs = build_message(conversation_id: conv.id, lettermint_message_id: "lm-12345")
+      conv = insert_thread(organization_id: org.id)
+      attrs = build_message(thread_id: conv.id, lettermint_message_id: "lm-12345")
       changeset = Message.changeset(%Message{}, attrs)
 
       assert changeset.valid?
@@ -156,8 +156,8 @@ defmodule Custyard.MessageTest do
 
     test "lettermint_message_id is stored and retrievable" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, lettermint_message_id: "lm-persist-test")
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, lettermint_message_id: "lm-persist-test")
 
       reloaded = Custyard.Repo.get!(Message, message.id)
       assert reloaded.lettermint_message_id == "lm-persist-test"
@@ -165,19 +165,19 @@ defmodule Custyard.MessageTest do
 
     test "lettermint_message_id defaults to nil" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id)
 
       assert message.lettermint_message_id == nil
     end
 
     test "insert_idempotent/1 works with lettermint_message_id set" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       attrs =
         build_message(
-          conversation_id: conv.id,
+          thread_id: conv.id,
           message_id: "unique-lm-test-#{System.unique_integer()}",
           lettermint_message_id: "lm-idempotent-test"
         )
@@ -190,8 +190,8 @@ defmodule Custyard.MessageTest do
   describe "updated_at behavior" do
     test "updated_at is set on insert" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id)
 
       assert message.updated_at != nil
       assert message.inserted_at != nil
@@ -201,8 +201,8 @@ defmodule Custyard.MessageTest do
 
     test "updated_at changes when delivery_status is updated" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id, delivery_status: :pending)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id, delivery_status: :pending)
 
       original_updated_at = message.updated_at
 
@@ -220,8 +220,8 @@ defmodule Custyard.MessageTest do
 
     test "updated_at is persisted in the database" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
-      message = insert_message(conversation_id: conv.id)
+      conv = insert_thread(organization_id: org.id)
+      message = insert_message(thread_id: conv.id)
 
       reloaded = Repo.get!(Message, message.id)
       assert reloaded.updated_at != nil
@@ -232,28 +232,28 @@ defmodule Custyard.MessageTest do
   describe "insert_idempotent/1" do
     test "successful insert returns {:ok, message}" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
-      attrs = build_message(conversation_id: conv.id, message_id: "unique-msg-id-123")
+      attrs = build_message(thread_id: conv.id, message_id: "unique-msg-id-123")
 
       assert {:ok, message} = Message.insert_idempotent(attrs)
       assert message.id != nil
       assert message.message_id == "unique-msg-id-123"
-      assert message.conversation_id == conv.id
+      assert message.thread_id == conv.id
     end
 
     test "duplicate message_id returns existing message" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
       message_id = "duplicate-msg-id-#{System.unique_integer()}"
 
       # Insert the first message
-      attrs = build_message(conversation_id: conv.id, message_id: message_id, body: "First body")
+      attrs = build_message(thread_id: conv.id, message_id: message_id, body: "First body")
       {:ok, first_message} = Message.insert_idempotent(attrs)
 
       # Try to insert duplicate with different body
       duplicate_attrs =
-        build_message(conversation_id: conv.id, message_id: message_id, body: "Second body")
+        build_message(thread_id: conv.id, message_id: message_id, body: "Second body")
 
       {:ok, returned_message} = Message.insert_idempotent(duplicate_attrs)
 
@@ -263,20 +263,20 @@ defmodule Custyard.MessageTest do
     end
 
     test "validation errors still return {:error, changeset}" do
-      # Missing required field (conversation_id)
+      # Missing required field (thread_id)
       attrs = %{source: :email, body: "Test body", message_id: "msg-id"}
 
       assert {:error, changeset} = Message.insert_idempotent(attrs)
       refute changeset.valid?
-      assert "can't be blank" in errors_on(changeset).conversation_id
+      assert "can't be blank" in errors_on(changeset).thread_id
     end
 
     test "returns {:error, changeset} for invalid source" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
       attrs =
-        build_message(conversation_id: conv.id)
+        build_message(thread_id: conv.id)
         |> Map.put(:source, :invalid_source)
 
       assert {:error, changeset} = Message.insert_idempotent(attrs)
@@ -286,9 +286,9 @@ defmodule Custyard.MessageTest do
 
     test "works without message_id (nil)" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
-      attrs = build_message(conversation_id: conv.id, message_id: nil)
+      attrs = build_message(thread_id: conv.id, message_id: nil)
 
       assert {:ok, message} = Message.insert_idempotent(attrs)
       assert message.id != nil
@@ -297,10 +297,10 @@ defmodule Custyard.MessageTest do
 
     test "multiple messages without message_id are allowed" do
       org = insert_organization()
-      conv = insert_conversation(organization_id: org.id)
+      conv = insert_thread(organization_id: org.id)
 
-      attrs1 = build_message(conversation_id: conv.id, message_id: nil, body: "Message 1")
-      attrs2 = build_message(conversation_id: conv.id, message_id: nil, body: "Message 2")
+      attrs1 = build_message(thread_id: conv.id, message_id: nil, body: "Message 1")
+      attrs2 = build_message(thread_id: conv.id, message_id: nil, body: "Message 2")
 
       {:ok, msg1} = Message.insert_idempotent(attrs1)
       {:ok, msg2} = Message.insert_idempotent(attrs2)
@@ -314,11 +314,11 @@ defmodule Custyard.MessageTest do
 
   describe "prospect source and public_intake origin" do
     test "accepts source :prospect with origin :public_intake" do
-      conv = insert_conversation(source: :public_intake)
+      conv = insert_thread(source: :public_intake)
 
       attrs =
         build_message(
-          conversation_id: conv.id,
+          thread_id: conv.id,
           source: :prospect,
           origin: :public_intake,
           sender_email: nil,

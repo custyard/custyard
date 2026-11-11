@@ -5,7 +5,7 @@ defmodule Custyard.Project do
   Projects can be linked to an Organization (customer projects) or exist
   independently (internal projects per US-11).
 
-  Projects can optionally link to a Conversation (e.g., the initial onboarding request).
+  Projects can optionally link to a Thread (e.g., the initial onboarding request).
 
   ## Project Types
 
@@ -16,7 +16,7 @@ defmodule Custyard.Project do
   - Have no organization_id
   - Are never visible in the client portal
   - Use tags for categorization (e.g., "oss-library", "experiment", "web-tool")
-  - Appear in operator attention queue based on task due dates
+  - Appear in staff attention queue based on task due dates
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -24,32 +24,31 @@ defmodule Custyard.Project do
   @project_types [:customer, :internal]
 
   schema "projects" do
-    field :tenant_id, :id, default: 1
-    belongs_to :tenant, Custyard.Tenant, define_field: false
-    field :title, :string
-    field :description, :string
-    field :start_date, :date
-    field :target_completion_date, :date
-    field :portal_visible, :boolean, default: true
-    field :project_type, Ecto.Enum, values: @project_types, default: :customer
+    field(:tenant_id, :id)
+    belongs_to(:tenant, Custyard.Tenant, define_field: false)
+    field(:title, :string)
+    field(:description, :string)
+    field(:start_date, :date)
+    field(:target_completion_date, :date)
+    field(:portal_visible, :boolean, default: true)
+    field(:project_type, Ecto.Enum, values: @project_types, default: :customer)
 
     # Tags for categorization (especially useful for internal projects)
-    field :tags, {:array, :string}, default: []
+    field(:tags, {:array, :string}, default: [])
 
     # Template flag - templates are used to create new projects
-    field :is_template, :boolean, default: false
+    field(:is_template, :boolean, default: false)
 
     # Virtual field for computed progress data (set by Projects.with_progress/1)
     # Contains %{total: integer, done: integer, percentage: integer}
-    field :progress, :map, virtual: true
+    field(:progress, :map, virtual: true)
 
-    belongs_to :organization, Custyard.Organization
-    # Single linked conversation (e.g., initial onboarding request)
-    belongs_to :conversation, Custyard.Conversation
-    # All conversations associated with this project
-    has_many :conversations, Custyard.Conversation
-    has_many :tasks, Custyard.Task
-    has_many :inbound_routes, Custyard.InboundRoute
+    belongs_to(:organization, Custyard.Organization)
+    # Single linked thread (e.g., initial onboarding request)
+    belongs_to(:thread, Custyard.Thread)
+    # All threads associated with this project
+    has_many(:threads, Custyard.Thread)
+    has_many(:tasks, Custyard.WorkItem)
 
     timestamps(type: :utc_datetime)
   end
@@ -71,19 +70,19 @@ defmodule Custyard.Project do
       :tags,
       :is_template,
       :organization_id,
-      :conversation_id
+      :thread_id
     ])
     |> validate_required([:title])
     |> put_tenant()
     |> validate_required([:tenant_id])
     |> validate_tenant_unchanged()
-    |> validate_conversation_tenant()
+    |> validate_thread_tenant()
     |> foreign_key_constraint(:tenant_id)
     |> validate_inclusion(:project_type, @project_types)
     |> validate_completion_after_start()
     |> validate_internal_project_constraints()
     |> foreign_key_constraint(:organization_id)
-    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:thread_id)
   end
 
   @doc """
@@ -96,7 +95,7 @@ defmodule Custyard.Project do
       |> Map.put(:project_type, :internal)
       |> Map.put(:portal_visible, false)
       |> Map.put_new(:organization_id, nil)
-      |> Map.put_new(:conversation_id, nil)
+      |> Map.put_new(:thread_id, nil)
 
     changeset(project, attrs)
   end
@@ -128,8 +127,15 @@ defmodule Custyard.Project do
     case get_field(changeset, :organization_id) do
       id when is_integer(id) ->
         case Custyard.Repo.get(Custyard.Organization, id) do
-          %{tenant_id: tenant_id} -> put_change(changeset, :tenant_id, tenant_id)
-          _ -> changeset
+          %{tenant_id: tenant_id} ->
+            case get_field(changeset, :tenant_id) do
+              nil -> put_change(changeset, :tenant_id, tenant_id)
+              ^tenant_id -> changeset
+              _ -> add_error(changeset, :organization_id, "must belong to the same tenant")
+            end
+
+          _ ->
+            changeset
         end
 
       _ ->
@@ -143,15 +149,14 @@ defmodule Custyard.Project do
       else: changeset
   end
 
-  defp validate_conversation_tenant(changeset) do
-    case get_field(changeset, :conversation_id) do
+  defp validate_thread_tenant(changeset) do
+    case get_field(changeset, :thread_id) do
       id when is_integer(id) ->
-        case Custyard.Repo.get(Custyard.Conversation, id) do
+        case Custyard.Repo.get(Custyard.Thread, id) do
           %{tenant_id: tenant_id} ->
             if tenant_id == get_field(changeset, :tenant_id),
               do: changeset,
-              else:
-                add_error(changeset, :conversation_id, "must belong to the project's workspace")
+              else: add_error(changeset, :thread_id, "must belong to the project's workspace")
 
           _ ->
             changeset

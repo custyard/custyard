@@ -36,14 +36,14 @@ COPY priv/repo priv/repo
 # (enable_source_code_context). Must run before the release is assembled.
 RUN mix sentry.package_source_code
 
-# Release overlays (bin/operator, bin/acknowledgments) and env.sh.eex, which
+# Release overlays (bin/instance-admin, bin/acknowledgments) and env.sh.eex, which
 # turns Erlang distribution off. Copied late so edits here rebuild only the
 # release, and checked so a missing or non-executable overlay fails the build.
 COPY rel rel
 
 # Build release
 RUN mix release
-RUN test -x _build/prod/rel/custyard/bin/operator && \
+RUN test -x _build/prod/rel/custyard/bin/instance-admin && \
     test -x _build/prod/rel/custyard/bin/acknowledgments && \
     test -x _build/prod/rel/custyard/bin/data-volume
 
@@ -73,7 +73,7 @@ RUN groupadd --system custyard && \
 WORKDIR /app
 
 # Copy release from builder. It stays root-owned: under `fly ssh console`
-# root runs /app/bin/operator and /app/bin/acknowledgments before they drop
+# root runs /app/bin/instance-admin and /app/bin/acknowledgments before they drop
 # to custyard, so an app user able to write /app could plant code root runs.
 COPY --from=builder /app/_build/prod/rel/custyard ./
 
@@ -94,7 +94,7 @@ USER custyard
 EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD curl -f http://localhost:${PORT:-4000}/api/health
+  CMD curl -f -H "Host: ${PHX_HOST:-localhost}" http://localhost:${PORT:-4000}/api/health
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bin/custyard", "start"]

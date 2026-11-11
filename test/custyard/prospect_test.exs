@@ -7,36 +7,36 @@ defmodule Custyard.ProspectTest do
   import Custyard.Factory
 
   describe "create_changeset/2" do
-    test "requires conversation_id and access_token_hash" do
+    test "requires thread_id and access_token_hash" do
       changeset = Prospect.create_changeset(%Prospect{}, %{})
 
       refute changeset.valid?
-      assert "can't be blank" in errors_on(changeset).conversation_id
+      assert "can't be blank" in errors_on(changeset).thread_id
       assert "can't be blank" in errors_on(changeset).access_token_hash
     end
 
-    test "enforces one prospect per conversation" do
+    test "enforces one prospect per thread" do
       prospect = insert_prospect()
 
       assert {:error, changeset} =
                %Prospect{}
                |> Prospect.create_changeset(%{
-                 conversation_id: prospect.conversation_id,
+                 thread_id: prospect.thread_id,
                  access_token_hash: Token.generate() |> elem(1)
                })
                |> Repo.insert()
 
-      assert "has already been taken" in errors_on(changeset).conversation_id
+      assert "has already been taken" in errors_on(changeset).thread_id
     end
 
     test "enforces unique access_token_hash" do
       prospect = insert_prospect()
-      conversation = insert_conversation(source: :public_intake)
+      thread = insert_thread(source: :public_intake)
 
       assert {:error, changeset} =
                %Prospect{}
                |> Prospect.create_changeset(%{
-                 conversation_id: conversation.id,
+                 thread_id: thread.id,
                  access_token_hash: prospect.access_token_hash
                })
                |> Repo.insert()
@@ -47,7 +47,7 @@ defmodule Custyard.ProspectTest do
     test "does not cast email or notification fields" do
       changeset =
         Prospect.create_changeset(%Prospect{}, %{
-          conversation_id: 1,
+          thread_id: 1,
           access_token_hash: "hash",
           email: "sneaky@example.com",
           notify_on_reply: true,
@@ -76,7 +76,7 @@ defmodule Custyard.ProspectTest do
           # Must be ignored: not in the cast list
           access_token_hash: "attacker-controlled",
           revoked_at: now,
-          conversation_id: 999_999
+          thread_id: 999_999
         })
 
       assert changeset.valid?
@@ -85,7 +85,7 @@ defmodule Custyard.ProspectTest do
       assert Ecto.Changeset.get_change(changeset, :notify_on_reply) == true
       assert Ecto.Changeset.get_change(changeset, :access_token_hash) == nil
       assert Ecto.Changeset.get_change(changeset, :revoked_at) == nil
-      assert Ecto.Changeset.get_change(changeset, :conversation_id) == nil
+      assert Ecto.Changeset.get_change(changeset, :thread_id) == nil
     end
 
     test "downcases and trims the email at write", %{prospect: prospect} do

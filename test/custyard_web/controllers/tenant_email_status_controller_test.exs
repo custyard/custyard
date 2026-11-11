@@ -23,7 +23,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
 
     {:ok, connection} =
       EmailSetup.ensure_connection(
-        insert_operator_account(role: "admin", tenant_id: tenant.id),
+        insert_staff_account(role: "admin", tenant_id: tenant.id),
         tenant.id
       )
 
@@ -37,12 +37,12 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
       Repo.update!(Ecto.Changeset.change(connection, status_secret_ciphertext: ciphertext))
 
     org = insert_organization(tenant_id: tenant.id)
-    conversation = insert_conversation(tenant_id: tenant.id, organization_id: org.id)
+    thread = insert_thread(tenant_id: tenant.id, organization_id: org.id)
 
     message =
       insert_message(
-        conversation_id: conversation.id,
-        source: :operator,
+        thread_id: thread.id,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "tenant-provider-id"
       )
@@ -74,7 +74,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
        c do
     foreign =
       insert_message(
-        source: :operator,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "foreign-provider-id"
       )
@@ -91,7 +91,7 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
              "/api/webhook/email-status/lettermint",
              payload(c.message.lettermint_message_id)
            )
-           |> json_response(200) == %{"status" => "ignored", "reason" => "unknown_message"}
+           |> response(404)
 
     assert Repo.reload!(c.message).delivery_status == :sent
   end
@@ -112,13 +112,13 @@ defmodule CustyardWeb.TenantEmailStatusControllerTest do
   test "a tenant's inbound provider ID cannot authorize a foreign outbound transition", c do
     foreign =
       insert_message(
-        source: :operator,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "foreign-duplicate-provider-id"
       )
 
     insert_message(
-      conversation_id: c.message.conversation_id,
+      thread_id: c.message.thread_id,
       source: :email,
       delivery_status: nil,
       lettermint_message_id: foreign.lettermint_message_id

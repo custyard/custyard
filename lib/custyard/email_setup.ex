@@ -7,10 +7,9 @@ defmodule Custyard.EmailSetup do
     EmailConnection,
     InboundRoute,
     InboundRoutes,
-    OperatorAccess,
-    OperatorAccount,
-    Repo,
-    Tenant
+    StaffAccess,
+    StaffAccount,
+    Repo
   }
 
   alias Custyard.Email.{DeliveryStatus, ThreadHeaders}
@@ -44,8 +43,8 @@ defmodule Custyard.EmailSetup do
     end
   end
 
-  def set_default_channel(operator, tenant_id, channel_id) do
-    mutate(operator, tenant_id, fn ->
+  def set_default_channel(staff, tenant_id, channel_id) do
+    mutate(staff, tenant_id, fn ->
       with {:ok, connection} <- do_ensure_connection(tenant_id),
            {:ok, id} <- parse_channel_id(channel_id),
            true <-
@@ -56,13 +55,7 @@ defmodule Custyard.EmailSetup do
                  )
                ) do
         connection
-        |> Ecto.Changeset.change(
-          default_channel_id: id,
-          last_reply_accepted_at: nil,
-          last_reply_delivered_at: nil,
-          last_returning_reply_at: nil,
-          reply_evidence_after_message_id: message_high_water_mark()
-        )
+        |> Ecto.Changeset.change(default_channel_id: id)
         |> Ecto.Changeset.foreign_key_constraint(:default_channel_id)
         |> Repo.update()
       else
@@ -104,25 +97,19 @@ defmodule Custyard.EmailSetup do
   def credential_status(tenant_id, field) when field in ["project_token", "team_token"] do
     connection = connection(tenant_id)
 
-    cond do
-      connection &&
-          is_binary(Map.get(connection, String.to_existing_atom(field <> "_ciphertext"))) ->
-        :saved
-
-      default_tenant?(tenant_id) and match?({:ok, _}, env_credential(field)) ->
-        :installation
-
-      true ->
-        :missing
-    end
+    if connection &&
+         is_binary(Map.get(connection, String.to_existing_atom(field <> "_ciphertext"))),
+       do: :saved,
+       else: :missing
   end
 
-  def authorized?(%{role: "super_admin"}, tenant_id), do: not is_nil(Repo.get(Tenant, tenant_id))
-  def authorized?(%{role: "admin", tenant_id: tenant_id}, tenant_id), do: true
+  def authorized?(%{role: "admin", tenant_id: tenant_id}, tenant_id),
+    do: Custyard.Tenants.active?(tenant_id)
+
   def authorized?(_, _), do: false
 
-  def ensure_connection(operator, tenant_id),
-    do: mutate(operator, tenant_id, fn -> do_ensure_connection(tenant_id) end)
+  def ensure_connection(staff, tenant_id),
+    do: mutate(staff, tenant_id, fn -> do_ensure_connection(tenant_id) end)
 
   defp do_ensure_connection(tenant_id) do
     case connection(tenant_id) do
@@ -140,8 +127,8 @@ defmodule Custyard.EmailSetup do
     end
   end
 
-  def save_credentials(operator, tenant_id, attrs) do
-    mutate(operator, tenant_id, fn ->
+  def save_credentials(staff, tenant_id, attrs) do
+    mutate(staff, tenant_id, fn ->
       with {:ok, connection} <- do_ensure_connection(tenant_id),
            {:ok, secrets} <- encrypt_inputs(connection, attrs, ~w(project_token team_token)) do
         changeset = EmailConnection.changeset(connection, Map.take(attrs, ["project_id"]))
@@ -188,15 +175,15 @@ defmodule Custyard.EmailSetup do
       sending_checked_at: nil,
       sending_check_status: "unchecked",
       last_signed_inbound_at: nil,
-      latest_received_conversation_id: nil,
+      latest_received_thread_id: nil,
       last_returning_reply_at: nil,
       last_reply_accepted_at: nil,
       last_reply_delivered_at: nil
     )
   end
 
-  def check_connection(operator, tenant_id) do
-    with :ok <- authorize(operator, tenant_id),
+  def check_connection(staff, tenant_id) do
+    with :ok <- authorize(staff, tenant_id),
          %EmailConnection{} = connection <- connection(tenant_id) do
       snapshot = configuration_snapshot(connection)
 
@@ -211,7 +198,7 @@ defmodule Custyard.EmailSetup do
              token when is_binary(token) <- opts[:api_token],
              do: provider().ping_sending(token, api_options())
 
-      mutate(operator, tenant_id, fn ->
+      mutate(staff, tenant_id, fn ->
         current = current_configuration!(tenant_id, snapshot)
 
         current
@@ -229,8 +216,8 @@ defmodule Custyard.EmailSetup do
     end
   end
 
-  def import_route(operator, tenant_id, remote_id) when is_binary(remote_id) do
-    with :ok <- authorize(operator, tenant_id),
+  def import_route(staff, tenant_id, remote_id) when is_binary(remote_id) do
+    with :ok <- authorize(staff, tenant_id),
          %EmailConnection{project_id: project_id} = connection when is_binary(project_id) <-
            connection(tenant_id),
          snapshot = configuration_snapshot(connection),
@@ -239,7 +226,7 @@ defmodule Custyard.EmailSetup do
          true <- remote["project_id"] == project_id and remote["route_type"] == "inbound",
          true <- is_binary(remote["id"]) and remote["id"] != "",
          true <- is_binary(remote["inbound_route_domain"]) do
-      mutate(operator, tenant_id, fn ->
+      mutate(staff, tenant_id, fn ->
         current_configuration!(tenant_id, snapshot)
         # The actor write lock serializes local imports before checking ownership.
         case Repo.get_by(InboundRoute, lettermint_route_id: remote["id"]) do
@@ -273,8 +260,8 @@ defmodule Custyard.EmailSetup do
     end
   end
 
-  def bind_inbound_webhook(operator, tenant_id, route_id, webhook_id, secret) do
-    with :ok <- authorize(operator, tenant_id),
+  def bind_inbound_webhook(staff, tenant_id, route_id, webhook_id, secret) do
+    with :ok <- authorize(staff, tenant_id),
          %EmailConnection{} = connection <- connection(tenant_id),
          snapshot = configuration_snapshot(connection),
          %InboundRoute{tenant_id: ^tenant_id} = route <- Repo.get(InboundRoute, route_id),
@@ -282,7 +269,7 @@ defmodule Custyard.EmailSetup do
          {:ok, remote} <- provider().get_webhook(String.trim(webhook_id), opts),
          true <- valid_inbound_webhook?(remote, route),
          {:ok, ciphertext} <- encrypt_secret(secret, route_context(route)) do
-      mutate(operator, tenant_id, fn ->
+      mutate(staff, tenant_id, fn ->
         current_configuration!(tenant_id, snapshot)
 
         current_route!(route)
@@ -309,15 +296,15 @@ defmodule Custyard.EmailSetup do
     end
   end
 
-  def bind_status_webhook(operator, tenant_id, webhook_id, secret) do
-    with {:ok, connection} <- ensure_connection(operator, tenant_id),
+  def bind_status_webhook(staff, tenant_id, webhook_id, secret) do
+    with {:ok, connection} <- ensure_connection(staff, tenant_id),
          snapshot = configuration_snapshot(connection),
          {:ok, opts} <- snapshot.management,
          {:ok, remote} <- provider().get_webhook(String.trim(webhook_id), opts),
          :ok <- status_webhook_scope(remote),
          true <- valid_status_webhook?(remote, connection),
          {:ok, ciphertext} <- encrypt_secret(secret, secret_context(connection, "status_secret")) do
-      mutate(operator, tenant_id, fn ->
+      mutate(staff, tenant_id, fn ->
         current_configuration!(tenant_id, snapshot)
         |> Ecto.Changeset.change(
           status_webhook_id: remote["id"],
@@ -390,13 +377,17 @@ defmodule Custyard.EmailSetup do
         params["event"] == "message.inbound" and params["sandbox"] == false and
         get_in(normalized, [:metadata, :is_spam]) != true and
         is_binary(id) and
-        not Repo.exists?(from(m in Custyard.Message, where: m.provider_delivery_id == ^id))
+        not Repo.exists?(
+          from(m in Custyard.Message,
+            where: m.tenant_id == ^route.tenant_id and m.provider_delivery_id == ^id
+          )
+        )
 
     %{eligible?: eligible, provider_delivery_id: id}
   end
 
   @doc "Record a newly stored customer email, never triage notices or a repeated webhook."
-  def record_inbound(route, conversation, normalized, %{eligible?: true, provider_delivery_id: id}) do
+  def record_inbound(route, thread, normalized, %{eligible?: true, provider_delivery_id: id}) do
     Repo.transaction(fn ->
       Repo.update_all(
         from(c in EmailConnection,
@@ -406,26 +397,27 @@ defmodule Custyard.EmailSetup do
         []
       )
 
-      do_record_inbound(route, conversation, normalized, id)
+      do_record_inbound(route, thread, normalized, id)
     end)
 
+    broadcast(route.tenant_id)
     :ok
   end
 
-  def record_inbound(_route, _conversation, _normalized, _observation), do: :ok
+  def record_inbound(_route, _thread, _normalized, _observation), do: :ok
 
-  defp do_record_inbound(route, conversation, normalized, id) do
+  defp do_record_inbound(route, thread, normalized, id) do
     with %{webhook_secret_ciphertext: secret} <- Repo.get(InboundRoute, route.id),
          true <- secret == route.webhook_secret_ciphertext,
          %{tenant_id: tenant_id, suspect: false} <-
-           Repo.get(Custyard.Conversation, conversation.id),
+           Repo.get(Custyard.Thread, thread.id),
          true <- tenant_id == route.tenant_id,
          %Custyard.Message{} = message <-
            Repo.one(
              from(m in Custyard.Message,
                join: c in Custyard.InboundChannel,
                on: c.id == m.inbound_channel_id,
-               where: m.provider_delivery_id == ^id and m.conversation_id == ^conversation.id,
+               where: m.provider_delivery_id == ^id and m.thread_id == ^thread.id,
                where:
                  m.source == :email and m.origin == :lettermint and m.triage_class == :customer,
                where: is_nil(m.deleted_at) and m.is_internal_note == false,
@@ -438,7 +430,7 @@ defmodule Custyard.EmailSetup do
 
       evidence = [
         last_signed_inbound_at: observed,
-        latest_received_conversation_id: conversation.id
+        latest_received_thread_id: thread.id
       ]
 
       evidence =
@@ -451,7 +443,6 @@ defmodule Custyard.EmailSetup do
       )
 
       Repo.update_all(from(c in EmailConnection, where: c.tenant_id == ^tenant_id), set: evidence)
-      broadcast(tenant_id)
     end
 
     :ok
@@ -467,12 +458,12 @@ defmodule Custyard.EmailSetup do
 
     Repo.exists?(
       from(m in Custyard.Message,
-        join: c in assoc(m, :conversation),
+        join: c in assoc(m, :thread),
         join: connection in EmailConnection,
         on: connection.tenant_id == c.tenant_id,
-        where: m.conversation_id == ^message.conversation_id and m.id < ^message.id,
+        where: m.thread_id == ^message.thread_id and m.id < ^message.id,
         where: m.id > connection.reply_evidence_after_message_id,
-        where: m.message_id in ^references and m.source == :operator,
+        where: m.message_id in ^references and m.source == :staff,
         where: m.delivery_status in [:sent, :delivered] and not is_nil(m.lettermint_message_id),
         where: is_nil(m.deleted_at) and m.is_internal_note == false,
         where: is_nil(m.triage_class)
@@ -484,7 +475,7 @@ defmodule Custyard.EmailSetup do
     Repo.update_all(from(c in EmailConnection, where: c.tenant_id == ^tenant_id),
       set: [
         last_signed_inbound_at: nil,
-        latest_received_conversation_id: nil,
+        latest_received_thread_id: nil,
         last_returning_reply_at: nil
       ]
     )
@@ -524,8 +515,8 @@ defmodule Custyard.EmailSetup do
 
   def record_reply_accepted(%{lettermint_message_id: id} = message)
       when is_binary(id) and id != "" do
-    message = Repo.preload(message, :conversation)
-    record_reply_evidence(message.conversation.tenant_id, :last_reply_accepted_at, message.id)
+    message = Repo.preload(message, :thread)
+    record_reply_evidence(message.thread.tenant_id, :last_reply_accepted_at, message.id)
   end
 
   def record_reply_accepted(_message), do: :ok
@@ -551,29 +542,13 @@ defmodule Custyard.EmailSetup do
   def status_message_belongs?(connection, %{"data" => %{"message_id" => id}}) do
     Repo.exists?(
       from(m in Custyard.Message,
-        join: c in assoc(m, :conversation),
+        join: c in assoc(m, :thread),
         where: m.lettermint_message_id == ^id and c.tenant_id == ^connection.tenant_id
       )
     )
   end
 
   def status_message_belongs?(_, _), do: false
-
-  def legacy_status_allowed?(%{"data" => %{"message_id" => id}}) do
-    tenant_id =
-      Repo.one(
-        from(m in Custyard.Message,
-          join: c in assoc(m, :conversation),
-          where: m.lettermint_message_id == ^id,
-          select: c.tenant_id,
-          limit: 1
-        )
-      )
-
-    is_nil(tenant_id) or default_tenant?(tenant_id)
-  end
-
-  def legacy_status_allowed?(_), do: true
 
   defp record_reply_evidence(nil, _field, _message_id), do: :ok
 
@@ -629,47 +604,20 @@ defmodule Custyard.EmailSetup do
          ]}
 
       {:error, :not_configured} = error ->
-        if default_tenant?(tenant_id),
-          do: {:ok, Application.get_env(:custyard, Custyard.Mailer, [])},
-          else: error
+        error
 
       error ->
         error
     end
   end
 
-  defp credential(connection, tenant_id, field) do
+  defp credential(connection, _tenant_id, field) do
     ciphertext =
       connection && Map.get(connection, String.to_existing_atom(field <> "_ciphertext"))
 
-    cond do
-      is_binary(ciphertext) -> Credentials.decrypt(ciphertext, secret_context(connection, field))
-      default_tenant?(tenant_id) -> env_credential(field)
-      true -> {:error, :not_configured}
-    end
-  end
-
-  defp env_credential("team_token") do
-    case Application.get_env(:custyard, :lettermint, [])[:team_token] do
-      token when is_binary(token) and token != "" -> {:ok, token}
-      _ -> {:error, :not_configured}
-    end
-  end
-
-  defp env_credential("project_token") do
-    case Application.get_env(:custyard, Custyard.Mailer, [])[:api_token] do
-      token when is_binary(token) and token != "" -> {:ok, token}
-      _ -> {:error, :not_configured}
-    end
-  end
-
-  def default_tenant?(nil), do: false
-
-  def default_tenant?(tenant_id) do
-    case Repo.get(Tenant, tenant_id) do
-      %{slug: "default"} -> true
-      _ -> false
-    end
+    if is_binary(ciphertext),
+      do: Credentials.decrypt(ciphertext, secret_context(connection, field)),
+      else: {:error, :not_configured}
   end
 
   def project_id(tenant_id) do
@@ -767,7 +715,10 @@ defmodule Custyard.EmailSetup do
           {:cont, {:ok, acc}}
 
         value ->
-          case encrypt_secret(value, secret_context(connection, field)) do
+          case encrypt_changed_secret(connection, field, value) do
+            {:ok, nil} ->
+              {:cont, {:ok, acc}}
+
             {:ok, ciphertext} ->
               {:cont,
                {:ok, Map.put(acc, String.to_existing_atom(field <> "_ciphertext"), ciphertext)}}
@@ -777,6 +728,16 @@ defmodule Custyard.EmailSetup do
           end
       end
     end)
+  end
+
+  defp encrypt_changed_secret(connection, field, value) do
+    context = secret_context(connection, field)
+    current = Map.get(connection, String.to_existing_atom(field <> "_ciphertext"))
+
+    case Credentials.decrypt(current, context) do
+      {:ok, ^value} -> {:ok, nil}
+      _ -> encrypt_secret(value, context)
+    end
   end
 
   defp normalize_secret_input(value) when is_binary(value), do: String.trim(value)
@@ -795,11 +756,11 @@ defmodule Custyard.EmailSetup do
 
   defp encrypt_secret(_, _), do: {:error, :secret_required}
 
-  defp authorize(%OperatorAccount{} = operator, tenant_id) do
-    current = Repo.get(OperatorAccount, operator.id)
+  defp authorize(%StaffAccount{} = staff, tenant_id) do
+    current = Repo.get(StaffAccount, staff.id)
 
     if current && authorized?(current, tenant_id) &&
-         OperatorAccount.session_claim_matches?(current, operator.session_claim),
+         StaffAccount.session_claim_matches?(current, staff.session_claim),
        do: :ok,
        else: {:error, :unauthorized}
   end
@@ -808,12 +769,12 @@ defmodule Custyard.EmailSetup do
 
   # Provider reads happen outside the transaction. Every local write rechecks
   # current authority under the same lock used by staff removal/reassignment.
-  defp mutate(operator, tenant_id, fun) do
+  defp mutate(staff, tenant_id, fun) do
     Repo.transaction(fn ->
-      current = OperatorAccess.lock_current(operator)
+      current = StaffAccess.lock_current(staff)
 
       unless current && authorized?(current, tenant_id) &&
-               OperatorAccount.session_claim_matches?(current, operator.session_claim),
+               StaffAccount.session_claim_matches?(current, staff.session_claim),
              do: Repo.rollback(:unauthorized)
 
       case fun.() do

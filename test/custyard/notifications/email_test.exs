@@ -11,7 +11,7 @@ defmodule Custyard.Notifications.EmailTest do
     Logger.put_module_level(Email, :info)
 
     try do
-      ExUnit.CaptureLog.capture_log([metadata: [:conversation_id, :channel_id, :mode]], fun)
+      ExUnit.CaptureLog.capture_log([metadata: [:thread_id, :channel_id, :mode]], fun)
     after
       Logger.delete_module_level(Email)
       Enum.each(previous, fn {module, level} -> Logger.put_module_level(module, level) end)
@@ -21,24 +21,31 @@ defmodule Custyard.Notifications.EmailTest do
   setup do
     # Create test data with preloaded associations
     org = insert_organization(name: "Acme Corp")
+
+    Repo.get!(Custyard.Tenant, org.tenant_id)
+    |> Ecto.Changeset.change(name: "Acme Workspace")
+    |> Repo.update!()
+
+    configure_tenant_email(org.tenant_id)
+    insert_staff_account(tenant_id: org.tenant_id, email: "ops@custyard.test")
     contact = insert_contact(organization_id: org.id, name: "Alice", email: "alice@acme.com")
 
     conv =
-      insert_conversation(
+      insert_thread(
         organization_id: org.id,
         contact_id: contact.id,
         subject: "Urgent support needed"
       )
       |> Repo.preload([:organization, :contact])
 
-    {:ok, org: org, contact: contact, conversation: conv}
+    {:ok, org: org, contact: contact, thread: conv}
   end
 
   describe "deliver_neglect_alert/2" do
-    test "logs alert when email is disabled", %{conversation: conv} do
+    test "logs alert when email is disabled", %{thread: conv} do
       log = capture_info_log(fn -> assert Email.deliver_neglect_alert(conv, :warning) == :ok end)
       assert log =~ "neglect_notification_stubbed"
-      assert log =~ "conversation_id=#{conv.id}"
+      assert log =~ "thread_id=#{conv.id}"
 
       for private <- [conv.subject, "Acme Corp", "Alice", "alice@acme.com"],
           do: refute(log =~ private)
@@ -46,7 +53,7 @@ defmodule Custyard.Notifications.EmailTest do
       assert_no_email_sent()
     end
 
-    test "sends email when email is enabled", %{conversation: conv} do
+    test "sends email when email is enabled", %{thread: conv} do
       # Temporarily enable email
       original_value = Application.get_env(:custyard, :email_enabled)
       Application.put_env(:custyard, :email_enabled, true)
@@ -70,7 +77,7 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
-    test "sends critical alert with different styling", %{conversation: conv} do
+    test "sends critical alert with different styling", %{thread: conv} do
       Application.put_env(:custyard, :email_enabled, true)
 
       on_exit(fn ->
@@ -86,13 +93,13 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
-    test "uses configured operator email", %{conversation: conv} do
+    test "uses tenant staff recipients", %{thread: conv} do
       Application.put_env(:custyard, :email_enabled, true)
-      Application.put_env(:custyard, :operator_email, "ops@custyard.test")
+      Application.put_env(:custyard, :staff_email, "ops@custyard.test")
 
       on_exit(fn ->
         Application.delete_env(:custyard, :email_enabled)
-        Application.delete_env(:custyard, :operator_email)
+        Application.delete_env(:custyard, :staff_email)
       end)
 
       assert Email.deliver_neglect_alert(conv, :warning) == :ok
@@ -104,7 +111,7 @@ defmodule Custyard.Notifications.EmailTest do
 
     test "handles missing contact gracefully", %{org: org} do
       conv =
-        insert_conversation(organization_id: org.id, contact_id: nil)
+        insert_thread(organization_id: org.id, contact_id: nil)
         |> Repo.preload([:organization, :contact])
 
       Application.put_env(:custyard, :email_enabled, true)
@@ -124,7 +131,7 @@ defmodule Custyard.Notifications.EmailTest do
       contact = insert_contact(organization_id: org.id, name: nil, email: "anon@example.com")
 
       conv =
-        insert_conversation(organization_id: org.id, contact_id: contact.id)
+        insert_thread(organization_id: org.id, contact_id: contact.id)
         |> Repo.preload([:organization, :contact])
 
       Application.put_env(:custyard, :email_enabled, true)
@@ -140,9 +147,9 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
-    test "renders neutral label for conversations without an organization" do
+    test "renders neutral label for threads without an organization" do
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           subject: "Anonymous intake question"
@@ -164,9 +171,9 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
-    test "logs alert without crashing for conversations without an organization" do
+    test "logs alert without crashing for threads without an organization" do
       conv =
-        insert_conversation(organization_id: nil, source: :disambiguation)
+        insert_thread(organization_id: nil, source: :disambiguation)
         |> Repo.preload([:organization, :contact])
 
       # Default config has email_enabled=false, so this exercises the log stub
@@ -186,7 +193,7 @@ defmodule Custyard.Notifications.EmailTest do
           public_address: "support@acme.example.com",
           last_received_at: last_received_at
         )
-        |> Repo.preload(:organization)
+        |> Repo.preload(:tenant)
 
       {:ok, channel: channel}
     end
@@ -205,11 +212,11 @@ defmodule Custyard.Notifications.EmailTest do
 
     test "sends the notice when email is enabled", %{channel: channel} do
       Application.put_env(:custyard, :email_enabled, true)
-      Application.put_env(:custyard, :operator_email, "ops@custyard.test")
+      Application.put_env(:custyard, :staff_email, "ops@custyard.test")
 
       on_exit(fn ->
         Application.delete_env(:custyard, :email_enabled)
-        Application.delete_env(:custyard, :operator_email)
+        Application.delete_env(:custyard, :staff_email)
       end)
 
       assert Email.deliver_channel_quiet(channel) == :ok
@@ -220,7 +227,7 @@ defmodule Custyard.Notifications.EmailTest do
 
         for body <- [email.html_body, email.text_body] do
           assert body =~ "support@acme.example.com"
-          assert body =~ "Acme Corp"
+          assert body =~ "Acme Workspace"
           assert body =~ "2026-10-10 08:30 UTC"
           assert body =~ "72 hours"
           assert body =~ "silently disabled"
@@ -242,21 +249,21 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
-    test "copes with an organization that is not preloaded", %{channel: channel} do
+    test "uses workspace identity without preloading a customer", %{channel: channel} do
       Application.put_env(:custyard, :email_enabled, true)
       on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
 
-      channel = %{channel | organization: %Ecto.Association.NotLoaded{}}
+      channel = %{channel | tenant: %Ecto.Association.NotLoaded{}}
       assert Email.deliver_channel_quiet(channel) == :ok
 
       assert_email_sent(fn email ->
-        assert email.text_body =~ "Unlinked prospect"
+        assert email.text_body =~ "Acme Workspace"
       end)
     end
   end
 
   describe "deliver_delivery_failure/3" do
-    test "logs instead of sending when email is disabled", %{conversation: conv} do
+    test "logs instead of sending when email is disabled", %{thread: conv} do
       log =
         capture_info_log(fn ->
           assert Email.deliver_delivery_failure(conv, :bounced, "alice@acme.com") == :ok
@@ -268,7 +275,7 @@ defmodule Custyard.Notifications.EmailTest do
       assert_no_email_sent()
     end
 
-    test "names the conversation, organization and recipient", %{conversation: conv} do
+    test "names the thread, organization and recipient", %{thread: conv} do
       Application.put_env(:custyard, :email_enabled, true)
       on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
 
@@ -286,7 +293,7 @@ defmodule Custyard.Notifications.EmailTest do
     end
 
     test "marks a CC recipient and says the customer's copy is unaffected", %{
-      conversation: conv
+      thread: conv
     } do
       Application.put_env(:custyard, :email_enabled, true)
       on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
@@ -300,7 +307,7 @@ defmodule Custyard.Notifications.EmailTest do
       end)
     end
 
-    test "explains a suppression and escapes the recipient", %{conversation: conv} do
+    test "explains a suppression and escapes the recipient", %{thread: conv} do
       Application.put_env(:custyard, :email_enabled, true)
       on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
 

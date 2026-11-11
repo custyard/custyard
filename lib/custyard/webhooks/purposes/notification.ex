@@ -1,6 +1,6 @@
 defmodule Custyard.Webhooks.Purposes.Notification do
   @moduledoc """
-  Async operator notification after conversation creation/update.
+  Async staff notification after thread creation/update.
 
   Sends notifications via configured channels (PubSub for now,
   extensible to Slack, push notifications, email).
@@ -9,14 +9,14 @@ defmodule Custyard.Webhooks.Purposes.Notification do
   require Custyard.Log, as: Log
 
   @doc """
-  Notify operators about the new/updated conversation.
+  Notify staffs about the new/updated thread.
   """
-  def process(conversation, _normalized, _route_context) do
+  def process(thread, _normalized, _route_context) do
     # Broadcast a notification event for any real-time listeners
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "operator:notifications",
-      {:new_message, conversation.id}
+      "staff:notifications",
+      {:new_message, thread.id}
     )
 
     :ok
@@ -24,7 +24,7 @@ defmodule Custyard.Webhooks.Purposes.Notification do
     error ->
       Log.error(
         :webhook_notification_failed,
-        [conversation_id: conversation.id] ++ Log.failure(error)
+        [thread_id: thread.id] ++ Log.failure(error)
       )
 
       :ok

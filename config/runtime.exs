@@ -29,20 +29,8 @@ blank_to_nil = fn
   value -> value
 end
 
-# Colonel acknowledgments are on by default in production only. Unset means
-# disabled in dev and test, so a shell holding production broker secrets never
-# consumes the production queue (the same reasoning as the prod-only Sentry
-# block below). Whether URL and source are complete is decided at application
-# start (Custyard.Acknowledgments.Config.startup/2), not here, so release
-# commands such as bin/operator still run when that configuration is broken.
-acknowledgments_enabled =
-  case System.get_env("ACKNOWLEDGMENTS_ENABLED") do
-    value when value in [nil, ""] -> config_env() == :prod
-    "true" -> true
-    "false" -> false
-    _ -> raise "ACKNOWLEDGMENTS_ENABLED must be true or false"
-  end
-
+# Tenant integration records own subscription credentials, queues and enabled state.
+# Consumption limits remain deployment settings.
 acknowledgments_prefetch =
   case System.get_env("ACKNOWLEDGMENTS_PREFETCH") do
     value when value in [nil, ""] ->
@@ -55,20 +43,31 @@ acknowledgments_prefetch =
       end
   end
 
-config :custyard, :acknowledgments,
-  enabled: acknowledgments_enabled,
-  url: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_AMQP_URL")),
-  source: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_SOURCE")),
-  queue: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_QUEUE")) || "custyard.acknowledgments",
-  prefetch: acknowledgments_prefetch
+config :custyard, :acknowledgments, prefetch: acknowledgments_prefetch
 
-# Helper to add webhook secret from env var if set
-maybe_put_env_secret = fn map, key, env_var ->
-  case System.get_env(env_var) do
-    nil -> map
-    "" -> map
-    value -> Map.put(map, key, value)
+# An installation-level stop for recovery and provider incidents. Never start
+# restored mail workers until an operator has reconciled the archived queue.
+outbound_delivery_enabled =
+  case System.get_env("OUTBOUND_DELIVERY_ENABLED") do
+    value when value in [nil, "true"] -> true
+    "false" -> false
+    _ -> raise "OUTBOUND_DELIVERY_ENABLED must be true or false"
   end
+
+config :custyard, :outbound_delivery_enabled, outbound_delivery_enabled
+
+# clamd must be reachable only through a trusted private network. Without an
+# endpoint attachments remain quarantined; receiving email remains available.
+if clamav_host = blank_to_nil.(System.get_env("CLAMAV_HOST")) do
+  clamav_port = parse_int.("CLAMAV_PORT", 3310)
+  clamav_timeout = parse_int.("CLAMAV_TIMEOUT_MS", 10_000)
+
+  if clamav_port not in 1..65_535 or clamav_timeout not in 100..60_000,
+    do: raise("CLAMAV_PORT or CLAMAV_TIMEOUT_MS is outside its allowed range")
+
+  config :custyard,
+    attachment_scanner: Custyard.Attachments.ClamAV,
+    attachment_scanner_options: [host: clamav_host, port: clamav_port, timeout: clamav_timeout]
 end
 
 # Configure Swoosh mailer for production
@@ -77,7 +76,7 @@ if config_env() == :prod do
   #
   # The old behaviour — unset or misspelled silently keeps Swoosh's
   # in-memory Local adapter — is the worst kind of failure this app has.
-  # Operator login is magic-link-only, so a discarded mail queue is not
+  # Staff login is magic-link-only, so a discarded mail queue is not
   # degraded service, it is total lockout: nobody can sign in, and every
   # claim confirmation, arrival notification, and prospect receipt is
   # accepted and thrown away with no error anywhere. Refusing to boot
@@ -85,7 +84,7 @@ if config_env() == :prod do
   #
   # This is deliberately stricter than the Lettermint route-provisioning
   # management configuration below, which can remain unavailable without
-  # preventing operators from opening existing conversations.
+  # preventing staffs from opening existing threads.
   known_mail_adapters = ~w(mailgun sendgrid smtp postmark lettermint local)
 
   mail_adapter =
@@ -102,7 +101,7 @@ if config_env() == :prod do
 
       Set it to one of: #{Enum.join(known_mail_adapters, ", ")}
 
-      Operator login is magic-link-only, so an instance without working
+      Staff login is magic-link-only, so an instance without working
       mail cannot be signed into at all. Use MAIL_ADAPTER=local to run
       without outbound mail on purpose — it discards every message.
       """
@@ -115,7 +114,7 @@ if config_env() == :prod do
 
       An unrecognized value used to fall through to the in-memory Local
       adapter, which accepts and discards every message — including the
-      magic links operators sign in with.
+      magic links staffs sign in with.
       """
 
     true ->
@@ -126,7 +125,7 @@ if config_env() == :prod do
     IO.warn("""
     MAIL_ADAPTER=local: outbound mail is discarded.
 
-    Magic-link logins, prospect receipts, and operator notifications will
+    Magic-link logins, prospect receipts, and staff notifications will
     not be delivered. This is only appropriate for a smoke-test instance.
     """)
   end
@@ -164,9 +163,7 @@ if config_env() == :prod do
         # Swoosh.Adapters.Lettermint available since swoosh 1.17+
         config :custyard, Custyard.Mailer,
           adapter: Swoosh.Adapters.Lettermint,
-          api_token:
-            blank_to_nil.(System.get_env("LETTERMINT_PROJECT_TOKEN")) ||
-              blank_to_nil.(System.get_env("LETTERMINT_API_KEY")),
+          api_token: blank_to_nil.(System.get_env("LETTERMINT_PROJECT_TOKEN")),
           base_url:
             blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
 
@@ -248,12 +245,6 @@ if lmtp_enabled do
     num_acceptors: parse_int.("LMTP_NUM_ACCEPTORS", 5)
 end
 
-# IMAP channels (spec-inbound-channels D8) replaced the single global IMAP
-# poller. A leftover IMAP_ENABLED is reported at application start
-# (Custyard.Application), not raised here, so release commands still run.
-config :custyard,
-  legacy_imap_enabled: blank_to_nil.(System.get_env("IMAP_ENABLED")) not in [nil, "false"]
-
 # Encryption key for stored third-party credentials such as IMAP channel
 # passwords (Custyard.Credentials). Base64 of 32 bytes. A malformed key fails
 # here; a missing one only blocks storing a credential.
@@ -280,27 +271,15 @@ case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY")) do
       previous: previous
 end
 
-# Sending tokens never authenticate management requests. These environment
-# credentials belong only to the default tenant; other tenants save their own
-# encrypted connection in Email setup.
-lettermint_api_url =
-  blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
-
-lettermint_team_token = blank_to_nil.(System.get_env("LETTERMINT_TEAM_TOKEN"))
-
-if lettermint_team_token do
-  config :custyard, :lettermint,
-    client: Custyard.Lettermint.HttpClient,
-    api_url: lettermint_api_url,
-    team_token: lettermint_team_token
-
-  config :custyard, :lettermint_configured, true
-else
-  if config_env() == :prod do
-    config :custyard, :lettermint, client: Custyard.Lettermint.DisabledClient
-    config :custyard, :lettermint_configured, false
-  end
-end
+# Support provider credentials are encrypted tenant records. Only the API
+# endpoint and implementation are installation configuration.
+config :custyard, :lettermint,
+  client:
+    if(config_env() == :test,
+      do: Custyard.Lettermint.MockClient,
+      else: Custyard.Lettermint.HttpClient
+    ),
+  api_url: blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
 
 # Hosting, proxy trust and database provider are independent. Fly staging
 # may use Bunny Database while retaining Fly's proxy and file-volume checks.
@@ -350,40 +329,22 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  # Email-only auth: operators log in via magic link, no password needed.
-  # OPERATOR_PASSWORD is no longer required.
+  # Email-only auth: staffs log in via magic link, no password needed.
+  # Instance administrators use email-only authentication.
 
   host = System.get_env("PHX_HOST") || "localhost"
   port = parse_int.("PORT", 4000)
-
-  # Per-source webhook HMAC secrets for routed webhooks (POST /api/webhook/route/:token)
-  # These enable signature verification on incoming webhook requests.
-  # If not configured, routed webhooks will reject requests in production.
-  webhook_secrets =
-    %{}
-    |> maybe_put_env_secret.(:lettermint, "WEBHOOK_SECRET_LETTERMINT")
-    # Lettermint issues one whsec_ secret per webhook, so the delivery-status
-    # webhook (POST /api/webhook/email-status/lettermint) has its own.
-    |> maybe_put_env_secret.(:lettermint_status, "WEBHOOK_SECRET_LETTERMINT_STATUS")
-    |> maybe_put_env_secret.(:zendesk, "WEBHOOK_SECRET_ZENDESK")
-    |> maybe_put_env_secret.(:intercom, "WEBHOOK_SECRET_INTERCOM")
-    |> maybe_put_env_secret.(:slack, "WEBHOOK_SECRET_SLACK")
-
-  if map_size(webhook_secrets) > 0 do
-    config :custyard, :webhook_secrets, webhook_secrets
-  end
 
   # Email notifications for neglect alerts and system events
   # These configure the Notifications.Email module for sending alert emails
   config :custyard,
     email_enabled: System.get_env("EMAIL_NOTIFICATIONS_ENABLED") == "true",
-    operator_email: System.get_env("OPERATOR_NOTIFICATION_EMAIL") || "operator@example.com",
     email_from_name: System.get_env("EMAIL_FROM_NAME") || "Custyard Alerts",
     email_from_address: System.get_env("EMAIL_FROM_ADDRESS") || "alerts@custyard.local"
 
   # Derive session and LiveView salts from SECRET_KEY_BASE
   # This ensures unique salts per deployment without requiring additional env vars.
-  # Falls back to env vars if explicitly set (for backward compatibility or rotation).
+  # Explicit salt variables support installation-specific configuration and rotation.
   session_signing_salt =
     System.get_env("SESSION_SIGNING_SALT") ||
       Base.encode64(:crypto.hash(:sha256, "session_signing:" <> secret_key_base), padding: false)
@@ -550,6 +511,6 @@ if config_env() == :prod do
   config :custyard,
     upload_dir: System.get_env("UPLOAD_DIR") || "/data/uploads",
     # Inbound email attachments, served only through the authenticated
-    # operator endpoint (never a static path).
+    # staff endpoint (never a static path).
     attachment_dir: System.get_env("ATTACHMENT_DIR") || "/data/attachments"
 end

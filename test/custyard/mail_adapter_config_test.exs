@@ -23,7 +23,7 @@ defmodule Custyard.MailAdapterConfigTest do
   end
 
   describe "MAIL_ADAPTER in :prod" do
-    # Operator login is magic-link-only, so silently keeping the in-memory
+    # Staff login is magic-link-only, so silently keeping the in-memory
     # Local adapter locks everyone out with no error anywhere.
     test "an unset value refuses to boot" do
       System.delete_env("MAIL_ADAPTER")

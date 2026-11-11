@@ -69,7 +69,7 @@ echo "==> boot entrypoint migrations and Bunny proxy guard against isolated SQLi
 timeout 60 docker run -d --network none --label "$label" --name "$app" "${common[@]}" \
   -v "$app_volume:/data" -e DATABASE_PROVIDER=sqlite -e STORAGE_PROVIDER=local \
   -e PROXY_PROVIDER=bunny -e BUNNY_ORIGIN_SECRET="$origin_secret" \
-  -e PHX_HOST=smoke.example -e OPERATOR_EMAIL=operator@example.test "$image" >/dev/null
+  -e PHX_HOST=smoke.example -e INSTANCE_ADMIN_EMAIL=admin@example.test "$image" >/dev/null
 healthy=false
 for _ in $(seq 1 60); do
   if timeout 10 docker exec "$app" curl -fsS --connect-timeout 1 --max-time 3 \
@@ -94,16 +94,16 @@ expect_status() {
     echo "Expected HTTP $expected for $request_path, got $actual" >&2; timeout 10 docker logs "$app" >&2; exit 1
   fi
 }
-for route in /favicon.ico /operator/login '/live/websocket?vsn=2.0.0' '/live/longpoll?vsn=2.0.0' '/api/health?extra=1'; do
+for route in /favicon.ico /admin/login /app/login '/live/websocket?vsn=2.0.0' '/live/longpoll?vsn=2.0.0' '/api/health?extra=1'; do
   expect_status 403 "$route"
 done
 expect_status 200 /api/health
-expect_status 200 /operator/login -H 'Host: smoke.example' -H "X-Custyard-Origin: $origin_secret" \
+expect_status 200 /admin/login -H 'Host: smoke.example' -H "X-Custyard-Origin: $origin_secret" \
   -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Port: 1234' -H 'X-Forwarded-Host: spoofed.invalid'
 timeout 10 docker exec "$app" grep -Fiq 'strict-transport-security: max-age=31536000' /tmp/smoke-headers
-expect_status 301 /operator/login -H 'Host: tenant.smoke.example' -H "X-Custyard-Origin: $origin_secret" \
+expect_status 301 /app/login -H 'Host: tenant.smoke.example' -H "X-Custyard-Origin: $origin_secret" \
   -H 'X-Forwarded-Proto: http' -H 'X-Forwarded-Host: spoofed.invalid'
-timeout 10 docker exec "$app" grep -Fiq 'location: https://tenant.smoke.example/operator/login' /tmp/smoke-headers
+timeout 10 docker exec "$app" grep -Fiq 'location: https://tenant.smoke.example/app/login' /tmp/smoke-headers
 timeout 30 docker stop --timeout 20 "$app" >/dev/null
 case $(docker inspect --format '{{.State.ExitCode}}' "$app") in
   0|143) ;;

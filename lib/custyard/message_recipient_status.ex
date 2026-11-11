@@ -1,7 +1,7 @@
 defmodule Custyard.MessageRecipientStatus do
   @moduledoc """
   The latest delivery status of one recipient of an outbound message
-  (spec-conversation-loop, "Delivery Tracking").
+  (spec-thread-loop, "Delivery Tracking").
 
   Lettermint reports delivery per recipient. `Custyard.Email.DeliveryStatus`
   keeps one row per address a message was sent to and applies the rank and
@@ -27,6 +27,7 @@ defmodule Custyard.MessageRecipientStatus do
     field :status, Ecto.Enum, values: @statuses
     field :status_at, :utc_datetime
 
+    belongs_to :tenant, Custyard.Tenant
     belongs_to :message, Custyard.Message
 
     timestamps(type: :utc_datetime)
@@ -41,12 +42,33 @@ defmodule Custyard.MessageRecipientStatus do
   @doc false
   def changeset(recipient_status, attrs) do
     recipient_status
-    |> cast(attrs, [:message_id, :address, :role, :status, :status_at])
-    |> validate_required([:message_id, :address, :role, :status, :status_at])
+    |> cast(attrs, [:tenant_id, :message_id, :address, :role, :status, :status_at])
+    |> put_tenant()
+    |> validate_required([:tenant_id, :message_id, :address, :role, :status, :status_at])
     |> validate_length(:address, max: 255)
     |> foreign_key_constraint(:message_id)
     |> unique_constraint([:message_id, :address],
       name: :message_recipient_statuses_message_id_address_index
     )
+  end
+
+  defp put_tenant(changeset) do
+    case get_field(changeset, :message_id) do
+      id when is_integer(id) ->
+        case Custyard.Repo.get(Custyard.Message, id) do
+          %{tenant_id: tenant_id} ->
+            case get_field(changeset, :tenant_id) do
+              nil -> put_change(changeset, :tenant_id, tenant_id)
+              ^tenant_id -> changeset
+              _ -> add_error(changeset, :tenant_id, "does not match the parent")
+            end
+
+          _ ->
+            changeset
+        end
+
+      _ ->
+        changeset
+    end
   end
 end

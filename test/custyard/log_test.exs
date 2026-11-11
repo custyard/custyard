@@ -22,7 +22,7 @@ defmodule Custyard.LogTest do
   require Logger
   import ExUnit.CaptureLog
 
-  @canary "PRIVATE-CANARY-person@example.test-/operator/login/verify/credential\r\nFORGED EVENT"
+  @canary "PRIVATE-CANARY-person@example.test-/app/login/verify/credential\r\nFORGED EVENT"
 
   setup do
     previous = Logger.metadata()
@@ -41,7 +41,7 @@ defmodule Custyard.LogTest do
   test "metadata is an explicit typed allowlist and malformed values do not poison safe fields" do
     safe =
       Custyard.Log.sanitize_metadata(%{
-        operator_id: 12,
+        staff_id: 12,
         tenant_id: 4,
         message_id: 99,
         provider_status: 422,
@@ -60,7 +60,7 @@ defmodule Custyard.LogTest do
         error_type: RuntimeError
       })
 
-    assert safe.operator_id == 12
+    assert safe.staff_id == 12
     assert safe.tenant_id == 4
     assert safe.message_id == 99
     assert safe.provider_status == 422
@@ -253,7 +253,7 @@ defmodule Custyard.LogTest do
     capture_log(fn ->
       Log.warning(
         :logging_self_test,
-        [operator_id: 12, message_id: 34, tenant_id: 56] ++
+        [staff_id: 12, message_id: 34, tenant_id: 56] ++
           Log.failure({422, %{"code" => "validation_failed", "errors" => %{"from" => [@canary]}}})
       )
 
@@ -303,7 +303,7 @@ defmodule Custyard.LogTest do
   end
 
   test "OTP diagnostics retain the actual code origin without argument/state contents" do
-    Code.ensure_loaded!(CustyardWeb.Operator.SessionController)
+    Code.ensure_loaded!(CustyardWeb.Staff.SessionController)
 
     raw = %{
       level: :error,
@@ -312,7 +312,7 @@ defmodule Custyard.LogTest do
          %{
            reason:
              {%RuntimeError{message: @canary},
-              [{CustyardWeb.Operator.SessionController, :create, [@canary, @canary], [line: 30]}]},
+              [{CustyardWeb.Staff.SessionController, :create, [@canary, @canary], [line: 30]}]},
            state: @canary
          }},
       meta: %{mfa: {:gen_server, :error_info, 7}},
@@ -323,10 +323,10 @@ defmodule Custyard.LogTest do
     assert Enum.sort(Map.keys(safe)) == [:level, :meta, :msg]
     refute inspect(safe) =~ @canary
     assert safe.meta.error_type == "Elixir.RuntimeError"
-    assert safe.meta.origin == "Elixir.CustyardWeb.Operator.SessionController.create/2"
+    assert safe.meta.origin == "Elixir.CustyardWeb.Staff.SessionController.create/2"
     assert Custyard.Log.filter(safe, nil) == safe
     record = Formatter.format(safe, %{}) |> IO.iodata_to_binary() |> Jason.decode!()
-    assert record["origin"] == "Elixir.CustyardWeb.Operator.SessionController.create/2"
+    assert record["origin"] == "Elixir.CustyardWeb.Staff.SessionController.create/2"
     assert record["code_location"] == record["origin"]
     refute inspect(record) =~ @canary
 
@@ -337,7 +337,7 @@ defmodule Custyard.LogTest do
            [
              error_info:
                {:error, {:badkey, @canary},
-                [{CustyardWeb.Operator.SessionController, :create, 2, []}]}
+                [{CustyardWeb.Staff.SessionController, :create, 2, []}]}
            ]}
     }
 
@@ -436,10 +436,10 @@ defmodule Custyard.LogTest do
   test "logged changeset fields remain diagnostic without retaining values" do
     for schema <- [
           Custyard.Message,
-          Custyard.Conversation,
+          Custyard.Thread,
           Custyard.InboundChannel,
           Custyard.InboundRoute,
-          Custyard.OperatorAccount,
+          Custyard.StaffAccount,
           Custyard.AuditEvent
         ],
         field <- schema.__schema__(:fields) ++ schema.__schema__(:virtual_fields) do

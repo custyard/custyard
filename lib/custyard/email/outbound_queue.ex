@@ -1,8 +1,8 @@
 defmodule Custyard.Email.OutboundQueue do
   @moduledoc """
-  Drains persisted operator replies awaiting email delivery.
+  Drains persisted staff replies awaiting email delivery.
 
-  `Conversations.send_reply/3` commits a pending message before notifying this
+  `Threads.send_reply/3` commits a pending message before notifying this
   worker. A periodic scan also finds messages left pending by a process crash,
   supervisor saturation, or a lost wake-up. The worker is the sole automatic
   sender in the single-node deployment model.
@@ -12,7 +12,7 @@ defmodule Custyard.Email.OutboundQueue do
 
   import Ecto.Query
 
-  alias Custyard.{Message, Repo}
+  alias Custyard.{Message, Repo, Tenant}
   alias Custyard.Email.Outbound
 
   require Custyard.Log, as: Log
@@ -36,18 +36,25 @@ defmodule Custyard.Email.OutboundQueue do
 
   @doc "Drain one batch synchronously, used by the worker and focused tests."
   def drain_pending do
+    if Outbound.enabled?(), do: drain_enabled(), else: 0
+  end
+
+  defp drain_enabled do
     fail_stale_sending()
 
     pending =
       from(m in Message,
-        where: m.source == :operator and m.delivery_status == :pending,
+        join: t in Tenant,
+        on: t.id == m.tenant_id,
+        where: m.source == :staff and m.delivery_status == :pending,
+        where: t.outbound_paused == false,
         order_by: [asc: m.inserted_at, asc: m.id],
         limit: @batch_size
       )
       |> Repo.all()
 
     Enum.each(pending, fn message ->
-      case Log.operation([message_id: message.id, conversation_id: message.conversation_id], fn ->
+      case Log.operation([message_id: message.id, thread_id: message.thread_id], fn ->
              Outbound.deliver(message)
            end) do
         {:ok, _} -> :ok
@@ -63,7 +70,7 @@ defmodule Custyard.Email.OutboundQueue do
 
   A row is `:sending` only between `Outbound.deliver/1` claiming it and the
   mailer reporting back; one left there was interrupted by a crash. Whether
-  the provider accepted the email is unknown, so the operator decides on a
+  the provider accepted the email is unknown, so the staff decides on a
   resend rather than the queue delivering it again automatically.
   """
   def fail_stale_sending(grace_seconds \\ @stale_sending_seconds) do
@@ -72,7 +79,7 @@ defmodule Custyard.Email.OutboundQueue do
 
     stale =
       from(m in Message,
-        where: m.source == :operator and m.delivery_status == :sending,
+        where: m.source == :staff and m.delivery_status == :sending,
         where: m.updated_at < ^cutoff
       )
       |> Repo.all()

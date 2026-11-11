@@ -1,0 +1,1000 @@
+defmodule CustyardWeb.Prospect.ThreadLiveTest do
+  # Shares the rate-limit ETS table and rewrites bucket config — sequential only.
+  use CustyardWeb.ConnCase, async: false
+
+  import Custyard.Factory
+  import Ecto.Query
+  import Phoenix.LiveViewTest
+
+  alias Custyard.{Thread, Threads, Intake, Message, Prospect, RateLimit, Repo}
+  alias Custyard.Auth.Token
+
+  @generous [limit: 1000, window_ms: 60_000]
+  @unavailable "/threads/unavailable"
+
+  setup do
+    RateLimit.reset()
+    original = Application.get_env(:custyard, :rate_limit_buckets)
+    put_buckets()
+
+    on_exit(fn ->
+      Application.put_env(:custyard, :rate_limit_buckets, original)
+      RateLimit.reset()
+    end)
+
+    :ok
+  end
+
+  defp put_buckets(overrides \\ []) do
+    base = [
+      public_instance_ip: @generous,
+      intake_get: @generous,
+      intake_post: @generous,
+      thread_mount: @generous,
+      thread_reply: @generous,
+      email_capture: @generous,
+      claim_submit: @generous,
+      claim_confirm: @generous,
+      claim_email_send: @generous,
+      intake_arrival_email: @generous,
+      intake_receipt_email: @generous
+    ]
+
+    Application.put_env(:custyard, :rate_limit_buckets, Keyword.merge(base, overrides))
+  end
+
+  defp create_intake!(body \\ "Hello, I need help with X") do
+    source = insert_intake_source(mode: :active)
+
+    unless Repo.get_by(Custyard.EmailConnection, tenant_id: source.tenant_id),
+      do: configure_tenant_email(source.tenant_id)
+
+    {:ok, result} =
+      Intake.create_intake_thread(source.key, body, tenant_id: source.tenant_id)
+
+    result
+  end
+
+  defp message_count(thread_id) do
+    Repo.one(from m in Message, where: m.thread_id == ^thread_id, select: count())
+  end
+
+  # The reply box collapses behind "Add comment" whenever the prospect's own
+  # message is the most recent; open it (when present) before submitting so
+  # these tests exercise the submit path regardless of thread state.
+  defp submit_reply(view, body) do
+    if has_element?(view, ~s([data-testid="resume-add-comment-btn"])) do
+      view |> element(~s([data-testid="resume-add-comment-btn"])) |> render_click()
+    end
+
+    view
+    |> form(~s([data-testid="resume-reply-form"]), %{"reply" => %{"body" => body}})
+    |> render_submit()
+  end
+
+  describe "mount and thread rendering" do
+    test "only explicitly shared tasks appear and live changes refresh their state" do
+      %{thread: thread, access_token: token} = create_intake!()
+      other = insert_thread(source: :public_intake)
+
+      insert_task(
+        thread_id: other.id,
+        title: "Other thread task",
+        portal_visible: true
+      )
+
+      insert_task(
+        thread_id: thread.id,
+        title: "Private investigation",
+        portal_visible: false
+      )
+
+      shared =
+        insert_task(
+          thread_id: thread.id,
+          title: "Send corrected invoice",
+          portal_visible: true,
+          due_at: ~U[2026-11-20 16:45:00Z]
+        )
+
+      staff = insert_staff_account(role: "admin")
+
+      {:ok, _label} =
+        Custyard.Labels.create_and_assign(
+          Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id)),
+          thread,
+          "Private label"
+        )
+
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert has_element?(
+               view,
+               "[data-testid=resume-task-#{shared.id}]",
+               "Send corrected invoice"
+             )
+
+      assert html =~ "2026-11-20 16:45 UTC"
+      refute html =~ "Private investigation"
+      refute html =~ "Other thread task"
+      refute html =~ "Private label"
+      refute has_element?(view, "[data-testid=resume-tasks] button")
+
+      {:ok, shared} = Threads.update_task_state(shared, :done)
+      assert has_element?(view, "[data-testid=resume-task-#{shared.id}]", "Done")
+      {:ok, _} = Threads.update_task(shared, %{portal_visible: false})
+      refute has_element?(view, "[data-testid=resume-tasks]")
+    end
+
+    test "task refresh does not reveal new content after the token is revoked" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
+      prospect = Intake.get_prospect(thread)
+
+      prospect
+      |> Ecto.Changeset.change(revoked_at: DateTime.utc_now() |> DateTime.truncate(:second))
+      |> Repo.update!()
+
+      {:ok, _} =
+        Threads.create_task(%{
+          thread_id: thread.id,
+          title: "Must remain private",
+          portal_visible: true
+        })
+
+      assert_redirect(view, @unavailable)
+    end
+
+    test "message notifications reject a revoked credential without an access-change broadcast" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
+
+      Intake.get_prospect(thread)
+      |> Ecto.Changeset.change(revoked_at: DateTime.utc_now(:second))
+      |> Repo.update!()
+
+      insert_message(thread_id: thread.id, body: "Private after revocation")
+      send(view.pid, {:message_added, thread.id})
+
+      assert_redirect(view, @unavailable)
+    end
+
+    test "a rotated credential cannot claim a slug on an already connected view" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, view, _} = live(build_conn(), ~p"/threads/#{token}")
+
+      Intake.get_prospect(thread)
+      |> Prospect.rotate_token_changeset(Token.hash("replacement-token"))
+      |> Repo.update!()
+
+      render_click(view, "claim_slug", %{
+        "claim" => %{"slug" => "revoked-claim", "email" => "person@example.com"}
+      })
+
+      assert_redirect(view, @unavailable)
+      refute Custyard.Slugs.get_claim_for_thread(thread.id)
+    end
+
+    test "a fresh session shows the thread including staff replies" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      insert_message(
+        thread_id: thread.id,
+        source: :staff,
+        body: "Staff here, happy to help",
+        sender_email: "staff-private@example.com"
+      )
+
+      # Cookie-less fresh conn: the URL alone is the credential.
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert html =~ ~s(data-testid="resume-thread")
+      assert html =~ "Hello, I need help with X"
+      assert html =~ "Staff here, happy to help"
+      assert html =~ "Support Team"
+      # Sender identity never renders — not even the staff address.
+      refute html =~ "staff-private@example.com"
+    end
+
+    test "the reply box is gated by who spoke last" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      # Prospect's own message is the most recent → collapsed behind a button.
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
+      assert html =~ ~s(data-testid="resume-add-comment")
+      refute html =~ ~s(data-testid="resume-reply-form")
+
+      # Clicking "Add comment" reveals the form in place.
+      html = view |> element(~s([data-testid="resume-add-comment-btn"])) |> render_click()
+      assert html =~ ~s(data-testid="resume-reply-form")
+
+      # When the team spoke last, the form shows automatically as "Reply".
+      insert_message(thread_id: thread.id, source: :staff, body: "On it!")
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+      assert html =~ ~s(data-testid="resume-reply-form")
+      refute html =~ ~s(data-testid="resume-add-comment")
+    end
+
+    test "internal notes are never rendered" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      insert_message(
+        thread_id: thread.id,
+        source: :staff,
+        body: "INTERNAL: lowball them",
+        is_internal_note: true
+      )
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      refute html =~ "INTERNAL: lowball them"
+    end
+
+    test "a thread id alone grants nothing (IDOR)" do
+      %{thread: thread} = create_intake!()
+
+      for guess <- [
+            "#{thread.id}",
+            "0",
+            "999999",
+            "id-#{thread.id}",
+            String.duplicate("a", 43)
+          ] do
+        assert {:error, {:redirect, %{to: @unavailable}}} =
+                 live(build_conn(), ~p"/threads/#{guess}")
+      end
+    end
+
+    test "a revoked prospect gets the same uniform unavailable page as an invalid token" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _prospect} = Intake.revoke_thread_access(thread)
+
+      assert {:error, {:redirect, %{to: @unavailable}}} =
+               live(build_conn(), ~p"/threads/#{token}")
+
+      # Identical failure rendering for every class: same redirect target,
+      # one static page.
+      html = build_conn() |> get(@unavailable) |> html_response(200)
+      assert html =~ "Thread unavailable"
+      refute html =~ thread.subject
+    end
+
+    test "the email prompt renders only while no email is captured" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+      assert html =~ ~s(data-testid="resume-email-prompt")
+      refute html =~ ~s(data-testid="resume-notify-toggle")
+
+      {:ok, _thread} = Intake.capture_email(thread, "captured@example.com")
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+      refute html =~ ~s(data-testid="resume-email-prompt")
+      assert html =~ ~s(data-testid="resume-notify-toggle")
+    end
+
+    test "mounts are rate limited per client IP with a graceful redirect" do
+      put_buckets(thread_mount: [limit: 2, window_ms: 60_000])
+      %{access_token: token} = create_intake!()
+
+      # First page view: disconnected + connected mount = the whole budget.
+      {:ok, _view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert {:error, {:redirect, %{to: @unavailable}}} =
+               live(build_conn(), ~p"/threads/#{token}")
+    end
+  end
+
+  describe "deleted messages (staff soft delete)" do
+    test "a deleted message renders the tombstone, never the original body" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      message =
+        insert_message(
+          thread_id: thread.id,
+          source: :staff,
+          body: "Staff reply sent by mistake"
+        )
+
+      staff = insert_staff_account(role: "admin")
+      {:ok, _deleted} = Threads.soft_delete_message(message, staff)
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert html =~ ~s(data-testid="resume-message-tombstone")
+      assert html =~ "This message was deleted"
+      refute html =~ "Staff reply sent by mistake"
+    end
+
+    test "an already-open view swaps to the tombstone when the delete broadcasts" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      # A follow-up with a body distinct from the intake message: the intake
+      # body seeds the thread subject, which stays visible after the
+      # delete — only the message body must vanish.
+      message =
+        insert_message(
+          thread_id: thread.id,
+          source: :prospect,
+          body: "Accidentally pasted a password here"
+        )
+
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
+      assert html =~ "Accidentally pasted a password here"
+
+      staff = insert_staff_account(role: "admin")
+      {:ok, _deleted} = Threads.soft_delete_message(message, staff)
+
+      # The message_updated broadcast reloads the thread in place.
+      html = render(view)
+      assert html =~ "This message was deleted"
+      refute html =~ "Accidentally pasted a password here"
+    end
+  end
+
+  describe "branded source link" do
+    test "renders the source's link when both title and url are set" do
+      source =
+        insert_intake_source(
+          mode: :active,
+          link_title: "Acme Product",
+          link_url: "https://acme.example/product"
+        )
+
+      {:ok, %{access_token: token}} =
+        Intake.create_intake_thread(source.key, "Hello", tenant_id: source.tenant_id)
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert html =~ ~s(data-testid="resume-source-link")
+      assert html =~ ~s(href="https://acme.example/product")
+      assert html =~ ~s(target="_blank")
+      assert html =~ ~s(rel="noopener noreferrer")
+      assert html =~ "Acme Product"
+    end
+
+    test "renders no link when the source has no link configured" do
+      %{access_token: token} = create_intake!()
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      refute html =~ ~s(data-testid="resume-source-link")
+    end
+
+    test "a deleted source renders the thread fine without a link" do
+      source =
+        insert_intake_source(
+          mode: :active,
+          link_title: "Acme Product",
+          link_url: "https://acme.example/product"
+        )
+
+      {:ok, %{access_token: token}} =
+        Intake.create_intake_thread(source.key, "Hello", tenant_id: source.tenant_id)
+
+      {:ok, _deleted} = Intake.delete_source(staff_scope(source.tenant_id), source)
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert html =~ ~s(data-testid="resume-thread")
+      assert html =~ "Hello"
+      refute html =~ ~s(data-testid="resume-source-link")
+    end
+
+    test "a disabled source still links (provenance, not intake availability)" do
+      source =
+        insert_intake_source(
+          mode: :active,
+          link_title: "Acme Product",
+          link_url: "https://acme.example/product"
+        )
+
+      {:ok, %{access_token: token}} =
+        Intake.create_intake_thread(source.key, "Hello", tenant_id: source.tenant_id)
+
+      {:ok, _source} =
+        Intake.update_source(staff_scope(source.tenant_id), source, %{enabled: false})
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert html =~ ~s(data-testid="resume-source-link")
+      assert html =~ "Acme Product"
+    end
+  end
+
+  describe "prospect replies" do
+    test "a reply reactivates a resolved thread and mirrors inbound semantics" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _thread} = Threads.update_thread(thread, %{state: :resolved})
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      html = submit_reply(view, "I am back!")
+
+      assert html =~ "I am back!"
+
+      reloaded = Repo.get!(Thread, thread.id)
+      assert reloaded.state == :active
+      assert reloaded.last_customer_action_at
+      assert reloaded.cached_score > 0
+
+      messages =
+        Repo.all(from m in Message, where: m.thread_id == ^thread.id, order_by: m.id)
+
+      reply = List.last(messages)
+      assert reply.source == :prospect
+      assert reply.origin == :public_intake
+      assert reply.sender_email == nil
+      assert reply.delivery_status == nil
+      refute reply.is_internal_note
+    end
+
+    test "reply bodies are validated and bounded like intake submissions" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      submit_reply(view, "   ")
+
+      assert message_count(thread.id) == 1
+
+      oversized = String.duplicate("a", 100_001)
+
+      submit_reply(view, oversized)
+
+      assert message_count(thread.id) == 1
+    end
+
+    test "resending the latest message verbatim is refused with a friendly notice" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      submit_reply(view, "Any update?")
+      assert message_count(thread.id) == 2
+
+      html = submit_reply(view, "Any update?")
+
+      assert html =~ "Looks like you already sent that message."
+      assert message_count(thread.id) == 2
+
+      # Whitespace doesn't dodge the check.
+      submit_reply(view, "  Any update? \n")
+      assert message_count(thread.id) == 2
+
+      # Different content still goes through.
+      submit_reply(view, "Any update at all?")
+      assert message_count(thread.id) == 3
+    end
+
+    test "replies over websocket are rate limited by token hash with no message row" do
+      put_buckets(thread_reply: [limit: 2, window_ms: 60_000])
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      for n <- 1..2 do
+        submit_reply(view, "Reply #{n}")
+      end
+
+      assert message_count(thread.id) == 3
+
+      html = submit_reply(view, "Reply 3")
+
+      assert html =~ "replying too quickly"
+      assert message_count(thread.id) == 3
+    end
+
+    test "mid-session revocation shuts the mounted view down to the uniform page" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      # The revocation broadcast alone re-authenticates the mounted socket:
+      # no further mutation is needed for the view to halt, and no reply
+      # could land afterwards (the context refuses revoked prospects too).
+      {:ok, _prospect} = Intake.revoke_thread_access(thread)
+
+      assert_redirect(view, @unavailable)
+      assert message_count(thread.id) == 1
+    end
+
+    test "token rotation shuts down sockets mounted under the old token" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      # An staff rotating a leaked link must cut off already-open tabs:
+      # the socket re-reads the prospect, sees its mount-time hash no longer
+      # matches, and halts to the uniform page — it neither keeps write
+      # access nor keeps receiving staff replies over PubSub.
+      {:ok, %{access_token: _new_token}} = Intake.rotate_access_token(thread)
+
+      assert_redirect(view, @unavailable)
+      assert message_count(thread.id) == 1
+    end
+  end
+
+  describe "email capture" do
+    test "capture links a matching contact without rendering any linkage" do
+      org = insert_organization(name: "Acme Rockets Inc", domain: "acme-rockets.example")
+
+      contact =
+        insert_contact(organization_id: org.id, email: "buyer@acme-rockets.example")
+
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      html =
+        view
+        |> form(~s([data-testid="resume-email-form"]), %{
+          "capture" => %{"email" => "buyer@acme-rockets.example", "notify" => "true"}
+        })
+        |> render_submit()
+
+      # The thread linked...
+      reloaded = Repo.get!(Thread, thread.id)
+      assert reloaded.organization_id == org.id
+      assert reloaded.contact_id == contact.id
+
+      # ...and nothing on the page says so.
+      refute html =~ "Acme Rockets Inc"
+      refute html =~ "acme-rockets.example"
+
+      prospect = Repo.get_by!(Prospect, thread_id: thread.id)
+      assert prospect.email == "buyer@acme-rockets.example"
+      assert prospect.notify_on_reply
+    end
+
+    test "the capture response is byte-identical for contact match, domain match, and no match" do
+      org = insert_organization(name: "Match Target", domain: "match-target.example")
+      insert_contact(organization_id: org.id, email: "known@match-target.example")
+
+      shared_body = "Same message everywhere"
+      fixed_time = ~U[2026-07-01 12:00:00Z]
+
+      captures = [
+        {"known@match-target.example", create_intake!(shared_body)},
+        {"someone-else@match-target.example", create_intake!(shared_body)},
+        {"stranger@unrelated.example", create_intake!(shared_body)}
+      ]
+
+      # Pin every rendered timestamp so the comparison sees only
+      # linkage-dependent differences (there must be none).
+      Repo.update_all(Message, set: [inserted_at: fixed_time])
+
+      [contact_html, domain_html, none_html] =
+        for {email, %{access_token: token}} <- captures do
+          {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+          view
+          |> form(~s([data-testid="resume-email-form"]), %{
+            "capture" => %{"email" => email, "notify" => "true"}
+          })
+          |> render_submit()
+          |> normalize_live_html()
+        end
+
+      assert contact_html == domain_html
+      assert domain_html == none_html
+    end
+
+    test "capture attempts are rate limited per IP, counting failures" do
+      put_buckets(email_capture: [limit: 1, window_ms: 60_000])
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      # First attempt consumes the budget even though it fails validation.
+      view
+      |> form(~s([data-testid="resume-email-form"]), %{
+        "capture" => %{"email" => "not-an-email", "notify" => "false"}
+      })
+      |> render_submit()
+
+      html =
+        view
+        |> form(~s([data-testid="resume-email-form"]), %{
+          "capture" => %{"email" => "fine@example.com", "notify" => "false"}
+        })
+        |> render_submit()
+
+      assert html =~ "Too many attempts"
+      assert Repo.get_by!(Prospect, thread_id: thread.id).email == nil
+    end
+  end
+
+  describe "notification toggle" do
+    test "the prospect can change the notification choice at any time" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _thread} = Intake.capture_email(thread, "toggle@example.com")
+
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
+      assert html =~ ~s(data-testid="resume-notify-toggle")
+
+      view
+      |> element(~s([data-testid="resume-notify-form"]))
+      |> render_change(%{"notify" => "true"})
+
+      assert Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
+
+      view
+      |> element(~s([data-testid="resume-notify-form"]))
+      |> render_change(%{"notify" => "false"})
+
+      refute Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
+    end
+
+    test "the toggle shares the :email_capture bucket" do
+      put_buckets(email_capture: [limit: 1, window_ms: 60_000])
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _thread} = Intake.capture_email(thread, "toggle@example.com")
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      view
+      |> element(~s([data-testid="resume-notify-form"]))
+      |> render_change(%{"notify" => "true"})
+
+      html =
+        view
+        |> element(~s([data-testid="resume-notify-form"]))
+        |> render_change(%{"notify" => "false"})
+
+      assert html =~ "Too many changes"
+      # The denied toggle did not write.
+      assert Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
+    end
+  end
+
+  describe "slug claim panel" do
+    import Swoosh.TestAssertions
+
+    alias Custyard.{Slug, Slugs}
+
+    defp submit_claim(view, slug, email, notify \\ "false") do
+      view
+      |> element(~s([data-testid="resume-claim-form"]))
+      |> render_submit(%{"claim" => %{"slug" => slug, "email" => email, "notify" => notify}})
+    end
+
+    test "offers the claim form when the thread has no live claim" do
+      %{access_token: token} = create_intake!()
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert html =~ ~s(data-testid="resume-claim-panel")
+      assert html =~ ~s(data-testid="resume-claim-form")
+      # The spec's framing: the email anchors the claim.
+      assert html =~ "Where do we confirm the claim?"
+      assert html =~ ~s(data-testid="resume-claim-notify")
+    end
+
+    test "submit claims the slug, captures the email, honors notify, and sends the email" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      html = submit_claim(view, "Acme-Corp", "Buyer@Example.com", "true")
+
+      # The claim committed, normalized.
+      claim = Slugs.get_claim_for_thread(thread.id)
+      assert claim.slug == "acme-corp"
+      assert claim.email == "buyer@example.com"
+      assert claim.status == :claimed
+
+      # Email captured with the notify choice honored.
+      prospect = Repo.get_by!(Prospect, thread_id: thread.id)
+      assert prospect.email == "buyer@example.com"
+      assert prospect.notify_on_reply
+
+      # The confirmation email carries the slug, the /c confirm URL, and
+      # the /r thread URL the prospect already holds.
+      assert_email_sent(fn email ->
+        assert email.text_body =~ "acme-corp"
+        assert email.text_body =~ "/claims/"
+        assert email.text_body =~ "/threads/#{token}"
+      end)
+
+      # The panel flips to the provisional state with an expiry countdown.
+      assert html =~ ~s(data-testid="resume-claim-status-provisional")
+      assert html =~ ~s(data-testid="resume-claim-expiry")
+      assert html =~ "expires in about"
+    end
+
+    test "notify unchecked leaves notifications off" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+      submit_claim(view, "quiet-corp", "quiet@example.com", "false")
+
+      refute Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
+    end
+
+    test "claim-then-capture ordering: a failed claim captures nothing" do
+      taken = create_intake!("Original claim")
+      {:ok, _slug, _token} = Slugs.claim("contested", "first@example.com", taken.thread)
+
+      %{thread: thread, access_token: token} = create_intake!("Second prospect")
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+      html = submit_claim(view, "contested", "second@example.com")
+
+      # The changeset error renders; nothing was captured or sent.
+      assert html =~ "is already claimed"
+      assert Repo.get_by!(Prospect, thread_id: thread.id).email == nil
+      refute_email_sent()
+      assert is_nil(Slugs.get_claim_for_thread(thread.id))
+    end
+
+    test "claim-then-capture ordering: a capture failure never loses the claim" do
+      # Write-once email already captured — the capture step inside the
+      # claim submit returns :already_captured, and the claim must stand.
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _} = Intake.capture_email(thread, "first@example.com")
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+      html = submit_claim(view, "sturdy-claim", "different@example.com")
+
+      claim = Slugs.get_claim_for_thread(thread.id)
+      assert claim.slug == "sturdy-claim"
+      # The claim anchors to the address it was submitted with...
+      assert claim.email == "different@example.com"
+      # ...while the write-once prospect email stands untouched.
+      assert Repo.get_by!(Prospect, thread_id: thread.id).email ==
+               "first@example.com"
+
+      # The confirmation email still goes out to the claim's anchor.
+      assert_email_sent(fn email ->
+        assert email.to == [{"", "different@example.com"}]
+      end)
+
+      assert html =~ ~s(data-testid="resume-claim-status-provisional")
+    end
+
+    test "claiming with notify on an already-captured email still opts into notifications" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _} = Intake.capture_email(thread, "first@example.com")
+      refute Repo.get_by!(Prospect, thread_id: thread.id).notify_on_reply
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+      submit_claim(view, "notify-me", "different@example.com", "true")
+
+      # capture_email returned :already_captured (write-once email), but a
+      # checked notify box is an explicit opt-in and must not be dropped.
+      prospect = Repo.get_by!(Prospect, thread_id: thread.id)
+      assert prospect.email == "first@example.com"
+      assert prospect.notify_on_reply
+    end
+
+    test "a rate-limited confirmation email changes the claim flash, not the claim" do
+      put_buckets(claim_email_send: [limit: 1, window_ms: 60_000])
+
+      # Exhaust the per-email daily budget from another thread
+      # claiming with the same anchor email.
+      first = create_intake!("Earlier claim")
+      {:ok, first_view, _html} = live(build_conn(), ~p"/threads/#{first.access_token}")
+      submit_claim(first_view, "first-claim", "shared@example.com")
+      assert_email_sent()
+
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+      html = submit_claim(view, "quota-hit", "shared@example.com")
+
+      # The claim committed and the panel flips to provisional...
+      assert Slugs.get_claim_for_thread(thread.id).status == :claimed
+      assert html =~ ~s(data-testid="resume-claim-status-provisional")
+
+      # ...but no email went out, and the flash must say so instead of
+      # telling the prospect to check for one.
+      refute_email_sent()
+      refute html =~ "Check your email"
+      assert html =~ "confirmation email limit is reached"
+    end
+
+    test "thread and thread access survive claim expiry with a fresh claim form" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, slug, _confirmation_token} =
+        Slugs.claim("short-lived", "buyer@example.com", thread)
+
+      past = DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
+
+      {1, _} =
+        Repo.update_all(from(s in Slug, where: s.id == ^slug.id), set: [expires_at: past])
+
+      assert Slugs.delete_expired_claims() == 1
+
+      # Expiry released only the slug row: the thread link still
+      # authenticates and the thread still renders...
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+      assert html =~ "Hello, I need help with X"
+
+      # ...and the panel offers a fresh claim form.
+      assert html =~ ~s(data-testid="resume-claim-form")
+      refute html =~ ~s(data-testid="resume-claim-status-provisional")
+    end
+
+    test "prefills the claim email from a captured prospect email" do
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, _} = Intake.capture_email(thread, "captured@example.com")
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert html =~ ~s(value="captured@example.com")
+    end
+
+    test "shows the confirmed state once the claim confirms" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, _slug, confirmation_token} =
+        Slugs.claim("all-done", "buyer@example.com", thread)
+
+      {:ok, _} = Slugs.confirm(confirmation_token, thread.tenant_id)
+
+      {:ok, _view, html} = live(build_conn(), ~p"/threads/#{token}")
+
+      assert html =~ ~s(data-testid="resume-claim-status-confirmed")
+      assert html =~ "all-done"
+      refute html =~ ~s(data-testid="resume-claim-form")
+    end
+
+    test "resend rotates the confirmation token and sends a fresh email" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, claim, _confirmation_token} =
+        Slugs.claim("resend-me", "buyer@example.com", thread)
+
+      {:ok, view, html} = live(build_conn(), ~p"/threads/#{token}")
+      assert html =~ ~s(data-testid="resume-claim-resend")
+
+      result =
+        view |> element(~s([data-testid="resume-claim-resend"])) |> render_click()
+
+      assert result =~ "Confirmation email sent"
+
+      # Rotated: the stored hash changed, and the fresh email carries a
+      # working link.
+      rotated = Repo.get!(Slug, claim.id)
+      refute rotated.confirmation_token_hash == claim.confirmation_token_hash
+
+      assert_email_sent(fn email ->
+        assert email.text_body =~ "resend-me"
+        assert email.text_body =~ "/claims/"
+      end)
+    end
+
+    test "resend is bucket-limited and a denied resend does not rotate the token" do
+      put_buckets(claim_email_send: [limit: 1, window_ms: 60_000])
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, claim, _confirmation_token} =
+        Slugs.claim("throttled", "buyer@example.com", thread)
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      # First resend consumes the whole budget.
+      view |> element(~s([data-testid="resume-claim-resend"])) |> render_click()
+      after_first = Repo.get!(Slug, claim.id)
+      refute after_first.confirmation_token_hash == claim.confirmation_token_hash
+
+      # Second resend is denied BEFORE rotation — the emailed link survives.
+      result =
+        view |> element(~s([data-testid="resume-claim-resend"])) |> render_click()
+
+      assert result =~ "Confirmation email limit reached"
+
+      assert Repo.get!(Slug, claim.id).confirmation_token_hash ==
+               after_first.confirmation_token_hash
+    end
+
+    test "shape-invalid claims render errors without consuming the :claim_submit budget" do
+      put_buckets(claim_submit: [limit: 1, window_ms: 60_000])
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      # Malformed submissions fail the DB-free shape check and spend
+      # nothing — a typo must not burn the small hourly allowance.
+      html = submit_claim(view, "x", "buyer@example.com")
+      assert html =~ "must be 3-63 characters"
+
+      html = submit_claim(view, "valid-name", "not-an-email")
+      assert html =~ "must be a valid email address"
+
+      # The whole budget is still available: the shape-valid claim commits.
+      submit_claim(view, "valid-name", "buyer@example.com")
+      assert Slugs.get_claim_for_thread(thread.id).slug == "valid-name"
+    end
+
+    test "shape-valid claims are bounded by the IP-keyed :claim_submit bucket" do
+      put_buckets(claim_submit: [limit: 1, window_ms: 60_000])
+
+      # A taken slug is an EXISTENCE outcome, not a shape failure — probing
+      # it must consume budget so enumeration stays bounded.
+      holder = create_intake!("Earlier claim")
+      {:ok, _slug, _token} = Slugs.claim("contested", "first@example.com", holder.thread)
+
+      %{thread: thread, access_token: token} = create_intake!()
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      html = submit_claim(view, "contested", "second@example.com")
+      assert html =~ "is already claimed"
+
+      html = submit_claim(view, "fresh-name", "second@example.com")
+      assert html =~ "Too many claim attempts"
+      assert is_nil(Slugs.get_claim_for_thread(thread.id))
+    end
+  end
+
+  describe "retention purge" do
+    test "a purged thread's thread URL lands on the uniform unavailable page" do
+      %{thread: thread, access_token: token} = create_intake!()
+
+      {:ok, _thread} = Threads.update_thread(thread, %{state: :resolved})
+
+      # Past the 365-day public-intake retention bound
+      backdated =
+        DateTime.utc_now()
+        |> DateTime.add(-366 * 24 * 60 * 60, :second)
+        |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(c in Thread, where: c.id == ^thread.id),
+        set: [updated_at: backdated]
+      )
+
+      assert Threads.cleanup_resolved_threads(90) == 1
+
+      # The prospect cascaded away with the thread, so the token no
+      # longer resolves...
+      assert Intake.get_thread_by_access_token(token, thread.tenant_id) ==
+               {:error, :not_found}
+
+      # ...and the thread URL renders the same unavailable page as an
+      # invalid token — no validity oracle.
+      assert {:error, {:redirect, %{to: @unavailable}}} =
+               live(build_conn(), ~p"/threads/#{token}")
+    end
+  end
+
+  # Strips the per-socket identifiers LiveView bakes into the DOM so two
+  # renders can be compared byte-for-byte on content.
+  defp normalize_live_html(html) do
+    html
+    |> String.replace(~r/id="phx-[^"]+"/, ~s(id="phx-ID"))
+    |> String.replace(~r/data-phx-session="[^"]*"/, ~s(data-phx-session=""))
+    |> String.replace(~r/data-phx-static="[^"]*"/, ~s(data-phx-static=""))
+  end
+
+  describe "standalone email prompt receipt" do
+    setup do
+      original = Application.get_env(:custyard, :email_enabled)
+      Application.put_env(:custyard, :email_enabled, true)
+
+      on_exit(fn ->
+        if is_nil(original),
+          do: Application.delete_env(:custyard, :email_enabled),
+          else: Application.put_env(:custyard, :email_enabled, original)
+      end)
+
+      :ok
+    end
+
+    test "capturing an email on the thread page sends the resume URL even without notify" do
+      %{access_token: token} = create_intake!()
+      {:ok, view, _html} = live(build_conn(), ~p"/threads/#{token}")
+
+      view
+      |> form(~s([data-testid="resume-email-form"]), %{
+        "capture" => %{"email" => "late@example.com", "notify" => "false"}
+      })
+      |> render_submit()
+
+      assert_receive {:email, %Swoosh.Email{to: [{_, "late@example.com"}]} = email}
+      assert email.text_body =~ "/threads/#{token}"
+    end
+  end
+end

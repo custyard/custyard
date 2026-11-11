@@ -3,7 +3,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Conversations, InboundRoute, Organization, Repo, Tenant}
+  alias Custyard.{Threads, InboundRoute, Organization, Repo, Tenant}
   alias Custyard.Email.{Outbound, SenderMatcher, ThreadMatcher}
   alias Custyard.Webhooks.Purposes.SenderMatching
   alias Custyard.Webhooks.Dispatcher
@@ -72,7 +72,8 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     org = Repo.get!(Organization, alice.organization_id)
     assert org.name == "Alice Chen"
     assert org.domain == nil
-    assert org.intake_key == "email:alice@gmail.com"
+    assert org.identity_kind == :email
+    assert org.identity_value == "alice@gmail.com"
     assert again.organization_id == alice.organization_id
     assert again.contact_id == alice.contact_id
     assert bob.organization_id != alice.organization_id
@@ -97,7 +98,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
   test "headers preserve the customer thread when a second sender joins and reply-all includes both" do
     tenant = tenant()
     original = message("Alice <alice@acme.example>")
-    assert {:ok, conversation} = receive_email(tenant, original)
+    assert {:ok, thread} = receive_email(tenant, original)
 
     bob =
       message("Bob <bob@partner.example>",
@@ -106,13 +107,13 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
       )
 
     assert {:ok, continued} = receive_email(tenant, bob)
-    assert continued.id == conversation.id
-    assert continued.organization_id == conversation.organization_id
+    assert continued.id == thread.id
+    assert continued.organization_id == thread.organization_id
     assert {:ok, "bob@partner.example"} = Outbound.reply_recipient(continued)
 
-    # Without a channel, pass the operator identity so the service's support
+    # Without a channel, pass the staff identity so the service's support
     # address remains our side of the reply-all envelope.
-    assert Conversations.default_reply_cc(continued, operator_email: "support@service.example") ==
+    assert Threads.default_reply_cc(continued, staff_email: "support@service.example") ==
              ["alice@acme.example"]
 
     assert {:ok, no_headers} =
@@ -121,7 +122,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
                message("Bob <bob@partner.example>", subject: "Re: Help with billing")
              )
 
-    assert no_headers.id == conversation.id
+    assert no_headers.id == thread.id
   end
 
   test "subject fallback requires reply intent, same sender and one unambiguous customer thread" do
@@ -153,17 +154,62 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert ambiguous.id not in [original.id, new_topic.id]
   end
 
-  test "an explicit customer route keeps its customer organization" do
+  test "a customer hint resolves a new sender within the tenant" do
     tenant = tenant()
     organization = insert_organization(tenant_id: tenant.id)
 
-    assert {:ok, conversation} =
+    assert {:ok, thread} =
              SenderMatching.process(message("alice@acme.example"), %{
                tenant_id: tenant.id,
-               organization_id: organization.id
+               default_organization_id: organization.id
              })
 
-    assert conversation.organization_id == organization.id
+    assert thread.organization_id == organization.id
+  end
+
+  test "channel hints cannot override known customer identity or an existing thread" do
+    tenant = tenant()
+    known = insert_organization(tenant_id: tenant.id, domain: "known.example")
+    other = insert_organization(tenant_id: tenant.id)
+    contact = insert_contact(organization_id: known.id, email: "alice@known.example")
+    project = insert_project(organization_id: other.id)
+
+    label =
+      %Custyard.Label{}
+      |> Custyard.Label.changeset(%{tenant_id: tenant.id, name: "Priority"})
+      |> Repo.insert!()
+
+    context = %{
+      tenant_id: tenant.id,
+      default_organization_id: other.id,
+      default_project_id: project.id,
+      default_label_id: label.id
+    }
+
+    assert {:ok, thread} = SenderMatching.process(message(contact.email), context)
+    assert thread.organization_id == known.id
+    assert thread.project_id == nil
+    assert Repo.get_by(Custyard.ThreadLabel, thread_id: thread.id, label_id: label.id)
+
+    first = Repo.get_by!(Custyard.Message, thread_id: thread.id)
+
+    label2 =
+      %Custyard.Label{}
+      |> Custyard.Label.changeset(%{tenant_id: tenant.id, name: "Other"})
+      |> Repo.insert!()
+
+    assert {:ok, reply} =
+             SenderMatching.process(
+               message(contact.email, in_reply_to: first.message_id),
+               %{context | default_label_id: label2.id}
+             )
+
+    assert reply.id == thread.id
+
+    refute Repo.get_by(Custyard.ThreadLabel,
+             thread_id: thread.id,
+             label_id: label2.id
+           )
   end
 
   test "lookup-only public capture never creates an organization" do
@@ -173,7 +219,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert Repo.aggregate(Organization, :count) == before_count
   end
 
-  test "dispatcher keeps the tenant's channel on each customer conversation" do
+  test "dispatcher keeps the tenant's channel on each customer thread" do
     tenant = tenant()
 
     route =
@@ -200,32 +246,33 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert bob.inbound_channel_id == channel.id
     assert alice.tenant_id == tenant.id
 
-    assert Conversations.reply_identity(alice) == %{
+    assert Threads.reply_identity(alice) == %{
              address: "support@service.example",
              name: "Service Support",
              source: :channel
            }
   end
 
-  test "an ambiguous contact uses deterministic domain identity for new unthreaded mail" do
+  test "an ambiguous contact remains unassigned for new unthreaded mail" do
     tenant = tenant()
     customer = insert_organization(tenant_id: tenant.id, domain: "acme.example")
     other = insert_organization(tenant_id: tenant.id, domain: "other.example")
     insert_contact(organization_id: customer.id, email: "alice@acme.example")
     insert_contact(organization_id: other.id, email: "alice@acme.example")
-    assert {:ok, conversation} = receive_email(tenant, message("alice@acme.example"))
-    assert conversation.organization_id == customer.id
+    assert {:ok, thread} = receive_email(tenant, message("alice@acme.example"))
+    assert thread.organization_id == nil
+    assert thread.contact_id == nil
   end
 
   test "missing sender remains visible without creating an undeliverable contact" do
     tenant = tenant()
-    assert {:ok, conversation} = receive_email(tenant, message(nil))
-    assert conversation.tenant_id == tenant.id
-    assert is_nil(conversation.contact_id)
-    assert {:error, :no_recipient_email} = Outbound.reply_recipient(conversation)
+    assert {:ok, thread} = receive_email(tenant, message(nil))
+    assert thread.tenant_id == tenant.id
+    assert is_nil(thread.contact_id)
+    assert {:error, :no_recipient_email} = Outbound.reply_recipient(thread)
   end
 
-  test "ambiguous references create a new conversation even when one subject matches" do
+  test "ambiguous references create a new thread even when one subject matches" do
     tenant = tenant()
     first = message("alice@acme.example", subject: "First question")
     second = message("alice@acme.example", subject: "Second question")
@@ -246,12 +293,12 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
 
   test "ineligible public references cannot hide an ambiguous customer match" do
     tenant = tenant()
-    public_thread = insert_conversation(source: :public_intake, tenant_id: tenant.id)
-    insert_prospect(conversation_id: public_thread.id, email: "other@customer.example")
+    public_thread = insert_thread(source: :public_intake, tenant_id: tenant.id)
+    insert_prospect(thread_id: public_thread.id, email: "other@customer.example")
 
     public_message =
       insert_message(
-        conversation_id: public_thread.id,
+        thread_id: public_thread.id,
         message_id: "<public-#{System.unique_integer([:positive])}@customer.example>"
       )
 
@@ -274,17 +321,17 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
 
     public_ids =
       for index <- 1..3 do
-        public_thread = insert_conversation(source: :public_intake, tenant_id: tenant.id)
-        insert_prospect(conversation_id: public_thread.id, email: "other@customer.example")
+        public_thread = insert_thread(source: :public_intake, tenant_id: tenant.id)
+        insert_prospect(thread_id: public_thread.id, email: "other@customer.example")
 
         insert_message(
-          conversation_id: public_thread.id,
+          thread_id: public_thread.id,
           message_id: "<public-#{index}-#{System.unique_integer([:positive])}@customer.example>"
         ).message_id
       end
 
     original = message("alice@acme.example")
-    assert {:ok, conversation} = receive_email(tenant, original)
+    assert {:ok, thread} = receive_email(tenant, original)
 
     assert {:ok, matched} =
              ThreadMatcher.find_in_tenant(
@@ -294,7 +341,7 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
                tenant.id
              )
 
-    assert matched.id == conversation.id
+    assert matched.id == thread.id
   end
 
   test "header threading can follow a customer across two shared routes in the same tenant" do
@@ -322,20 +369,22 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     channel = shared_channel(tenant)
 
     {:ok, channel} =
-      Custyard.InboundChannels.update_channel(channel, %{sending_domain: "mail.service.example"})
+      Custyard.InboundChannels.update_channel(channel, %{sending_domain: "mail.service.example"},
+        staff: insert_staff_account(tenant_id: tenant.id, role: "admin")
+      )
 
-    conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
+    thread = insert_thread(source: :public_intake, tenant_id: tenant.id)
 
     prospect =
       insert_prospect(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         email: "alice@acme.example",
         notify_on_reply: true
       )
 
     assert {:ok, outgoing} =
-             Conversations.send_reply(conversation, "Here is how to get started.",
-               operator_email: "private@operator.example"
+             Threads.send_reply(thread, "Here is how to get started.",
+               staff_email: "private@staff.example"
              )
 
     assert outgoing.sender_email == "support@mail.service.example"
@@ -348,12 +397,12 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
                message("wrong@other.example", in_reply_to: outgoing.message_id)
              )
 
-    assert unrelated.id != conversation.id
+    assert unrelated.id != thread.id
 
     assert {:ok, continued} =
              receive_email(tenant, message(prospect.email, in_reply_to: outgoing.message_id))
 
-    assert continued.id == conversation.id
+    assert continued.id == thread.id
     assert continued.source == :public_intake
     assert continued.organization_id != nil
     assert continued.contact_id != nil
@@ -368,21 +417,21 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     organization = insert_organization(tenant_id: tenant.id)
     contact = insert_contact(organization_id: organization.id)
 
-    conversation =
-      insert_conversation(
+    thread =
+      insert_thread(
         source: :portal,
         organization_id: organization.id,
         contact_id: contact.id
       )
 
-    assert {:ok, outgoing} = Conversations.send_reply(conversation, "An answer")
+    assert {:ok, outgoing} = Threads.send_reply(thread, "An answer")
     assert outgoing.sender_email == channel.public_address
     assert outgoing.inbound_channel_id == channel.id
 
     assert {:ok, continued} =
              receive_email(tenant, message(contact.email, in_reply_to: outgoing.message_id))
 
-    assert continued.id == conversation.id
+    assert continued.id == thread.id
   end
 
   test "archive copies of unlinked public replies are own echoes within their tenant" do
@@ -392,15 +441,15 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
     assert {:ok, channel} =
              Custyard.InboundChannels.update_channel(channel, %{archive_copy: true})
 
-    conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
+    thread = insert_thread(source: :public_intake, tenant_id: tenant.id)
 
     insert_prospect(
-      conversation_id: conversation.id,
+      thread_id: thread.id,
       email: "alice@acme.example",
       notify_on_reply: true
     )
 
-    assert {:ok, outgoing} = Conversations.send_reply(conversation, "Here is how to get started.")
+    assert {:ok, outgoing} = Threads.send_reply(thread, "Here is how to get started.")
 
     archived =
       message(channel.public_address,
@@ -409,44 +458,42 @@ defmodule Custyard.Email.TenantSupportIntakeTest do
         body: outgoing.body
       )
 
-    before_count = Repo.aggregate(Custyard.Conversation, :count)
+    before_count = Repo.aggregate(Custyard.Thread, :count)
 
     assert {:ignored, :own_echo} =
              Dispatcher.dispatch(channel.inbound_route, archived, channel: channel)
 
-    assert Repo.aggregate(Custyard.Conversation, :count) == before_count
+    assert Repo.aggregate(Custyard.Thread, :count) == before_count
 
     other_channel = shared_channel(tenant())
 
-    assert {:ok, other_conversation} =
+    assert {:ok, other_thread} =
              Dispatcher.dispatch(other_channel.inbound_route, archived, channel: other_channel)
 
-    assert other_conversation.tenant_id == other_channel.tenant_id
-    assert other_conversation.id != conversation.id
+    assert other_thread.tenant_id == other_channel.tenant_id
+    assert other_thread.id != thread.id
   end
 
-  test "a tenant without a sending identity never falls back to the instance or operator address" do
+  test "a tenant without a sending identity never falls back to the instance or staff address" do
     tenant = tenant()
-    conversation = insert_conversation(source: :public_intake, tenant_id: tenant.id)
+    thread = insert_thread(source: :public_intake, tenant_id: tenant.id)
 
     insert_prospect(
-      conversation_id: conversation.id,
+      thread_id: thread.id,
       email: "alice@acme.example",
       notify_on_reply: true
     )
 
     assert {:ok, outgoing} =
-             Conversations.send_reply(conversation, "An answer",
-               operator_email: "private@operator.example"
-             )
+             Threads.send_reply(thread, "An answer", staff_email: "private@staff.example")
 
     assert outgoing.sender_email == nil
     assert {:error, :from_not_set, failed} = Outbound.deliver(outgoing)
     assert failed.delivery_failure_kind == :configuration
 
     channel = shared_channel(tenant)
-    operator = insert_operator_account(role: "super_admin")
-    assert {:ok, pending} = Outbound.retry(failed, operator)
+    staff = insert_staff_account(role: "admin", tenant_id: tenant.id)
+    assert {:ok, pending} = Outbound.retry(Custyard.Scope.for_staff(staff, tenant), failed)
     assert pending.sender_email == channel.public_address
     assert pending.inbound_channel_id == channel.id
     assert pending.to_addresses == outgoing.to_addresses

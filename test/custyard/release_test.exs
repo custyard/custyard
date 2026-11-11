@@ -1,51 +1,24 @@
 defmodule Custyard.ReleaseTest do
-  # The CLI captures the global stderr device; run alone.
-  use Custyard.DataCase, async: false
-
-  import Custyard.Factory
+  use Custyard.DataCase
   import ExUnit.CaptureIO
   import ExUnit.CaptureLog
 
   require Logger
 
-  alias Custyard.{AuditEvent, Message, OperatorAccount, OperatorAccounts, Organization, Release}
+  alias Custyard.{InstanceAdmin, InstanceAdmins, Release}
 
   defmodule UnavailableRepo do
     def config, do: raise("RELEASE_FAILURE_PRIVATE_CANARY")
   end
 
-  # Returns {exit_status, stdout, stderr} without halting the VM.
-  defp run_cli(argv) do
-    parent = self()
-
-    stderr =
-      capture_io(:stderr, fn ->
-        stdout = capture_io(fn -> send(parent, {:status, Release.run_operator_cli(argv)}) end)
-        send(parent, {:stdout, stdout})
-      end)
-
-    assert_received {:status, status}
-    assert_received {:stdout, stdout}
-    {status, stdout, stderr}
+  setup do
+    previous = System.get_env("INSTANCE_ADMIN_EMAIL")
+    on_exit(fn -> restore_env("INSTANCE_ADMIN_EMAIL", previous) end)
+    :ok
   end
 
-  # The bootstrap logs at info; the test config caps Logger at warning.
-  defp capture_info_log(fun) do
-    modules = [Release, OperatorAccounts]
-    Enum.each(modules, &Logger.put_module_level(&1, :info))
-
-    try do
-      capture_log([metadata: [:operator_id, :organization_id, :role]], fun)
-    after
-      Enum.each(modules, &Logger.delete_module_level/1)
-    end
-  end
-
-  defp operator_count, do: Repo.aggregate(OperatorAccount, :count)
-
-  defp audit_events(type) do
-    Repo.all(from(a in AuditEvent, where: a.event_type == ^type, order_by: a.id))
-  end
+  defp restore_env(name, nil), do: System.delete_env(name)
+  defp restore_env(name, value), do: System.put_env(name, value)
 
   test "release repository entry points preserve privacy before running work" do
     filters = :logger.get_primary_config()[:filters]
@@ -112,438 +85,154 @@ defmodule Custyard.ReleaseTest do
     end
   end
 
-  describe "run_operator_cli/1 usage" do
-    test "help prints usage to stdout and succeeds" do
-      assert {0, stdout, ""} = run_cli(["help"])
-      assert stdout =~ "Usage: bin/operator COMMAND"
-      assert stdout =~ "add EMAIL [--role super_admin|admin|agent] [--organization ID]"
-      assert stdout =~ "remove EMAIL"
-    end
+  test "instance admin CLI manages installation identities without tenant privileges" do
+    assert capture_io(fn ->
+             assert Release.run_instance_admin_cli(["add", "ADMIN@EXAMPLE.COM"]) == 0
+           end) =~ "created instance admin"
 
-    test "bad arguments print usage to stderr, write nothing, and exit 1" do
-      org = insert_organization()
+    assert InstanceAdmins.get_by_email("admin@example.com")
 
-      for argv <- [
-            [],
-            ["bogus"],
-            ["help", "extra"],
-            ["add"],
-            ["add", "a@example.com", "b@example.com"],
-            ["add", "a@example.com", "--bogus"],
-            ["add", "a@example.com", "--role"],
-            ["add", "a@example.com", "--organization", "abc"],
-            [
-              "add",
-              "a@example.com",
-              "--role",
-              "agent",
-              "--organization",
-              "#{org.id}",
-              "--role",
-              "super_admin"
-            ],
-            ["list", "extra"],
-            ["list", "--all"],
-            ["remove"],
-            ["remove", "a@example.com", "b@example.com"],
-            ["remove", "a@example.com", "--force"],
-            # cast/4 would turn an empty role into the super_admin default
-            ["add", "a@example.com", "--role", ""],
-            ["add", "a@example.com", "--role", "  "],
-            ["add", "a@example.com", "--role", "owner"],
-            ["add", "a@example.com", "--role", "Super_Admin"],
-            # ids are signed 64-bit; anything else made the driver raise
-            ["add", "a@example.com", "--role", "agent", "--organization", "0"],
-            ["add", "a@example.com", "--role", "agent", "--organization", "-1"],
-            [
-              "add",
-              "a@example.com",
-              "--role",
-              "agent",
-              "--organization",
-              "99999999999999999999999"
-            ],
-            ["add", "a@example.com", "--role", "agent", "--organization", "9223372036854775808"]
-          ] do
-        assert {1, "", stderr} = run_cli(argv), "expected a usage error for #{inspect(argv)}"
-        assert stderr =~ "Usage: bin/operator COMMAND"
-      end
+    assert capture_io(fn -> assert Release.run_instance_admin_cli(["list"]) == 0 end) =~
+             "admin@example.com"
 
-      assert operator_count() == 0
-      assert Repo.aggregate(AuditEvent, :count) == 0
-    end
+    assert capture_io(:stderr, fn ->
+             assert Release.run_instance_admin_cli(["remove", "admin@example.com"]) == 1
+           end) =~ "last_admin"
+
+    assert capture_io(fn ->
+             assert Release.run_instance_admin_cli(["add", "second@example.com"]) == 0
+           end) =~ "created instance admin"
+
+    assert capture_io(fn ->
+             assert Release.run_instance_admin_cli(["remove", "admin@example.com"]) == 0
+           end) =~ "Removed instance admin"
+
+    refute InstanceAdmins.get_by_email("admin@example.com")
   end
 
-  describe "run_operator_cli/1 add" do
-    test "creates a super_admin by default and audits it as cli" do
-      assert {0, stdout, ""} = run_cli(["add", "First.Admin@Example.com"])
+  test "obsolete customer organization and staff switches are rejected" do
+    assert capture_io(:stderr, fn ->
+             assert Release.run_instance_admin_cli([
+                      "add",
+                      "bad@example.com",
+                      "--organization",
+                      "1"
+                    ]) == 1
+           end) =~ "Usage"
 
-      operator = Repo.get_by!(OperatorAccount, email: "first.admin@example.com")
-      assert operator.role == "super_admin"
-      assert stdout =~ "Created operator #{operator.id}: first.admin@example.com (super_admin)"
-
-      assert [%{source: "cli", payload: %{"via" => "cli", "operator_id" => id}}] =
-               audit_events(:operator_created)
-
-      assert id == operator.id
-    end
-
-    test "creates an admin or agent for an organization" do
-      org = insert_organization()
-
-      assert {0, stdout, ""} =
-               run_cli([
-                 "add",
-                 "agent@example.com",
-                 "--role",
-                 "agent",
-                 "--organization",
-                 "#{org.id}"
-               ])
-
-      assert stdout =~ "(agent, organization #{org.id})"
-
-      assert %{role: "agent", organization_id: org_id} =
-               Repo.get_by!(OperatorAccount, email: "agent@example.com")
-
-      assert org_id == org.id
-    end
-
-    test "takes switches before the email and an email that looks like a switch after --" do
-      assert {0, _, ""} = run_cli(["add", "--role", "super_admin", "lead@example.com"])
-      assert {0, _, ""} = run_cli(["add", "--", "-dash@example.com"])
-      assert Repo.get_by(OperatorAccount, email: "-dash@example.com")
-    end
-
-    test "reports an existing account without modifying it" do
-      org = insert_organization()
-
-      existing =
-        insert_operator_account(email: "ops@example.com", role: "admin", organization_id: org.id)
-
-      before = Repo.get!(OperatorAccount, existing.id)
-
-      assert {0, stdout, ""} = run_cli(["add", "OPS@example.com", "--role", "super_admin"])
-      assert stdout =~ "ops@example.com exists (role admin), not modified"
-      assert Repo.get!(OperatorAccount, existing.id) == before
-      assert audit_events(:operator_created) == []
-    end
-
-    test "reports invalid input on stderr and exits 1" do
-      assert {1, "", stderr} = run_cli(["add", "not-an-email"])
-      assert stderr =~ "Error: email: must be a valid email address"
-
-      assert {1, "", stderr} = run_cli(["add", "admin@example.com", "--role", "admin"])
-      assert stderr =~ "admin operators must be assigned to an organization"
-
-      assert {1, "", stderr} =
-               run_cli([
-                 "add",
-                 "agent@example.com",
-                 "--role",
-                 "agent",
-                 "--organization",
-                 "999999"
-               ])
-
-      assert stderr =~ "organization 999999 does not exist"
-
-      assert {1, "", stderr} = run_cli(["add", "admin@custyard.local"])
-      assert stderr =~ "non-routable placeholder"
-
-      # The largest valid id parses, and is reported missing rather than raising.
-      assert {1, "", stderr} =
-               run_cli([
-                 "add",
-                 "big@example.com",
-                 "--role",
-                 "agent",
-                 "--organization",
-                 "9223372036854775807"
-               ])
-
-      assert stderr =~ "organization 9223372036854775807 does not exist"
-
-      assert operator_count() == 0
-    end
+    refute InstanceAdmins.get_by_email("bad@example.com")
   end
 
-  describe "run_operator_cli/1 list" do
-    test "says how to create the first operator when there are none" do
-      assert {0, stdout, ""} = run_cli(["list"])
-      assert stdout =~ "No operator accounts. Create one with: bin/operator add EMAIL"
+  test "help and malformed commands print readable usage before checking database storage" do
+    previous = System.get_env("FLY_APP_NAME")
+    System.put_env("FLY_APP_NAME", "custyard-cli-usage-test")
+    on_exit(fn -> restore_env("FLY_APP_NAME", previous) end)
+
+    # A Repo-backed command would reject the test DB outside /data. Usage
+    # must work even when database configuration or storage is unavailable.
+    assert capture_io(fn -> assert Release.run_instance_admin_cli(["help"]) == 0 end) =~
+             "Usage: bin/instance-admin"
+
+    for argv <- [[], ["bogus"], ["add"], ["remove"], ["list", "extra"]] do
+      output = capture_io(:stderr, fn -> assert Release.run_instance_admin_cli(argv) == 1 end)
+      assert output =~ "Usage: bin/instance-admin"
+      assert output =~ "\nInstance administrators"
+      refute output =~ "\\n"
+      refute output =~ "Error: \"Usage"
     end
 
-    test "prints every operator and flags accounts that cannot log in" do
-      org = insert_organization()
-      doomed_org = insert_organization()
-      fine = insert_operator_account(email: "fine@example.com")
-
-      agent =
-        insert_operator_account(
-          email: "agent@example.com",
-          role: "agent",
-          organization_id: org.id
-        )
-
-      placeholder = insert_operator_account(email: "admin@custyard.local")
-
-      orphan =
-        insert_operator_account(
-          email: "orphan@example.com",
-          role: "admin",
-          organization_id: doomed_org.id
-        )
-
-      Repo.delete!(doomed_org)
-
-      Repo.query!(
-        "INSERT INTO operator_accounts (email, role, inserted_at, updated_at) " <>
-          "VALUES ('Mixed@Example.com', 'super_admin', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
-      )
-
-      assert {0, stdout, ""} = run_cli(["list"])
-      [header | rows] = String.split(stdout, "\n", trim: true)
-      assert header =~ ~r/^ID\s+EMAIL\s+ROLE\s+ORGANIZATION\s+CREATED\s+NOTES$/
-      assert length(rows) == 5
-
-      row = fn email -> Enum.find(rows, &(&1 =~ email)) end
-
-      assert row.("fine@example.com") =~
-               ~r/^#{fine.id}\s+fine@example.com\s+super_admin\s+-\s+\d{4}-/
-
-      refute row.("fine@example.com") =~ "cannot log in"
-
-      assert row.("agent@example.com") =~
-               ~r/^#{agent.id}\s+agent@example.com\s+agent\s+#{org.id}\s/
-
-      assert row.("admin@custyard.local") =~ ~r/^#{placeholder.id}\s/
-      assert row.("admin@custyard.local") =~ "non-routable address"
-      assert row.("Mixed@Example.com") =~ "email not normalized"
-      assert row.("orphan@example.com") =~ ~r/^#{orphan.id}\s+orphan@example.com\s+admin\s+-\s/
-      assert row.("orphan@example.com") =~ "no organization"
-    end
-
-    test "never prints control or format characters from a stored email" do
-      for email <- ["evil\e[2J@example.com", "rtl\u202Emoc.elpmaxe@x.com"] do
-        Repo.query!(
-          "INSERT INTO operator_accounts (email, role, inserted_at, updated_at) " <>
-            "VALUES (?, 'super_admin', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
-          [email]
-        )
-      end
-
-      assert {0, stdout, ""} = run_cli(["list"])
-      refute stdout =~ "\e"
-      refute stdout =~ "\u202E"
-      assert stdout =~ ~S(evil\u{1B}[2J@example.com)
-      assert stdout =~ ~S(rtl\u{202E}moc.elpmaxe@x.com)
-    end
+    assert Repo.aggregate(InstanceAdmin, :count) == 0
   end
 
-  describe "run_operator_cli/1 remove" do
-    test "removes an operator and audits it as cli" do
-      insert_operator_account(email: "keeper@example.com")
-      leaver = insert_operator_account(email: "leaver@example.com")
+  test "invalid addresses cannot create installation administrators through the CLI or setup" do
+    for email <- ["", "not-an-address", "admin@", "@example.com"] do
+      assert capture_io(:stderr, fn ->
+               assert Release.run_instance_admin_cli(["add", email]) == 1
+             end) =~ "Error:"
 
-      assert {0, stdout, ""} = run_cli(["remove", "Leaver@Example.com"])
-      assert stdout =~ "Removed operator #{leaver.id}: leaver@example.com (super_admin)"
-      refute Repo.get(OperatorAccount, leaver.id)
-      assert [%{source: "cli", payload: %{"via" => "cli"}}] = audit_events(:operator_removed)
+      assert {:error, _changeset} = Release.setup_instance_admin(email)
     end
 
-    test "mentions cleared message attribution" do
-      insert_operator_account(email: "keeper@example.com")
-      org = insert_organization()
-
-      mod =
-        insert_operator_account(email: "mod@example.com", role: "admin", organization_id: org.id)
-
-      message = insert_message(conversation_id: insert_conversation(organization_id: org.id).id)
-
-      Repo.update_all(from(m in Message, where: m.id == ^message.id),
-        set: [deleted_by_operator_id: mod.id, deleted_at: DateTime.utc_now(:second)]
-      )
-
-      assert {0, stdout, ""} = run_cli(["remove", "mod@example.com"])
-      assert stdout =~ "Cleared the deleted-by operator on 1 soft-deleted message(s)"
-    end
-
-    test "refuses to remove the last super_admin" do
-      only = insert_operator_account(email: "only@example.com")
-
-      assert {1, "", stderr} = run_cli(["remove", "only@example.com"])
-      assert stderr =~ "Error: refusing to remove the last super_admin"
-      assert Repo.get(OperatorAccount, only.id)
-    end
-
-    test "reports an unknown email" do
-      assert {1, "", stderr} = run_cli(["remove", "ghost@example.com"])
-      assert stderr =~ "Error: no operator with email ghost@example.com"
-    end
+    assert Repo.aggregate(InstanceAdmin, :count) == 0
+    assert Repo.aggregate(Custyard.AuditEvent, :count) == 0
   end
 
-  describe "bootstrap_operator/1" do
-    test "unset with no operators logs how to create the first one" do
-      for value <- [nil, "", "   "] do
-        log = capture_info_log(fn -> assert :ok = Release.bootstrap_operator(value) end)
-        assert log =~ "operator_bootstrap_required"
-      end
+  test "setup normalizes an administrator and repeated calls preserve the original identity" do
+    assert {:created, admin} = Release.setup_instance_admin(" ADMIN@EXAMPLE.COM ")
+    assert admin.email == "admin@example.com"
+    assert {:exists, same} = Release.setup_instance_admin("admin@example.com")
+    assert same.id == admin.id
+    assert Repo.aggregate(InstanceAdmin, :count) == 1
+  end
 
-      assert operator_count() == 0
-    end
+  test "bootstrap ignores absent and blank email configuration" do
+    System.delete_env("INSTANCE_ADMIN_EMAIL")
+    assert Release.bootstrap_instance_admin() == :ok
+    System.put_env("INSTANCE_ADMIN_EMAIL", " \n ")
+    assert Release.bootstrap_instance_admin() == :ok
+    assert Repo.aggregate(InstanceAdmin, :count) == 0
+  end
 
-    test "unset with operators logs one line on adding more" do
-      insert_operator_account(email: "ops@example.com")
+  test "bootstrap provisions one normalized identity and rejects malformed configuration" do
+    System.put_env("INSTANCE_ADMIN_EMAIL", " BOOTSTRAP@EXAMPLE.COM ")
 
-      log = capture_info_log(fn -> assert :ok = Release.bootstrap_operator(nil) end)
-      assert log =~ "operator_bootstrap_skipped"
-      refute log =~ "operator_bootstrap_required"
-    end
+    assert Release.bootstrap_instance_admin() == :ok
+    admin = InstanceAdmins.get_by_email("bootstrap@example.com")
+    assert admin
+    assert Release.bootstrap_instance_admin() == :ok
+    assert Repo.aggregate(InstanceAdmin, :count) == 1
 
-    test "set creates a super_admin via boot and recommends unsetting it" do
-      log =
-        capture_info_log(fn -> assert :ok = Release.bootstrap_operator(" First@Example.com ") end)
+    System.put_env("INSTANCE_ADMIN_EMAIL", "not-an-address")
 
-      operator = Repo.get_by!(OperatorAccount, email: "first@example.com")
-      assert operator.role == "super_admin"
-      assert log =~ "operator_account_created"
-      assert log =~ "operator_id=#{operator.id}"
-      assert log =~ "operator_bootstrap_environment_retained"
-      refute log =~ "first@example.com"
+    # The eval runner prints an uncaught exception to stderr. The message is
+    # fixed and the diagnostic names the rejected field, never its value.
+    failed_log =
+      capture_log(fn ->
+        error =
+          assert_raise RuntimeError, ~r/Could not create instance administrator/, fn ->
+            Release.bootstrap_instance_admin()
+          end
 
-      assert [%{source: "boot", payload: %{"via" => "boot", "operator_id" => id} = payload}] =
-               audit_events(:operator_created)
-
-      assert id == operator.id
-      refute Map.has_key?(payload, "email")
-    end
-
-    test "set to an existing account reports it unmodified" do
-      org = insert_organization()
-
-      existing =
-        insert_operator_account(email: "ops@example.com", role: "admin", organization_id: org.id)
-
-      before = Repo.get!(OperatorAccount, existing.id)
-
-      log = capture_info_log(fn -> assert :ok = Release.bootstrap_operator("OPS@example.com") end)
-
-      assert log =~ "operator_bootstrap_account_exists"
-      assert log =~ "operator_id=#{existing.id}"
-      assert log =~ "operator_bootstrap_environment_retained"
-      refute log =~ "ops@example.com"
-      assert Repo.get!(OperatorAccount, existing.id) == before
-      assert audit_events(:operator_created) == []
-    end
-
-    test "an invalid value is an error and writes nothing" do
-      capture_info_log(fn ->
-        assert {:error, "email: must be a valid email address"} =
-                 Release.bootstrap_operator("not-an-email")
-
-        assert {:error, message} = Release.bootstrap_operator("admin@custyard.local")
-        assert message =~ "non-routable placeholder"
+        refute Exception.message(error) =~ "not-an-address"
       end)
 
-      assert operator_count() == 0
-    end
+    assert failed_log =~ "instance_admin_bootstrap_failed"
+    refute failed_log =~ "not-an-address"
 
-    test "warns while a super_admin admin@custyard.local exists, and leaves it alone" do
-      placeholder = insert_operator_account(email: "admin@custyard.local")
-      before = Repo.get!(OperatorAccount, placeholder.id)
-
-      for value <- [nil, "admin@custyard.local", "ops@example.com"] do
-        log = capture_info_log(fn -> assert :ok = Release.bootstrap_operator(value) end)
-        assert log =~ "operator_placeholder_unroutable"
-        assert log =~ "operator_id=#{placeholder.id}"
-        refute log =~ "admin@custyard.local"
-      end
-
-      assert Repo.get!(OperatorAccount, placeholder.id) == before
-    end
-
-    test "never creates admin@custyard.local" do
-      capture_info_log(fn -> Release.bootstrap_operator(nil) end)
-      refute Repo.get_by(OperatorAccount, email: "admin@custyard.local")
-    end
-  end
-
-  describe "setup_operator/1,2" do
-    test "creates through the shared path and reports an existing account" do
-      output =
-        capture_io(fn ->
-          assert {:created, %OperatorAccount{email: "ops@example.com"}} =
-                   Release.setup_operator(" Ops@Example.COM ")
-        end)
-
-      assert output =~ "Created operator"
-      assert [%{source: "cli"}] = audit_events(:operator_created)
-
-      output =
-        capture_io(fn ->
-          assert {:exists, _} = Release.setup_operator("OPS@example.com", role: "agent")
-        end)
-
-      assert output =~ "ops@example.com exists (role super_admin), not modified"
-    end
-
-    test "accepts a role and organization" do
-      %Organization{id: org_id} = insert_organization()
-
-      capture_io(fn ->
-        assert {:created, %{role: "agent", organization_id: ^org_id}} =
-                 Release.setup_operator("agent@example.com",
-                   role: "agent",
-                   organization_id: org_id
-                 )
-      end)
-    end
-
-    test "raises on invalid input" do
-      assert_raise ArgumentError, ~r/must be a valid email address/, fn ->
-        Release.setup_operator("nope")
-      end
-    end
-
-    test "raises on an empty or unknown role instead of creating a super_admin" do
-      for role <- ["", "   ", nil, "owner"] do
-        assert_raise ArgumentError, ~r/role: must be one of: super_admin, admin, agent/, fn ->
-          Release.setup_operator("empty-role@example.com", role: role)
-        end
-      end
-
-      assert operator_count() == 0
-    end
+    assert Repo.aggregate(InstanceAdmin, :count) == 1
+    assert InstanceAdmins.get_by_email("bootstrap@example.com").id == admin.id
   end
 
   describe "export_sqlite/1" do
     @describetag :tmp_dir
     @describetag skip: System.get_env("TURSO_TEST_URL") not in [nil, ""]
 
-    defp sqlite_all(path, sql) do
-      {:ok, db} = Exqlite.Sqlite3.open(path, mode: :readonly)
-
-      try do
-        {:ok, statement} = Exqlite.Sqlite3.prepare(db, sql)
-        {:ok, rows} = Exqlite.Sqlite3.fetch_all(db, statement)
-        rows
-      after
-        Exqlite.Sqlite3.close(db)
-      end
-    end
-
-    test "writes one file in WAL mode with the schema, and never overwrites", %{tmp_dir: dir} do
+    test "writes a WAL-mode database with migration history and refuses overwrite", %{
+      tmp_dir: dir
+    } do
       path = Path.join(dir, "turso-import.db")
 
-      assert capture_io(fn -> assert Release.export_sqlite(path) == path end) =~
-               "to #{path}"
-
+      assert capture_io(fn -> assert Release.export_sqlite(path) == path end) =~ "to #{path}"
       assert sqlite_all(path, "PRAGMA journal_mode") == [["wal"]]
       assert [[migrations]] = sqlite_all(path, "SELECT count(*) FROM schema_migrations")
       assert migrations > 0
+      assert sqlite_all(path, "PRAGMA integrity_check") == [["ok"]]
+      original = File.read!(path)
 
       assert_raise RuntimeError, ~r/already exists/, fn -> Release.export_sqlite(path) end
+      assert File.read!(path) == original
+    end
+  end
+
+  defp sqlite_all(path, sql) do
+    {:ok, db} = Exqlite.Sqlite3.open(path, mode: :readonly)
+
+    try do
+      {:ok, statement} = Exqlite.Sqlite3.prepare(db, sql)
+      {:ok, rows} = Exqlite.Sqlite3.fetch_all(db, statement)
+      rows
+    after
+      Exqlite.Sqlite3.close(db)
     end
   end
 end

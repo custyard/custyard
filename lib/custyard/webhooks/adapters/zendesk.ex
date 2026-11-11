@@ -63,7 +63,7 @@ defmodule Custyard.Webhooks.Adapters.Zendesk do
       else: {:error, "stale timestamp - request may be a replay attack"}
   end
 
-  # Conversation.changeset validates subject max 500 chars
+  # Thread.changeset validates subject max 500 chars
   @max_subject_length 500
   # Message.changeset validates body max 100,000 chars
   @max_body_length 100_000

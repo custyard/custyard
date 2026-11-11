@@ -32,12 +32,17 @@ defmodule CustyardWeb.Plugs.RequestLog do
 
   defp route_class("/"), do: :root
   defp route_class("/api/health"), do: :health
-  defp route_class("/operator/login"), do: :operator_login
-  defp route_class("/operator/login/sent"), do: :operator_login
-  defp route_class("/operator" <> _), do: :operator
-  defp route_class("/i/" <> _), do: :intake
-  defp route_class("/p/" <> _), do: :portal
-  defp route_class("/claim/" <> _), do: :claim
+  defp route_class("/app/login"), do: :staff_login
+  defp route_class("/app/login/sent"), do: :staff_login
+  defp route_class("/app"), do: :staff
+  defp route_class("/app/" <> _), do: :staff
+  defp route_class("/admin/login"), do: :instance_admin_login
+  defp route_class("/admin"), do: :instance_admin
+  defp route_class("/admin/" <> _), do: :instance_admin
+  defp route_class("/intake/" <> _), do: :intake
+  defp route_class("/portal/" <> _), do: :portal
+  defp route_class("/threads/" <> _), do: :thread
+  defp route_class("/claims/" <> _), do: :claim
   defp route_class("/api/webhook/" <> _), do: :webhook
   defp route_class(_), do: :other
 end

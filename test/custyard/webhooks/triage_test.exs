@@ -62,16 +62,16 @@ defmodule Custyard.Webhooks.TriageTest do
   end
 
   describe "own outbound echo" do
-    test "matches an operator message by raw Message-ID in the organization", %{
+    test "matches a staff message by raw Message-ID in the organization", %{
       org: org,
       route: route
     } do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
       reply =
         insert_message(
-          conversation_id: conversation.id,
-          source: :operator,
+          thread_id: thread.id,
+          source: :staff,
           message_id: "<reply-1.c1@custyard.local>"
         )
 
@@ -86,11 +86,11 @@ defmodule Custyard.Webhooks.TriageTest do
     end
 
     test "matches after whitespace normalization of the Message-ID", %{org: org, route: route} do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conversation.id,
-        source: :operator,
+        thread_id: thread.id,
+        source: :staff,
         message_id: "<reply-2.c1@custyard.local>"
       )
 
@@ -102,12 +102,13 @@ defmodule Custyard.Webhooks.TriageTest do
                )
     end
 
-    test "an operator message in another organization is not an echo", %{route: route} do
-      other = insert_conversation()
+    test "a staff message in another tenant is not an echo", %{route: route} do
+      other_tenant = insert_tenant()
+      other = insert_thread(tenant_id: other_tenant.id)
 
       insert_message(
-        conversation_id: other.id,
-        source: :operator,
+        thread_id: other.id,
+        source: :staff,
         message_id: "<reply-3.c9@custyard.local>"
       )
 
@@ -120,10 +121,10 @@ defmodule Custyard.Webhooks.TriageTest do
     end
 
     test "a customer message with the same Message-ID is not an echo", %{org: org, route: route} do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         source: :email,
         message_id: "<dup-4@customer.example.com>"
       )
@@ -137,21 +138,21 @@ defmodule Custyard.Webhooks.TriageTest do
     end
   end
 
-  describe "operator-sent capture and manual forward" do
+  describe "staff-sent capture and manual forward" do
     setup %{org: org} do
-      operator =
-        insert_operator_account(
+      staff =
+        insert_staff_account(
           role: "admin",
           organization_id: org.id,
           email: "me@acme.example.com"
         )
 
-      conv = insert_conversation(organization_id: org.id)
-      insert_message(conversation_id: conv.id, message_id: "<orig@customer.example.com>")
-      %{operator: operator, conv: conv}
+      conv = insert_thread(organization_id: org.id)
+      insert_message(thread_id: conv.id, message_id: "<orig@customer.example.com>")
+      %{staff: staff, conv: conv}
     end
 
-    defp operator_mail(overrides) do
+    defp staff_mail(overrides) do
       normalized(
         Map.merge(
           %{
@@ -183,52 +184,52 @@ defmodule Custyard.Webhooks.TriageTest do
     I cannot log in.
     """
 
-    test "an authenticated operator reply into a known thread is operator_sent", %{
+    test "an authenticated staff reply into a known thread is staff_sent", %{
       route: route,
-      operator: operator,
+      staff: staff,
       conv: conv
     } do
       payload =
-        operator_mail(%{in_reply_to: "<orig@customer.example.com>", body: "Fixed it for you."})
+        staff_mail(%{in_reply_to: "<orig@customer.example.com>", body: "Fixed it for you."})
 
-      assert {:operator_sent,
+      assert {:staff_sent,
               %{
-                conversation: %{id: conv_id},
-                operator: %{id: op_id},
+                thread: %{id: conv_id},
+                staff: %{id: op_id},
                 email: "me@acme.example.com"
               }} =
                Triage.classify(payload, route, nil)
 
       assert conv_id == conv.id
-      assert op_id == operator.id
+      assert op_id == staff.id
     end
 
-    test "an authenticated operator forward with no thread is operator_forward", %{route: route} do
-      payload = operator_mail(%{subject: "Fwd: Login broken", body: @forward_body})
+    test "an authenticated staff forward with no thread is staff_forward", %{route: route} do
+      payload = staff_mail(%{subject: "Fwd: Login broken", body: @forward_body})
 
-      assert {:operator_forward,
+      assert {:staff_forward,
               %{original: %{email: "alice@customer.example.com", subject: "Login broken"}}} =
                Triage.classify(payload, route, nil)
     end
 
     test "a forwarded block without a Fwd: subject still unwraps", %{route: route} do
-      payload = operator_mail(%{subject: "see below", body: @forward_body})
-      assert {:operator_forward, _info} = Triage.classify(payload, route, nil)
+      payload = staff_mail(%{subject: "see below", body: @forward_body})
+      assert {:staff_forward, _info} = Triage.classify(payload, route, nil)
     end
 
     test "a forward that cannot be unwrapped is customer mail", %{route: route} do
-      payload = operator_mail(%{subject: "Fwd: something", body: "no block here"})
+      payload = staff_mail(%{subject: "Fwd: something", body: "no block here"})
       assert {:customer, nil} = Triage.classify(payload, route, nil)
     end
 
-    test "without an aligned DKIM pass the operator address is just a sender", %{route: route} do
+    test "without an aligned DKIM pass the staff address is just a sender", %{route: route} do
       for auth <- [
             %{dkim: "fail", dkim_domain: "acme.example.com", dmarc: "pass"},
             %{dkim: "pass", dkim_domain: "evil.example", dmarc: "pass"},
             %{dkim: nil, dkim_domain: nil, dmarc: nil}
           ] do
         payload =
-          operator_mail(%{in_reply_to: "<orig@customer.example.com>"})
+          staff_mail(%{in_reply_to: "<orig@customer.example.com>"})
           |> put_metadata(%{authentication: auth})
 
         assert {:customer, nil} = Triage.classify(payload, route, nil), inspect(auth)
@@ -237,25 +238,25 @@ defmodule Custyard.Webhooks.TriageTest do
 
     test "a subdomain signature is aligned", %{route: route} do
       payload =
-        operator_mail(%{in_reply_to: "<orig@customer.example.com>"})
+        staff_mail(%{in_reply_to: "<orig@customer.example.com>"})
         |> put_metadata(%{
           authentication: %{dkim: "pass", dkim_domain: "mail.acme.example.com", dmarc: "pass"}
         })
 
-      assert {:operator_sent, _info} = Triage.classify(payload, route, nil)
+      assert {:staff_sent, _info} = Triage.classify(payload, route, nil)
     end
 
-    test "an operator of another organization is not operator-owned here", %{route: route} do
-      other = insert_organization()
+    test "staff of another tenant is not staff-owned here", %{route: route} do
+      other = insert_tenant()
 
-      insert_operator_account(
+      insert_staff_account(
         role: "admin",
-        organization_id: other.id,
+        tenant_id: other.id,
         email: "them@acme.example.com"
       )
 
       payload =
-        operator_mail(%{
+        staff_mail(%{
           from: "them@acme.example.com",
           in_reply_to: "<orig@customer.example.com>"
         })
@@ -263,20 +264,21 @@ defmodule Custyard.Webhooks.TriageTest do
       assert {:customer, nil} = Triage.classify(payload, route, nil)
     end
 
-    test "a super admin is operator-owned everywhere", %{route: route} do
-      insert_operator_account(role: "super_admin", email: "root@acme.example.com")
+    test "an instance admin is not tenant staff", %{route: route} do
+      %Custyard.InstanceAdmin{}
+      |> Custyard.InstanceAdmin.changeset(%{email: "root@acme.example.com"})
+      |> Repo.insert!()
 
       payload =
-        operator_mail(%{
+        staff_mail(%{
           from: "root@acme.example.com",
           in_reply_to: "<orig@customer.example.com>"
         })
 
-      assert {:operator_sent, %{operator: %{role: "super_admin"}}} =
-               Triage.classify(payload, route, nil)
+      assert {:customer, nil} = Triage.classify(payload, route, nil)
     end
 
-    test "the channel's public address counts as operator-owned with no account", %{route: route} do
+    test "the channel's public address counts as staff-owned with no account", %{route: route} do
       channel =
         insert_inbound_channel(
           inbound_route_id: route.id,
@@ -285,12 +287,12 @@ defmodule Custyard.Webhooks.TriageTest do
         )
 
       payload =
-        operator_mail(%{
+        staff_mail(%{
           from: "Acme Support <support@acme.example.com>",
           in_reply_to: "<orig@customer.example.com>"
         })
 
-      assert {:operator_sent, %{operator: nil, email: "support@acme.example.com"}} =
+      assert {:staff_sent, %{staff: nil, email: "support@acme.example.com"}} =
                Triage.classify(payload, route, channel)
 
       assert {:customer, nil} = Triage.classify(payload, route, nil)
@@ -516,11 +518,11 @@ defmodule Custyard.Webhooks.TriageTest do
     end
 
     test "own echo beats auto-response", %{org: org, route: route} do
-      conversation = insert_conversation(organization_id: org.id)
+      thread = insert_thread(organization_id: org.id)
 
       insert_message(
-        conversation_id: conversation.id,
-        source: :operator,
+        thread_id: thread.id,
+        source: :staff,
         message_id: "<echo-5.c1@custyard.local>"
       )
 
@@ -575,34 +577,36 @@ defmodule Custyard.Webhooks.TriageTest do
       assert {:customer, nil} = Triage.classify(payload, route, nil)
     end
 
-    test "a contact in another organization does not exempt the sender", %{route: route} do
-      insert_contact(email: "alice@customer.example.com")
+    test "a contact in another tenant does not exempt the sender", %{route: route} do
+      other_tenant = insert_tenant()
+      other_org = insert_organization(tenant_id: other_tenant.id)
+      insert_contact(organization_id: other_org.id, email: "alice@customer.example.com")
 
       payload = normalized() |> put_metadata(%{is_spam: true})
       assert {:suspect, :spam_flagged} = Triage.classify(payload, route, nil)
     end
 
-    test "a contact whose only conversations are suspect does not exempt the sender", %{
+    test "a contact whose only threads are suspect does not exempt the sender", %{
       org: org,
       route: route
     } do
       # Sender matching created this contact from the first suspect delivery.
       contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
-      insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+      insert_thread(organization_id: org.id, contact_id: contact.id, suspect: true)
 
       payload = normalized() |> put_metadata(%{is_spam: true})
       assert {:suspect, :spam_flagged} = Triage.classify(payload, route, nil)
     end
 
-    test "one accepted conversation makes the sender known", %{org: org, route: route} do
+    test "one accepted thread makes the sender known", %{org: org, route: route} do
       contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
-      insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+      insert_thread(organization_id: org.id, contact_id: contact.id, suspect: true)
 
       cleared =
-        insert_conversation(organization_id: org.id, contact_id: contact.id, suspect: true)
+        insert_thread(organization_id: org.id, contact_id: contact.id, suspect: true)
 
-      # The operator dismissing the flag is what whitelists the sender.
-      {:ok, _} = Custyard.Conversations.set_suspect(cleared, false)
+      # The staff dismissing the flag is what whitelists the sender.
+      {:ok, _} = Custyard.Threads.set_suspect(cleared, false)
 
       payload = normalized() |> put_metadata(%{is_spam: true})
       assert {:customer, nil} = Triage.classify(payload, route, nil)

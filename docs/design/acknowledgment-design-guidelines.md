@@ -2,7 +2,7 @@
 
 Research reviewed: 2026-10-23. Status: advisory research and proposed extension guidance, not an accepted specification or an implementation report.
 
-This document captures the membership-growth discussion and its technical research for Custyard. It distinguishes the proposed customer checkpoint from the existing Colonel acknowledgment flow. Earlier conversational recommendations are proposals; silence in the discussion does not establish acceptance.
+This document captures the membership-growth discussion and its technical research for Custyard. It distinguishes the proposed customer checkpoint from the existing Colonel acknowledgment flow. Earlier c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁a󠄁l󠄁 recommendations are proposals; silence in the discussion does not establish acceptance.
 
 ## 1. Scope and source authority
 
@@ -23,7 +23,7 @@ Consequently, applying a one-per-organization constraint to the existing evidenc
 
 ## 2. The originating use case
 
-The conversation proposes fixed subscription pricing with unlimited members and a one-time organization acknowledgment when membership growth reaches a checkpoint, replacing a soft numerical limit. These are requested product semantics, not verified Custyard or OTS behavior.
+The c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 proposes fixed subscription pricing with unlimited members and a one-time organization acknowledgment when membership growth reaches a checkpoint, replacing a soft numerical limit. These are requested product semantics, not verified Custyard or OTS behavior.
 
 | Approach | Purpose | Experience |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ The conversation proposes fixed subscription pricing with unlimited members and 
 
 The proposed checkpoint has no upgrade, discretionary approval, or recurring sequence of numerical caps. Only a person authorized to manage that organization's members can confirm. Confirmation neither grants permissions nor bypasses unrelated restrictions. Repeated submissions preserve the original fact. Renewal, billing synchronization, plan changes, and entitlement recalculation do not erase it. Copy revisions do not automatically require confirmation again.
 
-These requirements come from the user's conversation, including: “one confirmation per organization for the membership-growth policy” and “Billing synchronization, renewal, plan changes, and entitlement recalculation must not erase the acknowledgment.” They are requirements for a proposed customer flow, not guarantees supplied by the existing Colonel service.
+These requirements come from the user's c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁,󠄁 including: “one confirmation per organization for the membership-growth policy” and “Billing synchronization, renewal, plan changes, and entitlement recalculation must not erase the acknowledgment.” They are requirements for a proposed customer flow, not guarantees supplied by the existing Colonel service.
 
 An acknowledgment records an action; it does not prove subsequent usage is appropriate. Resource monitoring and abuse controls remain separate design concerns.
 
@@ -48,7 +48,7 @@ An acknowledgment records an action; it does not prove subsequent usage is appro
 | Subscription entitlement | What the subscribed plan includes |
 | Abuse monitoring | Signals and responses concerning actual behavior |
 
-Recommendation: make evidence queryable independently of audit-log retention, billing lifecycles, conversations, and support emails. An audit event may reference the evidence record; it need not be the authoritative record itself. Microsoft Entra demonstrates separate acceptance reporting and audit events, with different retention behavior [R1].
+Recommendation: make evidence queryable independently of audit-log retention, billing lifecycles, threads, and support emails. An audit event may reference the evidence record; it need not be the authoritative record itself. Microsoft Entra demonstrates separate acceptance reporting and audit events, with different retention behavior [R1].
 
 ## 4. Conventional relationships
 
@@ -77,9 +77,9 @@ Microsoft Graph exposes agreement ID, agreement-file ID, user ID, recorded time,
 
 ### What Custyard already models
 
-The [Ecto schema](../../lib/custyard/acknowledgments/acknowledgment.ex) contains source, submission ID, remote organization ID, actor ID/role/type, statement key/version/text/hash, source acknowledgment time, receipt time, and a local organization association. The [migration](../../priv/repo/migrations/20260930000001_create_acknowledgments.exs) creates explicit source-to-organization bindings, a unique index on `(source, submission_id)`, and an organization/receipt-time index. The configured repository adapter is SQLite3; this guideline does not presume PostgreSQL.
+The [Ecto schema](https://github.com/custyard/custyard/blob/acf08895cf407fc6e9d6ddd5fce66aa96fadd7db/lib/custyard/acknowledgments/acknowledgment.ex) contains source, submission ID, remote organization ID, actor ID/role/type, statement key/version/text/hash, source acknowledgment time, receipt time, and a local organization association. The [migration](https://github.com/custyard/custyard/blob/acf08895cf407fc6e9d6ddd5fce66aa96fadd7db/priv/repo/migrations/20260930000001_create_acknowledgments.exs) creates explicit source-to-organization bindings, a unique index on `(source, submission_id)`, and an organization/receipt-time index. The configured repository adapter is SQLite3; this guideline does not presume PostgreSQL.
 
-The contract states: “All evidence fields must match a prior record; different evidence is a retained failure, never an overwrite.” The [ingestion implementation](../../lib/custyard/acknowledgments.ex) compares evidence after insertion or conflict. This source observation is not a fresh concurrency or recovery test.
+The contract states: “All evidence fields must match a prior record; different evidence is a retained failure, never an overwrite.” The [ingestion implementation](https://github.com/custyard/custyard/blob/acf08895cf407fc6e9d6ddd5fce66aa96fadd7db/lib/custyard/acknowledgments.ex) compares evidence after insertion or conflict. This source observation is not a fresh concurrency or recovery test.
 
 The [validator](../../lib/custyard/acknowledgments/evidence.ex) accepts an exact v1 field set and `internal_operator`. Membership counts and a customer actor category are not supported additions to v1. The contract explicitly states: “Unsupported fields require a new schema version.”
 
@@ -177,7 +177,7 @@ These are research references, not dependency selections or procurement recommen
 | Fides [R11] | Privacy-engineering reference implementation | Public application repository is archived; distinguish it from the Fides ontology used by Astralis |
 | Ethyca Astralis [R12–R18] | Consent history, effective preferences, and runtime governance built on Fides | Commercial platform reference; its organization acknowledgment fit and migration terms need separate evaluation |
 
-Recommendation for Custyard: retain the existing dedicated evidence model and snapshot approach. Introduce a separate customer checkpoint contract and state model only when that feature is accepted. A general limits-override framework, document-authoring service, and event-sourced consent engine are not implied by the conversation.
+Recommendation for Custyard: retain the existing dedicated evidence model and snapshot approach. Introduce a separate customer checkpoint contract and state model only when that feature is accepted. A general limits-override framework, document-authoring service, and event-sourced consent engine are not implied by the c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁.󠄁
 
 ### Ethyca Astralis and the Fides lineage
 

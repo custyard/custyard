@@ -23,12 +23,19 @@ defmodule Custyard.Log do
   @known_exception_names Enum.map(@known_exception_types, &Atom.to_string/1)
   @filter_id :custyard_log_privacy
   @event_names ~w(
+    account_login_delivery_started
+    account_login_provider_accepted
+    account_login_provider_rejected
+    account_login_rejected
+    account_login_requested
+    account_login_skipped
+    account_login_succeeded
+    account_logout
     acknowledgment_audit_record_failed
     acknowledgment_broker_unavailable
     acknowledgment_committed
-    acknowledgment_configuration_missing
+    acknowledgment_configuration_invalid
     acknowledgment_processing_failed
-    acknowledgment_transport_insecure
     attachment_fetch_failed
     channel_audit_record_failed
     channel_mark_received_failed
@@ -39,22 +46,14 @@ defmodule Custyard.Log do
     channel_verification_capture_failed
     claim_confirmation_email_accepted
     claim_confirmation_email_failed
-    conversation_enrichment_failed
-    conversation_enrichment_record_failed
     delivery_failure_notice_failed
     delivery_failure_notification_failed
     delivery_failure_notification_stubbed
     delivery_status_audit_record_failed
-    dev_operator_created
-    dev_operator_exists
-    dev_operator_setup_failed
     dormancy_check_completed
     dormancy_check_failed
     email_header_decode_failed
-    email_status_auth_rejected
     email_status_processing_failed
-    email_status_secret_missing
-    email_status_verification_skipped
     external_log
     fly_machine_count_unknown
     fly_mount_verification_failed
@@ -67,11 +66,9 @@ defmodule Custyard.Log do
     imap_message_processing_failed
     imap_position_rebased
     inbound_rejection_record_failed
-    inbound_route_action_unauthorized
-    inbound_route_create_failed
     inbound_route_delete_failed
     inbound_route_sync_failed
-    inbound_route_webhook_toggle_failed
+    instance_admin_bootstrap_failed
     intake_arrival_email_accepted
     intake_arrival_email_failed
     intake_arrival_email_rate_limited
@@ -96,8 +93,8 @@ defmodule Custyard.Log do
     lmtp_recipient_domain_rejected
     lmtp_recipient_extension_received
     lmtp_recipient_limit_exceeded
-    lmtp_recipient_organization_mismatch
     lmtp_recipient_received
+    lmtp_recipient_tenant_mismatch
     lmtp_sender_received
     lmtp_server_started
     lmtp_session_terminated
@@ -111,23 +108,6 @@ defmodule Custyard.Log do
     neglect_notification_dispatched
     neglect_notification_failed
     neglect_notification_stubbed
-    operator_account_created
-    operator_account_removed
-    operator_bootstrap_account_exists
-    operator_bootstrap_environment_retained
-    operator_bootstrap_failed
-    operator_bootstrap_required
-    operator_bootstrap_skipped
-    operator_email_normalization_skipped
-    operator_login_delivery_started
-    operator_login_provider_accepted
-    operator_login_provider_rejected
-    operator_login_rejected
-    operator_login_requested
-    operator_login_skipped
-    operator_login_succeeded
-    operator_logout
-    operator_placeholder_unroutable
     organization_deleted
     organization_deletion_failed
     organization_deletion_started
@@ -136,9 +116,7 @@ defmodule Custyard.Log do
     outbound_delivery_withheld
     outbound_queue_scan_failed
     outbound_status_update_failed
-    portal_path_already_prefixed
     prospect_conversion_audit_record_failed
-    provider_delivery_organization_mismatch
     public_rate_limit_exceeded
     quiet_channel_check_completed
     quiet_channel_check_failed
@@ -153,12 +131,13 @@ defmodule Custyard.Log do
     scoring_settings_database_failed
     scoring_settings_defaulted
     scoring_settings_unexpected_failure
-    sender_organization_ambiguous
     sentry_handler_attach_failed
     slug_claim_expiry_completed
     slug_claim_expiry_failed
     slug_release_audit_record_failed
     tenant_notification_skipped
+    thread_enrichment_failed
+    thread_enrichment_record_failed
     triage_audit_record_failed
     unused_local_database_detected
     webhook_attachment_processing_failed
@@ -176,24 +155,24 @@ defmodule Custyard.Log do
     webhook_verification_skipped
   )
   @events Enum.map(@event_names, &String.to_atom/1)
-  @context_keys ~w(request_id operation_id parent_operation_id tenant_id organization_id operator_id channel_id route_id conversation_id message_id)a
-  @integer_fields ~w(operator_id session_operator_id organization_id tenant_id conversation_id message_id channel_id inbound_channel_id route_id project_id audit_event_id slug_id contact_id source_id acknowledgment_id existing_organization_id new_organization_id conflicting_operator_id uid port count limit current_count max_size max_recipients actual_size declared_size size_bytes recipient_count received_count message_count messages_processed retry_after_ms retry_after_s attempt duration_ms deleted_count deleted_conversations deleted_messages deleted_attachments deleted_contacts deleted_operators deleted_routes deleted_channels organization_count quiet_after_hours conversations_deleted messages_deleted attachments_deleted contacts_deleted operators_deleted routes_deleted channels_deleted rejection_count rows affected_rows generation score dormant_count notification_count contacts_to_delete conversations_to_delete resolved_conversations orphaned_contacts orphaned_tasks channel_rejections channel_verifications channel_tokens attachment_files)a
+  @context_keys ~w(request_id operation_id parent_operation_id tenant_id organization_id staff_id channel_id route_id thread_id message_id)a
+  @integer_fields ~w(staff_id session_staff_id organization_id tenant_id thread_id message_id channel_id inbound_channel_id route_id project_id audit_event_id slug_id contact_id source_id acknowledgment_id existing_organization_id new_organization_id uid port count limit current_count max_size max_recipients actual_size declared_size size_bytes recipient_count received_count message_count messages_processed retry_after_ms retry_after_s attempt duration_ms deleted_count deleted_threads deleted_messages deleted_attachments deleted_contacts deleted_staff deleted_routes deleted_channels organization_count quiet_after_hours threads_deleted messages_deleted attachments_deleted contacts_deleted staff_deleted routes_deleted channels_deleted rejection_count rows affected_rows generation score dormant_count notification_count contacts_to_delete threads_to_delete resolved_threads orphaned_contacts orphaned_tasks channel_rejections channel_verifications channel_tokens attachment_files account_id instance_admin_id existing_tenant_id message_drafts)a
   @boolean_fields ~w(enabled email_captured tls used_default configured accepted async tls_enabled)a
   @id_fields ~w(request_id operation_id parent_operation_id)a
   @reference_fields ~w(submission_ref source_ref receipt_ref)a
   @levels ~w(debug info notice warning error critical alert emergency)a
   @transport_reasons ~w(timeout closed econnrefused econnreset enetunreach ehostunreach nxdomain etimedout ssl_closed tls_alert certificate_expired unknown_ca from_not_set no_recipients no_recipient_email missing_credentials missing_project_credentials no_consent delivery_exception smtp_down)a
   @reason_values @transport_reasons ++
-                   ~w(unknown_account no_organization missing_email email_rate_limited ip_rate_limited rate_limited no_consent exception validation_failed provider_response invalid_provider_response unclassified_error repository_unavailable database_unavailable constraint_error not_configured disabled not_found unauthorized forbidden invalid_signature missing_signature missing_secret unknown_source unknown_event unknown_message_source invalid_configuration invalid_payload invalid_header invalid_encoding oversized_message recipient_limit organization_mismatch unknown_recipient mail_loop ip_not_allowed temporary permanent invalid_response task_capacity no_matching_sender multiple_matches ambiguous manual own_echo no_channel tenant_not_found tenant_disabled missing_recipient delivery_error already_exist worker_exit invalid_context dropped other retry_scheduled acceptance_unknown invalid_domain capacity_exceeded no_operator_accounts no_staff sending_not_configured project_token_missing connection_not_found envelope_changed missing_raw_body missing_timestamp invalid_timestamp stale_timestamp invalid_signature_format normalization_collision invalid_utf8 invalid_or_expired_token eacces enoent eio enospc erofs enotdir eperm emfile enfile einval message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error attachment_fetch_failed attachment_processing_failed channel_route_mismatch concurrent_update invalid_enabled_value invalid_url channel_failed connection_failed unreachable auth_failed access_refused tls_failed ack_failed subscription_failed subscription_cancelled publication_failed publication_unconfirmed publication_rejected unroutable)a
+                   ~w(unknown_account no_organization missing_email email_rate_limited ip_rate_limited rate_limited no_consent exception validation_failed provider_response invalid_provider_response unclassified_error repository_unavailable database_unavailable constraint_error not_configured disabled not_found unauthorized forbidden invalid_signature missing_signature missing_secret unknown_source unknown_event unknown_message_source invalid_configuration invalid_payload invalid_header invalid_encoding oversized_message recipient_limit organization_mismatch unknown_recipient mail_loop ip_not_allowed temporary permanent invalid_response task_capacity no_matching_sender multiple_matches ambiguous manual own_echo no_channel tenant_not_found tenant_disabled tenant_suspended tenant_required missing_recipient delivery_error already_exist worker_exit invalid_context dropped other retry_scheduled acceptance_unknown invalid_domain capacity_exceeded no_staff sending_not_configured project_token_missing connection_not_found envelope_changed missing_raw_body missing_timestamp invalid_timestamp stale_timestamp invalid_signature_format normalization_collision invalid_utf8 invalid_or_expired_token eacces enoent eio enospc erofs enotdir eperm emfile enfile einval message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error attachment_fetch_failed attachment_processing_failed channel_route_mismatch concurrent_update invalid_enabled_value invalid_url channel_failed connection_failed unreachable auth_failed access_refused tls_failed ack_failed subscription_failed subscription_cancelled publication_failed publication_unconfirmed publication_rejected unroutable)a
   @enums %{
     reason: @reason_values,
     outcome:
       ~w(started accepted rejected skipped succeeded failed completed updated ignored deferred withheld retrying unknown unavailable)a,
     source:
-      ~w(email operator portal public_intake api webhook lettermint slack zendesk intercom lmtp imap cli boot scheduler inbound outbound internal broker test)a,
+      ~w(email staff prospect portal public_intake api webhook lettermint slack zendesk intercom lmtp imap cli boot scheduler inbound outbound internal broker test)a,
     mode: ~w(stub local test live enabled disabled development production active passive)a,
     receipt: ~w(sent skipped)a,
-    role: ~w(super_admin admin agent operator customer contact prospect to cc bcc)a,
+    role: ~w(admin agent staff instance_admin customer contact prospect to cc bcc)a,
     stage:
       ~w(startup connect poll fetch parse dispatch persist deliver notify audit sweep retry shutdown weights intake_config neglect_thresholds)a,
     purpose:
@@ -201,7 +180,7 @@ defmodule Custyard.Log do
     notification_level:
       ~w(info warning critical urgent high medium low neglect quiet delivery_failure)a,
     bucket:
-      ~w(operator_login_ip operator_login_email intake_get intake_post conversation_mount conversation_reply email_capture claim_submit claim_confirm claim_email_send intake_arrival_email intake_receipt_email)a,
+      ~w(account_login_ip account_login_email public_instance_ip intake_get intake_post thread_mount thread_reply email_capture claim_submit claim_confirm claim_email_send intake_arrival_email intake_receipt_email)a,
     action:
       ~w(create update delete enable disable release claim login logout add remove retry cancel revoke export erase)a,
     status:
@@ -210,54 +189,61 @@ defmodule Custyard.Log do
     error_type: ~w(temporary permanent exception exit throw validation transport provider)a,
     limit_type: ~w(connection global recipient size ip email)a,
     method: ~w(GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE),
-    route: ~w(root health operator_login operator intake portal claim webhook other)a,
+    route:
+      ~w(root health staff_login staff instance_admin_login instance_admin intake portal thread claim webhook other)a,
     provider: ~w(lettermint smtp sendgrid mailgun postmark local test unknown)a,
     event_type:
-      ~w(acknowledgment_binding_created acknowledgment_replayed channel_created channel_deleted channel_quiet channel_sending_domain_checked channel_state_changed channel_token_revealed channel_token_rotated channel_updated channel_verification_captured data_subject_erasure delivery_status_updated inbound_triaged operator_created operator_removed operator_tenant_access_granted prospect_converted slug_released webhook_error webhook_processed webhook_received)a
+      ~w(acknowledgment_binding_created acknowledgment_replayed channel_created channel_deleted channel_quiet channel_sending_domain_checked channel_state_changed channel_token_revealed channel_token_rotated channel_updated channel_verification_captured data_subject_erasure delivery_status_updated inbound_triaged installation_configured instance_admin_created instance_admin_removed internal_note_created outbound_pause_changed prospect_converted reply_queued reply_retried slug_released staff_created staff_removed tenant_host_removed tenant_status_changed webhook_error webhook_processed webhook_received)a
   }
   @provider_codes ~w(validation_failed validation_error invalid_request invalid_payload invalid_api_token invalid_token unauthorized unauthenticated forbidden access_denied domain_not_verified sender_not_verified unverified_domain invalid_sender invalid_recipient invalid_email account_not_verified production_not_verified project_not_verified quota_exceeded rate_limit_exceeded too_many_requests insufficient_credits daily_limit_exceeded message_too_large invalid_attachment duplicate_request idempotency_conflict internal_error server_error service_unavailable sandbox_recipient_not_allowed)
   @validation_fields ~w(
     access_token_hash acknowledged_at actor_id actor_role actor_type address
     api_token archive_copy attachment_limit_mb attachments attention_bonus authentication
-    batch_processing_expires_at batch_processing_token bcc body branding cached_score
-    callback_token cc cc_addresses channel_id channels classification
-    confirmation_token_hash confirmed_at contact contact_id contacts content
-    content_id content_type conversation conversation_id conversations custom_domain
-    dedup_scope default_channel default_channel_id deleted_at deleted_by_operator deleted_by_operator_id
-    delivery_attempted_at delivery_error_code delivery_failure_kind delivery_payload_hash delivery_recipients_locked delivery_status
-    description descriptor_hash display_name domain due_at email
-    email_captured_at email_status email_status_at enabled endpoint_url event_type
-    expires_at filename forwarded_by_email forwarded_by_operator forwarded_by_operator_id from
-    from_address headers headline html html_body id
-    imap_auth_failed_at imap_auth_failures imap_consecutive_failures imap_folder imap_host imap_last_error
-    imap_last_polled_at imap_last_uid imap_message_attempts imap_password imap_password_ciphertext imap_port
-    imap_uid_validity imap_username in_reply_to inbound_channel inbound_channel_id inbound_channels
-    inbound_route inbound_route_id inbound_routes ingress_kind ingress_local ingress_token
-    inserted_at intake_config intake_key intake_source_key intro_copy is_admin
-    is_internal_note is_template key label label_id language
-    last_customer_action_at last_neglect_notification last_operator_action_at last_received_at last_reply_accepted_at last_reply_delivered_at
-    last_returning_reply_at last_signed_inbound_at last_status_event_at latest_received_conversation latest_received_conversation_id lettermint_custom_domain
-    lettermint_custom_domain_verified_at lettermint_inbound_address lettermint_message_id lettermint_project_id lettermint_route_domain lettermint_route_id
-    lettermint_webhook_id link_title link_url login_token login_token_expires_at logo_url
+    author_staff author_staff_id batch_processing_expires_at batch_processing_token bcc body
+    branding cached_score callback_token cc cc_addresses channel_id
+    channels classification confirmation_token_hash confirmed_at contact contact_id
+    contacts content content_id content_type custom_domain dedup_scope
+    default_channel default_channel_id default_contact default_contact_id default_label default_label_id
+    default_organization default_organization_id default_project default_project_id deleted_at deleted_by_staff
+    deleted_by_staff_id delivery_attempted_at delivery_error_code delivery_failure_kind delivery_payload_hash delivery_recipients_locked
+    delivery_status description descriptor_hash display_name domain due_at
+    email email_captured_at email_status email_status_at enabled endpoint_url
+    event_type expires_at filename forwarded_by_email forwarded_by_staff forwarded_by_staff_id
+    from from_address headers headline hostname hosts
+    html html_body id identity_kind identity_value imap_auth_failed_at
+    imap_auth_failures imap_consecutive_failures imap_folder imap_host imap_last_error imap_last_polled_at
+    imap_last_uid imap_message_attempts imap_password imap_password_ciphertext imap_port imap_uid_validity
+    imap_username in_reply_to inbound_channel inbound_channel_id inbound_channels inbound_route
+    inbound_route_id inbound_routes ingress_kind ingress_local ingress_token inserted_at
+    intake_config intake_key intake_source_key intro_copy is_admin is_internal_note
+    is_template key label label_id language last_customer_action_at
+    last_neglect_notification last_received_at last_reply_accepted_at last_reply_delivered_at last_returning_reply_at last_signed_inbound_at
+    last_staff_action_at last_status_event_at latest_received_thread latest_received_thread_id lettermint_custom_domain lettermint_custom_domain_verified_at
+    lettermint_inbound_address lettermint_message_id lettermint_project_id lettermint_route_domain lettermint_route_id lettermint_webhook_id
+    link_title link_url lock_version login_token login_token_expires_at logo_url
     message message_id messages metadata mode name
-    neglect_thresholds normalized_name notify_on_reply operator_accounts organization organization_id
-    organizations origin password password_hash paused_at payload
-    portal_visible position previous_ingress_token previous_token_expires_at primary_color processing_expires_at
-    processing_token progress project project_check_status project_checked_at project_id
-    project_token_ciphertext project_type projects prospect provider provider_delivery_id
-    public_address purpose questions quiet_after_hours quiet_notified_at received_at
-    recipient recipient_statuses reply_evidence_after_message_id reply_from reply_to revoked_at
-    role route route_type sandbox_result scheduled_at schema_version
+    neglect_thresholds normalized_name note_text notify_on_reply organization organization_id
+    organizations origin outbound_paused password password_hash paused_at
+    payload portal_visible position previous_ingress_token previous_token_expires_at primary_color
+    processing_expires_at processing_token progress project project_check_status project_checked_at
+    project_id project_token_ciphertext project_type projects prospect provider
+    provider_delivery_id public_address public_id purpose questions queue
+    quiet_after_hours quiet_notified_at received_at recipient recipient_statuses reply_cc
+    reply_cc_edited reply_channel reply_channel_id reply_evidence_after_message_id reply_from reply_text
+    reply_to reviewed_activity_id revoked_at role route route_type
+    sandbox_result scan_status scan_token scanned_at scheduled_at schema_version
     score_weights secondary_color sender_email sending_check_status sending_checked_at sending_domain
     sending_domain_checked_at sending_domain_status session_claim settings sha256 sieve_header_mappings
     singleton size skip_reason slug sniffed_type snoozed_until
-    source source_organization_id spam_score start_date state statement_hash
-    statement_key statement_text statement_version status status_at status_callback_token
-    status_secret_ciphertext status_webhook_id storage_path subject submission_id suspect
-    tag tags target_completion_date tasks team_token_ciphertext tenant
-    tenant_id text tier title to to_addresses
-    token triage_class updated_at urgency verification_captured_at verification_code
-    verification_expires_at verification_link verified_at webhook_secret_ciphertext webhook_verified_at webhooks
+    source source_organization_id spam_score staff_account staff_account_id staff_accounts
+    start_date state statement_hash statement_key statement_text statement_version
+    status status_at status_callback_token status_secret_ciphertext status_webhook_id storage_path
+    subject submission_id suspect tag tags target_completion_date
+    tasks team_token_ciphertext tenant tenant_id text thread
+    thread_id threads tier title to to_addresses
+    token token_hash triage_class updated_at urgency url_ciphertext
+    verification_captured_at verification_code verification_expires_at verification_link verified_at webhook_secret_ciphertext
+    webhook_verified_at webhooks
   )
 
   @metadata_keys Enum.uniq(

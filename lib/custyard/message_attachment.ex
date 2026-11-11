@@ -8,7 +8,7 @@ defmodule Custyard.MessageAttachment do
   signed URL is never stored. `filename` is display data only: the file on
   disk is named by its SHA-256, so a hostile filename can never become a
   path. `sniffed_type` is derived from the bytes and is what the download
-  endpoint serves; the declared `content_type` is kept for the operator.
+  endpoint serves; the declared `content_type` is kept for the staff.
 
   States: `fetched` (file on disk), `skipped` (listed but deliberately not
   fetched: over the cap, suspect mail, fetching disabled) and `failed`
@@ -36,7 +36,16 @@ defmodule Custyard.MessageAttachment do
     field :content_id, :string
     field :state, Ecto.Enum, values: @states
     field :skip_reason, :string
+    # Fetch completion and malware verdict are separate: a scanner outage must
+    # neither acknowledge an unsafe file as clean nor reject the email itself.
+    field :scan_status, Ecto.Enum,
+      values: [:pending, :clean, :infected, :error],
+      default: :pending
 
+    field :scanned_at, :utc_datetime
+    field :scan_token, :string
+
+    belongs_to :tenant, Custyard.Tenant
     belongs_to :message, Custyard.Message
 
     timestamps(type: :utc_datetime)
@@ -49,6 +58,7 @@ defmodule Custyard.MessageAttachment do
   def changeset(attachment, attrs) do
     attachment
     |> cast(attrs, [
+      :tenant_id,
       :position,
       :descriptor_hash,
       :batch_processing_token,
@@ -67,7 +77,7 @@ defmodule Custyard.MessageAttachment do
       :message_id
     ])
     |> update_change(:filename, &clean_filename/1)
-    |> validate_required([:state, :message_id])
+    |> validate_required([:tenant_id, :state, :message_id])
     |> validate_length(:filename, max: 255)
     |> validate_length(:content_type, max: 255)
     |> validate_length(:sniffed_type, max: 255)

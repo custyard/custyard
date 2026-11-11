@@ -12,7 +12,7 @@ defmodule Custyard.InboundChannelTest do
         public_address: "support@acme.example.com",
         ingress_kind: :forward,
         inbound_route_id: 1,
-        organization_id: 1
+        tenant_id: 1
       },
       overrides
     )
@@ -34,7 +34,7 @@ defmodule Custyard.InboundChannelTest do
   end
 
   describe "changeset/2" do
-    test "is valid with a public address, route and organization" do
+    test "is valid with a public address, route and tenant" do
       cs = changeset()
 
       assert cs.valid?, inspect(cs.errors)
@@ -98,6 +98,7 @@ defmodule Custyard.InboundChannelTest do
       existing =
         channel(%{
           inbound_route_id: 1,
+          tenant_id: 1,
           sending_domain: "mail.acme.example.com",
           sending_domain_status: "verified",
           sending_domain_checked_at: @now
@@ -357,7 +358,7 @@ defmodule Custyard.InboundChannelTest do
   end
 
   describe "receiving?/1" do
-    test "is true for the states that create conversations" do
+    test "is true for the states that create threads" do
       for state <- [:pending_verification, :awaiting_first_message, :active] do
         assert InboundChannel.receiving?(channel(%{state: state}))
       end

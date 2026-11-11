@@ -1,22 +1,12 @@
 defmodule Custyard.Intake.EmailBranding do
   @moduledoc false
-  alias Custyard.{Conversation, InboundChannels, Repo, Settings, Tenants}
+  alias Custyard.{Thread, InboundChannels, Repo, Tenants}
   alias Custyard.Email.Headers
 
-  def tenant_id_for_claim(%{conversation_id: id}) do
-    case id && Repo.get(Conversation, id) do
-      %Conversation{tenant_id: tenant_id} -> tenant_id
-      _ -> 1
-    end
-  end
-
-  def delivery_settings(id) when id in [nil, 1] do
-    with {:ok, config} <- Custyard.EmailSetup.sending_config(id || 1) do
-      {:ok,
-       %{
-         address: Application.get_env(:custyard, :email_from_address, "noreply@custyard.local"),
-         config: config
-       }}
+  def tenant_id_for_claim(%{thread_id: id}) do
+    case id && Repo.get(Thread, id) do
+      %Thread{tenant_id: tenant_id} -> tenant_id
+      _ -> raise ArgumentError, "claim requires a tenant-owned thread"
     end
   end
 
@@ -60,15 +50,6 @@ defmodule Custyard.Intake.EmailBranding do
     end
   end
 
-  def for_tenant(id) when id in [nil, 1] do
-    %{
-      tenant?: false,
-      name: Settings.get_branding().name || "Custyard",
-      logo: nil,
-      color: "#4f46e5"
-    }
-  end
-
   def for_tenant(id) do
     tenant = Tenants.get_tenant!(id)
 
@@ -80,10 +61,10 @@ defmodule Custyard.Intake.EmailBranding do
     }
   end
 
-  def for_claim(%{conversation_id: id}) do
-    case id && Repo.get(Conversation, id) do
-      %Conversation{tenant_id: tenant_id} -> for_tenant(tenant_id)
-      _ -> for_tenant(1)
+  def for_claim(%{thread_id: id}) do
+    case id && Repo.get(Thread, id) do
+      %Thread{tenant_id: tenant_id} -> for_tenant(tenant_id)
+      _ -> raise ArgumentError, "claim requires a tenant-owned thread"
     end
   end
 

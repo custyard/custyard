@@ -1,7 +1,9 @@
 defmodule Custyard.LabelsTest do
   use Custyard.DataCase, async: true
   import Custyard.Factory
-  alias Custyard.{Conversations, Labels, Tenants}
+  alias Custyard.{Threads, Labels, Scope, Tenants}
+
+  defp scope(staff), do: Scope.for_staff(staff, Tenants.get_tenant!(staff.tenant_id))
 
   setup do
     {:ok, tenant} =
@@ -16,91 +18,101 @@ defmodule Custyard.LabelsTest do
     org = insert_organization(tenant_id: tenant.id)
     other_org = insert_organization(tenant_id: other.id)
 
-    operator =
-      insert_operator_account(role: "admin", organization_id: org.id, tenant_id: tenant.id)
+    staff =
+      insert_staff_account(role: "admin", organization_id: org.id, tenant_id: tenant.id)
 
-    conversation = insert_conversation(organization_id: org.id)
+    thread = insert_thread(organization_id: org.id)
 
     %{
       tenant: tenant,
       other_org: other_org,
       org: org,
-      operator: operator,
-      conversation: conversation
+      staff: staff,
+      thread: thread
     }
   end
 
   test "labels are reusable within a tenant and assignments are idempotent", c do
-    assert {:ok, label} = Labels.create_and_assign(c.operator, c.conversation, " Billing ")
+    assert {:ok, label} = Labels.create_and_assign(scope(c.staff), c.thread, " Billing ")
     assert label.name == "Billing"
-    assert {:ok, _} = Labels.assign(c.operator, c.conversation, label.id)
-    assert %{assigned: [^label]} = Labels.for_conversation(c.operator, c.conversation)
-    assert {:error, changeset} = Labels.create_and_assign(c.operator, c.conversation, "billing")
+    assert {:ok, _} = Labels.assign(scope(c.staff), c.thread, label.id)
+    assert %{assigned: [^label]} = Labels.for_thread(scope(c.staff), c.thread)
+
+    assert {:error, changeset} =
+             Labels.create_and_assign(scope(c.staff), c.thread, "billing")
+
     assert "has already been taken" in errors_on(changeset).tenant_id
-    assert {:ok, :removed} = Labels.remove(c.operator, c.conversation, label.id)
+    assert {:ok, :removed} = Labels.remove(scope(c.staff), c.thread, label.id)
 
     assert %{assigned: [], available: [^label]} =
-             Labels.for_conversation(c.operator, c.conversation)
+             Labels.for_thread(scope(c.staff), c.thread)
   end
 
   test "foreign labels cannot be read, assigned or used to cross tenant boundaries", c do
-    foreign_operator =
-      insert_operator_account(
+    foreign_staff =
+      insert_staff_account(
         role: "admin",
         organization_id: c.other_org.id,
         tenant_id: c.other_org.tenant_id
       )
 
-    foreign_conversation = insert_conversation(organization_id: c.other_org.id)
-    {:ok, label} = Labels.create_and_assign(foreign_operator, foreign_conversation, "Private")
-    refute label in Labels.list_for_operator(c.operator)
+    foreign_thread = insert_thread(organization_id: c.other_org.id)
+
+    {:ok, label} =
+      Labels.create_and_assign(scope(foreign_staff), foreign_thread, "Private")
+
+    refute label in Labels.list(scope(c.staff))
 
     assert %{available: [], assigned: []} =
-             Labels.for_conversation(c.operator, foreign_conversation)
+             Labels.for_thread(scope(c.staff), foreign_thread)
 
-    assert {:error, :not_found} = Labels.assign(c.operator, c.conversation, label.id)
-    assert {:error, :unauthorized} = Labels.assign(c.operator, foreign_conversation, label.id)
+    assert {:error, :not_found} = Labels.assign(scope(c.staff), c.thread, label.id)
 
-    assert Conversations.list_for_attention_queue(organization_id: c.org.id, label_id: label.id) ==
+    assert {:error, :unauthorized} =
+             Labels.assign(scope(c.staff), foreign_thread, label.id)
+
+    assert Threads.list(scope(c.staff), organization_id: c.org.id, label_id: label.id) ==
              []
   end
 
   test "agents can apply existing labels but cannot define labels", c do
-    {:ok, label} = Labels.create_and_assign(c.operator, c.conversation, "Bug")
-    {:ok, _} = Labels.remove(c.operator, c.conversation, label.id)
+    {:ok, label} = Labels.create_and_assign(scope(c.staff), c.thread, "Bug")
+    {:ok, _} = Labels.remove(scope(c.staff), c.thread, label.id)
 
     agent =
-      insert_operator_account(role: "agent", organization_id: c.org.id, tenant_id: c.tenant.id)
+      insert_staff_account(role: "agent", organization_id: c.org.id, tenant_id: c.tenant.id)
 
-    assert {:ok, _} = Labels.assign(agent, c.conversation, label.id)
-    assert {:error, :unauthorized} = Labels.create_and_assign(agent, c.conversation, "New")
+    assert {:ok, _} = Labels.assign(scope(agent), c.thread, label.id)
+    assert {:error, :unauthorized} = Labels.create_and_assign(scope(agent), c.thread, "New")
   end
 
-  test "unlinked public conversations use their workspace labels", c do
-    conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
-    assert is_nil(conversation.organization_id)
-    assert {:ok, label} = Labels.create_and_assign(c.operator, conversation, "Public question")
-    assert %{assigned: [^label]} = Labels.for_conversation(c.operator, conversation)
-    id = conversation.id
-    assert %{^id => [^label]} = Labels.for_conversations([conversation])
+  test "unlinked public threads use their workspace labels", c do
+    thread = insert_thread(source: :public_intake, tenant_id: c.tenant.id)
+    assert is_nil(thread.organization_id)
 
-    assert [%{conversation: %{id: ^id}}] =
-             Conversations.list_for_attention_queue(tenant_id: c.tenant.id, label_id: label.id)
+    assert {:ok, label} =
+             Labels.create_and_assign(scope(c.staff), thread, "Public question")
+
+    assert %{assigned: [^label]} = Labels.for_thread(scope(c.staff), thread)
+    id = thread.id
+    assert %{^id => [^label]} = Labels.for_threads([thread])
+
+    assert [%{thread: %{id: ^id}}] =
+             Threads.list(scope(c.staff), label_id: label.id)
   end
 
-  test "legacy customer staff can filter with their workspace labels only", c do
-    {:ok, label} = Labels.create_and_assign(c.operator, c.conversation, "Customer request")
+  test "tenant staff can filter with their workspace labels only", c do
+    {:ok, label} = Labels.create_and_assign(scope(c.staff), c.thread, "Customer request")
 
     for role <- ["admin", "agent"] do
-      legacy = insert_operator_account(role: role, organization_id: c.org.id, tenant_id: nil)
-      assert Labels.list_for_operator(legacy) == [label]
-      assert Labels.list_for_operator(legacy, c.tenant.id) == [label]
-      assert Labels.list_for_operator(legacy, c.other_org.tenant_id) == []
-      assert %{available: [^label]} = Labels.for_conversation(legacy, c.conversation)
+      staff = insert_staff_account(role: role, tenant_id: c.tenant.id)
+      assert Labels.list(scope(staff)) == [label]
+      assert Labels.list(scope(staff)) == [label]
+      assert Labels.list(%{scope(staff) | tenant_id: c.other_org.tenant_id}) == []
+      assert %{available: [^label]} = Labels.for_thread(scope(staff), c.thread)
     end
 
-    orphan = %Custyard.OperatorAccount{role: "admin", tenant_id: nil, organization_id: nil}
-    assert Labels.list_for_operator(orphan) == []
-    assert Labels.list_for_operator(orphan, c.tenant.id) == []
+    assert Labels.list(nil) == []
+    assert Labels.list(nil) == []
   end
 end

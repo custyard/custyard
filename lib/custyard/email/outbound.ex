@@ -1,14 +1,14 @@
 defmodule Custyard.Email.Outbound do
   @moduledoc """
-  Composes and delivers outbound emails for operator replies.
+  Composes and delivers outbound emails for staff replies.
 
   Builds a `Swoosh.Email` struct from a persisted Message (with preloaded
-  conversation, contact, and organization), delivers it via
+  thread, contact, and organization), delivers it via
   `Custyard.Mailer`, and updates the message's `delivery_status`.
 
   ## Usage
 
-  Called after `Conversations.send_reply/3` inserts a message with
+  Called after `Threads.send_reply/3` inserts a message with
   `delivery_status: :pending`. Can be invoked synchronously or from
   a `start_async` callback in a LiveView.
 
@@ -21,15 +21,15 @@ defmodule Custyard.Email.Outbound do
 
   require Custyard.Log, as: Log
 
-  alias Custyard.Email.{Headers, OutboundQueue, ReplyRecipients, ThreadHeaders}
+  alias Custyard.Email.{Headers, OutboundQueue, ReplyAudit, ReplyRecipients, ThreadHeaders}
 
   alias Custyard.{
-    Conversations,
+    Threads,
     InboundChannel,
     InboundChannels,
     Message,
     Repo,
-    Settings
+    Tenant
   }
 
   # Swoosh.Email also exports from/2, so Ecto.Query is not imported here.
@@ -39,13 +39,13 @@ defmodule Custyard.Email.Outbound do
   @doc """
   Deliver an outbound email for a message.
 
-  The message is reloaded and its conversation, contact, organization, and
+  The message is reloaded and its thread, contact, organization, and
   prospect are preloaded inside the delivery claim transaction, so recipient
   and consent checks read current DB state even for a stale queue snapshot.
   Recipient resolution falls back contact.email -> prospect.email -> no
   recipient; the prospect channel additionally requires the prospect's
   reply-notification opt-in (consent gate, secondary layer —
-  `Conversations.send_reply/3` is the primary). A prospect-channel recipient
+  `Threads.send_reply/3` is the primary). A prospect-channel recipient
   without opt-in marks the message `:withheld` and returns
   `{:error, :no_consent, updated_message}`, so no caller can bypass policy.
 
@@ -56,7 +56,7 @@ defmodule Custyard.Email.Outbound do
   the prospect channel is never redirected.
 
   The From display name is the inbound channel's display name when the
-  conversation arrived on a channel that has one, else the organization name
+  thread arrived on a channel that has one, else the organization name
   (D3); public-intake mail keeps the instance branding name.
 
   Only a `:pending` message is delivered. The row is flipped to `:sending`
@@ -76,9 +76,12 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
+  @doc "Whether the installation permits queued customer replies to reach the provider."
+  def enabled?, do: Application.get_env(:custyard, :outbound_delivery_enabled, true)
+
   @doc "Unattempted configuration failures can retry; provider attempts retain the 24-hour deduplication window."
   def retryable?(%Message{} = message) do
-    message.source == :operator and message.delivery_status == :failed and
+    message.source == :staff and message.delivery_status == :failed and
       message.delivery_failure_kind in [:rejected, :configuration] and
       message.delivery_error_code != "envelope_changed" and
       retry_window_open?(message) and
@@ -96,21 +99,31 @@ defmodule Custyard.Email.Outbound do
 
   defp retry_window_open?(_message), do: false
 
-  @doc "Requeue a confirmed failed reply under current operator authorization. Unknown sends never retry blindly."
-  def retry(%Message{} = message, operator) do
+  @doc "Requeue a confirmed failed reply under current staff authorization. Unknown sends never retry blindly."
+  def retry(%Custyard.Scope{} = scope, %Message{} = message, opts \\ []) do
     result =
-      Conversations.with_operator_access(message.conversation_id, operator, fn conversation,
-                                                                               _operator ->
-        case Repo.get_by(Message, id: message.id, conversation_id: conversation.id) do
+      Threads.with_access(scope, message.thread_id, fn thread, staff ->
+        case Repo.get_by(Message, id: message.id, thread_id: thread.id) do
           %Message{} = current ->
             if retryable?(current) do
-              current
-              |> refresh_unattempted_identity(conversation)
-              |> Message.delivery_status_changeset(:pending, %{
-                delivery_failure_kind: nil,
-                delivery_error_code: nil
-              })
-              |> Repo.update()
+              with {:ok, changeset} <- refresh_unattempted_envelope(current, thread, opts) do
+                result =
+                  changeset
+                  |> Message.delivery_status_changeset(:pending, %{
+                    delivery_failure_kind: nil,
+                    delivery_error_code: nil
+                  })
+                  |> Repo.update()
+
+                case result do
+                  {:ok, updated} ->
+                    ReplyAudit.record!(:reply_retried, updated, thread, staff)
+                    {:ok, updated}
+
+                  error ->
+                    error
+                end
+              end
             else
               {:error, :reconciliation_required}
             end
@@ -130,19 +143,55 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
-  defp refresh_unattempted_identity(
-         %Message{delivery_payload_hash: nil, sender_email: nil} = message,
-         conversation
+  defp refresh_unattempted_envelope(
+         %Message{delivery_payload_hash: nil, delivery_attempted_at: nil} = message,
+         thread,
+         opts
        ) do
-    channel = Conversations.reply_sending_channel(conversation)
-
-    Message.changeset(message, %{
-      sender_email: Conversations.reply_identity(conversation).address,
-      inbound_channel_id: channel && channel.id
-    })
+    with {:ok, attrs} <- refreshed_identity(message, thread, opts),
+         {:ok, attrs} <- refreshed_recipient(message, thread, attrs, opts) do
+      {:ok, Message.changeset(message, attrs)}
+    end
   end
 
-  defp refresh_unattempted_identity(message, _conversation), do: message
+  defp refresh_unattempted_envelope(message, _thread, _opts),
+    do: {:ok, Ecto.Changeset.change(message)}
+
+  defp refreshed_identity(%Message{sender_email: nil}, thread, opts) do
+    channel = Threads.reply_sending_channel(thread, opts)
+
+    if Keyword.has_key?(opts, :reply_channel_id) and is_nil(channel) do
+      {:error, :reply_channel_required}
+    else
+      {:ok,
+       %{
+         sender_email: channel && Custyard.InboundChannels.from_address(channel),
+         inbound_channel_id: channel && channel.id
+       }}
+    end
+  end
+
+  defp refreshed_identity(_message, _thread, _opts), do: {:ok, %{}}
+
+  defp refreshed_recipient(
+         %Message{delivery_error_code: "no_recipient_email", to_addresses: addresses},
+         thread,
+         attrs,
+         opts
+       )
+       when addresses in [nil, []] do
+    case reply_recipient(thread) do
+      {:ok, address} ->
+        if Keyword.has_key?(opts, :expected_recipient) and opts[:expected_recipient] != address,
+          do: {:error, :recipient_changed},
+          else: {:ok, Map.put(attrs, :to_addresses, [address])}
+
+      _ ->
+        {:ok, attrs}
+    end
+  end
+
+  defp refreshed_recipient(_message, _thread, attrs, _opts), do: {:ok, attrs}
 
   # Claim, reload current recipients and save the envelope under one write
   # transaction. A stale queue snapshot must not restore recipients erased
@@ -167,19 +216,20 @@ defmodule Custyard.Email.Outbound do
     message =
       Repo.preload(message, [
         :inbound_channel,
-        conversation: [:contact, :organization, :prospect, :inbound_channel]
+        thread: [:contact, :organization, :prospect, :inbound_channel]
       ])
 
-    conversation =
+    thread =
       if message.inbound_channel &&
-           message.inbound_channel.tenant_id == message.conversation.tenant_id,
-         do: %{message.conversation | inbound_channel: message.inbound_channel},
-         else: message.conversation
+           message.inbound_channel.tenant_id == message.thread.tenant_id,
+         do: %{message.thread | inbound_channel: message.inbound_channel},
+         else: message.thread
 
-    with {:ok, recipient} <- delivery_recipient(message, conversation),
-         {:ok, from_addr} <- resolve_from_address(message, conversation),
-         email <- compose(message, conversation, recipient, from_addr),
-         email <- preserve_provider_message_id(email, conversation.tenant_id),
+    with :ok <- delivery_allowed(message),
+         {:ok, recipient} <- delivery_recipient(message, thread),
+         {:ok, from_addr} <- resolve_from_address(message, thread),
+         email <- compose(message, thread, recipient, from_addr),
+         email <- preserve_provider_message_id(email),
          {:ok, message} <- persist_delivery_facts(message, email) do
       {:ok, message, email}
     else
@@ -187,30 +237,65 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
-  # Lettermint replaces Message-ID unless preservation is explicitly requested.
-  # Without it, forwarded BCC archives become customer mail and replies can lose
-  # their parent ID. The provider control is not an ordinary email header:
-  # https://lettermint.co/docs/api-reference/sending/send
-  # Add the control before fingerprinting so retries retain the exact request.
-  defp preserve_provider_message_id(email, tenant_id) do
-    adapter =
-      case Custyard.EmailSetup.sending_config(tenant_id) do
-        {:ok, config} -> config[:adapter]
-        # Credential errors belong to tenant Lettermint connections. Still
-        # snapshot their envelope; delivery validates credentials afterwards.
-        {:error, _} -> Swoosh.Adapters.Lettermint
-      end
-
-    if adapter == Swoosh.Adapters.Lettermint and is_binary(email.headers["Message-ID"]),
+  # Lettermint rewrites Message-ID unless this provider control is included.
+  # Snapshot it before fingerprinting so every retry uses the identical request.
+  defp preserve_provider_message_id(email) do
+    if is_binary(email.headers["Message-ID"]),
       do: header(email, "X-LM-Preserve-Message-ID", "true"),
       else: email
+  end
+
+  defp active_tenant(tenant_id) do
+    case Repo.get(Tenant, tenant_id) do
+      %Tenant{status: "active", outbound_paused: true} -> {:error, :outbound_paused}
+      %Tenant{status: "active"} -> :ok
+      _ -> {:error, :tenant_suspended}
+    end
+  end
+
+  # Read live tenant and channel state, never a preloaded queue snapshot.
+  # This runs during preparation and again immediately before provider handoff.
+  defp delivery_allowed(message) do
+    with :ok <- installation_delivery_allowed(),
+         :ok <- active_tenant(message.tenant_id) do
+      case message.inbound_channel_id do
+        nil ->
+          :ok
+
+        id ->
+          case Repo.get(InboundChannel, id) do
+            %InboundChannel{tenant_id: tenant_id, state: :active} = channel
+            when tenant_id == message.tenant_id ->
+              validate_current_sender(message, channel)
+
+            _ ->
+              {:error, :reply_channel_inactive}
+          end
+      end
+    end
+  end
+
+  defp installation_delivery_allowed do
+    if enabled?(), do: :ok, else: {:error, :outbound_paused}
+  end
+
+  defp validate_current_sender(%Message{sender_email: nil}, _channel), do: :ok
+
+  defp validate_current_sender(message, channel) do
+    channel = Repo.preload(channel, :inbound_route)
+
+    if InboundChannels.from_address(channel) == message.sender_email,
+      do: :ok,
+      else:
+        {:error,
+         if(message.delivery_payload_hash, do: :envelope_changed, else: :reply_identity_changed)}
   end
 
   # Recheck consent and whether the relationship still exists, but never let a
   # later participant redirect an already reviewed reply. Erasure can clear the
   # locked list, in which case delivery stops instead of restoring an address.
-  defp delivery_recipient(%Message{delivery_recipients_locked: true} = message, conversation) do
-    with {:ok, _current} <- reply_recipient(conversation) do
+  defp delivery_recipient(%Message{delivery_recipients_locked: true} = message, thread) do
+    with {:ok, _current} <- reply_recipient(thread) do
       case message.to_addresses do
         [address] -> {:ok, address}
         _ -> {:error, :no_recipient_email}
@@ -218,11 +303,12 @@ defmodule Custyard.Email.Outbound do
     end
   end
 
-  defp delivery_recipient(_message, conversation), do: reply_recipient(conversation)
+  defp delivery_recipient(_message, thread), do: reply_recipient(thread)
 
   defp deliver_claimed(message, email) do
-    with {:ok, config} <- Custyard.EmailSetup.sending_config(message.conversation.tenant_id),
+    with {:ok, config} <- Custyard.EmailSetup.sending_config(message.thread.tenant_id),
          :ok <- validate_delivery_config(config),
+         :ok <- delivery_allowed(message),
          {:ok, attempted} <- record_attempt(message) do
       deliver_attempted(attempted, email, config)
     else
@@ -246,23 +332,23 @@ defmodule Custyard.Email.Outbound do
   end
 
   defp deliver_attempted(message, email, config) do
-    case deliver_with_config(email, config) do
-      {:ok, metadata} ->
-        updated =
-          message
-          |> mark_status(
-            :sent,
-            Map.merge(provider_attrs(metadata), %{
-              delivery_failure_kind: nil,
-              delivery_error_code: nil
-            })
-          )
-          |> broadcast_delivery_update()
+    with :ok <- delivery_allowed(message),
+         {:ok, metadata} <- deliver_with_config(email, config) do
+      updated =
+        message
+        |> mark_status(
+          :sent,
+          Map.merge(provider_attrs(metadata), %{
+            delivery_failure_kind: nil,
+            delivery_error_code: nil
+          })
+        )
+        |> broadcast_delivery_update()
 
-        Custyard.EmailSetup.record_reply_accepted(updated)
+      Custyard.EmailSetup.record_reply_accepted(updated)
 
-        {:ok, updated}
-
+      {:ok, updated}
+    else
       {:error, reason} ->
         delivery_error(message, reason)
     end
@@ -274,6 +360,11 @@ defmodule Custyard.Email.Outbound do
     # Adapter exceptions can contain request bodies and credentials. Treat
     # acceptance as unknown and retain only a bounded diagnostic code.
     _error -> {:error, :delivery_exception}
+  end
+
+  defp delivery_error(message, :outbound_paused) do
+    # The provider was never called. Keep the reply recoverable for resume.
+    {:error, :outbound_paused, message |> mark_status(:pending) |> broadcast_delivery_update()}
   end
 
   defp delivery_error(message, :no_consent) do
@@ -311,6 +402,8 @@ defmodule Custyard.Email.Outbound do
               :sending_not_configured,
               :project_token_missing,
               :connection_not_found,
+              :reply_channel_inactive,
+              :reply_identity_changed,
               :envelope_changed
             ],
        do: {:configuration, Atom.to_string(reason)}
@@ -318,6 +411,7 @@ defmodule Custyard.Email.Outbound do
   defp failure_category(reason) when reason in [:timeout, :closed, :econnrefused, :nxdomain],
     do: {:unknown, Atom.to_string(reason)}
 
+  defp failure_category(:tenant_suspended), do: {:configuration, "tenant_suspended"}
   defp failure_category(_reason), do: {:unknown, "delivery_error"}
 
   # Store actual participants before contacting the provider. The message was
@@ -327,8 +421,8 @@ defmodule Custyard.Email.Outbound do
       {email.from, email.to, email.cc, email.bcc, email.subject, email.text_body, email.html_body,
        email.headers}
 
-    # Reply-To is a separate Swoosh field, serialized outside email.headers.
-    # Keep legacy nil-Reply-To envelopes byte-identical for existing retries.
+    # Reply-To is serialized outside email.headers. Its presence changes the
+    # provider envelope and must block a retry after the return path changes.
     fingerprint =
       if(is_nil(email.reply_to), do: envelope, else: {envelope, {:reply_to, email.reply_to}})
       |> :erlang.term_to_binary()
@@ -354,20 +448,20 @@ defmodule Custyard.Email.Outbound do
   Compose a Swoosh.Email struct without delivering.
   Useful for previewing or testing email composition.
   """
-  def compose(%Message{} = message, conversation, recipient, from_address) do
+  def compose(%Message{} = message, thread, recipient, from_address) do
     message =
-      if conversation.source == :public_intake, do: %{message | cc_addresses: []}, else: message
+      if thread.source == :public_intake, do: %{message | cc_addresses: []}, else: message
 
     new()
     |> to(recipient)
     |> put_cc(
-      if(conversation.source == :public_intake, do: %{message | cc_addresses: []}, else: message),
+      if(thread.source == :public_intake, do: %{message | cc_addresses: []}, else: message),
       recipient
     )
-    |> put_archive_bcc(conversation)
+    |> put_archive_bcc(thread)
     |> from(from_address)
-    |> put_channel_reply_to(conversation)
-    |> subject(compose_subject(conversation))
+    |> put_channel_reply_to(thread)
+    |> subject(compose_subject(thread))
     |> text_body(message.body)
     |> html_body(wrap_html(message.body))
     |> put_threading_headers(message)
@@ -383,9 +477,9 @@ defmodule Custyard.Email.Outbound do
 
   # --- Private ---
 
-  # Reply-all CC (spec-inbound-channels D5): the operator-approved list, never
-  # the recipient twice. Prospect conversations carry no CC by construction
-  # (Conversations.default_reply_cc/2 returns [] and the composer hides it).
+  # Reply-all CC (spec-inbound-channels D5): the staff-approved list, never
+  # the recipient twice. Prospect threads carry no CC by construction
+  # (Threads.default_reply_cc/2 returns [] and the composer hides it).
   defp put_cc(email, %Message{cc_addresses: cc}, recipient) when is_list(cc) and cc != [] do
     recipient = String.downcase(recipient)
 
@@ -406,48 +500,45 @@ defmodule Custyard.Email.Outbound do
        when is_binary(domain),
        do: reply_to(email, channel.public_address)
 
-  defp put_channel_reply_to(email, _conversation), do: email
+  defp put_channel_reply_to(email, _thread), do: email
 
   # Archive copy (spec-inbound-channels D4): BCC the channel's public address
-  # so the operator's mailbox keeps the reply. The copy is forwarded straight
-  # back and recognised by triage as an own echo, never a new conversation.
+  # so the staff's mailbox keeps the reply. The copy is forwarded straight
+  # back and recognised by triage as an own echo, never a new thread.
   defp put_archive_bcc(email, %{inbound_channel: %InboundChannel{archive_copy: true} = channel}),
     do: bcc(email, channel.public_address)
 
-  defp put_archive_bcc(email, _conversation), do: email
+  defp put_archive_bcc(email, _thread), do: email
 
   @doc """
-  The address the next reply on `conversation` is sent to: the customer's
+  The address the next reply on `thread` is sent to: the customer's
   Reply-To when it overrides the contact address (D5), else the contact's
   email, else an opted-in prospect's. The composer shows this so the
-  operator sees the address delivery will use.
+  staff sees the address delivery will use.
 
   The contact channel delivers unconditionally (established-customer path).
-  `Conversations.reply_channel/1` already excludes revoked prospects and
+  `Threads.reply_channel/1` already excludes revoked prospects and
   empty emails, so the prospect channel only needs the consent check here.
   """
-  def reply_recipient(conversation),
-    do: ReplyRecipients.recipient(conversation)
+  def reply_recipient(thread),
+    do: ReplyRecipients.recipient(thread)
 
-  defp resolve_from_address(message, conversation) do
+  defp resolve_from_address(message, thread) do
     # Priority: message sender_email > app config fallback
     if is_binary(message.sender_email) and message.sender_email != "" do
-      {:ok, {from_name(conversation), message.sender_email}}
+      {:ok, {from_name(thread), message.sender_email}}
     else
-      fallback_from_address(conversation)
+      fallback_from_address(thread)
     end
   end
 
-  defp fallback_from_address(%{tenant_id: tenant_id}) when tenant_id != 1,
-    do: {:error, :from_not_set}
-
-  defp fallback_from_address(conversation) do
-    case Application.get_env(:custyard, :email_from_address, "support@custyard.local") do
-      fallback when is_binary(fallback) and fallback != "" ->
-        {:ok, {from_name(conversation), fallback}}
-
-      _ ->
-        {:error, :from_not_set}
+  defp fallback_from_address(thread) do
+    with {:ok, channel} <- Custyard.EmailSetup.default_reply_channel(thread.tenant_id),
+         address when is_binary(address) and address != "" <-
+           InboundChannels.from_address(channel) do
+      {:ok, {from_name(thread), address}}
+    else
+      _ -> {:error, :from_not_set}
     end
   end
 
@@ -478,65 +569,36 @@ defmodule Custyard.Email.Outbound do
   # Message-ID (a message must not reference itself). Falls back to the
   # parent id alone when no other stored ids qualify.
   defp build_references(message, in_reply_to) do
-    message.conversation_id
-    |> ThreadHeaders.for_conversation(
+    message.thread_id
+    |> ThreadHeaders.for_thread(
       exclude_message_id: message.message_id,
       before_id: message.id
     )
     |> Map.get("References", in_reply_to)
   end
 
-  # Public-intake mail always carries the instance branding display name,
-  # keyed on the conversation's source — linking the conversation to an
-  # organization later must not change the From identity (source-keyed rule
-  # in the public intake spec).
-  defp from_name(%{source: :public_intake, tenant_id: 1}), do: header_safe_name(branding_name())
-
-  # Channel display name (D3) when the conversation arrived on a channel that
-  # has one, else the organization name.
-  defp from_name(conversation) do
-    name = channel_display_name(conversation) || organization_name(conversation)
+  defp from_name(thread) do
+    name = channel_display_name(thread) || tenant_name(thread.tenant_id)
     header_safe_name(name)
   end
 
-  defp channel_display_name(%{inbound_channel: %InboundChannel{} = channel}) do
-    InboundChannels.from_name(channel) ||
-      if is_nil(channel.organization_id) do
-        case Repo.get(Custyard.Tenant, channel.tenant_id) do
-          %{name: name} -> name
-          _ -> nil
-        end
-      end
-  end
+  defp channel_display_name(%{inbound_channel: %InboundChannel{} = channel}),
+    do: InboundChannels.from_name(channel)
 
-  defp channel_display_name(_conversation), do: nil
+  defp channel_display_name(_thread), do: nil
 
-  defp organization_name(conversation) do
-    case conversation.organization do
-      %{name: name} when is_binary(name) and name != "" -> name
-      _ -> "Custyard"
-    end
-  end
+  defp tenant_name(tenant_id), do: Repo.get!(Tenant, tenant_id).name
 
   defp header_safe_name(name), do: name |> sanitize_header_text() |> quote_display_name()
-
-  # Instance branding display name for public-intake mail; "Custyard" when no
-  # branding name is configured.
-  defp branding_name do
-    case Settings.get_branding() do
-      %{name: name} when is_binary(name) and name != "" -> name
-      _ -> "Custyard"
-    end
-  end
 
   # Delegates to the shared Custyard.Email.Headers (extracted from this
   # module's privates; behavior byte-identical).
   defp quote_display_name(name), do: Headers.quote_display_name(name)
 
-  defp compose_subject(conversation) do
+  defp compose_subject(thread) do
     base =
-      case sanitize_header_text(conversation.subject || "") do
-        "" -> "Your conversation"
+      case sanitize_header_text(thread.subject || "") do
+        "" -> "Your thread"
         subject -> subject
       end
 
@@ -561,7 +623,7 @@ defmodule Custyard.Email.Outbound do
 
     """
     <html>
-    <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 16px;">
+    <body style="margin: 0; padding: 0; text-align: left;">
     #{escaped}
     </body>
     </html>
@@ -593,13 +655,13 @@ defmodule Custyard.Email.Outbound do
   defp provider_attrs(_metadata), do: %{}
 
   @doc false
-  # Nudge subscribed LiveViews (ConversationLive) to refresh the delivery
+  # Nudge subscribed LiveViews (ThreadLive) to refresh the delivery
   # indicator once the async delivery lands on :sent or :failed.
   def broadcast_delivery_update(%Message{} = message) do
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversation:#{message.conversation_id}",
-      {:message_updated, message.conversation_id}
+      "thread:#{message.thread_id}",
+      {:message_updated, message.thread_id}
     )
 
     message

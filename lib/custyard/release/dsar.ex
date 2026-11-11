@@ -12,7 +12,7 @@ defmodule Custyard.Release.Dsar do
   terminal output ends up in scrollback and logs.
   """
 
-  alias Custyard.{DataSubjects, OperatorAccounts, Organizations, Release}
+  alias Custyard.{DataSubjects, StaffAccounts, Release}
 
   @usage """
   Usage: bin/dsar ACTION EMAIL --org ID [--yes]
@@ -28,12 +28,13 @@ defmodule Custyard.Release.Dsar do
         person did not send. Reports how many messages they sent.
     erase-contact EMAIL --org ID --yes
         The same, and also erase the messages the person sent, their
-        attachments, their contact record, the subjects of their conversations
+        attachments, their contact record, the subjects of their threads
         and their rejection-log entries.
     help
         Show this help.
 
-  ID is the organization's number, the one in /operator/organizations/ID.
+  ID is the organization's internal database number. Customer URLs use a
+  separate public identifier; do not pass the URL identifier to --org.
   Erasures are irreversible and refuse to run without --yes. Each writes a
   data_subject_erasure audit event with counts only, never the address.
   """
@@ -80,7 +81,7 @@ defmodule Custyard.Release.Dsar do
            OptionParser.parse(argv, strict: @switches),
          true <- Keyword.keys(opts) == Enum.uniq(Keyword.keys(opts)),
          {:ok, organization_id} <- Keyword.fetch(opts, :org),
-         true <- OperatorAccounts.valid_id?(organization_id) do
+         true <- StaffAccounts.valid_id?(organization_id) do
       check(action, email, organization_id, Keyword.get(opts, :yes, false))
     else
       _ -> :usage
@@ -103,18 +104,28 @@ defmodule Custyard.Release.Dsar do
   end
 
   defp perform(action, email, organization_id) do
-    if Organizations.get_organization(organization_id),
+    if Custyard.Repo.get(Custyard.Organization, organization_id),
       do: perform_in(action, email, organization_id),
       else: {:error, "organization #{organization_id} not found"}
   end
 
+  # The local release command is installation-owner authority; scope it to
+  # the selected customer's tenant before invoking resource operations.
+  defp scope(organization_id) do
+    org = Custyard.Repo.get!(Custyard.Organization, organization_id)
+    %Custyard.DataSubjects.LocalAuthority{tenant_id: org.tenant_id}
+  end
+
   defp perform_in("export", email, organization_id) do
-    json = email |> DataSubjects.export(organization_id) |> Jason.encode!(pretty: true)
+    json =
+      DataSubjects.export(scope(organization_id), email, organization_id)
+      |> Jason.encode!(pretty: true)
+
     {:ok, json <> "\n"}
   end
 
   defp perform_in("erase", email, organization_id) do
-    case DataSubjects.erase_participation(email, organization_id) do
+    case DataSubjects.erase_participation(scope(organization_id), email, organization_id) do
       {:ok, %{erased: erased, sent_by_subject: sent}} ->
         {:ok,
          "Removed the address from #{erased} message(s) as a recipient. " <>
@@ -126,7 +137,7 @@ defmodule Custyard.Release.Dsar do
   end
 
   defp perform_in("erase-contact", email, organization_id) do
-    case DataSubjects.erase_subject(email, organization_id) do
+    case DataSubjects.erase_subject(scope(organization_id), email, organization_id) do
       {:ok, counts} ->
         {:ok,
          """
@@ -134,7 +145,7 @@ defmodule Custyard.Release.Dsar do
          Sent messages erased: #{counts.messages_erased}
          Attachments removed: #{counts.attachments_removed}
          Contact records removed: #{counts.contacts_removed}
-         Conversation subjects erased: #{counts.conversations_retitled}
+         Thread subjects erased: #{counts.threads_retitled}
          Rejection-log entries removed: #{counts.rejections_removed}
          """}
 

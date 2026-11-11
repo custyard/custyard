@@ -4,35 +4,52 @@ defmodule Custyard.Acknowledgments.Consumer do
   require Custyard.Log, as: Log
   alias Custyard.Acknowledgments.{Broker, Config, Evidence, Topology}
 
-  # Failure headers, and so the operator UI, only ever carry one of these.
-  @failure_categories ~w(message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error)
+  # Failure headers, and so the staff UI, only ever carry one of these.
+  @failure_categories ~w(tenant_suspended message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error)
 
   # Published state, so status reads never wait behind message processing.
   # Replacing an atom value needs no global garbage collection.
   @status_key {__MODULE__, :status}
 
-  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(opts),
+    do: GenServer.start_link(__MODULE__, opts, name: name(Keyword.fetch!(opts, :tenant_id)))
+
+  defp name(tenant_id), do: {:global, {__MODULE__, tenant_id}}
 
   @doc "Every category a failure header can carry."
   def failure_categories, do: @failure_categories
 
   @doc """
-  `:connected` while this node's consumer holds a subscribed channel, otherwise
-  `:connecting`, including while the consumer is not running.
+  `:connected` while this node's consumer holds a subscribed channel,
+  `:connecting` while retrying a connection, and `:stopped` without a worker.
   """
-  def status do
-    if Process.whereis(__MODULE__),
-      do: :persistent_term.get(@status_key, :connecting),
-      else: :connecting
+  def status(tenant_id) do
+    if :global.whereis_name({__MODULE__, tenant_id}) != :undefined,
+      do: :persistent_term.get({@status_key, tenant_id}, :connecting),
+      else: :stopped
   end
 
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    tenant_id = Keyword.fetch!(opts, :tenant_id)
+    Process.put(:acknowledgment_tenant_id, tenant_id)
     publish_status(:connecting)
-    config = Keyword.get(opts, :config, Config.load()) |> Config.validate!()
-    send(self(), :connect)
-    {:ok, %{config: config, connection: nil, channel: nil, monitors: [], consumer_tag: nil}}
+
+    config = Keyword.get_lazy(opts, :config, fn -> Config.load(tenant_id) end)
+
+    case Config.validation_error(config) do
+      nil ->
+        send(self(), :connect)
+        {:ok, %{config: config, connection: nil, channel: nil, monitors: [], consumer_tag: nil}}
+
+      _error ->
+        publish_status(:invalid_config)
+
+        Log.warning(:acknowledgment_configuration_invalid, tenant_id: tenant_id)
+
+        :ignore
+    end
   end
 
   # Crash reports and :sys.get_status/1 render the state; the URL carries the
@@ -84,7 +101,7 @@ defmodule Custyard.Acknowledgments.Consumer do
         %{consumer_tag: tag} = state
       ) do
     Log.operation([], fn ->
-      case process(body, state.config[:source]) do
+      case process(body, state.config[:tenant_id], state.config[:source]) do
         {:ok, record} ->
           Log.info(:acknowledgment_committed,
             acknowledgment_id: record.id,
@@ -101,7 +118,7 @@ defmodule Custyard.Acknowledgments.Consumer do
           attempt = attempts(meta[:headers]) + 1
 
           queue =
-            if attempt <= length(state.config[:retry_delays]),
+            if reason != :tenant_suspended and attempt <= length(state.config[:retry_delays]),
               do: Topology.retry(state.config, attempt),
               else: Topology.failure(state.config)
 
@@ -153,20 +170,20 @@ defmodule Custyard.Acknowledgments.Consumer do
     close_subscription(state)
   end
 
-  def process(body, source, ingest \\ &Custyard.Acknowledgments.ingest/1) do
+  def process(body, tenant_id, source, ingest \\ &Custyard.Acknowledgments.ingest/2) do
     if byte_size(body) > Evidence.max_message_bytes(),
       do: {:error, :message_too_large},
-      else: decode_and_ingest(body, source, ingest)
+      else: decode_and_ingest(body, tenant_id, source, ingest)
   rescue
     _ -> {:error, :storage_unavailable}
   catch
     :exit, _ -> {:error, :storage_unavailable}
   end
 
-  defp decode_and_ingest(body, source, ingest) do
+  defp decode_and_ingest(body, tenant_id, source, ingest) do
     with {:ok, event} when is_map(event) <- Jason.decode(body),
          true <- event["source"] == source do
-      ingest.(event)
+      ingest.(tenant_id, event)
     else
       false -> {:error, :source_mismatch}
       _ -> {:error, :invalid_json}
@@ -206,7 +223,8 @@ defmodule Custyard.Acknowledgments.Consumer do
 
   def failure_reason(_), do: "processing_error"
 
-  defp publish_status(status), do: :persistent_term.put(@status_key, status)
+  defp publish_status(status),
+    do: :persistent_term.put({@status_key, Process.get(:acknowledgment_tenant_id)}, status)
 
   defp reconnect(state, reason) do
     Log.warning(

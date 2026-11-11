@@ -3,25 +3,33 @@ defmodule Custyard.AuditEvent.Payload do
 
   alias Custyard.Acknowledgments.Evidence
 
-  @actor_keys ~w(actor operator_id)
-  @channel_keys ~w(channel_id operator_id)
+  @actor_keys ~w(actor staff_id)
+  @channel_keys ~w(channel_id staff_id)
+  @reply_keys @actor_keys ++ ~w(message_db_id)
   @keys %{
+    instance_admin_created: ~w(instance_admin_id),
+    instance_admin_removed: ~w(instance_admin_id),
+    installation_configured: ~w(instance_admin_id),
     webhook_received: ~w(source timestamp),
-    webhook_processed: ~w(source outcome conversation_id message_id),
-    webhook_error: ~w(source outcome error_code),
-    slug_released: ~w(slug status operator_id),
-    prospect_converted: ~w(operator_id),
-    operator_created: ~w(operator_id tenant_id role organization_id via),
-    operator_removed:
-      ~w(operator_id actor_operator_id tenant_id role organization_id via soft_deleted_message_ids),
-    operator_tenant_access_granted:
-      ~w(operator_id actor_operator_id tenant_id previous_organization_id role),
+    webhook_processed: ~w(source outcome thread_id message_id),
+    webhook_error: ~w(source outcome error_code reason),
+    slug_released: ~w(slug status staff_id),
+    prospect_converted: ~w(staff_id),
+    staff_created: ~w(staff_id actor_staff_id instance_admin_id tenant_id role via),
+    staff_removed:
+      ~w(staff_id actor_staff_id role deleted_message_ids forwarded_message_ids authored_message_ids),
+    tenant_status_changed: ~w(instance_admin_id status),
+    tenant_host_removed: ~w(instance_admin_id host_id hostname),
     acknowledgment_replayed:
       @actor_keys ++ ~w(source submission_id body_sha256 category attempt outcome),
     acknowledgment_binding_created:
       @actor_keys ++ ~w(source source_organization_id organization_id),
     delivery_status_updated:
       ~w(event delivery_id from to recipient_role recipient_from recipient_to reason_code status_code enhanced_status_code),
+    reply_queued: @reply_keys,
+    internal_note_created: @reply_keys,
+    reply_retried: @reply_keys,
+    outbound_pause_changed: ~w(staff_id paused),
     channel_created: @channel_keys ++ ~w(provider ingress_kind),
     channel_updated: @channel_keys ++ ~w(changed),
     channel_deleted: @channel_keys,
@@ -31,21 +39,23 @@ defmodule Custyard.AuditEvent.Payload do
     channel_verification_captured: @channel_keys ++ ~w(has_code has_link),
     channel_sending_domain_checked: @channel_keys ++ ~w(domain status),
     channel_quiet: @channel_keys ++ ~w(last_received_at quiet_after_hours),
-    inbound_triaged: ~w(class channel_id route_id conversation_id),
+    inbound_triaged: ~w(class channel_id route_id thread_id),
     data_subject_erasure:
-      ~w(erased sent_by_subject messages_erased attachments_removed conversations_retitled contacts_removed rejections_removed audit_events_redacted redacted_audit_event_ids)
+      ~w(erased sent_by_subject messages_erased attachments_removed threads_retitled contacts_removed rejections_removed audit_events_redacted redacted_audit_event_ids)
   }
-  @id_keys ~w(operator_id actor_operator_id organization_id tenant_id previous_organization_id channel_id route_id conversation_id message_id)
-  @count_keys ~w(attempt grace_hours quiet_after_hours erased sent_by_subject messages_erased attachments_removed conversations_retitled contacts_removed rejections_removed audit_events_redacted)
+  @id_keys ~w(staff_id actor_staff_id instance_admin_id organization_id tenant_id host_id channel_id route_id thread_id message_id message_db_id)
+  @id_list_keys ~w(deleted_message_ids forwarded_message_ids authored_message_ids redacted_audit_event_ids)
+  @count_keys ~w(attempt grace_hours quiet_after_hours erased sent_by_subject messages_erased attachments_removed threads_retitled contacts_removed rejections_removed audit_events_redacted)
   @status_values ~w(pending sending sent delivered bounced suppressed failed withheld draft pending_verification awaiting_first_message active paused revoked unclaimed claimed confirmed provisioned verified partially_verified failed_verification not_found)
-  @known_fields ~w(public_address display_name provider ingress_kind state project_id reply_from sending_domain archive_copy attachment_limit_mb quiet_after_hours attention_bonus auto_response_handling imap_host imap_port imap_username imap_folder imap_password)
+  @known_fields ~w(public_address display_name provider ingress_kind state default_organization_id default_project_id default_label_id reply_from sending_domain archive_copy attachment_limit_mb quiet_after_hours attention_bonus auto_response_handling imap_host imap_port imap_username imap_folder imap_password)
   @enums %{
-    "actor" => ~w(operator cli mix console),
-    "via" => ~w(cli mix boot console operator),
-    "role" => ~w(super_admin admin agent),
+    "actor" => ~w(staff system cli mix console),
+    "via" => ~w(cli mix console staff instance_admin),
+    "role" => ~w(admin agent),
     "provider" => ~w(proton google google_workspace other),
     "ingress_kind" => ~w(forward mx imap),
     "recipient_role" => ~w(to cc other),
+    "reason" => ~w(tenant_suspended),
     "reason_code" =>
       ~w(policy suppressed mailbox_full recipient_unknown mailbox_unavailable spam rate_limited temporary_failure blocked),
     "event" =>
@@ -53,7 +63,7 @@ defmodule Custyard.AuditEvent.Payload do
     "category" =>
       ~w(message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error),
     "class" =>
-      ~w(customer_message operator_sent own_echo auto_response provider_notice unreadable no_channel paused revoked verification_captured),
+      ~w(customer_message staff_sent own_echo auto_response provider_notice unreadable no_channel paused revoked verification_captured),
     "outcome" =>
       ~w(started replayed empty changed updated ignored error invalid_config invalid_url unreachable timeout auth_failed access_refused tls_failed connection_failed channel_failed queue_missing precondition_failed operation_failed audit_failed unroutable publication_failed publication_rejected publication_unconfirmed),
     "error_code" => ~w(invalid_payload storage_unavailable processing_error)
@@ -82,9 +92,8 @@ defmodule Custyard.AuditEvent.Payload do
   defp value(key, item, _event) when key in @count_keys,
     do: if(is_integer(item) and item >= 0, do: item)
 
-  defp value(key, items, _event)
-       when key in ["soft_deleted_message_ids", "redacted_audit_event_ids"] and is_list(items),
-       do: Enum.filter(items, &(is_integer(&1) and &1 > 0)) |> Enum.uniq()
+  defp value(key, items, _event) when key in @id_list_keys and is_list(items),
+    do: Enum.filter(items, &(is_integer(&1) and &1 > 0)) |> Enum.uniq()
 
   defp value("changed", items, _event) when is_list(items) do
     items
@@ -93,7 +102,7 @@ defmodule Custyard.AuditEvent.Payload do
     |> Enum.uniq()
   end
 
-  defp value(key, item, _event) when key in ["has_code", "has_link"],
+  defp value(key, item, _event) when key in ["has_code", "has_link", "paused"],
     do: if(is_boolean(item), do: item)
 
   defp value(key, item, _event) when key in ["timestamp", "last_received_at"] do
@@ -108,6 +117,19 @@ defmodule Custyard.AuditEvent.Payload do
   defp value("body_sha256", item, _event) do
     if is_binary(item) and byte_size(item) == 64 and Regex.match?(~r/\A[0-9a-f]{64}\z/, item),
       do: item
+  end
+
+  defp value("status", item, :tenant_status_changed), do: enum(item, ~w(active suspended))
+
+  # A tenant hostname is workspace configuration, never a contact address.
+  # Single-label development hosts are valid here; sending domains are not.
+  defp value("hostname", item, _event) do
+    if is_binary(item) and byte_size(item) <= 253 and
+         Regex.match?(
+           ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\z/i,
+           item
+         ),
+       do: item
   end
 
   defp value("domain", item, _event) do
@@ -144,7 +166,7 @@ defmodule Custyard.AuditEvent.Payload do
     do:
       enum(
         item,
-        ~w(email portal operator lettermint zendesk intercom slack public_intake unknown)
+        ~w(email portal staff lettermint zendesk intercom slack public_intake unknown)
       )
 
   defp value("delivery_id", item, _event) do

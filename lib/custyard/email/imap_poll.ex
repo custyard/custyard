@@ -4,7 +4,7 @@ defmodule Custyard.Email.ImapPoll do
 
   The folder is opened read-only. The channel remembers how far it has read
   as `imap_uid_validity` plus `imap_last_uid`; nothing in the mailbox is
-  marked, moved or deleted, so the operator's own mail client sees the
+  marked, moved or deleted, so the staff's own mail client sees the
   mailbox exactly as before.
 
     * `establish/2` checks the credentials and, for a mailbox without a
@@ -39,7 +39,7 @@ defmodule Custyard.Email.ImapPoll do
 
   import Ecto.Query
 
-  alias Custyard.{Credentials, InboundChannel, InboundChannels, InboundRoute, Repo}
+  alias Custyard.{Credentials, InboundChannel, InboundChannels, InboundRoute, Repo, Tenant}
   alias Custyard.Email.{ImapClient, ImapHost, Parser}
   alias Custyard.Webhooks.Adapters.Email, as: EmailAdapter
   alias Custyard.Webhooks.Dispatcher
@@ -47,6 +47,7 @@ defmodule Custyard.Email.ImapPoll do
   @max_messages_per_poll 50
   @max_message_bytes 25 * 1024 * 1024
   @session_timeout_ms 120_000
+  @cleanup_timeout_ms 1_000
   @auth_failures_before_suspend 3
   @max_message_attempts 5
   @retryable_dispatch_errors [:attachment_fetch_failed, :attachment_processing_failed]
@@ -62,7 +63,8 @@ defmodule Custyard.Email.ImapPoll do
     session_crashed: "session_crashed",
     database_unavailable: "database_unavailable",
     attachments_failed: "attachments_failed",
-    channel_deleted: "channel_deleted"
+    channel_deleted: "channel_deleted",
+    tenant_suspended: "tenant_suspended"
   }
 
   def max_messages_per_poll, do: @max_messages_per_poll
@@ -75,6 +77,12 @@ defmodule Custyard.Email.ImapPoll do
   with the error also recorded on the channel.
   """
   def establish(%InboundChannel{ingress_kind: :imap} = channel, opts \\ []) do
+    with {:ok, current} <- current_channel(channel) do
+      establish_current(current, opts)
+    end
+  end
+
+  defp establish_current(channel, opts) do
     result =
       run(channel, opts, fn client, conn, mailbox ->
         position(client, conn, channel, mailbox)
@@ -110,13 +118,19 @@ defmodule Custyard.Email.ImapPoll do
   """
   def poll(channel, opts \\ [])
 
-  def poll(%InboundChannel{ingress_kind: :imap, imap_uid_validity: nil} = channel, opts) do
+  def poll(%InboundChannel{ingress_kind: :imap} = channel, opts) do
+    with {:ok, current} <- current_channel(channel) do
+      poll_current(current, opts)
+    end
+  end
+
+  defp poll_current(%InboundChannel{imap_uid_validity: nil} = channel, opts) do
     with {:ok, _channel} <- establish(channel, opts) do
       {:ok, %{imported: 0, ignored: 0, skipped: 0, failed: 0, rebased: true}}
     end
   end
 
-  def poll(%InboundChannel{ingress_kind: :imap} = channel, opts) do
+  defp poll_current(channel, opts) do
     route = Repo.get!(InboundRoute, channel.inbound_route_id)
 
     result =
@@ -155,12 +169,21 @@ defmodule Custyard.Email.ImapPoll do
     client = Keyword.get_lazy(opts, :client, &ImapClient.client/0)
     timeout = Keyword.get(opts, :timeout, @session_timeout_ms)
 
+    owner = self()
+
     task =
       Task.Supervisor.async_nolink(
         Custyard.TaskSupervisor,
         Log.task(
           fn ->
-            session(client, channel, opts, fun)
+            worker = self()
+            guard = spawn(fn -> guard_session(owner, worker, client, nil) end)
+
+            try do
+              session(client, channel, opts, fun, guard)
+            after
+              send(guard, :done)
+            end
           end,
           channel_id: channel.id
         )
@@ -173,8 +196,62 @@ defmodule Custyard.Email.ImapPoll do
     end
   end
 
-  defp session(client, channel, opts, fun) do
-    with {:ok, password} <- password(channel),
+  # A supervised, unlinked session must still belong to its polling caller.
+  # The guard also closes an acquired connection if cancellation skips `after`.
+  defp guard_session(owner, worker, client, conn) do
+    owner_ref = Process.monitor(owner)
+    worker_ref = Process.monitor(worker)
+    guard_session_loop(owner_ref, worker_ref, worker, client, conn)
+  end
+
+  defp guard_session_loop(owner_ref, worker_ref, worker, client, conn) do
+    receive do
+      {:connection, connection} ->
+        guard_session_loop(owner_ref, worker_ref, worker, client, connection)
+
+      {:DOWN, ^owner_ref, :process, _owner, _reason} ->
+        Process.exit(worker, :kill)
+        close_cancelled_session(client, conn)
+
+      {:DOWN, ^worker_ref, :process, ^worker, _reason} ->
+        close_cancelled_session(client, conn)
+
+      :done ->
+        :ok
+    end
+  end
+
+  defp close_cancelled_session(_client, nil), do: :ok
+
+  defp close_cancelled_session(client, conn) do
+    {cleanup, ref} = spawn_monitor(fn -> safe_logout(client, conn) end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^cleanup, _reason} -> :ok
+    after
+      @cleanup_timeout_ms ->
+        Process.exit(cleanup, :kill)
+        Process.demonitor(ref, [:flush])
+    end
+
+    # Plover transfers SSL ownership to a connection linked to the session.
+    # Killing the session already closes that connection, including the gap
+    # between connect returning and the guard receiving its handle.
+    if is_pid(conn), do: Process.exit(conn, :kill)
+    :ok
+  end
+
+  defp safe_logout(client, conn) do
+    client.logout(conn)
+  rescue
+    _error -> :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp session(client, channel, opts, fun, guard) do
+    with {:ok, channel} <- current_channel(channel),
+         {:ok, password} <- password(channel),
          {:ok, address, server_name} <- ImapHost.resolve(channel.imap_host),
          {:ok, conn} <-
            client.connect(
@@ -182,9 +259,12 @@ defmodule Custyard.Email.ImapPoll do
              channel.imap_port,
              [server_name: server_name] ++ Keyword.get(opts, :connect, [])
            ) do
+      send(guard, {:connection, conn})
+
       try do
         with :ok <- client.login(conn, channel.imap_username, password),
-             {:ok, mailbox} <- client.examine(conn, channel.imap_folder) do
+             {:ok, mailbox} <- client.examine(conn, channel.imap_folder),
+             {:ok, _current} <- current_channel(channel) do
           maybe_reencrypt(channel, password)
           fun.(client, conn, mailbox)
         end
@@ -205,7 +285,7 @@ defmodule Custyard.Email.ImapPoll do
   end
 
   # A password sealed with a previous key is moved to the current one once
-  # it has been used successfully, unless the operator saved a new password
+  # it has been used successfully, unless the staff saved a new password
   # while this session was logging in.
   defp maybe_reencrypt(%InboundChannel{imap_password_ciphertext: read} = channel, password) do
     if Credentials.stale?(read) do
@@ -268,7 +348,13 @@ defmodule Custyard.Email.ImapPoll do
       |> Enum.reduce_while(
         {:ok, %{imported: 0, ignored: 0, skipped: 0, failed: 0}, channel.imap_message_attempts},
         fn item, {:ok, counts, attempts} ->
-          case settle(import_one(client, conn, channel, route, item), channel, item, attempts) do
+          result =
+            case current_channel(channel) do
+              {:ok, current} -> import_one(client, conn, current, route, item)
+              {:error, reason} -> {:stop, reason}
+            end
+
+          case settle(result, channel, item, attempts) do
             {:advance, outcome} ->
               advance(channel, item.uid)
               {:cont, {:ok, Map.update!(counts, outcome, &(&1 + 1)), 0}}
@@ -315,8 +401,14 @@ defmodule Custyard.Email.ImapPoll do
 
   defp import_one(client, conn, channel, route, %{uid: uid}) do
     case client.fetch_message(conn, uid) do
-      {:ok, raw} -> dispatch(raw, channel, route, uid)
-      {:error, reason} -> {:stop, {:fetch_failed, reason}}
+      {:ok, raw} ->
+        case current_channel(channel) do
+          {:ok, current} -> dispatch(raw, current, route, uid)
+          {:error, reason} -> {:stop, reason}
+        end
+
+      {:error, reason} ->
+        {:stop, {:fetch_failed, reason}}
     end
   end
 
@@ -326,7 +418,7 @@ defmodule Custyard.Email.ImapPoll do
       normalized = put_delivery_id(normalized, channel, uid)
 
       case Dispatcher.dispatch(route, normalized, channel: channel) do
-        {:ok, _conversation} ->
+        {:ok, _thread} ->
           {:advance, :imported}
 
         {:ignored, _reason} ->
@@ -392,8 +484,12 @@ defmodule Custyard.Email.ImapPoll do
 
   # Forward-only: a concurrent poll (two nodes) can never move it back.
   defp advance(channel, uid) do
+    active_tenants = from(t in Tenant, where: t.status == "active", select: t.id)
+
     from(c in InboundChannel,
-      where: c.id == ^channel.id and (is_nil(c.imap_last_uid) or c.imap_last_uid < ^uid)
+      where:
+        c.id == ^channel.id and c.tenant_id in subquery(active_tenants) and
+          (is_nil(c.imap_last_uid) or c.imap_last_uid < ^uid)
     )
     |> Repo.update_all(set: [imap_last_uid: uid, imap_message_attempts: 0, updated_at: now()])
   end
@@ -403,27 +499,37 @@ defmodule Custyard.Email.ImapPoll do
   end
 
   defp record(channel, attrs) do
-    case Repo.get(InboundChannel, channel.id) do
-      nil ->
-        {:error, :channel_deleted}
-
-      current ->
-        with {:ok, updated} <-
-               current |> InboundChannel.imap_state_changeset(attrs) |> Repo.update() do
-          InboundChannels.broadcast(updated)
-          {:ok, updated}
-        end
-    end
+    Repo.transaction(fn ->
+      with {:ok, current} <- current_channel(channel),
+           {:ok, updated} <-
+             current |> InboundChannel.imap_state_changeset(attrs) |> Repo.update() do
+        InboundChannels.broadcast(updated)
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   defp record_failure(channel, reason) do
-    case Repo.get(InboundChannel, channel.id) do
-      nil ->
-        :ok
+    with {:ok, current} <- current_channel(channel) do
+      record(current, failure_attrs(current, error_code(reason)))
+    end
 
-      current ->
-        record(current, failure_attrs(current, error_code(reason)))
-        :ok
+    :ok
+  end
+
+  # Resolve ownership from the stored channel, never from a stale caller snapshot.
+  defp current_channel(%InboundChannel{id: id}) do
+    case Repo.get(InboundChannel, id) do
+      nil ->
+        {:error, :channel_deleted}
+
+      channel ->
+        case Repo.get(Tenant, channel.tenant_id) do
+          %Tenant{status: "active"} -> {:ok, channel}
+          _ -> {:error, :tenant_suspended}
+        end
     end
   end
 
@@ -452,7 +558,7 @@ defmodule Custyard.Email.ImapPoll do
 
   @doc """
   Short code for a session failure, stored as `imap_last_error` and shown
-  to the operator. Never the server's own text.
+  to the staff. Never the server's own text.
   """
   def error_code(reason) when is_atom(reason), do: Map.get(@error_codes, reason, "connect_failed")
   def error_code({tag, _detail}) when tag in [:fetch_failed, :list_failed], do: "fetch_failed"

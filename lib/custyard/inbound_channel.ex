@@ -3,11 +3,11 @@ defmodule Custyard.InboundChannel do
   One public support address bound to an inbound route.
 
   A route is the Lettermint-backed ingress with organization and project
-  scope; a channel is the operator-visible object on top of it: the public
+  scope; a channel is the staff-visible object on top of it: the public
   address customers write to (`support@companyname.com`), the ingress address
-  the operator's mail service forwards to
+  the staff's mail service forwards to
   (`support+<token>@<route domain>`), the From identity for replies, and
-  the lifecycle that tells the operator whether mail is flowing. See
+  the lifecycle that tells the staff whether mail is flowing. See
   docs/design/spec-inbound-channels.md, decisions D1 to D4 and D7.
 
   ## States
@@ -20,7 +20,7 @@ defmodule Custyard.InboundChannel do
 
   ## Ingress kinds (D8)
 
-    * `forward`: the operator's mail service forwards to the ingress
+    * `forward`: the staff's mail service forwards to the ingress
       address; routed by token
     * `mx`: mail arrives at the public address on the route's custom
       domain. The local part has no `+`: `support+tag@` reaches `support@`
@@ -80,65 +80,66 @@ defmodule Custyard.InboundChannel do
   @imap_mailbox_fields [:imap_host, :imap_port, :imap_username, :imap_folder]
 
   schema "inbound_channels" do
-    field :tenant_id, :id, default: 1
-    belongs_to :tenant, Custyard.Tenant, define_field: false
-    field :public_address, :string
-    field :display_name, :string
+    field(:tenant_id, :id)
+    belongs_to(:tenant, Custyard.Tenant, define_field: false)
+    field(:public_address, :string)
+    field(:display_name, :string)
 
-    field :ingress_local, :string
-    field :ingress_token, :string
-    field :previous_ingress_token, :string
-    field :previous_token_expires_at, :utc_datetime
+    field(:ingress_local, :string)
+    field(:ingress_token, :string)
+    field(:previous_ingress_token, :string)
+    field(:previous_token_expires_at, :utc_datetime)
 
-    field :ingress_kind, Ecto.Enum, values: @ingress_kinds, default: :forward
-    field :provider, Ecto.Enum, values: @providers
+    field(:ingress_kind, Ecto.Enum, values: @ingress_kinds, default: :forward)
+    field(:provider, Ecto.Enum, values: @providers)
 
-    field :state, Ecto.Enum, values: @states, default: :draft
+    field(:state, Ecto.Enum, values: @states, default: :draft)
 
-    field :reply_from, Ecto.Enum, values: @reply_from_options, default: :public_address
-    field :sending_domain, :string
-    # D4: BCC every outbound reply to the public address so the operator's
+    field(:reply_from, Ecto.Enum, values: @reply_from_options, default: :public_address)
+    field(:sending_domain, :string)
+    # D4: BCC every outbound reply to the public address so the staff's
     # mailbox keeps a copy. Off by default; the copy is forwarded back and
     # recognised by triage as an own echo.
-    field :archive_copy, :boolean, default: false
+    field(:archive_copy, :boolean, default: false)
     # D9: per-message attachment cap in megabytes; 0 disables fetching.
-    field :attachment_limit_mb, :integer, default: 10
-    # Points added to the attention score of the channel's conversations
+    field(:attachment_limit_mb, :integer, default: 10)
+    # Points added to the attention score of the channel's threads
     # (Custyard.Scoring), so security@ can outrank sales@. 0 is neutral.
-    field :attention_bonus, :integer, default: 0
-    field :sending_domain_status, :string
-    field :sending_domain_checked_at, :utc_datetime
+    field(:attention_bonus, :integer, default: 0)
+    field(:sending_domain_status, :string)
+    field(:sending_domain_checked_at, :utc_datetime)
 
-    field :verification_code, :string
-    field :verification_link, :string
-    field :verification_captured_at, :utc_datetime
-    field :verification_expires_at, :utc_datetime
+    field(:verification_code, :string)
+    field(:verification_link, :string)
+    field(:verification_captured_at, :utc_datetime)
+    field(:verification_expires_at, :utc_datetime)
 
-    field :imap_host, :string
-    field :imap_port, :integer
-    field :imap_username, :string
-    field :imap_password, :string, virtual: true, redact: true
-    field :imap_password_ciphertext, :string, redact: true
-    field :imap_folder, :string
-    field :imap_uid_validity, :integer
-    field :imap_last_uid, :integer
-    field :imap_last_polled_at, :utc_datetime
-    field :imap_last_error, :string
-    field :imap_consecutive_failures, :integer, default: 0
-    field :imap_auth_failures, :integer, default: 0
-    field :imap_message_attempts, :integer, default: 0
-    field :imap_auth_failed_at, :utc_datetime
+    field(:imap_host, :string)
+    field(:imap_port, :integer)
+    field(:imap_username, :string)
+    field(:imap_password, :string, virtual: true, redact: true)
+    field(:imap_password_ciphertext, :string, redact: true)
+    field(:imap_folder, :string)
+    field(:imap_uid_validity, :integer)
+    field(:imap_last_uid, :integer)
+    field(:imap_last_polled_at, :utc_datetime)
+    field(:imap_last_error, :string)
+    field(:imap_consecutive_failures, :integer, default: 0)
+    field(:imap_auth_failures, :integer, default: 0)
+    field(:imap_message_attempts, :integer, default: 0)
+    field(:imap_auth_failed_at, :utc_datetime)
 
-    field :verified_at, :utc_datetime
-    field :last_received_at, :utc_datetime
-    field :quiet_after_hours, :integer, default: 72
-    field :quiet_notified_at, :utc_datetime
-    field :paused_at, :utc_datetime
-    field :revoked_at, :utc_datetime
+    field(:verified_at, :utc_datetime)
+    field(:last_received_at, :utc_datetime)
+    field(:quiet_after_hours, :integer, default: 72)
+    field(:quiet_notified_at, :utc_datetime)
+    field(:paused_at, :utc_datetime)
+    field(:revoked_at, :utc_datetime)
 
-    belongs_to :inbound_route, Custyard.InboundRoute
-    belongs_to :organization, Custyard.Organization
-    belongs_to :project, Custyard.Project
+    belongs_to(:inbound_route, Custyard.InboundRoute)
+    belongs_to(:default_organization, Custyard.Organization)
+    belongs_to(:default_project, Custyard.Project)
+    belongs_to(:default_label, Custyard.Label)
 
     timestamps(type: :utc_datetime)
   end
@@ -156,7 +157,7 @@ defmodule Custyard.InboundChannel do
   def imap_password_context, do: @imap_password_context
 
   @doc """
-  Changeset for operator-editable attributes at creation and update.
+  Changeset for staff-editable attributes at creation and update.
 
   The ingress token is generated here when absent and is never cast from
   attrs; rotation goes through `rotate_token_changeset/2`.
@@ -175,9 +176,10 @@ defmodule Custyard.InboundChannel do
       :attachment_limit_mb,
       :attention_bonus,
       :inbound_route_id,
-      :organization_id,
+      :default_organization_id,
       :tenant_id,
-      :project_id
+      :default_project_id,
+      :default_label_id
       | @imap_fields
     ])
     |> update_change(:public_address, &normalize_address/1)
@@ -224,8 +226,33 @@ defmodule Custyard.InboundChannel do
       message: "is already a channel on this route"
     )
     |> foreign_key_constraint(:inbound_route_id)
-    |> foreign_key_constraint(:organization_id)
-    |> foreign_key_constraint(:project_id)
+    |> foreign_key_constraint(:default_organization_id)
+    |> foreign_key_constraint(:default_project_id)
+    |> foreign_key_constraint(:default_label_id)
+    |> validate_hint_tenants()
+  end
+
+  defp validate_hint_tenants(changeset) do
+    Enum.reduce(
+      [
+        {:inbound_route_id, Custyard.InboundRoute},
+        {:default_organization_id, Custyard.Organization},
+        {:default_project_id, Custyard.Project},
+        {:default_label_id, Custyard.Label}
+      ],
+      changeset,
+      fn {field, schema}, acc ->
+        case get_field(acc, field) && Custyard.Repo.get(schema, get_field(acc, field)) do
+          %{tenant_id: tenant_id} ->
+            if tenant_id == get_field(acc, :tenant_id),
+              do: acc,
+              else: add_error(acc, field, "must belong to the same tenant")
+
+          _ ->
+            acc
+        end
+      end
+    )
   end
 
   @doc """
@@ -408,7 +435,7 @@ defmodule Custyard.InboundChannel do
   def forwarding?(%__MODULE__{ingress_kind: :forward}), do: true
   def forwarding?(%__MODULE__{}), do: false
 
-  @doc "States in which deliveries become conversations."
+  @doc "States in which deliveries become threads."
   def receiving?(%__MODULE__{state: state}),
     do: state in [:pending_verification, :awaiting_first_message, :active]
 

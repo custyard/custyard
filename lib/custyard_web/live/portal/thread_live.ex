@@ -1,0 +1,398 @@
+defmodule CustyardWeb.Portal.ThreadLive do
+  use CustyardWeb, :live_view
+
+  alias Custyard.{Attachments, Threads, Scoring}
+
+  @impl true
+  def mount(params, _session, socket) do
+    # :current_org, :portal_path, :portal_home_path set by PortalAuth on_mount
+    org = socket.assigns.current_org
+    id = params["id"]
+
+    case Threads.get_thread_for_organization(id, org.id) do
+      {:error, _} ->
+        {:ok,
+         socket
+         |> put_flash(:error, "Request not found")
+         |> push_navigate(to: socket.assigns.portal_home_path)}
+
+      {:ok, thread} ->
+        if connected?(socket) do
+          Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{id}")
+        end
+
+        {:ok,
+         socket
+         |> assign(:thread, thread)
+         |> assign(:page_title, thread.subject)
+         |> assign(:reply_form, to_form(%{"body" => ""}))
+         |> load_messages()
+         |> load_tasks()}
+    end
+  end
+
+  defp load_messages(socket) do
+    conv = socket.assigns.thread
+
+    messages =
+      conv.id
+      |> Threads.list_public_messages()
+      |> Attachments.preload_for_portal(conv)
+
+    assign(socket, :messages, messages)
+  end
+
+  defp load_tasks(socket) do
+    conv = socket.assigns.thread
+    tasks = Threads.list_portal_visible_tasks(conv.id)
+    assign(socket, :tasks, tasks)
+  end
+
+  @impl true
+  def handle_event("submit_reply", %{"body" => body}, socket) do
+    conv = socket.assigns.thread
+    org = socket.assigns.current_org
+
+    # Re-verify the thread still belongs to this organization
+    case Threads.get_thread_for_organization(conv.id, org.id) do
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "This thread is no longer accessible")
+         |> push_navigate(to: socket.assigns.portal_home_path)}
+
+      {:ok, conv} ->
+        submit_reply(socket, conv, org, body)
+    end
+  end
+
+  defp submit_reply(socket, conv, org, body) do
+    if String.trim(body) != "" do
+      contact = Custyard.PortalCredentials.reply_contact(socket.assigns.portal_credential)
+      sender_email = contact && contact.email
+
+      case Threads.create_message(%{
+             tenant_id: org.tenant_id,
+             thread_id: conv.id,
+             source: :portal,
+             sender_email: sender_email,
+             body: body,
+             is_internal_note: false
+           }) do
+        {:ok, _message} ->
+          # Update thread timestamps and reactivate if needed, in a single write
+          now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+          update_attrs =
+            if conv.state in [:waiting, :dormant, :resolved] do
+              %{last_customer_action_at: now, state: :active}
+            else
+              %{last_customer_action_at: now}
+            end
+
+          case Threads.update_thread(conv, update_attrs) do
+            {:ok, updated_conv} ->
+              Scoring.calculate_and_cache(conv.id)
+
+              Phoenix.PubSub.broadcast(
+                Custyard.PubSub,
+                "threads",
+                {:thread_updated, conv.id}
+              )
+
+              Phoenix.PubSub.broadcast(
+                Custyard.PubSub,
+                "threads:org:#{conv.organization_id}",
+                {:thread_updated, conv.id}
+              )
+
+              Phoenix.PubSub.broadcast(
+                Custyard.PubSub,
+                "thread:#{conv.id}",
+                {:message_added, conv.id}
+              )
+
+              {:noreply,
+               socket
+               |> assign(:reply_form, to_form(%{"body" => ""}))
+               |> assign(:thread, updated_conv)
+               |> load_messages()}
+
+            {:error, _changeset} ->
+              {:noreply, put_flash(socket, :error, "Failed to update thread. Please try again.")}
+          end
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "Failed to send reply. Please try again.")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Reply cannot be empty")}
+    end
+  end
+
+  @impl true
+  def handle_info({:message_added, _}, socket) do
+    {:noreply, refresh_thread(socket)}
+  end
+
+  # Message-level change (staff soft delete, delivery status): refresh the
+  # thread so tombstones replace deleted bodies in already-open tabs.
+  @impl true
+  def handle_info({:message_updated, _}, socket) do
+    {:noreply, refresh_thread(socket)}
+  end
+
+  @impl true
+  def handle_info({:thread_updated, _}, socket) do
+    {:noreply, refresh_thread(socket)}
+  end
+
+  # Catch-all for unexpected PubSub messages to prevent LiveView crashes
+  @impl true
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
+  # Recheck ownership for every subscribed update. A thread can move to another
+  # customer before its message notification reaches an already-open portal.
+  defp refresh_thread(socket) do
+    conv = socket.assigns.thread
+    org = socket.assigns.current_org
+
+    case Threads.get_thread_for_organization(conv.id, org.id) do
+      {:ok, updated_conv} ->
+        socket
+        |> assign(:thread, updated_conv)
+        |> load_messages()
+        |> load_tasks()
+
+      {:error, _} ->
+        # Thread no longer accessible (deleted or org changed)
+        socket
+        |> put_flash(:info, "This request has been closed or moved")
+        |> push_navigate(to: socket.assigns.portal_home_path)
+    end
+  end
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <div class="max-w-4xl mx-auto py-8 px-4" data-testid="portal-thread">
+      <.link
+        navigate={@portal_home_path}
+        class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"
+        data-testid="portal-back-link"
+      >
+        &#8592; Back to requests
+      </.link>
+
+      <div class="flex items-start justify-between gap-4 mb-6">
+        <h1
+          class="text-2xl font-semibold text-gray-900 dark:text-zinc-100"
+          data-testid="portal-thread-subject"
+        >
+          {@thread.subject}
+        </h1>
+        <span
+          class={"shrink-0 text-sm px-3 py-1 rounded-full #{state_color(@thread.state)}"}
+          data-testid="portal-thread-state"
+        >
+          {state_label(@thread.state)}
+        </span>
+      </div>
+
+      <div class="space-y-4 mb-8" data-testid="portal-messages">
+        <div
+          :if={@messages == []}
+          class="text-center py-8 text-gray-500 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 rounded-lg"
+          data-testid="portal-no-messages"
+        >
+          No messages yet. Start the thread by sending a reply below.
+        </div>
+        <div
+          :for={msg <- @messages}
+          class={"p-4 rounded-lg #{message_style(msg)}"}
+          data-testid={"portal-message-#{msg.source}"}
+        >
+          <div class={"flex justify-between text-sm mb-2 #{metadata_text_style(msg)}"}>
+            <span data-testid="portal-message-sender">{sender_label(msg)}</span>
+            <span data-testid="portal-message-time">{format_time(msg.inserted_at)}</span>
+          </div>
+          <%!-- Soft-deleted messages render ONLY the tombstone — the original
+          body must never reach this page again once a staff deletes it. --%>
+          <div
+            :if={msg.deleted_at}
+            class="italic text-gray-500 dark:text-zinc-400"
+            data-testid="portal-message-tombstone"
+          >
+            This message was deleted
+          </div>
+          <div
+            :if={is_nil(msg.deleted_at)}
+            class={"whitespace-pre-wrap break-words #{body_text_style(msg)}"}
+            data-testid="portal-message-body"
+          >
+            {msg.body}
+          </div>
+          <ul
+            :if={msg.attachments != []}
+            class="mt-3 space-y-1 text-sm"
+            data-testid="portal-message-attachments"
+          >
+            <li :for={att <- msg.attachments} class="flex flex-wrap items-center gap-x-1.5">
+              <.icon name="hero-paper-clip" class="h-4 w-4 text-gray-400 dark:text-zinc-500" />
+              <a
+                :if={Attachments.downloadable?(att)}
+                href={"#{@portal_path}/attachments/#{att.id}"}
+                class="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+                data-testid={"portal-attachment-#{att.id}"}
+              >
+                {att.filename || "attachment"}
+              </a>
+              <span :if={not Attachments.downloadable?(att)} class="break-all">
+                {att.filename || "attachment"} · {Attachments.scan_label(att)}
+              </span>
+              <span class="text-xs text-gray-500 dark:text-zinc-400">
+                {Attachments.format_bytes(att.size)}
+              </span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <.tasks_section tasks={@tasks} />
+
+      <form
+        phx-submit="submit_reply"
+        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg p-4"
+        data-testid="portal-reply-form"
+      >
+        <textarea
+          name="body"
+          id="portal-reply-textarea"
+          rows="4"
+          aria-label="Reply to thread"
+          class="w-full border-gray-300 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500 phx-submit-loading:opacity-50 phx-submit-loading:cursor-not-allowed"
+          placeholder="Write a reply..."
+          phx-hook="ResetOnSubmit"
+          data-testid="portal-reply-textarea"
+        >{@reply_form[:body].value}</textarea>
+        <div class="flex justify-end mt-3">
+          <button
+            type="submit"
+            phx-disable-with="Sending..."
+            class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 phx-submit-loading:opacity-75 phx-submit-loading:cursor-not-allowed"
+            data-testid="portal-reply-submit"
+          >
+            Send Reply
+          </button>
+        </div>
+      </form>
+    </div>
+    """
+  end
+
+  attr :tasks, :list, required: true
+
+  defp tasks_section(assigns) do
+    ~H"""
+    <div :if={@tasks != []} class="mb-8" data-testid="portal-tasks-section">
+      <h2
+        class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-3"
+        data-testid="portal-tasks-heading"
+      >
+        Tasks
+      </h2>
+      <div
+        class="bg-white dark:bg-zinc-800 border dark:border-zinc-700 rounded-lg divide-y dark:divide-zinc-700"
+        data-testid="portal-tasks-list"
+      >
+        <div :for={task <- @tasks} class="p-3 flex items-center gap-3" data-testid="portal-task-item">
+          <.task_state_badge state={task.state} />
+          <div class="flex-1">
+            <div class="text-gray-900 dark:text-zinc-100" data-testid="portal-task-title">
+              {task.title}
+            </div>
+            <div
+              :if={task.due_at}
+              class="text-sm text-gray-500 dark:text-zinc-400"
+              data-testid="portal-task-due"
+            >
+              Due: {format_due_at(task.due_at)}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp message_style(msg) do
+    if msg.source == :staff do
+      "bg-indigo-50 dark:bg-indigo-950 border-l-4 border-indigo-400 dark:border-indigo-600"
+    else
+      "bg-gray-50 dark:bg-zinc-800"
+    end
+  end
+
+  defp metadata_text_style(msg) do
+    if msg.source == :staff do
+      # Higher contrast for staff messages: indigo-700 on indigo-50 background
+      "text-indigo-700 dark:text-indigo-300"
+    else
+      "text-gray-500 dark:text-zinc-400"
+    end
+  end
+
+  defp body_text_style(msg) do
+    if msg.source == :staff do
+      # Ensure good contrast for body text on indigo background
+      "text-indigo-900 dark:text-indigo-100"
+    else
+      "text-gray-900 dark:text-zinc-100"
+    end
+  end
+
+  defp sender_label(msg) do
+    case msg.source do
+      :staff -> "Support Team"
+      _ -> msg.sender_email || "Customer"
+    end
+  end
+
+  defp format_time(datetime) do
+    Calendar.strftime(datetime, "%b %d, %H:%M")
+  end
+
+  defp format_due_at(datetime) do
+    now = DateTime.utc_now()
+    diff_days = Date.diff(DateTime.to_date(datetime), DateTime.to_date(now))
+
+    cond do
+      diff_days < 0 -> "overdue"
+      diff_days == 0 -> "today"
+      diff_days == 1 -> "tomorrow"
+      diff_days < 7 -> Calendar.strftime(datetime, "%A")
+      true -> Calendar.strftime(datetime, "%b %d")
+    end
+  end
+
+  # Thread state styling and labels for customers
+  defp state_color(:new), do: "bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300"
+
+  defp state_color(:active),
+    do: "bg-green-100 dark:bg-green-950 text-green-800 dark:text-green-300"
+
+  defp state_color(:waiting),
+    do: "bg-yellow-100 dark:bg-yellow-950 text-yellow-800 dark:text-yellow-300"
+
+  defp state_color(_), do: "bg-gray-100 dark:bg-zinc-700 text-gray-800 dark:text-zinc-200"
+
+  # Customer-friendly state labels
+  defp state_label(:new), do: "Open"
+  defp state_label(:active), do: "In Progress"
+  defp state_label(:waiting), do: "Awaiting Reply"
+  defp state_label(:dormant), do: "On Hold"
+  defp state_label(:resolved), do: "Closed"
+  defp state_label(_), do: "Unknown"
+end

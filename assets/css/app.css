@@ -17,6 +17,13 @@
     color-scheme: light dark;
     @apply text-zinc-900 antialiased dark:text-zinc-100;
   }
+
+  [type='text'], [type='email'], [type='url'], [type='password'],
+  [type='number'], [type='date'], [type='datetime-local'], [type='month'],
+  [type='search'], [type='tel'], [type='time'], [type='week'],
+  input:not([type]), textarea, select {
+    @apply bg-white text-zinc-900 placeholder:text-zinc-500 dark:bg-zinc-900 dark:text-zinc-100 dark:border-zinc-600 dark:placeholder:text-zinc-400;
+  }
 }
 
 /* Sanitised inbound email HTML (Custyard.Email.HtmlSanitizer). Preflight

@@ -17,9 +17,16 @@ from verify_claude_review import (
 
 class BoundedReviewTest(unittest.TestCase):
     def setUp(self):
+        limits = {name: "" for name in (
+            "CLAUDE_REVIEW_MAX_FILES", "CLAUDE_REVIEW_MAX_PATCH_LINES",
+            "CLAUDE_REVIEW_WARN_PATCH_CHARS",
+        )}
+        env = patch.dict(os.environ, limits)
+        env.start()
+        self.addCleanup(env.stop)
         self.event = {"repository": {"full_name": "custyard/custyard"},
                       "pull_request": {"number": 45, "head": {"sha": "abc123"}}}
-        self.files = [{"filename": f"lib/file-{i}.ex", "patch": "small"} for i in range(31)]
+        self.files = [{"filename": f"lib/file-{i}.ex", "patch": "small"} for i in range(101)]
         self.current = {"head": {"sha": "abc123"}, "state": "open", "draft": False,
                         "changed_files": len(self.files), "title": "Example", "body": "Review this change."}
         self.plan = build_plan(self.event, "100", "1", self.current, self.files)
@@ -37,19 +44,60 @@ class BoundedReviewTest(unittest.TestCase):
         assigned = [f["filename"] for s in self.plan["shards"] for f in s["files"]]
         self.assertEqual(assigned, self.plan["files"])
         self.assertEqual(len(assigned), len(set(assigned)))
-        self.assertTrue(all(len(s["files"]) <= 5 for s in self.plan["shards"]))
+        self.assertEqual([len(s["files"]) for s in self.plan["shards"]], [50, 50, 1])
 
-    def test_patch_size_also_bounds_batches_and_keeps_large_single_files(self):
+    def test_patch_character_size_only_adds_awareness_without_partitioning(self):
         files = [{"filename": str(i), "patch": "x" * size}
                  for i, size in enumerate([70_000, 40_000, 150_000, 1])]
         plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 4}, files)
-        self.assertEqual([len(s["files"]) for s in plan["shards"]], [1, 1, 1, 1])
+        self.assertEqual([len(s["files"]) for s in plan["shards"]], [4])
+        self.assertIn("260,001", plan["size_notice"])
+        self.assertIn("50,000-character awareness threshold", plan["size_notice"])
+
+    def test_character_awareness_threshold_is_strictly_exceeded(self):
+        for size, expected in ((50_000, False), (50_001, True)):
+            with self.subTest(size=size):
+                files = [{"filename": "fixture.yml", "patch": "x" * size}]
+                plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 1}, files)
+                self.assertEqual(bool(plan["size_notice"]), expected)
+                self.assertEqual(len(plan["shards"]), 1)
+
+    def test_environment_overrides_each_partition_limit(self):
+        files = [{"filename": str(i), "patch": "x\n" * 2} for i in range(3)]
+        cases = [("CLAUDE_REVIEW_MAX_FILES", "2", [2, 1]),
+                 ("CLAUDE_REVIEW_MAX_PATCH_LINES", "3", [1, 1, 1]),
+                 ("CLAUDE_REVIEW_WARN_PATCH_CHARS", "7", [3])]
+        for name, value, expected in cases:
+            with self.subTest(name=name), patch.dict(os.environ, {name: value}):
+                plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 3}, files)
+                self.assertEqual([len(s["files"]) for s in plan["shards"]], expected)
+                self.assertEqual(bool(plan["size_notice"]), name == "CLAUDE_REVIEW_WARN_PATCH_CHARS")
+
+    def test_invalid_environment_limits_fail_planning(self):
+        for name in ("CLAUDE_REVIEW_MAX_FILES", "CLAUDE_REVIEW_MAX_PATCH_LINES",
+                     "CLAUDE_REVIEW_WARN_PATCH_CHARS"):
+            for value in ("0", "-1", "lots", "2.5"):
+                with self.subTest(name=name, value=value), patch.dict(os.environ, {name: value}):
+                    with self.assertRaisesRegex(IncompleteReview, name):
+                        build_plan(self.event, "100", "1", self.current, self.files)
+
+    def test_unset_and_whitespace_environment_limits_use_defaults(self):
+        for value in (None, "   "):
+            with self.subTest(value=value), patch.dict(os.environ):
+                for name in ("CLAUDE_REVIEW_MAX_FILES", "CLAUDE_REVIEW_MAX_PATCH_LINES",
+                             "CLAUDE_REVIEW_WARN_PATCH_CHARS"):
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                plan = build_plan(self.event, "100", "1", self.current, self.files)
+                self.assertEqual([len(s["files"]) for s in plan["shards"]], [50, 50, 1])
 
     def test_patch_line_count_bounds_reader_input(self):
         files = [{"filename": str(i), "patch": "short\n" * count}
-                 for i, count in enumerate([500, 400, 900, 1])]
-        plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 4}, files)
-        self.assertEqual([len(s["files"]) for s in plan["shards"]], [1, 1, 1, 1])
+                 for i, count in enumerate([900, 900, 1, 1801, 1])]
+        plan = build_plan(self.event, "100", "1", {**self.current, "changed_files": 5}, files)
+        self.assertEqual([len(s["files"]) for s in plan["shards"]], [2, 1, 1, 1])
 
     def test_incomplete_api_file_list_cannot_become_a_plan(self):
         with self.assertRaises(IncompleteReview):
@@ -87,7 +135,7 @@ class BoundedReviewTest(unittest.TestCase):
     def test_complete_receipts_cover_the_entire_pr(self):
         reviewed, summaries, errors = combine_results(self.plan, self.receipts())
         self.assertEqual(reviewed, set(self.plan["files"]))
-        self.assertEqual(len(summaries), 7)
+        self.assertEqual(len(summaries), 3)
         self.assertEqual(errors, [])
 
     def test_missing_failed_and_partial_receipts_stay_incomplete(self):
@@ -146,11 +194,11 @@ class BoundedReviewTest(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(batch_command("plan"), 0)
             matrix = json.loads(Path(env["GITHUB_OUTPUT"]).read_text().split("=", 1)[1])
-            self.assertEqual(len(matrix["include"]), 7)
+            self.assertEqual(len(matrix["include"]), 3)
             assigned = json.loads((Path(env["REVIEW_PLAN_DIR"]) / "shard-0.json").read_text())
-            self.assertEqual(len(assigned["files"]), 5)
+            self.assertEqual(len(assigned["files"]), 50)
             self.assertNotIn("shards", assigned)
-            self.assertEqual(assigned["assigned_paths"], [f["filename"] for f in self.files[:5]])
+            self.assertEqual(assigned["assigned_paths"], [f["filename"] for f in self.files[:50]])
             self.assertEqual(assigned["files"][0]["patch_lines"], ["small"])
 
     def test_multiline_patches_remain_readable_without_one_long_escaped_line(self):
@@ -286,19 +334,33 @@ class BoundedReviewTest(unittest.TestCase):
                     with contextlib.redirect_stdout(io.StringIO()):
                         self.assertEqual(batch_command("publish"), 0)
                     body = post.call_args.args[1]
-            self.assertIn("Completed: 31/31", body)
+            self.assertIn("Completed: 101/101", body)
+            self.assertIn("<!-- claude-review:abc123:100:1 -->", body)
+
+    def test_size_notice_is_published_without_failing_review(self):
+        with patch.dict(os.environ, {"CLAUDE_REVIEW_WARN_PATCH_CHARS": "100"}):
+            self.plan = build_plan(self.event, "100", "1", self.current, self.files)
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.local_context(directory)
+            with patch.dict(os.environ, env), patch("verify_claude_review.github_fetch", side_effect=self.fetch):
+                with patch("verify_claude_review.github_post", return_value={"html_url": "https://example.test/comment"}) as post:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(batch_command("publish"), 0)
+                    body = post.call_args.args[1]
+            self.assertIn("Size awareness: 505", body)
+            self.assertIn("notice is informational", body)
             self.assertIn("<!-- claude-review:abc123:100:1 -->", body)
 
     def test_missing_receipt_posts_incomplete_and_fails_without_a_success_marker(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.local_context(directory)
-            (Path(env["REVIEW_RESULT_DIR"]) / "result-6.json").unlink()
+            (Path(env["REVIEW_RESULT_DIR"]) / "result-2.json").unlink()
             with patch.dict(os.environ, env), patch("verify_claude_review.github_fetch", side_effect=self.fetch):
                 with patch("verify_claude_review.github_post", return_value={"html_url": "https://example.test/comment"}) as post:
                     with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(IncompleteReview):
                         batch_command("publish")
                     body = post.call_args.args[1]
-            self.assertIn("Incomplete: 30/31", body)
+            self.assertIn("Incomplete: 100/101", body)
             self.assertNotIn("<!-- claude-review:abc123", body)
 
     def test_stale_pr_is_not_published(self):

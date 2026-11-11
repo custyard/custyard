@@ -2,10 +2,10 @@ defmodule Custyard.AuditEvent.LegacyRedaction do
   @moduledoc false
 
   import Ecto.Query
-  alias Custyard.{AuditEvent, Conversation, EmailAddress, Repo}
+  alias Custyard.{AuditEvent, EmailAddress, Organization, Repo, Thread}
 
   # Contact erasure does not rewrite acknowledgment evidence or the history of
-  # operator-account actions. Their actor IDs remain evidence of those actions.
+  # staff-account actions. Their actor IDs remain evidence of those actions.
   @events [
     :webhook_received,
     :webhook_processed,
@@ -20,8 +20,8 @@ defmodule Custyard.AuditEvent.LegacyRedaction do
   @postgres? Application.compile_env(:custyard, :repo_adapter, Custyard.Repo.Adapter) ==
                Ecto.Adapters.Postgres
 
-  def redact(email, organization_id, owned_conversation_ids)
-      when is_binary(email) and is_integer(organization_id) and is_list(owned_conversation_ids) do
+  def redact(email, organization_id, owned_thread_ids)
+      when is_binary(email) and is_integer(organization_id) and is_list(owned_thread_ids) do
     email = validated_email!(email)
     pattern = mailbox_pattern(email)
 
@@ -29,7 +29,7 @@ defmodule Custyard.AuditEvent.LegacyRedaction do
     |> scoped_query()
     |> Repo.all()
     |> Enum.reduce([], fn event, ids ->
-      redact_event(event, email, pattern, owned_conversation_ids, ids)
+      redact_event(event, email, pattern, owned_thread_ids, ids)
     end)
     |> Enum.reverse()
   end
@@ -46,26 +46,33 @@ defmodule Custyard.AuditEvent.LegacyRedaction do
     email
   end
 
+  # The customer's tenant bounds the sweep explicitly; a row of another
+  # tenant is never read, whatever its organization or thread columns hold.
   defp scoped_query(organization_id) do
-    organization_conversations =
-      from(c in Conversation, where: c.organization_id == ^organization_id, select: c.id)
+    tenant_id =
+      Repo.one(from(o in Organization, where: o.id == ^organization_id, select: o.tenant_id)) ||
+        raise(ArgumentError, "audit redaction requires a tenant-owned organization")
+
+    organization_threads =
+      from(t in Thread, where: t.organization_id == ^organization_id, select: t.id)
 
     query =
       from(a in AuditEvent,
+        where: a.tenant_id == ^tenant_id,
         where: a.event_type in ^@events,
         where:
           a.organization_id == ^organization_id or
             (is_nil(a.organization_id) and
-               a.conversation_id in subquery(organization_conversations)),
+               a.thread_id in subquery(organization_threads)),
         order_by: [asc: a.id]
       )
 
     if @postgres?, do: lock(query, "FOR UPDATE"), else: query
   end
 
-  defp redact_event(event, email, pattern, owned_conversation_ids, ids) do
+  defp redact_event(event, email, pattern, owned_thread_ids, ids) do
     erase_content? =
-      event.conversation_id in owned_conversation_ids or subject_sender?(event.payload, email)
+      event.thread_id in owned_thread_ids or subject_sender?(event.payload, email)
 
     payload = redact_value(event.payload, email, pattern, erase_content?)
     message_id = redact_value(event.message_id, email, pattern, false)

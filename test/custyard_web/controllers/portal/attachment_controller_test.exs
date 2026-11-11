@@ -4,14 +4,15 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
   import Custyard.Factory
   import Phoenix.LiveViewTest
 
-  alias Custyard.Attachments
+  alias Custyard.{Attachments, PortalCredentials}
   alias Custyard.Attachments.StubClient
   alias Custyard.Repo
 
   setup do
-    org = insert_organization(custom_domain: "portal.acme.test")
-    conv = insert_conversation(organization_id: org.id)
-    message = insert_message(conversation_id: conv.id, body: "Invoice attached")
+    org = insert_organization()
+    {:ok, _} = Custyard.Tenants.add_host(org.tenant_id, "portal.acme.test")
+    conv = insert_thread(organization_id: org.id)
+    message = insert_message(thread_id: conv.id, body: "Invoice attached")
     %{org: org, conv: conv, attachment: fetched_attachment(message)}
   end
 
@@ -33,7 +34,7 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
       org: org,
       attachment: attachment
     } do
-      conn = get(conn, "/p/#{org.token}/attachments/#{attachment.id}")
+      conn = get(conn, "/portal/#{portal_token(org)}/attachments/#{attachment.id}")
 
       assert conn.status == 200
       assert conn.resp_body =~ "alert(1)"
@@ -44,11 +45,14 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
       assert get_resp_header(conn, "content-security-policy") == ["default-src 'none'; sandbox"]
     end
 
-    test "is reachable on the organization's custom domain", %{
+    test "is reachable on the tenant's registered custom domain", %{
       conn: conn,
-      attachment: attachment
+      attachment: attachment,
+      org: org
     } do
-      conn = %{conn | host: "portal.acme.test"} |> get("/attachments/#{attachment.id}")
+      conn =
+        %{conn | host: "portal.acme.test"}
+        |> get("/portal/#{portal_token(org)}/attachments/#{attachment.id}")
 
       assert conn.status == 200
       assert conn.resp_body =~ "alert(1)"
@@ -56,12 +60,38 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
 
     test "another organization's portal gets 404", %{conn: conn, attachment: attachment} do
       other = insert_organization()
-      assert get(conn, "/p/#{other.token}/attachments/#{attachment.id}").status == 404
+
+      assert get(conn, "/portal/#{portal_token(other)}/attachments/#{attachment.id}").status ==
+               404
+    end
+
+    test "revocation removes download access immediately", %{
+      conn: conn,
+      org: org,
+      attachment: attachment
+    } do
+      scope = portal_scope(org)
+      {:ok, credential, token} = PortalCredentials.issue(scope, org.id)
+      path = "/portal/#{token}/attachments/#{attachment.id}"
+      assert get(conn, path).status == 200
+      {:ok, _} = PortalCredentials.revoke(scope, credential)
+
+      assert get(conn, path).status == 404
+    end
+
+    test "a valid credential from another tenant cannot download on this host", %{
+      conn: conn,
+      attachment: attachment
+    } do
+      other = insert_organization(tenant_id: insert_tenant().id)
+
+      assert get(conn, "/portal/#{portal_token(other)}/attachments/#{attachment.id}").status ==
+               404
     end
 
     test "unknown and malformed ids are 404", %{conn: conn, org: org} do
-      assert get(conn, "/p/#{org.token}/attachments/999999").status == 404
-      assert get(conn, "/p/#{org.token}/attachments/not-an-id").status == 404
+      assert get(conn, "/portal/#{portal_token(org)}/attachments/999999").status == 404
+      assert get(conn, "/portal/#{portal_token(org)}/attachments/not-an-id").status == 404
     end
 
     test "the root path on the app host is 404", %{conn: conn, attachment: attachment} do
@@ -74,19 +104,19 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
       assert Attachments.get_for_portal(attachment.id, org.id).id == attachment.id
     end
 
-    test "refuses internal notes, deleted messages and suspect conversations", %{org: org} do
-      conv = insert_conversation(organization_id: org.id)
-      note = fetched_attachment(insert_message(conversation_id: conv.id, is_internal_note: true))
+    test "refuses internal notes, deleted messages and suspect threads", %{org: org} do
+      conv = insert_thread(organization_id: org.id)
+      note = fetched_attachment(insert_message(thread_id: conv.id, is_internal_note: true))
 
-      deleted_message = insert_message(conversation_id: conv.id)
+      deleted_message = insert_message(thread_id: conv.id)
       deleted = fetched_attachment(deleted_message)
 
       deleted_message
       |> Ecto.Changeset.change(deleted_at: DateTime.utc_now(:second))
       |> Repo.update!()
 
-      suspect_conv = insert_conversation(organization_id: org.id, suspect: true)
-      suspect = fetched_attachment(insert_message(conversation_id: suspect_conv.id))
+      suspect_conv = insert_thread(organization_id: org.id, suspect: true)
+      suspect = fetched_attachment(insert_message(thread_id: suspect_conv.id))
 
       for attachment <- [note, deleted, suspect] do
         assert Attachments.get_for_portal(attachment.id, org.id) == nil
@@ -94,7 +124,7 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
     end
 
     test "refuses an attachment that was not fetched", %{org: org, conv: conv} do
-      message = insert_message(conversation_id: conv.id)
+      message = insert_message(thread_id: conv.id)
 
       {:ok, [skipped]} =
         Attachments.fetch_for_message(
@@ -108,47 +138,70 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
   end
 
   describe "portal thread" do
+    test "lists quarantined files without providing a download link", %{
+      conn: conn,
+      org: org,
+      conv: conv,
+      attachment: attachment
+    } do
+      attachment
+      |> Ecto.Changeset.change(scan_status: :pending, scanned_at: nil)
+      |> Repo.update!()
+
+      token = portal_token(org)
+      {:ok, view, _} = live(conn, "/portal/#{token}/request/#{conv.id}")
+
+      assert render(view) =~ "Quarantined: awaiting security scan"
+      refute has_element?(view, "a[data-testid=portal-attachment-#{attachment.id}]")
+      assert get(conn, "/portal/#{token}/attachments/#{attachment.id}").status == 404
+    end
+
     test "links each downloadable attachment under its message", %{
       conn: conn,
       org: org,
       conv: conv,
       attachment: attachment
     } do
-      {:ok, view, _html} = live(conn, "/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, "/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert view
              |> element(~s([data-testid="portal-attachment-#{attachment.id}"]))
-             |> render() =~ ~s(href="/p/#{org.token}/attachments/#{attachment.id}")
+             |> render() =~ ~s(href="/portal/#{portal_token(org)}/attachments/#{attachment.id}")
     end
 
-    test "uses the un-prefixed path on a custom domain", %{
+    test "keeps the credential prefix on a tenant custom domain", %{
       conn: conn,
       conv: conv,
-      attachment: attachment
+      attachment: attachment,
+      org: org
     } do
-      {:ok, view, _html} = live(%{conn | host: "portal.acme.test"}, "/request/#{conv.id}")
+      {:ok, view, _html} =
+        live(
+          %{conn | host: "portal.acme.test"},
+          "/portal/#{portal_token(org)}/request/#{conv.id}"
+        )
 
       assert view
              |> element(~s([data-testid="portal-attachment-#{attachment.id}"]))
-             |> render() =~ ~s(href="/attachments/#{attachment.id}")
+             |> render() =~ ~s(href="/portal/#{portal_token(org)}/attachments/#{attachment.id}")
     end
 
     test "lists nothing under a deleted message", %{conn: conn, org: org, conv: conv} do
       Custyard.Message
-      |> Repo.get_by!(conversation_id: conv.id)
+      |> Repo.get_by!(thread_id: conv.id)
       |> Ecto.Changeset.change(deleted_at: DateTime.utc_now(:second))
       |> Repo.update!()
 
-      {:ok, view, _html} = live(conn, "/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, "/portal/#{portal_token(org)}/request/#{conv.id}")
 
       assert has_element?(view, ~s([data-testid="portal-message-tombstone"]))
       refute has_element?(view, ~s([data-testid="portal-message-attachments"]))
     end
 
-    test "lists nothing while the conversation is suspect", %{conn: conn, org: org, conv: conv} do
+    test "lists nothing while the thread is suspect", %{conn: conn, org: org, conv: conv} do
       conv |> Ecto.Changeset.change(suspect: true) |> Repo.update!()
 
-      {:ok, view, _html} = live(conn, "/p/#{org.token}/request/#{conv.id}")
+      {:ok, view, _html} = live(conn, "/portal/#{portal_token(org)}/request/#{conv.id}")
 
       refute has_element?(view, ~s([data-testid="portal-message-attachments"]))
     end

@@ -3,8 +3,11 @@ defmodule Custyard.Email.ImapPollTest do
   use Custyard.DataCase, async: true
 
   import Custyard.Factory
+  import ExUnit.CaptureLog
 
-  alias Custyard.{Conversation, InboundChannel, InboundChannelRejection, InboundChannels, Message}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  alias Custyard.{Thread, InboundChannel, InboundChannelRejection, InboundChannels, Message}
   alias Custyard.Email.{ImapPoll, ImapPollers, Parser}
   alias Custyard.Email.ImapClient.Stub
   alias Custyard.Webhooks.Adapters.Email, as: EmailAdapter
@@ -67,6 +70,159 @@ defmodule Custyard.Email.ImapPollTest do
 
   defp reload(channel), do: Repo.get!(InboundChannel, channel.id)
 
+  test "suspended tenant sessions do no network work or position/error writes", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    before_suspend = reload(channel)
+    before_calls = Stub.calls(host)
+    tenant = Repo.get!(Custyard.Tenant, channel.tenant_id)
+    tenant |> Ecto.Changeset.change(status: "suspended") |> Repo.update!()
+    other_tenant = insert_tenant()
+    forged_snapshot = %{channel | tenant_id: other_tenant.id, imap_uid_validity: nil}
+    Stub.put_message(host, 10, email(10))
+
+    assert {:error, :tenant_suspended} = ImapPoll.poll(forged_snapshot)
+    assert {:error, :tenant_suspended} = ImapPoll.establish(forged_snapshot)
+    assert Stub.calls(host) == before_calls
+    assert reload(channel) == before_suspend
+    refute ImapPollers.pollable?(forged_snapshot)
+    refute channel.id in ImapPollers.pollable_channel_ids()
+
+    Repo.reload!(tenant) |> Ecto.Changeset.change(status: "active") |> Repo.update!()
+    assert ImapPollers.pollable?(channel)
+    assert channel.id in ImapPollers.pollable_channel_ids()
+    assert {:ok, %{imported: 1}} = ImapPoll.poll(channel)
+    assert reload(channel).imap_last_uid == 10
+  end
+
+  test "suspending during login prevents baseline and failure-counter writes", %{
+    route: route,
+    host: host
+  } do
+    {:ok, channel} = create_imap(route, host)
+    before_session = reload(channel)
+    tenant = Repo.get!(Custyard.Tenant, channel.tenant_id)
+    Stub.put_message(host, 20, email(20))
+
+    Stub.update(
+      host,
+      &Map.put(&1, :on_login, fn ->
+        tenant |> Ecto.Changeset.change(status: "suspended") |> Repo.update!()
+      end)
+    )
+
+    assert {:error, "tenant_suspended"} = ImapPoll.establish(channel)
+    assert reload(channel) == before_session
+  end
+
+  test "suspending during an existing poll preserves its UID and error counters", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    before_poll = reload(channel)
+    tenant = Repo.get!(Custyard.Tenant, channel.tenant_id)
+    Stub.put_message(host, 30, email(30))
+
+    Stub.update(
+      host,
+      &Map.put(&1, :on_login, fn ->
+        tenant |> Ecto.Changeset.change(status: "suspended") |> Repo.update!()
+      end)
+    )
+
+    assert {:error, "tenant_suspended"} = ImapPoll.poll(channel)
+    assert reload(channel) == before_poll
+    refute {:list_after, 0} in Stub.calls(host)
+  end
+
+  test "suspension after the first fetch stops the batch and closes the session", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    before_poll = reload(channel)
+    tenant = Repo.get!(Custyard.Tenant, channel.tenant_id)
+    Stub.put_message(host, 1, email(1))
+    Stub.put_message(host, 2, email(2))
+
+    Stub.update(
+      host,
+      &Map.put(&1, :on_fetch, fn 1 ->
+        tenant |> Ecto.Changeset.change(status: "suspended") |> Repo.update!()
+      end)
+    )
+
+    assert {:error, "tenant_suspended"} = ImapPoll.poll(channel)
+    calls = Stub.calls(host)
+    assert {:fetch, 1} in calls
+    refute {:fetch, 2} in calls
+    assert List.last(calls) == :logout
+    assert reload(channel) == before_poll
+    assert Repo.aggregate(Thread, :count) == 0
+  end
+
+  test "terminating the caller cancels its live session and closes the connection", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    before_poll = reload(channel)
+    owner = self()
+    Stub.put_message(host, 1, email(1))
+    Stub.put_message(host, 2, email(2))
+
+    Stub.update(
+      host,
+      &Map.put(&1, :on_fetch, fn uid ->
+        send(owner, {:fetch_started, self(), uid})
+
+        receive do
+          :continue -> :ok
+        end
+      end)
+    )
+
+    caller =
+      spawn(fn ->
+        receive do
+          :poll -> ImapPoll.poll(channel)
+        end
+      end)
+
+    Sandbox.allow(Repo, self(), caller)
+    send(caller, :poll)
+    assert_receive {:fetch_started, worker, 1}
+    worker_ref = Process.monitor(worker)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}
+    send(worker, :continue)
+
+    # The guard's logout follows the worker termination asynchronously.
+    for _ <- 1..100, :logout != List.last(Stub.calls(host)), do: Process.sleep(5)
+    assert List.last(Stub.calls(host)) == :logout
+    refute {:fetch, 2} in Stub.calls(host)
+    assert reload(channel) == before_poll
+  end
+
+  test "a crashed session reports failure without crashing its caller", %{
+    route: route,
+    host: host
+  } do
+    channel = connected!(route, host)
+    Stub.put_message(host, 1, email(1))
+    Stub.update(host, &Map.put(&1, :on_fetch, fn _uid -> raise "session client crashed" end))
+
+    capture_log(fn ->
+      assert {:error, "session_crashed"} = ImapPoll.poll(channel)
+    end)
+
+    assert List.last(Stub.calls(host)) == :logout
+    assert reload(channel).imap_last_uid == 0
+  end
+
   describe "creating an IMAP channel" do
     test "stores the password only as ciphertext", %{route: route, host: host} do
       assert {:ok, channel} = create_imap(route, host)
@@ -121,7 +277,7 @@ defmodule Custyard.Email.ImapPollTest do
       assert channel.imap_last_uid == 9
       assert channel.imap_last_error == nil
       assert ImapPollers.pollable?(reload(channel))
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
     test "a rejected login is recorded and leaves the channel pending",
@@ -166,7 +322,7 @@ defmodule Custyard.Email.ImapPollTest do
       assert channel.imap_last_polled_at
 
       subjects =
-        from(c in Conversation, where: c.inbound_channel_id == ^channel.id, order_by: c.id)
+        from(c in Thread, where: c.inbound_channel_id == ^channel.id, order_by: c.id)
         |> Repo.all()
         |> Enum.map(& &1.subject)
 
@@ -358,7 +514,7 @@ defmodule Custyard.Email.ImapPollTest do
       assert [%{classification: :channel_paused}] =
                InboundChannels.list_rejections_for_route(route.id)
 
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
   end
 

@@ -2,8 +2,6 @@ defmodule Custyard.TenantMigrationTest do
   use ExUnit.Case, async: false
 
   @moduletag :tmp_dir
-  @baseline 20_261_025_000_000
-  @tables ~w(organizations operator_accounts contacts projects intake_sources inbound_routes inbound_route_webhooks inbound_channels conversations messages message_attachments tasks prospects inbound_channel_rejections)
 
   defmodule Repo do
     use Ecto.Repo, otp_app: :custyard, adapter: Custyard.Repo.Adapter
@@ -31,7 +29,7 @@ defmodule Custyard.TenantMigrationTest do
 
   for backend <- [:sqlite, :turso] do
     @tag backend: backend
-    test "#{backend}: seeded tenant upgrade and rollback preserve customer and public history",
+    test "#{backend}: fresh baseline enforces explicit tenant ownership without legacy organization settings",
          context do
       opts =
         case context.backend do
@@ -48,183 +46,169 @@ defmodule Custyard.TenantMigrationTest do
         end
 
       start_supervised!({Repo, [pool_size: 2, log: false] ++ opts})
-      Ecto.Migrator.run(Repo, context.migrations, :up, to: @baseline, log: false)
-      seed_history()
-      original = snapshot()
-      sequences = sequence_snapshot()
 
-      Ecto.Migrator.run(Repo, context.migrations, :up, all: true, log: false)
-      assert_original_history(original, sequences)
+      assert Ecto.Migrator.run(Repo, context.migrations, :up, all: true, log: false) ==
+               Enum.map(context.migrations, &elem(&1, 0))
+
+      assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
 
       for table <-
-            ~w(organizations conversations projects intake_sources inbound_routes inbound_channels inbound_channel_rejections) do
-        assert %{rows: [[1]]} = Repo.query!("SELECT DISTINCT tenant_id FROM #{table}")
-      end
-
-      assert %{rows: [[nil, 41]]} =
-               Repo.query!("SELECT tenant_id,organization_id FROM operator_accounts WHERE id=42")
-
-      Ecto.Migrator.run(Repo, context.migrations, :down, to_exclusive: @baseline, log: false)
-      assert_original_history(original, sequences)
-
-      %{rows: project_columns} = Repo.query!("PRAGMA table_info(projects)")
-      refute Enum.any?(project_columns, &(Enum.at(&1, 1) == "tenant_id"))
-
-      for table <- ~w(inbound_routes inbound_channels inbound_channel_rejections) do
+            ~w(organizations staff_accounts contacts projects intake_sources inbound_routes inbound_channels threads messages message_attachments tasks prospects portal_credentials) do
         %{rows: columns} = Repo.query!("PRAGMA table_info(#{table})")
-        organization = Enum.find(columns, &(Enum.at(&1, 1) == "organization_id"))
-        assert Enum.at(organization, 3) == 1
+        tenant = Enum.find(columns, &(Enum.at(&1, 1) == "tenant_id"))
+        assert tenant, "#{table} must have explicit tenant ownership"
+        assert Enum.at(tenant, 3) == 1
+        assert Enum.at(tenant, 4) == nil
       end
+
+      %{rows: org_columns} = Repo.query!("PRAGMA table_info(organizations)")
+      names = Enum.map(org_columns, &Enum.at(&1, 1))
+
+      for removed <-
+            ~w(token intake_key logo_url primary_color secondary_color custom_domain lettermint_project_id) do
+        refute removed in names
+      end
+
+      assert "identity_kind" in names
+      assert "identity_value" in names
+      assert "public_id" in names
+      %{rows: staff_columns} = Repo.query!("PRAGMA table_info(staff_accounts)")
+      refute Enum.any?(staff_columns, &(Enum.at(&1, 1) == "organization_id"))
+      assert %{rows: []} = Repo.query!("SELECT * FROM tenants")
+      assert %{rows: []} = Repo.query!("SELECT * FROM instance_admins")
     end
-  end
 
-  defp seed_history do
-    records = [
-      {"organizations",
-       %{id: 41, name: "Customer", domain: "fixture.example", token: "portal-token-preserved"}},
-      {"operator_accounts",
-       %{
-         id: 42,
-         email: "operator@fixture.example",
-         role: "admin",
-         organization_id: 41,
-         session_claim: "session-claim-preserved"
-       }},
-      {"contacts", %{id: 43, email: "alice@fixture.example", organization_id: 41}},
-      {"projects", %{id: 44, title: "Customer project", organization_id: 41}},
-      {"intake_sources", %{id: 45, key: "fixture-intake", name: "Public intake"}},
-      {"inbound_routes",
-       %{
-         id: 46,
-         organization_id: 41,
-         project_id: 44,
-         callback_token: "callback-preserved",
-         source: "lettermint"
-       }},
-      {"inbound_route_webhooks", %{id: 47, inbound_route_id: 46, purpose: "sender_matching"}},
-      {"inbound_channels",
-       %{
-         id: 48,
-         inbound_route_id: 46,
-         organization_id: 41,
-         public_address: "support@fixture.example",
-         ingress_local: "support",
-         ingress_token: "ingress-preserved",
-         state: "active"
-       }},
-      {"conversations",
-       %{
-         id: 49,
-         organization_id: 41,
-         contact_id: 43,
-         project_id: 44,
-         inbound_channel_id: 48,
-         subject: "Customer thread",
-         source: "lettermint"
-       }},
-      {"conversations",
-       %{
-         id: 50,
-         subject: "Public thread",
-         source: "public_intake",
-         intake_source_key: "fixture-intake"
-       }},
-      {"messages",
-       %{
-         id: 51,
-         conversation_id: 49,
-         source: "email",
-         body: "Customer body preserved",
-         inbound_channel_id: 48,
-         message_id: "<customer@fixture.example>"
-       }},
-      {"messages",
-       %{id: 52, conversation_id: 50, source: "prospect", body: "Public body preserved"}},
-      {"message_attachments",
-       %{
-         id: 53,
-         message_id: 51,
-         state: "fetched",
-         filename: "fixture.txt",
-         storage_path: "aa/fixture"
-       }},
-      {"tasks",
-       %{
-         id: 54,
-         conversation_id: 49,
-         project_id: 44,
-         organization_id: 41,
-         title: "Shared legacy task",
-         portal_visible: true
-       }},
-      {"tasks",
-       %{id: 55, conversation_id: 50, title: "Private legacy task", portal_visible: false}},
-      {"prospects",
-       %{
-         id: 56,
-         conversation_id: 50,
-         access_token_hash: "public-token-hash-preserved",
-         email: "prospect@fixture.example",
-         notify_on_reply: true
-       }},
-      {"inbound_channel_rejections",
-       %{
-         id: 57,
-         inbound_route_id: 46,
-         inbound_channel_id: 48,
-         organization_id: 41,
-         classification: "auto_response"
-       }}
-    ]
+    @tag backend: backend
+    test "#{backend}: message author migration preserves history and tenant boundaries",
+         context do
+      opts =
+        case context.backend do
+          :sqlite ->
+            [database: Path.join(context.tmp_dir, "authors.db")]
 
-    for {table, attrs} <- records do
-      %{rows: columns} = Repo.query!("PRAGMA table_info(#{table})")
-      fields = Enum.map(columns, &Enum.at(&1, 1))
+          :turso ->
+            server =
+              start_supervised!(
+                {Custyard.TursoTestServer, database: Path.join(context.tmp_dir, "authors.db")}
+              )
 
-      attrs =
-        Enum.reduce([:inserted_at, :updated_at], attrs, fn key, attrs ->
-          if Atom.to_string(key) in fields,
-            do: Map.put(attrs, key, "2026-10-26T12:00:00"),
-            else: attrs
-        end)
+            [turso_url: Custyard.TursoTestServer.url(server)]
+        end
 
-      {keys, values} = attrs |> Enum.sort() |> Enum.unzip()
-      placeholders = Enum.map_join(keys, ",", fn _ -> "?" end)
+      start_supervised!({Repo, [pool_size: 2, log: false] ++ opts})
+      Ecto.Migrator.run(Repo, context.migrations, :up, to: 20_261_029_010_000, log: false)
+
+      for id <- [1, 2] do
+        Repo.query!(
+          "INSERT INTO tenants (id, name, slug, inserted_at, updated_at) VALUES (?, 'Tenant', ?, '2026-10-29 00:00:00', '2026-10-29 00:00:00')",
+          [id, "tenant-#{id}"]
+        )
+
+        Repo.query!(
+          "INSERT INTO staff_accounts (id, tenant_id, email, inserted_at, updated_at) VALUES (?, ?, 'staff@example.com', '2026-10-29 00:00:00', '2026-10-29 00:00:00')",
+          [id, id]
+        )
+      end
 
       Repo.query!(
-        "INSERT INTO #{table} (#{Enum.join(keys, ",")}) VALUES (#{placeholders})",
-        values
+        "INSERT INTO threads (id, tenant_id, subject, inserted_at, updated_at) VALUES (1, 1, 'Historical thread', '2026-10-29 00:00:00', '2026-10-29 00:00:00')"
       )
+
+      Repo.query!(
+        "INSERT INTO messages (id, tenant_id, thread_id, source, body, inserted_at) VALUES (1, 1, 1, 'staff', 'Historical reply', '2026-10-29 00:00:00')"
+      )
+
+      assert [20_261_029_020_000] =
+               Ecto.Migrator.run(Repo, context.migrations, :up,
+                 to: 20_261_029_020_000,
+                 log: false
+               )
+
+      assert %{rows: [["Historical reply", nil]]} =
+               Repo.query!("SELECT body, author_staff_id FROM messages WHERE id = 1")
+
+      assert {:error, _} = Repo.query("UPDATE messages SET author_staff_id = 2 WHERE id = 1")
+      Repo.query!("UPDATE messages SET author_staff_id = 1 WHERE id = 1")
+      assert {:error, _} = Repo.query("UPDATE staff_accounts SET tenant_id = 2 WHERE id = 1")
+      Repo.query!("DELETE FROM staff_accounts WHERE id = 1")
+
+      assert %{rows: [["Historical reply", nil]]} =
+               Repo.query!("SELECT body, author_staff_id FROM messages WHERE id = 1")
+
+      assert [20_261_029_020_000] =
+               Ecto.Migrator.run(Repo, context.migrations, :down,
+                 to: 20_261_029_020_000,
+                 log: false
+               )
+
+      assert %{rows: [["Historical reply"]]} =
+               Repo.query!("SELECT body FROM messages WHERE id = 1")
+
+      assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
     end
 
-    # Deleted high IDs must remain unavailable after rebuilding a table.
-    for table <- ~w(inbound_routes inbound_channels inbound_channel_rejections tasks),
-        do: Repo.query!("UPDATE sqlite_sequence SET seq=999 WHERE name=?", [table])
-  end
+    @tag backend: backend
+    test "#{backend}: customer public IDs preserve existing records and relationships", context do
+      opts =
+        case context.backend do
+          :sqlite ->
+            [database: Path.join(context.tmp_dir, "upgrade.db")]
 
-  defp snapshot do
-    Map.new(@tables, fn table ->
-      %{columns: columns, rows: rows} = Repo.query!("SELECT * FROM #{table} ORDER BY id")
-      {table, Enum.map(rows, &Map.new(Enum.zip(columns, &1)))}
-    end)
-  end
+          :turso ->
+            server =
+              start_supervised!(
+                {Custyard.TursoTestServer, database: Path.join(context.tmp_dir, "upgrade.db")}
+              )
 
-  defp sequence_snapshot do
-    %{rows: rows} = Repo.query!("SELECT name,seq FROM sqlite_sequence")
-    rows |> Map.new(fn [name, seq] -> {name, seq} end) |> Map.take(@tables)
-  end
+            [turso_url: Custyard.TursoTestServer.url(server)]
+        end
 
-  defp assert_original_history(original, sequences) do
-    actual = snapshot()
+      start_supervised!({Repo, [pool_size: 2, log: false] ++ opts})
+      [{baseline, _} | _] = context.migrations
 
-    for table <- @tables do
-      assert length(actual[table]) == length(original[table]), "#{table} row count changed"
+      assert [^baseline] =
+               Ecto.Migrator.run(Repo, context.migrations, :up, to: baseline, log: false)
 
-      for {old, new} <- Enum.zip(original[table], actual[table]),
-          do: assert(Map.take(new, Map.keys(old)) == old, "#{table} original fields changed")
+      Repo.query!(
+        "INSERT INTO tenants (id, name, slug, inserted_at, updated_at) VALUES (1, 'Tenant', 'tenant', '2026-10-29 00:00:00', '2026-10-29 00:00:00')"
+      )
+
+      for id <- [1, 2] do
+        Repo.query!(
+          "INSERT INTO organizations (id, name, tenant_id, identity_value, inserted_at, updated_at) VALUES (?, 'Customer', 1, ?, '2026-10-29 00:00:00', '2026-10-29 00:00:00')",
+          [id, "customer-#{id}"]
+        )
+      end
+
+      Repo.query!(
+        "INSERT INTO contacts (id, organization_id, tenant_id, email, inserted_at, updated_at) VALUES (1, 1, 1, 'contact@example.com', '2026-10-29 00:00:00', '2026-10-29 00:00:00')"
+      )
+
+      Repo.query!(
+        "UPDATE organizations SET identity_kind = 'email', identity_value = 'contact@example.com' WHERE id = 1"
+      )
+
+      Ecto.Migrator.run(Repo, context.migrations, :up, all: true, log: false)
+
+      assert %{rows: [[1, first], [2, second]]} =
+               Repo.query!("SELECT id, public_id FROM organizations ORDER BY id")
+
+      assert {:ok, _} = Ecto.UUID.cast(first)
+      assert {:ok, _} = Ecto.UUID.cast(second)
+      assert first != second
+      assert %{rows: [[1, 1]]} = Repo.query!("SELECT id, organization_id FROM contacts")
+
+      assert %{rows: [[1, 1], [2, nil]]} =
+               Repo.query!("SELECT id, default_contact_id FROM organizations ORDER BY id")
+
+      assert {:error, _} =
+               Repo.query("UPDATE organizations SET default_contact_id = 1 WHERE id = 2")
+
+      assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
+      assert {:error, _} = Repo.query("UPDATE organizations SET public_id = NULL WHERE id = 1")
+
+      assert {:error, _} =
+               Repo.query("UPDATE organizations SET public_id = ? WHERE id = 2", [first])
     end
-
-    assert sequence_snapshot() == sequences
-    assert %{rows: []} = Repo.query!("PRAGMA foreign_key_check")
   end
 end

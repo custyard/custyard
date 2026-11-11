@@ -4,7 +4,7 @@ defmodule Custyard.Slug do
   organization-slug namespace.
 
   Lifecycle: `available → claimed (provisional) → confirmed → provisioned`,
-  where `available` means no row exists. Expiry and operator release DELETE
+  where `available` means no row exists. Expiry and staff release DELETE
   the row (no tombstones — a tombstone would block re-claim under the unique
   index). Promotion to `provisioned` arrives with prospect conversion
   (separate work); this module never builds provisioned rows.
@@ -14,7 +14,7 @@ defmodule Custyard.Slug do
   chars, lowercase alphanumerics, interior hyphens, no `xn--` punycode
   prefix). Reserved words live in code, not Settings — they encode router
   facts (every first path segment the application owns) and must not be
-  operator-mutable. `config :custyard, :additional_reserved_slugs` is the
+  staff-mutable. `config :custyard, :additional_reserved_slugs` is the
   deployment escape hatch.
   """
 
@@ -31,13 +31,13 @@ defmodule Custyard.Slug do
 
   # Reserved words are code, not settings: they encode router facts.
   # Covers every first path segment the application owns — router scopes
-  # (i, r, c, api, operator, p), endpoint paths (live, phoenix, dev,
+  # (i, r, c, api, staff, p), endpoint paths (live, phoenix, dev,
   # assets, fonts, images, uploads), the `_unmatched_` sentinel, and
   # infrastructure/mail names a slug-based host or address must never
   # shadow. Single-letter entries can never pass the 3-char format floor,
   # but stay listed so the intent survives a format change.
   @reserved_slugs ~w(
-    www mail api portal admin operator app assets static uploads webhook
+    www mail api portal admin staff app assets static uploads webhook
     webhooks login logout signup support help status docs blog p i r c
     claim intake resume confirm settings health smtp imap pop mx ns1 ns2
     ftp webmail email autodiscover autoconfig postmaster hostmaster abuse
@@ -46,6 +46,7 @@ defmodule Custyard.Slug do
   )
 
   schema "slugs" do
+    belongs_to :tenant, Custyard.Tenant
     field :slug, :string
     field :status, Ecto.Enum, values: @statuses, default: :claimed
     field :email, :string
@@ -53,7 +54,7 @@ defmodule Custyard.Slug do
     field :expires_at, :utc_datetime
     field :confirmed_at, :utc_datetime
 
-    belongs_to :conversation, Custyard.Conversation
+    belongs_to :thread, Custyard.Thread
     belongs_to :organization, Custyard.Organization
 
     timestamps(type: :utc_datetime)
@@ -86,10 +87,24 @@ defmodule Custyard.Slug do
   """
   def claim_changeset(slug, attrs) do
     slug
-    |> cast(attrs, [:slug, :email, :conversation_id, :expires_at, :confirmation_token_hash])
+    |> cast(attrs, [
+      :tenant_id,
+      :slug,
+      :email,
+      :thread_id,
+      :expires_at,
+      :confirmation_token_hash
+    ])
     |> normalize_slug()
     |> update_change(:email, &EmailAddress.normalize/1)
-    |> validate_required([:slug, :email, :conversation_id, :expires_at, :confirmation_token_hash])
+    |> validate_required([
+      :tenant_id,
+      :slug,
+      :email,
+      :thread_id,
+      :expires_at,
+      :confirmation_token_hash
+    ])
     |> validate_format(:slug, @slug_format,
       message: "must be 3-63 characters: lowercase letters, digits, and interior hyphens"
     )
@@ -97,10 +112,10 @@ defmodule Custyard.Slug do
     |> validate_exclusion(:slug, reserved_slugs(), message: "is reserved")
     |> validate_length(:email, max: 320, message: "must be at most 320 characters")
     |> EmailAddress.validate_email(:email)
-    |> unique_constraint(:slug, message: "is already claimed")
-    |> unique_constraint(:conversation_id, message: "already has a slug claim")
+    |> unique_constraint([:tenant_id, :slug], error_key: :slug, message: "is already claimed")
+    |> unique_constraint(:thread_id, message: "already has a slug claim")
     |> unique_constraint(:confirmation_token_hash)
-    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:thread_id)
   end
 
   # Downcase/trim BEFORE validation so "Acme " and "acme" are the same

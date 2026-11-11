@@ -1,0 +1,38 @@
+# Private ClamAV daemon. There must be no services or http_service section.
+app = "custyard-scanner"
+org = "custyard"
+primary_region = "ams"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+# Resolve and retain the immutable registry digest when deploying this release.
+image = "clamav/clamav@sha256:96ba6697d9a7479baff0a03dedceb96e8c18d28f180fb0ed0046f935e6b90382"
+
+[env]
+CLAMAV_NO_CLAMD = "false"
+CLAMAV_NO_FRESHCLAMD = "false"
+CLAMAV_NO_MILTERD = "true"
+CLAMD_STARTUP_TIMEOUT = "900"
+FRESHCLAM_CHECKS = "24"
+
+[[files]]
+guest_path = "/etc/clamav/clamd.conf"
+local_path = "ops/clamav/clamd.conf"
+
+[[mounts]]
+source = "clamav_signatures"
+destination = "/var/lib/clamav"
+
+[[vm]]
+cpu_kind = "shared"
+cpus = 2
+memory = "4gb"
+
+[checks]
+[checks.clamd]
+type = "tcp"
+port = 3310
+interval = "30s"
+timeout = "5s"
+grace_period = "10m"

@@ -1,7 +1,7 @@
 defmodule Custyard.Email.DeliveryStatus do
   @moduledoc """
   Applies Lettermint delivery lifecycle events to an outbound message
-  (spec-conversation-loop, "Delivery Tracking").
+  (spec-thread-loop, "Delivery Tracking").
 
   Lettermint sends one event per recipient and names it in `data.recipient`.
   Each recipient keeps its own latest status in `message_recipient_statuses`,
@@ -33,11 +33,11 @@ defmodule Custyard.Email.DeliveryStatus do
   and its status before and after. The payload deliberately omits recipient
   addresses, subjects, metadata, spam symbols and raw SMTP response text.
 
-  A recipient whose status becomes bounced or suppressed sends the operator a
+  A recipient whose status becomes bounced or suppressed sends the staff a
   notice, once per recipient, naming it and its role. A bounced or suppressed
-  recipient that is a contact of the conversation's organization is also
+  recipient that is a contact of the thread's organization is also
   flagged (`contacts.email_status`), and a later delivery to it clears the
-  flag (spec-conversation-loop, "Bounce and Suppression Handling"). The flag
+  flag (spec-thread-loop, "Bounce and Suppression Handling"). The flag
   follows the recipient, not the message, and applies even when nothing else
   changes, because an earlier recipient's event may already have set it.
   """
@@ -46,7 +46,7 @@ defmodule Custyard.Email.DeliveryStatus do
 
   require Custyard.Log, as: Log
 
-  alias Custyard.{AuditEvent, Contact, Conversation, Message, MessageRecipientStatus, Repo}
+  alias Custyard.{AuditEvent, Contact, Thread, Message, MessageRecipientStatus, Repo}
   alias Custyard.Email.Outbound
   alias Custyard.Notifications.Email, as: NotificationEmail
 
@@ -202,27 +202,21 @@ defmodule Custyard.Email.DeliveryStatus do
   # Outbound only: inbound messages have a nil delivery_status and must never
   # be touched, even when they carry the same provider id.
   defp find_message(provider_id, opts) do
-    query =
-      from(m in Message,
-        where: m.lettermint_message_id == ^provider_id and not is_nil(m.delivery_status),
-        limit: 1
-      )
+    case Keyword.fetch(opts, :tenant_id) do
+      {:ok, tenant_id} when is_integer(tenant_id) ->
+        Repo.one(
+          from m in Message,
+            where: m.tenant_id == ^tenant_id and m.lettermint_message_id == ^provider_id,
+            where: not is_nil(m.delivery_status),
+            limit: 1
+        )
+        |> case do
+          nil -> {:ignored, :unknown_message}
+          message -> {:ok, message}
+        end
 
-    query =
-      case Keyword.get(opts, :tenant_id) do
-        nil ->
-          query
-
-        tenant_id ->
-          from(m in query,
-            join: c in assoc(m, :conversation),
-            where: c.tenant_id == ^tenant_id
-          )
-      end
-
-    case Repo.one(query) do
-      nil -> {:ignored, :unknown_message}
-      message -> {:ok, message}
+      _ ->
+        {:ignored, :tenant_required}
     end
   end
 
@@ -279,7 +273,7 @@ defmodule Custyard.Email.DeliveryStatus do
   # one transaction, so a change is never recorded without its history entry.
   # Each write is conditional on the state we read; a loser sees 0 rows and
   # `apply_status/3` re-evaluates the event. The LiveView nudge and the
-  # operator notice go out only after commit.
+  # staff notice go out only after commit.
   defp transition(%Message{} = message, plan, incoming) do
     message
     |> transition_transaction(plan, incoming)
@@ -360,17 +354,18 @@ defmodule Custyard.Email.DeliveryStatus do
   end
 
   defp record_audit(%Message{} = message, from_status, recipient, incoming) do
-    %Message{conversation: conversation} = Repo.preload(message, :conversation)
+    %Message{thread: thread} = Repo.preload(message, :thread)
     data = incoming.data
     response = map_or_empty(data["response"])
     recipient = recipient || %{role: nil, from: nil, to: nil}
 
     attrs = %{
+      tenant_id: message.tenant_id,
       event_type: :delivery_status_updated,
       source: @source,
       message_id: message.message_id,
-      conversation_id: message.conversation_id,
-      organization_id: conversation && conversation.organization_id,
+      thread_id: message.thread_id,
+      organization_id: thread && thread.organization_id,
       payload: %{
         "event" => incoming.event,
         "delivery_id" => scalar(incoming.delivery_id),
@@ -426,8 +421,8 @@ defmodule Custyard.Email.DeliveryStatus do
     :ok
   end
 
-  defp message_organization(%Message{conversation_id: conversation_id}) do
-    from(c in Conversation, where: c.id == ^conversation_id, select: c.organization_id)
+  defp message_organization(%Message{thread_id: thread_id}) do
+    from(c in Thread, where: c.id == ^thread_id, select: c.organization_id)
     |> Repo.one()
   end
 
@@ -454,7 +449,7 @@ defmodule Custyard.Email.DeliveryStatus do
   # --- After commit ---
 
   defp after_commit(%Message{} = message, recipient, incoming) do
-    notify_operator(message, recipient, incoming)
+    notify_staff(message, recipient, incoming)
     Outbound.broadcast_delivery_update(message)
   end
 
@@ -464,23 +459,23 @@ defmodule Custyard.Email.DeliveryStatus do
   # committed, and a retried event would not advance. The notifier logs an
   # error result; a raise is logged here by type only, since its message may
   # name the recipient.
-  defp notify_operator(%Message{} = message, %{to: status, role: role}, incoming)
+  defp notify_staff(%Message{} = message, %{to: status, role: role}, incoming)
        when status in @notified_statuses do
     send_notice(message, status, incoming.recipient, role)
   end
 
-  defp notify_operator(%Message{delivery_status: status} = message, nil, %{recipient: nil})
+  defp notify_staff(%Message{delivery_status: status} = message, nil, %{recipient: nil})
        when status in @notified_statuses do
     send_notice(message, status, nil, :to)
   end
 
-  defp notify_operator(_message, _recipient, _incoming), do: :ok
+  defp notify_staff(_message, _recipient, _incoming), do: :ok
 
   defp send_notice(%Message{} = message, status, recipient, role) do
-    %Message{conversation: conversation} =
-      Repo.preload(message, conversation: [:organization, :contact])
+    %Message{thread: thread} =
+      Repo.preload(message, thread: [:organization, :contact])
 
-    NotificationEmail.deliver_delivery_failure(conversation, status, recipient, role)
+    NotificationEmail.deliver_delivery_failure(thread, status, recipient, role)
   rescue
     exception ->
       Log.error(

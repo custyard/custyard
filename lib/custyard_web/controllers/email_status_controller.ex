@@ -3,14 +3,10 @@ defmodule CustyardWeb.EmailStatusController do
   Delivery-status webhook for outbound replies, separate from the inbound
   message pipeline (`WebhookController`).
 
-  Each Lettermint webhook has its own signing secret. Tenant callback URLs
-  use the encrypted secret saved by Email setup, separately from the inbound
-  route secret. Until binding succeeds, these URLs deliberately return 401;
-  turning off provider Basic Auth does not bypass signature verification.
-
-  The legacy URL uses `:webhook_secrets[:lettermint_status]`. Missing legacy
-  configuration is allowed with a warning in dev/test and fails closed in
-  production.
+  Each callback uses the encrypted secret stored on its tenant email connection.
+  Until binding succeeds, callbacks return 401. Provider Basic Auth does not
+  replace webhook signatures. Previous sends can receive status updates while
+  a tenant is suspended; new inbound and outbound work is blocked.
 
   Responses never echo payload fields other than the event name's outcome.
   """
@@ -37,29 +33,11 @@ defmodule CustyardWeb.EmailStatusController do
     end
   end
 
-  def lettermint(conn, params) do
-    case verify(conn) do
-      :ok ->
-        if Custyard.EmailSetup.legacy_status_allowed?(params),
-          do: handle_event(conn, params),
-          else: json(conn, %{status: "ignored", reason: "unknown_message"})
-
-      {:error, reason} ->
-        Log.warning(:email_status_auth_rejected, Log.failure(reason))
-
-        conn |> put_status(401) |> json(%{status: "error", reason: "unauthorized"})
-    end
-  end
-
   defp handle_event(conn, %{"sandbox" => true}),
     do: json(conn, %{status: "ignored", reason: "sandbox"})
 
   defp handle_event(conn, %{"event" => event} = params) when is_binary(event) do
-    tenant_id =
-      case conn.assigns[:email_connection] do
-        %{tenant_id: tenant_id} -> tenant_id
-        nil -> Custyard.Tenants.default_tenant().id
-      end
+    tenant_id = conn.assigns.email_connection.tenant_id
 
     case DeliveryStatus.apply_event(params, tenant_id: tenant_id) do
       {:ok, :updated, message} ->
@@ -85,37 +63,12 @@ defmodule CustyardWeb.EmailStatusController do
     conn |> put_status(422) |> json(%{status: "error", reason: "invalid payload"})
   end
 
-  defp verify(conn) do
-    case status_secret() do
-      nil -> verify_without_secret()
-      secret -> verify_with_secret(conn, secret)
-    end
-  end
-
-  defp verify_without_secret do
-    if Application.get_env(:custyard, :env, :prod) in [:dev, :test] do
-      Log.warning(:email_status_verification_skipped, reason: :not_configured)
-
-      :ok
-    else
-      Log.error(:email_status_secret_missing)
-      {:error, "unauthorized"}
-    end
-  end
-
   defp verify_with_secret(conn, secret) do
     signature = conn |> get_req_header("x-lettermint-signature") |> List.first()
 
     case conn.private[:raw_body] do
       nil -> {:error, "missing raw body"}
       raw_body -> Lettermint.verify_request(raw_body, nil, signature, secret)
-    end
-  end
-
-  defp status_secret do
-    case Application.get_env(:custyard, :webhook_secrets, %{}) do
-      %{lettermint_status: secret} when is_binary(secret) and secret != "" -> secret
-      _ -> nil
     end
   end
 end

@@ -2,7 +2,7 @@ defmodule CustyardWeb.Plugs.NoReferrer do
   @moduledoc """
   Sends `Referrer-Policy: no-referrer` on public intake surfaces.
 
-  The conversation URL and the slug-claim confirmation URL are bearer credentials
+  The thread URL and the slug-claim confirmation URL are bearer credentials
   carried in the path: they must never leak to third parties through the
   `Referer` header when a prospect follows an outbound link.
 

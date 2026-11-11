@@ -10,7 +10,7 @@ defmodule Custyard.Email.ImapClient.Stub do
   (`%{uid => raw}`), `sizes` (`%{uid => bytes}`, overriding the listed
   size), `connect_error`, `fetch_error` (`%{uid => reason}`), `on_login`
   (a zero-arity function run during login, to change state mid-session),
-  and `calls`, the operations in order, for asserting that polling never
+  `on_fetch` (a function receiving the UID during fetch), and `calls`, the operations in order, for asserting that polling never
   changes the mailbox.
   """
 
@@ -112,6 +112,7 @@ defmodule Custyard.Email.ImapClient.Stub do
   def fetch_message(host, uid) do
     record(host, {:fetch, uid})
     state = get(host)
+    if callback = Map.get(state, :on_fetch), do: callback.(uid)
 
     case {Map.fetch(state.fetch_error, uid), Map.fetch(state.messages, uid)} do
       {{:ok, reason}, _message} -> {:error, reason}

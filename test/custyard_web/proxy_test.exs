@@ -30,7 +30,7 @@ defmodule CustyardWeb.ProxyTest do
           "/favicon.ico",
           "/live/websocket?vsn=2.0.0",
           "/live/longpoll?vsn=2.0.0",
-          "/operator/login"
+          "/app/login"
         ] do
       result = Endpoint.call(conn(:get, path), Endpoint.init([]))
       assert result.status == 403
@@ -40,7 +40,7 @@ defmodule CustyardWeb.ProxyTest do
   end
 
   test "missing, wrong, duplicate, and misconfigured origin secrets fail closed" do
-    request = conn(:get, "/operator/login")
+    request = conn(:get, "/app/login")
 
     for headers <- [
           [],
@@ -78,7 +78,7 @@ defmodule CustyardWeb.ProxyTest do
 
   test "authenticated Bunny request trusts scheme, keeps visitor Host, and drops secrets/Fly headers" do
     result =
-      conn(:get, "http://tenant.example/operator/login")
+      conn(:get, "http://tenant.example/app/login")
       |> put_req_header("x-custyard-origin", @secret)
       |> put_req_header("fly-client-ip", "1.2.3.4")
       |> put_req_header("x-forwarded-proto", "https")
@@ -105,13 +105,13 @@ defmodule CustyardWeb.ProxyTest do
 
   test "none provider ignores forwarded scheme and production redirects to visitor host" do
     result =
-      conn(:get, "http://tenant.example/p/opaque-token")
+      conn(:get, "http://tenant.example/portal/opaque-token")
       |> put_req_header("x-forwarded-proto", "https")
       |> put_req_header("x-forwarded-host", "spoofed.example")
       |> Proxy.call(provider: :none, https_required: true)
 
     assert result.status == 301
-    assert get_resp_header(result, "location") == ["https://tenant.example/p/opaque-token"]
+    assert get_resp_header(result, "location") == ["https://tenant.example/portal/opaque-token"]
   end
 
   test "deployment HTTPS requirement is independent of mutable application environment" do

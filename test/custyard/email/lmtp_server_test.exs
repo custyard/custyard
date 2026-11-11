@@ -40,9 +40,23 @@ defmodule Custyard.Email.LMTPServerTest do
 
     # Create organizations for test domains so recipient validation passes
     test_org = insert_organization(domain: "custyard.test")
-    example_org = insert_organization(domain: "example.com")
+    other_tenant = insert_tenant()
+    example_org = insert_organization(tenant_id: other_tenant.id, domain: "example.com")
+    receiving_channels(test_org, ["support@custyard.test", "team@custyard.test"])
+    receiving_channels(example_org, ["support@example.com", "alice@example.com"])
 
     {:ok, test_org: test_org, example_org: example_org}
+  end
+
+  defp receiving_channels(org, addresses) do
+    Enum.each(addresses, fn address ->
+      insert_inbound_channel(
+        tenant_id: org.tenant_id,
+        default_organization_id: org.id,
+        public_address: address,
+        state: :active
+      )
+    end)
   end
 
   # Sample email for testing - must use CRLF line endings for SMTP/LMTP
@@ -145,20 +159,41 @@ defmodule Custyard.Email.LMTPServerTest do
     end
   end
 
-  test "legacy recipient routing rejects the same customer domain in multiple tenants", c do
-    tenant =
-      Repo.insert!(%Custyard.Tenant{
-        name: "Another LMTP tenant",
-        slug: "lmtp-#{System.unique_integer([:positive])}"
-      })
-
+  test "customer domains never select the receiving tenant", c do
+    tenant = insert_tenant()
     insert_organization(tenant_id: tenant.id, domain: c.test_org.domain)
-    state = %{to: [], organization: nil, from: "sender@external.example", max_recipients: 100}
+    state = %{to: [], channel: nil, from: "sender@external.example", max_recipients: 100}
+    assert {:ok, updated} = LMTPServer.handle_RCPT("support@#{c.test_org.domain}", state)
+    assert updated.channel.tenant_id == c.test_org.tenant_id
+    assert Repo.aggregate(Custyard.Thread, :count) == 0
+  end
+
+  test "a second same-tenant channel is deferred without changing the first envelope" do
+    state = %{to: [], channel: nil, from: "sender@external.example", max_recipients: 100}
+    assert {:ok, first} = LMTPServer.handle_RCPT("support@custyard.test", state)
+
+    assert {:error, "451 4.5.3 Deliver different receiving channels in separate transactions",
+            ^first} =
+             LMTPServer.handle_RCPT("team@custyard.test", first)
+
+    assert {:ok, same} = LMTPServer.handle_RCPT("support@custyard.test", first)
+    assert same.channel.id == first.channel.id
+    assert length(same.to) == 2
+  end
+
+  test "suspended tenant recipients are refused and audited", c do
+    Repo.get!(Custyard.Tenant, c.test_org.tenant_id)
+    |> Ecto.Changeset.change(status: "suspended")
+    |> Repo.update!()
+
+    state = %{to: [], channel: nil, from: "sender@external.example", max_recipients: 100}
 
     assert {:error, "550 5.1.1 Unknown recipient domain", ^state} =
-             LMTPServer.handle_RCPT("support@#{c.test_org.domain}", state)
+             LMTPServer.handle_RCPT("support@custyard.test", state)
 
-    assert Repo.aggregate(Custyard.Conversation, :count) == 0
+    event = Repo.get_by!(Custyard.AuditEvent, tenant_id: c.test_org.tenant_id, source: "lmtp")
+    assert event.payload["reason"] == "tenant_suspended"
+    assert Repo.aggregate(Custyard.Message, :count) == 0
   end
 
   describe "LMTP connection handling" do
@@ -327,7 +362,7 @@ defmodule Custyard.Email.LMTPServerTest do
       :gen_tcp.close(socket)
     end
 
-    test "creates conversation from processed email", %{recipient_org: recipient_org} do
+    test "creates thread from processed email", %{recipient_org: recipient_org} do
       {:ok, socket} =
         :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
 
@@ -350,13 +385,13 @@ defmodule Custyard.Email.LMTPServerTest do
 
       :gen_tcp.close(socket)
 
-      # Conversation is created under the recipient's org (resolved from RCPT TO domain),
+      # Thread is created under the recipient's org (resolved from RCPT TO domain),
       # not the sender's org. This is the correct behavior — the inbound route belongs
       # to the org that owns the recipient domain.
-      conversations = Custyard.Conversations.list_for_organization(recipient_org.id)
-      assert conversations != []
+      threads = Custyard.Threads.list_for_organization(recipient_org.id)
+      assert threads != []
 
-      [conv | _] = conversations
+      [conv | _] = threads
       assert conv.subject == "Test email"
     end
   end
@@ -485,12 +520,12 @@ defmodule Custyard.Email.LMTPServerTest do
       {:ok, rcpt2_resp} = :gen_tcp.recv(socket, 0, 5000)
 
       assert rcpt2_resp =~ "550"
-      assert rcpt2_resp =~ "same organization"
+      assert rcpt2_resp =~ "same tenant"
 
       :gen_tcp.close(socket)
     end
 
-    test "accepts multiple RCPT TO addresses within the same organization" do
+    test "defers a different same-tenant channel for its own transaction" do
       {:ok, socket} =
         :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
 
@@ -502,14 +537,15 @@ defmodule Custyard.Email.LMTPServerTest do
       :ok = :gen_tcp.send(socket, "MAIL FROM:<sender@external.com>\r\n")
       {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
 
-      # Both recipients belong to custyard.test org — should both succeed
+      # Same-tenant channels need separate dispatcher transactions
       :ok = :gen_tcp.send(socket, "RCPT TO:<support@custyard.test>\r\n")
       {:ok, rcpt1_resp} = :gen_tcp.recv(socket, 0, 5000)
       assert rcpt1_resp =~ "250"
 
       :ok = :gen_tcp.send(socket, "RCPT TO:<team@custyard.test>\r\n")
       {:ok, rcpt2_resp} = :gen_tcp.recv(socket, 0, 5000)
-      assert rcpt2_resp =~ "250"
+      assert rcpt2_resp =~ "451"
+      assert rcpt2_resp =~ "separate transactions"
 
       :gen_tcp.close(socket)
     end
@@ -603,10 +639,10 @@ defmodule Custyard.Email.LMTPServerTest do
       send_email_via_socket(socket2, "alice@example.com", "Second message via LMTP")
       :gen_tcp.close(socket2)
 
-      # Conversations are created under the recipient's org (custyard.test),
+      # Threads are created under the recipient's org (custyard.test),
       # not the sender's org, because the inbound route resolves from RCPT TO domain.
-      conversations = Custyard.Conversations.list_for_organization(recipient_org.id)
-      assert Enum.count(conversations) >= 2
+      threads = Custyard.Threads.list_for_organization(recipient_org.id)
+      assert Enum.count(threads) >= 2
     end
 
     defp send_email_via_socket(socket, from, subject) do
@@ -1585,7 +1621,7 @@ defmodule Custyard.Email.LMTPServerTest do
 
       # First 3 recipients should succeed
       for i <- 1..3 do
-        :ok = :gen_tcp.send(socket, "RCPT TO:<recipient#{i}@example.com>\r\n")
+        :ok = :gen_tcp.send(socket, "RCPT TO:<support+recipient#{i}@example.com>\r\n")
         {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
         assert response =~ "250", "Expected 250 OK for recipient #{i}"
       end
@@ -1609,16 +1645,16 @@ defmodule Custyard.Email.LMTPServerTest do
       {:ok, _} = :gen_tcp.recv(socket, 0, 5000)
 
       # First 2 recipients should succeed
-      :ok = :gen_tcp.send(socket, "RCPT TO:<recipient1@example.com>\r\n")
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support+recipient1@example.com>\r\n")
       {:ok, response1} = :gen_tcp.recv(socket, 0, 5000)
       assert response1 =~ "250"
 
-      :ok = :gen_tcp.send(socket, "RCPT TO:<recipient2@example.com>\r\n")
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support+recipient2@example.com>\r\n")
       {:ok, response2} = :gen_tcp.recv(socket, 0, 5000)
       assert response2 =~ "250"
 
       # Third recipient should fail with 452
-      :ok = :gen_tcp.send(socket, "RCPT TO:<recipient3@example.com>\r\n")
+      :ok = :gen_tcp.send(socket, "RCPT TO:<support+recipient3@example.com>\r\n")
       {:ok, response3} = :gen_tcp.recv(socket, 0, 5000)
       assert response3 =~ "452"
       assert response3 =~ "Too many recipients"
@@ -1643,7 +1679,7 @@ defmodule Custyard.Email.LMTPServerTest do
 
       # Should accept many recipients
       for i <- 1..20 do
-        :ok = :gen_tcp.send(socket, "RCPT TO:<recipient#{i}@example.com>\r\n")
+        :ok = :gen_tcp.send(socket, "RCPT TO:<support+recipient#{i}@example.com>\r\n")
         {:ok, response} = :gen_tcp.recv(socket, 0, 5000)
         assert response =~ "250", "Expected 250 OK for recipient #{i}"
       end
@@ -1677,6 +1713,7 @@ defmodule Custyard.Email.LMTPServerTest do
 
     setup do
       org = insert_organization(domain: "large-test.com")
+      receiving_channels(org, ["support@large-test.com"])
       _contact = insert_contact(organization_id: org.id, email: "alice@large-test.com")
       {:ok, org: org}
     end
@@ -2039,9 +2076,7 @@ defmodule Custyard.Email.LMTPServerTest do
       LMTPServer.stop(pid)
     end
 
-    @tag :skip
     test "SIZE not advertised when max_message_size is infinity" do
-      # Skip: gen_smtp callback options don't pass :infinity through correctly
       {:ok, pid} =
         LMTPServer.start_link(
           port: @test_port,
@@ -2126,9 +2161,16 @@ defmodule Custyard.Email.LMTPServerTest do
 
       # Create organizations with known domains
       org1 = insert_organization(domain: "acme.example.com")
+      other_tenant = insert_tenant()
+      org2 = insert_organization(tenant_id: other_tenant.id, domain: "widgets.example.com")
 
-      org2 =
-        insert_organization(domain: "widgets.example.com", custom_domain: "support.widgets.com")
+      receiving_channels(org1, [
+        "support@acme.example.com",
+        "user@acme.example.com",
+        "user1@acme.example.com"
+      ])
+
+      receiving_channels(org2, ["help@support.widgets.com", "user2@widgets.example.com"])
 
       on_exit(fn -> LMTPServer.stop(pid) end)
       {:ok, server: pid, org1: org1, org2: org2}
@@ -2244,7 +2286,7 @@ defmodule Custyard.Email.LMTPServerTest do
     test "rejects second recipient when on a different organization's domain",
          %{org1: _org1, org2: _org2} do
       # Multi-RCPT across orgs is now rejected: all recipients in an LMTP
-      # session must belong to the same organization.
+      # session must belong to the same tenant.
       {:ok, socket} =
         :gen_tcp.connect(~c"localhost", @test_port, [:binary, active: false], 5000)
 
@@ -2265,7 +2307,7 @@ defmodule Custyard.Email.LMTPServerTest do
       :ok = :gen_tcp.send(socket, "RCPT TO:<user2@widgets.example.com>\r\n")
       {:ok, rcpt_resp2} = :gen_tcp.recv(socket, 0, 5000)
       assert rcpt_resp2 =~ "550"
-      assert rcpt_resp2 =~ "same organization"
+      assert rcpt_resp2 =~ "same tenant"
 
       :gen_tcp.close(socket)
     end
@@ -2361,7 +2403,7 @@ defmodule Custyard.Email.LMTPServerTest do
     test "DATA is answered once per recipient (RFC 2033)" do
       socket = open_session()
 
-      replies = deliver(socket, ["support@custyard.test", "team@custyard.test"])
+      replies = deliver(socket, ["support@custyard.test", "support@custyard.test"])
 
       assert length(replies) == 2
       assert Enum.all?(replies, &(&1 =~ ~r/^250 2\.0\.0/))
