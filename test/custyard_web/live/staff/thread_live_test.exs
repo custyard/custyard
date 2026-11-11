@@ -1704,7 +1704,11 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
                "Alice <alice@acme.com>"
              )
 
-      assert has_element?(view, "header [data-testid=staff-thread-back][href='/app']")
+      assert has_element?(
+               view,
+               "header [data-testid=staff-thread-back][href='/app?at=#{conv.id}']"
+             )
+
       assert has_element?(view, "header [data-testid=staff-state-badge-active]")
     end
 
@@ -1968,6 +1972,227 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert has_element?(view, "#staff-note-form textarea[rows='3'][phx-hook=ComposerInput]")
       assert has_element?(view, "[data-testid=staff-note-submit]", "Save internal note")
       refute has_element?(view, "[data-testid=staff-reply-submit]")
+    end
+  end
+
+  describe "stepping through the queue" do
+    setup do
+      org = insert_organization()
+
+      # Queue order is score first, so these list as a, b, c.
+      [a, b, c] =
+        for {subject, score} <- [{"Thread A", 90}, {"Thread B", 60}, {"Thread C", 30}] do
+          thread =
+            insert_thread(
+              organization_id: org.id,
+              state: :active,
+              subject: subject,
+              cached_score: score
+            )
+
+          insert_message(thread_id: thread.id, body: "Question about #{subject}")
+          thread
+        end
+
+      %{org: org, a: a, b: b, c: c}
+    end
+
+    test "previous and next follow the queue order", %{conn: conn, a: a, b: b, c: c} do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{b.id}?pos=1")
+      nav = "header nav[data-testid=staff-thread-queue-nav]"
+
+      assert has_element?(view, "#{nav} [data-testid=staff-thread-queue-position]", "2 of 3")
+
+      assert has_element?(
+               view,
+               "#{nav} a[data-testid=staff-thread-prev][data-shortcut=k][href='/app/threads/#{a.id}?pos=0']",
+               "Previous"
+             )
+
+      assert has_element?(
+               view,
+               "#{nav} a[data-testid=staff-thread-next][data-shortcut=j][href='/app/threads/#{c.id}?pos=2']",
+               "Next"
+             )
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-back][data-shortcut=u][href='/app?at=#{b.id}'][title='Back to the queue (u)']"
+             )
+
+      assert has_element?(view, "header#thread-header[phx-hook=Shortcuts]")
+    end
+
+    test "the ends of the queue have no link in that direction", %{conn: conn, a: a, b: b, c: c} do
+      {:ok, first, _html} = live(conn, ~p"/app/threads/#{a.id}")
+      refute has_element?(first, "[data-testid=staff-thread-prev]")
+      assert has_element?(first, "[data-testid=staff-thread-prev-none][aria-disabled=true]")
+
+      assert has_element?(
+               first,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{b.id}?pos=1']"
+             )
+
+      {:ok, last, _html} = live(conn, ~p"/app/threads/#{c.id}")
+
+      assert has_element?(
+               last,
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=1']"
+             )
+
+      assert has_element?(last, "[data-testid=staff-thread-next-none][aria-disabled=true]")
+    end
+
+    test "follows the filter and label the conversation was opened from", %{
+      conn: conn,
+      staff: staff,
+      a: a,
+      b: b,
+      c: c
+    } do
+      # b has been answered, so the needs-reply queue is a, c.
+      insert_message(thread_id: b.id, source: :staff, body: "Answered")
+
+      scope = Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+      {:ok, label} = Custyard.Labels.create_and_assign(scope, a, "Billing")
+      {:ok, _} = Custyard.Labels.assign(scope, c, label.id)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/app/threads/#{a.id}?filter=needs_reply&label=#{label.id}&pos=0")
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "needs reply")
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "1 of 2")
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=needs_reply&label=#{label.id}&pos=1']"
+             )
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-back][href='/app?filter=needs_reply&label=#{label.id}&at=#{a.id}']"
+             )
+    end
+
+    test "keeps the place in the queue after a reply takes the conversation out of it", %{
+      conn: conn,
+      a: a,
+      b: b,
+      c: c
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{b.id}?filter=needs_reply&pos=1")
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 3")
+
+      view |> form("#staff-reply-form", body: "Here is the answer") |> render_submit()
+
+      # b no longer needs a reply. c moved up into its place, a is still before it.
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 2")
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?filter=needs_reply&pos=0']"
+             )
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=needs_reply&pos=1']"
+             )
+    end
+
+    test "opening a new conversation from the new filter still offers the one after it", %{
+      conn: conn,
+      org: org
+    } do
+      [first, second, third] =
+        for score <- [80, 70, 65] do
+          insert_thread(organization_id: org.id, state: :new, cached_score: score)
+        end
+
+      # Opening `second` makes it active, so it is gone from the "new" queue
+      # by the time the page renders; the row's position stands in for it.
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{second.id}?filter=new&pos=1")
+      assert Repo.get!(Custyard.Thread, second.id).state == :active
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{first.id}?filter=new&pos=0']"
+             )
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{third.id}?filter=new&pos=1']"
+             )
+    end
+
+    test "opening a conversation that sinks in the queue keeps the place it was opened at", %{
+      conn: conn,
+      org: org,
+      a: a
+    } do
+      # A new thread ranked just under A. Opening it makes it active and
+      # resets its idle time, so its recalculated score drops below B and C.
+      fresh = insert_thread(organization_id: org.id, state: :new, cached_score: 85)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{fresh.id}?pos=1")
+
+      order = Threads.queue_ids(Custyard.Factory.staff_scope(fresh.tenant_id))
+      assert List.last(order) == fresh.id, "the opened thread sank to the end of the queue"
+      [^a, after_fresh | _] = Enum.map(order, &Repo.get!(Custyard.Thread, &1))
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 4")
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0']"
+             )
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{after_fresh.id}?pos=1']"
+             )
+    end
+
+    test "shows no queue controls for a conversation that is not in the queue", %{
+      conn: conn,
+      org: org
+    } do
+      resolved = insert_thread(organization_id: org.id, state: :resolved)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{resolved.id}")
+
+      refute has_element?(view, "[data-testid=staff-thread-queue-nav]")
+      assert has_element?(view, "a[data-testid=staff-thread-back][href='/app?at=#{resolved.id}']")
+    end
+
+    test "ignores unknown filters and malformed positions", %{conn: conn, a: a, b: b} do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{a.id}?filter=everything&label=x&pos=-4")
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "1 of 3")
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{b.id}?pos=1']"
+             )
+
+      assert has_element?(view, "a[data-testid=staff-thread-back][href='/app?at=#{a.id}']")
+    end
+
+    test "never offers a conversation from another tenant", %{conn: conn, a: a} do
+      foreign_tenant = insert_tenant()
+
+      foreign =
+        insert_thread(
+          tenant_id: foreign_tenant.id,
+          source: :public_intake,
+          state: :active,
+          cached_score: 95
+        )
+
+      {:ok, view, html} = live(conn, ~p"/app/threads/#{a.id}?pos=0")
+
+      refute html =~ "/app/threads/#{foreign.id}"
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "1 of 3")
+      assert has_element?(view, "[data-testid=staff-thread-prev-none]")
     end
   end
 end
