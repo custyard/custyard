@@ -154,9 +154,9 @@ for tenant configuration, TLS, permissions and the command set.
 
 `GET /api/health` returns `{"status":"ok"}` with a 200 status once the app is fully up, and 503 while it is in doctor mode (configuration or database problem). Fly's machine check in `fly.toml` under `[checks.health]` uses `GET /api/health/live`, which answers 200 whenever the process is up, so a machine in doctor mode keeps serving its setup page.
 
-S󠄁e󠄁t󠄁 t󠄁h󠄁e󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁'󠄁s󠄁 `headers.Host` t󠄁o󠄁 t󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁'󠄁s󠄁 `PHX_HOST`.󠄁 T󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 h󠄁o󠄁s󠄁t󠄁
-v󠄁a󠄁l󠄁i󠄁d󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁l󠄁s󠄁o󠄁 a󠄁p󠄁p󠄁l󠄁i󠄁e󠄁s󠄁 t󠄁o󠄁 h󠄁e󠄁a󠄁l󠄁t󠄁h󠄁 r󠄁e󠄁q󠄁u󠄁e󠄁s󠄁t󠄁s󠄁;󠄁 a󠄁 p󠄁r󠄁o󠄁b󠄁e󠄁 s󠄁e󠄁n󠄁t󠄁 t󠄁o󠄁 a󠄁n󠄁 u󠄁n󠄁r󠄁e󠄁g󠄁i󠄁s󠄁t󠄁e󠄁r󠄁e󠄁d󠄁 I󠄁P󠄁
-o󠄁r󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁 r󠄁e󠄁c󠄁e󠄁i󠄁v󠄁e󠄁s󠄁 4󠄁0󠄁4󠄁.󠄁 T󠄁h󠄁e󠄁 c󠄁o󠄁n󠄁t󠄁a󠄁i󠄁n󠄁e󠄁r󠄁 h󠄁e󠄁a󠄁l󠄁t󠄁h󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁 u󠄁s󠄁e󠄁s󠄁 `PHX_HOST` t󠄁o󠄁o󠄁.󠄁
+Set the check's `headers.Host` to the installation's `PHX_HOST`. Tenant host
+validation also applies to health requests; a probe sent to an unregistered IP
+or hostname receives 404. The container health check uses `PHX_HOST` too.
 
 ## Deployment lifecycle
 
@@ -247,8 +247,8 @@ Account creation/removal is audited and session claims prevent removed
 identities from retaining access when IDs are reused.
 
 Create tenants, register hostnames and provision their first staff admin through
-`/admin`. T󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁 i󠄁s󠄁 r󠄁e󠄁s󠄁e󠄁r󠄁v󠄁e󠄁d󠄁;󠄁 e󠄁v󠄁e󠄁r󠄁y󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 n󠄁e󠄁e󠄁d󠄁s󠄁 a󠄁 d󠄁i󠄁s󠄁t󠄁i󠄁n󠄁c󠄁t󠄁
-w󠄁o󠄁r󠄁k󠄁s󠄁p󠄁a󠄁c󠄁e󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁.󠄁 W󠄁i󠄁l󠄁d󠄁c󠄁a󠄁r󠄁d󠄁 D󠄁N󠄁S󠄁 is optional. Staff sign in at `/app/login` on their tenant's hostname. The header
+`/admin`. The installation hostname is reserved; every tenant needs a distinct
+workspace hostname. Wildcard DNS is optional. Staff sign in at `/app/login` on their tenant's hostname. The header
 shows the tenant name, **Staff** and the signed-in email. Staff roles are admin
 or agent; memberships are tenant database records. Instance administration does
 not grant membership or access to customer data.
@@ -262,8 +262,8 @@ mail independently of these tenant provider credentials.
 `bin/dsar` exports or erases what one email address appears on in one
 organization: as sender, To, CC or Reply-To. Like `bin/instance-admin`, it starts only
 the database (never the app), so it is safe while the server runs. `ID` is the
-organization's i󠄁n󠄁t󠄁e󠄁r󠄁n󠄁a󠄁l󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁 n󠄁u󠄁m󠄁b󠄁e󠄁r󠄁.󠄁 C󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 U󠄁R󠄁L󠄁s󠄁 u󠄁s󠄁e󠄁 a󠄁 s󠄁e󠄁p󠄁a󠄁r󠄁a󠄁t󠄁e󠄁 o󠄁p󠄁a󠄁q󠄁u󠄁e󠄁
-p󠄁u󠄁b󠄁l󠄁i󠄁c󠄁 i󠄁d󠄁e󠄁n󠄁t󠄁i󠄁f󠄁i󠄁e󠄁r󠄁;󠄁 d󠄁o󠄁 n󠄁o󠄁t󠄁 p󠄁a󠄁s󠄁s󠄁 t󠄁h󠄁e󠄁 U󠄁R󠄁L󠄁 i󠄁d󠄁e󠄁n󠄁t󠄁i󠄁f󠄁i󠄁e󠄁r󠄁 t󠄁o󠄁 `--org`.󠄁
+organization's internal database number. Customer URLs use a separate opaque
+public identifier; do not pass the URL identifier to `--org`.
 
 ```bash
 # Every message the address appears on, as JSON on stdout; the body only for
@@ -314,8 +314,8 @@ fly volumes snapshots list <volume-id>
 fly volumes create custyard_restore --snapshot-id <snapshot-id> --region <region> --size <GB>
 ```
 
-U󠄁s󠄁e󠄁 t󠄁h󠄁e󠄁 [b󠄁a󠄁c󠄁k󠄁u󠄁p󠄁 a󠄁n󠄁d󠄁 r󠄁e󠄁s󠄁t󠄁o󠄁r󠄁e󠄁 d󠄁r󠄁i󠄁l󠄁l󠄁](ops/backup-restore.md) t󠄁o󠄁 v󠄁e󠄁r󠄁i󠄁f󠄁y󠄁 t󠄁h󠄁e󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁,󠄁
-u󠄁p󠄁l󠄁o󠄁a󠄁d󠄁s󠄁 a󠄁n󠄁d󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁s󠄁 w󠄁i󠄁t󠄁h󠄁o󠄁u󠄁t󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁i󠄁n󠄁g󠄁 m󠄁a󠄁i󠄁l󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁.󠄁
+Use the [backup and restore drill](ops/backup-restore.md) to verify the database,
+uploads and attachments without starting mail delivery.
 
 > **Single-node constraint:** a Fly volume attaches to exactly one machine, so
 > every extra machine gets its own volume with its own SQLite database, uploads
