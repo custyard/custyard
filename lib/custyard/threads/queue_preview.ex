@@ -6,10 +6,79 @@ defmodule Custyard.Threads.QueuePreview do
   Reached through `Custyard.Threads.queue_previews/2`, which checks the staff
   scope first. Every query here is still bounded by the tenant id, so a thread
   id from another tenant yields nothing.
+
+  This module also owns the rule for whose turn it is, in the two forms the
+  queue needs: `turn/2` for a loaded row and `message_facts/1` for filtering
+  and counting in SQL. Both rest on the same two definitions, `exchanged/1`
+  and `staff_voice/1`.
   """
   import Ecto.Query
 
   alias Custyard.{Message, Repo}
+
+  @doc """
+  Query expression: the message is part of the conversation with the customer.
+  Internal notes and automatic replies are not.
+  """
+  defmacro exchanged(message) do
+    quote do
+      not unquote(message).is_internal_note and
+        (is_nil(unquote(message).triage_class) or
+           unquote(message).triage_class != :auto_response)
+    end
+  end
+
+  @doc """
+  Query expression: the message is the staff speaking. A reply sent from the
+  staff's own mailbox is captured as an email with the `:staff_sent` triage
+  class; it is still the staff's voice.
+  """
+  defmacro staff_voice(message) do
+    quote do
+      unquote(message).source == :staff or unquote(message).triage_class == :staff_sent
+    end
+  end
+
+  @doc """
+  Per-thread message facts as a query, for joining into queue queries:
+
+    * `:count` – every message on the thread
+    * `:exchanged` – messages exchanged with the customer
+    * `:last_id` – id of the newest exchanged message
+    * `:last_staff_id` – id of the newest exchanged message from staff
+
+  Staff spoke last exactly when `last_staff_id == last_id`. Pass the tenant id
+  to keep the scan to that tenant's messages.
+  """
+  def message_facts(tenant_id) do
+    query =
+      from(m in Message,
+        group_by: m.thread_id,
+        select: %{
+          thread_id: m.thread_id,
+          count: count(m.id),
+          exchanged: count(fragment("CASE WHEN ? THEN 1 END", exchanged(m))),
+          last_id: max(fragment("CASE WHEN ? THEN ? END", exchanged(m), m.id)),
+          last_staff_id:
+            max(fragment("CASE WHEN ? THEN ? END", exchanged(m) and staff_voice(m), m.id))
+        }
+      )
+
+    if is_integer(tenant_id), do: where(query, [m], m.tenant_id == ^tenant_id), else: query
+  end
+
+  @doc """
+  Who has to act next on a thread, given its preview (or `nil` when it has no
+  messages): `:ours`, `:theirs`, or `:none` for a resolved thread.
+
+  An explicit waiting state wins over the message history. Otherwise the last
+  speaker decides, and a thread nobody has answered yet is ours.
+  """
+  @spec turn(%{state: atom()}, preview() | nil) :: :ours | :theirs | :none
+  def turn(%{state: :resolved}, _preview), do: :none
+  def turn(%{state: :waiting}, _preview), do: :theirs
+  def turn(_thread, %{last_speaker: :staff}), do: :theirs
+  def turn(_thread, _preview), do: :ours
 
   # Characters of the stored text body read per message. A row shows one line,
   # so the full body (up to 100,000 characters) never leaves the database.
@@ -50,15 +119,7 @@ defmodule Custyard.Threads.QueuePreview do
         group_by: m.thread_id,
         select: %{
           any_id: max(m.id),
-          exchange_id:
-            max(
-              fragment(
-                "CASE WHEN ? THEN ? END",
-                not m.is_internal_note and
-                  (is_nil(m.triage_class) or m.triage_class != :auto_response),
-                m.id
-              )
-            )
+          exchange_id: max(fragment("CASE WHEN ? THEN ? END", exchanged(m), m.id))
         }
       )
 
@@ -103,8 +164,7 @@ defmodule Custyard.Threads.QueuePreview do
   defp snippet_from(%{triage_class: :auto_response}), do: :auto_reply
   defp snippet_from(message), do: speaker(message)
 
-  # A reply sent from the staff's own mailbox is captured as an email with the
-  # :staff_sent triage class; it is still the staff speaking.
+  # The loaded-row form of staff_voice/1.
   defp speaker(%{source: :staff}), do: :staff
   defp speaker(%{triage_class: :staff_sent}), do: :staff
   defp speaker(_message), do: :customer
