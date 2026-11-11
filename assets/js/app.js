@@ -83,6 +83,74 @@ Hooks.ComposerInput = {
   }
 }
 
+// Single-key shortcuts must never fire while the staff member is typing or
+// holding a modifier (Ctrl+K, Cmd+J and friends belong to the browser).
+const shortcutBlocked = (e) => {
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return true
+  const t = e.target
+  if (!(t instanceof Element)) return false
+  return t.isContentEditable || t.closest("input, textarea, select, [contenteditable]") !== null
+}
+
+// Attention queue: j / k (or the arrow keys) move the selection through the
+// rows and o opens it. The selection is the focused row link, so Enter opens
+// it natively, Tab carries on from it and screen readers announce the row.
+// data-select names the row to start from (the conversation just left).
+Hooks.QueueKeys = {
+  mounted() {
+    this.onKey = (e) => {
+      if (shortcutBlocked(e) || e.target.closest?.("[role=menu]")) return
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
+      const links = Array.from(this.el.querySelectorAll("[data-row-link]"))
+      if (links.length === 0) return
+      const row = document.activeElement?.closest?.("li")
+      const current = links.findIndex(link => link.closest("li") === row)
+
+      if (key === "j" || key === "ArrowDown") {
+        this.select(links[Math.min(current + 1, links.length - 1)])
+      } else if (key === "k" || key === "ArrowUp") {
+        this.select(links[Math.max(current - 1, 0)])
+      } else if (key === "o" && current >= 0) {
+        links[current].click()
+      } else {
+        return
+      }
+      e.preventDefault()
+    }
+    window.addEventListener("keydown", this.onKey)
+
+    const start = this.el.dataset.select
+    const link = start && this.el.querySelector(`#queue-row-${CSS.escape(start)} [data-row-link]`)
+    if (link) this.select(link)
+  },
+  destroyed() {
+    window.removeEventListener("keydown", this.onKey)
+  },
+  select(link) {
+    link.focus({preventScroll: true})
+    link.scrollIntoView({block: "nearest"})
+  }
+}
+
+// Clicks the descendant whose data-shortcut matches the pressed key, e.g.
+// <a data-shortcut="j"> in the conversation header (j next, k previous,
+// u back to the queue).
+Hooks.Shortcuts = {
+  mounted() {
+    this.onKey = (e) => {
+      if (shortcutBlocked(e) || e.key.length !== 1) return
+      const target = this.el.querySelector(`[data-shortcut="${CSS.escape(e.key.toLowerCase())}"]`)
+      if (!target) return
+      e.preventDefault()
+      target.click()
+    }
+    window.addEventListener("keydown", this.onKey)
+  },
+  destroyed() {
+    window.removeEventListener("keydown", this.onKey)
+  }
+}
+
 // Auto-dismiss flash messages after a timeout (configurable via
 // data-dismiss-timeout, in milliseconds). Elements that are hidden at mount
 // (e.g. the client/server connection-error flashes toggled by
