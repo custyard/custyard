@@ -24,7 +24,7 @@ The shared boundary admits only declared fields and their types:
 
 | Field family | Accepted values |
 | --- | --- |
-| Internal entity IDs | Nonnegative integers for declared operator, tenant, organization, channel, route, conversation, message and other database identifiers |
+| Internal entity IDs | Nonnegative integers for declared staff, tenant, organization, channel, route, thread, message and other database identifiers |
 | Correlation | Bounded server-generated request/operation IDs; an operation may retain its parent operation ID |
 | Counts and timing | Declared nonnegative counts, byte sizes, retry values and elapsed milliseconds |
 | Categories | Explicit finite values for reason, outcome, stage, mode, provider, `boot_mode`, `database_category`, first-run `step` and related classifications |
@@ -57,7 +57,7 @@ SQL query logging and sensitive connection-error output are disabled. Phoenix pa
 
 `Log.failure/1` accepts HTTP errors, Lettermint management wrappers, known transport categories, changeset failures and exception classes. It does not render their contents. Provider machine codes must exactly match the reviewed allowlist. Validation fields are reduced to reviewed provider and application-schema field-name labels, including labels for credential fields; validation messages, credentials, addresses and submitted values are discarded. A provider offering only free-form prose will still yield a status and generic classification. Adding a new safe category requires an exact mapping and a hostile-echo regression test, never a broad response-body exception.
 
-Boot diagnostics follow the same rule. `boot_database_probe_failed` carries a finite `database_category`, the attempt count and the exception class from `Log.failure/1`; the probe classifies the driver error and never logs its text, host, token or path. `boot_welcome_mail_failed` carries the provider, the numeric provider status and the sanitised `provider_message`, because the reason a sender was rejected is operational, not personal. The raw probe error appears only in `bin/doctor` terminal output, which is administrative CLI output of the same class as `bin/operator`: treat its recordings as sensitive and do not forward them into a log collector.
+Boot diagnostics follow the same rule. `boot_database_probe_failed` carries a finite `database_category`, the attempt count and the exception class from `Log.failure/1`; the probe classifies the driver error and never logs its text, host, token or path. `boot_welcome_mail_failed` carries the provider, the numeric provider status and the sanitised `provider_message`, because the reason a sender was rejected is operational, not personal. The raw probe error appears only in `bin/doctor` terminal output, which is administrative CLI output of the same class as `bin/instance-admin`: treat its recordings as sensitive and do not forward them into a log collector.
 
 [Sentry](sentry.md) independently rebuilds every exported event. It retains approved correlation, static events, loaded exception classes and minimized code frames, and drops customer-bearing event compartments. This covers manual events as well as Logger and HTTP capture. Manual operational message captures use registered event names and approved context so their category and request correlation survive minimization. Deployment environment labels must be registered in `:log_environments`; unreviewed labels fall back to the application environment.
 
@@ -82,7 +82,7 @@ The service owner must record the following for each log destination, including 
 
 Retention durations are a service-owner decision tied to purpose and obligations; this code does not invent a universal compliant duration or destroy historical logs. Conversation retention settings do not imply retention for Sentry, operational logs or standalone audit records. Previously collected data is not retroactively cleaned by the new filter.
 
-After deployment, verify the actual running revision and JSON records in each collector. Exercise a test-operator login and an unknown-account request through the browser, matching the returned request ID to the safe lifecycle in `fly logs --app custyard`. Confirm expected timestamp/service/schema, destination delivery, and access restricted to approved readers.
+After deployment, verify the actual running revision and JSON records in each collector. Exercise a test staff login and an unknown-account request through the browser, matching the returned request ID to the safe lifecycle in `fly logs --app custyard`. Confirm expected timestamp/service/schema, destination delivery, and access restricted to approved readers.
 
 With the required release configuration present, the built release can also emit a harmless self-test in an isolated eval VM:
 

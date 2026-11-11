@@ -1,6 +1,6 @@
 defmodule Custyard.Boot.FirstRun do
   @moduledoc """
-  The schema, operator and mail steps of a production boot, and the
+  The schema, instance administrator and mail steps of a production boot, and the
   `:first_run` / `:ready` decision (docs/backlog/1103-first-run-experience.md).
 
   ## Schema
@@ -21,39 +21,41 @@ defmodule Custyard.Boot.FirstRun do
   starting:
 
     0. the mode leaves `:starting` for `:first_run` or `:ready` by the count
-       of operators who can log in. It happens here and not in
+       of instance administrators. It happens here and not in
        `Custyard.Application` because a request let through now finds the
        Repo and PubSub running, and because `Custyard.Boot.State` is a
        read-modify-write with no lock, so it wants one writer. A count that
        fails (a remote database dropping one query) leaves the mode where
        it is and is retried on the next check: an established install must
        never look like a first run;
-    1. the operator from `OPERATOR_EMAIL` is created if absent
-       (`Custyard.OperatorAccounts.create_operator/2`, `via: "boot"`); an
-       existing account is never modified;
+    1. the instance administrator from `INSTANCE_ADMIN_EMAIL` is created if
+       absent (`Custyard.InstanceAdmins.create_admin/1`); an existing account
+       is never modified;
     2. when this boot created it, the welcome mail is sent through the real
        adapter and its provider verdict recorded (`Custyard.Boot.State`
        `:mail` step and `last_mail`);
-    3. while no operator can log in, the mode stays `:first_run` and the
-       check repeats every `recheck_every_ms` (5 s), so an account added
-       with `bin/operator add` flips the mode to `:ready` without a restart.
+    3. while no instance administrator exists, the mode stays `:first_run`
+       and the check repeats every `recheck_every_ms` (5 s), so an account
+       added with `bin/instance-admin add` flips the mode to `:ready` without
+       a restart.
 
-  A boot that created the operator or waited in `:first_run` records
+  A boot that created the administrator or waited in `:first_run` records
   `first_run.completed_at`, and `CustyardWeb.Plugs.BootGate` keeps the
   checklist on `GET /` until the next restart. A boot that found its
-  operators leaves it nil, so `/` is the landing page.
+  administrators leaves it nil, so `/` is the landing page.
 
   Options: `env:` (required), `schema:` (the `migrate/2` result),
   `recheck_every_ms:`, `deliver:` (a function taking a `Swoosh.Email`,
-  default `Custyard.Mailer.deliver/1`) and `count:` (the operator count,
-  default `Custyard.OperatorAccounts.count_can_log_in/0`; tests make it fail).
+  default `Custyard.Mailer.deliver/1`) and `count:` (the instance
+  administrator count, default `Custyard.InstanceAdmins.count/0`; tests make
+  it fail).
   """
 
   use GenServer
 
   alias Custyard.Boot.{Env, State}
   alias Custyard.Notifications.WelcomeEmail
-  alias Custyard.OperatorAccounts
+  alias Custyard.InstanceAdmins
 
   require Custyard.Log, as: Log
 
@@ -63,7 +65,7 @@ defmodule Custyard.Boot.FirstRun do
           total: non_neg_integer,
           applied: non_neg_integer,
           skipped: boolean,
-          operators: non_neg_integer | :unknown
+          instance_admins: non_neg_integer | :unknown
         }
 
   # ---------------------------------------------------------------------------
@@ -75,7 +77,7 @@ defmodule Custyard.Boot.FirstRun do
 
   Returns `{:ok, schema}` with the total number of applied migrations, how
   many this call applied, whether it was skipped (`skip: true`, the
-  `SKIP_MIGRATIONS` flag) and how many operators can log in; or
+  `SKIP_MIGRATIONS` flag) and how many instance administrators exist; or
   `{:error, detail, reason}` where `detail` names the failed migration and
   the exception class, never its message, and `reason` is the raw error.
 
@@ -126,8 +128,8 @@ defmodule Custyard.Boot.FirstRun do
            total: length(Ecto.Migrator.migrated_versions(repo)),
            applied: applied,
            skipped: skip,
-           operators:
-             case count_operators() do
+           instance_admins:
+             case count_instance_admins() do
                {:ok, count} -> count
                {:error, _} -> :unknown
              end
@@ -145,7 +147,7 @@ defmodule Custyard.Boot.FirstRun do
 
   # With migrations skipped the table may not exist yet, and a remote
   # database can fail one query. Callers treat an error as unknown, never as 0.
-  defp count_operators(count \\ &OperatorAccounts.count_can_log_in/0) do
+  defp count_instance_admins(count \\ &InstanceAdmins.count/0) do
     {:ok, count.()}
   rescue
     error -> {:error, error}
@@ -176,7 +178,7 @@ defmodule Custyard.Boot.FirstRun do
       created?: false,
       recheck_every_ms: Keyword.get(opts, :recheck_every_ms, @recheck_every_ms),
       deliver: Keyword.get(opts, :deliver, &Custyard.Mailer.deliver/1),
-      count: Keyword.get(opts, :count, &OperatorAccounts.count_can_log_in/0)
+      count: Keyword.get(opts, :count, &InstanceAdmins.count/0)
     }
 
     {:ok, state, {:continue, :run}}
@@ -187,7 +189,7 @@ defmodule Custyard.Boot.FirstRun do
     if state.schema, do: step(:schema, :ok, schema_detail(state.schema))
     open_gate(state)
 
-    created = bootstrap_operator(state.env)
+    created = bootstrap_instance_admin(state.env)
     welcome_mail(created, state)
     {:noreply, decide(%{state | created?: created != nil})}
   end
@@ -199,7 +201,7 @@ defmodule Custyard.Boot.FirstRun do
   # this; a restarted FirstRun is only if the count failed before.
   defp open_gate(state) do
     if State.mode() == :starting do
-      case count_operators(state.count) do
+      case count_instance_admins(state.count) do
         {:ok, count} -> publish(if count > 0, do: :ready, else: :first_run)
         {:error, reason} -> count_failed(reason)
       end
@@ -209,7 +211,7 @@ defmodule Custyard.Boot.FirstRun do
   # A failed count stays in :starting (or :first_run) and lands here again
   # through the recheck, so a database that recovers still gets a decision.
   defp decide(state) do
-    case count_operators(state.count) do
+    case count_instance_admins(state.count) do
       {:ok, count} when count > 0 ->
         finish(state, State.mode())
 
@@ -231,12 +233,12 @@ defmodule Custyard.Boot.FirstRun do
   end
 
   defp count_failed(reason),
-    do: Log.warning(:boot_operator_count_failed, Log.failure(reason))
+    do: Log.warning(:boot_instance_admin_count_failed, Log.failure(reason))
 
   defp recheck(state), do: Process.send_after(self(), :recheck, state.recheck_every_ms)
 
   # Runs once per process: no recheck is scheduled after it. A supervisor
-  # restart finds the operator in place and completed_at already set.
+  # restart finds the administrator in place and completed_at already set.
   defp finish(state, previous) do
     first_run? = state.created? or previous == :first_run
 
@@ -245,49 +247,51 @@ defmodule Custyard.Boot.FirstRun do
       %{s | mode: :ready, first_run: %{s.first_run | completed_at: completed_at}}
     end)
 
-    step(:sign_in, :ok, "an operator can sign in")
+    step(:sign_in, :ok, "an instance administrator can sign in")
     if previous != :ready, do: Log.info(:boot_mode_decided, boot_mode: :ready)
     if first_run?, do: Log.info(:boot_first_run_completed)
   end
 
-  # Returns the operator this boot created, or nil.
-  defp bootstrap_operator(%Env{settings: %{operator_email: nil}}) do
-    step(:operator, :skipped, "OPERATOR_EMAIL is not set")
+  # Returns the instance administrator this boot created, or nil.
+  defp bootstrap_instance_admin(%Env{settings: %{instance_admin_email: nil}}) do
+    step(:instance_admin, :skipped, "INSTANCE_ADMIN_EMAIL is not set")
     nil
   end
 
-  defp bootstrap_operator(%Env{settings: %{operator_email: email}}) do
-    case OperatorAccounts.create_operator(email, via: "boot") do
-      {:created, operator} ->
-        remember_operator(operator)
-        step(:operator, :ok, "#{operator.email} (#{operator.role}), from OPERATOR_EMAIL")
-        operator
+  defp bootstrap_instance_admin(%Env{settings: %{instance_admin_email: email}}) do
+    case InstanceAdmins.create_admin(email) do
+      {:created, admin} ->
+        remember_instance_admin(admin)
+        step(:instance_admin, :ok, "#{admin.email}, from INSTANCE_ADMIN_EMAIL")
+        admin
 
-      {:exists, operator} ->
-        remember_operator(operator)
-        step(:operator, :ok, "exists, not modified")
+      {:exists, admin} ->
+        remember_instance_admin(admin)
+        step(:instance_admin, :ok, "exists, not modified")
         nil
 
-      {:error, message} ->
-        step(:operator, :failed, message)
+      {:error, _changeset} ->
+        step(:instance_admin, :failed, "INSTANCE_ADMIN_EMAIL is not a usable address")
         nil
     end
   end
 
-  defp remember_operator(operator) do
-    State.update(fn s -> %{s | first_run: %{s.first_run | operator_email: operator.email}} end)
+  defp remember_instance_admin(admin) do
+    State.update(fn s ->
+      %{s | first_run: %{s.first_run | instance_admin_email: admin.email}}
+    end)
   end
 
-  defp welcome_mail(nil, _state), do: step(:mail, :skipped, "no new operator")
+  defp welcome_mail(nil, _state), do: step(:mail, :skipped, "no new administrator")
 
-  defp welcome_mail(operator, %{env: %Env{settings: settings}} = state) do
+  defp welcome_mail(admin, %{env: %Env{settings: settings}} = state) do
     %{adapter: adapter} = settings.mail
 
     if adapter == :local do
       step(:mail, :skipped, "MAIL_ADAPTER=local discards mail")
     else
       %{from_name: from_name, from_address: from_address} = settings.notifications
-      email = WelcomeEmail.build(operator.email, settings.host, {from_name, from_address})
+      email = WelcomeEmail.build(admin.email, settings.host, {from_name, from_address})
 
       email
       |> deliver(state.deliver)

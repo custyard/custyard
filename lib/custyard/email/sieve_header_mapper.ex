@@ -1,15 +1,15 @@
 defmodule Custyard.Email.SieveHeaderMapper do
   @moduledoc """
-  Maps Sieve-injected email headers to conversation properties.
+  Maps Sieve-injected email headers to thread properties.
 
-  Operators can configure Sieve rules on their MTA to inject custom headers
+  Staffs can configure Sieve rules on their MTA to inject custom headers
   before forwarding email to the platform. This module reads those headers
-  and maps their values to conversation properties.
+  and maps their values to thread properties.
 
   ## Supported Properties
 
   - `tier` - Organization service tier (enterprise, standard, basic)
-  - `urgency` - Conversation urgency level (urgent, elevated, normal)
+  - `urgency` - Thread urgency level (urgent, elevated, normal)
 
   ## Configuration
 
@@ -54,14 +54,14 @@ defmodule Custyard.Email.SieveHeaderMapper do
   }
 
   @doc """
-  Extract conversation property overrides from email headers.
+  Extract thread property overrides from email headers.
 
   Takes a map of headers and returns a map of property atoms to their values.
   Only returns properties that have valid mappings configured and valid values.
   """
-  @spec extract_properties(map()) :: map()
-  def extract_properties(headers) when is_map(headers) do
-    mappings = Settings.get_sieve_header_mappings()
+  @spec extract_properties(map(), integer()) :: map()
+  def extract_properties(headers, tenant_id) when is_map(headers) do
+    mappings = Settings.get_sieve_header_mappings(tenant_id)
 
     mappings
     |> Enum.map(fn {header_name, config} ->
@@ -72,7 +72,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
     |> Map.new()
   end
 
-  def extract_properties(_), do: %{}
+  def extract_properties(_, _), do: %{}
 
   defp get_header(headers, name), do: Normalizer.get_header(headers, name)
 
@@ -123,14 +123,14 @@ defmodule Custyard.Email.SieveHeaderMapper do
   end
 
   @doc """
-  Merge extracted properties into conversation attributes.
+  Merge extracted properties into thread attributes.
 
   Takes existing attrs and applies property overrides from headers.
   Sieve-injected properties take precedence over auto-detected values.
   """
-  @spec merge_overrides(map(), map()) :: map()
-  def merge_overrides(attrs, headers) do
-    overrides = extract_properties(headers)
+  @spec merge_overrides(map(), map(), integer()) :: map()
+  def merge_overrides(attrs, headers, tenant_id) do
+    overrides = extract_properties(headers, tenant_id)
 
     # Override urgency if provided
     attrs =
@@ -139,7 +139,7 @@ defmodule Custyard.Email.SieveHeaderMapper do
         urgency -> Map.put(attrs, :urgency, urgency)
       end
 
-    # Note: tier is on Organization, not Conversation
+    # Note: tier is on Organization, not Thread
     # If tier override is needed, it should be handled separately
 
     attrs

@@ -3,7 +3,7 @@ defmodule Custyard.Lettermint.HttpClient do
   Production HTTP client for the Lettermint API.
 
   Uses Finch to make HTTP requests. Requires `LETTERMINT_API_URL` and
-  `LETTERMINT_TEAM_TOKEN` to be configured at runtime.
+  a tenant connection with a management token.
 
   Routes and sending domains are both read from the Team API at the
   configured base URL with the same bearer token; `list_domains/0` pages
@@ -344,9 +344,6 @@ defmodule Custyard.Lettermint.HttpClient do
   end
 
   defp api_key(opts) do
-    # api_key remains an internal test-client compatibility option. Runtime
-    # never maps a project sending token into it.
-    config(opts)[:team_token] || config(opts)[:api_key] ||
-      raise "LETTERMINT_TEAM_TOKEN not configured"
+    config(opts)[:team_token] || raise "tenant management credential not configured"
   end
 end

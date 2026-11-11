@@ -8,9 +8,10 @@ defmodule Custyard.SlugTest do
     attrs =
       Map.merge(
         %{
+          tenant_id: Custyard.Factory.factory_tenant_id(),
           slug: "acme-corp",
           email: "claimant@example.com",
-          conversation_id: 1,
+          thread_id: 1,
           expires_at: DateTime.add(DateTime.utc_now(), 72, :hour),
           confirmation_token_hash: Token.generate() |> elem(1)
         },
@@ -36,7 +37,7 @@ defmodule Custyard.SlugTest do
     end
 
     test "a slug differing only in case validates against the reserved list" do
-      cs = changeset(slug: "OPERATOR")
+      cs = changeset(slug: "STAFF")
 
       refute cs.valid?
       assert "is reserved" in errors_on(cs).slug
@@ -95,10 +96,10 @@ defmodule Custyard.SlugTest do
 
   describe "reserved words" do
     test "every router first-path-segment is unclaimable" do
-      # Router scopes: /i, /r, /c, /api, /operator, /p. Endpoint paths:
+      # Router scopes: /i, /r, /c, /api, /staff, /p. Endpoint paths:
       # /live, /phoenix, /dev, plus the static roots. The short ones also
       # fail the 3-char format floor; either way they must not validate.
-      for segment <- ~w(i r c p api operator live phoenix dev assets fonts images uploads) do
+      for segment <- ~w(i r c p api staff live phoenix dev assets fonts images uploads) do
         cs = changeset(slug: segment)
         refute cs.valid?, "expected router segment #{inspect(segment)} to be unclaimable"
         assert Keyword.has_key?(cs.errors, :slug)
@@ -155,12 +156,12 @@ defmodule Custyard.SlugTest do
   end
 
   describe "required fields" do
-    test "slug, email, conversation, expiry, and token hash are all required" do
+    test "slug, email, thread, expiry, and token hash are all required" do
       cs = Slug.claim_changeset(%Slug{}, %{})
 
       errors = errors_on(cs)
 
-      for field <- [:slug, :email, :conversation_id, :expires_at, :confirmation_token_hash] do
+      for field <- [:slug, :email, :thread_id, :expires_at, :confirmation_token_hash] do
         assert "can't be blank" in Map.fetch!(errors, field)
       end
     end

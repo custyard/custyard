@@ -15,7 +15,7 @@ The configured payload must include a ticket ID, requester email, subject, and a
 }
 ```
 
-The ticket ID keeps comments in one Custyard conversation. The comment ID makes retries idempotent without discarding later comments. A payload with comment text but no comment ID receives a processing error; include `comment.id`, top-level `comment_id`, or top-level `event_id` in the template. Ticket-only events without a comment remain supported.
+The ticket ID keeps comments in one Custyard thread. The comment ID makes retries idempotent without discarding later comments. A payload with comment text but no comment ID receives a processing error; include `comment.id`, top-level `comment_id`, or top-level `event_id` in the template. Ticket-only events without a comment remain supported.
 
 `WEBHOOK_SECRET_ZENDESK` supplies one source-wide signing secret. If multiple Zendesk webhooks use different signing secrets, replace the `if map_size(webhook_secrets) > 0` block in `config/runtime.exs` with a route-keyed map. Keep the existing `webhook_secrets` construction so other sources retain their secrets:
 

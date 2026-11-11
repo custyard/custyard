@@ -11,7 +11,7 @@ defmodule Custyard.Boot.ReportTest do
     "PHX_HOST" => "custyard.example.com",
     "MAIL_ADAPTER" => "lettermint",
     "LETTERMINT_PROJECT_TOKEN" => "lm_" <> @canary,
-    "OPERATOR_EMAIL" => "ops@example.com",
+    "INSTANCE_ADMIN_EMAIL" => "ops@example.com",
     "DATABASE_URL" => "libsql://db-" <> @canary <> ".turso.io",
     "TURSO_AUTH_TOKEN" => "tok_" <> @canary,
     "CREDENTIAL_ENCRYPTION_KEY" => @canary <> "\n",
@@ -29,7 +29,7 @@ defmodule Custyard.Boot.ReportTest do
       assert text =~ "✗  CREDENTIAL_ENCRYPTION_KEY"
       assert text =~ "trailing newline"
       assert text =~ "9 visible · 8 of them Custyard settings"
-      assert text =~ "LETTERMINT_PROJECT_TOKEN  MAIL_ADAPTER  OPERATOR_EMAIL  PHX_HOST"
+      assert text =~ "INSTANCE_ADMIN_EMAIL  LETTERMINT_PROJECT_TOKEN  MAIL_ADAPTER  PHX_HOST"
       assert text =~ "MAIL_ADAPTOR (did you mean MAIL_ADAPTER)"
       assert text =~ "remote libSQL · DATABASE_URL is set, so remote libSQL"
     end
@@ -86,7 +86,7 @@ defmodule Custyard.Boot.ReportTest do
 
       assert rest == [
                "PHX_HOST=‹custyard.example.com›",
-               "OPERATOR_EMAIL=‹you@example.com›",
+               "INSTANCE_ADMIN_EMAIL=‹you@example.com›",
                "MAIL_ADAPTER=lettermint",
                "LETTERMINT_PROJECT_TOKEN=‹project token›"
              ]
@@ -131,7 +131,7 @@ defmodule Custyard.Boot.ReportTest do
 
       assert Report.paste_block(env) == """
              PHX_HOST=‹custyard.example.com›
-             OPERATOR_EMAIL=‹you@example.com›
+             INSTANCE_ADMIN_EMAIL=‹you@example.com›
              MAILGUN_DOMAIN=‹mail.example.com›\
              """
     end
@@ -143,7 +143,7 @@ defmodule Custyard.Boot.ReportTest do
             "SECRET_KEY_BASE" => String.duplicate("s", 64),
             "CREDENTIAL_ENCRYPTION_KEY" => @credential_key,
             "PHX_HOST" => "custyard.example.com",
-            "OPERATOR_EMAIL" => "ops@example.com",
+            "INSTANCE_ADMIN_EMAIL" => "ops@example.com",
             "MAIL_ADAPTER" => "local"
           },
           config_env: :prod

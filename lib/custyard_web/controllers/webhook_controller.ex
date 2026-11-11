@@ -35,26 +35,8 @@ defmodule CustyardWeb.WebhookController do
      Provides defense against random probing but can be leaked in logs or error
      messages. Treat as sensitive and rotate if compromised.
 
-  2. **webhook signature** (request-level): HMAC signature from the webhook
-     provider. Requires configuring `:webhook_secrets` in config/runtime.exs.
-
-  ## Production Requirements
-
-  In production, if `:webhook_secrets` is NOT configured for a source, requests
-  from that source will fail with "unauthorized". This is intentional fail-closed
-  behavior. Always configure secrets for each webhook source in production:
-
-      config :custyard, :webhook_secrets, %{
-        lettermint: "secret_from_lettermint",
-        zendesk: "secret_from_zendesk",
-        intercom: "secret_from_intercom",
-        slack: "secret_from_slack"
-      }
-
-  Where a source has multiple provider webhooks, use a map keyed by the inbound
-  route's callback token for independent signing secrets, for example:
-
-      zendesk: %{callback_token => "that_webhooks_signing_secret"}
+  2. **webhook signature**: Verified with the tenant route's encrypted signing
+     secret. Production rejects callbacks until the route is bound.
 
   ## Dev/Test Behavior
 
@@ -138,9 +120,9 @@ defmodule CustyardWeb.WebhookController do
 
   defp dispatch_normalized(conn, route, normalized, observation) do
     case Dispatcher.dispatch(route, normalized) do
-      {:ok, conversation} ->
-        Custyard.EmailSetup.record_inbound(route, conversation, normalized, observation)
-        json(conn, %{status: "ok", conversation_id: conversation.id})
+      {:ok, thread} ->
+        Custyard.EmailSetup.record_inbound(route, thread, normalized, observation)
+        json(conn, %{status: "ok", thread_id: thread.id})
 
       # Channel resolution or triage decided the delivery must not become a
       # customer message (unmatched recipient, paused channel, own echo,
@@ -148,6 +130,9 @@ defmodule CustyardWeb.WebhookController do
       # already; acknowledge with 200 so the provider does not retry.
       {:ignored, reason} ->
         json(conn, %{status: "ignored", reason: to_string(reason)})
+
+      {:error, :tenant_suspended} ->
+        conn |> put_status(403) |> json(%{status: "error", reason: "workspace suspended"})
 
       {:error, reason} ->
         conn |> put_status(422) |> json(%{status: "error", reason: format_error(reason)})
@@ -188,6 +173,8 @@ defmodule CustyardWeb.WebhookController do
     end
   end
 
+  defp resolve_adapter(:email), do: {:error, "direct email transport required"}
+
   defp resolve_adapter(source) do
     case Registry.get_adapter(source) do
       nil ->
@@ -204,16 +191,10 @@ defmodule CustyardWeb.WebhookController do
   defp verify_webhook(adapter, conn, route) do
     source = adapter.source_name()
 
-    if source == :lettermint and is_binary(route.webhook_secret_ciphertext) do
-      case Custyard.EmailSetup.inbound_secret(route) do
-        {:ok, secret} -> verify_with_secret(conn, source, secret)
-        _ -> {:error, "unauthorized"}
-      end
-    else
-      case get_webhook_secret(source, route) do
-        nil -> verify_without_secret(source)
-        secret -> verify_with_secret(conn, source, secret)
-      end
+    case Custyard.EmailSetup.inbound_secret(route) do
+      {:ok, secret} -> verify_with_secret(conn, source, secret)
+      {:error, :not_configured} -> verify_without_secret(source)
+      _ -> {:error, "unauthorized"}
     end
   end
 
@@ -290,22 +271,6 @@ defmodule CustyardWeb.WebhookController do
     case Map.get(@timestamp_headers, source) do
       nil -> nil
       header_name -> get_req_header(conn, header_name) |> List.first()
-    end
-  end
-
-  defp get_webhook_secret(source, route) do
-    case Application.get_env(:custyard, :webhook_secrets, %{}) |> Map.get(source) do
-      # Per-webhook secrets are keyed by the callback token, so two provider
-      # accounts of the same type can rotate their credentials independently.
-      secrets when is_map(secrets) ->
-        Map.get(secrets, route.callback_token)
-
-      secret when is_binary(secret) ->
-        if source != :lettermint or Custyard.EmailSetup.default_tenant?(route.tenant_id),
-          do: secret
-
-      _ ->
-        nil
     end
   end
 end

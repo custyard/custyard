@@ -1,6 +1,6 @@
 defmodule Custyard.InboundChannels do
   @moduledoc """
-  Context for inbound channels: the operator-visible public addresses bound
+  Context for inbound channels: the staff-visible public addresses bound
   to an inbound route (docs/design/spec-inbound-channels.md).
 
   Responsibilities:
@@ -17,15 +17,15 @@ defmodule Custyard.InboundChannels do
     * Health: `mark_received/2` on every accepted delivery,
       `check_quiet_channels/1` run by `Custyard.Scoring.Scheduler`, and the
       rejection log; `sweep_expired/1` is run by
-      `Custyard.Conversations.RetentionSweep`
+      `Custyard.Threads.RetentionSweep`
     * Audit events for every admin action. Payloads never carry the ingress
       token or message content.
 
   PubSub: channel changes broadcast `{:channel_updated, channel_id}` on
-  `"channel:<id>"`, on `"organization:<org_id>:channels"` and on
+  `"channel:<id>"`, on `"tenant:<tenant_id>:channels"` and on
   `"inbound_channels"`. A quiet
   notice also broadcasts `{:channel_quiet, channel_id}` on
-  `"operator:notifications"`.
+  `"staff:notifications"`.
   """
 
   import Ecto.Query
@@ -53,21 +53,12 @@ defmodule Custyard.InboundChannels do
 
   def list_for_tenant(tenant_id) when is_integer(tenant_id) do
     Repo.all(
-      from c in InboundChannel,
+      from(c in InboundChannel,
         where: c.tenant_id == ^tenant_id,
         order_by: [asc: c.public_address],
-        preload: [:inbound_route, :project]
+        preload: [:inbound_route, :default_project]
+      )
     )
-  end
-
-  @doc "Channels for an organization, newest first, with route and project preloaded."
-  def list_for_organization(organization_id) when is_integer(organization_id) do
-    from(c in InboundChannel,
-      where: c.organization_id == ^organization_id,
-      order_by: [asc: c.state, asc: c.public_address],
-      preload: [:inbound_route, :project]
-    )
-    |> Repo.all()
   end
 
   @doc "Channels bound to a route."
@@ -75,32 +66,33 @@ defmodule Custyard.InboundChannels do
     from(c in InboundChannel,
       where: c.inbound_route_id == ^route_id,
       order_by: [asc: c.id],
-      preload: [:inbound_route, :project]
+      preload: [:inbound_route, :default_project]
     )
     |> Repo.all()
   end
 
   @doc "True when the route has at least one channel (so routing by token applies)."
   def route_has_channels?(route_id) when is_integer(route_id) do
-    Repo.exists?(from c in InboundChannel, where: c.inbound_route_id == ^route_id)
+    Repo.exists?(from(c in InboundChannel, where: c.inbound_route_id == ^route_id))
   end
 
   def get_channel(id) when is_integer(id) do
-    InboundChannel |> Repo.get(id) |> Repo.preload([:inbound_route, :project, :organization])
+    InboundChannel
+    |> Repo.get(id)
+    |> Repo.preload([:inbound_route, :default_project, :default_organization])
   end
 
   def get_channel!(id) when is_integer(id) do
-    InboundChannel |> Repo.get!(id) |> Repo.preload([:inbound_route, :project, :organization])
+    InboundChannel
+    |> Repo.get!(id)
+    |> Repo.preload([:inbound_route, :default_project, :default_organization])
   end
 
-  @doc "Channel scoped to an organization; nil when absent or owned elsewhere."
-  def get_channel_for_organization(id, organization_id)
-      when is_integer(id) and is_integer(organization_id) do
-    from(c in InboundChannel,
-      where: c.id == ^id and c.organization_id == ^organization_id,
-      preload: [:inbound_route, :project, :organization]
-    )
-    |> Repo.one()
+  def get(%Custyard.Scope{tenant_id: tenant_id} = scope, id) do
+    if Custyard.Scope.current_staff(scope) do
+      Repo.get_by(InboundChannel, id: id, tenant_id: tenant_id)
+      |> Repo.preload([:inbound_route, :default_organization, :default_project, :default_label])
+    end
   end
 
   @doc "Changeset for form rendering."
@@ -129,7 +121,7 @@ defmodule Custyard.InboundChannels do
   def masked_ingress_address(%InboundChannel{}), do: nil
 
   @doc """
-  The From address for operator replies on this channel (D3): the public
+  The From address for staff replies on this channel (D3): the public
   local part at the selected sending domain, or the full ingress address
   when the channel falls back to the ingress identity. nil when the fallback
   is selected but the route has no domain yet (callers then use their own fallback).
@@ -165,7 +157,9 @@ defmodule Custyard.InboundChannels do
   the setup screen shows the ingress address immediately, which is the D7
   trigger for that state. `attrs` carries `public_address`, optional
   `display_name`, `ingress_kind` (default `forward`), `provider`,
-  `reply_from`; route, organization and project come from the route.
+  `reply_from` and optional customer, project and label defaults. The route
+  supplies the receiving infrastructure and tenant ownership; routing defaults
+  belong to the channel.
 
   A direct-MX channel (`ingress_kind: :mx`) receives mail at its public
   address on the route's custom domain. Creating the first one sets that
@@ -174,24 +168,22 @@ defmodule Custyard.InboundChannels do
   in `awaiting_first_message` when the domain is already verified. The
   public address must not be on a domain a forwarding channel of the
   organization already uses: pointing that domain's MX at Lettermint would
-  take mail away from the operator's mailbox.
+  take mail away from the staff's mailbox.
 
-  `opts[:operator]` is recorded on the audit event.
+  `opts[:staff]` is recorded on the audit event.
   """
   def create_channel(%InboundRoute{} = route, attrs, opts \\ []) when is_map(attrs) do
     attrs =
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
       |> Map.put("inbound_route_id", route.id)
-      |> Map.put("organization_id", route.organization_id)
       |> Map.put("tenant_id", route.tenant_id)
-      |> Map.put("project_id", route.project_id)
 
     changeset = InboundChannel.changeset(%InboundChannel{}, attrs)
 
     with :ok <- authorize_mutation(route, opts),
          {:ok, changeset} <- prepare_ingress(changeset, route),
-         {:ok, channel} <- operator_mutation(route, opts, fn _ -> Repo.insert(changeset) end) do
+         {:ok, channel} <- staff_mutation(route, opts, fn _ -> Repo.insert(changeset) end) do
       Custyard.EmailSetup.invalidate_receiving(channel.tenant_id)
 
       audit(channel, :channel_created, opts, %{
@@ -201,7 +193,7 @@ defmodule Custyard.InboundChannels do
       })
 
       broadcast(channel)
-      {:ok, Repo.preload(channel, [:inbound_route, :project])}
+      {:ok, Repo.preload(channel, [:inbound_route, :default_project])}
     end
   end
 
@@ -292,21 +284,19 @@ defmodule Custyard.InboundChannels do
   defp address_domain(_address), do: nil
 
   @doc """
-  Update operator-editable attributes (display name, provider, reply_from,
+  Update staff-editable attributes (display name, provider, reply_from,
   sending_domain, quiet window, attention bonus). A changed attention bonus rescores the
-  channel's active conversations at once.
+  channel's active threads at once.
   """
   def update_channel(%InboundChannel{} = channel, attrs, opts \\ []) when is_map(attrs) do
-    operator_mutation(channel, opts, fn channel -> do_update_channel(channel, attrs, opts) end)
+    staff_mutation(channel, opts, fn channel -> do_update_channel(channel, attrs, opts) end)
   end
 
   defp do_update_channel(channel, attrs, opts) do
     attrs =
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
-      |> Map.drop(
-        ~w(public_address ingress_kind inbound_route_id organization_id tenant_id project_id)
-      )
+      |> Map.drop(~w(public_address ingress_kind inbound_route_id tenant_id))
 
     changeset = InboundChannel.changeset(channel, attrs)
 
@@ -324,13 +314,13 @@ defmodule Custyard.InboundChannels do
 
   defp rescore(%InboundChannel{id: id}) do
     Recalculator.recalculate_channel(id)
-    Phoenix.PubSub.broadcast(Custyard.PubSub, "conversations", {:conversation_updated, nil})
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, nil})
   end
 
   @doc """
-  Operator confirmed the forwarding rule: `pending_verification` ->
+  Staff confirmed the forwarding rule: `pending_verification` ->
   `awaiting_first_message`. Consumes any captured verification, including a
-  confirmation received after the operator advanced to the first-message step.
+  confirmation received after the staff advanced to the first-message step.
   """
   def confirm_verification(channel, opts \\ [])
 
@@ -444,7 +434,7 @@ defmodule Custyard.InboundChannels do
     end
   end
 
-  @doc "Pause: deliveries are logged to the rejection log instead of becoming conversations."
+  @doc "Pause: deliveries are logged to the rejection log instead of becoming threads."
   def pause(%InboundChannel{} = channel, opts \\ []) do
     transition(channel, opts, &InboundChannel.state_changeset(&1, :paused, %{paused_at: now()}))
   end
@@ -494,7 +484,7 @@ defmodule Custyard.InboundChannels do
     do: {:error, invalid_state(channel, :rotate_token)}
 
   def rotate_token(%InboundChannel{} = channel, opts) do
-    operator_mutation(channel, opts, fn current -> do_rotate_token(current, opts) end)
+    staff_mutation(channel, opts, fn current -> do_rotate_token(current, opts) end)
   end
 
   defp do_rotate_token(%InboundChannel{state: :revoked} = channel, _opts),
@@ -514,7 +504,7 @@ defmodule Custyard.InboundChannels do
   end
 
   @doc """
-  Record that an operator revealed the full ingress address. The address
+  Record that a staff revealed the full ingress address. The address
   itself is read from the channel; this only leaves the audit trail D7 asks
   for.
   """
@@ -525,7 +515,7 @@ defmodule Custyard.InboundChannels do
 
   @doc "Delete a channel outright (admin). Prefer `revoke/2` for offboarding."
   def delete_channel(%InboundChannel{} = channel, opts \\ []) do
-    operator_mutation(channel, opts, fn current -> do_delete_channel(current, opts) end)
+    staff_mutation(channel, opts, fn current -> do_delete_channel(current, opts) end)
   end
 
   defp do_delete_channel(channel, opts) do
@@ -538,7 +528,7 @@ defmodule Custyard.InboundChannels do
   end
 
   defp transition(channel, opts, build_changeset) do
-    operator_mutation(channel, opts, fn _current ->
+    staff_mutation(channel, opts, fn _current ->
       current = Repo.get(InboundChannel, channel.id)
 
       if current && current.state == channel.state do
@@ -571,9 +561,9 @@ defmodule Custyard.InboundChannels do
 
   # Every lifecycle write is conditional on the state the caller read. A
   # delivery resolves its channel before triage and sender matching run; if
-  # an operator revokes (or pauses) the channel in that window, the stale
+  # a staff revokes (or pauses) the channel in that window, the stale
   # struct must not write `active` over `revoked`. The same guard stops an
-  # operator action from regressing a channel a delivery just activated.
+  # staff action from regressing a channel a delivery just activated.
   # One conditional UPDATE is the whole check: SQLite serialises writers.
   defp update_in_state(%Ecto.Changeset{valid?: false} = changeset, _channel),
     do: {:error, changeset}
@@ -601,7 +591,8 @@ defmodule Custyard.InboundChannels do
 
   # update_all returns a bare row; callers hold a struct with associations.
   defp keep_preloads(updated, channel) do
-    Enum.reduce([:inbound_route, :organization, :project], updated, fn assoc, acc ->
+    Enum.reduce([:inbound_route, :default_organization, :default_project], updated, fn assoc,
+                                                                                       acc ->
       case Map.fetch!(channel, assoc) do
         %Ecto.Association.NotLoaded{} -> acc
         loaded -> Map.put(acc, assoc, loaded)
@@ -625,7 +616,7 @@ defmodule Custyard.InboundChannels do
 
   Returns `{:ok, channel}` with the stored status, or `{:error, reason}` when
   the API call fails or reports a status this module does not know; the
-  stored status is left untouched in both cases. `opts[:operator]` is
+  stored status is left untouched in both cases. `opts[:staff]` is
   recorded on the audit event.
   """
   def check_sending_domain(%InboundChannel{} = channel, opts \\ []) do
@@ -682,36 +673,37 @@ defmodule Custyard.InboundChannels do
   # Network checks never hold a database transaction. Before recording results,
   # reject revoked sessions and channels whose routing/credentials changed.
   defp authorize_mutation(resource, opts) do
-    case Keyword.fetch(opts, :operator) do
+    case Keyword.fetch(opts, :staff) do
       :error ->
         :ok
 
-      {:ok, operator} ->
-        if authorized_operator?(operator, resource),
+      {:ok, staff} ->
+        if authorized_staff?(staff, resource),
           do: :ok,
           else: {:error, :unauthorized}
     end
   end
 
   @doc "Check current channel-management scope and session before a component event."
-  def authorized_operator?(%Custyard.OperatorAccount{} = operator, resource) do
-    current = Repo.get(Custyard.OperatorAccount, operator.id)
+  def authorized_staff?(%Custyard.StaffAccount{} = staff, resource) do
+    current = Repo.get(Custyard.StaffAccount, staff.id)
 
-    current &&
+    current && current.tenant_id == staff.tenant_id &&
+      Custyard.Tenants.active?(current.tenant_id) &&
       if(is_nil(resource),
-        do: current.role in ["admin", "super_admin"],
+        do: current.role == "admin",
         else: check_manager?(current, resource)
       ) &&
-      Custyard.OperatorAccount.session_claim_matches?(current, operator.session_claim)
+      Custyard.StaffAccount.session_claim_matches?(current, staff.session_claim)
   end
 
-  def authorized_operator?(_, _), do: false
+  def authorized_staff?(_, _), do: false
 
   # Components have their own lifecycle hooks, so their parent LiveView's
   # authorization hook cannot protect a channel write. Recheck actor and scope
   # under the same lock used by removal, reassignment and session rotation.
-  defp operator_mutation(resource, opts, fun) do
-    case Keyword.fetch(opts, :operator) do
+  defp staff_mutation(resource, opts, fun) do
+    case Keyword.fetch(opts, :staff) do
       :error ->
         Repo.transaction(fn ->
           case fun.(resource) do
@@ -720,12 +712,12 @@ defmodule Custyard.InboundChannels do
           end
         end)
 
-      {:ok, operator} ->
+      {:ok, staff} ->
         Repo.transaction(fn ->
-          current_operator = Custyard.OperatorAccess.lock_current(operator)
+          current_staff = Custyard.StaffAccess.lock_current(staff)
           current = Repo.get(resource.__struct__, resource.id)
           if is_nil(current), do: Repo.rollback(:stale_configuration)
-          authorize_current!(current_operator, operator, current)
+          authorize_current!(current_staff, staff, current)
 
           case fun.(current) do
             {:ok, value} -> value
@@ -737,7 +729,7 @@ defmodule Custyard.InboundChannels do
 
   defp persist_check(channel, opts, fun) do
     Repo.transaction(fn ->
-      authorize_check!(Keyword.get(opts, :operator), channel)
+      authorize_check!(Keyword.get(opts, :staff), channel)
 
       Repo.update_all(
         from(c in InboundChannel,
@@ -751,7 +743,7 @@ defmodule Custyard.InboundChannels do
 
       fields = [
         :tenant_id,
-        :organization_id,
+        :default_organization_id,
         :inbound_route_id,
         :state,
         :public_address,
@@ -777,28 +769,20 @@ defmodule Custyard.InboundChannels do
 
   defp authorize_check!(nil, _channel), do: :ok
 
-  defp authorize_check!(operator, channel) do
-    current = Custyard.OperatorAccess.lock_current(operator)
-    authorize_current!(current, operator, channel)
+  defp authorize_check!(staff, channel) do
+    current = Custyard.StaffAccess.lock_current(staff)
+    authorize_current!(current, staff, channel)
   end
 
-  defp authorize_current!(current, operator, channel) do
-    unless current && check_manager?(current, channel) &&
-             Custyard.OperatorAccount.session_claim_matches?(current, operator.session_claim),
+  defp authorize_current!(current, staff, channel) do
+    unless current && current.tenant_id == staff.tenant_id && current.role == staff.role &&
+             Custyard.Tenants.active?(current.tenant_id) && check_manager?(current, channel) &&
+             Custyard.StaffAccount.session_claim_matches?(current, staff.session_claim),
            do: Repo.rollback(:unauthorized)
   end
 
-  defp check_manager?(%{role: "super_admin"}, _), do: true
-
   defp check_manager?(%{role: "admin", tenant_id: id}, %{tenant_id: id}) when is_integer(id),
     do: true
-
-  defp check_manager?(%{role: "admin", tenant_id: nil, organization_id: id}, %{
-         organization_id: id
-       })
-       when is_integer(id) do
-    true
-  end
 
   defp check_manager?(_, _), do: false
 
@@ -817,9 +801,7 @@ defmodule Custyard.InboundChannels do
 
     * `{:ok, channel}` for a receiving channel that matched
     * `{:paused, channel}` / `{:revoked, channel}` when the token matched a
-      channel that must not create conversations
-    * `:legacy` when the route has no channels at all (routes created before
-      channels exist keep working as one implicit channel)
+      channel that must not create threads
     * `{:error, :no_channel}` when the route has channels but nothing matched
 
   Only the recipient (`data.recipient`, falling back to `normalized.to`) is
@@ -828,7 +810,7 @@ defmodule Custyard.InboundChannels do
   def resolve_for_delivery(%InboundRoute{id: route_id} = route, recipient) do
     case list_for_route(route_id) do
       [] ->
-        :legacy
+        {:error, :no_channel}
 
       channels ->
         classify_match(
@@ -880,7 +862,7 @@ defmodule Custyard.InboundChannels do
   @doc """
   The routing outcome for a channel already known to the caller (an IMAP
   poller): `{:ok, channel}`, `{:paused, channel}`, `{:revoked, channel}` or
-  `{:error, :no_channel}` for a draft. Reloads the state, which an operator
+  `{:error, :no_channel}` for a draft. Reloads the state, which a staff
   may have changed while the message was being fetched.
   """
   def classify_channel(%InboundChannel{id: id}) do
@@ -959,7 +941,7 @@ defmodule Custyard.InboundChannels do
     from(c in InboundChannel,
       where: c.state == :active and not is_nil(c.last_received_at),
       where: is_nil(c.quiet_notified_at) or c.quiet_notified_at < c.last_received_at,
-      preload: [:inbound_route, :organization]
+      preload: [:inbound_route, :default_organization]
     )
     |> Repo.all()
     |> Enum.filter(fn channel ->
@@ -978,8 +960,8 @@ defmodule Custyard.InboundChannels do
   @doc """
   Quiet-channel health check (D7): for every channel `list_quiet_channels/1`
   returns, write a `:channel_quiet` audit event, broadcast
-  `{:channel_quiet, channel_id}` on `"operator:notifications"` and the
-  channel topics, send the operator notice, and stamp `quiet_notified_at` so
+  `{:channel_quiet, channel_id}` on `"staff:notifications"` and the
+  channel topics, send the staff notice, and stamp `quiet_notified_at` so
   the channel is notified once per quiet period (the next delivery clears
   the stamp via `mark_received/2`).
 
@@ -1001,7 +983,7 @@ defmodule Custyard.InboundChannels do
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "operator:notifications",
+      "staff:notifications",
       {:channel_quiet, channel.id}
     )
 
@@ -1051,7 +1033,6 @@ defmodule Custyard.InboundChannels do
       |> Map.put("classification", classification)
       |> Map.put("tenant_id", route.tenant_id)
       |> Map.put("inbound_route_id", route.id)
-      |> Map.put("organization_id", route.organization_id)
       |> Map.update("subject", nil, &truncate(&1, 500))
 
     case %InboundChannelRejection{}
@@ -1080,19 +1061,6 @@ defmodule Custyard.InboundChannels do
 
     from(r in InboundChannelRejection,
       where: r.inbound_route_id == ^route_id,
-      order_by: [desc: r.inserted_at, desc: r.id],
-      limit: ^limit
-    )
-    |> Repo.all()
-  end
-
-  @doc "Rejections for an organization, newest first."
-  def list_rejections_for_organization(organization_id, opts \\ [])
-      when is_integer(organization_id) do
-    limit = Keyword.get(opts, :limit, 100)
-
-    from(r in InboundChannelRejection,
-      where: r.organization_id == ^organization_id,
       order_by: [desc: r.inserted_at, desc: r.id],
       limit: ^limit
     )
@@ -1149,7 +1117,7 @@ defmodule Custyard.InboundChannels do
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "organization:#{channel.organization_id}:channels",
+      "tenant:#{channel.tenant_id}:channels",
       {:channel_updated, channel.id}
     )
 
@@ -1164,22 +1132,23 @@ defmodule Custyard.InboundChannels do
     do: Phoenix.PubSub.subscribe(Custyard.PubSub, "channel:#{id}")
 
   @doc false
-  def subscribe_organization(organization_id),
-    do: Phoenix.PubSub.subscribe(Custyard.PubSub, "organization:#{organization_id}:channels")
+  def subscribe_tenant(tenant_id),
+    do: Phoenix.PubSub.subscribe(Custyard.PubSub, "tenant:#{tenant_id}:channels")
 
   # Audit payloads never carry the ingress token or any message content.
   defp audit(%InboundChannel{} = channel, event_type, opts, payload) do
-    operator = Keyword.get(opts, :operator)
+    staff = Keyword.get(opts, :staff)
 
     attrs = %{
       event_type: event_type,
+      tenant_id: channel.tenant_id,
       source: "inbound_channels",
-      organization_id: channel.organization_id,
-      project_id: channel.project_id,
+      organization_id: channel.default_organization_id,
+      project_id: channel.default_project_id,
       payload:
         payload
         |> Map.put(:channel_id, channel.id)
-        |> Map.put(:operator_id, operator && operator.id)
+        |> Map.put(:staff_id, staff && staff.id)
         |> Map.new(fn {k, v} -> {to_string(k), audit_value(v)} end)
     }
 

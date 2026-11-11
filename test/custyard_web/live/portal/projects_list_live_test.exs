@@ -8,7 +8,7 @@ defmodule CustyardWeb.Portal.ProjectsListLiveTest do
     test "renders projects page", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/projects")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/projects")
 
       assert html =~ "Projects"
       assert html =~ "Active projects and their progress"
@@ -17,7 +17,7 @@ defmodule CustyardWeb.Portal.ProjectsListLiveTest do
     test "shows empty state when no projects", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/projects")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/projects")
 
       assert html =~ "No active projects at this time"
     end
@@ -28,7 +28,7 @@ defmodule CustyardWeb.Portal.ProjectsListLiveTest do
       project1 = insert_project(organization_id: org.id, title: "Project Alpha")
       project2 = insert_project(organization_id: org.id, title: "Project Beta")
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/projects")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/projects")
 
       assert html =~ project1.title
       assert html =~ project2.title
@@ -43,7 +43,7 @@ defmodule CustyardWeb.Portal.ProjectsListLiveTest do
       hidden_project =
         insert_project(organization_id: org.id, title: "Hidden Project", portal_visible: false)
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/projects")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/projects")
 
       assert html =~ visible_project.title
       refute html =~ hidden_project.title
@@ -56,7 +56,7 @@ defmodule CustyardWeb.Portal.ProjectsListLiveTest do
       project1 = insert_project(organization_id: org1.id, title: "Org1 Project")
       project2 = insert_project(organization_id: org2.id, title: "Org2 Project")
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org1.token}/projects")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org1)}/projects")
 
       assert html =~ project1.title
       refute html =~ project2.title
@@ -68,7 +68,7 @@ defmodule CustyardWeb.Portal.ProjectsListLiveTest do
       _project =
         insert_project(organization_id: org.id, description: "This is a detailed description")
 
-      {:ok, _view, html} = live(conn, ~p"/p/#{org.token}/projects")
+      {:ok, _view, html} = live(conn, ~p"/portal/#{portal_token(org)}/projects")
 
       assert html =~ "This is a detailed description"
     end
@@ -79,7 +79,7 @@ defmodule CustyardWeb.Portal.ProjectsListLiveTest do
       org = insert_organization()
       project = insert_project(organization_id: org.id, title: "Test Project")
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/projects")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/projects")
 
       assert view |> element("a[href*='/projects/#{project.id}']") |> has_element?()
     end
@@ -87,7 +87,7 @@ defmodule CustyardWeb.Portal.ProjectsListLiveTest do
     test "links back to requests page", %{conn: conn} do
       org = insert_organization()
 
-      {:ok, view, _html} = live(conn, ~p"/p/#{org.token}/projects")
+      {:ok, view, _html} = live(conn, ~p"/portal/#{portal_token(org)}/projects")
 
       assert view |> element("a", "View Requests") |> has_element?()
     end

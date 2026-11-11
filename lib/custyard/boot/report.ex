@@ -56,7 +56,9 @@ defmodule Custyard.Boot.Report do
         do: "CREDENTIAL_ENCRYPTION_KEY=#{generate_credential_key()}"
       ),
       if(is_nil(settings.host), do: "PHX_HOST=#{@placeholder_host}"),
-      if(is_nil(settings.operator_email), do: "OPERATOR_EMAIL=#{@placeholder_email}"),
+      if(is_nil(settings.instance_admin_email),
+        do: "INSTANCE_ADMIN_EMAIL=#{@placeholder_email}"
+      ),
       mail_lines(settings.mail)
     ]
     |> List.flatten()

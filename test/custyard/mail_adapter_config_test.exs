@@ -28,7 +28,7 @@ defmodule Custyard.MailAdapterConfigTest do
   end
 
   describe "MAIL_ADAPTER in :prod" do
-    # Operator login is magic-link-only, so silently keeping the in-memory
+    # Staff login is magic-link-only, so silently keeping the in-memory
     # Local adapter locks everyone out with no error anywhere. The problem is
     # reported in the boot verdict (Custyard.Boot.Env) and the mailer is left
     # unconfigured; runtime.exs never raises.

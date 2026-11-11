@@ -9,7 +9,7 @@ defmodule CustyardWeb.Plugs.BootGateStartingTest do
   @env %{
     "SECRET_KEY_BASE" => @canary,
     "PHX_HOST" => "custyard.example.com",
-    "OPERATOR_EMAIL" => "ops-" <> @canary <> "@example.com",
+    "INSTANCE_ADMIN_EMAIL" => "ops-" <> @canary <> "@example.com",
     "LETTERMINT_PROJECT_TOKEN" => "lm_" <> @canary,
     "MAIL_ADAPTER" => "lettermint",
     "DATABASE_PATH" => "/data/custyard.db"
@@ -48,7 +48,7 @@ defmodule CustyardWeb.Plugs.BootGateStartingTest do
   end
 
   test "every other page is the starting card too", %{conn: conn} do
-    body = html_response(get(conn, "/operator/login"), 503)
+    body = html_response(get(conn, "/admin/login"), 503)
     assert body =~ ~s(data-testid="boot-card-starting")
     refute body =~ @canary
   end

@@ -13,17 +13,25 @@ defmodule Custyard.AuditEventTest do
   describe "event_types/0" do
     test "returns list of valid event types" do
       assert AuditEvent.event_types() == [
+               :instance_admin_created,
+               :instance_admin_removed,
+               :installation_configured,
                :webhook_received,
                :webhook_processed,
                :webhook_error,
                :slug_released,
                :prospect_converted,
-               :operator_created,
-               :operator_removed,
-               :operator_tenant_access_granted,
+               :staff_created,
+               :staff_removed,
+               :tenant_status_changed,
+               :tenant_host_removed,
                :acknowledgment_replayed,
                :acknowledgment_binding_created,
                :delivery_status_updated,
+               :reply_queued,
+               :internal_note_created,
+               :reply_retried,
+               :outbound_pause_changed,
                :channel_created,
                :channel_updated,
                :channel_deleted,
@@ -81,7 +89,7 @@ defmodule Custyard.AuditEventTest do
 
     test "source accepts fixed application channels and adapters, rejecting private content" do
       sources =
-        ~w(email lettermint zendesk intercom slack portal webhook unknown operator boot cli mix console inbound_channels dsar test)
+        ~w(email lettermint zendesk intercom slack portal webhook unknown staff instance_admin system acknowledgments lmtp cli mix console inbound_channels dsar test)
 
       for source <- sources do
         assert AuditEvent.changeset(%AuditEvent{}, build_audit_event(source: source)).valid?
@@ -134,9 +142,9 @@ defmodule Custyard.AuditEventTest do
       assert changeset.valid?
     end
 
-    test "accepts conversation_id" do
-      conv = insert_conversation()
-      attrs = build_audit_event(conversation_id: conv.id)
+    test "accepts thread_id" do
+      conv = insert_thread()
+      attrs = build_audit_event(thread_id: conv.id)
       changeset = AuditEvent.changeset(%AuditEvent{}, attrs)
 
       assert changeset.valid?
@@ -186,13 +194,13 @@ defmodule Custyard.AuditEventTest do
       assert audit_event.organization_id == org.id
     end
 
-    test "associates with conversation" do
-      conv = insert_conversation()
-      attrs = build_audit_event(conversation_id: conv.id)
+    test "associates with thread" do
+      conv = insert_thread()
+      attrs = build_audit_event(thread_id: conv.id)
 
       {:ok, audit_event} = AuditEvent.create(attrs)
 
-      assert audit_event.conversation_id == conv.id
+      assert audit_event.thread_id == conv.id
     end
 
     test "sets inserted_at timestamp" do
@@ -235,24 +243,24 @@ defmodule Custyard.AuditEventTest do
       assert {:ok, event} =
                AuditEvent.create(
                  build_audit_event(
-                   event_type: :operator_removed,
+                   event_type: :staff_removed,
                    payload: %{
-                     "operator_id" => "person@example.com",
+                     "staff_id" => "person@example.com",
+                     "actor_staff_id" => %{name: "Acme"},
                      "role" => "agent with customer content",
-                     "organization_id" => %{name: "Acme"},
-                     "soft_deleted_message_ids" => [7, "person@example.com", -1, 7, 8],
-                     "via" => "cli",
+                     "deleted_message_ids" => [7, "person@example.com", -1, 7, 8],
+                     "forwarded_message_ids" => ["person@example.com"],
                      "email" => "person@example.com"
                    }
                  )
                )
 
       assert event.payload == %{
-               "operator_id" => nil,
+               "staff_id" => nil,
+               "actor_staff_id" => nil,
                "role" => nil,
-               "organization_id" => nil,
-               "soft_deleted_message_ids" => [7, 8],
-               "via" => "cli"
+               "deleted_message_ids" => [7, 8],
+               "forwarded_message_ids" => []
              }
     end
 
@@ -260,8 +268,8 @@ defmodule Custyard.AuditEventTest do
       digest = :crypto.hash(:sha256, "exact evidence") |> Base.encode16(case: :lower)
 
       payload = %{
-        "actor" => "operator",
-        "operator_id" => 7,
+        "actor" => "staff",
+        "staff_id" => 7,
         "source" => "partner.integration",
         "submission_id" => "subject@example.com",
         "body_sha256" => digest,
@@ -274,7 +282,7 @@ defmodule Custyard.AuditEventTest do
                AuditEvent.create(
                  build_audit_event(
                    event_type: :acknowledgment_replayed,
-                   payload: Map.put(payload, "operator_email", "operator@example.com")
+                   payload: Map.put(payload, "staff_email", "staff@example.com")
                  )
                )
 
@@ -291,7 +299,7 @@ defmodule Custyard.AuditEventTest do
                      "delivery_id" => "event-123",
                      "from" => "sent",
                      "to" => "failed",
-                     "reason" => "Refused person@example.com /operator/login/verify/SECRET",
+                     "reason" => "Refused person@example.com /app/login/verify/SECRET",
                      "reason_code" => "person@example.com",
                      "status_code" => "550 person@example.com",
                      "enhanced_status_code" => "5.1.1 person@example.com",

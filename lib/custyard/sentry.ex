@@ -3,14 +3,14 @@ defmodule Custyard.Sentry do
   Sentry data-scrubbing hooks for Custyard.
 
   Custyard's public surfaces carry bearer credentials **in the URL path**, not
-  in headers — a conversation token (`/c/:token`), a slug-claim token
-  (`/claim/:token`), an operator magic-link token
-  (`/operator/login/verify/:token`), a routed-webhook callback token
+  in headers — a thread token (`/threads/:token`), a slug-claim token
+  (`/claims/:token`), a staff magic-link token
+  (`/app/login/verify/:token`), a routed-webhook callback token
   (`/api/webhook/route/:token`) and the unguessable portal org token
-  (`/p/:org_token/...`). Sentry's built-in `Sentry.PlugContext` url scrubber
+  (`/portal/:org_token/...`). Sentry's built-in `Sentry.PlugContext` url scrubber
   only redacts *query* parameters, so without this module those path tokens
   would ship to the error tracker verbatim and become a credential leak in the
-  one place operators look when something breaks.
+  one place staffs look when something breaks.
 
   This module is the single source of truth for that redaction. It is wired in
   two complementary places (defence in depth), both delegating to the same
@@ -45,24 +45,25 @@ defmodule Custyard.Sentry do
   # in flight (spec-inbound-channels D9: never logged, never stored).
   # `imap_password` is an IMAP channel's password in the wizard's event params;
   # `imap_password_ciphertext` is its stored form (D8).
-  @sensitive_keys ~w(access_token org_token callback_token token key credential secret passphrase password email as verification_code verification_link attachments imap_password imap_password_ciphertext)
+  @sensitive_keys ~w(project_token team_token url access_token org_token callback_token token key credential secret passphrase password email as verification_code verification_link attachments imap_password imap_password_ciphertext)
 
   # Path patterns. Each redacts the single credential segment that follows a
   # known prefix, leaving the prefix (and any trailing segments) intact for
-  # debugging — e.g. `/claim/<tok>/confirm` -> `/claim/[REDACTED]/confirm`. The
+  # debugging — e.g. `/claims/<tok>/confirm` -> `/claims/[REDACTED]/confirm`. The
   # `[^/?#\s]+` credential class stops at the next path separator, query/fragment
   # marker, or whitespace, so these work both on a bare path (from `scrub_url`)
   # and on a full URL embedded in free-form text such as a crash message.
   @path_patterns [
-    ~r{(/c/)[^/?#\s]+},
-    ~r{(/claim/)[^/?#\s]+},
-    ~r{(/operator/login/verify/)[^/?#\s]+},
+    ~r{(/threads/)[^/?#\s]+},
+    ~r{(/claims/)[^/?#\s]+},
+    ~r{((?:/app|/admin)/login/verify/)[^/?#\s]+},
     ~r{(/api/webhook/route/)[^/?#\s]+},
-    ~r{(/p/)[^/?#\s]+}
+    ~r{(/api/webhook/email-status/lettermint/)[^/?#\s]+},
+    ~r{(/portal/)[^/?#\s]+}
   ]
 
   # Crash reports (Sentry.LoggerHandler) `inspect/1` the crashed process's state
-  # into the event message and `:extra.crash_reason`. Custyard's conversation
+  # into the event message and `:extra.crash_reason`. Custyard's thread
   # LiveView keeps the raw access token (and prospect email) in socket assigns,
   # so a crash surfaces them as *bare values keyed by name* — e.g.
   # `access_token: "..."` — which the path patterns above cannot catch. These
@@ -124,7 +125,7 @@ defmodule Custyard.Sentry do
 
   Returns an empty map: Custyard's public-intake bodies carry prospect PII
   (name, email, message text) and portal replies, none of which belongs in an
-  error report. Sending no params is the secure default; operators who need a
+  error report. Sending no params is the secure default; staffs who need a
   specific field can opt it in later via a narrower scrubber.
   """
   @spec scrub_conn_body(Plug.Conn.t()) :: map()
@@ -443,25 +444,34 @@ defmodule Custyard.Sentry do
   defp safe_route_path(path)
        when path in [
               "/",
-              "/operator",
-              "/operator/login",
-              "/operator/login/sent",
+              "/app",
+              "/app/login",
+              "/app/login/sent",
+              "/admin",
+              "/admin/login",
               "/api/health",
               "/api/health/live"
             ],
        do: path
 
-  defp safe_route_path("/operator/login/verify/" <> _token),
-    do: "/operator/login/verify/[REDACTED]"
+  defp safe_route_path("/app/login/verify/" <> _token),
+    do: "/app/login/verify/[REDACTED]"
+
+  defp safe_route_path("/admin/login/verify/" <> _token),
+    do: "/admin/login/verify/[REDACTED]"
 
   defp safe_route_path("/api/webhook/route/" <> _token),
     do: "/api/webhook/route/[REDACTED]"
 
-  defp safe_route_path("/claim/" <> _token), do: "/claim/[REDACTED]"
-  defp safe_route_path("/c/" <> _token), do: "/c/[REDACTED]"
-  defp safe_route_path("/p/" <> _token), do: "/p/[REDACTED]"
-  defp safe_route_path("/i/" <> _source), do: "/i/[REDACTED]"
-  defp safe_route_path("/operator/" <> _path), do: "/operator/[OTHER]"
+  defp safe_route_path("/api/webhook/email-status/lettermint/" <> _token),
+    do: "/api/webhook/email-status/lettermint/[REDACTED]"
+
+  defp safe_route_path("/claims/" <> _token), do: "/claims/[REDACTED]"
+  defp safe_route_path("/threads/" <> _token), do: "/threads/[REDACTED]"
+  defp safe_route_path("/portal/" <> _token), do: "/portal/[REDACTED]"
+  defp safe_route_path("/intake/" <> _source), do: "/intake/[REDACTED]"
+  defp safe_route_path("/app/" <> _path), do: "/app/[OTHER]"
+  defp safe_route_path("/admin/" <> _path), do: "/admin/[OTHER]"
   defp safe_route_path(_path), do: "/[OTHER]"
 
   defp safe_exceptions(exceptions) when is_list(exceptions) do

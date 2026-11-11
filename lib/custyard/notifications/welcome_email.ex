@@ -1,7 +1,7 @@
 defmodule Custyard.Notifications.WelcomeEmail do
   @moduledoc """
-  The mail `Custyard.Boot.FirstRun` sends once, to the operator account the
-  boot just created from `OPERATOR_EMAIL`.
+  The mail `Custyard.Boot.FirstRun` sends once, to the instance administrator
+  the boot just created from `INSTANCE_ADMIN_EMAIL`.
 
   It is the mail check: it goes through the real adapter, so an unverified
   sender is rejected here, on the first-run card, instead of as a login
@@ -14,7 +14,7 @@ defmodule Custyard.Notifications.WelcomeEmail do
   @subject "Your Custyard is ready"
 
   @doc """
-  `to` is the operator's address, `host` the public hostname (`PHX_HOST`),
+  `to` is the administrator's address, `host` the installation hostname (`PHX_HOST`),
   `from` is `{name, address}`.
   """
   @spec build(String.t(), String.t(), {String.t(), String.t()}) :: Swoosh.Email.t()
@@ -30,11 +30,12 @@ defmodule Custyard.Notifications.WelcomeEmail do
     """
     Your Custyard instance at https://#{host} is set up.
 
-    Sign in at https://#{host}/operator/login with this address (#{to}).
+    Sign in at https://#{host}/admin/login with this address (#{to}).
     There is no password: a login link is emailed to you each time you sign in.
 
-    Once you have signed in, OPERATOR_EMAIL can be removed from the environment;
-    the account stays.
+    Once you have signed in, INSTANCE_ADMIN_EMAIL can be removed from the
+    environment; the account stays. Create a tenant and its first staff account
+    from the instance console.
     """
   end
 end

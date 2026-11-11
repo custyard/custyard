@@ -4,19 +4,19 @@ defmodule Custyard.Webhooks.Triage do
   (docs/design/spec-inbound-channels.md, D6).
 
   `classify/3` is a pure decision: it reads the normalized payload, the
-  route and the resolved channel (nil on a legacy route), queries the
+  route and the resolved channel (nil for a non-email source), queries the
   database only to look up existing rows, and never writes. The dispatcher
   acts on the result.
 
   Classes, checked in this order; the first match wins:
 
-    1. `{:own_echo, %Message{}}` - the Message-ID belongs to an operator
+    1. `{:own_echo, %Message{}}` - the Message-ID belongs to a staff
        reply Custyard sent from this organization (D4 archive copy).
-    2. `{:operator_sent, %{conversation:, operator:, email:}}` - a reply the
-       operator sent from their own mailbox, outside Custyard, that threads
-       to a known conversation.
-    3. `{:operator_forward, %{original:, operator:, email:}}` - customer
-       mail an operator forwarded in by hand (the backlog-import path):
+    2. `{:staff_sent, %{thread:, staff:, email:}}` - a reply the
+       staff sent from their own mailbox, outside Custyard, that threads
+       to a known thread.
+    3. `{:staff_forward, %{original:, staff:, email:}}` - customer
+       mail a staff forwarded in by hand (the backlog-import path):
        the original sender, subject and body are unwrapped from the
        forwarded block.
     4. `{:verification, %{provider:, code:, link:}}` - a Gmail or Proton
@@ -24,14 +24,14 @@ defmodule Custyard.Webhooks.Triage do
     5. `{:auto_response, reason}` - auto-submitted, bulk or bounce mail.
     6. `{:suspect, reason}` - spam-flagged or DKIM+DMARC failing mail from a
        sender who is not a known contact in the organization. A contact
-       whose only conversations are themselves suspect does not count:
+       whose only threads are themselves suspect does not count:
        suspect mail creates its own contact, and that must not whitelist
-       the sender's next message. An operator clearing the suspect flag on
-       any of those conversations is what makes the sender known.
+       the sender's next message. An staff clearing the suspect flag on
+       any of those threads is what makes the sender known.
     7. `{:customer, nil}` - everything else.
 
-  Classes 2 and 3 need an authenticated operator identity: `From` is
-  forgeable, so the sender must be an operator account of the organization
+  Classes 2 and 3 need an authenticated staff identity: `From` is
+  forgeable, so the sender must be a staff account of the organization
   (or the channel's own public address) *and* the forwarded copy must carry
   a DKIM pass whose signing domain is aligned with the sender's domain.
   Without that, the mail is customer mail from an unknown sender.
@@ -41,24 +41,23 @@ defmodule Custyard.Webhooks.Triage do
 
   alias Custyard.{
     Contact,
-    Conversation,
+    Thread,
     InboundChannel,
     InboundRoute,
     Message,
     Organization,
-    OperatorAccount,
+    StaffAccount,
     Repo
   }
 
   alias Custyard.Email.{ForwardUnwrapper, Normalizer, SenderMatcher, ThreadHeaders, ThreadMatcher}
 
-  @type operator_identity :: %{operator: struct() | nil, email: String.t()}
+  @type staff_identity :: %{staff: struct() | nil, email: String.t()}
 
   @type classification ::
           {:own_echo, struct()}
-          | {:operator_sent,
-             %{conversation: struct(), operator: struct() | nil, email: String.t()}}
-          | {:operator_forward, %{original: map(), operator: struct() | nil, email: String.t()}}
+          | {:staff_sent, %{thread: struct(), staff: struct() | nil, email: String.t()}}
+          | {:staff_forward, %{original: map(), staff: struct() | nil, email: String.t()}}
           | {:verification,
              %{provider: :google | :proton, code: String.t() | nil, link: String.t() | nil}}
           | {:auto_response, atom()}
@@ -85,7 +84,7 @@ defmodule Custyard.Webhooks.Triage do
   @auto_reply_headers ["X-Autoreply", "X-Autorespond"]
 
   @doc """
-  Classify `normalized` delivered on `route` to `channel` (nil for a legacy
+  Classify `normalized` delivered on `route` to `channel` (nil for a non-email
   route without channels).
   """
   @spec classify(map(), struct(), struct() | nil) :: classification()
@@ -93,7 +92,7 @@ defmodule Custyard.Webhooks.Triage do
     sender = SenderMatcher.extract_email(normalized[:from])
 
     with nil <- own_echo(normalized, route),
-         nil <- operator_mail(normalized, sender, route, channel),
+         nil <- staff_mail(normalized, sender, route, channel),
          nil <- verification(normalized, sender),
          nil <- auto_response(normalized),
          nil <- suspect(normalized, sender, route) do
@@ -111,10 +110,10 @@ defmodule Custyard.Webhooks.Triage do
       candidates ->
         query =
           from m in Message,
-            join: c in Conversation,
-            on: c.id == m.conversation_id,
-            where: m.source == :operator,
-            where: is_nil(m.triage_class) or m.triage_class != :operator_sent,
+            join: c in Thread,
+            on: c.id == m.thread_id,
+            where: m.source == :staff,
+            where: is_nil(m.triage_class) or m.triage_class != :staff_sent,
             where: m.message_id in ^candidates,
             order_by: [asc: m.id],
             limit: 1
@@ -142,81 +141,62 @@ defmodule Custyard.Webhooks.Triage do
 
   defp echo_candidates(_message_id), do: []
 
-  # --- operator-sent capture and manual forward (D6) ---
+  # --- staff-sent capture and manual forward (D6) ---
 
-  defp operator_mail(_normalized, nil, _route, _channel), do: nil
+  defp staff_mail(_normalized, nil, _route, _channel), do: nil
 
-  defp operator_mail(normalized, sender, route, channel) do
-    case operator_identity(normalized, sender, route, channel) do
+  defp staff_mail(normalized, sender, route, channel) do
+    case staff_identity(normalized, sender, route, channel) do
       nil ->
         nil
 
       identity ->
-        match =
-          if route.organization_id,
-            do: ThreadMatcher.find_thread(normalized, route.organization_id),
-            else: ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
+        match = ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
 
         case match do
-          {:ok, conversation} ->
-            {:operator_sent, Map.put(identity, :conversation, conversation)}
+          {:ok, thread} ->
+            {:staff_sent, Map.put(identity, :thread, thread)}
 
           no_match when no_match in [:not_found, :ambiguous] ->
-            operator_forward(normalized, identity)
+            staff_forward(normalized, identity)
         end
     end
   end
 
-  defp operator_forward(normalized, identity) do
+  defp staff_forward(normalized, identity) do
     subject = normalized[:subject]
     body = normalized[:body]
 
     if ForwardUnwrapper.forward_subject?(subject) or ForwardUnwrapper.forwarded_block?(body) do
       case ForwardUnwrapper.unwrap(body, subject) do
-        {:ok, original} -> {:operator_forward, Map.put(identity, :original, original)}
+        {:ok, original} -> {:staff_forward, Map.put(identity, :original, original)}
         :error -> nil
       end
     end
   end
 
-  # The sender is operator-owned (an operator account of this organization,
+  # The sender is staff-owned (a staff account of this organization,
   # or the channel's public address) and the DKIM signature on the forwarded
   # copy is from the sender's own domain.
-  defp operator_identity(normalized, sender, route, channel) do
+  defp staff_identity(normalized, sender, route, channel) do
     sender = String.downcase(sender)
 
     with true <- dkim_aligned?(normalized, sender),
-         {:ok, operator} <- operator_owned(sender, route, channel) do
-      %{operator: operator, email: sender}
+         {:ok, staff} <- staff_owned(sender, route, channel) do
+      %{staff: staff, email: sender}
     else
-      _not_operator -> nil
+      _not_staff -> nil
     end
   end
 
-  defp operator_owned(sender, route, channel) do
-    case Repo.get_by(OperatorAccount, email: OperatorAccount.normalize_email(sender)) do
-      %OperatorAccount{role: "super_admin"} = operator ->
-        {:ok, operator}
-
-      %OperatorAccount{} = operator ->
-        if legacy_customer_operator?(operator, route) or tenant_staff?(operator, route),
-          do: {:ok, operator},
-          else: channel_owned(sender, channel)
-
-      _other ->
-        channel_owned(sender, channel)
+  defp staff_owned(sender, route, channel) do
+    case Repo.get_by(StaffAccount,
+           email: StaffAccount.normalize_email(sender),
+           tenant_id: route.tenant_id
+         ) do
+      %StaffAccount{} = staff -> {:ok, staff}
+      _ -> channel_owned(sender, channel)
     end
-  end
-
-  defp legacy_customer_operator?(operator, route) do
-    not is_nil(route.organization_id) and
-      operator.organization_id == route.organization_id and
-      (is_nil(operator.tenant_id) or operator.tenant_id == route.tenant_id)
-  end
-
-  defp tenant_staff?(operator, route) do
-    not is_nil(route.tenant_id) and operator.tenant_id == route.tenant_id and
-      (is_nil(route.organization_id) or is_nil(operator.organization_id))
   end
 
   defp channel_owned(sender, channel) do
@@ -445,19 +425,19 @@ defmodule Custyard.Webhooks.Triage do
 
   defp known_contact?(nil, _organization_id), do: false
 
-  # A contact counts as known unless every conversation it has is suspect.
+  # A contact counts as known unless every thread it has is suspect.
   # Sender matching creates a contact for the first suspect delivery; without
   # this rule that contact would exempt the sender's second message. A
-  # contact with no conversations at all (operator-created or imported) is
-  # known, as is one with at least one conversation an operator accepted or
+  # contact with no threads at all (staff-created or imported) is
+  # known, as is one with at least one thread a staff accepted or
   # cleared.
   defp known_contact?(email, route) do
     suspect_only =
-      from v in Conversation,
+      from v in Thread,
         where: v.contact_id == parent_as(:contact).id and v.suspect == true
 
     accepted =
-      from v in Conversation,
+      from v in Thread,
         where: v.contact_id == parent_as(:contact).id and v.suspect == false
 
     query =
@@ -468,10 +448,7 @@ defmodule Custyard.Webhooks.Triage do
         where: c.email == ^email,
         where: not exists(suspect_only) or exists(accepted)
 
-    query =
-      if route.organization_id,
-        do: where(query, [c], c.organization_id == ^route.organization_id),
-        else: where(query, [_c, o], o.tenant_id == ^route.tenant_id)
+    query = where(query, [_c, o], o.tenant_id == ^route.tenant_id)
 
     Repo.exists?(query)
   end

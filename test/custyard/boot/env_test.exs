@@ -11,7 +11,7 @@ defmodule Custyard.Boot.EnvTest do
     "PHX_HOST" => "custyard.example.com",
     "MAIL_ADAPTER" => "lettermint",
     "LETTERMINT_PROJECT_TOKEN" => "lm_project_token",
-    "OPERATOR_EMAIL" => "ops@example.com",
+    "INSTANCE_ADMIN_EMAIL" => "ops@example.com",
     "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(@credential_key)
   }
 
@@ -54,11 +54,10 @@ defmodule Custyard.Boot.EnvTest do
       assert env.settings.host == nil
       assert env.settings.mail == nil
       assert env.settings.credential_keys == %{current: nil, previous: []}
-      assert env.settings.operator_email == nil
+      assert env.settings.instance_admin_email == nil
 
       assert env.settings.notifications == %{
                enabled: false,
-               operator_email: nil,
                from_name: "Custyard",
                from_address: nil
              }
@@ -83,7 +82,7 @@ defmodule Custyard.Boot.EnvTest do
       assert env.problems == []
       assert env.settings.secret_key_base == @secret
       assert env.settings.host == "custyard.example.com"
-      assert env.settings.operator_email == "ops@example.com"
+      assert env.settings.instance_admin_email == "ops@example.com"
 
       assert env.settings.mail == %{
                adapter: :lettermint,
@@ -103,7 +102,6 @@ defmodule Custyard.Boot.EnvTest do
     test "turns notifications on with a noreply sender", %{env: env} do
       assert env.settings.notifications == %{
                enabled: true,
-               operator_email: "ops@example.com",
                from_name: "Custyard",
                from_address: "noreply@custyard.example.com"
              }
@@ -191,7 +189,7 @@ defmodule Custyard.Boot.EnvTest do
       assert [%{kind: :missing}] = problems_for(env, "LETTERMINT_PROJECT_TOKEN")
     end
 
-    test "lettermint accepts LETTERMINT_API_KEY with a deprecation warning" do
+    test "LETTERMINT_API_KEY is no longer a sending token" do
       env =
         prod(
           @minimal
@@ -200,10 +198,10 @@ defmodule Custyard.Boot.EnvTest do
           |> Map.put("LETTERMINT_API_URL", "https://lm.internal/v1")
         )
 
-      assert env.verdict == :configured
-      assert env.settings.mail.config[:api_token] == "legacy"
+      assert [%{kind: :missing}] = problems_for(env, "LETTERMINT_PROJECT_TOKEN")
+      assert env.settings.mail.config[:api_token] == nil
       assert env.settings.mail.config[:base_url] == "https://lm.internal/v1"
-      assert warning?(env, "LETTERMINT_API_KEY", "deprecated")
+      assert warning?(env, "LETTERMINT_API_KEY", "LETTERMINT_PROJECT_TOKEN")
     end
 
     test "mailgun needs both key and domain" do
@@ -272,18 +270,85 @@ defmodule Custyard.Boot.EnvTest do
     end
   end
 
-  describe "OPERATOR_EMAIL" do
+  describe "INSTANCE_ADMIN_EMAIL" do
     test "must look like an address" do
-      env = prod(Map.put(@minimal, "OPERATOR_EMAIL", "ops-at-example"))
-      assert [%{kind: :malformed}] = problems_for(env, "OPERATOR_EMAIL")
-      assert env.settings.operator_email == nil
-      assert env.settings.notifications.operator_email == nil
+      env = prod(Map.put(@minimal, "INSTANCE_ADMIN_EMAIL", "ops-at-example"))
+      assert [%{kind: :malformed}] = problems_for(env, "INSTANCE_ADMIN_EMAIL")
+      assert env.settings.instance_admin_email == nil
     end
 
-    test "OPERATOR_NOTIFICATION_EMAIL overrides for notifications" do
-      env = prod(Map.put(@minimal, "OPERATOR_NOTIFICATION_EMAIL", "alerts@example.com"))
-      assert env.settings.notifications.operator_email == "alerts@example.com"
-      assert env.settings.operator_email == "ops@example.com"
+    test "is optional and never part of the notification settings" do
+      env = prod(Map.delete(@minimal, "INSTANCE_ADMIN_EMAIL"))
+      assert env.problems == []
+      assert env.settings.instance_admin_email == nil
+      refute Map.has_key?(env.settings.notifications, :operator_email)
+    end
+  end
+
+  describe "variables an earlier release read" do
+    test "are warnings that say where the setting lives now, never problems" do
+      retired = %{
+        "OPERATOR_EMAIL" => "INSTANCE_ADMIN_EMAIL",
+        "OPERATOR_NOTIFICATION_EMAIL" => "tenant",
+        "ACKNOWLEDGMENTS_ENABLED" => "tenant",
+        "ACKNOWLEDGMENTS_AMQP_URL" => "tenant",
+        "ACKNOWLEDGMENTS_SOURCE" => "tenant",
+        "ACKNOWLEDGMENTS_QUEUE" => "tenant",
+        "LETTERMINT_TEAM_TOKEN" => "tenant",
+        "WEBHOOK_SECRET_LETTERMINT" => "tenant"
+      }
+
+      env =
+        prod(Map.merge(@minimal, Map.new(retired, fn {name, _} -> {name, "PRIVATE-VALUE"} end)))
+
+      assert env.problems == []
+      assert env.verdict == :configured
+
+      for {name, fragment} <- retired do
+        assert warning?(env, name, "no longer read")
+        assert warning?(env, name, fragment)
+        assert name in env.present
+        refute name in Env.known_names()
+      end
+
+      refute inspect(env.warnings) =~ "PRIVATE-VALUE"
+    end
+
+    test "an absent retired variable says nothing" do
+      assert prod(@minimal).warnings == []
+    end
+  end
+
+  describe "outbound delivery and the attachment scanner" do
+    test "delivery is on unless stopped, and a mistyped value keeps it stopped" do
+      assert prod(@minimal).settings.outbound_delivery_enabled == true
+
+      assert prod(Map.put(@minimal, "OUTBOUND_DELIVERY_ENABLED", "false")).settings.outbound_delivery_enabled ==
+               false
+
+      env = prod(Map.put(@minimal, "OUTBOUND_DELIVERY_ENABLED", "flase"))
+      assert [%{kind: :malformed}] = problems_for(env, "OUTBOUND_DELIVERY_ENABLED")
+      assert env.settings.outbound_delivery_enabled == false
+    end
+
+    test "the scanner is configured only with a host and values in range" do
+      assert prod(@minimal).settings.attachment_scanner == nil
+
+      env = prod(Map.put(@minimal, "CLAMAV_HOST", "scanner.internal"))
+      assert env.problems == []
+
+      assert env.settings.attachment_scanner ==
+               %{host: "scanner.internal", port: 3310, timeout: 10_000}
+
+      for {name, value} <- [
+            {"CLAMAV_PORT", "70000"},
+            {"CLAMAV_TIMEOUT_MS", "5"},
+            {"CLAMAV_PORT", "x"}
+          ] do
+        env = prod(Map.merge(@minimal, %{"CLAMAV_HOST" => "scanner.internal", name => value}))
+        assert [%{kind: :malformed}] = problems_for(env, name)
+        assert env.settings.attachment_scanner == nil
+      end
     end
   end
 
@@ -789,26 +854,10 @@ defmodule Custyard.Boot.EnvTest do
   end
 
   describe "acknowledgments" do
-    test "ACKNOWLEDGMENTS_ENABLED must be boolean" do
-      env = prod(Map.put(@minimal, "ACKNOWLEDGMENTS_ENABLED", "on"))
-      assert [%{kind: :malformed}] = problems_for(env, "ACKNOWLEDGMENTS_ENABLED")
-    end
-
     test "ACKNOWLEDGMENTS_PREFETCH must be 1..100" do
       assert prod(Map.put(@minimal, "ACKNOWLEDGMENTS_PREFETCH", "100")).problems == []
       env = prod(Map.put(@minimal, "ACKNOWLEDGMENTS_PREFETCH", "0"))
       assert [%{kind: :malformed}] = problems_for(env, "ACKNOWLEDGMENTS_PREFETCH")
-    end
-
-    test "URL and source must be set together in prod" do
-      env = prod(Map.put(@minimal, "ACKNOWLEDGMENTS_AMQP_URL", "amqp://broker"))
-      assert [%{kind: :missing}] = problems_for(env, "ACKNOWLEDGMENTS_SOURCE")
-
-      env = prod(Map.put(@minimal, "ACKNOWLEDGMENTS_SOURCE", "colonel"))
-      assert [%{kind: :missing}] = problems_for(env, "ACKNOWLEDGMENTS_AMQP_URL")
-
-      env = Env.read(Map.put(@minimal, "ACKNOWLEDGMENTS_SOURCE", "colonel"), config_env: :dev)
-      assert env.problems == []
     end
   end
 

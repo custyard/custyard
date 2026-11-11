@@ -1,11 +1,11 @@
 defmodule Custyard.IntakeSource do
   @moduledoc """
-  Operator-configured public intake source (CTA).
+  Staff-configured public intake source (CTA).
 
   Each row defines a public intake entry point identified by `key`, a public
   URL segment. The key format is locked to lowercase alphanumerics with
-  hyphens/underscores because it appears verbatim in URLs and as conversation
-  provenance (`conversations.intake_source_key`).
+  hyphens/underscores because it appears verbatim in URLs and as thread
+  provenance (`threads.intake_source_key`).
 
   Modes:
   - `:active` — form-first intake page
@@ -15,7 +15,7 @@ defmodule Custyard.IntakeSource do
   use Ecto.Schema
   import Ecto.Changeset
 
-  # Same format as conversations.intake_source_key: 1-50 chars, lowercase
+  # Same format as threads.intake_source_key: 1-50 chars, lowercase
   # alphanumeric start, then lowercase alphanumerics/underscore/hyphen.
   # \A/\z (not ^/$): Erlang's re lets $ match before a trailing newline, which
   # would admit "valid-key\n" into a public URL segment.
@@ -30,7 +30,7 @@ defmodule Custyard.IntakeSource do
   @max_link_url_length 2000
 
   schema "intake_sources" do
-    field :tenant_id, :id, default: 1
+    field :tenant_id, :id
     belongs_to :tenant, Custyard.Tenant, define_field: false
     field :key, :string
     field :name, :string
@@ -82,16 +82,16 @@ defmodule Custyard.IntakeSource do
     intake_source
     |> cast(attrs, [:key, :tenant_id | @update_fields])
     |> foreign_key_constraint(:tenant_id)
-    |> validate_required([:key, :name])
+    |> validate_required([:tenant_id, :key, :name])
     |> validate_format(:key, @key_format)
-    |> unique_constraint(:key)
+    |> unique_constraint(:key, name: :intake_sources_tenant_id_key_index)
     |> validate_content()
   end
 
   @doc """
   Changeset for updating an existing source. Does not cast `:key`: the key is
-  a public URL segment and conversation provenance
-  (`conversations.intake_source_key`), immutable after creation regardless of
+  a public URL segment and thread provenance
+  (`threads.intake_source_key`), immutable after creation regardless of
   caller.
   """
   def update_changeset(intake_source, attrs) do

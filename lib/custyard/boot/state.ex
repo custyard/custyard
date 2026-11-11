@@ -17,7 +17,7 @@ defmodule Custyard.Boot.State do
     * `:database_unavailable` — configuration is complete but the database
       probe failed; the endpoint serves the database card while
       `Custyard.Boot.Monitor` retries.
-    * `:first_run` — the app is fully up on a database with no operator who
+    * `:first_run` — the app is fully up on a database with no instance administrator who
       can log in; `/` shows the setup checklist, everything else is normal.
     * `:ready` — normal operation.
   """
@@ -42,7 +42,7 @@ defmodule Custyard.Boot.State do
   What the probe learned. `facts` holds whatever is known without values:
   `:kind` (`:sqlite | :turso | :postgres`), `:path` (SQLite only),
   `:mounted?` (whether `/data` is a mount), `:file_exists?`, `:migrations`
-  (count applied) and `:operators` (count that can log in).
+  (count applied) and `:instance_admins` (count that exist).
   """
   @type database :: %{
           status: :unknown | :ok | :error,
@@ -54,18 +54,18 @@ defmodule Custyard.Boot.State do
           facts: map
         }
 
-  @type step_key :: :schema | :operator | :mail | :sign_in
+  @type step_key :: :schema | :instance_admin | :mail | :sign_in
   @type step_status :: :pending | :running | :ok | :failed | :skipped
 
   @type step :: %{key: step_key, status: step_status, detail: String.t() | nil}
 
   @type first_run :: %{
           steps: [step],
-          operator_email: String.t() | nil,
+          instance_admin_email: String.t() | nil,
           completed_at: DateTime.t() | nil
         }
 
-  @typedoc "Outcome of the most recent outbound mail attempt, for /operator/system."
+  @typedoc "Outcome of the most recent outbound mail attempt, for /admin/system."
   @type mail_result :: %{
           at: DateTime.t(),
           adapter: atom,
@@ -97,11 +97,11 @@ defmodule Custyard.Boot.State do
             first_run: %{
               steps: [
                 %{key: :schema, status: :pending, detail: nil},
-                %{key: :operator, status: :pending, detail: nil},
+                %{key: :instance_admin, status: :pending, detail: nil},
                 %{key: :mail, status: :pending, detail: nil},
                 %{key: :sign_in, status: :pending, detail: nil}
               ],
-              operator_email: nil,
+              instance_admin_email: nil,
               completed_at: nil
             },
             last_mail: nil

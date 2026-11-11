@@ -210,14 +210,13 @@ defmodule Custyard.Boot.ProbeTest do
   end
 
   describe "facts/1 and repo_config/1" do
-    test "adds schema and operator counts while the Repo is running" do
-      insert_operator_account(email: "ops@example.com")
-      insert_operator_account(email: "admin@custyard.local")
+    test "adds schema and administrator counts while the Repo is running" do
+      {:created, _admin} = Custyard.InstanceAdmins.create_admin("ops@example.com")
 
       facts = Probe.facts(env(%{"DATABASE_PATH" => "/data/custyard.db"}))
       assert facts.kind == :sqlite
       assert facts.migrations > 0
-      assert facts.operators == 1
+      assert facts.instance_admins == 1
     end
 
     test "builds the Repo configuration runtime.exs writes" do

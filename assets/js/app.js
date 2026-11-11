@@ -51,7 +51,7 @@ Hooks.ResetOnSubmit = {
 }
 
 // Submit form on Ctrl+Enter or Cmd+Enter
-// Useful for quick message sending in operator interfaces
+// Useful for quick message sending in staff interfaces
 Hooks.CtrlEnterSubmit = {
   mounted() {
     this.el.addEventListener("keydown", (e) => {
@@ -113,7 +113,9 @@ Hooks.CopyToClipboard = {
 }
 
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
-let liveSocket = new LiveSocket("/live", Socket, {
+const socketPath = window.location.pathname.startsWith("/admin") ? "/admin/live" :
+  window.location.pathname.startsWith("/app") ? "/app/live" : "/live"
+let liveSocket = new LiveSocket(socketPath, Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
   hooks: Hooks

@@ -1,9 +1,9 @@
 defmodule Custyard.Intake do
   @moduledoc """
-  Public intake domain: intake-source configuration, anonymous conversation
+  Public intake domain: intake-source configuration, anonymous thread
   creation, access-token access, and prospect email capture.
 
-  Public-intake conversations carry source `:public_intake`, no organization,
+  Public-intake threads carry source `:public_intake`, no organization,
   and no contact. Each has exactly one `Custyard.Prospect` holding the hashed
   access token; the plaintext token is returned exactly once at creation (and
   again only on rotation) and is never persisted.
@@ -14,14 +14,15 @@ defmodule Custyard.Intake do
   alias Ecto.Multi
 
   alias Custyard.{
-    Conversation,
-    Conversations,
+    Thread,
+    Threads,
     IntakeSource,
     Message,
     Prospect,
     Repo,
     Scoring,
-    Slugs
+    Slugs,
+    Tenant
   }
 
   alias Custyard.Auth.Token
@@ -36,20 +37,15 @@ defmodule Custyard.Intake do
   @doc """
   List all intake sources, ordered by key.
   """
-  def list_sources do
-    Repo.all(from s in IntakeSource, order_by: [asc: s.key])
+  def list_sources(%Custyard.Scope{tenant_id: tenant_id} = scope) do
+    if Custyard.Scope.current_staff(scope),
+      do: Repo.all(from s in IntakeSource, where: s.tenant_id == ^tenant_id, order_by: s.key),
+      else: []
   end
 
-  def list_sources(tenant_id),
-    do: Repo.all(from s in IntakeSource, where: s.tenant_id == ^tenant_id, order_by: s.key)
-
-  @doc """
-  Get an intake source by id, regardless of enabled state. Returns `nil`
-  when not found. Operator UI lookup - the public surface must use
-  `get_enabled_source/1`.
-  """
-  def get_source(id) do
-    Repo.get(IntakeSource, id)
+  def get_source(%Custyard.Scope{tenant_id: tenant_id} = scope, id) do
+    if Custyard.Scope.current_staff(scope),
+      do: Repo.get_by(IntakeSource, tenant_id: tenant_id, id: id)
   end
 
   @doc """
@@ -58,34 +54,38 @@ defmodule Custyard.Intake do
   Returns `nil` for unknown or disabled keys. Request input is validated by
   table lookup — never converted to an atom.
   """
-  def get_enabled_source(key) when is_binary(key) do
-    Repo.get_by(IntakeSource, key: key, enabled: true)
+  def get_enabled_source(key, tenant_id) when is_binary(key) do
+    Repo.one(
+      from s in IntakeSource,
+        join: t in assoc(s, :tenant),
+        where: s.key == ^key and s.tenant_id == ^tenant_id and s.enabled and t.status == "active"
+    )
   end
 
-  def get_enabled_source(_key), do: nil
+  def get_enabled_source(_key, _tenant_id), do: nil
 
   @doc """
   Get an intake source by key, regardless of enabled state. Returns `nil`
   for unknown keys and non-binary input.
 
-  Provenance lookup for prospect surfaces: `conversations.intake_source_key`
-  stores the key string (not a foreign key), so a conversation's source may
+  Provenance lookup for prospect surfaces: `threads.intake_source_key`
+  stores the key string (not a foreign key), so a thread's source may
   be disabled or deleted after creation — the branded link on an existing
   thread survives a disable (the source still exists) and disappears on
-  delete. Public intake entry must keep using `get_enabled_source/1`.
+  delete. Public intake entry must keep using `get_enabled_source/2`.
   """
-  def get_source_by_key(key) when is_binary(key) do
-    Repo.get_by(IntakeSource, key: key)
+  def get_source_by_key(key, tenant_id) when is_binary(key) do
+    Repo.get_by(IntakeSource, key: key, tenant_id: tenant_id)
   end
 
-  def get_source_by_key(_key), do: nil
+  def get_source_by_key(_key, _tenant_id), do: nil
 
   @doc """
   The intake source passive pages pair with: the first enabled active-mode
   source, ordered by key — the deterministic choice until explicit pairing
   exists in the schema. Returns `nil` when no enabled active source exists.
   """
-  def first_enabled_active_source(tenant_id \\ 1) do
+  def first_enabled_active_source(tenant_id) do
     Repo.one(
       from s in IntakeSource,
         where: s.enabled == true and s.mode == :active and s.tenant_id == ^tenant_id,
@@ -97,73 +97,104 @@ defmodule Custyard.Intake do
   @doc """
   Create an intake source.
   """
-  def create_source(attrs) do
-    %IntakeSource{}
-    |> IntakeSource.changeset(attrs)
-    |> Repo.insert()
+  def create_source(%Custyard.Scope{} = scope, attrs) do
+    with_source_admin(scope, fn ->
+      attrs =
+        Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
+        |> Map.put("tenant_id", scope.tenant_id)
+
+      %IntakeSource{} |> IntakeSource.changeset(attrs) |> Repo.insert()
+    end)
   end
 
   @doc """
   Update an intake source.
 
-  The key is immutable after creation (public URL segment and conversation
+  The key is immutable after creation (public URL segment and thread
   provenance): `IntakeSource.update_changeset/2` never casts `:key`, so key
   values in `attrs` are ignored regardless of caller.
   """
-  def update_source(%IntakeSource{} = source, attrs) do
-    source
-    |> IntakeSource.update_changeset(attrs)
-    |> Repo.update()
+  def update_source(%Custyard.Scope{} = scope, %IntakeSource{} = source, attrs) do
+    with_source_admin(scope, fn ->
+      case get_source(scope, source.id) do
+        nil -> {:error, :not_found}
+        current -> current |> IntakeSource.update_changeset(attrs) |> Repo.update()
+      end
+    end)
   end
 
   @doc """
   Delete an intake source.
 
-  Conversation provenance is unaffected: `conversations.intake_source_key`
+  Thread provenance is unaffected: `threads.intake_source_key`
   stores the key string, not a foreign key.
   """
-  def delete_source(%IntakeSource{} = source) do
-    Repo.delete(source)
+  def delete_source(%Custyard.Scope{} = scope, %IntakeSource{} = source) do
+    with_source_admin(scope, fn ->
+      case get_source(scope, source.id) do
+        nil -> {:error, :not_found}
+        current -> Repo.delete(current)
+      end
+    end)
   end
 
-  ## Conversation creation ----------------------------------------------------
+  defp with_source_admin(scope, fun) do
+    Repo.transaction(fn ->
+      staff =
+        scope.staff_id &&
+          Custyard.StaffAccess.lock_current(%Custyard.StaffAccount{id: scope.staff_id})
+
+      if staff && staff.tenant_id == scope.tenant_id && staff.role == "admin" &&
+           Custyard.StaffAccount.session_claim_matches?(staff, scope.session_claim) &&
+           Custyard.Tenants.active?(scope.tenant_id) do
+        case fun.() do
+          {:ok, result} -> result
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      else
+        Repo.rollback(:unauthorized)
+      end
+    end)
+  end
+
+  ## Thread creation ----------------------------------------------------
 
   @doc """
-  Create a public-intake conversation from an anonymous submission.
+  Create a public-intake thread from an anonymous submission.
 
   Validates `source_key` against enabled intake sources by table lookup, then
   atomically creates:
 
-  - the conversation (source `:public_intake`, no organization, no contact,
+  - the thread (source `:public_intake`, no organization, no contact,
     subject derived from the first non-empty line of the body)
   - the prospect with a fresh access token (hash stored, plaintext returned)
   - the first message (source `:prospect`, origin `:public_intake`)
 
   Post-commit it caches the attention score and broadcasts
-  `{:conversation_created, id}` on the `"conversations"` topic only — the
+  `{:thread_created, id}` on the `"threads"` topic only — the
   org-scoped topic is skipped because the organization is nil.
 
-  Returns `{:ok, %{conversation: c, prospect: p, access_token: token}}` — the
+  Returns `{:ok, %{thread: c, prospect: p, access_token: token}}` — the
   only place the plaintext access token is returned — or
   `{:error, :unknown_source}` / `{:error, changeset}`.
   """
-  def create_intake_conversation(source_key, message_body, _opts \\ []) do
-    case get_enabled_source(source_key) do
+  def create_intake_thread(source_key, message_body, opts) do
+    case get_enabled_source(source_key, Keyword.fetch!(opts, :tenant_id)) do
       nil ->
         {:error, :unknown_source}
 
       %IntakeSource{} = source ->
-        do_create_intake_conversation(source, message_body)
+        do_create_intake_thread(source, message_body)
     end
   end
 
-  defp do_create_intake_conversation(source, message_body) do
+  defp do_create_intake_thread(source, message_body) do
     {access_token, token_hash} = Token.generate()
     body = Normalizer.truncate(message_body, Normalizer.max_body_length())
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    conversation_changeset =
-      Conversation.intake_changeset(%Conversation{}, %{
+    thread_changeset =
+      Thread.intake_changeset(%Thread{}, %{
         subject: derive_subject(body),
         state: :new,
         source: :public_intake,
@@ -173,53 +204,55 @@ defmodule Custyard.Intake do
       })
 
     Multi.new()
-    |> Multi.insert(:conversation, conversation_changeset)
-    |> Multi.insert(:prospect, fn %{conversation: conversation} ->
+    |> Multi.run(:source, fn _repo, _changes -> lock_enabled_source(source) end)
+    |> Multi.insert(:thread, thread_changeset)
+    |> Multi.insert(:prospect, fn %{thread: thread} ->
       Prospect.create_changeset(%Prospect{}, %{
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         access_token_hash: token_hash
       })
     end)
-    |> Multi.insert(:message, fn %{conversation: conversation} ->
+    |> Multi.insert(:message, fn %{thread: thread} ->
       # sender_email and delivery_status are deliberately nil: there is no
       # sender identity yet, and inbound messages never carry delivery state.
       # message_id is synthetic — see generate_prospect_message_id/1.
       Message.changeset(%Message{}, %{
-        conversation_id: conversation.id,
+        thread_id: thread.id,
+        tenant_id: thread.tenant_id,
         source: :prospect,
         origin: :public_intake,
         body: body,
         is_internal_note: false,
-        message_id: generate_prospect_message_id(conversation.id)
+        message_id: generate_prospect_message_id(thread.id)
       })
     end)
     |> Repo.transaction()
     |> case do
-      {:ok, %{conversation: conversation, prospect: prospect}} ->
-        Scoring.calculate_and_cache(conversation.id)
+      {:ok, %{thread: thread, prospect: prospect}} ->
+        Scoring.calculate_and_cache(thread.id)
 
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
-          "conversations",
-          {:conversation_created, conversation.id}
+          "threads",
+          {:thread_created, thread.id}
         )
 
         # No-op while organization_id is nil (broadcast_to_org/2 guard) —
-        # public-intake conversations have no org topic until linked.
-        Conversations.broadcast_to_org(
-          conversation.organization_id,
-          {:conversation_created, conversation.id}
+        # public-intake threads have no org topic until linked.
+        Threads.broadcast_to_org(
+          thread.organization_id,
+          {:thread_created, thread.id}
         )
 
         # Out-of-band arrival signal: the broadcasts above reach only
         # LiveViews that are already open. Result deliberately ignored —
         # everything above is committed, and ArrivalEmail owns its own
         # gating, rate limiting, and failure logging.
-        _ = ArrivalEmail.send_arrival(conversation, source, body)
+        _ = ArrivalEmail.send_arrival(thread, source, body)
 
         {:ok,
          %{
-           conversation: Repo.reload!(conversation),
+           thread: Repo.reload!(thread),
            prospect: prospect,
            access_token: access_token
          }}
@@ -248,21 +281,25 @@ defmodule Custyard.Intake do
     end
   end
 
-  ## Conversation access ------------------------------------------------------------
+  ## Thread access ------------------------------------------------------------
 
   @doc """
-  Fetch the conversation a access token grants access to.
+  Fetch the thread a access token grants access to.
 
   Hashes the presented token for an indexed lookup; revoked and unknown tokens
   are indistinguishable (`{:error, :not_found}`). Preloads the associations the
-  conversation view renders (organization, contact, prospect, public messages).
+  thread view renders (organization, contact, prospect, public messages).
   """
-  def get_conversation_by_access_token(token) when is_binary(token) do
+  def get_thread_by_access_token(token, tenant_id)
+      when is_binary(token) and is_integer(tenant_id) do
     hash = Token.hash(token)
 
     prospect =
       Repo.one(
         from p in Prospect,
+          join: t in Custyard.Tenant,
+          on: t.id == p.tenant_id,
+          where: p.tenant_id == ^tenant_id and t.status == "active",
           where: p.access_token_hash == ^hash and is_nil(p.revoked_at)
       )
 
@@ -271,13 +308,13 @@ defmodule Custyard.Intake do
         {:error, :not_found}
 
       %Prospect{} = prospect ->
-        case Repo.get(Conversation, prospect.conversation_id) do
+        case Repo.get_by(Thread, id: prospect.thread_id, tenant_id: tenant_id) do
           nil ->
             {:error, :not_found}
 
-          conversation ->
-            conversation =
-              Repo.preload(conversation, [
+          thread ->
+            thread =
+              Repo.preload(thread, [
                 :organization,
                 :contact,
                 :prospect,
@@ -288,43 +325,46 @@ defmodule Custyard.Intake do
                   )
               ])
 
-            {:ok, conversation}
+            {:ok, thread}
         end
     end
   end
 
-  def get_conversation_by_access_token(_token), do: {:error, :not_found}
+  def get_thread_by_access_token(_token, _tenant_id), do: {:error, :not_found}
 
   @doc """
   Whether a access token currently resolves: same predicate as
-  `get_conversation_by_access_token/1` (hash match, not revoked) without
-  loading the conversation or its preloads.
+  `get_thread_by_access_token/1` (hash match, not revoked) without
+  loading the thread or its preloads.
 
   For surfaces that only need validity — the cookie refresh in
-  `CustyardWeb.Plugs.ConversationCookie` and the intake-page conversation banner —
+  `CustyardWeb.Plugs.ThreadCookie` and the intake-page thread banner —
   not the thread.
   """
-  def access_token_valid?(token) when is_binary(token) do
+  def access_token_valid?(token, tenant_id) when is_binary(token) and is_integer(tenant_id) do
     hash = Token.hash(token)
 
     Repo.exists?(
       from p in Prospect,
+        join: t in Custyard.Tenant,
+        on: t.id == p.tenant_id,
+        where: p.tenant_id == ^tenant_id and t.status == "active",
         where: p.access_token_hash == ^hash and is_nil(p.revoked_at)
     )
   end
 
-  def access_token_valid?(_token), do: false
+  def access_token_valid?(_token, _tenant_id), do: false
 
   @doc """
-  Add a prospect reply to a public-intake conversation via the conversation surface.
+  Add a prospect reply to a public-intake thread via the thread surface.
 
   Mirrors the established inbound semantics (the webhook pipeline's
   reactivation and the portal reply path): the message carries source
   `:prospect` and origin `:public_intake` with `sender_email` and
   `delivery_status` deliberately nil; a reply on a waiting/dormant/resolved
-  conversation reactivates it to `:active`; `last_customer_action_at` is
+  thread reactivates it to `:active`; `last_customer_action_at` is
   always touched. Post-commit: rescore plus guarded broadcasts (the
-  org-scoped topic fires only when the conversation is linked).
+  org-scoped topic fires only when the thread is linked).
 
   The prospect is re-read and re-checked inside the same transaction as the
   write, so a revocation or rotation racing the caller's handle still blocks
@@ -332,7 +372,7 @@ defmodule Custyard.Intake do
   indistinguishable by design.
 
   A reply whose trimmed body is identical to the prospect's most recent
-  message in the conversation is refused with `{:error, :duplicate_message}`
+  message in the thread is refused with `{:error, :duplicate_message}`
   — prod testing produced runs of identical messages from double-submits.
   Only the single latest prospect-authored message is compared, so resending
   earlier content stays legitimate.
@@ -346,46 +386,59 @@ defmodule Custyard.Intake do
       Callers that did not authenticate by token (the intake POST that just
       created it) omit the option.
   """
-  def add_prospect_reply(%Conversation{id: conversation_id}, body, opts \\ [])
+  def add_prospect_reply(%Thread{id: thread_id, tenant_id: tenant_id}, body, opts \\ [])
       when is_binary(body) do
-    case Repo.get(Conversation, conversation_id) do
-      nil -> {:error, :no_prospect}
-      conversation -> do_add_prospect_reply(conversation, body, opts)
+    case Repo.get(Thread, thread_id) do
+      nil ->
+        {:error, :no_prospect}
+
+      %Thread{tenant_id: ^tenant_id} = thread ->
+        do_add_prospect_reply(thread, body, Keyword.put(opts, :tenant_id, tenant_id))
+
+      _ ->
+        {:error, :no_prospect}
     end
   end
 
-  defp do_add_prospect_reply(conversation, body, opts) do
+  defp do_add_prospect_reply(thread, body, opts) do
     body = Normalizer.truncate(body, Normalizer.max_body_length())
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     message_changeset =
       Message.changeset(%Message{}, %{
-        conversation_id: conversation.id,
+        thread_id: thread.id,
+        tenant_id: thread.tenant_id,
         source: :prospect,
         origin: :public_intake,
         body: body,
         is_internal_note: false,
-        message_id: generate_prospect_message_id(conversation.id)
+        message_id: generate_prospect_message_id(thread.id)
       })
 
     Multi.new()
-    |> Multi.run(:prospect, fn _repo, _changes -> authorized_prospect(conversation.id, opts) end)
+    |> Multi.run(:current_thread, fn _repo, _changes -> lock_active_thread(thread.id, opts) end)
+    |> Multi.run(:prospect, fn _repo, _changes -> authorized_prospect(thread.id, opts) end)
     |> Multi.run(:duplicate, fn _repo, _changes ->
-      if duplicate_of_last_prospect_message?(conversation.id, body) do
+      if duplicate_of_last_prospect_message?(thread.id, body) do
         {:error, :duplicate_message}
       else
         {:ok, :unique}
       end
     end)
     |> Multi.insert(:message, message_changeset)
-    |> Multi.update(:conversation, reactivate_changeset(conversation, now))
+    |> Multi.update(:thread, fn %{current_thread: current} ->
+      reactivate_changeset(current, now)
+    end)
     |> Repo.transaction()
     |> case do
-      {:ok, %{conversation: conversation, message: message}} ->
-        perform_reply_side_effects(conversation)
-        {:ok, %{conversation: conversation, message: message}}
+      {:ok, %{thread: thread, message: message}} ->
+        perform_reply_side_effects(thread)
+        {:ok, %{thread: thread, message: message}}
 
       {:error, :prospect, reason, _changes} ->
+        {:error, reason}
+
+      {:error, :current_thread, reason, _changes} ->
         {:error, reason}
 
       {:error, :duplicate, reason, _changes} ->
@@ -397,15 +450,15 @@ defmodule Custyard.Intake do
   end
 
   # Double-submit guard: whether `body` (trimmed) matches the prospect's most
-  # recent message in the conversation. Deliberately compares only the single
-  # latest prospect-authored message — operator messages never participate,
+  # recent message in the thread. Deliberately compares only the single
+  # latest prospect-authored message — staff messages never participate,
   # and content older than the latest prospect message may be resent. Runs
   # inside the reply transaction so it serializes with the insert.
-  defp duplicate_of_last_prospect_message?(conversation_id, body) do
+  defp duplicate_of_last_prospect_message?(thread_id, body) do
     last_body =
       Repo.one(
         from m in Message,
-          where: m.conversation_id == ^conversation_id and m.source == :prospect,
+          where: m.thread_id == ^thread_id and m.source == :prospect,
           order_by: [desc: m.inserted_at, desc: m.id],
           limit: 1,
           select: m.body
@@ -414,7 +467,7 @@ defmodule Custyard.Intake do
     is_binary(last_body) and String.trim(last_body) == String.trim(body)
   end
 
-  # Enforces the `:token_hash` option shared by the conversation-surface writes:
+  # Enforces the `:token_hash` option shared by the thread-surface writes:
   # when the caller presents the credential hash it authenticated with, the
   # prospect's stored hash must still match, otherwise the token rotated
   # underneath a still-mounted socket and the handle has lost access.
@@ -427,88 +480,146 @@ defmodule Custyard.Intake do
   end
 
   # Synthetic RFC 5322 Message-ID for prospect web messages. The intake
-  # surface has no real email Message-ID, but operator replies thread
+  # surface has no real email Message-ID, but staff replies thread
   # In-Reply-To/References off the last customer message's message_id
   # (Email.Outbound), so a nil id here would break threading in the
-  # prospect's inbox. Mirrors Conversations.generate_outbound_message_id/1.
-  defp generate_prospect_message_id(conversation_id) do
+  # prospect's inbox. Mirrors Threads.generate_outbound_message_id/1.
+  defp generate_prospect_message_id(thread_id) do
     unique = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
     domain = Application.get_env(:custyard, :outbound_email_domain, "custyard.local")
-    "<#{unique}.c#{conversation_id}@#{domain}>"
+    "<#{unique}.c#{thread_id}@#{domain}>"
   end
 
   # Loads the prospect eligible to act under the presented token, inside the
   # caller's transaction — mirrors capturable_prospect/2 so a concurrent
   # rotation or revocation between the check and the write can't let a
   # stale/revoked token slip through.
-  defp authorized_prospect(conversation_id, opts) do
-    case Repo.get_by(Prospect, conversation_id: conversation_id) do
-      nil ->
-        {:error, :no_prospect}
-
-      %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
-        {:error, :no_prospect}
-
-      %Prospect{} = prospect ->
-        if token_hash_current?(prospect, opts) do
-          {:ok, prospect}
-        else
-          {:error, :no_prospect}
-        end
+  defp authorized_prospect(thread_id, opts) do
+    with {:ok, thread} <- lock_active_thread(thread_id, opts),
+         %Prospect{revoked_at: nil} = prospect <- lock_prospect(thread),
+         true <- token_hash_current?(prospect, opts) do
+      {:ok, prospect}
+    else
+      _ -> {:error, :no_prospect}
     end
   end
 
-  # A customer action on a waiting/dormant/resolved conversation reactivates
+  defp lock_prospect(thread) do
+    query =
+      from(p in Prospect,
+        where:
+          p.thread_id == ^thread.id and p.tenant_id == ^thread.tenant_id and is_nil(p.revoked_at),
+        update: [set: [updated_at: p.updated_at]]
+      )
+
+    case Repo.update_all(query, []) do
+      {1, _} -> Repo.get_by(Prospect, thread_id: thread.id, tenant_id: thread.tenant_id)
+      _ -> nil
+    end
+  end
+
+  # Serialize lifecycle changes with public writes. Reads alone are insufficient
+  # for a socket mounted before tenant suspension or thread reassignment.
+  defp lock_active_tenant(tenant_id) do
+    {count, _} =
+      Repo.update_all(
+        from(t in Tenant,
+          where: t.id == ^tenant_id and t.status == "active",
+          update: [set: [updated_at: t.updated_at]]
+        ),
+        []
+      )
+
+    count == 1
+  end
+
+  defp lock_enabled_source(source) do
+    if lock_active_tenant(source.tenant_id) do
+      {count, _} =
+        Repo.update_all(
+          from(s in IntakeSource,
+            where: s.id == ^source.id and s.tenant_id == ^source.tenant_id and s.enabled,
+            update: [set: [enabled: s.enabled]]
+          ),
+          []
+        )
+
+      if count == 1, do: {:ok, source}, else: {:error, :unknown_source}
+    else
+      {:error, :unknown_source}
+    end
+  end
+
+  defp lock_active_thread(thread_id, opts) do
+    with %Thread{} = thread <- Repo.get(Thread, thread_id),
+         true <- Keyword.get(opts, :tenant_id, thread.tenant_id) == thread.tenant_id,
+         true <- lock_active_tenant(thread.tenant_id) do
+      query =
+        from(t in Thread,
+          where: t.id == ^thread_id and t.tenant_id == ^thread.tenant_id,
+          update: [set: [updated_at: t.updated_at]]
+        )
+
+      case Repo.update_all(query, []) do
+        {1, _} -> {:ok, Repo.get!(Thread, thread_id)}
+        _ -> {:error, :no_prospect}
+      end
+    else
+      _ -> {:error, :no_prospect}
+    end
+  end
+
+  # A customer action on a waiting/dormant/resolved thread reactivates
   # it — mirrors the webhook pipeline's maybe_reactivate and the portal reply
   # path (which also updates last_customer_action_at in the same write).
-  defp reactivate_changeset(conversation, now) do
+  defp reactivate_changeset(thread, now) do
     attrs =
-      if conversation.state in [:waiting, :dormant, :resolved] do
+      if thread.state in [:waiting, :dormant, :resolved] do
         %{state: :active, last_customer_action_at: now}
       else
         %{last_customer_action_at: now}
       end
 
-    Conversation.changeset(conversation, attrs)
+    Thread.changeset(thread, attrs)
   end
 
-  defp perform_reply_side_effects(conversation) do
-    Scoring.calculate_and_cache(conversation.id)
+  defp perform_reply_side_effects(thread) do
+    Scoring.calculate_and_cache(thread.id)
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversations",
-      {:conversation_updated, conversation.id}
+      "threads",
+      {:thread_updated, thread.id}
     )
 
     # No-op while organization_id is nil (broadcast_to_org/2 guard).
-    Conversations.broadcast_to_org(
-      conversation.organization_id,
-      {:conversation_updated, conversation.id}
+    Threads.broadcast_to_org(
+      thread.organization_id,
+      {:thread_updated, thread.id}
     )
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversation:#{conversation.id}",
-      {:message_added, conversation.id}
+      "thread:#{thread.id}",
+      {:message_added, thread.id}
     )
 
     :ok
   end
 
   @doc """
-  Rotate a conversation's access token, invalidating the previous one.
+  Rotate a thread's access token, invalidating the previous one.
 
   Returns `{:ok, %{prospect: p, access_token: token}}` — the only other place
   a plaintext access token is returned. Revoked prospects are rejected with
   the same `{:error, :no_prospect}` as missing ones.
 
-  Post-commit it broadcasts `{:conversation_access_changed, id}` on the
-  `"conversation:{id}"` topic so conversation views mounted under the old token
+  Post-commit it broadcasts `{:thread_access_changed, id}` on the
+  `"thread:{id}"` topic so thread views mounted under the old token
   re-authenticate and shut down instead of streaming past the rotation.
   """
-  def rotate_access_token(%Conversation{} = conversation) do
-    case get_prospect(conversation) do
+  def rotate_access_token(%Thread{} = thread) do
+    case get_prospect(thread) do
       nil ->
         {:error, :no_prospect}
 
@@ -520,21 +631,21 @@ defmodule Custyard.Intake do
 
         with {:ok, prospect} <-
                prospect |> Prospect.rotate_token_changeset(token_hash) |> Repo.update() do
-          broadcast_conversation_access_changed(conversation.id)
+          broadcast_thread_access_changed(thread.id)
           {:ok, %{prospect: prospect, access_token: access_token}}
         end
     end
   end
 
   @doc """
-  Revoke conversation access for a conversation. Operator-initiated; the access
+  Revoke thread access for a thread. Staff-initiated; the access
   token stops resolving once `revoked_at` is set.
 
-  Broadcasts the same `{:conversation_access_changed, id}` as rotation so mounted
-  conversation views re-authenticate and shut down.
+  Broadcasts the same `{:thread_access_changed, id}` as rotation so mounted
+  thread views re-authenticate and shut down.
   """
-  def revoke_conversation_access(%Conversation{} = conversation) do
-    case get_prospect(conversation) do
+  def revoke_thread_access(%Thread{} = thread) do
+    case get_prospect(thread) do
       nil ->
         {:error, :no_prospect}
 
@@ -549,7 +660,7 @@ defmodule Custyard.Intake do
               # claim never expires, so the revoked prospect would otherwise
               # keep (or still win) the name. Release it in the same
               # transaction; confirming the old link then finds nothing.
-              Slugs.release_claim_for_conversation(conversation.id)
+              Slugs.release_claim_for_thread(thread.id)
               prospect
 
             {:error, reason} ->
@@ -558,7 +669,7 @@ defmodule Custyard.Intake do
         end)
         |> case do
           {:ok, prospect} ->
-            broadcast_conversation_access_changed(conversation.id)
+            broadcast_thread_access_changed(thread.id)
             {:ok, prospect}
 
           {:error, reason} ->
@@ -567,15 +678,15 @@ defmodule Custyard.Intake do
     end
   end
 
-  # Conversation views subscribe to "conversation:{id}"; this tells them the
+  # Thread views subscribe to "thread:{id}"; this tells them the
   # credential state changed (rotation or revocation) so the read side —
-  # an already-mounted socket receiving operator replies over PubSub —
+  # an already-mounted socket receiving staff replies over PubSub —
   # gets closed off, not just the writes.
-  defp broadcast_conversation_access_changed(conversation_id) do
+  defp broadcast_thread_access_changed(thread_id) do
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversation:#{conversation_id}",
-      {:conversation_access_changed, conversation_id}
+      "thread:#{thread_id}",
+      {:thread_access_changed, thread_id}
     )
 
     :ok
@@ -591,16 +702,18 @@ defmodule Custyard.Intake do
   inside the same transaction, so a revocation or rotation racing the
   caller's handle still blocks the write.
 
-  A successful flip broadcasts `{:conversation_updated, id}` on the
-  conversation topic so already-mounted operator views recompute reply
+  A successful flip broadcasts `{:thread_updated, id}` on the
+  thread topic so already-mounted staff views recompute reply
   deliverability (consent advisory, delivery expectations) without a manual
   refresh.
   """
-  def set_notification(%Conversation{id: conversation_id}, notify?, opts \\ [])
+  def set_notification(%Thread{id: thread_id, tenant_id: tenant_id}, notify?, opts \\ [])
       when is_boolean(notify?) do
+    opts = Keyword.put(opts, :tenant_id, tenant_id)
+
     result =
       Repo.transaction(fn ->
-        case authorized_prospect(conversation_id, opts) do
+        case authorized_prospect(thread_id, opts) do
           {:ok, prospect} ->
             case prospect |> Prospect.notification_changeset(notify?) |> Repo.update() do
               {:ok, prospect} -> prospect
@@ -613,33 +726,33 @@ defmodule Custyard.Intake do
       end)
 
     with {:ok, prospect} <- result do
-      broadcast_notification_change({:ok, prospect}, conversation_id)
+      broadcast_notification_change({:ok, prospect}, thread_id)
     end
 
     result
   end
 
-  # A consent flip must reach already-mounted operator views: ConversationLive
-  # handles {:conversation_updated, id} on the conversation topic by reloading,
+  # A consent flip must reach already-mounted staff views: ThreadLive
+  # handles {:thread_updated, id} on the thread topic by reloading,
   # which recomputes the reply-deliverability assigns. The consent gates in
-  # Conversations.send_reply/3 and Email.Outbound.deliver/1 re-read the DB
+  # Threads.send_reply/3 and Email.Outbound.deliver/1 re-read the DB
   # regardless — this broadcast keeps the UI honest, not the policy.
-  defp broadcast_notification_change({:ok, prospect}, conversation_id) do
+  defp broadcast_notification_change({:ok, prospect}, thread_id) do
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversation:#{conversation_id}",
-      {:conversation_updated, conversation_id}
+      "thread:#{thread_id}",
+      {:thread_updated, thread_id}
     )
 
     {:ok, prospect}
   end
 
-  defp broadcast_notification_change(error, _conversation_id), do: error
+  defp broadcast_notification_change(error, _thread_id), do: error
 
   ## Email capture and linking ------------------------------------------------
 
   @doc """
-  Capture a prospect's email on a public-intake conversation and link it to a
+  Capture a prospect's email on a public-intake thread and link it to a
   known identity when resolution finds one.
 
   One transaction: write-once email capture (`{:error, :already_captured}` on
@@ -648,14 +761,14 @@ defmodule Custyard.Intake do
   `SenderMatcher.resolve/1`, then linking per outcome — a contact match sets
   BOTH `contact_id` and `organization_id` in one changeset (nothing else
   validates the pair), a domain match sets the organization only, and `:none`
-  touches nothing. A conversation already linked to an organization is never
-  re-linked: existing (operator) linkage wins, though the email is still
+  touches nothing. A thread already linked to an organization is never
+  re-linked: existing (staff) linkage wins, though the email is still
   captured.
 
-  Post-commit: rescore plus `"conversations"` and `"conversation:{id}"`
-  broadcasts; the org-scoped topic fires only when the conversation linked.
+  Post-commit: rescore plus `"threads"` and `"thread:{id}"`
+  broadcasts; the org-scoped topic fires only when the thread linked.
 
-  Enumeration-neutral: returns `{:ok, conversation}` to callers regardless of
+  Enumeration-neutral: returns `{:ok, thread}` to callers regardless of
   link outcome — the response never reveals whether the email matched.
 
   ## Options
@@ -667,14 +780,15 @@ defmodule Custyard.Intake do
       the write-once guard so a rotated-out handle cannot learn whether an
       email was captured
   """
-  def capture_email(%Conversation{} = conversation, email, opts \\ []) do
+  def capture_email(%Thread{} = thread, email, opts \\ []) do
+    opts = Keyword.put(opts, :tenant_id, thread.tenant_id)
     notify? = Keyword.get(opts, :notify, false)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     Repo.transaction(fn ->
-      case capturable_prospect(conversation.id, opts) do
+      case capturable_prospect(thread.id, opts) do
         {:ok, prospect} ->
-          capture_and_link(conversation, prospect, %{
+          capture_and_link(thread, prospect, %{
             email: email,
             email_captured_at: now,
             notify_on_reply: notify?
@@ -685,9 +799,9 @@ defmodule Custyard.Intake do
       end
     end)
     |> case do
-      {:ok, conversation} ->
-        perform_capture_side_effects(conversation)
-        {:ok, Repo.reload!(conversation)}
+      {:ok, thread} ->
+        perform_capture_side_effects(thread)
+        {:ok, Repo.reload!(thread)}
 
       {:error, reason} ->
         {:error, reason}
@@ -701,69 +815,59 @@ defmodule Custyard.Intake do
   # failure classes stay indistinguishable; the stale-hash check runs BEFORE
   # the write-once guard so a rotated-out handle cannot learn whether an
   # email was captured.
-  defp capturable_prospect(conversation_id, opts) do
-    case Repo.get_by(Prospect, conversation_id: conversation_id) do
-      nil ->
-        {:error, :no_prospect}
-
-      %Prospect{revoked_at: revoked} when not is_nil(revoked) ->
-        {:error, :no_prospect}
-
-      %Prospect{} = prospect ->
-        cond do
-          not token_hash_current?(prospect, opts) -> {:error, :no_prospect}
-          not is_nil(prospect.email) -> {:error, :already_captured}
-          true -> {:ok, prospect}
-        end
+  defp capturable_prospect(thread_id, opts) do
+    with {:ok, prospect} <- authorized_prospect(thread_id, opts) do
+      if is_nil(prospect.email), do: {:ok, prospect}, else: {:error, :already_captured}
     end
   end
 
-  defp capture_and_link(conversation, prospect, attrs) do
+  defp capture_and_link(thread, prospect, attrs) do
     case prospect |> Prospect.capture_email_changeset(attrs) |> Repo.update() do
       {:ok, prospect} ->
         # Linking is now a conditional UPDATE that always reports success
-        # (a lost DB-side race returns the conversation untouched), so there
+        # (a lost DB-side race returns the thread untouched), so there
         # is no changeset error to roll back here.
-        {:ok, conversation} =
-          link_conversation(
-            conversation,
-            SenderMatcher.resolve_existing(prospect.email, conversation.tenant_id)
+        {:ok, thread} =
+          link_thread(
+            thread,
+            SenderMatcher.resolve_existing(prospect.email, thread.tenant_id)
           )
 
-        conversation
+        thread
 
       {:error, changeset} ->
         Repo.rollback(changeset)
     end
   end
 
-  # Existing linkage wins: an operator (or earlier flow) that already linked
-  # the conversation to an organization must not be silently overridden by
+  # Existing linkage wins: a staff (or earlier flow) that already linked
+  # the thread to an organization must not be silently overridden by
   # identity derived from anonymous public input.
-  defp link_conversation(%Conversation{organization_id: org_id} = conversation, _resolution)
+  defp link_thread(%Thread{organization_id: org_id} = thread, _resolution)
        when not is_nil(org_id) do
-    {:ok, conversation}
+    {:ok, thread}
   end
 
   # Contact match: both FKs set in ONE write — nothing else validates that
   # the contact/organization pair is consistent. Conditional on
   # `organization_id IS NULL` at the DB, not just the in-memory struct: a
-  # socket mounted before an operator ran Organizations.convert_prospect/3
+  # socket mounted before a staff ran Organizations.convert_prospect/3
   # still carries organization_id: nil, so a plain update-by-PK could clobber
   # the just-converted link and orphan the new org. The DB guard means a
   # concurrent link wins (0 rows) and this write is a no-op.
-  defp link_conversation(%Conversation{id: id} = conversation, {:contact, contact}) do
-    conditional_link(conversation, id,
+  defp link_thread(%Thread{id: id} = thread, {:contact, contact}) do
+    conditional_link(thread, id,
       contact_id: contact.id,
       organization_id: contact.organization_id
     )
   end
 
-  defp link_conversation(%Conversation{id: id} = conversation, {:organization, organization}) do
-    conditional_link(conversation, id, organization_id: organization.id)
+  defp link_thread(%Thread{id: id} = thread, {:organization, organization}) do
+    conditional_link(thread, id, organization_id: organization.id)
   end
 
-  defp link_conversation(conversation, :none), do: {:ok, conversation}
+  defp link_thread(thread, outcome) when outcome in [:none, :ambiguous],
+    do: {:ok, thread}
 
   # Race-safe conditional link: `WHERE id = ? AND organization_id IS NULL`.
   # On count == 1 the fields are patched onto the in-memory struct so the
@@ -771,55 +875,55 @@ defmodule Custyard.Intake do
   # without a re-read; capture_email/3 reloads for the value it returns. On
   # count == 0 a concurrent link already won, so the stale struct is returned
   # untouched and its link is left intact.
-  defp conditional_link(conversation, id, fields) do
+  defp conditional_link(thread, id, fields) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     set = Keyword.put(fields, :updated_at, now)
 
     {count, _} =
       Repo.update_all(
-        from(c in Conversation, where: c.id == ^id and is_nil(c.organization_id)),
+        from(c in Thread, where: c.id == ^id and is_nil(c.organization_id)),
         set: set
       )
 
     if count == 1 do
-      {:ok, struct(conversation, set)}
+      {:ok, struct(thread, set)}
     else
-      {:ok, conversation}
+      {:ok, thread}
     end
   end
 
-  defp perform_capture_side_effects(conversation) do
-    Scoring.calculate_and_cache(conversation.id)
+  defp perform_capture_side_effects(thread) do
+    Scoring.calculate_and_cache(thread.id)
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversations",
-      {:conversation_updated, conversation.id}
+      "threads",
+      {:thread_updated, thread.id}
     )
 
     Phoenix.PubSub.broadcast(
       Custyard.PubSub,
-      "conversation:#{conversation.id}",
-      {:conversation_updated, conversation.id}
+      "thread:#{thread.id}",
+      {:thread_updated, thread.id}
     )
 
-    # Fires only when the capture linked the conversation to an organization
+    # Fires only when the capture linked the thread to an organization
     # (broadcast_to_org/2 skips nil org ids).
-    Conversations.broadcast_to_org(
-      conversation.organization_id,
-      {:conversation_updated, conversation.id}
+    Threads.broadcast_to_org(
+      thread.organization_id,
+      {:thread_updated, thread.id}
     )
 
     :ok
   end
 
   @doc """
-  Fetch the prospect row for a conversation. Returns `nil` when none exists.
+  Fetch the prospect row for a thread. Returns `nil` when none exists.
 
-  Public so the conversation surface can re-read prospect state (captured email,
+  Public so the thread surface can re-read prospect state (captured email,
   notification preference) after a mutation without reaching for `Repo`.
   """
-  def get_prospect(%Conversation{id: conversation_id}) do
-    Repo.get_by(Prospect, conversation_id: conversation_id)
+  def get_prospect(%Thread{id: thread_id}) do
+    Repo.get_by(Prospect, thread_id: thread_id)
   end
 end

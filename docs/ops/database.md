@@ -97,7 +97,7 @@ step 1 to step 4.
    fly secrets unset MAINTENANCE_MODE
    ```
 
-5. Log in and check that recent conversations are there. Then remove the
+5. Log in and check that recent threads are there. Then remove the
    export with `fly ssh console -C "rm /data/turso-import.db"`.
 
 Every boot logs a warning while `/data/custyard.db` is still on the volume.

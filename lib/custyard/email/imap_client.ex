@@ -5,7 +5,7 @@ defmodule Custyard.Email.ImapClient do
 
   The folder is opened read-only (EXAMINE) and messages are fetched with
   `BODY.PEEK[]`: polling never sets `\\Seen` or any other flag in the
-  operator's mailbox. New mail is listed by UID with `UID FETCH`, not
+  staff's mailbox. New mail is listed by UID with `UID FETCH`, not
   `SEARCH`, because the response format of FETCH is the same on every
   server.
 

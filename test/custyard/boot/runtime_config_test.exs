@@ -13,7 +13,7 @@ defmodule Custyard.Boot.RuntimeConfigTest do
     "PHX_HOST" => "custyard.example.com",
     "MAIL_ADAPTER" => "lettermint",
     "LETTERMINT_PROJECT_TOKEN" => "lm_project_token",
-    "OPERATOR_EMAIL" => "ops@example.com",
+    "INSTANCE_ADMIN_EMAIL" => "ops@example.com",
     "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32))
   }
 
@@ -82,7 +82,8 @@ defmodule Custyard.Boot.RuntimeConfigTest do
     assert custyard[Custyard.Repo][:pool_size] == 4
     assert byte_size(custyard[:credential_keys][:current]) == 32
     assert custyard[:email_enabled] == true
-    assert custyard[:operator_email] == "ops@example.com"
+    assert custyard[:outbound_delivery_enabled] == true
+    refute Keyword.has_key?(custyard, :operator_email)
     assert custyard[:email_from_name] == "Custyard"
     assert custyard[:email_from_address] == "noreply@custyard.example.com"
   end
@@ -93,7 +94,7 @@ defmodule Custyard.Boot.RuntimeConfigTest do
         "MAIL_ADAPTER" => "\"lettermint\"",
         "CREDENTIAL_ENCRYPTION_KEY" => "not-base64\n",
         "IMAP_ENABLED" => "true",
-        "ACKNOWLEDGMENTS_ENABLED" => "yes",
+        "OUTBOUND_DELIVERY_ENABLED" => "yes",
         "ACKNOWLEDGMENTS_PREFETCH" => "0",
         "DATABASE_PATH" => "relative/custyard.db",
         "PORT" => "eighty"
@@ -106,12 +107,12 @@ defmodule Custyard.Boot.RuntimeConfigTest do
     variables = Enum.map(env.problems, & &1.variable)
 
     for name <-
-          ~w(MAIL_ADAPTER CREDENTIAL_ENCRYPTION_KEY IMAP_ENABLED ACKNOWLEDGMENTS_ENABLED ACKNOWLEDGMENTS_PREFETCH DATABASE_PATH PORT) do
+          ~w(MAIL_ADAPTER CREDENTIAL_ENCRYPTION_KEY IMAP_ENABLED OUTBOUND_DELIVERY_ENABLED ACKNOWLEDGMENTS_PREFETCH DATABASE_PATH PORT) do
       assert name in variables, "#{name} should be a problem"
     end
 
     assert custyard[:legacy_imap_enabled] == true
-    assert custyard[:acknowledgments][:enabled] == true
+    assert custyard[:outbound_delivery_enabled] == false
     assert custyard[:acknowledgments][:prefetch] == 1
     assert custyard[Custyard.Repo] == nil
     assert custyard[Custyard.Mailer] == nil

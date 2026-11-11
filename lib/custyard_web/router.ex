@@ -13,7 +13,6 @@ defmodule CustyardWeb.Router do
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
-    plug CustyardWeb.Plugs.TenantSession
     plug :fetch_live_flash
     plug :put_root_layout, html: {CustyardWeb.Layouts, :root}
     plug :protect_from_forgery
@@ -29,8 +28,8 @@ defmodule CustyardWeb.Router do
     plug :accepts, ["json"]
   end
 
-  pipeline :require_operator do
-    plug CustyardWeb.Plugs.RequireOperator
+  pipeline :require_staff do
+    plug CustyardWeb.Plugs.RequireStaff
   end
 
   pipeline :portal_auth do
@@ -39,17 +38,17 @@ defmodule CustyardWeb.Router do
     plug :put_root_layout, html: {CustyardWeb.Layouts, :portal_root}
   end
 
-  # Public prospect surfaces (/i intake, /c conversation, /claim slug-claim):
+  # Public prospect surfaces (/i intake, /c thread, /claim slug-claim):
   # anonymous, hammerable, and carrying bearer tokens in the path. The
-  # conversation URL must never leak via the Referer header, and the pages render
-  # the sparse operator-branded :intake layout instead of the app chrome.
+  # thread URL must never leak via the Referer header, and the pages render
+  # the sparse staff-branded :intake layout instead of the app chrome.
   pipeline :public_intake do
     plug CustyardWeb.Plugs.NoReferrer
     plug :put_root_layout, html: {CustyardWeb.Layouts, :intake_root}
   end
 
-  pipeline :conversation_cookie do
-    plug CustyardWeb.Plugs.ConversationCookie
+  pipeline :thread_cookie do
+    plug CustyardWeb.Plugs.ThreadCookie
   end
 
   scope "/", CustyardWeb do
@@ -58,31 +57,31 @@ defmodule CustyardWeb.Router do
     live "/", HomeLive, :index
   end
 
-  # Public intake pages — anonymous dead views, one per operator-configured
+  # Public intake pages — anonymous dead views, one per staff-configured
   # intake source key. Served on the application host only: on a custom
   # domain the CustomDomain plug rewrites /i/* into the portal scope, where
-  # it 404s (intake is an operator surface, never a customer-portal one).
-  scope "/i", CustyardWeb do
+  # it 404s (intake is a staff surface, never a customer-portal one).
+  scope "/intake", CustyardWeb do
     pipe_through [:browser, :public_intake]
 
     get "/:source_key", IntakeController, :show
     post "/:source_key", IntakeController, :create
   end
 
-  # Conversation access — the token in the URL is the credential; every mount
+  # Thread access — the token in the URL is the credential; every mount
   # re-authenticates it (nothing lives in the session). The uniform
-  # "conversation unavailable" page is a dead view so invalid tokens never
+  # "thread unavailable" page is a dead view so invalid tokens never
   # cost a LiveView socket; it must be declared before the catch-all live
   # route ("unavailable" is not a valid token shape, but order still matters).
-  scope "/c", CustyardWeb do
-    pipe_through [:browser, :public_intake, :conversation_cookie]
+  scope "/threads", CustyardWeb do
+    pipe_through [:browser, :public_intake, :thread_cookie]
 
-    get "/unavailable", Prospect.ConversationController, :unavailable
+    get "/unavailable", Prospect.ThreadController, :unavailable
 
-    live_session :prospect_conversation,
+    live_session :prospect_thread,
       on_mount: [{CustyardWeb.Live.ProspectAuth, :default}],
       layout: {CustyardWeb.Layouts, :intake} do
-      live "/:token", Prospect.ConversationLive, :show
+      live "/:token", Prospect.ThreadLive, :show
     end
   end
 
@@ -90,7 +89,7 @@ defmodule CustyardWeb.Router do
   # state change, so mail-scanner prefetch never consumes the single-use
   # token); the explicit POST confirms. Same no-referrer + :intake layout
   # discipline as /i and /c: the token in the path is a bearer credential.
-  scope "/claim", CustyardWeb do
+  scope "/claims", CustyardWeb do
     pipe_through [:browser, :public_intake]
 
     get "/:token", ClaimConfirmationController, :show
@@ -109,14 +108,11 @@ defmodule CustyardWeb.Router do
     post "/webhook/route/:callback_token", WebhookController, :routed
 
     # Provider delivery-status events for outbound replies (separate from inbound intake)
-    post "/webhook/email-status/lettermint", EmailStatusController, :lettermint
     post "/webhook/email-status/lettermint/:callback_token", EmailStatusController, :lettermint
   end
 
-  # Operator routes - public (login/logout)
-  scope "/operator", CustyardWeb.Operator, as: :operator do
+  scope "/app", CustyardWeb.Staff do
     pipe_through [:browser]
-
     get "/login", SessionController, :new
     post "/login", SessionController, :create
     get "/login/sent", SessionController, :sent
@@ -125,86 +121,67 @@ defmodule CustyardWeb.Router do
     delete "/logout", SessionController, :delete
   end
 
-  # Operator routes - protected LiveViews
-  scope "/operator", CustyardWeb.Operator, as: :operator do
-    pipe_through [:browser, :require_operator]
-
-    # Inbound email attachments: authenticated download, organization-scoped
-    # in the controller (spec-inbound-channels D9).
+  scope "/app", CustyardWeb.Staff do
+    pipe_through [:browser, :require_staff]
     get "/attachments/:id", AttachmentController, :show
     get "/attachments/:id/inline", AttachmentController, :inline
-    post "/tenants/:id/select", TenantController, :select
+
+    live_session :staff,
+      on_mount: [{CustyardWeb.Live.StaffAuth, :default}],
+      layout: {CustyardWeb.Layouts, :staff} do
+      live "/", AttentionQueueLive, :index
+      live "/threads", AttentionQueueLive, :index
+      live "/threads/:id", ThreadLive, :show
+      live "/projects", ProjectsLive, :index
+      live "/projects/:id", ProjectDetailLive, :show
+      live "/neglect", NeglectReportLive, :index
+      live "/customers", OrganizationsLive, :index
+      live "/customers/:id", OrganizationDetailLive, :show
+    end
+
+    live_session :staff_admin,
+      on_mount: [{CustyardWeb.Live.StaffAuth, :require_admin}],
+      layout: {CustyardWeb.Layouts, :staff} do
+      live "/settings/email", EmailSetupLive, :index
+      live "/settings/workspace", TenantSettingsLive, :index
+      live "/settings/staff", TenantSettingsLive, :index
+      live "/settings/intake", IntakeSourcesLive, :index
+      live "/settings/workflow", SettingsLive, :index
+      live "/settings/slugs", SlugsLive, :index
+      live "/settings/integrations", AcknowledgmentsLive, :index
+    end
+  end
+
+  scope "/admin", CustyardWeb.Admin do
+    pipe_through [:browser]
+    get "/login", SessionController, :new
+    post "/login", SessionController, :create
+    get "/login/verify/:token", SessionController, :verify
+    post "/login/verify/:token", SessionController, :consume
+    delete "/logout", SessionController, :delete
 
     # Boot verdict, first-run progress and last mail result after login
     # (docs/backlog/1103-first-run-experience.md). A dead view.
     get "/system", SystemController, :index
 
-    # All authenticated operators
-    live_session :operator,
-      on_mount: [{CustyardWeb.Live.OperatorAuth, :default}] do
-      live "/", AttentionQueueLive, :index
-      live "/conversation/:id", ConversationLive, :show
-      live "/projects", ProjectsLive, :index
-      live "/projects/:id", ProjectDetailLive, :show
-      live "/neglect", NeglectReportLive, :index
-      live "/organizations", OrganizationsLive, :index
-      live "/organizations/:id", OrganizationDetailLive, :show
-    end
-
-    # Admin+ only
-    live_session :operator_admin,
-      on_mount: [{CustyardWeb.Live.OperatorAuth, :require_admin}] do
-      live "/email-setup", EmailSetupLive, :index
-      live "/tenant", TenantSettingsLive, :index
-      live "/intake-sources", IntakeSourcesLive, :index
-    end
-
-    # Super admin only
-    live_session :operator_super_admin,
-      on_mount: [{CustyardWeb.Live.OperatorAuth, :require_super_admin}] do
-      live "/settings", SettingsLive, :index
+    live_session :instance_admin,
+      on_mount: [{CustyardWeb.Live.InstanceAdminAuth, :default}],
+      layout: {CustyardWeb.Layouts, :admin} do
+      live "/", TenantsLive, :index
       live "/tenants", TenantsLive, :index
-      live "/slugs", SlugsLive, :index
-      live "/acknowledgments", AcknowledgmentsLive, :index
+      live "/tenants/:id/settings", TenantsLive, :show
     end
   end
 
-  # Portal routes - accessed via unguessable org token or custom domain.
-  #
-  # Every portal LiveView is declared twice, inside ONE live_session:
-  #
-  #   * under /p/:org_token, the app-host form of the URL;
-  #   * at the root, the custom-domain form. On a custom domain the
-  #     CustomDomain plug (endpoint) rewrites the HTTP request onto the
-  #     /p/:token routes, but the browser URL stays un-prefixed, and that is
-  #     the URL the LiveView client sends on connect. The router must resolve
-  #     it to the same view in the same live_session, or the connected mount
-  #     is refused and the page reloads forever. "/" belongs to HomeLive on
-  #     the app host, so the list lives at /requests here and "/" redirects.
-  #
-  # On the app host the root aliases 404 in the PortalAuth plug (no token, no
-  # custom domain), so they expose nothing new.
-  scope "/", CustyardWeb.Portal do
+  scope "/portal/:org_token", CustyardWeb.Portal do
     pipe_through [:browser, :portal_auth]
-
-    # Inbound email attachments (spec-inbound-channels D10). On a custom
-    # domain the CustomDomain plug rewrites /attachments/:id onto this route,
-    # so no root alias is needed for a plain HTTP request.
-    get "/p/:org_token/attachments/:id", AttachmentController, :show
+    get "/attachments/:id", AttachmentController, :show
 
     live_session :portal,
       on_mount: [{CustyardWeb.Live.PortalAuth, :default}],
       layout: {CustyardWeb.Layouts, :portal} do
-      scope "/p/:org_token", as: :portal do
-        live "/", RequestListLive, :index
-        live "/request/:id", ConversationLive, :show
-        live "/new", NewRequestLive, :new
-        live "/projects", ProjectsListLive, :index
-        live "/projects/:id", ProjectLive, :show
-      end
-
-      live "/requests", RequestListLive, :index
-      live "/request/:id", ConversationLive, :show
+      live "/", RequestListLive, :index
+      live "/request/:id", ThreadLive, :show
       live "/new", NewRequestLive, :new
       live "/projects", ProjectsListLive, :index
       live "/projects/:id", ProjectLive, :show

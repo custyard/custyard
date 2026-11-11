@@ -13,7 +13,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   use CustyardWeb.ConnCase, async: false
   import Custyard.Factory
   import Phoenix.LiveViewTest
-  alias Custyard.{Conversations, EmailSetup, InboundChannels, Intake, RateLimit, Repo, Tenants}
+  alias Custyard.{Threads, EmailSetup, InboundChannels, Intake, RateLimit, Repo, Tenants}
   alias Custyard.Intake.{ArrivalEmail, ClaimEmail, EmailBranding, ReceiptEmail}
 
   setup do
@@ -41,13 +41,13 @@ defmodule CustyardWeb.TenantPublicEmailTest do
       Tenants.create_tenant(%{
         name: "Atlas, Support",
         slug: "mail-atlas",
-        custom_domain: "help.atlas.example",
         logo_url: "/uploads/logos/atlas.png",
         primary_color: "#123456"
       })
 
+    {:ok, _} = Tenants.add_host(tenant.id, "help.atlas.example")
     source = insert_intake_source(tenant_id: tenant.id, name: "Atlas pricing")
-    admin = insert_operator_account(role: "admin", tenant_id: tenant.id, organization_id: nil)
+    admin = insert_staff_account(role: "admin", tenant_id: tenant.id, organization_id: nil)
 
     {:ok, _} =
       EmailSetup.save_credentials(admin, tenant.id, %{
@@ -67,12 +67,13 @@ defmodule CustyardWeb.TenantPublicEmailTest do
       Custyard.InboundChannels.create_channel(route, %{public_address: "support@atlas.example"})
 
     channel = channel |> Ecto.Changeset.change(state: :active) |> Repo.update!()
+    {:ok, _} = EmailSetup.set_default_channel(admin, tenant.id, channel.id)
     %{tenant: tenant, source: source, channel: channel, admin: admin}
   end
 
-  test "submission receipt uses the tenant identity and canonical conversation origin", c do
+  test "submission receipt uses the tenant identity and canonical thread origin", c do
     conn =
-      post(build_conn(), "/i/#{c.source.key}", %{
+      post(%{build_conn() | host: Tenants.host(c.tenant)}, "/intake/#{c.source.key}", %{
         "submission" => %{
           "body" => "PRIVATE submitted details",
           "email" => "receipt@example.com",
@@ -89,10 +90,12 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   end
 
   test "late email capture and claim confirmation preserve tenant URLs and consent", c do
-    {:ok, %{conversation: conversation, access_token: token}} =
-      Intake.create_intake_conversation(c.source.key, "PRIVATE support question")
+    {:ok, %{thread: thread, access_token: token}} =
+      Intake.create_intake_thread(c.source.key, "PRIVATE support question",
+        tenant_id: c.tenant.id
+      )
 
-    {:ok, view, _} = live(build_conn(), "/c/#{token}")
+    {:ok, view, _} = live(%{build_conn() | host: Tenants.host(c.tenant)}, "/threads/#{token}")
 
     view
     |> form("[data-testid=resume-email-form]", %{
@@ -101,9 +104,9 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     |> render_submit()
 
     assert_receive {:email, %Swoosh.Email{to: [{_, "late@example.com"}]} = receipt}
-    assert receipt.text_body =~ Tenants.url(c.tenant) <> "/c/#{token}"
+    assert receipt.text_body =~ Tenants.url(c.tenant) <> "/threads/#{token}"
     assert_branding(receipt, c.tenant)
-    refute Intake.get_prospect(conversation).notify_on_reply
+    refute Intake.get_prospect(thread).notify_on_reply
 
     view
     |> form("[data-testid=resume-claim-form]", %{
@@ -112,14 +115,14 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     |> render_submit()
 
     assert_receive {:email, %Swoosh.Email{subject: "Confirm your claim: atlas-claim"} = claim}
-    assert claim.text_body =~ Tenants.url(c.tenant) <> "/claim/"
-    assert claim.text_body =~ Tenants.url(c.tenant) <> "/c/#{token}"
+    assert claim.text_body =~ Tenants.url(c.tenant) <> "/claims/"
+    assert claim.text_body =~ Tenants.url(c.tenant) <> "/threads/#{token}"
     assert_branding(claim, c.tenant)
-    [_, confirmation_token] = Regex.run(~r{/claim/([A-Za-z0-9_-]+)}, claim.text_body)
+    [_, confirmation_token] = Regex.run(~r{/claims/([A-Za-z0-9_-]+)}, claim.text_body)
 
     confirmation_page =
       %{build_conn() | host: Tenants.host(c.tenant)}
-      |> get("/claim/#{confirmation_token}")
+      |> get("/claims/#{confirmation_token}")
       |> html_response(200)
 
     assert confirmation_page =~ "Atlas, Support"
@@ -127,32 +130,30 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     assert confirmation_page =~ "Confirm claim"
     refute claim.text_body =~ "PRIVATE support question"
     refute claim.html_body =~ "PRIVATE support question"
-    refute Intake.get_prospect(conversation).notify_on_reply
+    refute Intake.get_prospect(thread).notify_on_reply
   end
 
   test "tenant receipts and claims keep the public return address with a sending subdomain", c do
     assert {:ok, _} =
              InboundChannels.update_channel(c.channel, %{sending_domain: "mail.atlas.example"},
-               operator: c.admin
+               staff: c.admin
              )
 
-    conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
-    conversation_url = Tenants.url(c.tenant) <> "/c/receipt-token"
+    thread = insert_thread(source: :public_intake, tenant_id: c.tenant.id)
+    thread_url = Tenants.url(c.tenant) <> "/threads/receipt-token"
 
     assert {:ok, _} =
-             ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: conversation_url
-             )
+             ReceiptEmail.send_receipt("buyer@example.com", c.source, thread_url: thread_url)
 
     assert_custom_domain_return_path()
 
     assert {:ok, slug, _} =
-             Custyard.Slugs.claim("custom-domain-claim", "buyer@example.com", conversation)
+             Custyard.Slugs.claim("custom-domain-claim", "buyer@example.com", thread)
 
     assert {:ok, _} =
              ClaimEmail.send_confirmation(slug,
-               confirm_url: Tenants.url(c.tenant) <> "/claim/claim-token",
-               conversation_url: conversation_url
+               confirm_url: Tenants.url(c.tenant) <> "/claims/claim-token",
+               thread_url: thread_url
              )
 
     assert_custom_domain_return_path()
@@ -163,12 +164,12 @@ defmodule CustyardWeb.TenantPublicEmailTest do
              InboundChannels.update_channel(
                c.channel,
                %{sending_domain: "mail.atlas.example", reply_from: :ingress_address},
-               operator: c.admin
+               staff: c.admin
              )
 
     assert {:ok, _} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/c/receipt-token"
+               thread_url: Tenants.url(c.tenant) <> "/threads/receipt-token"
              )
 
     assert_receive {:email, email}
@@ -202,15 +203,15 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     Repo.delete!(EmailSetup.connection(c.tenant.id))
 
     conn =
-      post(build_conn(), "/i/#{c.source.key}", %{
+      post(%{build_conn() | host: Tenants.host(c.tenant)}, "/intake/#{c.source.key}", %{
         "submission" => %{"body" => "Still stored", "email" => "quiet@example.com"}
       })
 
-    assert "/c/" <> token = redirected_to(conn)
-    assert {:ok, _} = Intake.get_conversation_by_access_token(token)
+    assert "/threads/" <> token = redirected_to(conn)
+    assert {:ok, _} = Intake.get_thread_by_access_token(token, c.tenant.id)
     refute_receive {:tenant_delivery_headers, _}
     refute_receive {:email, %Swoosh.Email{to: [{_, "quiet@example.com"}]}}
-    {:ok, view, _} = live(build_conn(), "/c/#{token}")
+    {:ok, view, _} = live(%{build_conn() | host: Tenants.host(c.tenant)}, "/threads/#{token}")
 
     view
     |> form("[data-testid=resume-claim-form]", %{
@@ -227,7 +228,7 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     assert {:error, :no_default_channel} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/c/test-token"
+               thread_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     refute_receive {:email, _}
@@ -238,51 +239,11 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     assert {:ok, _} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/c/test-token"
+               thread_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     assert_receive {:email, email}
     assert_branding(email, c.tenant)
-  end
-
-  test "saved default-tenant credentials reach receipts, confirmations and staff alerts" do
-    put_delivery_env(Custyard.Mailer, adapter: Swoosh.Adapters.SMTP, relay: "unused.example")
-    put_delivery_env(:email_from_address, "platform@example.com")
-    put_delivery_env(:operator_email, "instance-operator@example.com")
-
-    admin = insert_operator_account(role: "super_admin", tenant_id: nil, organization_id: nil)
-
-    assert {:ok, _} =
-             EmailSetup.save_credentials(admin, 1, %{
-               "project_id" => "default-project",
-               "project_token" => "saved-default-project-token"
-             })
-
-    source = insert_intake_source(tenant_id: 1)
-    conversation = insert_conversation(source: :public_intake, tenant_id: 1)
-    conversation = Repo.preload(conversation, [:organization, :contact])
-
-    assert {:ok, _} =
-             ReceiptEmail.send_receipt("buyer@example.com", source,
-               conversation_url: "http://localhost/c/default-token"
-             )
-
-    assert_default_delivery("buyer@example.com")
-
-    assert {:ok, slug, _} =
-             Custyard.Slugs.claim("default-claim", "buyer@example.com", conversation)
-
-    assert {:ok, _} =
-             ClaimEmail.send_confirmation(slug,
-               confirm_url: "http://localhost/claim/default-confirmation",
-               conversation_url: "http://localhost/c/default-token"
-             )
-
-    assert_default_delivery("buyer@example.com")
-    assert {:ok, _} = ArrivalEmail.send_arrival(conversation, source, "A support question")
-    assert_default_delivery("instance-operator@example.com")
-    assert :ok = Custyard.Notifications.Email.deliver_neglect_alert(conversation, :warning)
-    assert_default_delivery("instance-operator@example.com")
   end
 
   test "a missing selected ingress identity prevents tenant mail instead of building a nil From",
@@ -299,28 +260,17 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     # The public domain has not been verified for sending. An explicitly chosen
     # ingress identity must not silently switch to that address or the platform.
     assert is_nil(c.channel.sending_domain_status)
-    conversation = insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
-    assert is_nil(Conversations.reply_identity(conversation).address)
+    thread = insert_thread(source: :public_intake, tenant_id: c.tenant.id)
+    assert is_nil(Threads.reply_identity(thread).address)
     assert {:error, :from_not_set} = EmailBranding.delivery_settings(c.tenant.id)
 
     assert {:error, :from_not_set} =
              ReceiptEmail.send_receipt("buyer@example.com", c.source,
-               conversation_url: Tenants.url(c.tenant) <> "/c/test-token"
+               thread_url: Tenants.url(c.tenant) <> "/threads/test-token"
              )
 
     refute_receive {:email, _}
     refute_receive {:tenant_delivery_headers, _}
-  end
-
-  defp assert_default_delivery(recipient) do
-    assert_receive {:email, email}
-    assert email.to == [{"", recipient}]
-    assert elem(email.from, 1) == "platform@example.com"
-    assert is_nil(email.reply_to)
-    assert_receive {:tenant_delivery_payload, payload}
-    refute Map.has_key?(payload, "reply_to")
-    assert_receive {:tenant_delivery_headers, headers}
-    assert {"x-lettermint-token", "saved-default-project-token"} in headers
   end
 
   defp put_delivery_env(key, value) do
@@ -337,11 +287,11 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   test "tenant arrival and operational alerts reach only tenant staff with tenant credentials",
        c do
     {:ok, other} = Tenants.create_tenant(%{name: "Foreign", slug: "foreign-mail"})
-    foreign = insert_operator_account(role: "agent", tenant_id: other.id, organization_id: nil)
-    local = insert_operator_account(role: "agent", tenant_id: c.tenant.id, organization_id: nil)
+    foreign = insert_staff_account(role: "agent", tenant_id: other.id, organization_id: nil)
+    local = insert_staff_account(role: "agent", tenant_id: c.tenant.id, organization_id: nil)
 
-    conversation =
-      insert_conversation(
+    thread =
+      insert_thread(
         source: :public_intake,
         tenant_id: c.tenant.id,
         subject: "PRIVATE tenant subject"
@@ -350,13 +300,13 @@ defmodule CustyardWeb.TenantPublicEmailTest do
 
     expected = MapSet.new([c.admin.email, local.email])
 
-    assert {:ok, _} = ArrivalEmail.send_arrival(conversation, c.source, "PRIVATE tenant body")
+    assert {:ok, _} = ArrivalEmail.send_arrival(thread, c.source, "PRIVATE tenant body")
     assert_receive {:email, arrival}
     assert MapSet.new(Enum.map(arrival.to, &elem(&1, 1))) == expected
     assert arrival.text_body =~ "PRIVATE tenant body"
 
     assert arrival.text_body =~
-             Tenants.url(c.tenant) <> "/operator/conversation/#{conversation.id}"
+             Tenants.url(c.tenant) <> "/app/threads/#{thread.id}"
 
     refute Enum.any?(arrival.to, &(elem(&1, 1) == foreign.email))
     assert arrival.from == {~s("Atlas, Support"), "support@atlas.example"}
@@ -364,10 +314,10 @@ defmodule CustyardWeb.TenantPublicEmailTest do
     assert {"x-lettermint-token", "atlas-private-token"} in headers
 
     for send_alert <- [
-          fn -> Custyard.Notifications.Email.deliver_neglect_alert(conversation, :warning) end,
+          fn -> Custyard.Notifications.Email.deliver_neglect_alert(thread, :warning) end,
           fn ->
             Custyard.Notifications.Email.deliver_delivery_failure(
-              conversation,
+              thread,
               :bounced,
               "customer@example.com"
             )
@@ -386,14 +336,14 @@ defmodule CustyardWeb.TenantPublicEmailTest do
   test "tenant notifications skip when staff are absent", c do
     Repo.delete!(c.admin)
 
-    conversation =
-      insert_conversation(source: :public_intake, tenant_id: c.tenant.id)
+    thread =
+      insert_thread(source: :public_intake, tenant_id: c.tenant.id)
       |> Repo.preload([:organization, :contact])
 
-    assert {:error, :no_staff} = ArrivalEmail.send_arrival(conversation, c.source, "PRIVATE")
+    assert {:error, :no_staff} = ArrivalEmail.send_arrival(thread, c.source, "PRIVATE")
 
     assert {:error, :no_staff} =
-             Custyard.Notifications.Email.deliver_neglect_alert(conversation, :warning)
+             Custyard.Notifications.Email.deliver_neglect_alert(thread, :warning)
 
     refute_receive {:email, _}
   end

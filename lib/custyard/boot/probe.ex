@@ -26,7 +26,7 @@ defmodule Custyard.Boot.Probe do
   """
 
   alias Custyard.Boot.{Env, State}
-  alias Custyard.{OperatorAccounts, Repo, Storage}
+  alias Custyard.{InstanceAdmins, Repo, Storage}
 
   require Custyard.Log, as: Log
 
@@ -67,7 +67,7 @@ defmodule Custyard.Boot.Probe do
 
   @doc """
   What is known about the database without connecting (`kind`, `path`,
-  `mounted?`, `file_exists?`), plus `migrations` and `operators` when the
+  `mounted?`, `file_exists?`), plus `migrations` and `instance_admins` when the
   application Repo is running and answers.
   """
   @spec facts(Env.t()) :: map
@@ -335,7 +335,7 @@ defmodule Custyard.Boot.Probe do
     if Process.whereis(Repo) do
       %{
         migrations: length(Ecto.Migrator.migrated_versions(Repo)),
-        operators: OperatorAccounts.count_can_log_in()
+        instance_admins: InstanceAdmins.count()
       }
     else
       %{}

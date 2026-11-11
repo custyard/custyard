@@ -2,7 +2,7 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
   @moduledoc """
   End-to-end proof for the LiveView/process-crash scrubbing path.
 
-  A crashed `ConversationLive` never passes through `Sentry.PlugContext`.
+  A crashed `ThreadLive` never passes through `Sentry.PlugContext`.
   The global logger boundary must remove its socket state before any handler
   receives the report. The Sentry send boundary independently minimizes the
   resulting event. Both boundaries are exercised with a real crash.
@@ -22,10 +22,11 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     original = Application.get_env(:custyard, :rate_limit_buckets)
 
     Application.put_env(:custyard, :rate_limit_buckets,
+      public_instance_ip: @generous,
       intake_get: @generous,
       intake_post: @generous,
-      conversation_mount: @generous,
-      conversation_reply: @generous,
+      thread_mount: @generous,
+      thread_reply: @generous,
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
@@ -72,7 +73,7 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     previous_trap_exit = Process.flag(:trap_exit, true)
 
     try do
-      {:ok, view, _html} = live(build_conn(), "/c/#{token}")
+      {:ok, view, _html} = live(build_conn(), "/threads/#{token}")
 
       # An event with no matching handle_event/3 clause crashes the actual LV.
       try do
@@ -102,10 +103,12 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     end
   end
 
-  test "a real ConversationLive crash is safe before handlers and before Sentry export" do
+  test "a real ThreadLive crash is safe before handlers and before Sentry export" do
     source = insert_intake_source(mode: :active)
     private = "UNLABELLED-CUSTOMER-CONTENT-CANARY"
-    {:ok, %{access_token: token}} = Intake.create_intake_conversation(source.key, private)
+
+    {:ok, %{access_token: token}} =
+      Intake.create_intake_thread(source.key, private, tenant_id: source.tenant_id)
 
     report = capture_crash_report(token)
 
@@ -117,12 +120,12 @@ defmodule CustyardWeb.SentryLiveViewCrashTest do
     scrubbed =
       event(
         message: %Message{formatted: report, message: report},
-        extra: %{crash_reason: report, operator_id: 7}
+        extra: %{crash_reason: report, staff_id: 7}
       )
       |> Custyard.Sentry.before_send()
 
     assert scrubbed.message.formatted == "application_error"
-    assert scrubbed.extra == %{operator_id: 7}
+    assert scrubbed.extra == %{staff_id: 7}
     refute inspect(scrubbed, limit: :infinity) =~ token
     refute inspect(scrubbed, limit: :infinity) =~ private
   end

@@ -4,6 +4,7 @@ defmodule Custyard.Factory do
   Returns maps with defaults that can be merged with overrides.
   """
 
+  alias Custyard.Acknowledgments.OrganizationBinding
   alias Custyard.Auth.Token
 
   @doc """
@@ -18,8 +19,7 @@ defmodule Custyard.Factory do
     defaults = %{
       name: "Test Organization #{unique_id()}",
       domain: "test-#{unique_id()}.example.com",
-      tier: :standard,
-      token: generate_token()
+      tier: :standard
     }
 
     Map.merge(defaults, Map.new(overrides))
@@ -47,25 +47,25 @@ defmodule Custyard.Factory do
   end
 
   @doc """
-  Build conversation attributes.
+  Build thread attributes.
 
   States: :new, :active, :waiting, :dormant, :resolved
   Urgencies: :normal, :elevated, :urgent
 
   ## Examples
 
-      build_conversation()
-      build_conversation(state: :active, urgency: :elevated)
+      build_thread()
+      build_thread(state: :active, urgency: :elevated)
   """
-  def build_conversation(overrides \\ []) do
+  def build_thread(overrides \\ []) do
     defaults = %{
-      subject: "Test conversation #{unique_id()}",
+      subject: "Test thread #{unique_id()}",
       state: :new,
       urgency: :normal,
       cached_score: 0,
       organization_id: nil,
       contact_id: nil,
-      last_operator_action_at: nil,
+      last_staff_action_at: nil,
       last_customer_action_at: nil,
       snoozed_until: nil
     }
@@ -76,7 +76,7 @@ defmodule Custyard.Factory do
   @doc """
   Build message attributes.
 
-  Sources: :email, :portal, :operator
+  Sources: :email, :portal, :staff
 
   ## Examples
 
@@ -91,7 +91,7 @@ defmodule Custyard.Factory do
       is_internal_note: false,
       message_id: "mid-#{unique_id()}",
       in_reply_to: nil,
-      conversation_id: nil,
+      thread_id: nil,
       delivery_status: nil,
       lettermint_message_id: nil
     }
@@ -152,11 +152,12 @@ defmodule Custyard.Factory do
   """
   def build_audit_event(overrides \\ []) do
     defaults = %{
+      tenant_id: test_tenant_id(),
       event_type: :webhook_received,
       source: "email",
       message_id: "audit-mid-#{unique_id()}",
       payload: %{"test" => "data"},
-      conversation_id: nil,
+      thread_id: nil,
       organization_id: nil,
       project_id: nil
     }
@@ -165,7 +166,7 @@ defmodule Custyard.Factory do
   end
 
   @doc """
-  Build operator account attributes.
+  Build staff account attributes.
 
   Roles: "super_admin", "admin", "agent"
   - super_admin: No organization_id (can access all)
@@ -173,17 +174,16 @@ defmodule Custyard.Factory do
 
   ## Examples
 
-      build_operator_account()
-      build_operator_account(role: "admin", organization_id: 1)
+      build_staff_account()
+      build_staff_account(role: "admin", organization_id: 1)
   """
-  def build_operator_account(overrides \\ []) do
+  def build_staff_account(overrides \\ []) do
     id = unique_id()
 
     defaults = %{
-      email: "operator-#{id}@example.com",
+      email: "staff-#{id}@example.com",
       password: "password123",
-      role: "super_admin",
-      organization_id: nil
+      role: "agent"
     }
 
     Map.merge(defaults, Map.new(overrides))
@@ -194,7 +194,7 @@ defmodule Custyard.Factory do
   """
   def insert_organization(overrides \\ []) do
     %Custyard.Organization{}
-    |> Custyard.Organization.changeset(build_organization(overrides))
+    |> Custyard.Organization.changeset(build_organization(ensure_tenant(overrides)))
     |> Custyard.Repo.insert!()
   end
 
@@ -210,17 +210,17 @@ defmodule Custyard.Factory do
     |> Custyard.Repo.insert!()
   end
 
-  # Sources whose conversations may exist without an organization; the factory
+  # Sources whose threads may exist without an organization; the factory
   # skips auto-creating one for these unless organization_id is given.
   @org_exempt_sources [:disambiguation, :public_intake]
 
   @doc """
-  Insert a conversation into the database.
+  Insert a thread into the database.
   Requires organization_id or will create one — except for org-exempt sources
   (:disambiguation, :public_intake), which stay organization-less unless an
   organization_id override is provided.
   """
-  def insert_conversation(overrides \\ []) do
+  def insert_thread(overrides \\ []) do
     overrides =
       if Keyword.get(overrides, :source) in @org_exempt_sources do
         overrides
@@ -228,22 +228,22 @@ defmodule Custyard.Factory do
         ensure_organization(overrides)
       end
 
-    attrs = build_conversation(overrides)
+    attrs = build_thread(ensure_tenant(overrides))
 
     # Extract cached_score (not in changeset cast list for security)
     {cached_score, attrs} = Map.pop(attrs, :cached_score, 0)
-    # intake_source_key is creation-only (not in the operator changeset cast
+    # intake_source_key is creation-only (not in the staff changeset cast
     # list); apply it as a raw change like cached_score
     {intake_source_key, attrs} = Map.pop(attrs, :intake_source_key)
     # The triage suspect flag has its own changeset, deliberately outside
-    # changeset/2 (operators must not toggle it through the edit form).
+    # changeset/2 (staffs must not toggle it through the edit form).
     {suspect, attrs} = Map.pop(attrs, :suspect, false)
 
-    %Custyard.Conversation{}
-    |> Custyard.Conversation.changeset(attrs)
+    %Custyard.Thread{}
+    |> Custyard.Thread.changeset(attrs)
     |> Ecto.Changeset.change(cached_score: cached_score)
     |> maybe_change_intake_source_key(intake_source_key)
-    |> Custyard.Conversation.suspect_changeset(suspect)
+    |> Custyard.Thread.suspect_changeset(suspect)
     |> Custyard.Repo.insert!()
   end
 
@@ -254,10 +254,10 @@ defmodule Custyard.Factory do
 
   @doc """
   Insert a message into the database.
-  Requires conversation_id or will create one.
+  Requires thread_id or will create one.
   """
   def insert_message(overrides \\ []) do
-    overrides = ensure_conversation(overrides)
+    overrides = ensure_thread(overrides)
 
     %Custyard.Message{}
     |> Custyard.Message.changeset(build_message(overrides))
@@ -300,12 +300,12 @@ defmodule Custyard.Factory do
   def insert_task(overrides \\ []) do
     overrides =
       if Keyword.has_key?(overrides, :organization_id) or
-           Keyword.has_key?(overrides, :conversation_id),
+           Keyword.has_key?(overrides, :thread_id),
          do: overrides,
          else: ensure_project(overrides)
 
-    %Custyard.Task{}
-    |> Custyard.Task.changeset(build_task(overrides))
+    %Custyard.WorkItem{}
+    |> Custyard.WorkItem.changeset(build_task(overrides))
     |> Custyard.Repo.insert!()
   end
 
@@ -318,10 +318,7 @@ defmodule Custyard.Factory do
       build_inbound_route(route_type: :project, project_id: 1)
   """
   def build_inbound_route(overrides \\ []) do
-    defaults = %{
-      route_type: :general,
-      organization_id: nil
-    }
+    defaults = %{}
 
     Map.merge(defaults, Map.new(overrides))
   end
@@ -331,7 +328,7 @@ defmodule Custyard.Factory do
   Requires organization_id or will create one.
   """
   def insert_inbound_route(overrides \\ []) do
-    overrides = ensure_organization(overrides)
+    overrides = ensure_tenant(overrides)
 
     %Custyard.InboundRoute{}
     |> Custyard.InboundRoute.changeset(build_inbound_route(overrides))
@@ -353,8 +350,8 @@ defmodule Custyard.Factory do
       provider: :google,
       reply_from: :public_address,
       inbound_route_id: nil,
-      organization_id: nil,
-      project_id: nil
+      default_organization_id: nil,
+      default_project_id: nil
     }
 
     Map.merge(defaults, Map.new(overrides))
@@ -380,7 +377,7 @@ defmodule Custyard.Factory do
     |> maybe_change(:last_received_at, last_received_at)
     |> maybe_change(:verified_at, verified_at)
     |> Custyard.Repo.insert!()
-    |> Custyard.Repo.preload([:inbound_route, :project])
+    |> Custyard.Repo.preload([:inbound_route, :default_project])
   end
 
   defp maybe_change(changeset, _field, nil), do: changeset
@@ -396,25 +393,25 @@ defmodule Custyard.Factory do
   defp ensure_channel_route(overrides) do
     case Keyword.get(overrides, :inbound_route_id) do
       nil ->
-        overrides = ensure_organization(overrides)
+        overrides = ensure_tenant(overrides)
 
         route =
           insert_inbound_route(
-            organization_id: Keyword.fetch!(overrides, :organization_id),
-            route_type: :general,
+            tenant_id: Keyword.fetch!(overrides, :tenant_id),
             source: :lettermint,
             lettermint_route_id: "lm_route_#{unique_id()}",
             lettermint_route_domain: "r#{unique_id()}.lettermint.app"
           )
 
-        Keyword.put(overrides, :inbound_route_id, route.id)
+        overrides
+        |> Keyword.put(:inbound_route_id, route.id)
+        |> Keyword.put(:tenant_id, route.tenant_id)
 
       route_id ->
         route = Custyard.Repo.get!(Custyard.InboundRoute, route_id)
 
         overrides
-        |> Keyword.put_new(:organization_id, route.organization_id)
-        |> Keyword.put_new(:project_id, route.project_id)
+        |> Keyword.put_new(:tenant_id, route.tenant_id)
     end
   end
 
@@ -444,34 +441,6 @@ defmodule Custyard.Factory do
   end
 
   @doc """
-  Build team attributes.
-
-  ## Examples
-
-      build_team()
-      build_team(name: "Support Team")
-  """
-  def build_team(overrides \\ []) do
-    defaults = %{
-      name: "Team #{unique_id()}"
-    }
-
-    Map.merge(defaults, Map.new(overrides))
-  end
-
-  @doc """
-  Insert a team into the database.
-  Requires organization_id or will create one.
-  """
-  def insert_team(overrides \\ []) do
-    overrides = ensure_organization(overrides)
-
-    %Custyard.Team{}
-    |> Custyard.Team.changeset(build_team(overrides))
-    |> Custyard.Repo.insert!()
-  end
-
-  @doc """
   Build prospect attributes.
 
   ## Examples
@@ -486,7 +455,7 @@ defmodule Custyard.Factory do
       notify_on_reply: false,
       email_captured_at: nil,
       revoked_at: nil,
-      conversation_id: nil
+      thread_id: nil
     }
 
     Map.merge(defaults, Map.new(overrides))
@@ -494,16 +463,16 @@ defmodule Custyard.Factory do
 
   @doc """
   Insert a prospect into the database.
-  Requires conversation_id or will create an org-less :public_intake conversation.
+  Requires thread_id or will create an org-less :public_intake thread.
   """
   def insert_prospect(overrides \\ []) do
-    overrides = ensure_intake_conversation(overrides)
+    overrides = ensure_intake_thread(overrides)
     attrs = build_prospect(overrides)
 
-    # create_changeset casts only conversation_id and access_token_hash;
+    # create_changeset casts only thread_id and access_token_hash;
     # the remaining fields (normally set via Intake.capture_email/3 or the
     # revoke path) are applied as raw changes.
-    {create_attrs, extra} = Map.split(attrs, [:conversation_id, :access_token_hash])
+    {create_attrs, extra} = Map.split(attrs, [:thread_id, :access_token_hash])
     extra = extra |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
 
     %Custyard.Prospect{}
@@ -524,6 +493,7 @@ defmodule Custyard.Factory do
     id = unique_id()
 
     defaults = %{
+      tenant_id: factory_tenant_id(),
       key: "source-#{id}",
       name: "Intake Source #{id}",
       mode: :active,
@@ -541,7 +511,7 @@ defmodule Custyard.Factory do
   """
   def insert_intake_source(overrides \\ []) do
     %Custyard.IntakeSource{}
-    |> Custyard.IntakeSource.changeset(build_intake_source(overrides))
+    |> Custyard.IntakeSource.changeset(build_intake_source(ensure_tenant(overrides)))
     |> Custyard.Repo.insert!()
   end
 
@@ -560,7 +530,7 @@ defmodule Custyard.Factory do
       slug: "org-#{id}",
       status: :claimed,
       email: "claimant-#{id}@example.com",
-      conversation_id: nil,
+      thread_id: nil,
       organization_id: nil,
       confirmation_token_hash: Token.generate() |> elem(1),
       expires_at: DateTime.utc_now() |> DateTime.add(72, :hour) |> DateTime.truncate(:second),
@@ -573,16 +543,16 @@ defmodule Custyard.Factory do
   @doc """
   Insert a slug registry row into the database.
 
-  Requires conversation_id or will create an org-less :public_intake
-  conversation. Inserted as a raw struct (no changeset) so tests can build
+  Requires thread_id or will create an org-less :public_intake
+  thread. Inserted as a raw struct (no changeset) so tests can build
   confirmed/provisioned rows directly; the database CHECK constraints
   still apply (provisioned requires organization_id and vice versa).
   """
   def insert_slug(overrides \\ []) do
-    overrides = ensure_intake_conversation(overrides)
+    overrides = ensure_intake_thread(overrides)
 
     Custyard.Slug
-    |> struct(build_slug(overrides))
+    |> struct(build_slug(ensure_tenant(overrides)))
     |> Custyard.Repo.insert!()
   end
 
@@ -596,24 +566,14 @@ defmodule Custyard.Factory do
   end
 
   @doc """
-  Insert an operator account into the database.
+  Insert a staff account into the database.
   For admin/agent roles, requires organization_id or will create one.
   """
-  def insert_operator_account(overrides \\ []) do
-    attrs = build_operator_account(overrides)
-    role = Map.get(attrs, :role, "super_admin")
+  def insert_staff_account(overrides \\ []) do
+    attrs = build_staff_account(ensure_tenant(overrides))
 
-    # Ensure organization_id for non-super_admin roles
-    attrs =
-      if role in ["admin", "agent"] and is_nil(Map.get(attrs, :organization_id)) do
-        org = insert_organization()
-        Map.put(attrs, :organization_id, org.id)
-      else
-        attrs
-      end
-
-    %Custyard.OperatorAccount{}
-    |> Custyard.OperatorAccount.changeset(attrs)
+    %Custyard.StaffAccount{}
+    |> Custyard.StaffAccount.changeset(attrs)
     |> Custyard.Repo.insert!()
   end
 
@@ -623,34 +583,117 @@ defmodule Custyard.Factory do
     System.unique_integer([:positive, :monotonic])
   end
 
-  defp generate_token do
-    :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+  def create_acknowledgment_binding(attrs) do
+    %OrganizationBinding{}
+    |> OrganizationBinding.changeset(attrs)
+    |> Custyard.Repo.insert()
+  end
+
+  def configure_tenant_email(tenant_id, opts \\ []) do
+    channel =
+      insert_inbound_channel(
+        tenant_id: tenant_id,
+        state: :active,
+        display_name: nil,
+        public_address: Keyword.get(opts, :public_address, "support@custyard.local")
+      )
+
+    {:ok, encrypted} =
+      Custyard.Credentials.encrypt(
+        "test-project-token",
+        "email_connection:#{tenant_id}:project_token"
+      )
+
+    connection =
+      Custyard.Repo.get_by(Custyard.EmailConnection, tenant_id: tenant_id) ||
+        %Custyard.EmailConnection{}
+
+    connection
+    |> Custyard.EmailConnection.changeset(%{tenant_id: tenant_id, project_id: "test-project"})
+    |> Ecto.Changeset.change(
+      project_token_ciphertext: encrypted,
+      default_channel_id: channel.id,
+      status_callback_token: "test-status-#{tenant_id}"
+    )
+    |> Custyard.Repo.insert_or_update!()
+
+    channel
+  end
+
+  def insert_tenant(overrides \\ []) do
+    %Custyard.Tenant{}
+    |> Custyard.Tenant.changeset(
+      Map.merge(%{name: "Tenant", slug: "tenant-#{unique_id()}"}, Map.new(overrides))
+    )
+    |> Custyard.Repo.insert!()
+  end
+
+  defp ensure_tenant(overrides) do
+    if Keyword.get(overrides, :tenant_id) do
+      overrides
+    else
+      parent =
+        Enum.find_value(
+          [
+            organization_id: Custyard.Organization,
+            thread_id: Custyard.Thread,
+            project_id: Custyard.Project,
+            inbound_route_id: Custyard.InboundRoute
+          ],
+          fn {key, module} ->
+            id = Keyword.get(overrides, key)
+            id && Custyard.Repo.get(module, id)
+          end
+        )
+
+      tenant_id = if parent, do: parent.tenant_id, else: test_tenant_id()
+      Keyword.put(overrides, :tenant_id, tenant_id)
+    end
+  end
+
+  def factory_tenant_id, do: test_tenant_id()
+
+  def staff_scope(tenant_id \\ nil, role \\ "admin") do
+    staff = insert_staff_account(tenant_id: tenant_id || factory_tenant_id(), role: role)
+    Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+  end
+
+  defp test_tenant_id do
+    case Process.get(:factory_tenant_id) do
+      nil ->
+        tenant = insert_tenant()
+        Process.put(:factory_tenant_id, tenant.id)
+        tenant.id
+
+      id ->
+        id
+    end
   end
 
   defp ensure_organization(overrides) do
     if Keyword.has_key?(overrides, :organization_id) do
       overrides
     else
-      org = insert_organization()
-      Keyword.put(overrides, :organization_id, org.id)
+      org = insert_organization(ensure_tenant(overrides))
+      overrides |> Keyword.put(:organization_id, org.id) |> Keyword.put(:tenant_id, org.tenant_id)
     end
   end
 
-  defp ensure_conversation(overrides) do
-    if Keyword.has_key?(overrides, :conversation_id) do
+  defp ensure_thread(overrides) do
+    if Keyword.has_key?(overrides, :thread_id) do
       overrides
     else
-      conv = insert_conversation()
-      Keyword.put(overrides, :conversation_id, conv.id)
+      conv = insert_thread()
+      Keyword.put(overrides, :thread_id, conv.id)
     end
   end
 
-  defp ensure_intake_conversation(overrides) do
-    if Keyword.has_key?(overrides, :conversation_id) do
+  defp ensure_intake_thread(overrides) do
+    if Keyword.has_key?(overrides, :thread_id) do
       overrides
     else
-      conv = insert_conversation(source: :public_intake)
-      Keyword.put(overrides, :conversation_id, conv.id)
+      conv = insert_thread(source: :public_intake)
+      Keyword.put(overrides, :thread_id, conv.id)
     end
   end
 
@@ -668,7 +711,10 @@ defmodule Custyard.Factory do
       overrides
     else
       route = insert_inbound_route()
-      Keyword.put(overrides, :inbound_route_id, route.id)
+
+      overrides
+      |> Keyword.put(:inbound_route_id, route.id)
+      |> Keyword.put(:tenant_id, route.tenant_id)
     end
   end
 end

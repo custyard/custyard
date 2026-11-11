@@ -51,7 +51,11 @@
       name="twitter:image:alt"
       content={branding.name <> " — " <> branding.description}
     />
-    <.live_title suffix={" · " <> branding.name}>
+    <.live_title suffix={
+      if assigns[:page_title] && assigns[:page_title] != branding.name,
+        do: " · " <> branding.name,
+        else: ""
+    }>
       {assigns[:page_title] || branding.name}
     </.live_title>
     <%!-- Favicon & icons --%>

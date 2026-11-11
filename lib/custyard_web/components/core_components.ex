@@ -761,7 +761,7 @@ defmodule CustyardWeb.CoreComponents do
   ## Examples
 
       <.banner kind={:warning} title="Lettermint not configured">
-        Route provisioning is disabled. Set LETTERMINT_API_URL and LETTERMINT_API_KEY.
+        Configure support email in this workspace’s email settings to enable route provisioning.
       </.banner>
 
       <.banner kind={:note}>

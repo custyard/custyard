@@ -21,11 +21,11 @@
         <span class="font-medium">{step_label(step.key)}</span>
         <span :if={step.detail} class="ml-1 text-zinc-600 dark:text-zinc-400">{step.detail}</span>
         <p
-          :if={step.key == :operator and step.status == :skipped}
+          :if={step.key == :instance_admin and step.status == :skipped}
           class="mt-1 text-zinc-600 dark:text-zinc-400"
         >
-          Set <code>OPERATOR_EMAIL=you@example.com</code>
-          and restart, or run <code>docker exec &lt;container&gt; bin/operator add you@example.com</code>.
+          Set <code>INSTANCE_ADMIN_EMAIL=you@example.com</code>
+          and restart, or run <code>docker exec &lt;container&gt; bin/instance-admin add you@example.com</code>.
           This page updates when one exists.
         </p>
         <p
@@ -43,15 +43,16 @@
       <span class="font-mono" aria-hidden="true">→</span>
       Sign in at
       <a
-        href={~p"/operator/login"}
+        href={~p"/admin/login"}
         class="font-medium text-indigo-600 underline dark:text-indigo-400"
       >
-        /operator/login
+        /admin/login
       </a>
-      <span :if={@first_run.operator_email}>with <code>{@first_run.operator_email}</code></span>
+      <span :if={@first_run.instance_admin_email}>with
+      <code>{@first_run.instance_admin_email}</code></span>
     </p>
     <p class="mt-1 text-zinc-600 dark:text-zinc-400">
-      After your first login, remove <code>OPERATOR_EMAIL</code>.
+      After your first login, remove <code>INSTANCE_ADMIN_EMAIL</code>, then create a tenant and its first staff account.
     </p>
   </div>
 

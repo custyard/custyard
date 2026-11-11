@@ -10,7 +10,7 @@ defmodule Custyard.Acknowledgments.Evidence do
     with true <- Enum.sort(Map.keys(payload)) == Enum.sort(@fields),
          true <- payload["schema_version"] === 1,
          true <- Enum.all?(@identities, &valid_identity?(payload[&1])),
-         true <- payload["actor_type"] == "internal_operator",
+         true <- payload["actor_type"] == "internal_staff",
          text when is_binary(text) <- payload["statement_text"],
          true <- String.valid?(text) and byte_size(text) in 1..16_384,
          hash when is_binary(hash) <- payload["statement_hash"],

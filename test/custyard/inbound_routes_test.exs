@@ -9,14 +9,15 @@ defmodule Custyard.InboundRoutesTest do
   describe "route operations" do
     test "list_for_organization returns routes for the given org" do
       org = Factory.insert_organization()
-      other_org = Factory.insert_organization()
+      other_org = Factory.insert_organization(tenant_id: Factory.insert_tenant().id)
 
-      {:ok, route1} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route1} =
+        InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       {:ok, _route2} =
-        InboundRoutes.create_route(%{organization_id: other_org.id, route_type: :general})
+        InboundRoutes.create_route(%{tenant_id: other_org.tenant_id, route_type: :general})
 
-      routes = InboundRoutes.list_for_organization(org.id)
+      routes = InboundRoutes.list_for_tenant(org.tenant_id)
 
       assert length(routes) == 1
       assert hd(routes).id == route1.id
@@ -24,12 +25,11 @@ defmodule Custyard.InboundRoutesTest do
 
     test "get_route returns route with preloads" do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       fetched = InboundRoutes.get_route(route.id)
 
       assert fetched.id == route.id
-      assert Ecto.assoc_loaded?(fetched.organization)
       assert Ecto.assoc_loaded?(fetched.webhooks)
     end
 
@@ -45,7 +45,7 @@ defmodule Custyard.InboundRoutesTest do
 
     test "get_by_callback_token finds route by token" do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       fetched = InboundRoutes.get_by_callback_token(route.callback_token)
 
@@ -61,7 +61,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general
         })
 
@@ -74,7 +74,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general
         })
 
@@ -93,7 +93,7 @@ defmodule Custyard.InboundRoutesTest do
 
         {:ok, route} =
           InboundRoutes.create_route(%{
-            organization_id: org.id,
+            tenant_id: org.tenant_id,
             route_type: :general,
             source: source
           })
@@ -113,7 +113,7 @@ defmodule Custyard.InboundRoutesTest do
 
       assert {:ok, route} =
                InboundRoutes.create_route(%{
-                 organization_id: org.id,
+                 tenant_id: org.tenant_id,
                  route_type: :general,
                  source: "zendesk"
                })
@@ -130,7 +130,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           callback_token: custom_token
         })
@@ -143,7 +143,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:error, changeset} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           callback_token: "short-token"
         })
@@ -152,49 +152,9 @@ defmodule Custyard.InboundRoutesTest do
       assert error_msg =~ "at least 32 characters"
     end
 
-    test "create_route validates project_id for project routes" do
-      org = Factory.insert_organization()
-
-      {:error, changeset} =
-        InboundRoutes.create_route(%{
-          organization_id: org.id,
-          route_type: :project
-          # Missing project_id
-        })
-
-      assert %{project_id: ["is required for project routes"]} = errors_on(changeset)
-    end
-
-    test "create_route creates project route with project_id" do
-      org = Factory.insert_organization()
-      project = Factory.insert_project(organization_id: org.id)
-
-      {:ok, route} =
-        InboundRoutes.create_route(%{
-          organization_id: org.id,
-          route_type: :project,
-          project_id: project.id
-        })
-
-      assert route.route_type == :project
-      assert route.project_id == project.id
-    end
-
-    test "create_route creates disambiguation route" do
-      org = Factory.insert_organization()
-
-      {:ok, route} =
-        InboundRoutes.create_route(%{
-          organization_id: org.id,
-          route_type: :disambiguation
-        })
-
-      assert route.route_type == :disambiguation
-    end
-
     test "update_route updates attributes" do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       {:ok, updated} = InboundRoutes.update_route(route, %{lettermint_route_id: "lm-123"})
 
@@ -206,7 +166,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           from_address: "support@example.com"
         })
@@ -219,7 +179,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:error, changeset} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           from_address: "not-valid"
         })
@@ -229,7 +189,7 @@ defmodule Custyard.InboundRoutesTest do
 
     test "update_route can set from_address" do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       {:ok, updated} = InboundRoutes.update_route(route, %{from_address: "reply@acme.com"})
 
@@ -238,7 +198,7 @@ defmodule Custyard.InboundRoutesTest do
 
     test "delete_route removes the route" do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       {:ok, _} = InboundRoutes.delete_route(route)
 
@@ -247,7 +207,7 @@ defmodule Custyard.InboundRoutesTest do
 
     test "delete_route cascades deletion to webhooks" do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
       {:ok, webhook} = InboundRoutes.enable_webhook(route, :sender_matching)
 
       InboundRoutes.delete_route(route)
@@ -263,7 +223,7 @@ defmodule Custyard.InboundRoutesTest do
 
     test "callback_url returns URL with callback_token" do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       url = InboundRoutes.callback_url(route)
       assert url =~ "/api/webhook/route/#{route.callback_token}"
@@ -275,7 +235,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           source: :email
         })
@@ -290,7 +250,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           source: :lettermint
         })
@@ -304,7 +264,7 @@ defmodule Custyard.InboundRoutesTest do
   describe "webhook operations" do
     setup do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
       {:ok, route: route}
     end
 
@@ -448,36 +408,33 @@ defmodule Custyard.InboundRoutesTest do
     test "find_or_create_general_route creates if not exists" do
       org = Factory.insert_organization()
 
-      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.tenant_id)
 
-      assert route.route_type == :general
-      assert route.organization_id == org.id
+      assert route.tenant_id == org.tenant_id
     end
 
     test "find_or_create_general_route returns existing route" do
       org = Factory.insert_organization()
 
       {:ok, existing} =
-        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+        InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
-      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.tenant_id)
 
       assert route.id == existing.id
     end
 
     test "get_general_route returns general route" do
       org = Factory.insert_organization()
-      {:ok, _route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
 
-      route = InboundRoutes.get_general_route(org.id)
-
-      assert route.route_type == :general
+      {:ok, expected} = InboundRoutes.create_route(%{tenant_id: org.tenant_id})
+      assert InboundRoutes.get_general_route(org.tenant_id).id == expected.id
     end
 
     test "get_general_route returns nil when no general route exists" do
       org = Factory.insert_organization()
 
-      assert InboundRoutes.get_general_route(org.id) == nil
+      assert InboundRoutes.get_general_route(org.tenant_id) == nil
     end
 
     test "Lettermint and Zendesk general routes have deterministic source selection" do
@@ -485,32 +442,32 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, lettermint} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           source: :lettermint
         })
 
       {:ok, zendesk} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           source: :zendesk
         })
 
-      assert InboundRoutes.get_general_route(org.id).id == lettermint.id
-      assert InboundRoutes.get_general_route(org.id, source: :email).id == lettermint.id
-      assert InboundRoutes.get_general_route(org.id, source: :zendesk).id == zendesk.id
+      assert InboundRoutes.get_general_route(org.tenant_id).id == lettermint.id
+      assert InboundRoutes.get_general_route(org.tenant_id, source: :email).id == lettermint.id
+      assert InboundRoutes.get_general_route(org.tenant_id, source: :zendesk).id == zendesk.id
 
       assert {:ok, email_route} =
-               InboundRoutes.find_or_create_general_route(org.id, source: :email)
+               InboundRoutes.find_or_create_general_route(org.tenant_id, source: :email)
 
       assert email_route.id == lettermint.id
 
       assert {:ok, zendesk_route} =
-               InboundRoutes.find_or_create_general_route(org.id, source: :zendesk)
+               InboundRoutes.find_or_create_general_route(org.tenant_id, source: :zendesk)
 
       assert zendesk_route.id == zendesk.id
-      assert length(InboundRoutes.list_for_organization(org.id)) == 2
+      assert length(InboundRoutes.list_for_tenant(org.tenant_id)) == 2
     end
 
     test "email intake creates a local route when only a Zendesk general route exists" do
@@ -522,34 +479,20 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, zendesk} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           source: :zendesk
         })
 
-      assert InboundRoutes.get_general_route(org.id).id == zendesk.id
-      assert {:ok, email} = InboundRoutes.find_or_create_general_route(org.id, source: :email)
+      assert InboundRoutes.get_general_route(org.tenant_id).id == zendesk.id
+
+      assert {:ok, email} =
+               InboundRoutes.find_or_create_general_route(org.tenant_id, source: :email)
+
       assert email.source == :email
       assert email.id != zendesk.id
       assert email.lettermint_route_id == nil
-      assert InboundRoutes.get_general_route(org.id).id == email.id
-    end
-
-    test "get_project_route returns project route" do
-      org = Factory.insert_organization()
-      project = Factory.insert_project(organization_id: org.id)
-
-      {:ok, _route} =
-        InboundRoutes.create_route(%{
-          organization_id: org.id,
-          route_type: :project,
-          project_id: project.id
-        })
-
-      route = InboundRoutes.get_project_route(project.id)
-
-      assert route.route_type == :project
-      assert route.project_id == project.id
+      assert InboundRoutes.get_general_route(org.tenant_id).id == email.id
     end
   end
 
@@ -557,20 +500,18 @@ defmodule Custyard.InboundRoutesTest do
     test "creates route with source: :email when passed as option" do
       org = Factory.insert_organization()
 
-      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id, source: :email)
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.tenant_id, source: :email)
 
-      assert route.route_type == :general
-      assert route.organization_id == org.id
+      assert route.tenant_id == org.tenant_id
       assert route.source == :email
     end
 
     test "defaults to source: :lettermint when no source option is given" do
       org = Factory.insert_organization()
 
-      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.tenant_id)
 
-      assert route.route_type == :general
-      assert route.organization_id == org.id
+      assert route.tenant_id == org.tenant_id
       assert route.source == :lettermint
     end
 
@@ -578,10 +519,10 @@ defmodule Custyard.InboundRoutesTest do
       org = Factory.insert_organization()
 
       # Create route without explicit source (defaults to :lettermint)
-      {:ok, existing} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, existing} = InboundRoutes.find_or_create_general_route(org.tenant_id)
 
       # Calling again with source: :email should return the same existing route
-      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id, source: :email)
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.tenant_id, source: :email)
 
       assert route.id == existing.id
     end
@@ -591,7 +532,7 @@ defmodule Custyard.InboundRoutesTest do
     test "creates sender_matching and notification webhook records on new route" do
       org = Factory.insert_organization()
 
-      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.tenant_id)
 
       webhooks = InboundRoutes.list_webhooks_for_route(route.id)
       purposes = Enum.map(webhooks, & &1.purpose) |> Enum.sort()
@@ -606,11 +547,11 @@ defmodule Custyard.InboundRoutesTest do
     test "calling find_or_create_general_route again does not duplicate webhook records" do
       org = Factory.insert_organization()
 
-      {:ok, route} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, route} = InboundRoutes.find_or_create_general_route(org.tenant_id)
       initial_webhooks = InboundRoutes.list_webhooks_for_route(route.id)
 
       # Call again -- should return the same route with the same webhooks
-      {:ok, same_route} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, same_route} = InboundRoutes.find_or_create_general_route(org.tenant_id)
       assert same_route.id == route.id
 
       later_webhooks = InboundRoutes.list_webhooks_for_route(route.id)
@@ -635,7 +576,7 @@ defmodule Custyard.InboundRoutesTest do
       # Create route directly (bypasses seed_default_webhooks entirely)
       {:ok, bare_route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general
         })
 
@@ -651,10 +592,10 @@ defmodule Custyard.InboundRoutesTest do
 
       # Now find_or_create_general_route should find the existing route and
       # return it, regardless of missing webhooks
-      {:ok, found_route} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, found_route} = InboundRoutes.find_or_create_general_route(org.tenant_id)
 
       assert found_route.id == bare_route.id
-      assert found_route.route_type == :general
+      assert found_route.tenant_id == org.tenant_id
 
       # The route is returned successfully; webhooks may or may not be present
       # depending on whether the "find" path re-seeds. The key guarantee is
@@ -670,7 +611,7 @@ defmodule Custyard.InboundRoutesTest do
       # Create route directly and seed only one of the two default purposes
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general
         })
 
@@ -688,10 +629,10 @@ defmodule Custyard.InboundRoutesTest do
 
       # find_or_create_general_route should return the route even with
       # incomplete webhook seeding
-      {:ok, found_route} = InboundRoutes.find_or_create_general_route(org.id)
+      {:ok, found_route} = InboundRoutes.find_or_create_general_route(org.tenant_id)
 
       assert found_route.id == route.id
-      assert found_route.route_type == :general
+      assert found_route.tenant_id == org.tenant_id
     end
   end
 
@@ -713,31 +654,10 @@ defmodule Custyard.InboundRoutesTest do
 
       # Should be a changeset error (validation failed), not an API error
       assert %Ecto.Changeset{} = changeset
-      assert %{tenant_id: ["must be selected"]} = errors_on(changeset)
+      assert %{tenant_id: ["can't be blank"]} = errors_on(changeset)
 
       # Verify no route was created
-      assert [] = InboundRoutes.list_for_organization(org.id)
-    end
-
-    test "returns changeset error for project route without project_id before calling API" do
-      org = Factory.insert_organization()
-
-      original_config = Application.get_env(:custyard, :lettermint)
-      Application.put_env(:custyard, :lettermint, client: Custyard.Lettermint.FailingMockClient)
-
-      on_exit(fn ->
-        Application.put_env(:custyard, :lettermint, original_config)
-      end)
-
-      {:error, changeset} =
-        InboundRoutes.create_route(%{
-          organization_id: org.id,
-          route_type: :project
-          # Missing project_id
-        })
-
-      assert %Ecto.Changeset{} = changeset
-      assert %{project_id: ["is required for project routes"]} = errors_on(changeset)
+      assert [] = InboundRoutes.list_for_tenant(org.tenant_id)
     end
 
     test "returns changeset error for short callback_token before calling API" do
@@ -752,7 +672,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:error, changeset} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           callback_token: "too-short"
         })
@@ -775,7 +695,7 @@ defmodule Custyard.InboundRoutesTest do
       # Valid attrs - should pass validation and call API, which will fail
       {:error, reason} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general
         })
 
@@ -791,7 +711,7 @@ defmodule Custyard.InboundRoutesTest do
       # First create a route with the normal mock client
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general
         })
 
@@ -822,7 +742,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general
         })
 
@@ -854,7 +774,7 @@ defmodule Custyard.InboundRoutesTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           lettermint_route_id: nil
         })
@@ -873,117 +793,6 @@ defmodule Custyard.InboundRoutesTest do
 
       assert deleted.id == route.id
       assert InboundRoutes.get_route(route.id) == nil
-    end
-  end
-
-  describe "is_last_general_route?/1" do
-    test "returns true when route is the only general route for its org" do
-      org = Factory.insert_organization()
-
-      {:ok, route} =
-        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
-
-      assert InboundRoutes.is_last_general_route?(route)
-    end
-
-    test "returns false when there are multiple general routes for the org" do
-      org = Factory.insert_organization()
-
-      {:ok, route1} =
-        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
-
-      {:ok, route2} =
-        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
-
-      refute InboundRoutes.is_last_general_route?(route1)
-      refute InboundRoutes.is_last_general_route?(route2)
-    end
-
-    test "returns false for project routes" do
-      org = Factory.insert_organization()
-      project = Factory.insert_project(organization_id: org.id)
-
-      {:ok, route} =
-        InboundRoutes.create_route(%{
-          organization_id: org.id,
-          route_type: :project,
-          project_id: project.id
-        })
-
-      refute InboundRoutes.is_last_general_route?(route)
-    end
-
-    test "returns false for disambiguation routes" do
-      org = Factory.insert_organization()
-
-      {:ok, route} =
-        InboundRoutes.create_route(%{organization_id: org.id, route_type: :disambiguation})
-
-      refute InboundRoutes.is_last_general_route?(route)
-    end
-
-    test "does not count general routes from other organizations" do
-      org1 = Factory.insert_organization()
-      org2 = Factory.insert_organization()
-
-      {:ok, route1} =
-        InboundRoutes.create_route(%{organization_id: org1.id, route_type: :general})
-
-      {:ok, route2} =
-        InboundRoutes.create_route(%{organization_id: org2.id, route_type: :general})
-
-      # Each org has exactly one general route, so each is the "last" one
-      assert InboundRoutes.is_last_general_route?(route1)
-      assert InboundRoutes.is_last_general_route?(route2)
-    end
-
-    test "does not count project routes when determining last general route" do
-      org = Factory.insert_organization()
-      project = Factory.insert_project(organization_id: org.id)
-
-      {:ok, general_route} =
-        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
-
-      {:ok, _project_route} =
-        InboundRoutes.create_route(%{
-          organization_id: org.id,
-          route_type: :project,
-          project_id: project.id
-        })
-
-      # The general route is still the only general route despite having a project route
-      assert InboundRoutes.is_last_general_route?(general_route)
-    end
-  end
-
-  describe "create_route/1 project scoping" do
-    test "rejects a project that belongs to another organization" do
-      org = Factory.insert_organization()
-      other_org = Factory.insert_organization()
-      foreign_project = Factory.insert_project(organization_id: other_org.id)
-
-      assert {:error, changeset} =
-               InboundRoutes.create_route(%{
-                 organization_id: org.id,
-                 route_type: :project,
-                 project_id: foreign_project.id
-               })
-
-      assert {"must belong to the same organization", _} = changeset.errors[:project_id]
-    end
-
-    test "accepts a project of the same organization" do
-      org = Factory.insert_organization()
-      project = Factory.insert_project(organization_id: org.id)
-
-      assert {:ok, route} =
-               InboundRoutes.create_route(%{
-                 organization_id: org.id,
-                 route_type: :project,
-                 project_id: project.id
-               })
-
-      assert route.project_id == project.id
     end
   end
 
@@ -1012,7 +821,7 @@ defmodule Custyard.InboundRoutesTest do
     test "create_route stores the route domain and inbound address from Lettermint" do
       org = Factory.insert_organization()
 
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       assert route.lettermint_route_domain =~ ~r/^[a-z0-9]{10}\.lettermint\.app$/
       assert route.lettermint_inbound_address =~ ~r/^[0-9a-f]{32}@inbound\.lettermint\.co$/
@@ -1026,7 +835,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           source: :zendesk
         })
@@ -1067,7 +876,7 @@ defmodule Custyard.InboundRoutesTest do
 
     test "sync_remote_route/1 backfills a route created without a domain" do
       org = Factory.insert_organization()
-      {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+      {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
       cleared = clear_domain_fields(route)
       assert cleared.lettermint_route_domain == nil
 
@@ -1086,7 +895,7 @@ defmodule Custyard.InboundRoutesTest do
 
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           source: :zendesk
         })
@@ -1098,10 +907,10 @@ defmodule Custyard.InboundRoutesTest do
       org = Factory.insert_organization()
 
       {:ok, complete} =
-        InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+        InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
 
       {:ok, stale} =
-        InboundRoutes.create_route(%{organization_id: org.id, route_type: :disambiguation})
+        InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :disambiguation})
 
       clear_domain_fields(stale)
 
@@ -1123,7 +932,7 @@ defmodule Custyard.InboundRoutesTest do
       route =
         %InboundRoute{}
         |> InboundRoute.changeset(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           lettermint_route_id: "lm_route_legacy"
         })
@@ -1144,7 +953,7 @@ defmodule Custyard.InboundRoutesTest do
 
       %InboundRoute{}
       |> InboundRoute.changeset(%{
-        organization_id: org.id,
+        tenant_id: org.tenant_id,
         route_type: :general,
         lettermint_route_id: "lm_route_legacy"
       })

@@ -29,18 +29,18 @@ defmodule Custyard.SentryTest do
   end
 
   describe "scrub_path/1 redacts bearer tokens in the path" do
-    test "conversation token" do
-      assert Scrub.scrub_path("/c/abc123token") == "/c/#{@redacted}"
+    test "thread token" do
+      assert Scrub.scrub_path("/threads/abc123token") == "/threads/#{@redacted}"
     end
 
     test "claim token, preserving the trailing /confirm segment" do
-      assert Scrub.scrub_path("/claim/tok987") == "/claim/#{@redacted}"
-      assert Scrub.scrub_path("/claim/tok987/confirm") == "/claim/#{@redacted}/confirm"
+      assert Scrub.scrub_path("/claims/tok987") == "/claims/#{@redacted}"
+      assert Scrub.scrub_path("/claims/tok987/confirm") == "/claims/#{@redacted}/confirm"
     end
 
-    test "operator magic-link verify token" do
-      assert Scrub.scrub_path("/operator/login/verify/magiclink") ==
-               "/operator/login/verify/#{@redacted}"
+    test "staff magic-link verify token" do
+      assert Scrub.scrub_path("/app/login/verify/magiclink") ==
+               "/app/login/verify/#{@redacted}"
     end
 
     test "routed-webhook callback token" do
@@ -48,20 +48,20 @@ defmodule Custyard.SentryTest do
     end
 
     test "portal org token, preserving trailing segments" do
-      assert Scrub.scrub_path("/p/orgtoken") == "/p/#{@redacted}"
-      assert Scrub.scrub_path("/p/orgtoken/request/5") == "/p/#{@redacted}/request/5"
+      assert Scrub.scrub_path("/portal/orgtoken") == "/portal/#{@redacted}"
+      assert Scrub.scrub_path("/portal/orgtoken/request/5") == "/portal/#{@redacted}/request/5"
     end
 
     test "leaves non-sensitive paths untouched" do
-      # /i/:source_key is an operator-published identifier, not a credential.
-      for path <- ["/", "/i/eu-otshosted", "/operator", "/operator/projects", "/api/health"] do
+      # /i/:source_key is a staff-published identifier, not a credential.
+      for path <- ["/", "/i/eu-otshosted", "/staff", "/staff/projects", "/api/health"] do
         assert Scrub.scrub_path(path) == path
       end
     end
 
     test "redacts a token embedded in free-form text (crash messages)" do
-      msg = "GenServer terminating while handling GET /c/leakytoken from client"
-      assert Scrub.scrub_path(msg) =~ "/c/#{@redacted}"
+      msg = "GenServer terminating while handling GET /threads/leakytoken from client"
+      assert Scrub.scrub_path(msg) =~ "/threads/#{@redacted}"
       refute Scrub.scrub_path(msg) =~ "leakytoken"
     end
 
@@ -157,9 +157,9 @@ defmodule Custyard.SentryTest do
     end
 
     test "redacts a full-URL path token embedded in text (lookbehind bug fix)" do
-      # The char before /c/ is a word char here; the old lookbehind missed it.
-      text = "raise while handling https://custyard.fly.dev/c/urltoken now"
-      assert Scrub.scrub_text(text) =~ "/c/#{@redacted}"
+      # The char before /threads/ is a word char here; the old lookbehind missed it.
+      text = "raise while handling https://custyard.fly.dev/threads/urltoken now"
+      assert Scrub.scrub_text(text) =~ "/threads/#{@redacted}"
       refute Scrub.scrub_text(text) =~ "urltoken"
     end
 
@@ -205,14 +205,14 @@ defmodule Custyard.SentryTest do
 
   describe "scrub_url/1 scrubs path and query together" do
     test "redacts both a path token and a query token" do
-      url = "https://custyard.fly.dev/c/tok?token=abc&keep=1"
+      url = "https://custyard.fly.dev/threads/tok?token=abc&keep=1"
 
       assert Scrub.scrub_url(url) ==
-               "https://custyard.fly.dev/c/#{@redacted}?token=#{@redacted}&keep=1"
+               "https://custyard.fly.dev/threads/#{@redacted}?token=#{@redacted}&keep=1"
     end
 
     test "leaves a benign URL untouched" do
-      url = "https://custyard.fly.dev/operator/projects?page=2"
+      url = "https://custyard.fly.dev/staff/projects?page=2"
       assert Scrub.scrub_url(url) == url
     end
 
@@ -224,10 +224,10 @@ defmodule Custyard.SentryTest do
 
   describe "scrub_conn_url/1 — the PlugContext :url_scrubber contract" do
     test "returns a full URL string with the path token redacted" do
-      result = Scrub.scrub_conn_url(conn(:get, "/c/secrettoken?token=abc&keep=1"))
+      result = Scrub.scrub_conn_url(conn(:get, "/threads/secrettoken?token=abc&keep=1"))
 
       assert is_binary(result)
-      assert result =~ "/c/#{@redacted}"
+      assert result =~ "/threads/#{@redacted}"
       assert result =~ "token=#{@redacted}"
       assert result =~ "keep=1"
       refute result =~ "secrettoken"
@@ -246,8 +246,7 @@ defmodule Custyard.SentryTest do
         event(
           request: %Request{
             method: "POST",
-            url:
-              "https://customer.example/operator/login/verify/magiclink?token=abc&name=private",
+            url: "https://customer.example/app/login/verify/magiclink?token=abc&name=private",
             query_string: "token=abc&keep=private",
             data: %{body: "customer message"},
             headers: %{"authorization" => "secret", "x-custom" => "private"},
@@ -259,7 +258,7 @@ defmodule Custyard.SentryTest do
 
       assert scrubbed.request == %Request{
                method: "POST",
-               url: "/operator/login/verify/[REDACTED]"
+               url: "/app/login/verify/[REDACTED]"
              }
     end
 
@@ -282,7 +281,7 @@ defmodule Custyard.SentryTest do
           extra: %{
             crash_reason: private,
             note: private,
-            operator_id: 7,
+            staff_id: 7,
             tenant_id: 9,
             request_id: "req_12345678901234567890",
             operation_id: "op_12345678901234567890"
@@ -296,7 +295,7 @@ defmodule Custyard.SentryTest do
                params: []
              }
 
-      assert scrubbed.extra.operator_id == 7
+      assert scrubbed.extra.staff_id == 7
       assert scrubbed.extra.tenant_id == 9
       assert scrubbed.extra.request_id == "req_12345678901234567890"
       assert scrubbed.extra.operation_id == "op_12345678901234567890"
@@ -335,10 +334,10 @@ defmodule Custyard.SentryTest do
             }
           ],
           fingerprint: [private],
-          tags: %{private => private, :operator_id => 12},
-          extra: %{private => private, :operator_id => 12},
+          tags: %{private => private, :staff_id => 12},
+          extra: %{private => private, :staff_id => 12},
           request: %Request{
-            url: "https://#{private}/i/#{private}?#{private}=#{private}",
+            url: "https://#{private}/intake/#{private}?#{private}=#{private}",
             method: private,
             query_string: private,
             data: %{private => private},
@@ -381,14 +380,14 @@ defmodule Custyard.SentryTest do
 
       refute inspect(scrubbed, limit: :infinity, printable_limit: :infinity) =~ private
       assert scrubbed.environment == "test"
-      assert scrubbed.extra == %{operator_id: 12}
-      assert scrubbed.tags == %{operator_id: 12}
+      assert scrubbed.extra == %{staff_id: 12}
+      assert scrubbed.tags == %{staff_id: 12}
       assert scrubbed.attachments == []
       assert scrubbed.original_exception == nil
       assert scrubbed.user == %{}
       assert scrubbed.breadcrumbs == []
       assert scrubbed.contexts == nil
-      assert scrubbed.request == %Request{url: "/i/[REDACTED]"}
+      assert scrubbed.request == %Request{url: "/intake/[REDACTED]"}
       assert [%{type: "RuntimeError", value: @redacted} = exception] = scrubbed.exception
       assert exception.module == nil
       assert exception.mechanism == %Sentry.Interfaces.Exception.Mechanism{handled: true}
@@ -529,7 +528,7 @@ defmodule Custyard.SentryTest do
 
       scrubbed =
         event(
-          message: %Message{formatted: "operator_login_requested\n#{private}"},
+          message: %Message{formatted: "account_login_requested\n#{private}"},
           extra: %{
             logger_metadata: %{
               custyard_event: private,
@@ -651,11 +650,11 @@ defmodule Custyard.SentryTest do
           body_scrubber: {Custyard.Sentry, :scrub_conn_body}
         )
 
-      Sentry.PlugContext.call(conn(:get, "/c/secrettoken?token=abc&keep=1"), opts)
+      Sentry.PlugContext.call(conn(:get, "/threads/secrettoken?token=abc&keep=1"), opts)
 
       request = Sentry.Context.get_all().request
 
-      assert request.url =~ "/c/#{@redacted}"
+      assert request.url =~ "/threads/#{@redacted}"
       assert request.url =~ "token=#{@redacted}"
       refute request.url =~ "secrettoken"
     end
@@ -673,14 +672,14 @@ defmodule Custyard.SentryTest do
 
   describe "token_path?/1" do
     test "recognizes every path that carries a bearer credential" do
-      assert Scrub.token_path?("/c/abc123")
-      assert Scrub.token_path?("/claim/abc123/confirm")
-      assert Scrub.token_path?("/operator/login/verify/abc123")
+      assert Scrub.token_path?("/threads/abc123")
+      assert Scrub.token_path?("/claims/abc123/confirm")
+      assert Scrub.token_path?("/app/login/verify/abc123")
       assert Scrub.token_path?("/api/webhook/route/abc123")
-      assert Scrub.token_path?("/p/orgtoken/request/5")
+      assert Scrub.token_path?("/portal/orgtoken/request/5")
 
       refute Scrub.token_path?("/")
-      refute Scrub.token_path?("/operator/login")
+      refute Scrub.token_path?("/staff/login")
       refute Scrub.token_path?("/i/quote")
       refute Scrub.token_path?(nil)
     end

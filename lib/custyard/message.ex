@@ -2,14 +2,14 @@ defmodule Custyard.Message do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Custyard.{Conversation, Repo}
+  alias Custyard.{Thread, Repo}
 
   # Message types: how the message was sent
-  # :prospect — anonymous public-intake submission or conversation-link reply
-  @sources [:email, :portal, :operator, :prospect]
+  # :prospect — anonymous public-intake submission or thread-link reply
+  @sources [:email, :portal, :staff, :prospect]
 
   # Origins: which adapter/integration the message came from (for audit/reporting)
-  # Aligns with Conversation.@sources for consistent tracking
+  # Aligns with Thread.@sources for consistent tracking
   @origins [
     :email,
     :lettermint,
@@ -34,13 +34,13 @@ defmodule Custyard.Message do
   # distinct from provider-side :suppressed: consent-withheld is an expected
   # state, provider-suppressed is a delivery failure.
   #
-  # Ranking (spec-conversation-loop, Delivery Tracking): pending < sending <
+  # Ranking (spec-thread-loop, Delivery Tracking): pending < sending <
   # sent < delivered; bounced, suppressed and failed are terminal. A status
   # event only advances a message when its rank is higher or it is terminal.
-  # :operator_sent — a reply the operator sent from their own mailbox, outside
-  # Custyard, captured by triage (D6). :operator_forward — customer mail an
-  # operator manually forwarded in; the message carries the original sender.
-  @triage_classes [:customer, :auto_response, :suspect, :operator_sent, :operator_forward]
+  # :staff_sent — a reply the staff sent from their own mailbox, outside
+  # Custyard, captured by triage (D6). :staff_forward — customer mail an
+  # staff manually forwarded in; the message carries the original sender.
+  @triage_classes [:customer, :auto_response, :suspect, :staff_sent, :staff_forward]
 
   @delivery_statuses [
     :pending,
@@ -59,16 +59,17 @@ defmodule Custyard.Message do
     # e.g., a message with source: :email might have origin: :lettermint
     field :origin, Ecto.Enum, values: @origins
     field :sender_email, :string
+    # The authenticated human author is independent of the tenant's shared
+    # sending identity. Set only by the authorized staff mutation context.
+    belongs_to :author_staff, Custyard.StaffAccount
     field :body, :string
     field :is_internal_note, :boolean, default: false
     field :message_id, :string
-    # Uniqueness namespace for inbound deliveries (organization, source, route).
-    field :dedup_scope, :string
     field :in_reply_to, :string
     field :lettermint_message_id, :string
     # Provider webhook delivery id (Lettermint's top-level `id`, reused on
     # retries). Second idempotency key for inbound deliveries, alongside
-    # (dedup_scope, message_id). nil for outbound messages.
+    # (tenant_id, message_id). nil for outbound messages.
     field :provider_delivery_id, :string
     # Delivery status tracks outbound message lifecycle (nil for inbound messages)
     field :delivery_status, Ecto.Enum, values: @delivery_statuses
@@ -90,28 +91,29 @@ defmodule Custyard.Message do
     field :spam_score, :float
     # Triage class (D6): :customer, :auto_response (system message appended
     # to a thread), :suspect (spam-flagged or unauthenticated unknown sender).
-    # nil for operator, portal and legacy rows.
+    # nil for staff and portal messages.
     field :triage_class, Ecto.Enum, values: @triage_classes
     belongs_to :inbound_channel, Custyard.InboundChannel
 
     # Allowlist-sanitised HTML body (D9), stored alongside the text body.
     # nil when the mail was text-only or the HTML was too large to keep.
     field :html_body, :string
-    # Manual-forward provenance (D6): the operator who forwarded a customer
-    # thread in, and the operator-owned address it came from.
-    belongs_to :forwarded_by_operator, Custyard.OperatorAccount
+    # Manual-forward provenance (D6): the staff who forwarded a customer
+    # thread in, and the staff-owned address it came from.
+    belongs_to :forwarded_by_staff, Custyard.StaffAccount
     field :forwarded_by_email, :string
     has_many :attachments, Custyard.MessageAttachment
-    # Per-recipient delivery outcome (spec-conversation-loop, "Delivery Tracking")
+    # Per-recipient delivery outcome (spec-thread-loop, "Delivery Tracking")
     has_many :recipient_statuses, Custyard.MessageRecipientStatus
 
     # Soft delete (GitHub-style tombstone): the body stays in the database and
     # rendering surfaces show "This message was deleted" instead. There is no
     # hard-delete path. Set only via soft_delete_changeset/2.
     field :deleted_at, :utc_datetime
-    belongs_to :deleted_by_operator, Custyard.OperatorAccount
+    belongs_to :deleted_by_staff, Custyard.StaffAccount
 
-    belongs_to :conversation, Custyard.Conversation
+    belongs_to :tenant, Custyard.Tenant
+    belongs_to :thread, Custyard.Thread
 
     timestamps(type: :utc_datetime)
   end
@@ -120,6 +122,19 @@ defmodule Custyard.Message do
   def origins, do: @origins
   def delivery_statuses, do: @delivery_statuses
   def triage_classes, do: @triage_classes
+
+  @doc "Attach an already authorized staff author; public message attrs cannot set it."
+  def put_author(changeset, %Custyard.StaffAccount{id: id, tenant_id: tenant_id}) do
+    if get_field(changeset, :tenant_id) == tenant_id do
+      changeset
+      |> put_change(:author_staff_id, id)
+      |> foreign_key_constraint(:author_staff_id)
+    else
+      add_error(changeset, :author_staff_id, "must belong to the message tenant")
+    end
+  end
+
+  def put_author(changeset, nil), do: changeset
 
   @doc false
   def changeset(message, attrs) do
@@ -131,7 +146,7 @@ defmodule Custyard.Message do
       :body,
       :is_internal_note,
       :message_id,
-      :dedup_scope,
+      :tenant_id,
       :in_reply_to,
       :lettermint_message_id,
       :provider_delivery_id,
@@ -144,11 +159,12 @@ defmodule Custyard.Message do
       :triage_class,
       :inbound_channel_id,
       :html_body,
-      :forwarded_by_operator_id,
+      :forwarded_by_staff_id,
       :forwarded_by_email,
-      :conversation_id
+      :thread_id
     ])
-    |> validate_required([:source, :body, :conversation_id])
+    |> put_tenant_from_thread()
+    |> validate_required([:tenant_id, :source, :body, :thread_id])
     |> validate_length(:body, max: 100_000)
     |> validate_length(:html_body, max: 500_000)
     |> validate_length(:forwarded_by_email, max: 255)
@@ -157,13 +173,18 @@ defmodule Custyard.Message do
     |> validate_length(:to_addresses, max: 50)
     |> validate_length(:cc_addresses, max: 50)
     # Note: :source and :origin use Ecto.Enum which validates values automatically
-    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:thread_id)
     |> foreign_key_constraint(:inbound_channel_id)
-    |> foreign_key_constraint(:forwarded_by_operator_id)
-    |> unique_constraint([:dedup_scope, :message_id],
-      name: :messages_dedup_scope_message_id_index
+    |> foreign_key_constraint(:forwarded_by_staff_id)
+    |> foreign_key_constraint(:tenant_id)
+    |> unique_constraint([:tenant_id, :message_id],
+      name: :messages_tenant_id_message_id_index,
+      error_key: :message_id
     )
-    |> unique_constraint(:provider_delivery_id, name: :messages_provider_delivery_id_index)
+    |> unique_constraint([:tenant_id, :provider_delivery_id],
+      name: :messages_tenant_id_provider_delivery_id_index,
+      error_key: :provider_delivery_id
+    )
   end
 
   @doc """
@@ -174,17 +195,17 @@ defmodule Custyard.Message do
   @doc """
   Changeset for soft-deleting a message (GitHub-style tombstone).
 
-  Stamps `deleted_at` and the deleting operator. The body column is left
+  Stamps `deleted_at` and the deleting staff. The body column is left
   untouched — the original content stays in the database and only rendering
   changes. Deliberately not part of `changeset/2` so external attrs can never
   set or clear the deletion fields.
   """
-  def soft_delete_changeset(message, %Custyard.OperatorAccount{} = operator) do
+  def soft_delete_changeset(message, %Custyard.StaffAccount{} = staff) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     message
-    |> change(deleted_at: now, deleted_by_operator_id: operator.id)
-    |> foreign_key_constraint(:deleted_by_operator_id)
+    |> change(deleted_at: now, deleted_by_staff_id: staff.id)
+    |> foreign_key_constraint(:deleted_by_staff_id)
   end
 
   @doc """
@@ -206,86 +227,55 @@ defmodule Custyard.Message do
     |> validate_required([:delivery_status])
   end
 
-  @doc """
-  Insert a message, handling duplicate message_id gracefully.
-
-  For webhook idempotency: a matching message ID in the same delivery namespace
-  returns the existing message. The namespace includes the organization, provider,
-  and inbound route when available.
-
-  Returns `{:ok, message}` on success or duplicate, `{:error, changeset}` on validation failure.
-  """
+  @doc "Insert a message idempotently within its tenant."
   def insert_idempotent(attrs) do
-    attrs = ensure_dedup_scope(attrs)
     changeset = changeset(%__MODULE__{}, attrs)
+    tenant_id = get_field(changeset, :tenant_id)
 
     case Repo.insert(changeset) do
       {:ok, message} -> {:ok, message}
-      {:error, %Ecto.Changeset{} = cs} -> recover_duplicate(attrs, cs)
+      {:error, %Ecto.Changeset{} = cs} -> recover_duplicate(attrs, tenant_id, cs)
     end
   end
 
-  # Postgres reports one violated unique index per insert, so the two dedup
-  # keys are checked in turn: the provider delivery id (a retried webhook
-  # delivery) and the (dedup_scope, message_id) pair (the same mail arriving
-  # twice through one route).
-  defp recover_duplicate(attrs, %Ecto.Changeset{errors: errors} = cs) do
+  defp recover_duplicate(attrs, tenant_id, %Ecto.Changeset{errors: errors} = cs) do
     existing =
       cond do
-        delivery_constraint?(errors) && attrs[:provider_delivery_id] ->
-          Repo.get_by(__MODULE__, provider_delivery_id: attrs[:provider_delivery_id])
-
-        duplicate_constraint?(errors) && attrs[:message_id] && attrs[:dedup_scope] ->
+        Keyword.has_key?(errors, :provider_delivery_id) && attrs[:provider_delivery_id] ->
           Repo.get_by(__MODULE__,
-            dedup_scope: attrs[:dedup_scope],
-            message_id: attrs[:message_id]
+            tenant_id: tenant_id,
+            provider_delivery_id: attrs[:provider_delivery_id]
           )
+
+        Keyword.has_key?(errors, :message_id) && attrs[:message_id] ->
+          Repo.get_by(__MODULE__, tenant_id: tenant_id, message_id: attrs[:message_id])
 
         true ->
           nil
       end
 
-    if existing && same_organization?(attrs[:conversation_id], existing.conversation_id),
-      do: {:ok, existing},
-      else: {:error, cs}
+    if existing, do: {:ok, existing}, else: {:error, cs}
   end
 
-  defp delivery_constraint?(errors), do: Keyword.has_key?(errors, :provider_delivery_id)
+  # The parent thread supplies authoritative tenant ownership for all writers.
+  # Explicit attributes remain subject to the composite database foreign key.
+  defp put_tenant_from_thread(changeset) do
+    case get_field(changeset, :thread_id) do
+      id when is_integer(id) ->
+        case Repo.get(Thread, id) do
+          %Thread{tenant_id: tenant_id} ->
+            case get_field(changeset, :tenant_id) do
+              nil -> put_change(changeset, :tenant_id, tenant_id)
+              ^tenant_id -> changeset
+              _ -> add_error(changeset, :tenant_id, "does not match the parent thread")
+            end
 
-  defp duplicate_constraint?(errors),
-    do: Keyword.has_key?(errors, :message_id) or Keyword.has_key?(errors, :dedup_scope)
-
-  defp same_organization?(requested_id, existing_id) do
-    case {Repo.get(Conversation, requested_id), Repo.get(Conversation, existing_id)} do
-      {%Conversation{organization_id: org_id}, %Conversation{organization_id: org_id}} -> true
-      _ -> false
-    end
-  end
-
-  @doc "Build the namespace for a provider delivery within an organization."
-  def dedup_scope(organization_id, origin, route_id \\ nil) do
-    "org:#{organization_id}:source:#{origin || :email}:route:#{route_id || 0}"
-  end
-
-  defp ensure_dedup_scope(%{message_id: message_id} = attrs) when not is_nil(message_id) do
-    case attrs[:dedup_scope] do
-      nil ->
-        case attrs[:conversation_id] && Repo.get(Conversation, attrs[:conversation_id]) do
-          nil ->
-            attrs
-
-          conversation ->
-            Map.put(
-              attrs,
-              :dedup_scope,
-              dedup_scope(conversation.organization_id, attrs[:origin] || attrs[:source])
-            )
+          _ ->
+            changeset
         end
 
       _ ->
-        attrs
+        changeset
     end
   end
-
-  defp ensure_dedup_scope(attrs), do: attrs
 end

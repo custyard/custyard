@@ -1,7 +1,7 @@
 defmodule CustyardWeb.Portal.NewRequestLive do
   use CustyardWeb, :live_view
 
-  alias Custyard.{Conversation, Message, Repo, Scoring}
+  alias Custyard.{Thread, Message, Repo, Scoring}
   alias Ecto.Multi
 
   @impl true
@@ -26,24 +26,29 @@ defmodule CustyardWeb.Portal.NewRequestLive do
       when urgency in @allowed_urgencies do
     org = socket.assigns.current_org
     portal_path = socket.assigns.portal_path
+    contact = Custyard.PortalCredentials.reply_contact(socket.assigns.portal_credential)
 
     result =
       Multi.new()
       |> Multi.insert(
-        :conversation,
-        Conversation.changeset(%Conversation{}, %{
+        :thread,
+        Thread.changeset(%Thread{}, %{
+          tenant_id: org.tenant_id,
           organization_id: org.id,
+          contact_id: contact && contact.id,
+          source: :portal,
           subject: params["subject"],
           state: :new,
           urgency: String.to_existing_atom(urgency),
           last_customer_action_at: DateTime.utc_now()
         })
       )
-      |> Multi.insert(:message, fn %{conversation: conv} ->
+      |> Multi.insert(:message, fn %{thread: conv} ->
         Message.changeset(%Message{}, %{
-          conversation_id: conv.id,
+          tenant_id: org.tenant_id,
+          thread_id: conv.id,
           source: :portal,
-          sender_email: "portal@#{org.domain || "portal"}",
+          sender_email: contact && contact.email,
           body: params["body"],
           is_internal_note: false
         })
@@ -51,16 +56,16 @@ defmodule CustyardWeb.Portal.NewRequestLive do
       |> Repo.transaction()
 
     case result do
-      {:ok, %{conversation: conv}} ->
+      {:ok, %{thread: conv}} ->
         Scoring.calculate_and_cache(conv.id)
 
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
-          "conversations",
-          {:conversation_created, conv.id}
+          "threads",
+          {:thread_created, conv.id}
         )
 
-        Custyard.Conversations.broadcast_to_org(org.id, {:conversation_created, conv.id})
+        Custyard.Threads.broadcast_to_org(org.id, {:thread_created, conv.id})
 
         {:noreply, push_navigate(socket, to: "#{portal_path}/request/#{conv.id}")}
 

@@ -15,7 +15,7 @@ defmodule Custyard.Boot.StateTest do
 
     assert Enum.map(State.get().first_run.steps, & &1.key) == [
              :schema,
-             :operator,
+             :instance_admin,
              :mail,
              :sign_in
            ]

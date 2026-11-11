@@ -3,7 +3,7 @@ defmodule Custyard.Email.ThreadHeaders do
   Build threading headers for outbound email replies.
 
   This is the outbound counterpart to `Email.ThreadMatcher`, which matches
-  inbound emails to conversations. This module constructs the `In-Reply-To`
+  inbound emails to threads. This module constructs the `In-Reply-To`
   and `References` headers so email clients thread replies correctly.
 
   ## Header semantics (RFC 2822)
@@ -20,9 +20,9 @@ defmodule Custyard.Email.ThreadHeaders do
   @msg_id_pattern ~r/^<[^\s<>@\x00-\x1F\x7F]+@[^\s<>@\x00-\x1F\x7F]+>$/
 
   @doc """
-  Build threading headers for an outbound reply to a conversation.
+  Build threading headers for an outbound reply to a thread.
 
-  Queries email messages in the conversation (those with a `message_id` set),
+  Queries email messages in the thread (those with a `message_id` set),
   ordered by insertion time, and constructs the appropriate headers. Only
   values shaped like real RFC 5322 msg-ids are included (see
   `normalize_msg_id/1`), so synthetic webhook identifiers never leak into
@@ -43,19 +43,19 @@ defmodule Custyard.Email.ThreadHeaders do
     - `"References"` - space-separated chain of all Message-IDs
 
   Returns an empty map if no email messages with message_ids exist in the
-  conversation (e.g., a conversation started through the portal).
+  thread (e.g., a thread started through the portal).
 
   ## Examples
 
-      iex> headers = ThreadHeaders.for_conversation(conversation_id)
+      iex> headers = ThreadHeaders.for_thread(thread_id)
       %{"In-Reply-To" => "<abc@example.com>", "References" => "<abc@example.com> <def@example.com>"}
 
-      iex> ThreadHeaders.for_conversation(portal_conversation_id)
+      iex> ThreadHeaders.for_thread(portal_thread_id)
       %{}
   """
-  def for_conversation(conversation_id, opts \\ []) do
+  def for_thread(thread_id, opts \\ []) do
     message_ids =
-      conversation_id
+      thread_id
       |> message_ids_query(Keyword.get(opts, :exclude_message_id))
       |> before_message(Keyword.get(opts, :before_id))
       |> Repo.all()
@@ -78,17 +78,17 @@ defmodule Custyard.Email.ThreadHeaders do
   defp before_message(query, _id), do: query
 
   # id breaks ties between rows sharing the same second-precision inserted_at
-  defp message_ids_query(conversation_id, nil) do
+  defp message_ids_query(thread_id, nil) do
     from(m in Message,
-      where: m.conversation_id == ^conversation_id,
+      where: m.thread_id == ^thread_id,
       where: not is_nil(m.message_id),
       order_by: [asc: m.inserted_at, asc: m.id],
       select: m.message_id
     )
   end
 
-  defp message_ids_query(conversation_id, exclude_message_id) do
-    from(m in message_ids_query(conversation_id, nil),
+  defp message_ids_query(thread_id, exclude_message_id) do
+    from(m in message_ids_query(thread_id, nil),
       where: m.message_id != ^exclude_message_id
     )
   end
@@ -112,15 +112,15 @@ defmodule Custyard.Email.ThreadHeaders do
   @doc """
   Apply threading headers to a Swoosh email.
 
-  Convenience function that queries headers for the conversation and
+  Convenience function that queries headers for the thread and
   applies them to the email struct via `Swoosh.Email.header/3`.
-  Accepts the same options as `for_conversation/2`.
+  Accepts the same options as `for_thread/2`.
 
   Returns the email unchanged if no threading headers are available.
   """
-  def apply_to_email(%Swoosh.Email{} = email, conversation_id, opts \\ []) do
-    conversation_id
-    |> for_conversation(opts)
+  def apply_to_email(%Swoosh.Email{} = email, thread_id, opts \\ []) do
+    thread_id
+    |> for_thread(opts)
     |> Enum.reduce(email, fn {name, value}, acc ->
       Swoosh.Email.header(acc, name, value)
     end)

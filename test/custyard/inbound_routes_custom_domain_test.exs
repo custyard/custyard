@@ -7,7 +7,7 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
   setup do
     on_exit(fn -> Application.delete_env(:custyard, :lettermint_mock_inbound_verification) end)
     org = Factory.insert_organization()
-    {:ok, route} = InboundRoutes.create_route(%{organization_id: org.id, route_type: :general})
+    {:ok, route} = InboundRoutes.create_route(%{tenant_id: org.tenant_id, route_type: :general})
     %{org: org, route: route}
   end
 
@@ -21,7 +21,7 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
   describe "InboundRoute custom domain rules" do
     test "accepts exact domains and left-hand wildcards, lowercased" do
       changeset =
-        InboundRoute.changeset(%InboundRoute{organization_id: 1}, %{
+        InboundRoute.changeset(%InboundRoute{tenant_id: 1}, %{
           lettermint_custom_domain: " Help.Acme.COM "
         })
 
@@ -29,7 +29,7 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
       assert Ecto.Changeset.get_field(changeset, :lettermint_custom_domain) == "help.acme.com"
 
       wildcard =
-        InboundRoute.changeset(%InboundRoute{organization_id: 1}, %{
+        InboundRoute.changeset(%InboundRoute{tenant_id: 1}, %{
           lettermint_custom_domain: "*.m.acme.com"
         })
 
@@ -45,7 +45,7 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
             "lettermint.mx"
           ] do
         changeset =
-          InboundRoute.changeset(%InboundRoute{organization_id: 1}, %{
+          InboundRoute.changeset(%InboundRoute{tenant_id: 1}, %{
             lettermint_custom_domain: domain
           })
 
@@ -126,7 +126,7 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
         public_address: "support@help.acme.com",
         ingress_kind: :mx,
         inbound_route_id: route.id,
-        organization_id: org.id
+        tenant_id: org.tenant_id
       })
       |> Repo.insert!()
 
@@ -141,7 +141,7 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
         public_address: "support@help.acme.com",
         ingress_kind: :mx,
         inbound_route_id: route.id,
-        organization_id: org.id
+        tenant_id: org.tenant_id
       })
       |> Repo.insert!()
 
@@ -161,7 +161,7 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
         public_address: "support@help.acme.com",
         ingress_kind: :mx,
         inbound_route_id: route.id,
-        organization_id: org.id
+        tenant_id: org.tenant_id
       })
       |> Repo.insert!()
 
@@ -172,7 +172,7 @@ defmodule Custyard.InboundRoutesCustomDomainTest do
     test "rejects non-Lettermint routes", %{org: org} do
       {:ok, route} =
         InboundRoutes.create_route(%{
-          organization_id: org.id,
+          tenant_id: org.tenant_id,
           route_type: :general,
           source: :email
         })

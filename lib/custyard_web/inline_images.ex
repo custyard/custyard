@@ -1,7 +1,7 @@
 defmodule CustyardWeb.InlineImages do
   @moduledoc """
   Maps the `cid:` images that `Custyard.Email.HtmlSanitizer` keeps to the
-  message's own stored attachments when the operator thread renders an
+  message's own stored attachments when the staff thread renders an
   email's HTML (spec-inbound-channels D9).
 
   An image is shown only when the same message has a fetched attachment
@@ -41,7 +41,7 @@ defmodule CustyardWeb.InlineImages do
           nil -> ~s( alt="")
         end
 
-      ~s(<img src="#{~p"/operator/attachments/#{id}/inline"}"#{alt} loading="lazy" />)
+      ~s(<img src="#{~p"/app/attachments/#{id}/inline"}"#{alt} loading="lazy" />)
     else
       _unresolved -> ""
     end

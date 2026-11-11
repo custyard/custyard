@@ -1,4 +1,14 @@
-"""Fail closed on incomplete Claude reviews without publishing raw SDK output."""
+"""Fail closed on incomplete Claude reviews without publishing raw SDK output.
+
+Partition limits accept positive-integer environment overrides:
+CLAUDE_REVIEW_MAX_FILES (50) and CLAUDE_REVIEW_MAX_PATCH_LINES (1800).
+CLAUDE_REVIEW_WARN_PATCH_CHARS (50000) adds an informational size notice to
+the combined PR review comment; it never partitions or blocks a review.
+Unset/blank values use the defaults.
+The workflow maps the same GitHub Actions repository variables into these
+environment variables. Limits split batches, never individual files: an
+oversized file remains intact in its own batch.
+"""
 
 import base64
 import json
@@ -10,8 +20,26 @@ import subprocess
 import sys
 
 
+DEFAULT_MAX_FILES = 50
+DEFAULT_MAX_PATCH_LINES = 1800
+DEFAULT_WARN_PATCH_CHARS = 50_000
+
+
 class IncompleteReview(Exception):
     pass
+
+
+def positive_env_limit(name, default):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        limit = int(value)
+    except ValueError:
+        raise IncompleteReview(f"{name} must be a positive integer.") from None
+    if limit <= 0:
+        raise IncompleteReview(f"{name} must be a positive integer.")
+    return limit
 
 
 BLOCKING_REASONS = {
@@ -165,23 +193,34 @@ def build_plan(event, run_id, attempt, current, files):
     paths = [f["filename"] for f in files]
     if len(paths) != len(set(paths)):
         raise IncompleteReview("The changed-file list contains duplicates.")
-    batches, batch, size, lines = [], [], 0, 0
+    max_files = positive_env_limit("CLAUDE_REVIEW_MAX_FILES", DEFAULT_MAX_FILES)
+    max_lines = positive_env_limit("CLAUDE_REVIEW_MAX_PATCH_LINES", DEFAULT_MAX_PATCH_LINES)
+    warn_chars = positive_env_limit("CLAUDE_REVIEW_WARN_PATCH_CHARS", DEFAULT_WARN_PATCH_CHARS)
+    batches, batch, lines, total_chars = [], [], 0, 0
     for file in files:
         text = file.get("patch") or file.get("source_text") or ""
-        patch_size = len(text)
+        total_chars += len(text)
         patch_lines = len(text.splitlines())
-        if batch and (len(batch) >= 5 or size + patch_size > 50_000 or lines + patch_lines > 800):
+        if batch and (len(batch) >= max_files or lines + patch_lines > max_lines):
             batches.append(batch)
-            batch, size, lines = [], 0, 0
+            batch, lines = [], 0
         batch.append(file)
-        size += patch_size
         lines += patch_lines
     if batch:
         batches.append(batch)
+    size_notice = ""
+    if total_chars > warn_chars:
+        size_notice = (
+            f"Size awareness: {total_chars:,} patch/source characters exceed the configured "
+            f"{warn_chars:,}-character awareness threshold. Large diffs can include translations "
+            "or recorded fixtures. This notice is informational: review continues using the "
+            "file and line partition limits without a character-size restriction."
+        )
     return {
         "repository": event["repository"]["full_name"], "number": event["pull_request"]["number"],
         "head": head, "run_id": str(run_id), "attempt": str(attempt), "files": paths,
         "title": current.get("title", ""), "description": current.get("body") or "",
+        "size_notice": size_notice,
         "shards": [{"id": i, "files": batch} for i, batch in enumerate(batches)],
     }
 
@@ -361,6 +400,8 @@ def batch_command(mode):
     body = (f"## Claude code review — {state.lower()}\n\nReviewed head: `{plan['head']}`\n\n"
             f"{state}: {len(reviewed)}/{len(plan['files'])} changed files across "
             f"{len(plan['shards'])} bounded reviews. Findings are static analysis, not runtime validation.\n\n")
+    if size_notice := plan.get("size_notice"):
+        body += size_notice + "\n\n"
     if errors:
         body += "\n".join(f"- {error}" for error in errors) + "\n\n"
     for i, summary, warning in summaries[:40]:

@@ -1,7 +1,7 @@
 # Local container testing / deployment reference
 # Usage: docker compose up --build
 #
-# The boot report and /operator/system name the image build. Compose cannot
+# The boot report and /admin/system name the image build. Compose cannot
 # run git, so pass the values in when you want them (otherwise "unknown"):
 #   GIT_SHA=$(git rev-parse HEAD) BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose up --build
 services:
@@ -23,8 +23,8 @@ services:
       # SECRET_KEY_BASE: "mix phx.gen.secret"
       # CREDENTIAL_ENCRYPTION_KEY: "openssl rand -base64 32"
       # PHX_HOST: localhost
-      # First super_admin, created on boot if absent; remove after first login.
-      # OPERATOR_EMAIL: you@example.com
+      # First instance administrator, created on boot if absent; remove after first login.
+      # INSTANCE_ADMIN_EMAIL: you@example.com
       # MAIL_ADAPTER: lettermint   # or smtp|postmark|sendgrid|mailgun
       # LETTERMINT_PROJECT_TOKEN: ""
     restart: unless-stopped

@@ -6,7 +6,7 @@ defmodule Custyard.Boot.FirstRunTest do
   import Custyard.Factory
   import ExUnit.CaptureLog
 
-  alias Custyard.{AuditEvent, OperatorAccount}
+  alias Custyard.{AuditEvent, InstanceAdmin, InstanceAdmins}
   alias Custyard.Boot.{Env, FirstRun, State}
 
   @minimal %{
@@ -14,10 +14,10 @@ defmodule Custyard.Boot.FirstRunTest do
     "PHX_HOST" => "custyard.example.com",
     "MAIL_ADAPTER" => "lettermint",
     "LETTERMINT_PROJECT_TOKEN" => "lm_project_token",
-    "OPERATOR_EMAIL" => "Ops@Example.com"
+    "INSTANCE_ADMIN_EMAIL" => "Ops@Example.com"
   }
 
-  @schema %{total: 41, applied: 0, skipped: false, operators: 0}
+  @schema %{total: 41, applied: 0, skipped: false, instance_admins: 0}
 
   defmodule UnavailableRepo do
     def config, do: raise("MIGRATE_FAILURE_PRIVATE_CANARY")
@@ -53,6 +53,11 @@ defmodule Custyard.Boot.FirstRunTest do
     pid
   end
 
+  defp insert_instance_admin(email) do
+    {:created, admin} = InstanceAdmins.create_admin(email)
+    admin
+  end
+
   defp step(key), do: Enum.find(State.get().first_run.steps, &(&1.key == key))
 
   defp wait_for(fun, attempts \\ 50) do
@@ -63,13 +68,21 @@ defmodule Custyard.Boot.FirstRunTest do
     end
   end
 
-  describe "operator bootstrap and welcome mail" do
-    test "creates the operator once, mails it without a login link, and is ready" do
+  describe "instance administrator bootstrap and welcome mail" do
+    test "creates the administrator once, mails it without a login link, and is ready" do
       run(env())
 
-      operator = Repo.get_by!(OperatorAccount, email: "ops@example.com")
-      assert operator.role == "super_admin"
-      assert [%{source: "boot", payload: %{"via" => "boot"}}] = Repo.all(AuditEvent)
+      admin = Repo.get_by!(InstanceAdmin, email: "ops@example.com")
+
+      assert [
+               %{
+                 event_type: :instance_admin_created,
+                 source: "instance_admin",
+                 payload: %{"instance_admin_id" => admin_id}
+               }
+             ] = Repo.all(AuditEvent)
+
+      assert admin_id == admin.id
 
       assert_receive {:email, email}
       assert email.to == [{"", "ops@example.com"}]
@@ -77,46 +90,47 @@ defmodule Custyard.Boot.FirstRunTest do
       assert email.subject == "Your Custyard is ready"
       assert email.html_body == nil
       assert email.text_body =~ "https://custyard.example.com is set up"
-      assert email.text_body =~ "https://custyard.example.com/operator/login"
-      assert email.text_body =~ "OPERATOR_EMAIL can be removed"
-      refute email.text_body =~ "/operator/login/"
+      assert email.text_body =~ "https://custyard.example.com/admin/login"
+      assert email.text_body =~ "INSTANCE_ADMIN_EMAIL can be removed"
+      refute email.text_body =~ "/admin/login/"
       refute email.text_body =~ "token"
 
       assert step(:schema) == %{key: :schema, status: :ok, detail: "41 migrations applied"}
 
-      assert step(:operator) == %{
-               key: :operator,
+      assert step(:instance_admin) == %{
+               key: :instance_admin,
                status: :ok,
-               detail: "ops@example.com (super_admin), from OPERATOR_EMAIL"
+               detail: "ops@example.com, from INSTANCE_ADMIN_EMAIL"
              }
 
       assert step(:mail) == %{key: :mail, status: :ok, detail: "accepted by lettermint"}
-      assert step(:sign_in) == %{key: :sign_in, status: :ok, detail: "an operator can sign in"}
+
+      assert step(:sign_in) == %{
+               key: :sign_in,
+               status: :ok,
+               detail: "an instance administrator can sign in"
+             }
 
       state = State.get()
       assert state.mode == :ready
-      assert state.first_run.operator_email == "ops@example.com"
+      assert state.first_run.instance_admin_email == "ops@example.com"
       assert %DateTime{} = state.first_run.completed_at
       assert %{adapter: :lettermint, status: :ok} = state.last_mail
     end
 
-    test "an existing operator is left alone and gets no mail" do
-      org = insert_organization()
-
-      existing =
-        insert_operator_account(email: "ops@example.com", role: "admin", organization_id: org.id)
-
-      before = Repo.get!(OperatorAccount, existing.id)
+    test "an existing administrator is left alone and gets no mail" do
+      existing = insert_instance_admin("ops@example.com")
+      before = Repo.get!(InstanceAdmin, existing.id)
 
       run(env())
 
       refute_received {:email, _}
-      assert Repo.get!(OperatorAccount, existing.id) == before
-      assert Repo.aggregate(OperatorAccount, :count) == 1
-      assert step(:operator).detail == "exists, not modified"
-      assert step(:mail) == %{key: :mail, status: :skipped, detail: "no new operator"}
+      assert Repo.get!(InstanceAdmin, existing.id) == before
+      assert Repo.aggregate(InstanceAdmin, :count) == 1
+      assert step(:instance_admin).detail == "exists, not modified"
+      assert step(:mail) == %{key: :mail, status: :skipped, detail: "no new administrator"}
       assert State.get().last_mail == nil
-      # An admin whose organization exists can log in.
+      # An existing administrator can sign in.
       assert State.mode() == :ready
       # Nothing was set up this boot, so "/" stays the landing page.
       assert State.get().first_run.completed_at == nil
@@ -150,7 +164,7 @@ defmodule Custyard.Boot.FirstRunTest do
       assert log =~ "provider_status=422"
       assert log =~ "provider_code=sender_not_verified"
       refute log =~ "noreply@"
-      # The operator exists regardless, so the instance is usable once mail is fixed.
+      # The administrator exists regardless, so the instance is usable once mail is fixed.
       assert State.mode() == :ready
     end
 
@@ -164,7 +178,7 @@ defmodule Custyard.Boot.FirstRunTest do
              }
 
       State.reset()
-      Repo.delete_all(OperatorAccount)
+      Repo.delete_all(InstanceAdmin)
       Repo.delete_all(AuditEvent)
 
       capture_log(fn ->
@@ -191,27 +205,29 @@ defmodule Custyard.Boot.FirstRunTest do
       assert State.mode() == :ready
     end
 
-    test "the placeholder address fails validation and is recorded" do
-      run(env(%{"OPERATOR_EMAIL" => "admin@custyard.local"}))
+    test "an address the account rejects is recorded without the value" do
+      configured = env()
+      settings = %{configured.settings | instance_admin_email: "not-an-address"}
+      run(%{configured | settings: settings})
 
-      assert %{status: :failed, detail: detail} = step(:operator)
-      assert detail =~ "non-routable placeholder"
+      assert %{status: :failed, detail: detail} = step(:instance_admin)
+      assert detail == "INSTANCE_ADMIN_EMAIL is not a usable address"
+      refute detail =~ "not-an-address"
       assert step(:mail).status == :skipped
-      assert Repo.aggregate(OperatorAccount, :count) == 0
+      assert Repo.aggregate(InstanceAdmin, :count) == 0
       assert State.mode() == :first_run
     end
   end
 
   describe "first-run mode" do
-    test "leaves :starting for :ready when operators exist, before the operator step" do
-      org = insert_organization()
-      insert_operator_account(email: "ops@example.com", role: "admin", organization_id: org.id)
+    test "leaves :starting for :ready when administrators exist, before the bootstrap step" do
+      insert_instance_admin("ops@example.com")
       State.put(%State{mode: :starting})
 
       run(env())
 
       assert State.mode() == :ready
-      assert step(:operator).detail == "exists, not modified"
+      assert step(:instance_admin).detail == "exists, not modified"
       assert State.get().first_run.completed_at == nil
     end
 
@@ -221,60 +237,61 @@ defmodule Custyard.Boot.FirstRunTest do
       run(env())
 
       assert State.mode() == :ready
-      assert step(:operator).status == :ok
+      assert step(:instance_admin).status == :ok
       assert %DateTime{} = State.get().first_run.completed_at
     end
 
-    test "a failed operator count stays in :starting and decides on the recheck" do
-      insert_operator_account(email: "ops@example.com")
+    test "a failed administrator count stays in :starting and decides on the recheck" do
+      insert_instance_admin("ops@example.com")
       State.put(%State{mode: :starting})
       {:ok, database} = Agent.start_link(fn -> :down end)
 
       count = fn ->
         if Agent.get(database, & &1) == :down,
           do: raise(RuntimeError, "COUNT_FAILURE_PRIVATE_CANARY"),
-          else: Custyard.OperatorAccounts.count_can_log_in()
+          else: InstanceAdmins.count()
       end
 
       log =
         capture_log(fn ->
-          run(env(%{"OPERATOR_EMAIL" => ""}), count: count)
+          run(env(%{"INSTANCE_ADMIN_EMAIL" => ""}), count: count)
           Process.sleep(60)
         end)
 
-      # An unknown count is not "no operators": the mode is undecided.
+      # An unknown count is not "no administrators": the mode is undecided.
       assert State.mode() == :starting
-      assert log =~ "boot_operator_count_failed"
+      assert log =~ "boot_instance_admin_count_failed"
       refute log =~ "COUNT_FAILURE_PRIVATE_CANARY"
 
       Agent.update(database, fn _ -> :up end)
       wait_for(fn -> State.mode() == :ready end)
-      # The operators were there all along, so this was not a first run.
+      # The administrators were there all along, so this was not a first run.
       assert State.get().first_run.completed_at == nil
     end
 
-    test "stays first_run without OPERATOR_EMAIL and flips to ready when an operator appears" do
-      run(env(%{"OPERATOR_EMAIL" => ""}))
+    test "stays first_run without INSTANCE_ADMIN_EMAIL and flips to ready when an administrator appears" do
+      run(env(%{"INSTANCE_ADMIN_EMAIL" => ""}))
 
-      assert step(:operator) == %{
-               key: :operator,
+      assert step(:instance_admin) == %{
+               key: :instance_admin,
                status: :skipped,
-               detail: "OPERATOR_EMAIL is not set"
+               detail: "INSTANCE_ADMIN_EMAIL is not set"
              }
 
-      assert step(:mail) == %{key: :mail, status: :skipped, detail: "no new operator"}
+      assert step(:mail) == %{key: :mail, status: :skipped, detail: "no new administrator"}
       assert step(:sign_in).status == :pending
       assert State.mode() == :first_run
       assert State.get().first_run.completed_at == nil
 
-      # The placeholder cannot log in, so it does not end first run.
-      insert_operator_account(email: "admin@custyard.local")
-      Process.sleep(60)
-      assert State.mode() == :first_run
-
-      insert_operator_account(email: "later@example.com")
+      insert_instance_admin("later@example.com")
       wait_for(fn -> State.mode() == :ready end)
-      assert step(:sign_in) == %{key: :sign_in, status: :ok, detail: "an operator can sign in"}
+
+      assert step(:sign_in) == %{
+               key: :sign_in,
+               status: :ok,
+               detail: "an instance administrator can sign in"
+             }
+
       assert %DateTime{} = State.get().first_run.completed_at
     end
 
@@ -297,15 +314,15 @@ defmodule Custyard.Boot.FirstRunTest do
 
   describe "migrate/2" do
     test "runs on the current repo and counts" do
-      assert {:ok, %{total: total, applied: 0, skipped: false, operators: 0}} =
+      assert {:ok, %{total: total, applied: 0, skipped: false, instance_admins: 0}} =
                FirstRun.migrate(Repo, start_repo: false)
 
       assert total > 0
       assert total == length(Ecto.Migrator.migrated_versions(Repo))
 
-      insert_operator_account(email: "ops@example.com")
+      insert_instance_admin("ops@example.com")
 
-      assert {:ok, %{skipped: true, operators: 1}} =
+      assert {:ok, %{skipped: true, instance_admins: 1}} =
                FirstRun.migrate(Repo, start_repo: false, skip: true)
     end
 

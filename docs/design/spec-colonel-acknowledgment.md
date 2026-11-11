@@ -75,7 +75,7 @@ The record attributes an internal operator's attestation to the organization. A 
 
 - Authorized Custyard operators can find acknowledgments on the organization detail page.
 - Each record displays the source, submission ID, Colonel actor, acknowledgment time, statement version, and exact historical wording.
-- Acknowledgments are dedicated organization records; their existence does not require a conversation or a support email.
+- Acknowledgments are dedicated organization records; their existence does not require a thread or a support email.
 
 ## Non-Functional Requirements
 

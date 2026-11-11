@@ -20,7 +20,7 @@ defmodule CustyardWeb.Plugs.BootGate do
 
   (*) When this boot completed the first run (`first_run.completed_at` is
   set), `GET /` keeps showing the finished checklist until the next restart,
-  so the operator who set `OPERATOR_EMAIL` sees what happened and where to
+  so whoever set `INSTANCE_ADMIN_EMAIL` sees what happened and where to
   sign in instead of an unexplained landing page. The state is not persisted,
   so the next boot serves the landing page as usual.
   """

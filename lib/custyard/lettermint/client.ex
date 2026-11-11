@@ -3,9 +3,8 @@ defmodule Custyard.Lettermint.Client do
   @moduledoc """
   Behaviour for Lettermint API interactions.
 
-  Tenant administrators import provider routes and bind manually created
-  webhooks through Email setup. Older organization provisioning APIs remain
-  available and use the owning tenant's Team credentials.
+  Tenant administrators import provider routes and bind provider webhooks
+  through email settings. Every management call uses the tenant's credentials.
 
   Implementations:
   - `Custyard.Lettermint.HttpClient` — production HTTP client
@@ -22,7 +21,7 @@ defmodule Custyard.Lettermint.Client do
       any local part and plus tag reaches the route. `nil` for non-inbound routes.
     * `"inbound_address"` — permanent compatibility address
       (`<uuid>@inbound.lettermint.co`, no plus addressing)
-    * `"inbound_domain"` — operator-configured custom domain, nullable
+    * `"inbound_domain"` — staff-configured custom domain, nullable
     * `"inbound_domain_verified_at"` — ISO8601 datetime string, nullable
 
   The HTTP API wraps the route in `{"data": ...}` on create (201) but returns
@@ -116,12 +115,12 @@ defmodule Custyard.Lettermint.Client do
   end
 
   @doc "Call a management operation with the owning tenant's credentials."
-  def call(operation, args, tenant_id \\ nil) do
+  def call(operation, args, tenant_id) do
     module = client()
 
     cond do
-      is_nil(tenant_id) ->
-        apply(module, operation, args)
+      not is_integer(tenant_id) ->
+        {:error, :tenant_required}
 
       Application.get_env(:custyard, :env, @environment) in [:dev, :test] and
           module not in [Custyard.Lettermint.HttpClient, Custyard.Lettermint.DisabledClient] ->

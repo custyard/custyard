@@ -132,7 +132,7 @@ defmodule Custyard.IntakeSourceTest do
     test "accepts a valid Q&A list and round-trips through the database" do
       questions = [
         %{"question" => "What is this?", "answer" => "A public intake page."},
-        %{"question" => "Who reads it?", "answer" => "The operator."}
+        %{"question" => "Who reads it?", "answer" => "The staff."}
       ]
 
       source = insert_intake_source(questions: questions)
@@ -278,7 +278,7 @@ defmodule Custyard.IntakeSourceTest do
   end
 
   describe "key_format/0" do
-    test "matches the conversations.intake_source_key format" do
+    test "matches the threads.intake_source_key format" do
       assert Regex.match?(IntakeSource.key_format(), "landing-page")
       refute Regex.match?(IntakeSource.key_format(), "Landing Page")
     end

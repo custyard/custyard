@@ -46,12 +46,11 @@ defmodule Custyard.Boot.Env do
   @near_miss_threshold 0.9
 
   @known_names Enum.sort(~w(
-    ACKNOWLEDGMENTS_AMQP_URL
-    ACKNOWLEDGMENTS_ENABLED
     ACKNOWLEDGMENTS_PREFETCH
-    ACKNOWLEDGMENTS_QUEUE
-    ACKNOWLEDGMENTS_SOURCE
     ATTACHMENT_DIR
+    CLAMAV_HOST
+    CLAMAV_PORT
+    CLAMAV_TIMEOUT_MS
     CREDENTIAL_ENCRYPTION_KEY
     CREDENTIAL_ENCRYPTION_KEY_PREVIOUS
     DATABASE_PATH
@@ -62,10 +61,9 @@ defmodule Custyard.Boot.Env do
     EMAIL_FROM_NAME
     EMAIL_NOTIFICATIONS_ENABLED
     IMAP_ENABLED
-    LETTERMINT_API_KEY
+    INSTANCE_ADMIN_EMAIL
     LETTERMINT_API_URL
     LETTERMINT_PROJECT_TOKEN
-    LETTERMINT_TEAM_TOKEN
     LIVE_VIEW_SIGNING_SALT
     LMTP_ENABLED
     LMTP_HOSTNAME
@@ -75,12 +73,11 @@ defmodule Custyard.Boot.Env do
     LMTP_TLS_CACERTFILE
     LMTP_TLS_CERTFILE
     LMTP_TLS_KEYFILE
-    MAIL_ADAPTER
     MAILGUN_API_KEY
     MAILGUN_DOMAIN
+    MAIL_ADAPTER
     MAINTENANCE_MODE
-    OPERATOR_EMAIL
-    OPERATOR_NOTIFICATION_EMAIL
+    OUTBOUND_DELIVERY_ENABLED
     PHX_HOST
     POOL_SIZE
     PORT
@@ -102,12 +99,32 @@ defmodule Custyard.Boot.Env do
     STORAGE_PROVIDER
     TURSO_AUTH_TOKEN
     UPLOAD_DIR
-    WEBHOOK_SECRET_INTERCOM
-    WEBHOOK_SECRET_LETTERMINT
-    WEBHOOK_SECRET_LETTERMINT_STATUS
-    WEBHOOK_SECRET_SLACK
-    WEBHOOK_SECRET_ZENDESK
   ))
+
+  # Variables an earlier release read. They are still normalized so a value
+  # left behind is named in a warning instead of silently doing nothing.
+  @retired %{
+    "OPERATOR_EMAIL" =>
+      "no longer read; INSTANCE_ADMIN_EMAIL creates the first instance administrator",
+    "OPERATOR_NOTIFICATION_EMAIL" => "no longer read; notifications go to each tenant's staff",
+    "ACKNOWLEDGMENTS_ENABLED" =>
+      "no longer read; each tenant enables its acknowledgment integration in Settings",
+    "ACKNOWLEDGMENTS_AMQP_URL" => "no longer read; each tenant stores its broker URL in Settings",
+    "ACKNOWLEDGMENTS_SOURCE" => "no longer read; each tenant stores its source in Settings",
+    "ACKNOWLEDGMENTS_QUEUE" => "no longer read; each tenant stores its queue in Settings",
+    "LETTERMINT_API_KEY" => "no longer read; the sending token is LETTERMINT_PROJECT_TOKEN",
+    "LETTERMINT_TEAM_TOKEN" =>
+      "no longer read; each tenant stores its Lettermint credentials in Email setup",
+    "WEBHOOK_SECRET_INTERCOM" =>
+      "no longer read; webhook secrets are stored with each tenant route",
+    "WEBHOOK_SECRET_LETTERMINT" =>
+      "no longer read; webhook secrets are stored with each tenant route",
+    "WEBHOOK_SECRET_LETTERMINT_STATUS" =>
+      "no longer read; webhook secrets are stored with each tenant route",
+    "WEBHOOK_SECRET_SLACK" => "no longer read; webhook secrets are stored with each tenant route",
+    "WEBHOOK_SECRET_ZENDESK" =>
+      "no longer read; webhook secrets are stored with each tenant route"
+  }
 
   @platform_prefixes ["FLY_", "BUNNY_"]
 
@@ -144,13 +161,16 @@ defmodule Custyard.Boot.Env do
       |> secret_key_base()
       |> host_and_port()
       |> mail()
-      |> operator_email()
+      |> instance_admin_email()
       |> database()
       |> credential_keys()
       |> notifications()
       |> acknowledgments()
+      |> outbound_delivery()
+      |> attachment_scanner()
       |> skip_migrations()
       |> imap()
+      |> retired()
       |> hosting()
       |> directories_and_platform()
 
@@ -214,7 +234,7 @@ defmodule Custyard.Boot.Env do
     first in ["\"", "'"] and String.last(value) == first
   end
 
-  defp known?(name), do: name in @known_names
+  defp known?(name), do: name in @known_names or is_map_key(@retired, name)
   defp platform?(name), do: Enum.any?(@platform_prefixes, &String.starts_with?(name, &1))
 
   # ---------------------------------------------------------------------------
@@ -286,7 +306,7 @@ defmodule Custyard.Boot.Env do
         acc
         |> require(
           "MAIL_ADAPTER",
-          "operator login is by emailed link; set one of #{Enum.join(@mail_adapters, ", ")} " <>
+          "staff and administrator login is by emailed link; set one of #{Enum.join(@mail_adapters, ", ")} " <>
             "(local discards mail on purpose)"
         )
         |> put(:mail, nil)
@@ -312,31 +332,18 @@ defmodule Custyard.Boot.Env do
   end
 
   defp mail_adapter(acc, "lettermint") do
-    {acc, token} =
-      case {get(acc, "LETTERMINT_PROJECT_TOKEN"), get(acc, "LETTERMINT_API_KEY")} do
-        {nil, nil} ->
-          {credential(
-             acc,
-             "LETTERMINT_PROJECT_TOKEN",
-             "the Lettermint project token that sends mail"
-           ), nil}
-
-        {nil, legacy} ->
-          {warn(
-             acc,
-             "LETTERMINT_API_KEY",
-             "deprecated name; rename it to LETTERMINT_PROJECT_TOKEN"
-           ), legacy}
-
-        {token, _} ->
-          {acc, token}
-      end
+    acc =
+      credential(
+        acc,
+        "LETTERMINT_PROJECT_TOKEN",
+        "the Lettermint project token that sends installation mail"
+      )
 
     put(acc, :mail, %{
       adapter: :lettermint,
       config: [
         adapter: Swoosh.Adapters.Lettermint,
-        api_token: token,
+        api_token: get(acc, "LETTERMINT_PROJECT_TOKEN"),
         base_url: get(acc, "LETTERMINT_API_URL") || @lettermint_api_url
       ]
     })
@@ -399,22 +406,22 @@ defmodule Custyard.Boot.Env do
     |> put(:mail, %{adapter: :smtp, config: config})
   end
 
-  defp operator_email(acc) do
-    case get(acc, "OPERATOR_EMAIL") do
+  defp instance_admin_email(acc) do
+    case get(acc, "INSTANCE_ADMIN_EMAIL") do
       nil ->
-        put(acc, :operator_email, nil)
+        put(acc, :instance_admin_email, nil)
 
       value ->
         if email?(value) do
-          put(acc, :operator_email, value)
+          put(acc, :instance_admin_email, value)
         else
           acc
           |> problem(
-            "OPERATOR_EMAIL",
+            "INSTANCE_ADMIN_EMAIL",
             :malformed,
             "must be an email address such as you@example.com"
           )
-          |> put(:operator_email, nil)
+          |> put(:instance_admin_email, nil)
         end
     end
   end
@@ -754,7 +761,6 @@ defmodule Custyard.Boot.Env do
 
     notifications = %{
       enabled: acc.settings.notifications_enabled,
-      operator_email: get(acc, "OPERATOR_NOTIFICATION_EMAIL") || acc.settings.operator_email,
       from_name: get(acc, "EMAIL_FROM_NAME") || "Custyard",
       from_address: get(acc, "EMAIL_FROM_ADDRESS") || (host && "noreply@#{host}")
     }
@@ -767,13 +773,9 @@ defmodule Custyard.Boot.Env do
   # Read by Custyard.Application before the migrations run.
   defp skip_migrations(acc), do: boolean(acc, "SKIP_MIGRATIONS", false, :skip_migrations)
 
-  defp acknowledgments(acc) do
-    acc
-    |> boolean("ACKNOWLEDGMENTS_ENABLED", nil, :ack_enabled)
-    |> update_in([:settings], &Map.delete(&1, :ack_enabled))
-    |> acknowledgments_prefetch()
-    |> acknowledgments_pair()
-  end
+  # Tenant integration records own the broker URL, source, queue and enabled
+  # state. Only the consumption limit is a deployment setting.
+  defp acknowledgments(acc), do: acknowledgments_prefetch(acc)
 
   defp acknowledgments_prefetch(acc) do
     with value when is_binary(value) <- get(acc, "ACKNOWLEDGMENTS_PREFETCH"),
@@ -793,33 +795,60 @@ defmodule Custyard.Boot.Env do
     end
   end
 
-  # Whether URL and source are complete is decided at application start; here
-  # only the half-configured state is a problem, and only in :prod where the
-  # consumer is on by default.
-  defp acknowledgments_pair(%{env: :prod} = acc) do
-    case {get(acc, "ACKNOWLEDGMENTS_AMQP_URL"), get(acc, "ACKNOWLEDGMENTS_SOURCE")} do
-      {nil, source} when is_binary(source) ->
-        problem(
-          acc,
-          "ACKNOWLEDGMENTS_AMQP_URL",
-          :missing,
-          "ACKNOWLEDGMENTS_SOURCE is set, so the broker URL is needed too"
-        )
+  # An installation-level stop for recovery and provider incidents. A value
+  # that is neither true nor false is a problem, and delivery stays stopped:
+  # a mistyped "false" must not send.
+  defp outbound_delivery(acc) do
+    case get(acc, "OUTBOUND_DELIVERY_ENABLED") do
+      value when value in [nil, "true"] ->
+        put(acc, :outbound_delivery_enabled, true)
 
-      {url, nil} when is_binary(url) ->
-        problem(
-          acc,
-          "ACKNOWLEDGMENTS_SOURCE",
-          :missing,
-          "ACKNOWLEDGMENTS_AMQP_URL is set, so the source name is needed too"
-        )
+      "false" ->
+        put(acc, :outbound_delivery_enabled, false)
 
       _ ->
         acc
+        |> problem("OUTBOUND_DELIVERY_ENABLED", :malformed, "must be true or false")
+        |> put(:outbound_delivery_enabled, false)
     end
   end
 
-  defp acknowledgments_pair(acc), do: acc
+  # clamd is optional. Without a host attachments stay quarantined; with a
+  # port or timeout out of range the scanner is not configured either.
+  defp attachment_scanner(acc) do
+    case get(acc, "CLAMAV_HOST") do
+      nil ->
+        put(acc, :attachment_scanner, nil)
+
+      host ->
+        {acc, port} = ranged(acc, "CLAMAV_PORT", 3310, 1..65_535)
+        {acc, timeout} = ranged(acc, "CLAMAV_TIMEOUT_MS", 10_000, 100..60_000)
+
+        scanner = if port && timeout, do: %{host: host, port: port, timeout: timeout}
+        put(acc, :attachment_scanner, scanner)
+    end
+  end
+
+  defp ranged(acc, name, default, range) do
+    case get(acc, name) do
+      nil ->
+        {acc, default}
+
+      value ->
+        case Integer.parse(value) do
+          {int, ""} ->
+            if int in range,
+              do: {acc, int},
+              else: {out_of_range(acc, name, range), nil}
+
+          _ ->
+            {out_of_range(acc, name, range), nil}
+        end
+    end
+  end
+
+  defp out_of_range(acc, name, first..last//_),
+    do: problem(acc, name, :malformed, "must be an integer between #{first} and #{last}")
 
   defp imap(acc) do
     case get(acc, "IMAP_ENABLED") do
@@ -836,6 +865,14 @@ defmodule Custyard.Boot.Env do
             "then unset IMAP_ENABLED and the other IMAP_* variables"
         )
     end
+  end
+
+  defp retired(acc) do
+    @retired
+    |> Enum.sort()
+    |> Enum.reduce(acc, fn {name, detail}, acc ->
+      if name in acc.present, do: warn(acc, name, detail), else: acc
+    end)
   end
 
   # Where files live and which proxy is in front are chosen separately from

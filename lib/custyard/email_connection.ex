@@ -6,7 +6,7 @@ defmodule Custyard.EmailConnection do
   schema "email_connections" do
     belongs_to :tenant, Custyard.Tenant
     belongs_to :default_channel, Custyard.InboundChannel
-    belongs_to :latest_received_conversation, Custyard.Conversation
+    belongs_to :latest_received_thread, Custyard.Thread
     field :project_id, :string
     field :project_token_ciphertext, :string, redact: true
     field :team_token_ciphertext, :string, redact: true

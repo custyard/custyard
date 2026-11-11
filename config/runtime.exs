@@ -36,21 +36,9 @@ blank_to_nil = fn
   value -> value
 end
 
-# Colonel acknowledgments are on by default in production only. Unset means
-# disabled in dev and test, so a shell holding production broker secrets never
-# consumes the production queue (the same reasoning as the prod-only Sentry
-# block below). Whether URL and source are complete is decided at application
-# start (Custyard.Acknowledgments.Config.startup/2), not here, so release
-# commands such as bin/operator still run when that configuration is broken.
-# A value that is neither true nor false, or a prefetch out of range, is
-# reported by Custyard.Boot.Env; here it falls back to the default.
-acknowledgments_enabled =
-  case System.get_env("ACKNOWLEDGMENTS_ENABLED") do
-    "true" -> true
-    "false" -> false
-    _ -> config_env() == :prod
-  end
-
+# Tenant integration records own subscription credentials, queues and enabled
+# state. Consumption limits remain deployment settings. A prefetch out of
+# range is reported by Custyard.Boot.Env; here it falls back to the default.
 acknowledgments_prefetch =
   with value when is_binary(value) <- System.get_env("ACKNOWLEDGMENTS_PREFETCH"),
        {count, ""} when count > 0 and count <= 100 <- Integer.parse(value) do
@@ -59,19 +47,34 @@ acknowledgments_prefetch =
     _ -> 1
   end
 
-config :custyard, :acknowledgments,
-  enabled: acknowledgments_enabled,
-  url: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_AMQP_URL")),
-  source: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_SOURCE")),
-  queue: blank_to_nil.(System.get_env("ACKNOWLEDGMENTS_QUEUE")) || "custyard.acknowledgments",
-  prefetch: acknowledgments_prefetch
+config :custyard, :acknowledgments, prefetch: acknowledgments_prefetch
 
-# Helper to add webhook secret from env var if set
-maybe_put_env_secret = fn map, key, env_var ->
-  case System.get_env(env_var) do
-    nil -> map
-    "" -> map
-    value -> Map.put(map, key, value)
+# An installation-level stop for recovery and provider incidents. Never start
+# restored mail workers until an operator has reconciled the archived queue.
+# Production takes this, and the attachment scanner, from Custyard.Boot.Env
+# below, which reports a malformed value as a problem. Outside production a
+# value that is neither true nor false keeps delivery stopped: a mistyped
+# "false" must not send.
+if config_env() != :prod do
+  config :custyard,
+         :outbound_delivery_enabled,
+         System.get_env("OUTBOUND_DELIVERY_ENABLED") in [nil, "", "true"]
+
+  # clamd must be reachable only through a trusted private network. Without an
+  # endpoint attachments remain quarantined; receiving email remains available.
+  if clamav_host = blank_to_nil.(System.get_env("CLAMAV_HOST")) do
+    clamav_port = parse_int.("CLAMAV_PORT", 3310)
+    clamav_timeout = parse_int.("CLAMAV_TIMEOUT_MS", 10_000)
+
+    if clamav_port in 1..65_535 and clamav_timeout in 100..60_000 do
+      config :custyard,
+        attachment_scanner: Custyard.Attachments.ClamAV,
+        attachment_scanner_options: [
+          host: clamav_host,
+          port: clamav_port,
+          timeout: clamav_timeout
+        ]
+    end
   end
 end
 
@@ -178,27 +181,15 @@ if config_env() != :prod do
   end
 end
 
-# Sending tokens never authenticate management requests. These environment
-# credentials belong only to the default tenant; other tenants save their own
-# encrypted connection in Email setup.
-lettermint_api_url =
-  blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
-
-lettermint_team_token = blank_to_nil.(System.get_env("LETTERMINT_TEAM_TOKEN"))
-
-if lettermint_team_token do
-  config :custyard, :lettermint,
-    client: Custyard.Lettermint.HttpClient,
-    api_url: lettermint_api_url,
-    team_token: lettermint_team_token
-
-  config :custyard, :lettermint_configured, true
-else
-  if config_env() == :prod do
-    config :custyard, :lettermint, client: Custyard.Lettermint.DisabledClient
-    config :custyard, :lettermint_configured, false
-  end
-end
+# Support provider credentials are encrypted tenant records. Only the API
+# endpoint and implementation are installation configuration.
+config :custyard, :lettermint,
+  client:
+    if(config_env() == :test,
+      do: Custyard.Lettermint.MockClient,
+      else: Custyard.Lettermint.HttpClient
+    ),
+  api_url: blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
 
 if config_env() == :prod do
   env = Custyard.Boot.Env.read(System.get_env(), config_env: config_env())
@@ -225,7 +216,7 @@ if config_env() == :prod do
     bunny_origin_secret: settings.bunny_origin_secret,
     trust_proxy_headers: settings.trust_proxy_headers
 
-  # Operator login is magic-link-only, so an unset or unknown MAIL_ADAPTER is
+  # Staff login is magic-link-only, so an unset or unknown MAIL_ADAPTER is
   # a configuration problem (Custyard.Boot.Env), not a silent fallback to the
   # in-memory adapter. A recognized adapter is configured even while its
   # credential is missing: the problem is reported and the app does not
@@ -238,33 +229,27 @@ if config_env() == :prod do
     config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: Custyard.Finch
   end
 
-  # Per-source webhook HMAC secrets for routed webhooks (POST /api/webhook/route/:token)
-  # These enable signature verification on incoming webhook requests.
-  # If not configured, routed webhooks will reject requests in production.
-  webhook_secrets =
-    %{}
-    |> maybe_put_env_secret.(:lettermint, "WEBHOOK_SECRET_LETTERMINT")
-    # Lettermint issues one whsec_ secret per webhook, so the delivery-status
-    # webhook (POST /api/webhook/email-status/lettermint) has its own.
-    |> maybe_put_env_secret.(:lettermint_status, "WEBHOOK_SECRET_LETTERMINT_STATUS")
-    |> maybe_put_env_secret.(:zendesk, "WEBHOOK_SECRET_ZENDESK")
-    |> maybe_put_env_secret.(:intercom, "WEBHOOK_SECRET_INTERCOM")
-    |> maybe_put_env_secret.(:slack, "WEBHOOK_SECRET_SLACK")
-
-  if map_size(webhook_secrets) > 0 do
-    config :custyard, :webhook_secrets, webhook_secrets
-  end
-
   # Email notifications for neglect alerts and system events
-  # (Custyard.Notifications.Email). Defaults: on unless MAIL_ADAPTER=local,
-  # to OPERATOR_EMAIL, from noreply@PHX_HOST.
+  # (Custyard.Notifications.Email), delivered to each tenant's staff.
+  # Defaults: on unless MAIL_ADAPTER=local, from noreply@PHX_HOST.
   notifications = settings.notifications
 
   config :custyard,
     email_enabled: notifications.enabled,
-    operator_email: notifications.operator_email || "operator@example.com",
     email_from_name: notifications.from_name,
     email_from_address: notifications.from_address || "alerts@custyard.local"
+
+  config :custyard, :outbound_delivery_enabled, settings.outbound_delivery_enabled
+
+  if scanner = settings.attachment_scanner do
+    config :custyard,
+      attachment_scanner: Custyard.Attachments.ClamAV,
+      attachment_scanner_options: [
+        host: scanner.host,
+        port: scanner.port,
+        timeout: scanner.timeout
+      ]
+  end
 
   config :custyard, :credential_keys,
     current: settings.credential_keys.current,
@@ -343,6 +328,6 @@ if config_env() == :prod do
   config :custyard,
     upload_dir: settings.upload_dir,
     # Inbound email attachments, served only through the authenticated
-    # operator endpoint (never a static path).
+    # staff endpoint (never a static path).
     attachment_dir: settings.attachment_dir
 end

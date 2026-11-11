@@ -1,6 +1,14 @@
 defmodule Custyard.Notifications.NeglectCheckerTest do
   use Custyard.DataCase, async: true
 
+  setup do
+    tenant = Custyard.Factory.insert_tenant()
+    Process.put(:factory_tenant_id, tenant.id)
+    :ok
+  end
+
+  defp tenant_id, do: Process.get(:factory_tenant_id)
+
   import Custyard.Factory
   import Swoosh.TestAssertions
 
@@ -8,51 +16,51 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
   alias Custyard.Settings
 
   describe "list_notification_candidates/1" do
-    test "returns conversations exceeding warning threshold" do
+    test "returns threads exceeding warning threshold" do
       # Get default thresholds for standard tier
-      thresholds = Settings.get_neglect_thresholds()
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
 
-      # Create a conversation that exceeds the warning threshold
+      # Create a thread that exceeds the warning threshold
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       assert Enum.any?(candidates, &(&1.id == conv.id))
     end
 
-    test "excludes conversations within warning threshold" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "excludes threads within warning threshold" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
 
-      # Create a conversation within the warning threshold
+      # Create a thread within the warning threshold
       recent_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours - 1), :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: recent_action_time
+          last_staff_action_at: recent_action_time
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       refute Enum.any?(candidates, &(&1.id == conv.id))
     end
 
-    test "excludes resolved conversations" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "excludes resolved threads" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
@@ -60,49 +68,49 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       _conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :resolved,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       assert Enum.empty?(candidates)
     end
 
-    test "excludes suspect conversations until an operator clears the flag" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "excludes suspect threads until a staff clears the flag" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :new,
           suspect: true,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
       refute Enum.any?(
-               NeglectChecker.list_notification_candidates(thresholds),
+               NeglectChecker.list_notification_candidates(tenant_id(), thresholds),
                &(&1.id == conv.id)
              )
 
       assert {:ok, 0} = NeglectChecker.check_and_notify()
 
-      {:ok, _} = Custyard.Conversations.set_suspect(conv, false)
+      {:ok, _} = Custyard.Threads.set_suspect(conv, false)
 
       assert Enum.any?(
-               NeglectChecker.list_notification_candidates(thresholds),
+               NeglectChecker.list_notification_candidates(tenant_id(), thresholds),
                &(&1.id == conv.id)
              )
     end
 
-    test "excludes snoozed conversations" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "excludes snoozed threads" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
@@ -111,20 +119,20 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       snooze_until = DateTime.add(DateTime.utc_now(), 1, :hour)
 
       _conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: old_action_time,
+          last_staff_action_at: old_action_time,
           snoozed_until: snooze_until
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       assert Enum.empty?(candidates)
     end
 
-    test "includes snoozed conversations after snooze expires" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "includes snoozed threads after snooze expires" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
@@ -134,47 +142,47 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       snooze_until = DateTime.add(DateTime.utc_now(), -1, :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: old_action_time,
+          last_staff_action_at: old_action_time,
           snoozed_until: snooze_until
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       assert Enum.any?(candidates, &(&1.id == conv.id))
     end
 
-    test "uses inserted_at when last_operator_action_at is nil" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "uses inserted_at when last_staff_action_at is nil" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
 
-      # This conversation has no operator action
+      # This thread has no staff action
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :new,
-          last_operator_action_at: nil
+          last_staff_action_at: nil
         )
 
       # Manually update inserted_at to be old
       old_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       Repo.update_all(
-        from(c in Custyard.Conversation, where: c.id == ^conv.id),
+        from(c in Custyard.Thread, where: c.id == ^conv.id),
         set: [inserted_at: old_time]
       )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       assert Enum.any?(candidates, &(&1.id == conv.id))
     end
 
     test "respects tier-specific thresholds" do
-      thresholds = Settings.get_neglect_thresholds()
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {enterprise_warning, _} = thresholds.enterprise
       {standard_warning, _} = thresholds.standard
 
@@ -188,20 +196,20 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       mid_time = DateTime.add(DateTime.utc_now(), -(enterprise_warning + 1), :hour)
 
       enterprise_conv =
-        insert_conversation(
+        insert_thread(
           organization_id: enterprise_org.id,
           state: :active,
-          last_operator_action_at: mid_time
+          last_staff_action_at: mid_time
         )
 
       standard_conv =
-        insert_conversation(
+        insert_thread(
           organization_id: standard_org.id,
           state: :active,
-          last_operator_action_at: mid_time
+          last_staff_action_at: mid_time
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       # Enterprise should be a candidate (exceeded warning)
       assert Enum.any?(candidates, &(&1.id == enterprise_conv.id))
@@ -213,7 +221,7 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
     end
 
     test "preloads organization and contact" do
-      thresholds = Settings.get_neglect_thresholds()
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard, name: "Test Org")
@@ -222,14 +230,14 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           state: :active,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
       found = Enum.find(candidates, &(&1.id == conv.id))
 
       assert found != nil
@@ -237,21 +245,21 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert found.contact.name == "John Doe"
     end
 
-    test "includes unlinked public-intake conversations past the standard cutoff" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "includes unlinked public-intake threads past the standard cutoff" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :public_intake,
           state: :new,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
       found = Enum.find(candidates, &(&1.id == conv.id))
 
       assert found != nil
@@ -260,40 +268,40 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert found.organization == nil
     end
 
-    test "excludes unlinked conversations still within the standard threshold" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "excludes unlinked threads still within the standard threshold" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       recent_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours - 1), :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :public_intake,
           state: :new,
-          last_operator_action_at: recent_action_time
+          last_staff_action_at: recent_action_time
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       refute Enum.any?(candidates, &(&1.id == conv.id))
     end
 
-    test "excludes resolved unlinked conversations" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "excludes resolved unlinked threads" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :public_intake,
           state: :resolved,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
-      candidates = NeglectChecker.list_notification_candidates(thresholds)
+      candidates = NeglectChecker.list_notification_candidates(tenant_id(), thresholds)
 
       refute Enum.any?(candidates, &(&1.id == conv.id))
     end
@@ -301,18 +309,18 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
 
   describe "check_and_notify/0" do
     test "returns count of notifications sent" do
-      # Create a conversation that needs notification
-      thresholds = Settings.get_neglect_thresholds()
+      # Create a thread that needs notification
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       _conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
       {:ok, count} = NeglectChecker.check_and_notify()
@@ -321,19 +329,19 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert count >= 0
     end
 
-    test "returns zero when no conversations need notification" do
-      # Create a conversation that's within threshold
-      thresholds = Settings.get_neglect_thresholds()
+    test "returns zero when no threads need notification" do
+      # Create a thread that's within threshold
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
       recent_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours - 1), :hour)
 
       _conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: recent_action_time
+          last_staff_action_at: recent_action_time
         )
 
       {:ok, count} = NeglectChecker.check_and_notify()
@@ -342,17 +350,17 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
     end
 
     test "does not send duplicate notifications" do
-      thresholds = Settings.get_neglect_thresholds()
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       _conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
       # First check
@@ -365,30 +373,30 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       assert first_count >= second_count
     end
 
-    test "notifies for nil-org conversations that reached neglect status" do
-      # Nil-org conversations accrue neglect status on the standard-tier
+    test "notifies for nil-org threads that reached neglect status" do
+      # Nil-org threads accrue neglect status on the standard-tier
       # thresholds (Scoring.neglect_tier/1) and now reach the sweep too.
-      thresholds = Settings.get_neglect_thresholds()
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       old_action_time = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           state: :new,
-          last_operator_action_at: old_action_time
+          last_staff_action_at: old_action_time
         )
 
-      # Premise: the conversation has accrued neglect status
+      # Premise: the thread has accrued neglect status
       preloaded = Repo.preload(conv, [:organization])
       assert Custyard.Scoring.neglect_status(preloaded, thresholds) == :warning
 
       # And the sweep now picks it up and dispatches without crashing on the
       # nil organization
       assert Enum.any?(
-               NeglectChecker.list_notification_candidates(thresholds),
+               NeglectChecker.list_notification_candidates(tenant_id(), thresholds),
                &(&1.id == conv.id)
              )
 
@@ -400,41 +408,38 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
     # EMAIL_NOTIFICATIONS_ENABLED=true, so the path that actually ships is
     # the delivery one — and it is the one that dereferences the now
     # sometimes-nil organization.
-    test "delivers a real alert for an unlinked conversation when email is on" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "does not send an unlinked alert through installation mail when tenant mail is unconfigured" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
 
       Application.put_env(:custyard, :email_enabled, true)
       on_exit(fn -> Application.delete_env(:custyard, :email_enabled) end)
 
-      insert_conversation(
+      insert_thread(
         organization_id: nil,
         source: :public_intake,
         subject: "Unlinked and neglected",
         state: :new,
-        last_operator_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+        last_staff_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
       )
 
       assert {:ok, 1} = NeglectChecker.check_and_notify()
 
-      assert_email_sent(fn email ->
-        assert email.subject =~ "Unlinked and neglected"
-        assert email.html_body =~ "Unlinked prospect"
-      end)
+      refute_email_sent()
     end
 
     test "sends new notification when severity escalates" do
-      thresholds = Settings.get_neglect_thresholds()
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {_warning_hours, critical_hours} = thresholds.standard
 
       org = insert_organization(tier: :standard)
 
       # Start with warning-level neglect
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -(critical_hours - 1), :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -(critical_hours - 1), :hour)
         )
 
       # First check should detect warning
@@ -444,8 +449,8 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
       critical_time = DateTime.add(DateTime.utc_now(), -(critical_hours + 1), :hour)
 
       Repo.update_all(
-        from(c in Custyard.Conversation, where: c.id == ^conv.id),
-        set: [last_operator_action_at: critical_time]
+        from(c in Custyard.Thread, where: c.id == ^conv.id),
+        set: [last_staff_action_at: critical_time]
       )
 
       # Second check should detect critical
@@ -459,79 +464,79 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
   describe "reset_recovered_notifications/1" do
     require Ecto.Query
 
-    test "clears the notification level once the operator has acted" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "clears the notification level once the staff has acted" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
       org = insert_organization(tier: :standard)
 
       recovered =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: DateTime.utc_now() |> DateTime.truncate(:second)
+          last_staff_action_at: DateTime.utc_now() |> DateTime.truncate(:second)
         )
         |> with_notification_level(:critical)
 
       still_neglected =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
+          last_staff_action_at: DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
         )
         |> with_notification_level(:critical)
 
       assert {:ok, _count} = NeglectChecker.check_and_notify()
 
-      assert Repo.get!(Custyard.Conversation, recovered.id).last_neglect_notification == nil
+      assert Repo.get!(Custyard.Thread, recovered.id).last_neglect_notification == nil
 
-      assert Repo.get!(Custyard.Conversation, still_neglected.id).last_neglect_notification ==
+      assert Repo.get!(Custyard.Thread, still_neglected.id).last_neglect_notification ==
                :critical
     end
 
     # Unlinked rows make every tier branch of the cutoff NULL; one that is
     # within the standard cutoff but past a shorter tier's must still reset.
-    test "clears the notification level on a recovered unlinked conversation" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "clears the notification level on a recovered unlinked thread" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {enterprise_warning, _} = thresholds.enterprise
       {standard_warning, _} = thresholds.standard
       assert enterprise_warning + 1 < standard_warning
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: nil,
           source: :disambiguation,
           state: :active,
-          last_operator_action_at:
+          last_staff_action_at:
             DateTime.utc_now()
             |> DateTime.add(-(enterprise_warning + 1), :hour)
             |> DateTime.truncate(:second)
         )
         |> with_notification_level(:warning)
 
-      assert NeglectChecker.reset_recovered_notifications() == 1
-      assert Repo.get!(Custyard.Conversation, conv.id).last_neglect_notification == nil
+      assert NeglectChecker.reset_recovered_notifications(tenant_id()) == 1
+      assert Repo.get!(Custyard.Thread, conv.id).last_neglect_notification == nil
     end
 
-    test "a conversation neglected again after recovery is alerted again" do
-      thresholds = Settings.get_neglect_thresholds()
+    test "a thread neglected again after recovery is alerted again" do
+      thresholds = Settings.get_neglect_thresholds(tenant_id())
       {warning_hours, _critical_hours} = thresholds.standard
       org = insert_organization(tier: :standard)
 
       conv =
-        insert_conversation(
+        insert_thread(
           organization_id: org.id,
           state: :active,
-          last_operator_action_at: DateTime.utc_now() |> DateTime.truncate(:second)
+          last_staff_action_at: DateTime.utc_now() |> DateTime.truncate(:second)
         )
         |> with_notification_level(:critical)
 
-      assert NeglectChecker.reset_recovered_notifications() == 1
+      assert NeglectChecker.reset_recovered_notifications(tenant_id()) == 1
 
       neglected_at = DateTime.add(DateTime.utc_now(), -(warning_hours + 1), :hour)
 
       Repo.update_all(
-        Ecto.Query.from(c in Custyard.Conversation, where: c.id == ^conv.id),
-        set: [last_operator_action_at: neglected_at]
+        Ecto.Query.from(c in Custyard.Thread, where: c.id == ^conv.id),
+        set: [last_staff_action_at: neglected_at]
       )
 
       assert {:ok, 1} = NeglectChecker.check_and_notify()
@@ -540,9 +545,9 @@ defmodule Custyard.Notifications.NeglectCheckerTest do
 
   # last_neglect_notification is system-managed: the factory's public
   # changeset drops it, so set it the way NeglectChecker does.
-  defp with_notification_level(conversation, level) do
-    conversation
-    |> Custyard.Conversation.internal_changeset(%{last_neglect_notification: level})
+  defp with_notification_level(thread, level) do
+    thread
+    |> Custyard.Thread.internal_changeset(%{last_neglect_notification: level})
     |> Repo.update!()
   end
 end

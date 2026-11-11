@@ -1,29 +1,29 @@
 defmodule Custyard.Webhooks.Purposes.Enrichment do
   @moduledoc """
-  Async enrichment of conversations after creation.
+  Async enrichment of threads after creation.
 
   Applies the external priority carried in metadata and detects the
-  conversation's language from the first customer message
+  thread's language from the first customer message
   (spec-inbound-channels Phase 2). Runs after sender_matching completes.
   """
 
   import Ecto.Query
 
-  alias Custyard.{Conversation, Message, Repo, Scoring}
+  alias Custyard.{Thread, Message, Repo, Scoring}
   alias Custyard.Email.LanguageDetector
 
   require Custyard.Log, as: Log
 
   @doc """
-  Enrich a conversation with additional metadata from the normalized payload.
+  Enrich a thread with additional metadata from the normalized payload.
   """
-  def process(conversation, normalized, _route_context) do
-    conversation = Repo.reload!(conversation)
+  def process(thread, normalized, _route_context) do
+    thread = Repo.reload!(thread)
     attrs = build_enrichment_attrs(normalized)
-    language_changed? = is_nil(conversation.language) and set_first_language(conversation.id)
+    language_changed? = is_nil(thread.language) and set_first_language(thread.id)
 
     if map_size(attrs) > 0 or language_changed? do
-      changeset = Conversation.changeset(conversation, attrs)
+      changeset = Thread.changeset(thread, attrs)
 
       case Repo.update(changeset) do
         {:ok, updated} ->
@@ -31,14 +31,14 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
 
           Phoenix.PubSub.broadcast(
             Custyard.PubSub,
-            "conversations",
-            {:conversation_updated, updated.id}
+            "threads",
+            {:thread_updated, updated.id}
           )
 
         {:error, changeset} ->
           Log.error(
-            :conversation_enrichment_record_failed,
-            [conversation_id: conversation.id] ++ Log.failure(changeset)
+            :thread_enrichment_record_failed,
+            [thread_id: thread.id] ++ Log.failure(changeset)
           )
       end
     end
@@ -47,8 +47,8 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
   rescue
     error ->
       Log.error(
-        :conversation_enrichment_failed,
-        [conversation_id: conversation.id] ++ Log.failure(error)
+        :thread_enrichment_failed,
+        [thread_id: thread.id] ++ Log.failure(error)
       )
 
       :ok
@@ -57,12 +57,12 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
   # Read persisted customer messages in arrival order, rather than whichever
   # enrichment task happens to run first. A conditional write prevents stale
   # tasks from overwriting a language another task already established.
-  defp set_first_language(conversation_id) do
+  defp set_first_language(thread_id) do
     language =
       from(m in Message,
-        where: m.conversation_id == ^conversation_id,
-        where: m.source != :operator and m.is_internal_note == false,
-        where: is_nil(m.triage_class) or m.triage_class in [:customer, :operator_forward],
+        where: m.thread_id == ^thread_id,
+        where: m.source != :staff and m.is_internal_note == false,
+        where: is_nil(m.triage_class) or m.triage_class in [:customer, :staff_forward],
         order_by: [asc: m.inserted_at, asc: m.id],
         select: m.body
       )
@@ -71,7 +71,7 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
 
     if language do
       {changed, _} =
-        from(c in Conversation, where: c.id == ^conversation_id and is_nil(c.language))
+        from(c in Thread, where: c.id == ^thread_id and is_nil(c.language))
         |> Repo.update_all(set: [language: language])
 
       changed == 1

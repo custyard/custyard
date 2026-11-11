@@ -5,18 +5,18 @@ defmodule CustyardWeb.ClaimConfirmationController do
   GET `/claim/:token` PEEKS: it renders the claimed slug and a Confirm button
   with ZERO state change, so mail-scanner prefetch can never consume the
   single-use token. POST `/claim/:token/confirm` consumes it via
-  `Custyard.Slugs.confirm/1` (race-safe conditional update).
+  `Custyard.Slugs.confirm/2` (race-safe conditional update).
 
   Invalid, expired, already-used, and purged tokens ALL render one
   identical generic page (the PR-6 uniform-unavailable pattern) — token
   handling exposes no validity oracle. The success page deliberately does
-  not mint or reveal the conversation URL: the email the prospect already holds
+  not mint or reveal the thread URL: the email the prospect already holds
   is the only carrier of that credential.
   """
 
   use CustyardWeb, :controller
 
-  alias Custyard.{Conversation, Repo, Settings, Slugs, Tenants}
+  alias Custyard.{Slugs, Tenants}
 
   plug :put_layout, html: {CustyardWeb.Layouts, :intake}
   # Shape check BEFORE the rate limit: a path segment that cannot possibly
@@ -31,7 +31,7 @@ defmodule CustyardWeb.ClaimConfirmationController do
   plug :assign_branding
 
   def show(conn, %{"token" => token}) do
-    with {:ok, slug} <- Slugs.peek(token),
+    with {:ok, slug} <- Slugs.peek(token, conn.assigns.host_tenant.id),
          true <- claim_on_host?(conn, slug) do
       conn
       |> assign(:page_title, "Confirm your claim")
@@ -42,9 +42,9 @@ defmodule CustyardWeb.ClaimConfirmationController do
   end
 
   def confirm(conn, %{"token" => token}) do
-    with {:ok, slug} <- Slugs.peek(token),
+    with {:ok, slug} <- Slugs.peek(token, conn.assigns.host_tenant.id),
          true <- claim_on_host?(conn, slug),
-         {:ok, confirmed} <- Slugs.confirm(token) do
+         {:ok, confirmed} <- Slugs.confirm(token, conn.assigns.host_tenant.id) do
       conn
       |> assign(:page_title, "Claim confirmed")
       |> render(:confirmed, slug: confirmed)
@@ -53,21 +53,10 @@ defmodule CustyardWeb.ClaimConfirmationController do
     end
   end
 
-  defp claim_on_host?(conn, slug) do
-    case conn.assigns[:host_tenant] do
-      nil ->
-        true
-
-      %{id: tenant_id} ->
-        case Repo.get(Conversation, slug.conversation_id) do
-          %{tenant_id: ^tenant_id} -> true
-          _ -> false
-        end
-    end
-  end
+  defp claim_on_host?(conn, slug), do: conn.assigns.host_tenant.id == slug.tenant_id
 
   # One identical rendering for every failure class — same template, same
-  # status, same assigns — mirroring the conversation surface's unavailable page.
+  # status, same assigns — mirroring the thread surface's unavailable page.
   defp render_unavailable(conn) do
     conn
     |> assign(:page_title, "Confirmation unavailable")
@@ -94,11 +83,7 @@ defmodule CustyardWeb.ClaimConfirmationController do
   end
 
   defp assign_branding(conn, _opts) do
-    branding =
-      case conn.assigns[:host_tenant] do
-        %{id: id} = tenant when id != 1 -> Tenants.branding(tenant)
-        _ -> Settings.get_branding()
-      end
+    branding = Tenants.branding(conn.assigns.host_tenant)
 
     assign(conn, :branding, branding)
   end

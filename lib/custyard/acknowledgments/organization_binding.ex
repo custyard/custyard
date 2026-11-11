@@ -7,20 +7,21 @@ defmodule Custyard.Acknowledgments.OrganizationBinding do
   schema "acknowledgment_organization_bindings" do
     field :source, :string
     field :source_organization_id, :string
+    belongs_to :tenant, Custyard.Tenant
     belongs_to :organization, Custyard.Organization
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
   def changeset(record, attrs) do
     record
-    |> cast(attrs, [:source, :source_organization_id, :organization_id])
-    |> validate_required([:source, :source_organization_id, :organization_id])
+    |> cast(attrs, [:tenant_id, :source, :source_organization_id, :organization_id])
+    |> validate_required([:tenant_id, :source, :source_organization_id, :organization_id])
     |> validate_length(:source, max: 255)
     |> validate_length(:source_organization_id, max: 255)
     |> validate_change(:source, &validate_identity/2)
     |> validate_change(:source_organization_id, &validate_identity/2)
     |> validate_number(:organization_id, greater_than: 0)
-    |> unique_constraint([:source, :source_organization_id])
+    |> unique_constraint([:tenant_id, :source, :source_organization_id])
     |> foreign_key_constraint(:organization_id)
   end
 

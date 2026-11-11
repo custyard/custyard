@@ -10,11 +10,11 @@ defmodule Mix.Tasks.Custyard.DsarTest do
 
   setup do
     org = insert_organization()
-    conv = insert_conversation(organization_id: org.id)
+    conv = insert_thread(organization_id: org.id)
 
     message =
       insert_message(
-        conversation_id: conv.id,
+        thread_id: conv.id,
         sender_email: "alice@customer.example",
         cc_addresses: ["pat@example.com"]
       )

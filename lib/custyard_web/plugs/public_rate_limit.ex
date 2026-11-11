@@ -39,10 +39,14 @@ defmodule CustyardWeb.Plugs.PublicRateLimit do
 
   @impl true
   def call(conn, %{bucket: bucket}) do
-    key = ClientIP.from_conn(conn)
+    ip = ClientIP.from_conn(conn)
+    tenant_id = conn.assigns[:host_tenant] && conn.assigns.host_tenant.id
+    key = {tenant_id || :instance, ip}
 
-    case RateLimit.check_rate(bucket, key) do
-      {:allow, _count} -> conn
+    with {:allow, _} <- RateLimit.check_rate(:public_instance_ip, ip),
+         {:allow, _} <- RateLimit.check_rate(bucket, key) do
+      conn
+    else
       {:deny, retry_after_ms} -> deny(conn, bucket, retry_after_ms)
     end
   end

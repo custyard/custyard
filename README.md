@@ -4,62 +4,54 @@ Customer onboarding platform with email ingestion via LMTP/IMAP.
 
 ## Background
 
-Custyard is a self-hosted, relationship-centric service platform for the **ante-CRM period**: the interval between a prospect's first pricing-page inquiry ("Join the Waitlist", "Contact Us") and a stable, everyday client relationship. It ingests customer communication with zero friction (routed webhooks, LMTP/IMAP, portal filings), resolves every message to an organization/contact/conversation automatically, and replaces the operator's queue discipline with a transparent, configurable attention-scoring engine plus neglect detection — while a white-label-capable portal makes the white-glove relationship legible to the customer.
+Custyard is a self-hosted, relationship-centric service platform for the **ante-CRM period**: the interval between a prospect's first pricing-page inquiry ("Join the Waitlist", "Contact Us") and a stable, everyday client relationship. It ingests customer communication with zero friction (routed webhooks, LMTP/IMAP, portal filings), resolves every message to an organization/contact/thread automatically, and replaces the staff's queue discipline with a transparent, configurable attention-scoring engine plus neglect detection — while a white-label-capable portal makes the white-glove relationship legible to the customer.
 
 The full framing lives in the design docs:
 
 - [Problem space and product thesis](docs/design/problem-space.md) — the ante-CRM framing, why existing tool categories don't fit, and the document map
-- [Prospect conversation loop spec](docs/design/spec-conversation-loop.md) — the end-to-end MVP loop: intake → attention queue → threaded reply → delivery tracking → portal
+- [Prospect thread loop spec](docs/design/spec-thread-loop.md) — the end-to-end MVP loop: intake → attention queue → threaded reply → delivery tracking → portal
 - [Software design document](docs/design/sdd.md) and [implementation status](docs/design/sdd-status.md)
 
-## Onboarding to Custyard
+## Ownership and access
 
-Connect the dots from our pricing page for items with CTAs like Join the Waitlist and Contact Us (for a quote) to a new project in Custyard, kind of like CloudFlare's waiting room feature for managing high traffic to a particular page or site, except it's like the first step in a white glove service for onboarding potential and actual customers, during the ante-CRM period when there's a lot going on and it's not a stable everyday operations client relationship yet.
+An installation operator runs Custyard and administers tenants at `/admin`.
+Each tenant owns its workspace, staff, customers, branding, support email,
+projects and tasks. Staff work at `/app` on the tenant's registered hostname.
+A customer is an organization, including an individual identified by email.
+Customers receive independently revocable portal links at `/portal/:token`.
+Public inquiries start at `/intake/:key` and continue at `/threads/:token`.
 
-Redirect 5-10 a multiplicity of "asks" from potential customers from "enterprise plan" (which means different thing to different people), global elite, custom installs, etc from my email inbox to a single place where I can triage and respond to them in a white-glove way, and where they can see the status of their request and follow the conversation.
+Installation administrators and tenant staff have separate accounts, login
+pages, cookies and LiveView sessions. Email domains do not grant authority.
+The installation bootstrap email comes from `INSTANCE_ADMIN_EMAIL`; tenant
+staff emails and admin/agent roles are tenant database records. The same
+address can have separate memberships in different tenants.
 
-
-- Intake API — /api/webhook/inbound and per-org routed webhooks (/webhook/route/:callback_token) that receive inbound email via Lettermint, verify HMAC signatures, resolve the sender to a contact/thread, and create or continue conversations. This is where pricing-page CTAs would land: a waitlist signup or quote request becomes a conversation in a queue.
-- Operator side (/operator/...) — an attention queue of conversations, per-conversation view with replies, organizations management, and settings. Operators are your team doing the white-glove work. There's an RBAC schema (admin/agent/viewer) and a scoring/attention mechanism.
-- Customer portal (/p/:org_token/...) — a token-gated space where a prospect/customer sees their requests, opens new ones, and follows the thread. This is the customer-facing half of the "waiting room."
-
-The core object is the conversation: state machine (waiting/active/resolved/dormant), messages with email threading metadata (Message-ID, In-Reply-To, References), immutable message log, audit events, PubSub-driven live updates to both operator and portal views.
-
+See [the tenant architecture plan](docs/design/tenant-architecture-cleanup.md)
+and [entity relationships](docs/entity-relationships.md) for ownership details.
 
 ## Setup
 
 ```bash
 mix setup
-overmind start -f Procfile.dev
+INSTANCE_ADMIN_EMAIL=installer@example.com overmind start -f Procfile.dev
 ```
 
-mix compile && mix fly.secrets 
+Open `/admin/login` on the configured installation host. In development,
+login mail appears at `/dev/mailbox`. System login mail is independent of
+tenant support email configuration.
 
+Use the installation console to create a tenant on its own subdomain or custom
+hostname and provision its first staff administrator. The installation hostname
+is reserved for Custyard. Staff can find their workspace from the installation
+homepage, then sign in at `/app/login` on that workspace's hostname. Unknown
+hosts are rejected.
 
-http://localhost:4000
-
-## Admin login (fresh instance)
-
-Custyard uses **email-only auth**: operators log in with a magic link, no password.
-Roles are `super_admin` (all orgs), `admin` (one org), and `agent` (support); the
-default for a new account is `super_admin`.
-
-### Local dev
-
-A `super_admin` account is created for you automatically. On every boot,
-`Custyard.Application` inserts `admin@custyard.local` if it doesn't already exist —
-so a fresh checkout after `mix setup` already has an admin. To log in:
-
-1. Open http://localhost:4000/operator/login and enter `admin@custyard.local`.
-2. The magic link is captured by the Swoosh local (in-memory) mailer. Open the
-   dev mailbox at http://localhost:4000/dev/mailbox and click the login link.
-   (Link expires in 15 minutes; request a new one if it lapses.)
-
-To use a different email instead of the default:
-
-```bash
-mix dev.create_operator --email you@example.com
-```
+Configure encrypted tenant provider credentials and support channels at
+`/app/settings/email`. The installation's mail credentials never supply tenant
+support access. Channels can suggest a customer, project and label for new
+threads; those hints cannot override an existing thread or known sender.
+See the [support email setup guide](docs/ops/lettermint-email-setup.md).
 
 ### Production (Docker / Fly)
 
@@ -69,8 +61,8 @@ there are no database variables.
 ```bash
 SECRET_KEY_BASE=              # mix phx.gen.secret
 CREDENTIAL_ENCRYPTION_KEY=    # openssl rand -base64 32
-PHX_HOST=custyard.example.com
-OPERATOR_EMAIL=you@example.com
+PHX_HOST=custyard.example.com # the installation hostname
+INSTANCE_ADMIN_EMAIL=you@example.com
 MAIL_ADAPTER=lettermint       # or smtp | postmark | sendgrid | mailgun
 LETTERMINT_PROJECT_TOKEN=     # the credential for the chosen adapter; see .env.sample
 ```
@@ -92,13 +84,17 @@ no reachable database it then serves a database card and retries
 every 10 s; once the database answers it exits with status 1 so the platform's
 restart policy (Fly's default `on-failure`, compose `unless-stopped`) runs a
 normal boot. A failed migration does not retry. With an empty database it runs
-the migrations, creates the `super_admin` from `OPERATOR_EMAIL`, sends a welcome
-mail through the real adapter, and shows the setup checklist on `/` for the rest
-of that boot; sign in at `/operator/login`. Credential values never appear on a
-card or in the log, only variable names; the SQLite path is the one value shown.
+the migrations, creates the installation administrator from
+`INSTANCE_ADMIN_EMAIL`, sends a welcome mail through the real adapter, and shows
+the setup checklist on `/` for the rest of that boot; sign in at `/admin/login`.
+No tenant, staff membership or support connection is created implicitly.
+Credential values never appear on a card or in the log, only variable names;
+the SQLite path is the one value shown.
 
 Platform health checks must use `/api/health/live`, which is 200 whenever the
 process answers. `/api/health` is readiness and returns 503 in doctor modes.
+Both answer on any hostname, because platform probes cannot send the
+installation or a tenant hostname.
 
 `bin/doctor` prints the same report from a shell (exit 1 unless complete);
 `--probe-database` also connects to the configured database and exits 1 if
@@ -110,72 +106,46 @@ disposable one from your laptop. Images are published per commit as
 docker run --rm ghcr.io/custyard/custyard:sha-<commit> bin/doctor --probe-database libsql://scratch.turso.io --token "$TURSO_AUTH_TOKEN"
 ```
 
-After login, `/operator/system` shows the same report plus the last mail
-delivery result (`super_admin` only).
+After login, `/admin/system` shows the same report plus the last mail
+delivery result (installation administrators only).
 
-#### Operators
+#### Installation administrators
 
-The account named by `OPERATOR_EMAIL` is created on the first run if absent and
-never modified afterwards.
-
-```bash
-fly secrets set OPERATOR_EMAIL=you@example.com
-```
-
-Log in at `/operator/login`, then `fly secrets unset OPERATOR_EMAIL`. While it is
-set, every boot logs a reminder, and an operator you remove with that address is
-recreated on the next boot.
-
-For Lettermint, `LETTERMINT_PROJECT_TOKEN` sends installation mail, including
-login links; `LETTERMINT_TEAM_TOKEN` authorizes management reads in Email setup
-(without it, management is disabled, never mocked). `LETTERMINT_API_KEY` is a
-deprecated name for the project token and logs a warning; rename it.
-
-After login, choose the tenant and open **Email setup** at
-`/operator/email-setup`. The environment tokens configure only the **Default**
-tenant; each additional tenant stores its own encrypted project token, Team
-token, project and webhook secrets. See the [support email setup
-guide](docs/ops/lettermint-email-setup.md) for the verification checklist.
-
-From a shell on the running machine: `bin/operator` starts only the database,
-never the app, so it is safe while the server runs. Under `fly ssh console` it
-switches to the `custyard` user itself. In a doctor mode it prints the boot
-report and exits 1.
+The account named by `INSTANCE_ADMIN_EMAIL` is created on the first run if
+absent and never modified afterwards. Unset it after the first login; the
+account remains stored in the installation database.
 
 ```bash
-fly ssh console -a custyard -C "/app/bin/operator add you@example.com"
-fly ssh console -a custyard -C "/app/bin/operator add lead@example.com --role admin --organization 3"
-fly ssh console -a custyard -C "/app/bin/operator add helper@example.com --role agent --organization 3"
-fly ssh console -a custyard -C "/app/bin/operator list"
-fly ssh console -a custyard -C "/app/bin/operator remove helper@example.com"
-fly ssh console -a custyard -C "/app/bin/operator help"
+fly secrets set INSTANCE_ADMIN_EMAIL=installer@example.com
+# After the first successful installation-admin login:
+fly secrets unset INSTANCE_ADMIN_EMAIL
 ```
 
-With Docker, run `docker exec <container> bin/operator ...` instead.
-
-- The default role is `super_admin`. `admin` and `agent` need `--organization ID`
-  (the number in `/operator/organizations/ID`). `add` reports an existing account
-  as "exists (role X), not modified" and never changes its role.
-- Emails are case-insensitive: `Ops@Example.com` and `ops@example.com` are the
-  same account, stored lowercased.
-- The "check your email" page looks the same whether or not the address has an
-  account, so a typo looks like success. Check `bin/operator list`.
-- `remove` refuses to remove the last `super_admin` who can log in.
-- An `admin` or `agent` whose organization was deleted cannot log in ("No
-  organization assigned; ask a super admin"); `list` flags them. Remove the
-  account and add it again with `--organization`.
-
-Older images seeded `admin@custyard.local` as a `super_admin`. Nothing delivers
-mail to that address, so it can never log in; each boot logs a warning while it
-exists and `list` flags it. Once your own `super_admin` can log in, remove it:
+The database-only release CLI manages installation administrators. It starts
+only the database, never the app, so it is safe while the server runs. In a
+doctor mode it prints the boot report and exits 1.
 
 ```bash
-fly ssh console -a custyard -C "/app/bin/operator remove admin@custyard.local"
+bin/instance-admin add installer@example.com
+bin/instance-admin list
+bin/instance-admin remove installer@example.com
 ```
 
-Erlang distribution is off in the release, so `bin/custyard remote` and
-`bin/custyard rpc` do not work. Use `bin/operator`, or `bin/custyard eval` for
-one-off code (a separate VM with the app's configuration; the app is not started).
+It refuses to remove the last installation administrator. Tenant staff are
+managed in the tenant workspace; creating an installation administrator does
+not grant tenant membership or access to customer data.
+
+## Validation and database reset
+
+```bash
+mix ci
+ACKNOWLEDGMENTS_TEST_AMQP_URL=amqp://guest:guest@127.0.0.1:5672 mix test
+```
+
+The schema is a fresh baseline. After validating changes, explicitly reset the
+intended development database with `mix ecto.reset`. No compatibility migration
+or default tenant is created. Resetting invalidates existing login, thread,
+portal and claim links. Provision tenants and staff again through `/admin`.
 
 Local Docker run (plain `docker compose up --build` also works and reports the
 build as unknown):

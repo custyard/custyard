@@ -7,12 +7,12 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
 
   import Custyard.Factory
 
-  alias Custyard.{AuditEvent, Conversation, InboundChannelRejection, InboundChannels, Message}
+  alias Custyard.{AuditEvent, Thread, InboundChannelRejection, InboundChannels, Message}
   alias Custyard.{Attachments, MessageAttachment}
   alias Custyard.Attachments.StubClient
   alias Custyard.Webhooks.Dispatcher
 
-  @notifications "operator:notifications"
+  @notifications "staff:notifications"
 
   setup do
     org = insert_organization(name: "Acme")
@@ -94,7 +94,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
     end
   end
 
-  describe "operator-sent capture and manual forward (D6)" do
+  describe "staff-sent capture and manual forward (D6)" do
     @forward_body """
     ---------- Forwarded message ---------
     From: Alice <alice@customer.example.com>
@@ -105,7 +105,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
     I cannot log in since this morning.
     """
 
-    defp operator_delivery(recipient, overrides) do
+    defp staff_delivery(recipient, overrides) do
       delivery(recipient, overrides)
       |> Map.put(:from, "Me <me@acme.example.com>")
       |> put_metadata(%{
@@ -119,14 +119,14 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       })
     end
 
-    test "an operator's mailbox reply is appended as an operator message, quietly", %{
+    test "a staff's mailbox reply is appended as a staff message, quietly", %{
       org: org,
       route: route
     } do
       channel = channel!(route)
 
-      operator =
-        insert_operator_account(
+      staff =
+        insert_staff_account(
           role: "admin",
           organization_id: org.id,
           email: "me@acme.example.com"
@@ -135,53 +135,53 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       contact = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
 
       conv =
-        insert_conversation(organization_id: org.id, contact_id: contact.id, state: :resolved)
+        insert_thread(organization_id: org.id, contact_id: contact.id, state: :resolved)
 
-      insert_message(conversation_id: conv.id, message_id: "<orig@customer.example.com>")
+      insert_message(thread_id: conv.id, message_id: "<orig@customer.example.com>")
       Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
 
       payload =
-        operator_delivery(InboundChannels.ingress_address(channel), %{
+        staff_delivery(InboundChannels.ingress_address(channel), %{
           in_reply_to: "<orig@customer.example.com>",
           body: "Fixed it for you.",
           subject: "Re: Login broken"
         })
 
-      assert {:ok, %Conversation{id: conv_id}} = Dispatcher.dispatch(route, payload)
+      assert {:ok, %Thread{id: conv_id}} = Dispatcher.dispatch(route, payload)
       assert conv_id == conv.id
 
-      message = Repo.get_by!(Message, conversation_id: conv.id, triage_class: :operator_sent)
-      assert message.source == :operator
+      message = Repo.get_by!(Message, thread_id: conv.id, triage_class: :staff_sent)
+      assert message.source == :staff
       assert message.sender_email == "me@acme.example.com"
-      assert message.forwarded_by_operator_id == operator.id
+      assert message.forwarded_by_staff_id == staff.id
       assert message.forwarded_by_email == "me@acme.example.com"
       assert message.delivery_status == nil
       assert message.body == "Fixed it for you."
 
-      reloaded = Repo.get!(Conversation, conv.id)
+      reloaded = Repo.get!(Thread, conv.id)
       assert reloaded.state == :resolved
-      assert reloaded.last_operator_action_at
+      assert reloaded.last_staff_action_at
       refute_receive {:new_message, _id}, 100
       assert Repo.aggregate(Custyard.Contact, :count) == 1
     end
 
-    test "an operator mailbox retry resumes failed attachments instead of becoming an own echo",
+    test "a staff mailbox retry resumes failed attachments instead of becoming an own echo",
          %{
            org: org,
            route: route
          } do
       channel = channel!(route)
 
-      insert_operator_account(
+      insert_staff_account(
         role: "admin",
         organization_id: org.id,
         email: "me@acme.example.com"
       )
 
-      conversation = insert_conversation(organization_id: org.id, state: :resolved)
+      thread = insert_thread(organization_id: org.id, state: :resolved)
 
       insert_message(
-        conversation_id: conversation.id,
+        thread_id: thread.id,
         message_id: "<mailbox-original@example.com>"
       )
 
@@ -189,7 +189,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       StubClient.fail(url, :timeout)
 
       payload =
-        operator_delivery(InboundChannels.ingress_address(channel), %{
+        staff_delivery(InboundChannels.ingress_address(channel), %{
           in_reply_to: "<mailbox-original@example.com>"
         })
         |> put_metadata(%{
@@ -207,28 +207,28 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert {:error, :attachment_fetch_failed} = Dispatcher.dispatch(route, payload)
 
       message =
-        Repo.get_by!(Message, conversation_id: conversation.id, triage_class: :operator_sent)
+        Repo.get_by!(Message, thread_id: thread.id, triage_class: :staff_sent)
 
       assert [%{state: :failed} = attachment] = Attachments.list_for_message(message.id)
 
       StubClient.put(url, "hello")
       assert {:ok, returned} = Dispatcher.dispatch(route, payload)
-      assert returned.id == conversation.id
+      assert returned.id == thread.id
       assert [%{state: :fetched, id: id}] = Attachments.list_for_message(message.id)
       assert id == attachment.id
 
-      assert Repo.aggregate(from(m in Message, where: m.triage_class == :operator_sent), :count) ==
+      assert Repo.aggregate(from(m in Message, where: m.triage_class == :staff_sent), :count) ==
                1
     end
 
-    test "a manual forward creates the conversation for the original sender", %{
+    test "a manual forward creates the thread for the original sender", %{
       org: org,
       route: route
     } do
       channel = channel!(route)
 
-      operator =
-        insert_operator_account(
+      staff =
+        insert_staff_account(
           role: "admin",
           organization_id: org.id,
           email: "me@acme.example.com"
@@ -237,28 +237,28 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
 
       payload =
-        operator_delivery(InboundChannels.ingress_address(channel), %{
+        staff_delivery(InboundChannels.ingress_address(channel), %{
           subject: "Fwd: Login broken",
           body: @forward_body
         })
         |> put_metadata(%{is_spam: true, spam_score: 9.0, cc: ["colleague@acme.example.com"]})
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      assert conversation.subject == "Login broken"
-      assert conversation.suspect == false
-      assert conversation.inbound_channel_id == channel.id
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      assert thread.subject == "Login broken"
+      assert thread.suspect == false
+      assert thread.inbound_channel_id == channel.id
 
-      contact = Repo.get!(Custyard.Contact, conversation.contact_id)
+      contact = Repo.get!(Custyard.Contact, thread.contact_id)
       assert contact.email == "alice@customer.example.com"
 
       [message] =
-        Repo.all(Ecto.Query.from(m in Message, where: m.conversation_id == ^conversation.id))
+        Repo.all(Ecto.Query.from(m in Message, where: m.thread_id == ^thread.id))
 
       assert message.source == :email
-      assert message.triage_class == :operator_forward
+      assert message.triage_class == :staff_forward
       assert message.sender_email == "Alice <alice@customer.example.com>"
       assert message.body == "I cannot log in since this morning."
-      assert message.forwarded_by_operator_id == operator.id
+      assert message.forwarded_by_staff_id == staff.id
       assert message.forwarded_by_email == "me@acme.example.com"
       assert message.cc_addresses == []
       assert message.authentication == nil
@@ -267,20 +267,20 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       refute_receive {:new_message, _id}, 100
     end
 
-    test "an unauthenticated 'operator' address is ordinary customer mail", %{
+    test "an unauthenticated 'staff' address is ordinary customer mail", %{
       org: org,
       route: route
     } do
       channel = channel!(route)
 
-      insert_operator_account(
+      insert_staff_account(
         role: "admin",
         organization_id: org.id,
         email: "me@acme.example.com"
       )
 
       payload =
-        operator_delivery(InboundChannels.ingress_address(channel), %{
+        staff_delivery(InboundChannels.ingress_address(channel), %{
           subject: "Fwd: Login broken",
           body: @forward_body
         })
@@ -288,9 +288,9 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           authentication: %{dkim: "fail", dkim_domain: "acme.example.com", dmarc: "fail"}
         })
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      assert Repo.get!(Custyard.Contact, conversation.contact_id).email == "me@acme.example.com"
-      assert conversation.suspect
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      assert Repo.get!(Custyard.Contact, thread.contact_id).email == "me@acme.example.com"
+      assert thread.suspect
     end
   end
 
@@ -323,8 +323,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           ]
         })
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, thread_id: thread.id)
 
       assert [receipt, huge] = wait_for_attachments(message.id)
       assert %MessageAttachment{state: :fetched, sniffed_type: "application/pdf"} = receipt
@@ -352,7 +352,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       [message] = Repo.all(Message)
       assert [%{state: :failed} = row] = Attachments.list_for_message(message.id)
       StubClient.put(url, "hello")
-      assert {:ok, _conversation} = Dispatcher.dispatch(route, payload)
+      assert {:ok, _thread} = Dispatcher.dispatch(route, payload)
       assert [%{state: :fetched, id: id}] = Attachments.list_for_message(message.id)
       assert id == row.id
       assert Repo.aggregate(Message, :count) == 1
@@ -371,8 +371,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           ]
         })
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert [_row] = wait_for_attachments(message.id)
 
       assert {:ok, _same} = Dispatcher.dispatch(route, payload)
@@ -400,9 +400,9 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           ]
         })
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      assert conversation.suspect
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      assert thread.suspect
+      message = Repo.get_by!(Message, thread_id: thread.id)
 
       assert [
                %MessageAttachment{
@@ -418,21 +418,17 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
   defp triage_audits(org) do
     Repo.all(
       from a in AuditEvent,
-        where: a.organization_id == ^org.id and a.event_type == :inbound_triaged
+        where: a.tenant_id == ^org.tenant_id and a.event_type == :inbound_triaged
     )
   end
 
-  describe "legacy routes" do
-    test "a route without channels behaves as before", %{route: route} do
-      assert {:ok, conversation} =
+  describe "routes without channels" do
+    test "an unconfigured route rejects delivery", %{route: route} do
+      assert {:ignored, :no_channel} =
                Dispatcher.dispatch(route, delivery("support@acme.example.com"))
 
-      assert conversation.inbound_channel_id == nil
-
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
-      assert message.inbound_channel_id == nil
-      assert message.triage_class == :customer
-      assert rejections(route) == []
+      assert Repo.aggregate(Message, :count) == 0
+      assert [%{classification: :no_channel}] = rejections(route)
     end
   end
 
@@ -450,7 +446,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert rejection.subject == "Hello"
       assert rejection.provider_delivery_id =~ "dlv-"
       assert rejection.inbound_channel_id == nil
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
       assert Repo.reload!(channel).last_received_at == nil
     end
 
@@ -482,8 +478,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
         delivery("someone-else@acme.example.com")
         |> put_metadata(%{recipient: InboundChannels.ingress_address(channel)})
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      assert conversation.inbound_channel_id == channel.id
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      assert thread.inbound_channel_id == channel.id
     end
   end
 
@@ -507,21 +503,21 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       %{route: route, channel: channel}
     end
 
-    test "mail to the public address becomes a conversation on the channel",
+    test "mail to the public address becomes a thread on the channel",
          %{route: route, channel: channel} do
-      assert {:ok, conversation} =
+      assert {:ok, thread} =
                Dispatcher.dispatch(route, delivery("support@help.acme.example.com"))
 
-      assert conversation.inbound_channel_id == channel.id
+      assert thread.inbound_channel_id == channel.id
       assert Repo.reload!(channel).state == :active
     end
 
     test "a +tag on the public address still reaches the channel",
          %{route: route, channel: channel} do
-      assert {:ok, conversation} =
+      assert {:ok, thread} =
                Dispatcher.dispatch(route, delivery("support+order-42@help.acme.example.com"))
 
-      assert conversation.inbound_channel_id == channel.id
+      assert thread.inbound_channel_id == channel.id
     end
 
     test "another local part on the custom domain is rejected", %{route: route} do
@@ -535,12 +531,12 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
   describe "own outbound echo" do
     test "is audited and ignored without inserting anything", %{org: org, route: route} do
       channel = channel!(route)
-      conversation = insert_conversation(organization_id: org.id, state: :waiting)
+      thread = insert_thread(organization_id: org.id, state: :waiting)
 
       insert_message(
-        conversation_id: conversation.id,
-        source: :operator,
-        message_id: "<reply-9.c#{conversation.id}@custyard.local>"
+        thread_id: thread.id,
+        source: :staff,
+        message_id: "<reply-9.c#{thread.id}@custyard.local>"
       )
 
       Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
@@ -548,20 +544,20 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       payload =
         delivery(InboundChannels.ingress_address(channel), %{
           from: "Acme Help <help@acme.example.com>",
-          message_id: "<reply-9.c#{conversation.id}@custyard.local>"
+          message_id: "<reply-9.c#{thread.id}@custyard.local>"
         })
 
       assert {:ignored, :own_echo} = Dispatcher.dispatch(route, payload)
 
       assert Repo.aggregate(Message, :count) == 1
-      assert Repo.aggregate(Conversation, :count) == 1
+      assert Repo.aggregate(Thread, :count) == 1
       assert Repo.aggregate(Custyard.Contact, :count) == 0
-      assert Repo.reload!(conversation).state == :waiting
+      assert Repo.reload!(thread).state == :waiting
       assert Repo.reload!(channel).last_received_at == nil
       refute_receive {:new_message, _}, 100
 
       assert [audit] = triage_audits(org)
-      assert audit.conversation_id == conversation.id
+      assert audit.thread_id == thread.id
       assert audit.payload["class"] == "own_echo"
       assert audit.payload["channel_id"] == channel.id
       assert audit.payload["route_id"] == route.id
@@ -574,7 +570,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
     @gmail_subject "(#314159265) Gmail Forwarding Confirmation - Receive Mail from ops@acme.example.com"
     @gmail_body "Confirm here: https://mail-settings.google.com/mail/vf-abc123 thanks"
 
-    test "is captured on a pending channel and never becomes a conversation", %{
+    test "is captured on a pending channel and never becomes a thread", %{
       org: org,
       route: route
     } do
@@ -597,12 +593,12 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert channel.state == :pending_verification
       assert channel.last_received_at == nil
 
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
       assert Enum.any?(triage_audits(org), &(&1.payload["class"] == "verification_captured"))
       assert rejections(route) == []
     end
 
-    test "a Proton confirmation arriving after the operator advances is still captured", %{
+    test "a Proton confirmation arriving after the staff advances is still captured", %{
       route: route
     } do
       channel = channel!(route, state: :awaiting_first_message, provider: :proton)
@@ -623,7 +619,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
 
       assert channel.state == :awaiting_first_message
       assert is_nil(channel.last_received_at)
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
       assert rejections(route) == []
     end
 
@@ -641,10 +637,10 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert Repo.reload!(channel).verification_code == nil
       assert [%{classification: :provider_notice, inbound_channel_id: id}] = rejections(route)
       assert id == channel.id
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
-    test "on a legacy route it is logged as a provider notice", %{route: route} do
+    test "an unconfigured route is rejected before provider triage", %{route: route} do
       payload =
         delivery("support@acme.example.com", %{
           from: "no-reply@notify.proton.me",
@@ -652,9 +648,9 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           body: "https://account.proton.me/confirm/x"
         })
 
-      assert {:ignored, :provider_notice} = Dispatcher.dispatch(route, payload)
-      assert [%{classification: :provider_notice, inbound_channel_id: nil}] = rejections(route)
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert {:ignored, :no_channel} = Dispatcher.dispatch(route, payload)
+      assert [%{classification: :no_channel, inbound_channel_id: nil}] = rejections(route)
+      assert Repo.aggregate(Thread, :count) == 0
     end
   end
 
@@ -668,8 +664,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
 
       before = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
 
-      conversation =
-        insert_conversation(
+      thread =
+        insert_thread(
           organization_id: org.id,
           contact_id: contact.id,
           state: :waiting,
@@ -677,9 +673,9 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
         )
 
       insert_message(
-        conversation_id: conversation.id,
-        source: :operator,
-        message_id: "<op-1.c#{conversation.id}@custyard.local>"
+        thread_id: thread.id,
+        source: :staff,
+        message_id: "<op-1.c#{thread.id}@custyard.local>"
       )
 
       Phoenix.PubSub.subscribe(Custyard.PubSub, @notifications)
@@ -688,7 +684,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
         delivery(InboundChannels.ingress_address(channel), %{
           subject: "Automatic reply: Hello",
           body: "I am out of office",
-          in_reply_to: "<op-1.c#{conversation.id}@custyard.local>",
+          in_reply_to: "<op-1.c#{thread.id}@custyard.local>",
           headers: %{"Auto-Submitted" => "auto-replied"}
         })
 
@@ -714,24 +710,24 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
         })
 
       assert {:ok, returned} = Dispatcher.dispatch(route, payload)
-      assert returned.id == conversation.id
+      assert returned.id == thread.id
       refute_received :auto_response_attachment_fetched
       assert Repo.all(MessageAttachment) == []
 
-      reloaded = Repo.reload!(conversation)
+      reloaded = Repo.reload!(thread)
       assert reloaded.state == :waiting
       assert reloaded.last_customer_action_at == before
 
       [appended] =
         Repo.all(
           from m in Message,
-            where: m.conversation_id == ^conversation.id and m.source == :email
+            where: m.thread_id == ^thread.id and m.source == :email
         )
 
       assert appended.triage_class == :auto_response
       assert appended.origin == :lettermint
       assert appended.inbound_channel_id == channel.id
-      assert appended.in_reply_to == "<op-1.c#{conversation.id}@custyard.local>"
+      assert appended.in_reply_to == "<op-1.c#{thread.id}@custyard.local>"
       assert appended.provider_delivery_id == payload.metadata.provider_delivery_id
       # No header To in the fixture: the delivery address stands in, minus the token.
       assert appended.to_addresses == [
@@ -756,7 +752,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert {:ignored, :auto_response} = Dispatcher.dispatch(route, payload)
       assert [%{classification: :auto_response, inbound_channel_id: id}] = rejections(route)
       assert id == channel.id
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
       assert Repo.aggregate(Message, :count) == 0
     end
 
@@ -773,7 +769,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
   end
 
   describe "suspect mail" do
-    test "creates a suspect conversation at normal urgency without notification", %{
+    test "creates a suspect thread at normal urgency without notification", %{
       route: route
     } do
       channel = channel!(route)
@@ -786,12 +782,12 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
         })
         |> put_metadata(%{is_spam: true, spam_score: 9.8})
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      assert conversation.suspect == true
-      assert conversation.urgency == :normal
-      assert conversation.inbound_channel_id == channel.id
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      assert thread.suspect == true
+      assert thread.urgency == :normal
+      assert thread.inbound_channel_id == channel.id
 
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert message.triage_class == :suspect
       assert message.spam_score == 9.8
 
@@ -814,7 +810,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert {:ok, second} = Dispatcher.dispatch(route, spam.("URGENT two"))
       assert second.suspect == true
       assert second.urgency == :normal
-      assert Repo.get_by!(Message, conversation_id: second.id).triage_class == :suspect
+      assert Repo.get_by!(Message, thread_id: second.id).triage_class == :suspect
 
       # A replay of the first delivery is quiet as well.
       assert {:ok, replayed} = Dispatcher.dispatch(route, spam.("URGENT one"))
@@ -832,13 +828,13 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
         delivery(InboundChannels.ingress_address(channel), %{subject: "URGENT outage"})
         |> put_metadata(%{is_spam: true})
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      assert conversation.suspect == false
-      assert conversation.urgency == :urgent
-      assert Repo.get_by!(Message, conversation_id: conversation.id).triage_class == :customer
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      assert thread.suspect == false
+      assert thread.urgency == :urgent
+      assert Repo.get_by!(Message, thread_id: thread.id).triage_class == :customer
 
-      conversation_id = conversation.id
-      assert_receive {:new_message, ^conversation_id}, 500
+      thread_id = thread.id
+      assert_receive {:new_message, ^thread_id}, 500
     end
   end
 
@@ -857,11 +853,11 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           spam_score: 1
         })
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      assert conversation.inbound_channel_id == channel.id
-      assert conversation.suspect == false
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      assert thread.inbound_channel_id == channel.id
+      assert thread.suspect == false
 
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert message.inbound_channel_id == channel.id
       assert message.triage_class == :customer
       assert message.to_addresses == ["help@acme.example.com"]
@@ -876,12 +872,14 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
                "dmarc" => "pass"
              }
 
-      conversation_id = conversation.id
-      assert_receive {:new_message, ^conversation_id}, 500
+      thread_id = thread.id
+      assert_receive {:new_message, ^thread_id}, 500
     end
 
     test "omits the authentication map when nothing was learned and ignores a bad reply_to",
          %{route: route} do
+      channel = channel!(route)
+
       payload =
         delivery("support@acme.example.com")
         |> put_metadata(%{
@@ -890,18 +888,19 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
           spam_score: nil
         })
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload, channel: channel)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert message.authentication == nil
       assert message.reply_to == nil
       assert message.spam_score == nil
     end
 
     test "falls back to the To address when the envelope recipient is absent", %{route: route} do
+      channel = channel!(route)
       payload = delivery("support@acme.example.com") |> put_metadata(%{recipient: nil})
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload, channel: channel)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert message.to_addresses == ["support@acme.example.com"]
     end
 
@@ -910,8 +909,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       recipient = InboundChannels.ingress_address(channel)
 
       # No header To at all: the delivery address stands in, minus its subaddress.
-      assert {:ok, conversation} = Dispatcher.dispatch(route, delivery(recipient))
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert {:ok, thread} = Dispatcher.dispatch(route, delivery(recipient))
+      message = Repo.get_by!(Message, thread_id: thread.id)
 
       refute Enum.any?(message.to_addresses, &(&1 =~ channel.ingress_token))
       assert message.to_addresses == ["#{channel.ingress_local}@#{route.lettermint_route_domain}"]
@@ -925,8 +924,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
         delivery(InboundChannels.ingress_address(channel))
         |> put_metadata(%{to: addresses, cc: addresses})
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert message.to_addresses == Enum.take(addresses, 50)
       assert message.cc_addresses == Enum.take(addresses, 50)
     end
@@ -938,8 +937,8 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
         delivery("help+billing@acme.example.com")
         |> put_metadata(%{recipient: InboundChannels.ingress_address(channel)})
 
-      assert {:ok, conversation} = Dispatcher.dispatch(route, payload)
-      message = Repo.get_by!(Message, conversation_id: conversation.id)
+      assert {:ok, thread} = Dispatcher.dispatch(route, payload)
+      message = Repo.get_by!(Message, thread_id: thread.id)
       assert message.to_addresses == ["help+billing@acme.example.com"]
     end
 
@@ -955,7 +954,7 @@ defmodule Custyard.Webhooks.DispatcherTriageTest do
       assert channel.verified_at
     end
 
-    test "a replayed delivery is still acknowledged on the same conversation", %{route: route} do
+    test "a replayed delivery is still acknowledged on the same thread", %{route: route} do
       channel = channel!(route)
       payload = delivery(InboundChannels.ingress_address(channel))
 

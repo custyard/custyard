@@ -8,8 +8,7 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   1. **Channel resolution.** `Custyard.InboundChannels.resolve_for_delivery/2`
      maps the envelope recipient to a channel on the route. A route without
-     channels is `:legacy` and behaves exactly as before channels existed. A
-     recipient that matches no channel, or a paused or revoked channel, is
+     email channels rejects email deliveries. A recipient that matches no channel, or a paused or revoked channel, is
      written to the route's rejection log and the delivery is acknowledged
      as `{:ignored, reason}` so the provider does not retry. An IMAP channel
      poller passes its channel as `channel:` instead; only the channel state
@@ -17,17 +16,17 @@ defmodule Custyard.Webhooks.Dispatcher do
   2. **Triage.** `Custyard.Webhooks.Triage.classify/3` sorts the delivery:
      - own outbound echo: audited, ignored; nothing is inserted
      - provider verification: captured on a `pending_verification` channel,
-       otherwise logged as a provider notice; never a conversation
+       otherwise logged as a provider notice; never a thread
      - auto-response / bulk / bounce: appended to the thread it answers as a
        `triage_class: :auto_response` message without reactivating the
-       conversation, or logged when it threads to nothing
+       thread, or logged when it threads to nothing
      - suspect and customer mail: continue to sender matching
 
   Each inbound route can then have multiple webhook purposes. The dispatcher
   executes them in order:
-  1. `sender_matching` — identity resolution, conversation creation (blocking)
+  1. `sender_matching` — identity resolution, thread creation (blocking)
   2. `enrichment` — urgency scoring, keyword extraction (async)
-  3. `notification` — operator notifications (async)
+  3. `notification` — staff notifications (async)
   4. `audit` — activity log (async)
   5. `disambiguation` — ambiguous sender resolution (conditional)
 
@@ -46,8 +45,8 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   `sender_matching` executes unconditionally regardless of its enabled flag
   in the webhook_purposes table. It is the step that resolves sender identity
-  and creates the conversation record — without it, no downstream purpose
-  has anything to operate on. The toggle exposed in the operator UI for
+  and creates the thread record — without it, no downstream purpose
+  has anything to operate on. The toggle exposed in the staff UI for
   sender_matching is cosmetic: it controls audit visibility and reporting,
   not execution. This is intentional and must not be changed without
   reworking the entire dispatch pipeline.
@@ -57,7 +56,7 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   alias Custyard.{
     AuditEvent,
-    Conversation,
+    Thread,
     InboundChannel,
     InboundChannels,
     InboundRoute,
@@ -89,14 +88,31 @@ defmodule Custyard.Webhooks.Dispatcher do
   - `opts[:channel]` - a channel on `route` that fetched the message itself
     (IMAP); skips recipient resolution
 
-  Returns `{:ok, conversation}` when a message was stored (a new or existing
-  conversation, including an appended auto-response), `{:ignored, reason}`
+  Returns `{:ok, thread}` when a message was stored (a new or existing
+  thread, including an appended auto-response), `{:ignored, reason}`
   when the delivery was deliberately not stored (see `t:ignored_reason/0`;
   the caller acknowledges it with 2xx), or `{:error, reason}`.
   """
   @spec dispatch(struct(), map(), keyword()) ::
           {:ok, struct()} | {:ignored, ignored_reason()} | {:error, term()}
   def dispatch(%InboundRoute{} = route, normalized, opts \\ []) do
+    case Repo.get(Custyard.Tenant, route.tenant_id) do
+      %Custyard.Tenant{status: "active"} ->
+        dispatch_active(route, normalized, opts)
+
+      _ ->
+        AuditEvent.create(%{
+          tenant_id: route.tenant_id,
+          event_type: :webhook_error,
+          source: to_string(normalized[:source] || :email),
+          payload: %{"reason" => "tenant_suspended"}
+        })
+
+        {:error, :tenant_suspended}
+    end
+  end
+
+  defp dispatch_active(route, normalized, opts) do
     start_time = System.monotonic_time()
     adapter = normalized[:source] || :unknown
 
@@ -106,10 +122,10 @@ defmodule Custyard.Webhooks.Dispatcher do
       case resolve_channel(route, normalized, Keyword.get(opts, :channel)) do
         {:ok, channel} ->
           case triage_and_process(route, normalized, channel) do
-            {{:ok, conversation} = stored, class} when class != :auto_response ->
+            {{:ok, thread} = stored, class} when class != :auto_response ->
               context = route_context(route, channel, class)
 
-              case Purposes.Attachments.process(conversation, normalized, context) do
+              case Purposes.Attachments.process(thread, normalized, context) do
                 :ok -> stored
                 {:error, _reason} = error -> error
               end
@@ -137,11 +153,15 @@ defmodule Custyard.Webhooks.Dispatcher do
     result
   end
 
-  defp result_tag({:ok, _conversation}), do: :ok
+  defp result_tag({:ok, _thread}), do: :ok
   defp result_tag({:ignored, _reason}), do: :ignored
   defp result_tag({:error, _reason}), do: :error
 
   # --- Stage 1: channel resolution (D2) ---
+
+  defp resolve_channel(_route, %{source: source}, nil)
+       when source in [:zendesk, :intercom, :slack],
+       do: {:ok, nil}
 
   defp resolve_channel(route, normalized, nil) do
     recipient = recipient(normalized)
@@ -167,9 +187,6 @@ defmodule Custyard.Webhooks.Dispatcher do
 
   defp resolved(resolution, route, normalized) do
     case resolution do
-      :legacy ->
-        {:ok, nil}
-
       {:ok, channel} ->
         {:ok, channel}
 
@@ -204,11 +221,11 @@ defmodule Custyard.Webhooks.Dispatcher do
         {:own_echo, message} ->
           handle_own_echo(route, normalized, channel, message)
 
-        {:operator_sent, info} ->
-          handle_operator_sent(route, normalized, channel, info)
+        {:staff_sent, info} ->
+          handle_staff_sent(route, normalized, channel, info)
 
-        {:operator_forward, info} ->
-          handle_operator_forward(route, normalized, channel, info)
+        {:staff_forward, info} ->
+          handle_staff_forward(route, normalized, channel, info)
 
         {:verification, capture} ->
           handle_verification(route, normalized, channel, capture)
@@ -226,56 +243,56 @@ defmodule Custyard.Webhooks.Dispatcher do
     {result, elem(classification, 0)}
   end
 
-  # Custyard's own reply forwarded back by the operator's mailbox (D4): the
+  # Custyard's own reply forwarded back by the staff's mailbox (D4): the
   # message is already stored, so nothing is inserted, no contact is
   # resolved, nobody is notified and the channel health is untouched.
   defp handle_own_echo(route, normalized, channel, %Message{} = message) do
-    audit_triaged(route, normalized, channel, "own_echo", message.conversation_id)
+    audit_triaged(route, normalized, channel, "own_echo", message.thread_id)
     {:ignored, :own_echo}
   end
 
-  # A reply the operator sent from their own mailbox (D6 "operator-sent
-  # capture"): appended as an operator message so the thread is complete,
-  # with the operator's action stamped on the conversation. No reactivation,
-  # no contact resolution, no notification; the operator already knows.
-  defp handle_operator_sent(route, normalized, channel, %{conversation: conversation} = info) do
+  # A reply the staff sent from their own mailbox (D6 "staff-sent
+  # capture"): appended as a staff message so the thread is complete,
+  # with the staff's action stamped on the thread. No reactivation,
+  # no contact resolution, no notification; the staff already knows.
+  defp handle_staff_sent(route, normalized, channel, %{thread: thread} = info) do
     route_context =
       route
-      |> route_context(channel, :operator_sent)
+      |> route_context(channel, :staff_sent)
       |> Map.merge(forwarder_context(info))
 
     attrs =
-      conversation
+      thread
       |> Purposes.SenderMatching.inbound_message_attrs(normalized, route_context)
-      |> Map.put(:source, :operator)
+      |> Map.put(:source, :staff)
       |> Map.put(:sender_email, info.email)
-      |> Map.put(:triage_class, :operator_sent)
+      |> Map.put(:triage_class, :staff_sent)
 
     case Message.insert_idempotent(attrs) do
       {:ok, message} ->
-        conversation = stamp_operator_action(Repo.get!(Conversation, message.conversation_id))
+        thread = stamp_staff_action(Repo.get!(Thread, message.thread_id))
 
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
-          "conversation:#{conversation.id}",
-          {:message_added, conversation.id}
+          "thread:#{thread.id}",
+          {:message_added, thread.id}
         )
 
         mark_received(channel)
-        audit_triaged(route, normalized, channel, "operator_sent", conversation.id)
-        {:ok, conversation}
+        audit_triaged(route, normalized, channel, "staff_sent", thread.id)
+        {:ok, thread}
 
       {:error, changeset} ->
         {:error, changeset}
     end
   end
 
-  # Customer mail forwarded in by an operator (D6 "operator manual forward",
+  # Customer mail forwarded in by a staff (D6 "staff manual forward",
   # the backlog-import path): the unwrapped original runs through the
   # customer pipeline with the original sender as the contact, stamped with
   # who forwarded it. The forward's own authentication, spam score and HTML
-  # describe the operator's copy, not the customer's mail, and are dropped.
-  defp handle_operator_forward(route, normalized, channel, %{original: original} = info) do
+  # describe the staff's copy, not the customer's mail, and are dropped.
+  defp handle_staff_forward(route, normalized, channel, %{original: original} = info) do
     unwrapped =
       normalized
       |> Map.put(:from, original.from)
@@ -294,21 +311,21 @@ defmodule Custyard.Webhooks.Dispatcher do
         })
       end)
 
-    process_customer(route, unwrapped, channel, :operator_forward, forwarder_context(info))
+    process_customer(route, unwrapped, channel, :staff_forward, forwarder_context(info))
   end
 
-  defp forwarder_context(%{operator: operator, email: email}) do
+  defp forwarder_context(%{staff: staff, email: email}) do
     %{
-      forwarded_by_operator_id: operator && operator.id,
+      forwarded_by_staff_id: staff && staff.id,
       forwarded_by_email: email
     }
   end
 
-  defp stamp_operator_action(%Conversation{} = conversation) do
+  defp stamp_staff_action(%Thread{} = thread) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    conversation
-    |> Ecto.Changeset.change(last_operator_action_at: now)
+    thread
+    |> Ecto.Changeset.change(last_staff_action_at: now)
     |> Repo.update!()
   end
 
@@ -335,8 +352,8 @@ defmodule Custyard.Webhooks.Dispatcher do
     end
   end
 
-  # A legacy route, or a channel that is no longer being set up: the
-  # notice is kept in the rejection log so the operator can find it.
+  # A channel that is no longer being set up: the
+  # notice is kept in the rejection log so the staff can find it.
   defp handle_verification(route, normalized, channel, _capture) do
     log_rejection(route, channel, :provider_notice, normalized)
     {:ignored, :provider_notice}
@@ -346,14 +363,11 @@ defmodule Custyard.Webhooks.Dispatcher do
   # message: no reactivation, no contact resolution, no notification and no
   # enrichment. One that threads to nothing is logged and dropped.
   defp handle_auto_response(route, normalized, channel, _reason) do
-    match =
-      if route.organization_id,
-        do: ThreadMatcher.find_thread(normalized, route.organization_id),
-        else: ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
+    match = ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
 
     case match do
-      {:ok, conversation} ->
-        append_auto_response(route, normalized, channel, conversation)
+      {:ok, thread} ->
+        append_auto_response(route, normalized, channel, thread)
 
       no_match when no_match in [:not_found, :ambiguous] ->
         log_rejection(route, channel, :auto_response, normalized)
@@ -361,23 +375,23 @@ defmodule Custyard.Webhooks.Dispatcher do
     end
   end
 
-  defp append_auto_response(route, normalized, channel, conversation) do
+  defp append_auto_response(route, normalized, channel, thread) do
     route_context = route_context(route, channel, :auto_response)
-    attrs = Purposes.SenderMatching.inbound_message_attrs(conversation, normalized, route_context)
+    attrs = Purposes.SenderMatching.inbound_message_attrs(thread, normalized, route_context)
 
     case Message.insert_idempotent(attrs) do
       {:ok, message} ->
-        conversation = Repo.get!(Conversation, message.conversation_id)
+        thread = Repo.get!(Thread, message.thread_id)
 
         Phoenix.PubSub.broadcast(
           Custyard.PubSub,
-          "conversation:#{conversation.id}",
-          {:message_added, conversation.id}
+          "thread:#{thread.id}",
+          {:message_added, thread.id}
         )
 
         mark_received(channel)
-        run_audit_purpose(conversation, normalized, route_context, enabled_purposes(route))
-        {:ok, conversation}
+        run_audit_purpose(thread, normalized, route_context, enabled_purposes(route))
+        {:ok, thread}
 
       {:error, changeset} ->
         {:error, changeset}
@@ -392,11 +406,11 @@ defmodule Custyard.Webhooks.Dispatcher do
 
     # Step 1: Sender matching (synchronous, blocking)
     case run_sender_matching(normalized, route_context, enabled_purposes) do
-      {:ok, conversation} ->
+      {:ok, thread} ->
         mark_received(channel)
         # Step 2-4: Async purposes (enrichment, notification, audit)
-        run_async_purposes(conversation, normalized, route_context, enabled_purposes)
-        {:ok, conversation}
+        run_async_purposes(thread, normalized, route_context, enabled_purposes)
+        {:ok, thread}
 
       {:error, reason} ->
         {:error, reason}
@@ -406,9 +420,9 @@ defmodule Custyard.Webhooks.Dispatcher do
   defp route_context(route, channel, triage_class) do
     %{
       tenant_id: route.tenant_id,
-      organization_id: route.organization_id,
-      project_id: route.project_id,
-      route_type: route.route_type,
+      default_organization_id: channel && channel.default_organization_id,
+      default_project_id: channel && channel.default_project_id,
+      default_label_id: channel && channel.default_label_id,
       route_id: route.id,
       channel_id: channel && channel.id,
       triage_class: triage_class
@@ -429,20 +443,20 @@ defmodule Custyard.Webhooks.Dispatcher do
     Purposes.SenderMatching.process(normalized, route_context)
   end
 
-  defp run_async_purposes(conversation, normalized, route_context, enabled_purposes) do
+  defp run_async_purposes(thread, normalized, route_context, enabled_purposes) do
     if MapSet.member?(enabled_purposes, :enrichment) do
       start_purpose_task(:enrichment, fn ->
-        Purposes.Enrichment.process(conversation, normalized, route_context)
+        Purposes.Enrichment.process(thread, normalized, route_context)
       end)
     end
 
-    if MapSet.member?(enabled_purposes, :notification) and notify?(conversation, route_context) do
+    if MapSet.member?(enabled_purposes, :notification) and notify?(thread, route_context) do
       start_purpose_task(:notification, fn ->
-        Purposes.Notification.process(conversation, normalized, route_context)
+        Purposes.Notification.process(thread, normalized, route_context)
       end)
     end
 
-    run_audit_purpose(conversation, normalized, route_context, enabled_purposes)
+    run_audit_purpose(thread, normalized, route_context, enabled_purposes)
 
     # Disambiguation is reserved for future implementation
     # (sends DM to ambiguous senders asking them to clarify their identity)
@@ -455,28 +469,28 @@ defmodule Custyard.Webhooks.Dispatcher do
     :ok
   end
 
-  defp run_audit_purpose(conversation, normalized, route_context, enabled_purposes) do
+  defp run_audit_purpose(thread, normalized, route_context, enabled_purposes) do
     if MapSet.member?(enabled_purposes, :audit) do
       start_purpose_task(:audit, fn ->
-        Purposes.Audit.process(conversation, normalized, route_context)
+        Purposes.Audit.process(thread, normalized, route_context)
       end)
     end
 
     :ok
   end
 
-  # D6: suspect mail and auto-responses never reach operator notifications.
+  # D6: suspect mail and auto-responses never reach staff notifications.
   # The stored flag is checked too: a replayed or follow-up delivery into a
-  # conversation an operator has not yet cleared stays quiet even when this
+  # thread a staff has not yet cleared stays quiet even when this
   # delivery on its own classified as customer mail.
-  defp notify?(%Conversation{suspect: true}, _route_context), do: false
+  defp notify?(%Thread{suspect: true}, _route_context), do: false
 
-  # A manual forward is the operator importing mail they have already read.
-  defp notify?(_conversation, %{triage_class: class})
-       when class in [:suspect, :auto_response, :operator_forward],
+  # A manual forward is the staff importing mail they have already read.
+  defp notify?(_thread, %{triage_class: class})
+       when class in [:suspect, :auto_response, :staff_forward],
        do: false
 
-  defp notify?(_conversation, _route_context), do: true
+  defp notify?(_thread, _route_context), do: true
 
   # --- Channel health (D7) ---
 
@@ -511,19 +525,18 @@ defmodule Custyard.Webhooks.Dispatcher do
     :ok
   end
 
-  defp audit_triaged(route, normalized, channel, class, conversation_id) do
+  defp audit_triaged(route, normalized, channel, class, thread_id) do
     attrs = %{
       event_type: :inbound_triaged,
       source: to_string(normalized[:source] || "unknown"),
       message_id: normalized[:message_id],
-      conversation_id: conversation_id,
-      organization_id: route.organization_id,
-      project_id: route.project_id,
+      thread_id: thread_id,
+      tenant_id: route.tenant_id,
       payload: %{
         "class" => class,
         "channel_id" => channel && channel.id,
         "route_id" => route.id,
-        "conversation_id" => conversation_id
+        "thread_id" => thread_id
       }
     }
 

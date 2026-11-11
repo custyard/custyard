@@ -1,15 +1,45 @@
 defmodule Custyard.Release.AcknowledgmentsTest do
+  defp local_authority(tenant_id, channel),
+    do: %Custyard.Acknowledgments.LocalAuthority{tenant_id: tenant_id, channel: channel}
+
+  defp ack_scope(tenant_id) do
+    key = {__MODULE__, :scope, tenant_id}
+
+    case Process.get(key) do
+      nil ->
+        scope = Custyard.Factory.staff_scope(tenant_id)
+        Process.put(key, scope)
+        scope
+
+      scope ->
+        scope
+    end
+  end
+
   # Reads and replaces the application's acknowledgment configuration.
   use Custyard.DataCase, async: false
   import ExUnit.CaptureIO
   import Custyard.AcknowledgmentsBroker
   alias Custyard.Acknowledgments
-  alias Custyard.Acknowledgments.Topology
+  alias Custyard.Acknowledgments.{Integration, Topology}
   alias Custyard.Release.Acknowledgments, as: CLI
 
   # Runs a command as bin/acknowledgments would in a running VM, capturing both
   # streams and the exit status.
+  defp tenant_id do
+    case Process.get(:ack_test_tenant_id) || Process.get(:factory_tenant_id) do
+      nil ->
+        tenant = Custyard.Factory.insert_tenant()
+        Process.put(:factory_tenant_id, tenant.id)
+        tenant.id
+
+      id ->
+        id
+    end
+  end
+
   defp cli(argv) do
+    argv = argv ++ ["--tenant", Integer.to_string(tenant_id())]
     {{status, out}, err} = with_io(:stderr, fn -> with_io(fn -> CLI.run(argv) end) end)
     %{status: status, out: out, err: err}
   end
@@ -18,6 +48,25 @@ defmodule Custyard.Release.AcknowledgmentsTest do
     previous = Application.get_env(:custyard, :acknowledgments)
     on_exit(fn -> Application.put_env(:custyard, :acknowledgments, previous) end)
     Application.put_env(:custyard, :acknowledgments, config)
+
+    if config[:url] && config[:source] do
+      id = tenant_id()
+      {:ok, encrypted} = Custyard.Credentials.encrypt(config[:url], "acknowledgments.#{id}.url")
+
+      integration =
+        Repo.get_by(Integration, tenant_id: id) ||
+          %Integration{}
+
+      integration
+      |> Integration.changeset(%{
+        tenant_id: id,
+        source: config[:source],
+        url_ciphertext: encrypted,
+        queue: config[:queue],
+        enabled: config[:enabled]
+      })
+      |> Repo.insert_or_update!()
+    end
   end
 
   defp binding_audits,
@@ -57,7 +106,7 @@ defmodule Custyard.Release.AcknowledgmentsTest do
         assert result.out == ""
       end
 
-      assert Acknowledgments.list_bindings() == []
+      assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
       assert binding_audits() == []
     end
   end
@@ -74,10 +123,10 @@ defmodule Custyard.Release.AcknowledgmentsTest do
 
       result = cli(["status"])
       assert result.status == 0
-      assert result.out =~ "Consumer: enabled"
+      assert result.out =~ "Consumer: disabled"
       assert result.out =~ "Source: not set"
       assert result.out =~ "Broker URL: not set"
-      assert result.out =~ "Set ACKNOWLEDGMENTS_AMQP_URL and ACKNOWLEDGMENTS_SOURCE"
+      assert result.out =~ "Configure the tenant acknowledgment integration"
     end
 
     test "an invalid URL is reported by rule, never by value" do
@@ -99,20 +148,8 @@ defmodule Custyard.Release.AcknowledgmentsTest do
       refute result.out <> result.err =~ "broker.internal"
     end
 
-    test "incomplete configuration names the missing variable and fails" do
-      put_config(
-        enabled: true,
-        url: "amqp://custyard:incomplete-pw@broker.internal",
-        source: nil,
-        queue: "custyard.acknowledgments",
-        prefetch: 1
-      )
-
-      result = cli(["status"])
-      assert result.status == 1
-      assert result.out =~ "Broker URL: set"
-      assert result.err =~ "ACKNOWLEDGMENTS_SOURCE is not set"
-      refute result.out <> result.err =~ "incomplete-pw"
+    test "missing tenant selection refuses the command" do
+      assert capture_io(:stderr, fn -> assert CLI.run(["status"]) == 1 end) =~ "--tenant"
     end
   end
 
@@ -140,7 +177,9 @@ defmodule Custyard.Release.AcknowledgmentsTest do
     test "reports conflicts, missing organizations and invalid input without writing" do
       org = Custyard.Factory.insert_organization()
       other = Custyard.Factory.insert_organization()
-      {:ok, :created, _} = Acknowledgments.bind("ots.test", "org-taken", org.id, "cli")
+
+      {:ok, :created, _} =
+        Acknowledgments.bind(local_authority(tenant_id(), "cli"), "ots.test", "org-taken", org.id)
 
       conflict = cli(["bind", "ots.test", "org-taken", "#{other.id}"])
       assert conflict.status == 1
@@ -165,7 +204,7 @@ defmodule Custyard.Release.AcknowledgmentsTest do
       assert invalid.status == 1
       assert invalid.err =~ "nonblank identities"
 
-      assert Acknowledgments.get_binding("ots.test", "org-new") == nil
+      assert Acknowledgments.get_binding(ack_scope(tenant_id()), "ots.test", "org-new") == nil
       assert length(binding_audits()) == 1
     end
 
@@ -204,11 +243,17 @@ defmodule Custyard.Release.AcknowledgmentsTest do
         assert_raise RuntimeError,
                      ~r/(DATABASE_PATH|UPLOAD_DIR) must point inside the mounted \/data/,
                      fn ->
-                       with_io(:stderr, fn -> with_io(fn -> CLI.run(argv, mode: :release) end) end)
+                       with_io(:stderr, fn ->
+                         with_io(fn ->
+                           CLI.run(argv ++ ["--tenant", Integer.to_string(tenant_id())],
+                             mode: :release
+                           )
+                         end)
+                       end)
                      end
       end
 
-      assert Acknowledgments.list_bindings() == []
+      assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
       assert binding_audits() == []
     end
   end

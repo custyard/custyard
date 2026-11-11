@@ -25,7 +25,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
         })
       )
 
-    admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
+    admin = insert_staff_account(role: "admin", tenant_id: tenant.id)
     {:ok, _} = EmailSetup.ensure_connection(admin, tenant.id)
 
     route =
@@ -68,28 +68,28 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     assert signed_post(path, params, "legacy-global-secret") |> json_response(401)
     refute EmailSetup.summary(c.tenant.id).receiving?
     response = signed_post(path, params, "route-secret") |> json_response(200)
-    conversation = Repo.get!(Custyard.Conversation, response["conversation_id"])
-    assert conversation.tenant_id == c.tenant.id
+    thread = Repo.get!(Custyard.Thread, response["thread_id"])
+    assert thread.tenant_id == c.tenant.id
     assert EmailSetup.summary(c.tenant.id).receiving?
     refute EmailSetup.summary(c.tenant.id).sending?
     refute EmailSetup.summary(c.tenant.id).complete?
-    assert EmailSetup.connection(c.tenant.id).latest_received_conversation_id == conversation.id
+    assert EmailSetup.connection(c.tenant.id).latest_received_thread_id == thread.id
   end
 
-  test "completion requires a new customer reply referencing a preceding sent operator message",
+  test "completion requires a new customer reply referencing a preceding sent staff message",
        c do
     path = "/api/webhook/route/#{c.route.callback_token}"
 
     response =
       signed_post(path, inbound_payload(c, "initial"), "route-secret") |> json_response(200)
 
-    conversation_id = response["conversation_id"]
+    thread_id = response["thread_id"]
 
     outgoing =
       insert_message(
-        conversation_id: conversation_id,
-        source: :operator,
-        message_id: "<operator-reply@service.example>",
+        thread_id: thread_id,
+        source: :staff,
+        message_id: "<staff-reply@service.example>",
         delivery_status: :sent,
         lettermint_message_id: "outbound-provider"
       )
@@ -112,8 +112,10 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
         "references" => "<initial@acme.example> #{outgoing.message_id}"
       })
 
+    Phoenix.PubSub.subscribe(Custyard.PubSub, "email_setup:#{c.tenant.id}")
     response = signed_post(path, returned, "route-secret") |> json_response(200)
-    assert response["conversation_id"] == conversation_id
+    assert_receive :email_setup_updated
+    assert response["thread_id"] == thread_id
     assert EmailSetup.summary(c.tenant.id).returning?
     assert EmailSetup.summary(c.tenant.id).complete?
 
@@ -136,7 +138,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     auto = inbound_payload(c, "auto", %{"auto-submitted" => "auto-replied"})
     signed_post(path, auto, "route-secret") |> json_response(200)
     refute EmailSetup.summary(c.tenant.id).receiving?
-    assert is_nil(EmailSetup.connection(c.tenant.id).latest_received_conversation_id)
+    assert is_nil(EmailSetup.connection(c.tenant.id).latest_received_thread_id)
   end
 
   test "a changed sender requires a new send and ignores delayed evidence for the old identity",
@@ -146,12 +148,12 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     response =
       signed_post(path, inbound_payload(c, "initial"), "route-secret") |> json_response(200)
 
-    conversation_id = response["conversation_id"]
+    thread_id = response["thread_id"]
 
     old_reply =
       insert_message(
-        conversation_id: conversation_id,
-        source: :operator,
+        thread_id: thread_id,
+        source: :staff,
         message_id: "<old-identity@service.example>",
         delivery_status: :delivered,
         lettermint_message_id: "old-provider-reply"
@@ -175,7 +177,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
              c.channel
              |> Repo.reload!()
              |> Custyard.InboundChannels.update_channel(%{reply_from: :ingress_address},
-               operator: c.admin
+               staff: c.admin
              )
 
     refute EmailSetup.summary(c.tenant.id).sending?
@@ -199,8 +201,8 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
 
     new_reply =
       insert_message(
-        conversation_id: conversation_id,
-        source: :operator,
+        thread_id: thread_id,
+        source: :staff,
         message_id: "<new-identity@service.example>",
         delivery_status: :delivered,
         lettermint_message_id: "new-provider-reply"
@@ -226,7 +228,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     refute EmailSetup.summary(c.tenant.id).returning?
   end
 
-  test "referencing an unsent operator draft does not prove a successful roundtrip", c do
+  test "referencing an unsent staff draft does not prove a successful roundtrip", c do
     path = "/api/webhook/route/#{c.route.callback_token}"
 
     response =
@@ -234,8 +236,8 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
 
     outgoing =
       insert_message(
-        conversation_id: response["conversation_id"],
-        source: :operator,
+        thread_id: response["thread_id"],
+        source: :staff,
         message_id: "<draft@service.example>",
         delivery_status: :pending
       )
@@ -245,7 +247,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
     refute EmailSetup.summary(c.tenant.id).returning?
   end
 
-  test "credential rotation clears receiving evidence and its conversation link", c do
+  test "credential rotation clears receiving evidence and its thread link", c do
     path = "/api/webhook/route/#{c.route.callback_token}"
     signed_post(path, inbound_payload(c, "initial"), "route-secret") |> json_response(200)
     assert EmailSetup.summary(c.tenant.id).receiving?
@@ -255,7 +257,7 @@ defmodule CustyardWeb.TenantInboundWebhookTest do
                "team_token" => "replacement-team-token"
              })
 
-    assert is_nil(connection.latest_received_conversation_id)
+    assert is_nil(connection.latest_received_thread_id)
     refute EmailSetup.summary(c.tenant.id).receiving?
     assert is_nil(Repo.reload!(c.route).webhook_verified_at)
   end

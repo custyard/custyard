@@ -39,7 +39,7 @@ defmodule Custyard.EmailSetupTest do
         })
       )
 
-    admin = insert_operator_account(role: "admin", tenant_id: tenant.id)
+    admin = insert_staff_account(role: "admin", tenant_id: tenant.id)
     %{tenant: tenant, admin: admin}
   end
 
@@ -92,7 +92,7 @@ defmodule Custyard.EmailSetupTest do
 
     {:ok, connection} =
       EmailSetup.ensure_connection(
-        insert_operator_account(role: "admin", tenant_id: other.id),
+        insert_staff_account(role: "admin", tenant_id: other.id),
         other.id
       )
 
@@ -107,6 +107,46 @@ defmodule Custyard.EmailSetupTest do
              EmailSetup.save_credentials(c.admin, c.tenant.id, %{"team_token" => "new-secret"})
 
     assert EmailSetup.connection(c.tenant.id).team_token_ciphertext == saved.team_token_ciphertext
+  end
+
+  test "resaving unchanged provider tokens preserves checks and mail evidence; rotation resets them",
+       c do
+    {:ok, connection} = save(c)
+    observed = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    connection =
+      Repo.update!(
+        Ecto.Changeset.change(connection,
+          project_check_status: "verified",
+          sending_check_status: "verified",
+          last_signed_inbound_at: observed,
+          last_reply_accepted_at: observed,
+          last_reply_delivered_at: observed,
+          last_returning_reply_at: observed
+        )
+      )
+
+    assert {:ok, unchanged} =
+             EmailSetup.save_credentials(c.admin, c.tenant.id, %{
+               "project_id" => "project-1",
+               "project_token" => " project-secret ",
+               "team_token" => "team-secret"
+             })
+
+    assert EmailSetup.summary(c.tenant.id).complete?
+    assert unchanged.project_token_ciphertext == connection.project_token_ciphertext
+    assert unchanged.team_token_ciphertext == connection.team_token_ciphertext
+    assert unchanged.project_check_status == "verified"
+    assert unchanged.sending_check_status == "verified"
+
+    assert {:ok, rotated} =
+             EmailSetup.save_credentials(c.admin, c.tenant.id, %{"project_token" => "new-secret"})
+
+    refute EmailSetup.summary(c.tenant.id).complete?
+    refute EmailSetup.summary(c.tenant.id).receiving?
+    refute EmailSetup.summary(c.tenant.id).sending?
+    assert rotated.project_check_status == "unchecked"
+    assert rotated.sending_check_status == "unchecked"
   end
 
   test "connection checks authenticate independently without creating delivery evidence", c do
@@ -136,7 +176,7 @@ defmodule Custyard.EmailSetupTest do
     fixture(:route, {:ok, remote_route("project-1")})
     assert {:ok, route} = EmailSetup.import_route(c.admin, c.tenant.id, "route-1")
     assert route.tenant_id == c.tenant.id
-    assert is_nil(route.organization_id)
+    refute Map.has_key?(route, :organization_id)
     assert {:ok, repeated} = EmailSetup.import_route(c.admin, c.tenant.id, "route-1")
     assert repeated.id == route.id
 
@@ -197,7 +237,7 @@ defmodule Custyard.EmailSetupTest do
 
     assert Enum.sort(Enum.map(route.webhooks, & &1.purpose)) == [:notification, :sender_matching]
 
-    Phoenix.PubSub.subscribe(Custyard.PubSub, "operator:notifications")
+    Phoenix.PubSub.subscribe(Custyard.PubSub, "staff:notifications")
 
     normalized = %{
       from: "alice@customer.example",
@@ -212,9 +252,12 @@ defmodule Custyard.EmailSetupTest do
       metadata: %{authentication: %{"dkim" => "pass", "dmarc" => "pass"}}
     }
 
-    assert {:ok, conversation} = Dispatcher.dispatch(route, normalized)
+    channel =
+      insert_inbound_channel(tenant_id: c.tenant.id, inbound_route_id: route.id, state: :active)
+
+    assert {:ok, thread} = Dispatcher.dispatch(route, normalized, channel: channel)
     assert_receive {:new_message, id}, 1_000
-    assert id == conversation.id
+    assert id == thread.id
 
     notification = Enum.find(route.webhooks, &(&1.purpose == :notification))
     {:ok, _} = Custyard.InboundRoutes.disable_webhook(notification)
@@ -273,7 +316,8 @@ defmodule Custyard.EmailSetupTest do
     assert {:ok, _} = EmailSetup.set_default_channel(c.admin, c.tenant.id, to_string(second.id))
     assert {:ok, %{id: id}} = EmailSetup.default_reply_channel(c.tenant.id)
     assert id == second.id
-    foreign = reply_channel(1, "foreign@example.com")
+    other_tenant = insert_tenant()
+    foreign = reply_channel(other_tenant.id, "foreign@example.com")
 
     assert {:error, :no_default_channel} =
              EmailSetup.set_default_channel(c.admin, c.tenant.id, foreign.id)
@@ -290,15 +334,39 @@ defmodule Custyard.EmailSetupTest do
     assert {:ok, %{project_id: "project-1"}} = save(c)
   end
 
+  test "choosing or resaving a portal reply default preserves observed mail delivery", c do
+    {:ok, connection} = save(c)
+    first = reply_channel(c.tenant.id, "support@example.com")
+    second = reply_channel(c.tenant.id, "billing@example.com")
+    observed = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    connection =
+      Repo.update!(
+        Ecto.Changeset.change(connection,
+          last_signed_inbound_at: observed,
+          last_reply_accepted_at: observed,
+          last_reply_delivered_at: observed,
+          last_returning_reply_at: observed
+        )
+      )
+
+    for id <- [first.id, first.id, second.id, nil] do
+      assert {:ok, current} = EmailSetup.set_default_channel(c.admin, c.tenant.id, id)
+      assert current.default_channel_id == id
+      assert EmailSetup.summary(c.tenant.id).complete?
+      assert current.reply_evidence_after_message_id == connection.reply_evidence_after_message_id
+    end
+  end
+
   test "changing a legacy sender records the evidence boundary before the wizard is opened", c do
     channel = reply_channel(c.tenant.id, "legacy-support@example.com")
     customer = insert_organization(tenant_id: c.tenant.id)
-    conversation = insert_conversation(organization_id: customer.id)
+    thread = insert_thread(organization_id: customer.id)
 
     old_reply =
       insert_message(
-        conversation_id: conversation.id,
-        source: :operator,
+        thread_id: thread.id,
+        source: :staff,
         delivery_status: :sent,
         lettermint_message_id: "old-legacy-reply"
       )
@@ -307,7 +375,7 @@ defmodule Custyard.EmailSetupTest do
 
     assert {:ok, _} =
              Custyard.InboundChannels.update_channel(channel, %{reply_from: :ingress_address},
-               operator: c.admin
+               staff: c.admin
              )
 
     assert EmailSetup.connection(c.tenant.id).reply_evidence_after_message_id >= old_reply.id
@@ -347,7 +415,7 @@ defmodule Custyard.EmailSetupTest do
     {:ok, connection} = save(c)
 
     fixture(:webhook, fn ->
-      Repo.update!(Custyard.OperatorAccount.role_changeset(c.admin, %{role: "agent"}))
+      Repo.update!(Custyard.StaffAccount.role_changeset(c.admin, %{role: "agent"}))
 
       {:ok,
        webhook(%{
@@ -370,7 +438,7 @@ defmodule Custyard.EmailSetupTest do
 
     Repo.update!(
       Ecto.Changeset.change(c.admin,
-        session_claim: Custyard.OperatorAccount.generate_session_claim()
+        session_claim: Custyard.StaffAccount.generate_session_claim()
       )
     )
 

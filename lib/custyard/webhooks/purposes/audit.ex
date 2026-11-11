@@ -16,21 +16,22 @@ defmodule Custyard.Webhooks.Purposes.Audit do
 
   Persists the event to the database and logs to Logger for real-time visibility.
   """
-  def process(conversation, normalized, route_context) do
+  def process(thread, normalized, route_context) do
     attrs = %{
-      conversation_id: conversation.id,
+      tenant_id: thread.tenant_id,
+      thread_id: thread.id,
       event_type: :webhook_received,
       source: to_string(normalized[:source] || "unknown"),
       message_id: normalized[:message_id],
       payload: build_payload(normalized),
-      organization_id: route_context[:organization_id],
-      project_id: route_context[:project_id]
+      organization_id: thread.organization_id,
+      project_id: thread.project_id
     }
 
     case AuditEvent.create(attrs) do
       {:ok, _event} ->
         Log.info(:webhook_audit_recorded,
-          conversation_id: conversation.id,
+          thread_id: thread.id,
           organization_id: route_context[:organization_id],
           project_id: route_context[:project_id]
         )
@@ -40,7 +41,7 @@ defmodule Custyard.Webhooks.Purposes.Audit do
       {:error, changeset} ->
         Log.error(
           :webhook_audit_record_failed,
-          [conversation_id: conversation.id] ++ Log.failure(changeset)
+          [thread_id: thread.id] ++ Log.failure(changeset)
         )
 
         # Still return :ok to avoid blocking the webhook pipeline
@@ -48,7 +49,7 @@ defmodule Custyard.Webhooks.Purposes.Audit do
     end
   rescue
     error ->
-      Log.error(:webhook_audit_failed, [conversation_id: conversation.id] ++ Log.failure(error))
+      Log.error(:webhook_audit_failed, [thread_id: thread.id] ++ Log.failure(error))
 
       :ok
   end

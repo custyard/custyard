@@ -8,7 +8,7 @@ defmodule CustyardWeb.Plugs.BootGateTest do
 
   @partial_env %{
     "SECRET_KEY_BASE" => @canary,
-    "OPERATOR_EMAIL" => "ops-" <> @canary <> "@example.com",
+    "INSTANCE_ADMIN_EMAIL" => "ops-" <> @canary <> "@example.com",
     "LETTERMINT_PROJECT_TOKEN" => "lm_" <> @canary,
     "MAIL_ADAPTOR" => "lettermint",
     "CREDENTIAL_ENCRYPTION_KEY" => "\"" <> @canary <> "\""
@@ -94,12 +94,12 @@ defmodule CustyardWeb.Plugs.BootGateTest do
 
     test "with zero variables the paste block has every required line", %{conn: conn} do
       unconfigured(%{})
-      body = html_response(get(conn, "/operator/login"), 503)
+      body = html_response(get(conn, "/admin/login"), 503)
 
       assert body =~ "SECRET_KEY_BASE="
       assert body =~ "CREDENTIAL_ENCRYPTION_KEY="
       assert body =~ "PHX_HOST=‹custyard.example.com›"
-      assert body =~ "OPERATOR_EMAIL=‹you@example.com›"
+      assert body =~ "INSTANCE_ADMIN_EMAIL=‹you@example.com›"
       assert body =~ "LETTERMINT_PROJECT_TOKEN=‹project token›"
       assert body =~ "0 variables visible · 0 of them Custyard settings"
       assert body =~ "Docker:"
@@ -218,7 +218,7 @@ defmodule CustyardWeb.Plugs.BootGateTest do
     setup do
       set_mode(:first_run)
       State.put_step(:schema, :ok, "41 migrations applied in 2.1 s")
-      State.put_step(:operator, :skipped, "OPERATOR_EMAIL is not set")
+      State.put_step(:instance_admin, :skipped, "INSTANCE_ADMIN_EMAIL is not set")
       State.put_step(:mail, :failed, "lettermint rejected the message (422: sender not verified)")
       :ok
     end
@@ -230,7 +230,7 @@ defmodule CustyardWeb.Plugs.BootGateTest do
       assert body =~ "Setting up Custyard"
       assert body =~ "Database schema"
       assert body =~ "41 migrations applied in 2.1 s"
-      assert body =~ "bin/operator add you@example.com"
+      assert body =~ "bin/instance-admin add you@example.com"
       assert body =~ "Login links will fail the same way"
       assert body =~ "422: sender not verified"
       assert body =~ "This page refreshes itself."
@@ -246,25 +246,25 @@ defmodule CustyardWeb.Plugs.BootGateTest do
           | first_run: %{
               state.first_run
               | completed_at: DateTime.utc_now(),
-                operator_email: "you@example.com"
+                instance_admin_email: "you@example.com"
             }
         }
       end)
 
-      State.put_step(:operator, :ok, "you@example.com (super_admin), from OPERATOR_EMAIL")
+      State.put_step(:instance_admin, :ok, "you@example.com, from INSTANCE_ADMIN_EMAIL")
       State.put_step(:mail, :ok, "welcome mail accepted by lettermint")
       State.put_step(:sign_in, :pending)
 
       body = html_response(get(conn, "/"), 200)
-      assert body =~ ~s(href="/operator/login")
+      assert body =~ ~s(href="/admin/login")
       assert body =~ "you@example.com"
-      assert body =~ "remove <code>OPERATOR_EMAIL</code>"
+      assert body =~ "remove <code>INSTANCE_ADMIN_EMAIL</code>"
     end
 
     test "everything else is the live app", %{conn: conn} do
-      conn = get(conn, "/operator/login")
+      conn = get(conn, "/app/login")
 
-      assert html_response(conn, 200) =~ "Operator Login"
+      assert html_response(conn, 200) =~ ~s(name="email")
       refute conn.resp_body =~ "Setting up Custyard"
 
       assert json_response(get(build_conn(), "/api/health/live"), 200) == %{"status" => "live"}
@@ -298,18 +298,18 @@ defmodule CustyardWeb.Plugs.BootGateTest do
           | first_run: %{
               state.first_run
               | completed_at: DateTime.utc_now(),
-                operator_email: "you@example.com"
+                instance_admin_email: "you@example.com"
             }
         }
       end)
 
-      State.put_step(:sign_in, :ok, "an operator can sign in")
+      State.put_step(:sign_in, :ok, "an instance administrator can sign in")
 
       body = html_response(get(conn, "/"), 200)
       assert body =~ "Setting up Custyard"
-      assert body =~ ~s(href="/operator/login")
+      assert body =~ ~s(href="/admin/login")
 
-      assert html_response(get(build_conn(), "/operator/login"), 200) =~ "Operator Login"
+      assert html_response(get(build_conn(), "/app/login"), 200) =~ ~s(name="email")
     end
   end
 end

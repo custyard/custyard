@@ -28,7 +28,6 @@
     "MAIL_ADAPTER": "lettermint",
     "EMAIL_FROM_ADDRESS": "<verified-installation-sender>",
     "EMAIL_NOTIFICATIONS_ENABLED": "false",
-    "ACKNOWLEDGMENTS_ENABLED": "false",
     "LMTP_ENABLED": "false",
     "SENTRY_ENVIRONMENT": "production"
   },
@@ -41,10 +40,9 @@
     "LETTERMINT_PROJECT_TOKEN"
   ],
   "optional_protected_environment_names": [
-    "LETTERMINT_TEAM_TOKEN",
     "SENTRY_DSN"
   ],
-  "one_time_bootstrap_environment": ["OPERATOR_EMAIL"],
+  "one_time_bootstrap_environment": ["INSTANCE_ADMIN_EMAIL"],
   "health_checks": {
     "startup": {"method": "GET", "port": 4000, "path": "/api/health/live"},
     "readiness": {"method": "GET", "port": 4000, "path": "/api/health/live"}

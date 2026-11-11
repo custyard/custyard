@@ -18,7 +18,7 @@ defmodule Custyard.Application do
       to the running supervisor one at a time, in the order
       `deferred_children/1` lists them. `Custyard.Boot.FirstRun`, which comes
       after the Repo, PubSub and the HTTP client, moves the mode out of
-      `:starting` as its first step and then finishes the operator and mail
+      `:starting` as its first step and then finishes the administrator and mail
       steps.
     * When they fail, `Custyard.Boot.Monitor` is added instead; it exits the
       VM once the database answers.
@@ -30,18 +30,14 @@ defmodule Custyard.Application do
 
   Development and test have no `:boot_env`: they start the full tree in one
   `Supervisor.start_link`, in the order they always have (Endpoint after the
-  Repo and PubSub), and development creates its placeholder operator.
+  Repo and PubSub), and development provisions `INSTANCE_ADMIN_EMAIL` when set.
   """
 
   use Application
 
   require Custyard.Log, as: Log
 
-  alias Custyard.Acknowledgments.Config, as: AcknowledgmentsConfig
-  alias Custyard.Acknowledgments.Consumer, as: AcknowledgmentsConsumer
   alias Custyard.Boot.{Build, Console, Env, FirstRun, Monitor, Probe, Report, State}
-
-  @default_operator_email "admin@custyard.local"
 
   @impl true
   def start(_type, _args) do
@@ -59,12 +55,24 @@ defmodule Custyard.Application do
     end
   end
 
-  # Dev and test: today's tree, and the dev operator after it is up.
+  # Dev and test: today's tree. Development also provisions the instance
+  # administrator named by INSTANCE_ADMIN_EMAIL once the tree is up; in
+  # production Custyard.Boot.FirstRun does it.
   defp start_without_verdict do
     result = supervise(full_children([]))
 
-    if Application.get_env(:custyard, :env) == :dev do
-      Task.start(Log.task(fn -> setup_dev_operator() end))
+    case {result, Application.get_env(:custyard, :env), System.get_env("INSTANCE_ADMIN_EMAIL")} do
+      {{:ok, _}, env, email} when env != :test and is_binary(email) and email != "" ->
+        case Custyard.InstanceAdmins.create_admin(email) do
+          {status, _admin} when status in [:created, :exists] ->
+            :ok
+
+          {:error, changeset} ->
+            raise "Invalid INSTANCE_ADMIN_EMAIL: #{inspect(changeset.errors)}"
+        end
+
+      _ ->
+        :ok
     end
 
     result
@@ -240,16 +248,13 @@ defmodule Custyard.Application do
     end
   end
 
-  # Decided here rather than in config/runtime.exs, so release commands such as
-  # bin/operator still boot when acknowledgment configuration is incomplete.
-  # Incomplete or invalid configuration raises (without values) and the
-  # application refuses to start. The consumer loads its configuration itself:
-  # a child spec carrying the URL would put the password in supervisor reports.
+  # Consumers load credentials themselves, so supervisor reports never carry
+  # broker passwords. Invalid configuration and exhausted restart budgets are
+  # isolated to the affected tenant subscription.
   defp maybe_add_acknowledgment_consumer(children) do
-    case AcknowledgmentsConfig.startup() do
-      :enabled -> children ++ [AcknowledgmentsConsumer]
-      _ -> children
-    end
+    if Application.get_env(:custyard, :env) == :test,
+      do: children,
+      else: children ++ [Custyard.Acknowledgments.Subscriptions]
   end
 
   # Public-intake background sweeps (expired slug claims, retention bounds).
@@ -257,7 +262,7 @@ defmodule Custyard.Application do
   # directly with an injected clock or explicit options.
   defp maybe_add_intake_sweeps(children) do
     if Application.get_env(:custyard, :start_intake_sweeps, true) do
-      children ++ [Custyard.Slugs.ClaimExpiry, Custyard.Conversations.RetentionSweep]
+      children ++ [Custyard.Slugs.ClaimExpiry, Custyard.Threads.RetentionSweep]
     else
       children
     end
@@ -310,52 +315,5 @@ defmodule Custyard.Application do
   def config_change(changed, _new, removed) do
     CustyardWeb.Endpoint.config_change(changed, removed)
     :ok
-  end
-
-  defp setup_dev_operator do
-    # Wait for Repo with exponential backoff instead of fixed sleep
-    wait_for_repo(5, 100)
-    do_setup_dev_operator()
-  rescue
-    e ->
-      Log.warning(:dev_operator_setup_failed, Log.failure(e))
-  end
-
-  # Poll for Repo availability with exponential backoff
-  # max_attempts=5, initial_delay_ms=100 gives delays: 100, 200, 400, 800, 1600 = ~3s total
-  defp wait_for_repo(0, _delay_ms), do: :ok
-
-  defp wait_for_repo(attempts_remaining, delay_ms) do
-    if repo_ready?() do
-      :ok
-    else
-      Process.sleep(delay_ms)
-      wait_for_repo(attempts_remaining - 1, delay_ms * 2)
-    end
-  end
-
-  defp repo_ready? do
-    alias Custyard.Repo
-    # Try a simple query - if it succeeds, Repo is ready
-    Repo.query("SELECT 1")
-    true
-  rescue
-    _ -> false
-  end
-
-  defp do_setup_dev_operator do
-    case Custyard.OperatorAccounts.create_operator(@default_operator_email,
-           via: "boot",
-           allow_placeholder: true
-         ) do
-      {:created, operator} ->
-        Log.info(:dev_operator_created, operator_id: operator.id, mode: :development)
-
-      {:exists, operator} ->
-        Log.debug(:dev_operator_exists, operator_id: operator.id, mode: :development)
-
-      {:error, reason} ->
-        Log.warning(:dev_operator_setup_failed, Log.failure(reason))
-    end
   end
 end

@@ -1,7 +1,7 @@
 defmodule CustyardWeb.BootComponents do
   @moduledoc """
   Function components and formatting helpers shared by the doctor cards
-  (`CustyardWeb.BootHTML`) and `/operator/system`.
+  (`CustyardWeb.BootHTML`) and `/admin/system`.
 
   Everything here renders from a `Custyard.Boot.State`; nothing touches the
   Repo, the session or the request, so the doctor cards can be served before
@@ -16,7 +16,7 @@ defmodule CustyardWeb.BootComponents do
 
   @step_labels %{
     schema: "Database schema",
-    operator: "Operator account",
+    instance_admin: "Instance administrator",
     mail: "Outbound mail",
     sign_in: "Sign in"
   }
@@ -179,7 +179,7 @@ defmodule CustyardWeb.BootComponents do
 
   @doc """
   Footer database line: kind, the reason it was chosen, and the probe's
-  facts (mount, file, migrations, operators) when known.
+  facts (mount, file, migrations, instance administrators) when known.
   """
   @spec database_line(State.t()) :: String.t()
   def database_line(%State{} = state) do
@@ -195,7 +195,7 @@ defmodule CustyardWeb.BootComponents do
       fact(facts, :mounted?, "/data is a mount", "/data is not a mount"),
       fact(facts, :file_exists?, "file exists", "file does not exist yet"),
       count(facts, :migrations, "migration"),
-      count(facts, :operators, "operator account")
+      count(facts, :instance_admins, "instance administrator")
     ]
   end
 

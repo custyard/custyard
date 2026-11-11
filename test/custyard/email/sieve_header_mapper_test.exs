@@ -1,6 +1,14 @@
 defmodule Custyard.Email.SieveHeaderMapperTest do
   use Custyard.DataCase, async: true
 
+  setup do
+    tenant = Custyard.Factory.insert_tenant()
+    Process.put(:sieve_tenant_id, tenant.id)
+    :ok
+  end
+
+  defp tenant_id, do: Process.get(:sieve_tenant_id)
+
   alias Custyard.Email.SieveHeaderMapper
   alias Custyard.Settings
 
@@ -8,10 +16,10 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
     setup do
       # Ensure Settings singleton exists with sieve_header_mappings configured
       # Settings.get/0 creates defaults if none exist
-      _settings = Settings.get()
+      _settings = Settings.get(tenant_id())
 
       {:ok, _} =
-        Settings.update_sieve_header_mappings(%{
+        Settings.update_sieve_header_mappings(Custyard.Factory.staff_scope(tenant_id()), %{
           "X-Customer-Tier" => %{
             "property" => "tier",
             "mapping" => %{
@@ -36,7 +44,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
     test "extracts urgency from header" do
       headers = %{"X-Priority" => "high"}
 
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{urgency: :urgent}
     end
@@ -44,7 +52,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
     test "extracts tier from header" do
       headers = %{"X-Customer-Tier" => "ent"}
 
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{tier: :enterprise}
     end
@@ -55,7 +63,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
         "X-Priority" => "medium"
       }
 
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{tier: :standard, urgency: :elevated}
     end
@@ -65,7 +73,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
       # The value "high" should still map to "urgent"
       headers = %{"x-priority" => "high"}
 
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{urgency: :urgent}
     end
@@ -73,7 +81,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
     test "case-insensitive value lookup" do
       headers = %{"X-Priority" => "HIGH"}
 
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{urgency: :urgent}
     end
@@ -81,7 +89,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
     test "ignores unmapped header values" do
       headers = %{"X-Priority" => "unknown_priority"}
 
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{}
     end
@@ -89,14 +97,14 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
     test "ignores headers not in configuration" do
       headers = %{"X-Unknown-Header" => "some-value"}
 
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{}
     end
 
     test "returns empty map for non-map input" do
-      assert SieveHeaderMapper.extract_properties(nil) == %{}
-      assert SieveHeaderMapper.extract_properties("not a map") == %{}
+      assert SieveHeaderMapper.extract_properties(nil, tenant_id()) == %{}
+      assert SieveHeaderMapper.extract_properties("not a map", tenant_id()) == %{}
     end
 
     test "ignores unknown property names in config" do
@@ -107,7 +115,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
       # @valid_sieve_properties ~w(tier urgency queue), so we need to test with a valid
       # sieve property that the mapper ignores (like "queue" which is reserved for future).
       {:ok, _} =
-        Settings.update_sieve_header_mappings(%{
+        Settings.update_sieve_header_mappings(Custyard.Factory.staff_scope(tenant_id()), %{
           "X-Queue" => %{
             "property" => "queue",
             "mapping" => %{"support" => "support-queue"}
@@ -117,7 +125,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
       headers = %{"X-Queue" => "support"}
 
       # Should silently ignore the "queue" property since it's not in mapper's @valid_properties
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{}
     end
@@ -127,7 +135,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
 
       # Even if mapped, invalid values are rejected
       {:ok, _} =
-        Settings.update_sieve_header_mappings(%{
+        Settings.update_sieve_header_mappings(Custyard.Factory.staff_scope(tenant_id()), %{
           "X-Priority" => %{
             "property" => "urgency",
             "mapping" => %{
@@ -136,7 +144,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
           }
         })
 
-      result = SieveHeaderMapper.extract_properties(headers)
+      result = SieveHeaderMapper.extract_properties(headers, tenant_id())
 
       assert result == %{}
     end
@@ -144,10 +152,10 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
 
   describe "merge_overrides/2" do
     setup do
-      _settings = Settings.get()
+      _settings = Settings.get(tenant_id())
 
       {:ok, _} =
-        Settings.update_sieve_header_mappings(%{
+        Settings.update_sieve_header_mappings(Custyard.Factory.staff_scope(tenant_id()), %{
           "X-Priority" => %{
             "property" => "urgency",
             "mapping" => %{"high" => "urgent"}
@@ -161,7 +169,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
       attrs = %{subject: "Test", urgency: :normal}
       headers = %{"X-Priority" => "high"}
 
-      result = SieveHeaderMapper.merge_overrides(attrs, headers)
+      result = SieveHeaderMapper.merge_overrides(attrs, headers, tenant_id())
 
       assert result.urgency == :urgent
       assert result.subject == "Test"
@@ -171,7 +179,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
       attrs = %{subject: "Test", urgency: :normal}
       headers = %{}
 
-      result = SieveHeaderMapper.merge_overrides(attrs, headers)
+      result = SieveHeaderMapper.merge_overrides(attrs, headers, tenant_id())
 
       assert result == attrs
     end
@@ -180,7 +188,7 @@ defmodule Custyard.Email.SieveHeaderMapperTest do
       attrs = %{subject: "Test", urgency: :normal}
       headers = %{"X-Priority" => "unknown"}
 
-      result = SieveHeaderMapper.merge_overrides(attrs, headers)
+      result = SieveHeaderMapper.merge_overrides(attrs, headers, tenant_id())
 
       assert result.urgency == :normal
     end

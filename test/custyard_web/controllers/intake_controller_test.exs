@@ -6,7 +6,7 @@ defmodule CustyardWeb.IntakeControllerTest do
   import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias Custyard.{Conversation, Message, OperatorAccount, Prospect, RateLimit, Repo}
+  alias Custyard.{Thread, Message, StaffAccount, Prospect, RateLimit, Repo}
 
   # The exact CSP the :browser pipeline ships today — the public surface must
   # not weaken or change it (bundled app.js/app.css only, no inline scripts).
@@ -30,10 +30,11 @@ defmodule CustyardWeb.IntakeControllerTest do
 
   defp put_buckets(overrides \\ []) do
     base = [
+      public_instance_ip: @generous,
       intake_get: @generous,
       intake_post: @generous,
-      conversation_mount: @generous,
-      conversation_reply: @generous,
+      thread_mount: @generous,
+      thread_reply: @generous,
       email_capture: @generous,
       claim_submit: @generous,
       claim_confirm: @generous,
@@ -45,18 +46,26 @@ defmodule CustyardWeb.IntakeControllerTest do
     Application.put_env(:custyard, :rate_limit_buckets, Keyword.merge(base, overrides))
   end
 
-  # Both intake emails — the operator arrival notification and the prospect
+  # Both intake emails — the staff arrival notification and the prospect
   # receipt — are gated by :email_enabled, which is off by default in test.
   defp enable_email! do
     original_enabled = Application.get_env(:custyard, :email_enabled)
-    original_operator = Application.get_env(:custyard, :operator_email)
+    original_staff = Application.get_env(:custyard, :staff_email)
 
     Application.put_env(:custyard, :email_enabled, true)
-    Application.put_env(:custyard, :operator_email, "ops@example.com")
+    configure_tenant_email(factory_tenant_id())
+
+    unless Repo.get_by(StaffAccount, tenant_id: factory_tenant_id(), email: "ops@example.com") do
+      insert_staff_account(
+        tenant_id: factory_tenant_id(),
+        email: "ops@example.com",
+        role: "admin"
+      )
+    end
 
     on_exit(fn ->
       restore_env(:email_enabled, original_enabled)
-      restore_env(:operator_email, original_operator)
+      restore_env(:staff_email, original_staff)
     end)
   end
 
@@ -88,7 +97,7 @@ defmodule CustyardWeb.IntakeControllerTest do
 
   defp row_counts do
     %{
-      conversations: Repo.aggregate(Conversation, :count),
+      threads: Repo.aggregate(Thread, :count),
       messages: Repo.aggregate(Message, :count),
       prospects: Repo.aggregate(Prospect, :count)
     }
@@ -98,27 +107,27 @@ defmodule CustyardWeb.IntakeControllerTest do
     test "renders the message form with the optional email field", %{conn: conn} do
       source = insert_intake_source(mode: :active, headline: "Join the waitlist")
 
-      conn = get(conn, ~p"/i/#{source.key}")
+      conn = get(conn, ~p"/intake/#{source.key}")
       html = html_response(conn, 200)
 
       assert html =~ ~s(data-testid="intake-active")
       assert html =~ "Join the waitlist"
       assert html =~ ~s(name="submission[body]")
       # Without this the default mode collects no contact information at
-      # all, and a prospect who loses the conversation cookie is
+      # all, and a prospect who loses the thread cookie is
       # unreachable forever.
       assert html =~ ~s(name="submission[email]")
       assert html =~ ~s(name="submission[notify]")
     end
 
-    test "renders operator instance branding with Custyard fallback", %{conn: conn} do
+    test "renders tenant workspace branding", %{conn: conn} do
       source = insert_intake_source(mode: :active)
 
-      html = conn |> get(~p"/i/#{source.key}") |> html_response(200)
+      html = conn |> get(~p"/intake/#{source.key}") |> html_response(200)
 
       assert html =~ ~s(data-testid="intake-instance-name")
-      assert html =~ "Custyard"
-      # No operator or portal chrome on the intake layout
+      assert html =~ "Tenant"
+      # No staff or portal chrome on the intake layout
       refute html =~ ~s(data-testid="layout-header")
       refute html =~ ~s(data-testid="portal-layout")
     end
@@ -126,14 +135,14 @@ defmodule CustyardWeb.IntakeControllerTest do
     test "sends Referrer-Policy: no-referrer and leaves the CSP unchanged", %{conn: conn} do
       source = insert_intake_source(mode: :active)
 
-      conn = get(conn, ~p"/i/#{source.key}")
+      conn = get(conn, ~p"/intake/#{source.key}")
 
       assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
       assert get_resp_header(conn, "content-security-policy") == [@csp]
     end
 
     test "unknown key renders the standard 404", %{conn: conn} do
-      conn = get(conn, ~p"/i/nope-never-configured")
+      conn = get(conn, ~p"/intake/nope-never-configured")
 
       assert conn.status == 404
       assert conn.resp_body =~ ~s(data-testid="error-404")
@@ -142,7 +151,7 @@ defmodule CustyardWeb.IntakeControllerTest do
     test "disabled key renders the standard 404", %{conn: conn} do
       source = insert_intake_source(enabled: false)
 
-      conn = get(conn, ~p"/i/#{source.key}")
+      conn = get(conn, ~p"/intake/#{source.key}")
 
       assert conn.status == 404
       assert conn.resp_body =~ ~s(data-testid="error-404")
@@ -163,7 +172,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           questions: [%{"question" => "Is there a trial?", "answer" => "Yes, 30 days."}]
         )
 
-      html = conn |> get(~p"/i/#{source.key}") |> html_response(200)
+      html = conn |> get(~p"/intake/#{source.key}") |> html_response(200)
 
       assert html =~ ~s(data-testid="intake-passive")
       assert html =~ "Curious about pricing?"
@@ -173,14 +182,14 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert html =~ ~s(name="submission[email]")
       assert html =~ ~s(name="submission[notify]")
       assert html =~ ~s(data-testid="intake-active-link")
-      assert html =~ ~p"/i/#{active.key}"
+      assert html =~ ~p"/intake/#{active.key}"
     end
 
     test "omits the active-flow link when no enabled active source exists", %{conn: conn} do
       insert_intake_source(mode: :active, enabled: false)
       source = insert_intake_source(mode: :passive)
 
-      html = conn |> get(~p"/i/#{source.key}") |> html_response(200)
+      html = conn |> get(~p"/intake/#{source.key}") |> html_response(200)
 
       refute html =~ ~s(data-testid="intake-active-link")
     end
@@ -193,7 +202,7 @@ defmodule CustyardWeb.IntakeControllerTest do
         )
 
       before = row_counts()
-      conn = get(conn, ~p"/i/#{source.key}")
+      conn = get(conn, ~p"/intake/#{source.key}")
 
       assert html_response(conn, 200)
       assert row_counts() == before
@@ -212,7 +221,7 @@ defmodule CustyardWeb.IntakeControllerTest do
             link_url: "https://acme.example/product"
           )
 
-        html = conn |> get(~p"/i/#{source.key}") |> html_response(200)
+        html = conn |> get(~p"/intake/#{source.key}") |> html_response(200)
 
         assert html =~ ~s(data-testid="intake-source-link")
         assert html =~ ~s(href="https://acme.example/product")
@@ -230,7 +239,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           ] do
         source = insert_intake_source(Keyword.merge([mode: :active], overrides))
 
-        html = conn |> get(~p"/i/#{source.key}") |> html_response(200)
+        html = conn |> get(~p"/intake/#{source.key}") |> html_response(200)
 
         refute html =~ ~s(data-testid="intake-source-link"),
                "expected no link for #{inspect(overrides)}"
@@ -239,26 +248,26 @@ defmodule CustyardWeb.IntakeControllerTest do
   end
 
   describe "POST /i/:source_key" do
-    test "anonymous submit creates the conversation and redirects to the conversation URL", %{
+    test "anonymous submit creates the thread and redirects to the thread URL", %{
       conn: conn
     } do
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{
+        post(conn, ~p"/intake/#{source.key}", %{
           "submission" => %{"body" => "Hello, I want to join the waitlist"}
         })
 
-      assert "/c/" <> token = redirected_to(conn)
+      assert "/threads/" <> token = redirected_to(conn)
       assert byte_size(token) > 40
 
-      conversation = Repo.one!(Conversation)
-      assert conversation.source == :public_intake
-      assert conversation.intake_source_key == source.key
-      assert conversation.organization_id == nil
-      assert conversation.contact_id == nil
-      assert conversation.subject == "Hello, I want to join the waitlist"
-      assert conversation.cached_score > 0
+      thread = Repo.one!(Thread)
+      assert thread.source == :public_intake
+      assert thread.intake_source_key == source.key
+      assert thread.organization_id == nil
+      assert thread.contact_id == nil
+      assert thread.subject == "Hello, I want to join the waitlist"
+      assert thread.cached_score > 0
 
       message = Repo.one!(Message)
       assert message.source == :prospect
@@ -268,44 +277,49 @@ defmodule CustyardWeb.IntakeControllerTest do
       refute message.is_internal_note
 
       prospect = Repo.one!(Prospect)
-      assert prospect.conversation_id == conversation.id
+      assert prospect.thread_id == thread.id
       assert prospect.email == nil
     end
 
-    test "the submission appears in the operator queue with intake tag and no-reply badge", %{
+    test "the submission appears in the staff queue with intake tag and no-reply badge", %{
       conn: conn
     } do
       source = insert_intake_source(mode: :active)
 
-      post(conn, ~p"/i/#{source.key}", %{
+      post(conn, ~p"/intake/#{source.key}", %{
         "submission" => %{"body" => "Queue me up please"}
       })
 
-      operator =
-        %OperatorAccount{}
-        |> OperatorAccount.changeset(%{email: "queue-op@example.com", password: "password123"})
+      staff =
+        %StaffAccount{}
+        |> StaffAccount.changeset(%{
+          role: "admin",
+          tenant_id: Process.get(:factory_tenant_id),
+          email: "queue-op@example.com",
+          password: "password123"
+        })
         |> Repo.insert!()
 
-      operator_conn =
+      staff_conn =
         Phoenix.ConnTest.build_conn()
         |> Phoenix.ConnTest.init_test_session(%{})
-        |> put_operator_session(operator.id)
+        |> put_staff_session(staff.id)
 
-      {:ok, _view, html} = live(operator_conn, ~p"/operator")
+      {:ok, _view, html} = live(staff_conn, ~p"/app")
 
       assert html =~ "Queue me up please"
       assert html =~ ~s(data-testid="intake-source-tag")
       assert html =~ ~s(data-testid="no-reply-channel-badge")
     end
 
-    test "sets the signed conversation cookie with the canonical attributes", %{conn: conn} do
+    test "sets the signed thread cookie with the canonical attributes", %{conn: conn} do
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Cookie please"}})
+        post(conn, ~p"/intake/#{source.key}", %{"submission" => %{"body" => "Cookie please"}})
 
-      assert "/c/" <> token = redirected_to(conn)
-      assert %{} = cookie = conn.resp_cookies["_custyard_conversation"]
+      assert "/threads/" <> token = redirected_to(conn)
+      assert %{} = cookie = conn.resp_cookies["_custyard_thread"]
       assert cookie.http_only
       assert cookie.same_site == "Lax"
       assert cookie.max_age == 31_536_000
@@ -317,19 +331,19 @@ defmodule CustyardWeb.IntakeControllerTest do
       refute cookie[:secure]
     end
 
-    test "the conversation redirect target renders the thread on a fresh session", %{conn: conn} do
+    test "the thread redirect target renders the thread on a fresh session", %{conn: conn} do
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "See you there"}})
+        post(conn, ~p"/intake/#{source.key}", %{"submission" => %{"body" => "See you there"}})
 
-      conversation_path = redirected_to(conn)
+      thread_path = redirected_to(conn)
 
       # Cookie-less fresh browser: the URL alone is the credential.
       fresh = Phoenix.ConnTest.build_conn()
-      html = fresh |> get(conversation_path) |> html_response(200)
+      html = fresh |> get(thread_path) |> html_response(200)
 
-      assert html =~ ~s(data-testid="resume-conversation")
+      assert html =~ ~s(data-testid="resume-thread")
       assert html =~ "See you there"
     end
 
@@ -338,12 +352,12 @@ defmodule CustyardWeb.IntakeControllerTest do
     } do
       source = insert_intake_source(mode: :active)
 
-      conn = post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "   \n  "}})
+      conn = post(conn, ~p"/intake/#{source.key}", %{"submission" => %{"body" => "   \n  "}})
       html = html_response(conn, 422)
 
       assert html =~ ~s(data-testid="form-error")
       assert html =~ "blank"
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
     test "non-binary body params get a structured 4xx, never a 500", %{conn: conn} do
@@ -355,51 +369,53 @@ defmodule CustyardWeb.IntakeControllerTest do
             %{"submission" => "not-a-map"},
             %{}
           ] do
-        conn = post(conn, ~p"/i/#{source.key}", params)
+        conn = post(conn, ~p"/intake/#{source.key}", params)
         assert conn.status == 422
         assert conn.resp_body =~ ~s(data-testid="form-error")
       end
 
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
     test "oversized body gets a structured 4xx and creates nothing", %{conn: conn} do
       source = insert_intake_source(mode: :active)
       oversized = String.duplicate("a", 100_001)
 
-      conn = post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => oversized}})
+      conn = post(conn, ~p"/intake/#{source.key}", %{"submission" => %{"body" => oversized}})
 
       assert html_response(conn, 422) =~ "too long"
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
     test "unknown key 404s without creating anything", %{conn: conn} do
-      conn = post(conn, ~p"/i/never-was", %{"submission" => %{"body" => "Hi"}})
+      conn = post(conn, ~p"/intake/never-was", %{"submission" => %{"body" => "Hi"}})
 
       assert conn.status == 404
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
     test "passive submission gets the same treatment as active", %{conn: conn} do
       source = insert_intake_source(mode: :passive)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Passive but serious"}})
+        post(conn, ~p"/intake/#{source.key}", %{
+          "submission" => %{"body" => "Passive but serious"}
+        })
 
-      assert "/c/" <> _token = redirected_to(conn)
+      assert "/threads/" <> _token = redirected_to(conn)
 
-      conversation = Repo.one!(Conversation)
-      assert conversation.source == :public_intake
-      assert conversation.intake_source_key == source.key
-      assert conversation.cached_score > 0
-      assert Repo.one!(Prospect).conversation_id == conversation.id
+      thread = Repo.one!(Thread)
+      assert thread.source == :public_intake
+      assert thread.intake_source_key == source.key
+      assert thread.cached_score > 0
+      assert Repo.one!(Prospect).thread_id == thread.id
     end
 
     test "passive optional email flows into capture with the notify choice", %{conn: conn} do
       source = insert_intake_source(mode: :passive)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{
+        post(conn, ~p"/intake/#{source.key}", %{
           "submission" => %{
             "body" => "Reach me by email",
             "email" => "Prospect@Example.com",
@@ -407,7 +423,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           }
         })
 
-      assert "/c/" <> _token = redirected_to(conn)
+      assert "/threads/" <> _token = redirected_to(conn)
 
       prospect = Repo.one!(Prospect)
       assert prospect.email == "prospect@example.com"
@@ -419,7 +435,7 @@ defmodule CustyardWeb.IntakeControllerTest do
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{
+        post(conn, ~p"/intake/#{source.key}", %{
           "submission" => %{
             "body" => "How much for 50 seats?",
             "email" => "Buyer@Example.com",
@@ -427,7 +443,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           }
         })
 
-      assert "/c/" <> _token = redirected_to(conn)
+      assert "/threads/" <> _token = redirected_to(conn)
 
       prospect = Repo.one!(Prospect)
       assert prospect.email == "buyer@example.com"
@@ -439,30 +455,32 @@ defmodule CustyardWeb.IntakeControllerTest do
       source = insert_intake_source(mode: :active, name: "Pricing CTA")
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{
+        post(conn, ~p"/intake/#{source.key}", %{
           "submission" => %{"body" => "Pricing please", "email" => "buyer@example.com"}
         })
 
-      "/c/" <> token = redirected_to(conn)
-      resume_url = CustyardWeb.Endpoint.url() <> "/c/#{token}"
+      "/threads/" <> token = redirected_to(conn)
+      tenant = Custyard.Tenants.get_tenant!(source.tenant_id)
+      resume_url = Custyard.Tenants.url(tenant) <> "/threads/#{token}"
 
       receipt = email_to("buyer@example.com")
 
       assert receipt
       assert receipt.text_body =~ resume_url
       assert receipt.html_body =~ resume_url
+      refute receipt.text_body =~ CustyardWeb.Endpoint.url() <> "/threads/"
       # The receipt must carry no submitted content.
       refute receipt.text_body =~ "Pricing please"
     end
 
-    # notify_on_reply is consent for operator replies. The receipt is the
+    # notify_on_reply is consent for staff replies. The receipt is the
     # delivery mechanism for the prospect's own access link.
     test "the resume URL is sent even when reply notifications are declined", %{conn: conn} do
       enable_email!()
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{
+        post(conn, ~p"/intake/#{source.key}", %{
           "submission" => %{
             "body" => "No mail please",
             "email" => "quiet@example.com",
@@ -470,7 +488,7 @@ defmodule CustyardWeb.IntakeControllerTest do
           }
         })
 
-      assert "/c/" <> _token = redirected_to(conn)
+      assert "/threads/" <> _token = redirected_to(conn)
       refute Repo.one!(Prospect).notify_on_reply
 
       assert email_to("quiet@example.com")
@@ -481,11 +499,11 @@ defmodule CustyardWeb.IntakeControllerTest do
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Anonymous question"}})
+        post(conn, ~p"/intake/#{source.key}", %{"submission" => %{"body" => "Anonymous question"}})
 
-      assert "/c/" <> _token = redirected_to(conn)
+      assert "/threads/" <> _token = redirected_to(conn)
 
-      # The operator still gets the arrival notification; nobody else does.
+      # The staff still gets the arrival notification; nobody else does.
       assert recipients() == ["ops@example.com"]
     end
 
@@ -494,11 +512,11 @@ defmodule CustyardWeb.IntakeControllerTest do
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{
+        post(conn, ~p"/intake/#{source.key}", %{
           "submission" => %{"body" => "Bad address", "email" => "not-an-email"}
         })
 
-      assert "/c/" <> _token = redirected_to(conn)
+      assert "/threads/" <> _token = redirected_to(conn)
       assert Repo.one!(Prospect).email == nil
 
       # The prospect is told their address was not saved
@@ -511,14 +529,14 @@ defmodule CustyardWeb.IntakeControllerTest do
       source = insert_intake_source(mode: :passive)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{
+        post(conn, ~p"/intake/#{source.key}", %{
           "submission" => %{"body" => "Bad email attached", "email" => "not-an-email"}
         })
 
-      assert "/c/" <> _token = redirected_to(conn)
+      assert "/threads/" <> _token = redirected_to(conn)
 
-      conversation = Repo.one!(Conversation)
-      assert conversation.subject == "Bad email attached"
+      thread = Repo.one!(Thread)
+      assert thread.subject == "Bad email attached"
 
       prospect = Repo.one!(Prospect)
       assert prospect.email == nil
@@ -531,21 +549,21 @@ defmodule CustyardWeb.IntakeControllerTest do
       for n <- 1..2 do
         conn =
           Phoenix.ConnTest.build_conn()
-          |> post(~p"/i/#{source.key}", %{"submission" => %{"body" => "Burst #{n}"}})
+          |> post(~p"/intake/#{source.key}", %{"submission" => %{"body" => "Burst #{n}"}})
 
-        assert "/c/" <> _token = redirected_to(conn)
+        assert "/threads/" <> _token = redirected_to(conn)
       end
 
-      assert Repo.aggregate(Conversation, :count) == 2
+      assert Repo.aggregate(Thread, :count) == 2
 
       denied =
         Phoenix.ConnTest.build_conn()
-        |> post(~p"/i/#{source.key}", %{"submission" => %{"body" => "Burst 3"}})
+        |> post(~p"/intake/#{source.key}", %{"submission" => %{"body" => "Burst 3"}})
 
       assert denied.status == 429
       assert denied.resp_body =~ ~s(data-testid="error-429")
       assert [_retry] = get_resp_header(denied, "retry-after")
-      assert Repo.aggregate(Conversation, :count) == 2
+      assert Repo.aggregate(Thread, :count) == 2
     end
   end
 
@@ -555,7 +573,7 @@ defmodule CustyardWeb.IntakeControllerTest do
 
       events =
         capture_events([:custyard, :intake, :submission], fn ->
-          post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Counted"}})
+          post(conn, ~p"/intake/#{source.key}", %{"submission" => %{"body" => "Counted"}})
         end)
 
       assert [{%{count: 1}, metadata}] = events
@@ -570,7 +588,7 @@ defmodule CustyardWeb.IntakeControllerTest do
 
       events =
         capture_events([:custyard, :intake, :submission], fn ->
-          post(conn, ~p"/i/#{source.key}", %{
+          post(conn, ~p"/intake/#{source.key}", %{
             "submission" => %{
               "body" => "Counted with email",
               "email" => "prospect@example.com",
@@ -588,7 +606,7 @@ defmodule CustyardWeb.IntakeControllerTest do
       {events, records} =
         Custyard.LogCapture.with_json(fn ->
           capture_events([:custyard, :intake, :unknown_source], fn ->
-            rejected = get(conn, ~p"/i/no-such-key")
+            rejected = get(conn, ~p"/intake/no-such-key")
             assert rejected.status == 404
             assert rejected.resp_body =~ ~s(data-testid="error-404")
           end)
@@ -614,7 +632,8 @@ defmodule CustyardWeb.IntakeControllerTest do
         |> Map.put(:path_params, %{"source_key" => source.key})
         |> Plug.Conn.assign(:intake_source, source)
 
-      {:ok, _disabled} = Custyard.Intake.update_source(source, %{enabled: false})
+      {:ok, _disabled} =
+        Custyard.Intake.update_source(staff_scope(source.tenant_id), source, %{enabled: false})
 
       {events, records} =
         Custyard.LogCapture.with_json(fn ->
@@ -634,13 +653,13 @@ defmodule CustyardWeb.IntakeControllerTest do
       assert record["reason"] == "disabled"
       refute Jason.encode!(records) =~ "PRIVATE_SUBMISSION_CANARY"
       refute Jason.encode!(records) =~ source.key
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
-    # The third create_conversation/1 branch: the insert was refused, the
+    # The third create_thread/1 branch: the insert was refused, the
     # prospect saw a generic failure and left. Forced by writing a key past
     # IntakeSource.key_format/0 straight to the row — the lookups still find it,
-    # but Conversation.intake_changeset/2 rejects it, which is the same
+    # but Thread.intake_changeset/2 rejects it, which is the same
     # {:error, %Ecto.Changeset{}} shape any refused insert produces.
     test "a submission the database refuses is counted, not swallowed", %{conn: conn} do
       source = insert_intake_source(mode: :active)
@@ -654,7 +673,7 @@ defmodule CustyardWeb.IntakeControllerTest do
       events =
         capture_events([:custyard, :intake, :submission_rejected], fn ->
           rejected =
-            post(conn, ~p"/i/#{"Not A Valid Key"}", %{
+            post(conn, ~p"/intake/#{"Not A Valid Key"}", %{
               "submission" => %{"body" => "Refused by the database"}
             })
 
@@ -662,18 +681,18 @@ defmodule CustyardWeb.IntakeControllerTest do
         end)
 
       assert [{%{count: 1}, %{mode: :active}}] = events
-      assert Repo.aggregate(Conversation, :count) == 0
+      assert Repo.aggregate(Thread, :count) == 0
     end
 
     test "a rate-limited request emits from the plug, not the controller", %{conn: conn} do
       put_buckets(intake_get: [limit: 1, window_ms: 60_000])
       source = insert_intake_source(mode: :active)
 
-      get(conn, ~p"/i/#{source.key}")
+      get(conn, ~p"/intake/#{source.key}")
 
       events =
         capture_events([:custyard, :public_rate_limit, :exceeded], fn ->
-          denied = get(build_conn(), ~p"/i/#{source.key}")
+          denied = get(build_conn(), ~p"/intake/#{source.key}")
           assert denied.status == 429
         end)
 
@@ -713,23 +732,23 @@ defmodule CustyardWeb.IntakeControllerTest do
     end
   end
 
-  describe "conversation banner on intake pages" do
-    test "a verifying cookie renders the banner link and no conversation content", %{conn: conn} do
+  describe "thread banner on intake pages" do
+    test "a verifying cookie renders the banner link and no thread content", %{conn: conn} do
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{
+        post(conn, ~p"/intake/#{source.key}", %{
           "submission" => %{"body" => "Banner secret content"}
         })
 
-      assert "/c/" <> token = redirected_to(conn)
+      assert "/threads/" <> token = redirected_to(conn)
 
       # Same conn: Phoenix.ConnTest recycles response cookies automatically.
-      conn = get(conn, ~p"/i/#{source.key}")
+      conn = get(conn, ~p"/intake/#{source.key}")
       html = html_response(conn, 200)
 
       assert html =~ ~s(data-testid="intake-resume-banner")
-      assert html =~ ~p"/c/#{token}"
+      assert html =~ ~p"/threads/#{token}"
       refute html =~ "Banner secret content"
     end
 
@@ -738,8 +757,8 @@ defmodule CustyardWeb.IntakeControllerTest do
 
       conn =
         conn
-        |> put_req_cookie("_custyard_conversation", "garbage-value")
-        |> get(~p"/i/#{source.key}")
+        |> put_req_cookie("_custyard_thread", "garbage-value")
+        |> get(~p"/intake/#{source.key}")
 
       refute html_response(conn, 200) =~ ~s(data-testid="intake-resume-banner")
     end
@@ -748,28 +767,30 @@ defmodule CustyardWeb.IntakeControllerTest do
       source = insert_intake_source(mode: :active)
 
       conn =
-        post(conn, ~p"/i/#{source.key}", %{"submission" => %{"body" => "Revoke me soon"}})
+        post(conn, ~p"/intake/#{source.key}", %{"submission" => %{"body" => "Revoke me soon"}})
 
-      conversation = Repo.one!(Conversation)
-      {:ok, _prospect} = Custyard.Intake.revoke_conversation_access(conversation)
+      thread = Repo.one!(Thread)
+      {:ok, _prospect} = Custyard.Intake.revoke_thread_access(thread)
 
-      conn = get(conn, ~p"/i/#{source.key}")
+      conn = get(conn, ~p"/intake/#{source.key}")
 
       refute html_response(conn, 200) =~ ~s(data-testid="intake-resume-banner")
     end
   end
 
   describe "GET /c/:token over HTTP" do
-    test "refreshes the conversation cookie on a valid token", %{conn: _} do
+    test "refreshes the thread cookie on a valid token", %{conn: _} do
       source = insert_intake_source(mode: :active)
 
       {:ok, %{access_token: token}} =
-        Custyard.Intake.create_intake_conversation(source.key, "Refresh my cookie")
+        Custyard.Intake.create_intake_thread(source.key, "Refresh my cookie",
+          tenant_id: source.tenant_id
+        )
 
-      conn = Phoenix.ConnTest.build_conn() |> get(~p"/c/#{token}")
+      conn = Phoenix.ConnTest.build_conn() |> get(~p"/threads/#{token}")
 
-      assert html_response(conn, 200) =~ ~s(data-testid="resume-conversation")
-      assert %{} = cookie = conn.resp_cookies["_custyard_conversation"]
+      assert html_response(conn, 200) =~ ~s(data-testid="resume-thread")
+      assert %{} = cookie = conn.resp_cookies["_custyard_thread"]
       assert cookie.http_only
       assert cookie.same_site == "Lax"
       assert cookie.max_age == 31_536_000
@@ -777,56 +798,60 @@ defmodule CustyardWeb.IntakeControllerTest do
     end
 
     test "an invalid token redirects to the uniform page and sets no cookie", %{conn: conn} do
-      conn = get(conn, ~p"/c/definitely-not-a-token")
+      conn = get(conn, ~p"/threads/definitely-not-a-token")
 
-      assert redirected_to(conn) == "/c/unavailable"
-      refute Map.has_key?(conn.resp_cookies, "_custyard_conversation")
+      assert redirected_to(conn) == "/threads/unavailable"
+      refute Map.has_key?(conn.resp_cookies, "_custyard_thread")
     end
 
     test "a rate-limited client gets no cookie refresh even for a valid token", %{conn: _} do
-      put_buckets(conversation_mount: [limit: 1, window_ms: 60_000])
+      put_buckets(thread_mount: [limit: 1, window_ms: 60_000])
       source = insert_intake_source(mode: :active)
 
       {:ok, %{access_token: token}} =
-        Custyard.Intake.create_intake_conversation(source.key, "Probe target")
+        Custyard.Intake.create_intake_thread(source.key, "Probe target",
+          tenant_id: source.tenant_id
+        )
 
       # First GET: the cookie plug's non-counting peek allows, the mount
       # check consumes the whole budget.
-      first = Phoenix.ConnTest.build_conn() |> get(~p"/c/#{token}")
+      first = Phoenix.ConnTest.build_conn() |> get(~p"/threads/#{token}")
       assert html_response(first, 200)
-      assert Map.has_key?(first.resp_cookies, "_custyard_conversation")
+      assert Map.has_key?(first.resp_cookies, "_custyard_thread")
 
       # Over the limit, valid and invalid tokens are indistinguishable:
       # the peek denies BEFORE any token lookup, so the 302 carries no
       # Set-Cookie — presence of the refresh is not a validity oracle and
-      # the lookup itself stays inside the :conversation_mount budget.
-      denied_valid = Phoenix.ConnTest.build_conn() |> get(~p"/c/#{token}")
-      assert redirected_to(denied_valid) == "/c/unavailable"
-      refute Map.has_key?(denied_valid.resp_cookies, "_custyard_conversation")
+      # the lookup itself stays inside the :thread_mount budget.
+      denied_valid = Phoenix.ConnTest.build_conn() |> get(~p"/threads/#{token}")
+      assert redirected_to(denied_valid) == "/threads/unavailable"
+      refute Map.has_key?(denied_valid.resp_cookies, "_custyard_thread")
 
-      denied_invalid = Phoenix.ConnTest.build_conn() |> get(~p"/c/definitely-not-a-token")
-      assert redirected_to(denied_invalid) == "/c/unavailable"
-      refute Map.has_key?(denied_invalid.resp_cookies, "_custyard_conversation")
+      denied_invalid = Phoenix.ConnTest.build_conn() |> get(~p"/threads/definitely-not-a-token")
+      assert redirected_to(denied_invalid) == "/threads/unavailable"
+      refute Map.has_key?(denied_invalid.resp_cookies, "_custyard_thread")
     end
 
     test "the unavailable page renders with the no-referrer policy", %{conn: conn} do
-      conn = get(conn, "/c/unavailable")
+      conn = get(conn, "/threads/unavailable")
 
-      assert html_response(conn, 200) =~ "Conversation unavailable"
+      assert html_response(conn, 200) =~ "Thread unavailable"
       assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
       assert get_resp_header(conn, "content-security-policy") == [@csp]
     end
   end
 
   describe "custom domains (CustomDomain plug unchanged)" do
-    test "intake and conversation paths on a customer domain rewrite into the portal and 404" do
-      insert_organization(custom_domain: "support.acme-custyard-test.com")
+    test "unregistered hosts cannot access intake or private threads" do
+      insert_organization()
       source = insert_intake_source(mode: :active)
 
       {:ok, %{access_token: token}} =
-        Custyard.Intake.create_intake_conversation(source.key, "Not on this host")
+        Custyard.Intake.create_intake_thread(source.key, "Not on this host",
+          tenant_id: source.tenant_id
+        )
 
-      for path <- ["/i/#{source.key}", "/c/#{token}"] do
+      for path <- ["/intake/#{source.key}", "/threads/#{token}"] do
         conn =
           Phoenix.ConnTest.build_conn()
           |> Map.put(:host, "support.acme-custyard-test.com")
@@ -836,8 +861,8 @@ defmodule CustyardWeb.IntakeControllerTest do
         # where it matches no route: intake surfaces exist on the
         # application host only, and no cookie is issued.
         assert conn.status == 404
-        assert String.starts_with?(conn.request_path, "/p/")
-        refute Map.has_key?(conn.resp_cookies, "_custyard_conversation")
+        assert conn.request_path == path
+        refute Map.has_key?(conn.resp_cookies, "_custyard_thread")
       end
     end
   end
@@ -847,14 +872,14 @@ defmodule CustyardWeb.IntakeControllerTest do
     source = insert_intake_source(mode: :passive)
 
     Phoenix.ConnTest.build_conn()
-    |> post(~p"/i/#{source.key}", %{
+    |> post(~p"/intake/#{source.key}", %{
       "submission" => %{"body" => "One message only", "email" => "solo@example.com"}
     })
 
-    conversation = Repo.one!(Conversation)
+    thread = Repo.one!(Thread)
 
     count =
-      Repo.one(from m in Message, where: m.conversation_id == ^conversation.id, select: count())
+      Repo.one(from m in Message, where: m.thread_id == ^thread.id, select: count())
 
     assert count == 1
   end
