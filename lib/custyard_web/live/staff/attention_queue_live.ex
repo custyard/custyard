@@ -215,8 +215,9 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       Enum.map(threads, fn %{thread: conv, message_count: message_count} = item ->
         neglect_status = Scoring.neglect_status(conv, settings.thresholds)
 
+        # breakdown/2 takes the 24h count, not the thread's total.
         breakdown =
-          Scoring.breakdown(conv, settings: settings, message_count: message_count)
+          Scoring.breakdown(conv, settings: settings, message_count: item.recent_count)
 
         hours_idle = hours_since(conv.last_staff_action_at || conv.inserted_at)
 
