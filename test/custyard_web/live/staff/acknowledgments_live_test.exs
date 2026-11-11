@@ -301,6 +301,8 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
     test "the form is pinned to the configured source", %{conn: conn} do
       org = insert_organization()
       {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      # Submissions are ignored while the initial refresh is in flight.
+      render_async(view, 10_000)
 
       refute has_element?(
                view,
