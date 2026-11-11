@@ -113,6 +113,36 @@ defmodule Custyard.LogTest do
     refute Jason.encode!(records) =~ "person@example.test"
   end
 
+  test "provider_message keeps a bounded, address-free provider sentence" do
+    message = "sender address noreply@custyard.example.com not verified; see https://x.io/docs"
+
+    assert Custyard.Log.sanitize_metadata(provider_message: message) == %{
+             provider_message: "sender address [redacted] not verified; see [redacted]"
+           }
+
+    hostile = "status\r\nFORGED EVENT\e[2J " <> @canary <> " " <> String.duplicate("x", 300)
+    %{provider_message: safe} = Custyard.Log.sanitize_metadata(provider_message: hostile)
+    assert String.length(safe) <= 200
+    refute safe =~ "person@example.test"
+    refute safe =~ "\r"
+    refute safe =~ "\e"
+    assert Custyard.Log.sanitize_metadata(provider_message: safe) == %{provider_message: safe}
+
+    assert Custyard.Log.sanitize_metadata(provider_message: <<255>>) == %{}
+    assert Custyard.Log.sanitize_metadata(provider_message: "   ") == %{}
+    assert Custyard.Log.sanitize_metadata(provider_message: %{"message" => "x"}) == %{}
+    assert Custyard.Log.sanitize_metadata(provider_message: 422) == %{}
+
+    {_result, records} =
+      Custyard.LogCapture.with_json(fn ->
+        Log.error(:boot_welcome_mail_failed, provider: :lettermint, provider_message: message)
+      end)
+
+    assert [record] = Enum.filter(records, &(&1["event"] == "boot_welcome_mail_failed"))
+    assert record["provider_message"] == "sender address [redacted] not verified; see [redacted]"
+    assert record["provider"] == "lettermint"
+  end
+
   test "provider diagnostics retain only known codes and validation field names" do
     error =
       {422,
@@ -512,11 +542,18 @@ defmodule Custyard.LogTest do
       for path <- sources,
           not String.ends_with?(path, "/custyard/log.ex"),
           ast = Code.string_to_quoted!(File.read!(path)),
-          cli_output? =
-            Path.relative_to(path, root) in [
-              "lib/custyard/release.ex",
-              "lib/custyard/release/dsar.ex",
-              "lib/custyard/release/acknowledgments.ex"
+          # A generator, not a filter: a `=` binding to false would skip the file.
+          cli_output? <-
+            [
+              Path.relative_to(path, root) in [
+                "lib/custyard/release.ex",
+                "lib/custyard/release/dsar.ex",
+                "lib/custyard/release/acknowledgments.ex",
+                # bin/data-volume: fixed sentences for the operator's terminal.
+                "lib/custyard/release/volume.ex",
+                # The boot report (names only) for `docker logs`; see its moduledoc.
+                "lib/custyard/boot/console.ex"
+              ]
             ],
           {_, bad} =
             Macro.prewalk(ast, [], fn

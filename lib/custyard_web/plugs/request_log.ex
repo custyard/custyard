@@ -32,6 +32,7 @@ defmodule CustyardWeb.Plugs.RequestLog do
 
   defp route_class("/"), do: :root
   defp route_class("/api/health"), do: :health
+  defp route_class("/api/health/live"), do: :health
   defp route_class("/app/login"), do: :staff_login
   defp route_class("/app/login/sent"), do: :staff_login
   defp route_class("/app"), do: :staff

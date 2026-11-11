@@ -8,6 +8,9 @@ defmodule Custyard.InstanceAdmins do
   def get_by_email(email), do: Repo.get_by(InstanceAdmin, email: Account.normalize_email(email))
   def list_admins, do: Repo.all(from a in InstanceAdmin, order_by: a.id)
 
+  @doc "How many instance administrators exist; zero means a first run."
+  def count, do: Repo.aggregate(InstanceAdmin, :count)
+
   def create_admin(email) do
     case get_by_email(email) do
       %InstanceAdmin{} = admin ->

@@ -46,7 +46,7 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   end
 
   defp installation_request?(conn) do
-    conn.request_path in ["/", "/api/health"] or
+    conn.request_path in ["/", "/api/health", "/api/health/live"] or
       admin_request?(conn) or callback_request?(conn) or
       development_request?(conn)
   end

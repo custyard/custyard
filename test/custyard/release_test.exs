@@ -5,6 +5,7 @@ defmodule Custyard.ReleaseTest do
 
   require Logger
 
+  alias Custyard.Boot.Env
   alias Custyard.{InstanceAdmin, InstanceAdmins, Release}
 
   defmodule UnavailableRepo do
@@ -165,52 +166,211 @@ defmodule Custyard.ReleaseTest do
     assert Repo.aggregate(InstanceAdmin, :count) == 1
   end
 
-  test "bootstrap ignores absent and blank email configuration" do
-    System.delete_env("INSTANCE_ADMIN_EMAIL")
-    assert Release.bootstrap_instance_admin() == :ok
-    System.put_env("INSTANCE_ADMIN_EMAIL", " \n ")
-    assert Release.bootstrap_instance_admin() == :ok
-    assert Repo.aggregate(InstanceAdmin, :count) == 0
+  # Returns {exit_status, stdout, stderr} without halting the VM.
+  defp run_cli(argv) do
+    parent = self()
+
+    stderr =
+      capture_io(:stderr, fn ->
+        stdout =
+          capture_io(fn -> send(parent, {:status, Release.run_instance_admin_cli(argv)}) end)
+
+        send(parent, {:stdout, stdout})
+      end)
+
+    assert_received {:status, status}
+    assert_received {:stdout, stdout}
+    {status, stdout, stderr}
   end
 
-  test "bootstrap provisions one normalized identity and rejects malformed configuration" do
-    System.put_env("INSTANCE_ADMIN_EMAIL", " BOOTSTRAP@EXAMPLE.COM ")
+  defp run_doctor(argv) do
+    parent = self()
 
-    Logger.put_module_level(InstanceAdmins, :info)
-    on_exit(fn -> Logger.delete_module_level(InstanceAdmins) end)
-
-    created_log =
-      capture_log([metadata: [:instance_admin_id]], fn ->
-        assert Release.bootstrap_instance_admin() == :ok
+    stderr =
+      capture_io(:stderr, fn ->
+        stdout = capture_io(fn -> send(parent, {:status, Release.run_doctor_cli(argv)}) end)
+        send(parent, {:stdout, stdout})
       end)
 
-    admin = InstanceAdmins.get_by_email("bootstrap@example.com")
-    assert admin
-    assert created_log =~ "instance_admin_created"
-    assert created_log =~ "instance_admin_id=#{admin.id}"
-    refute String.downcase(created_log) =~ "bootstrap@example.com"
-    assert Release.bootstrap_instance_admin() == :ok
-    assert Repo.aggregate(InstanceAdmin, :count) == 1
+    assert_received {:status, status}
+    assert_received {:stdout, stdout}
+    {status, stdout, stderr}
+  end
 
-    System.put_env("INSTANCE_ADMIN_EMAIL", "not-an-address")
+  defp with_boot_env(env, fun) do
+    Application.put_env(:custyard, :boot_env, env)
 
-    # The eval runner prints an uncaught exception to stderr. The message is
-    # fixed and the diagnostic names the rejected field, never its value.
-    failed_log =
-      capture_log(fn ->
-        error =
-          assert_raise RuntimeError, ~r/Could not create instance administrator/, fn ->
-            Release.bootstrap_instance_admin()
-          end
+    try do
+      fun.()
+    after
+      Application.delete_env(:custyard, :boot_env)
+    end
+  end
 
-        refute Exception.message(error) =~ "not-an-address"
+  describe "with_repo/1 and the boot verdict" do
+    test "an unconfigured verdict prints the report to stderr and refuses" do
+      env = Env.read(%{"MAIL_ADAPTOR" => "x"}, config_env: :prod)
+
+      with_boot_env(env, fn ->
+        stderr =
+          capture_io(:stderr, fn ->
+            assert {:error, "configuration is incomplete; see the report above"} =
+                     Release.with_repo(fn -> flunk("the repo must not be opened") end)
+          end)
+
+        assert stderr =~ "Custyard is not configured yet"
+        assert stderr =~ "✗  SECRET_KEY_BASE"
+        assert stderr =~ "MAIL_ADAPTOR (did you mean MAIL_ADAPTER)"
+
+        assert {1, "", stderr} = run_cli(["list"])
+        assert stderr =~ "Error: configuration is incomplete"
       end)
+    end
 
-    assert failed_log =~ "instance_admin_bootstrap_failed"
-    refute failed_log =~ "not-an-address"
+    test "a configured verdict opens the repo" do
+      env =
+        Env.read(
+          %{
+            "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32)),
+            "PHX_HOST" => "custyard.example.com",
+            "MAIL_ADAPTER" => "local"
+          },
+          config_env: :prod
+        )
 
-    assert Repo.aggregate(InstanceAdmin, :count) == 1
-    assert InstanceAdmins.get_by_email("bootstrap@example.com").id == admin.id
+      with_boot_env(env, fn -> assert :ok = Release.with_repo(fn -> :ok end) end)
+    end
+  end
+
+  describe "run_doctor_cli/1" do
+    @describetag :tmp_dir
+
+    test "help prints usage and bad arguments are a usage error" do
+      assert {0, stdout, ""} = run_doctor(["help"])
+      assert stdout =~ "Usage: bin/doctor"
+
+      for argv <- [
+            ["bogus"],
+            ["--probe-database", "a", "b"],
+            ["--probe-database", ""],
+            ["--probe-database", "  ", "--token", "t"],
+            ["--probe-database", "--token"],
+            ["--probe-database", "x", "--token", "a", "--token", "b"]
+          ] do
+        assert {1, "", stderr} = run_doctor(argv), "expected a usage error for #{inspect(argv)}"
+        assert stderr =~ "Usage: bin/doctor"
+      end
+    end
+
+    test "prints the boot report and exits by verdict" do
+      canary = "CANARY-" <> String.duplicate("z", 60)
+
+      with_boot_env(
+        Env.read(%{"SECRET_KEY_BASE" => canary}, config_env: :prod),
+        fn ->
+          assert {1, stdout, ""} = run_doctor([])
+          assert stdout =~ "Custyard is not configured yet"
+          assert stdout =~ "✗  PHX_HOST"
+          assert stdout =~ "Image"
+          assert stdout =~ "Booted"
+          refute stdout =~ canary
+        end
+      )
+
+      configured =
+        Env.read(
+          %{
+            "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "CREDENTIAL_ENCRYPTION_KEY" => Base.encode64(:crypto.strong_rand_bytes(32)),
+            "PHX_HOST" => "custyard.example.com",
+            "MAIL_ADAPTER" => "local"
+          },
+          config_env: :prod
+        )
+
+      with_boot_env(configured, fn ->
+        assert {0, stdout, ""} = run_doctor([])
+        assert stdout =~ "Custyard configuration is complete"
+      end)
+    end
+
+    test "--probe-database without a target exits 1 while the configuration is incomplete",
+         %{tmp_dir: dir} do
+      env =
+        Env.read(
+          %{
+            "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "DATABASE_PATH" => Path.join(dir, "d.db")
+          },
+          config_env: :prod
+        )
+
+      with_boot_env(env, fn ->
+        assert {1, stdout, ""} = run_doctor(["--probe-database"])
+        assert stdout =~ "Custyard is not configured yet"
+        assert stdout =~ "ok      connected and ran SELECT 1"
+      end)
+    end
+
+    test "probes a SQLite path and runs the throwaway migration", %{tmp_dir: dir} do
+      path = Path.join(dir, "doctor.db")
+
+      assert {0, stdout, ""} = run_doctor(["--probe-database", path])
+      assert stdout =~ "kind    sqlite"
+      assert stdout =~ "path    #{path}"
+      assert stdout =~ "ok      connected and ran SELECT 1"
+      assert stdout =~ "ok      create table custyard_doctor_probe"
+      assert stdout =~ "ok      insert and read a row"
+      assert stdout =~ "ok      drop table custyard_doctor_probe"
+      assert stdout =~ "committed; nothing left behind"
+      assert File.exists?(path)
+
+      {:ok, db} = Exqlite.Sqlite3.open(path, mode: :readonly)
+
+      {:ok, statement} =
+        Exqlite.Sqlite3.prepare(db, "SELECT name FROM sqlite_master WHERE type = 'table'")
+
+      {:ok, rows} = Exqlite.Sqlite3.fetch_all(db, statement)
+      Exqlite.Sqlite3.close(db)
+      refute ["custyard_doctor_probe"] in rows
+
+      # The running test Repo is untouched by the one-off probe repo.
+      assert Repo.aggregate(InstanceAdmin, :count) == 0
+    end
+
+    test "reports an unopenable path with the category and the driver error" do
+      assert {1, stdout, ""} = run_doctor(["--probe-database", "/dev/null/doctor.db"])
+      assert stdout =~ "failed  not_writable: the SQLite file cannot be opened"
+      # macOS reports enotdir for a parent that is not a directory, Linux eexist.
+      assert stdout =~ ~r/error   e(notdir|exist)/
+      refute stdout =~ "custyard_doctor_probe"
+    end
+
+    test "reports an unreachable libSQL server and a missing token" do
+      assert {1, stdout, ""} = run_doctor(["--probe-database", "libsql://127.0.0.1:1?tls=0"])
+      assert stdout =~ "kind    turso"
+      assert stdout =~ "failed  unreachable:"
+      assert stdout =~ "error   Turso: cannot connect to 127.0.0.1:1"
+
+      assert {1, "", stderr} = run_doctor(["--probe-database", "libsql://db.turso.io"])
+      assert stderr =~ "TURSO_AUTH_TOKEN  missing"
+
+      assert {1, "", stderr} = run_doctor(["--probe-database", "relative/path.db"])
+      assert stderr =~ "DATABASE_PATH  malformed"
+    end
+
+    test "an https:// target is probed as Bunny Database" do
+      assert {1, "", stderr} = run_doctor(["--probe-database", "https://127.0.0.1:1"])
+      assert stderr =~ "BUNNY_DATABASE_AUTH_TOKEN  missing"
+
+      assert {1, stdout, ""} =
+               run_doctor(["--probe-database", "https://127.0.0.1:1", "--token", "t"])
+
+      assert stdout =~ "kind    turso"
+      assert stdout =~ "failed  unreachable:"
+      refute stdout =~ "custyard_doctor_probe"
+    end
   end
 
   describe "export_sqlite/1" do

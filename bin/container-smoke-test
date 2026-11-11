@@ -12,8 +12,11 @@ app_volume="$run_id-app"
 app="$run_id-app"
 work=$(mktemp -d)
 origin_secret="isolated-container-smoke-origin-secret-32-bytes"
+# CREDENTIAL_ENCRYPTION_KEY is Base64 of 32 bytes: the boot verdict requires it,
+# and an incomplete configuration serves the doctor card instead of the app.
 common=(-e SECRET_KEY_BASE=isolated-container-smoke-secret-key-base-at-least-sixty-four-bytes-long
-  -e MAIL_ADAPTER=local -e ACKNOWLEDGMENTS_ENABLED=false -e LMTP_ENABLED=false)
+  -e CREDENTIAL_ENCRYPTION_KEY=aXNvbGF0ZWQtc21va2UtY3JlZGVudGlhbC1rZXktMzI=
+  -e MAIL_ADAPTER=local -e LMTP_ENABLED=false)
 bunny=(-e DATABASE_PROVIDER=bunny -e BUNNY_DATABASE_URL=https://database.invalid
   -e BUNNY_DATABASE_AUTH_TOKEN=isolated-smoke-token -e STORAGE_PROVIDER=bunny
   -e DATA_VOLUME_ID=isolated-smoke-volume -e MAINTENANCE_MODE=true)
@@ -65,7 +68,7 @@ run "${bunny[@]}" "${mounts[@]}" --entrypoint /app/bin/data-volume "$image" rest
 run "${mounts[@]}" --entrypoint /bin/sh "$image" \
   -ec 'grep -qx logo /data/uploads/logo; grep -qx private-mail /data/attachments/mail'
 
-echo "==> boot entrypoint migrations and Bunny proxy guard against isolated SQLite"
+echo "==> boot (in-application migrations, first run) and Bunny proxy guard against isolated SQLite"
 timeout 60 docker run -d --network none --label "$label" --name "$app" "${common[@]}" \
   -v "$app_volume:/data" -e DATABASE_PROVIDER=sqlite -e STORAGE_PROVIDER=local \
   -e PROXY_PROVIDER=bunny -e BUNNY_ORIGIN_SECRET="$origin_secret" \
@@ -94,10 +97,13 @@ expect_status() {
     echo "Expected HTTP $expected for $request_path, got $actual" >&2; timeout 10 docker logs "$app" >&2; exit 1
   fi
 }
-for route in /favicon.ico /admin/login /app/login '/live/websocket?vsn=2.0.0' '/live/longpoll?vsn=2.0.0' '/api/health?extra=1'; do
+for route in /favicon.ico /admin/login /app/login '/live/websocket?vsn=2.0.0' '/live/longpoll?vsn=2.0.0' \
+  '/api/health?extra=1' '/api/health/live?extra=1'; do
   expect_status 403 "$route"
 done
 expect_status 200 /api/health
+# Liveness is what the image HEALTHCHECK and platform checks request, unauthenticated.
+expect_status 200 /api/health/live
 expect_status 200 /admin/login -H 'Host: smoke.example' -H "X-Custyard-Origin: $origin_secret" \
   -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Port: 1234' -H 'X-Forwarded-Host: spoofed.invalid'
 timeout 10 docker exec "$app" grep -Fiq 'strict-transport-security: max-age=31536000' /tmp/smoke-headers

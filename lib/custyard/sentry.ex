@@ -449,7 +449,8 @@ defmodule Custyard.Sentry do
               "/app/login/sent",
               "/admin",
               "/admin/login",
-              "/api/health"
+              "/api/health",
+              "/api/health/live"
             ],
        do: path
 
