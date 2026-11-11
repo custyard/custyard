@@ -50,9 +50,11 @@ Hooks.ResetOnSubmit = {
   }
 }
 
-// Submit form on Ctrl+Enter or Cmd+Enter
-// Useful for quick message sending in staff interfaces
-Hooks.CtrlEnterSubmit = {
+// Staff composer textarea. Ctrl+Enter or Cmd+Enter submits the form, and the
+// box grows with what is typed until it reaches 40% of the viewport, then
+// scrolls. The height is reapplied after every server patch, which drops
+// inline styles.
+Hooks.ComposerInput = {
   mounted() {
     this.el.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
@@ -64,6 +66,20 @@ Hooks.CtrlEnterSubmit = {
         }
       }
     })
+    this.el.addEventListener("input", () => this.fit())
+    this.fit()
+  },
+  updated() {
+    this.fit()
+  },
+  fit() {
+    const el = this.el
+    const limit = Math.round(window.innerHeight * 0.4)
+    el.style.height = "auto"
+    const border = el.offsetHeight - el.clientHeight
+    const wanted = el.scrollHeight + border
+    el.style.height = Math.min(wanted, limit) + "px"
+    el.style.overflowY = wanted > limit ? "auto" : "hidden"
   }
 }
 
