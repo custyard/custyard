@@ -294,7 +294,7 @@ defmodule Custyard.InboundChannelsTest do
 
       assert event.payload["channel_id"] == channel.id
       assert event.payload["staff_id"] == staff.id
-      assert event.payload["public_address"] == "support@acme.example.com"
+      refute Map.has_key?(event.payload, "public_address")
     end
 
     test "stores a customer project as an optional channel hint" do
@@ -884,7 +884,7 @@ defmodule Custyard.InboundChannelsTest do
       assert [event] = audit_events(:channel_quiet)
       assert event.tenant_id == channel.tenant_id
       assert event.payload["channel_id"] == channel.id
-      assert event.payload["public_address"] == "support@acme.example.com"
+      refute Map.has_key?(event.payload, "public_address")
       assert event.payload["quiet_after_hours"] == 72
       assert {:ok, _, _} = DateTime.from_iso8601(event.payload["last_received_at"])
       refute inspect(event.payload) =~ channel.ingress_token
@@ -1133,7 +1133,7 @@ defmodule Custyard.InboundChannelsTest do
                    })
         end)
 
-      assert log =~ "Inbound rejection log insert failed"
+      assert log =~ "inbound_rejection_record_failed"
       refute log =~ "secret@example.com"
     end
   end

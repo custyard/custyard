@@ -35,12 +35,34 @@ defmodule Custyard.Attachments.RuntimeConfigTest do
            ]
   end
 
-  test "unbounded timeout and invalid port fail configuration" do
+  # runtime.exs never raises; an out-of-range value leaves attachments
+  # quarantined and is a boot problem in production.
+  test "unbounded timeout and invalid port leave the scanner unconfigured" do
     System.put_env("CLAMAV_HOST", "scanner.internal")
-    System.put_env("CLAMAV_TIMEOUT_MS", "60001")
-    assert_raise RuntimeError, fn -> Config.Reader.read!(@runtime, env: :test) end
-    System.delete_env("CLAMAV_TIMEOUT_MS")
-    System.put_env("CLAMAV_PORT", "0")
-    assert_raise RuntimeError, fn -> Config.Reader.read!(@runtime, env: :test) end
+
+    for {name, value} <- [{"CLAMAV_TIMEOUT_MS", "60001"}, {"CLAMAV_PORT", "0"}] do
+      System.put_env(name, value)
+
+      refute Config.Reader.read!(@runtime, env: :test)[:custyard][:attachment_scanner]
+
+      prod = Config.Reader.read!(@runtime, env: :prod)[:custyard]
+      refute prod[:attachment_scanner]
+      assert Enum.any?(prod[:boot_env].problems, &(&1.variable == name and &1.kind == :malformed))
+
+      System.delete_env(name)
+    end
+  end
+
+  test "a production scanner endpoint is configured from the boot verdict" do
+    System.put_env("CLAMAV_HOST", "scanner.internal")
+    System.put_env("CLAMAV_PORT", "3311")
+    prod = Config.Reader.read!(@runtime, env: :prod)[:custyard]
+    assert prod[:attachment_scanner] == Custyard.Attachments.ClamAV
+
+    assert prod[:attachment_scanner_options] == [
+             host: "scanner.internal",
+             port: 3311,
+             timeout: 10_000
+           ]
   end
 end

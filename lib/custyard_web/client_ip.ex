@@ -5,13 +5,15 @@ defmodule CustyardWeb.ClientIP do
   Shared by every rate-limit surface (plugs and LiveViews) so they use
   the same trust discipline:
 
-  Proxy headers are only honored when `config :custyard,
-  :trust_proxy_headers` is `true` (default `false`; enabled for the Fly
-  deployment in `config/runtime.exs`). Otherwise the transport peer
-  address is used directly, so clients cannot spoof `X-Forwarded-For`
-  to dodge rate limits or frame another address.
+  `config :custyard, :proxy_provider` selects `:none`, `:fly` or `:bunny`.
+  Without a provider, the transport peer address is used directly. The older
+  `:trust_proxy_headers` boolean remains a Fly-compatible fallback.
 
-  When trusted, header preference for HTTP requests is:
+  Bunny authenticates the CDN origin in `CustyardWeb.Proxy` before HTTP or
+  socket dispatch, ignores Fly-Client-IP, and accepts only one valid visitor
+  address in X-Forwarded-For (Bunny replaces that header rather than appending).
+
+  For Fly, header preference for HTTP requests is:
 
   1. `Fly-Client-IP` — set by Fly.io, a single trusted value
   2. `X-Forwarded-For` — rightmost entry. The trusted edge proxy
@@ -44,10 +46,15 @@ defmodule CustyardWeb.ClientIP do
   """
   @spec from_conn(Plug.Conn.t()) :: String.t()
   def from_conn(conn) do
-    if trust_proxy_headers?() do
-      from_trusted_headers(conn) || address_to_string(conn.remote_ip)
-    else
-      address_to_string(conn.remote_ip)
+    case proxy_provider() do
+      :fly ->
+        from_trusted_headers(conn) || address_to_string(conn.remote_ip)
+
+      :bunny ->
+        single_ip(get_req_header(conn, "x-forwarded-for")) || address_to_string(conn.remote_ip)
+
+      _ ->
+        address_to_string(conn.remote_ip)
     end
   end
 
@@ -60,10 +67,10 @@ defmodule CustyardWeb.ClientIP do
   """
   @spec from_peer_data(map() | nil, [{String.t(), String.t()}] | nil) :: String.t() | nil
   def from_peer_data(peer_data, x_headers) do
-    if trust_proxy_headers?() do
-      forwarded_ip(x_headers || []) || peer_data_ip(peer_data)
-    else
-      peer_data_ip(peer_data)
+    case proxy_provider() do
+      :fly -> forwarded_ip(x_headers || []) || peer_data_ip(peer_data)
+      :bunny -> bunny_forwarded_ip(x_headers || []) || peer_data_ip(peer_data)
+      _ -> peer_data_ip(peer_data)
     end
   end
 
@@ -92,7 +99,7 @@ defmodule CustyardWeb.ClientIP do
     rightmost_forwarded_ip(values)
   end
 
-  defp single_ip([value | _rest]), do: validate_ip(String.trim(value))
+  defp single_ip([value]), do: validate_ip(String.trim(value))
   defp single_ip(_none), do: nil
 
   # X-Forwarded-For arrives as "client-supplied..., proxy-appended": the
@@ -126,7 +133,14 @@ defmodule CustyardWeb.ClientIP do
     end
   end
 
-  defp trust_proxy_headers? do
-    Application.get_env(:custyard, :trust_proxy_headers, false)
+  defp bunny_forwarded_ip(x_headers) do
+    values = for {"x-forwarded-for", value} <- x_headers, do: value
+    single_ip(values)
+  end
+
+  @doc false
+  def proxy_provider do
+    Application.get_env(:custyard, :proxy_provider) ||
+      if(Application.get_env(:custyard, :trust_proxy_headers, false), do: :fly, else: :none)
   end
 end

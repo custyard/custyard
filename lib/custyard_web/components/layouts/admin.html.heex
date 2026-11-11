@@ -7,10 +7,11 @@
       >
         Instance admin · {@current_instance_admin.email}
       </p>
-    </div><.link
-      href={~p"/admin/logout"}
-      method="delete"
-    >Sign out</.link>
+    </div>
+    <div class="flex items-center gap-4">
+      <.link href={~p"/admin/system"} data-testid="instance-admin-system-link">System</.link>
+      <.link href={~p"/admin/logout"} method="delete">Sign out</.link>
+    </div>
   </nav>
   <.flash_group flash={@flash} />
   <main class="max-w-4xl mx-auto p-6">{@inner_content}</main>

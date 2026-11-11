@@ -4,7 +4,7 @@ defmodule Custyard.Acknowledgments.Audit do
   (the UI) or a channel name: `"cli"` (bin/acknowledgments), `"mix"` or
   `"console"` (a direct call).
   """
-  require Logger
+  require Custyard.Log, as: Log
   alias Custyard.{AuditEvent, StaffAccount, Repo}
 
   @channels ["cli", "mix", "console"]
@@ -36,16 +36,24 @@ defmodule Custyard.Acknowledgments.Audit do
     record!(tenant_id, event_type, actor, organization_id, payload)
   rescue
     error ->
-      Logger.error("Failed to record #{event_type} audit event: #{Exception.message(error)}")
+      Log.error(
+        :acknowledgment_audit_record_failed,
+        [event_type: event_type] ++ Log.failure(error)
+      )
+
       :error
   catch
     :exit, _ ->
-      Logger.error("Failed to record #{event_type} audit event: repository unavailable")
+      Log.error(:acknowledgment_audit_record_failed,
+        event_type: event_type,
+        reason: :repository_unavailable
+      )
+
       :error
   end
 
-  defp actor_fields(%StaffAccount{id: id, email: email}),
-    do: {"staff", %{"actor" => "staff", "staff_id" => id, "staff_email" => email}}
+  defp actor_fields(%StaffAccount{id: id}),
+    do: {"staff", %{"actor" => "staff", "staff_id" => id}}
 
   defp actor_fields(channel) when channel in @channels,
     do: {channel, %{"actor" => channel}}

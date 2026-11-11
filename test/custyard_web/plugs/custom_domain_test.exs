@@ -23,6 +23,25 @@ defmodule CustyardWeb.Plugs.CustomDomainTest do
     refute result.halted
   end
 
+  test "platform health probes pass without a registered hostname and learn nothing else" do
+    for {method, host} <- [{:get, "127.0.0.1"}, {:head, "probe.internal"}, {:get, "localhost"}] do
+      result = CustomDomain.call(%{conn(method, "/api/health") | host: host}, [])
+      refute result.halted
+      refute Map.has_key?(result.assigns, :host_tenant)
+      refute Map.has_key?(result.assigns, :current_tenant)
+    end
+
+    for {method, path} <- [
+          {:post, "/api/health"},
+          {:get, "/api/health?verbose=1"},
+          {:get, "/api/health/extra"},
+          {:get, "/app/login"}
+        ] do
+      assert %{status: 404, halted: true} =
+               CustomDomain.call(%{conn(method, path) | host: "127.0.0.1"}, [])
+    end
+  end
+
   test "installation pages never inherit a tenant even with a stale hostname mapping" do
     tenant = insert_tenant()
     Repo.insert!(%Custyard.TenantHost{tenant_id: tenant.id, hostname: Tenants.app_host()})

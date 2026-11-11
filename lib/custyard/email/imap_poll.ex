@@ -35,7 +35,7 @@ defmodule Custyard.Email.ImapPoll do
   as short codes and never carry server responses.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
 
   import Ecto.Query
 
@@ -172,16 +172,22 @@ defmodule Custyard.Email.ImapPoll do
     owner = self()
 
     task =
-      Task.Supervisor.async_nolink(Custyard.TaskSupervisor, fn ->
-        worker = self()
-        guard = spawn(fn -> guard_session(owner, worker, client, nil) end)
+      Task.Supervisor.async_nolink(
+        Custyard.TaskSupervisor,
+        Log.task(
+          fn ->
+            worker = self()
+            guard = spawn(fn -> guard_session(owner, worker, client, nil) end)
 
-        try do
-          session(client, channel, opts, fun, guard)
-        after
-          send(guard, :done)
-        end
-      end)
+            try do
+              session(client, channel, opts, fun, guard)
+            after
+              send(guard, :done)
+            end
+          end,
+          channel_id: channel.id
+        )
+      )
 
     case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> result
@@ -325,9 +331,7 @@ defmodule Custyard.Email.ImapPoll do
   defp rebase(client, conn, channel, mailbox) do
     with {:ok, uid} <- starting_uid(client, conn, mailbox),
          {:ok, _} <- save_baseline(channel, mailbox.uid_validity, uid) do
-      Logger.warning(
-        "IMAP channel #{channel.id}: UIDVALIDITY changed, position reset to UID #{uid}"
-      )
+      Log.warning(:imap_position_rebased, channel_id: channel.id, uid: uid)
 
       {:ok, %{imported: 0, ignored: 0, skipped: 0, failed: 0, rebased: true}}
     end
@@ -371,8 +375,10 @@ defmodule Custyard.Email.ImapPoll do
   # it is passed over like a message the pipeline refused.
   defp settle({:retry, reason}, channel, item, attempts) do
     if attempts + 1 >= @max_message_attempts do
-      Logger.warning(
-        "IMAP channel #{channel.id}: UID #{item.uid} passed over after #{@max_message_attempts} attempts: #{inspect(reason)}"
+      Log.warning(
+        :imap_message_attempts_exhausted,
+        [channel_id: channel.id, uid: item.uid, attempt: @max_message_attempts] ++
+          Log.failure(reason)
       )
 
       {:advance, :failed}
@@ -424,8 +430,9 @@ defmodule Custyard.Email.ImapPoll do
           {:retry, reason}
 
         {:error, reason} ->
-          Logger.warning(
-            "IMAP channel #{channel.id}: UID #{uid} not imported: #{inspect(error_class(reason))}"
+          Log.warning(
+            :imap_message_not_imported,
+            [channel_id: channel.id, uid: uid] ++ Log.failure(reason)
           )
 
           {:advance, :failed}
@@ -443,12 +450,20 @@ defmodule Custyard.Email.ImapPoll do
     # The database being busy says nothing about the message: stop here and
     # retry it on the next poll.
     _error in [DBConnection.ConnectionError, Exqlite.Error] ->
-      Logger.warning("IMAP channel #{channel.id}: database unavailable at UID #{uid}")
+      Log.warning(:imap_database_unavailable,
+        channel_id: channel.id,
+        uid: uid,
+        reason: :database_unavailable
+      )
+
       {:stop, :database_unavailable}
 
     # A message that crashes the pipeline must not block the folder.
     error ->
-      Logger.error("IMAP channel #{channel.id}: UID #{uid} raised #{inspect(error.__struct__)}")
+      Log.error(
+        :imap_message_processing_failed,
+        [channel_id: channel.id, uid: uid] ++ Log.failure(error)
+      )
 
       {:advance, :failed}
   end
@@ -464,11 +479,6 @@ defmodule Custyard.Email.ImapPoll do
       &Map.put(&1, :provider_delivery_id, id)
     )
   end
-
-  defp error_class(%Ecto.Changeset{errors: errors}), do: {:invalid, Keyword.keys(errors)}
-  defp error_class(reason) when is_atom(reason), do: reason
-  defp error_class({reason, _detail}) when is_atom(reason), do: reason
-  defp error_class(_reason), do: :error
 
   # --- Persistence ---
 

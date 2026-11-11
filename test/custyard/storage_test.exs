@@ -8,65 +8,82 @@ defmodule Custyard.StorageTest do
   @mounted "36 28 0:29 / /data rw,relatime - ext4 /dev/vdb rw\n"
   @unmounted "35 28 0:28 / / rw,relatime - overlay overlay rw\n"
   @one_machine {:ok, ["080e94edf34038"]}
+  @canary "private-person@example.test-credential\r\nFORGED EVENT"
+
+  @fly [
+    fly_app_name: "custyard",
+    repo_config: [database: "/data/custyard.db"],
+    upload_dir: "/data/uploads",
+    attachment_dir: "/data/attachments",
+    mountinfo: @mounted,
+    machine_ids: @one_machine
+  ]
+
+  defp check(overrides), do: Storage.check(Keyword.merge(@fly, overrides))
 
   test "allows SQLite and uploads on a mounted Fly volume" do
-    assert :ok ==
-             Storage.validate_fly_storage!(
-               fly_app_name: "custyard",
-               repo_config: [database: "/data/custyard.db"],
-               upload_dir: "/data/uploads",
-               attachment_dir: "/data/attachments",
-               mountinfo: @mounted,
-               machine_ids: @one_machine
-             )
+    assert :ok == check([])
+    assert :ok == Storage.validate_fly_storage!(@fly)
   end
 
-  test "rejects a missing volume even when /data exists in the image" do
+  test "reports a missing volume even when /data exists in the image" do
+    assert {:error, :volume_missing, detail} = check(mountinfo: @unmounted)
+    assert detail =~ "no mounted volume at /data"
+
     assert_raise RuntimeError, ~r/no mounted volume at \/data/, fn ->
-      Storage.validate_fly_storage!(
-        fly_app_name: "custyard",
-        repo_config: [database: "/data/custyard.db"],
-        upload_dir: "/data/uploads",
-        attachment_dir: "/data/attachments",
-        mountinfo: @unmounted
-      )
+      Storage.validate_fly_storage!(Keyword.put(@fly, :mountinfo, @unmounted))
     end
   end
 
-  test "rejects paths outside the Fly volume" do
+  test "reports paths outside the Fly volume" do
+    assert {:error, :volume_missing, "DATABASE_PATH must point inside" <> _} =
+             check(repo_config: [database: "/tmp/custyard.db"])
+
+    assert {:error, :volume_missing, "ATTACHMENT_DIR must point inside" <> _} =
+             check(attachment_dir: "/app/priv/attachments")
+
+    assert {:error, :volume_missing, "UPLOAD_DIR must point inside" <> _} =
+             check(upload_dir: "/tmp/uploads")
+
     assert_raise RuntimeError, ~r/DATABASE_PATH must point inside/, fn ->
-      Storage.validate_fly_storage!(
-        fly_app_name: "custyard",
-        repo_config: [database: "/tmp/custyard.db"],
-        upload_dir: "/data/uploads",
-        attachment_dir: "/data/attachments",
-        mountinfo: @mounted
-      )
+      Storage.validate_fly_storage!(Keyword.put(@fly, :repo_config, database: "/tmp/custyard.db"))
     end
+  end
 
-    assert_raise RuntimeError, ~r/ATTACHMENT_DIR must point inside/, fn ->
-      Storage.validate_fly_storage!(
-        fly_app_name: "custyard",
-        repo_config: [database: "/data/custyard.db"],
-        upload_dir: "/data/uploads",
-        attachment_dir: "/app/priv/attachments",
-        mountinfo: @mounted
-      )
-    end
+  test "path validation never echoes a configured path" do
+    path = "/tmp/" <> @canary
 
-    assert_raise RuntimeError, ~r/UPLOAD_DIR must point inside/, fn ->
-      Storage.validate_fly_storage!(
-        fly_app_name: "custyard",
-        repo_config: [database: "/data/custyard.db"],
-        upload_dir: "/tmp/uploads",
-        mountinfo: @mounted
-      )
+    assert {:error, :volume_missing, detail} = check(repo_config: [database: path])
+    assert detail == "DATABASE_PATH must point inside the mounted /data volume on Fly.io"
+    refute detail =~ @canary
+  end
+
+  test "mount read failures retain safe classification without raw details" do
+    for {reason, expected} <- [
+          {:eacces, "eacces"},
+          {:enoent, "enoent"},
+          {%File.Error{reason: :eacces, path: @canary, action: "read"}, "exception"},
+          {{:private_failure, @canary}, "unclassified_error"}
+        ] do
+      log =
+        capture_log(fn ->
+          assert {:error, :volume_missing, detail} = check(mountinfo: {:error, reason})
+
+          assert detail ==
+                   "Cannot verify Fly volume mount at /data; check the filesystem error event"
+
+          refute detail =~ @canary
+        end)
+
+      assert log =~ "fly_mount_verification_failed"
+      assert log =~ expected
+      refute log =~ @canary
     end
   end
 
   test "does not require a Fly mount for local development" do
     assert :ok ==
-             Storage.validate_fly_storage!(
+             Storage.check(
                fly_app_name: nil,
                repo_config: [database: "/tmp/custyard.db"],
                upload_dir: "/tmp/uploads",
@@ -74,89 +91,51 @@ defmodule Custyard.StorageTest do
              )
   end
 
-  test "rejects a second machine, which would hold a second SQLite database" do
-    assert_raise RuntimeError, ~r/has 2 machines.*fly scale count 1/s, fn ->
+  test "reports a second machine, which would hold a second SQLite database" do
+    assert {:error, :multiple_machines, detail} =
+             check(machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]})
+
+    assert detail =~ ~r/has 2 machines.*fly scale count 1/s
+    assert detail =~ "fly scale count 1 -a YOUR_APP_NAME"
+    refute detail =~ "080e94edf34038"
+    refute detail =~ "d8d0066f561338"
+
+    assert_raise RuntimeError, ~r/has 2 machines/, fn ->
       Storage.validate_fly_storage!(
-        fly_app_name: "custyard",
-        repo_config: [database: "/data/custyard.db"],
-        upload_dir: "/data/uploads",
-        attachment_dir: "/data/attachments",
-        mountinfo: @mounted,
-        machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
+        Keyword.put(@fly, :machine_ids, {:ok, ["080e94edf34038", "d8d0066f561338"]})
       )
     end
   end
 
-  test "rejects a second machine when the database is remote, since files stay on the volume" do
-    error =
-      assert_raise RuntimeError, fn ->
-        Storage.validate_fly_storage!(
-          fly_app_name: "custyard",
-          repo_config: [url: "postgres://localhost/custyard"],
-          upload_dir: "/data/uploads",
-          attachment_dir: "/data/attachments",
-          mountinfo: @mounted,
-          machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
-        )
-      end
+  test "reports a second machine when the database is remote, since files stay on the volume" do
+    assert {:error, :multiple_machines, detail} =
+             check(
+               repo_config: [url: "postgres://localhost/custyard"],
+               machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
+             )
 
-    assert error.message =~
-             ~r/has 2 machines.*keeps\s+uploads and inbound attachments under \/data/s
-
-    assert error.message =~ ~r/Turso or PostgreSQL database does not lift the limit/
-    refute error.message =~ "SQLite"
+    assert detail =~ ~r/has 2 machines.*keeps\s+uploads and inbound attachments under \/data/s
+    assert detail =~ ~r/Turso or PostgreSQL database does not lift the limit/
+    refute detail =~ "SQLite"
   end
 
   test "allows one machine when the database is remote" do
-    assert :ok ==
-             Storage.validate_fly_storage!(
-               fly_app_name: "custyard",
-               repo_config: [url: "postgres://localhost/custyard"],
-               upload_dir: "/data/uploads",
-               attachment_dir: "/data/attachments",
-               mountinfo: @mounted,
-               machine_ids: @one_machine
-             )
+    assert :ok == check(repo_config: [url: "postgres://localhost/custyard"])
   end
 
   test "a Turso database is not on the volume, but uploads still are" do
     # A leftover :database path does not make it local.
     turso = [turso_url: "libsql://custyard-acme.turso.io", database: "/tmp/custyard.db"]
 
-    assert :ok ==
-             Storage.validate_fly_storage!(
-               fly_app_name: "custyard",
-               repo_config: turso,
-               upload_dir: "/data/uploads",
-               attachment_dir: "/data/attachments",
-               mountinfo: @mounted,
-               machine_ids: @one_machine
-             )
+    assert :ok == check(repo_config: turso)
 
-    error =
-      assert_raise RuntimeError, fn ->
-        Storage.validate_fly_storage!(
-          fly_app_name: "custyard",
-          repo_config: turso,
-          upload_dir: "/data/uploads",
-          attachment_dir: "/data/attachments",
-          mountinfo: @mounted,
-          machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]}
-        )
-      end
+    assert {:error, :multiple_machines, detail} =
+             check(repo_config: turso, machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]})
 
-    assert error.message =~ ~r/keeps\s+uploads and inbound attachments under \/data/
-    refute error.message =~ "SQLite"
+    assert detail =~ ~r/keeps\s+uploads and inbound attachments under \/data/
+    refute detail =~ "SQLite"
 
-    assert_raise RuntimeError, ~r/no mounted volume at \/data/, fn ->
-      Storage.validate_fly_storage!(
-        fly_app_name: "custyard",
-        repo_config: turso,
-        upload_dir: "/data/uploads",
-        attachment_dir: "/data/attachments",
-        mountinfo: @unmounted
-      )
-    end
+    assert {:error, :volume_missing, _} = check(repo_config: turso, mountinfo: @unmounted)
   end
 
   @tag :tmp_dir
@@ -164,32 +143,37 @@ defmodule Custyard.StorageTest do
     sqlite = Path.join(dir, "custyard.db")
 
     validate = fn ->
-      Storage.validate_fly_storage!(
-        fly_app_name: "custyard",
-        repo_config: [turso_url: "libsql://custyard-acme.turso.io"],
-        upload_dir: "/data/uploads",
-        attachment_dir: "/data/attachments",
-        mountinfo: @mounted,
-        machine_ids: @one_machine,
-        sqlite_path: sqlite
-      )
+      assert :ok ==
+               check(
+                 repo_config: [turso_url: "libsql://custyard-acme.turso.io"],
+                 sqlite_path: sqlite
+               )
     end
 
-    refute capture_log(validate) =~ "still has"
+    refute capture_log(validate) =~ "unused_local_database_detected"
 
     File.write!(sqlite, "")
-    assert capture_log(validate) =~ "#{sqlite} still has a SQLite database"
+    log = capture_log(validate)
+    assert log =~ "unused_local_database_detected"
+    refute log =~ sqlite
   end
 
-  test "boots with a warning when the machine count cannot be determined" do
-    assert :ok ==
-             Storage.validate_fly_storage!(
-               fly_app_name: "custyard",
-               repo_config: [database: "/data/custyard.db"],
-               upload_dir: "/data/uploads",
-               attachment_dir: "/data/attachments",
-               mountinfo: @mounted,
-               machine_ids: :unknown
-             )
+  test "continues with a warning when the machine count cannot be determined" do
+    assert capture_log(fn -> assert :ok == check(machine_ids: :unknown) end) =~
+             "fly_machine_count_unknown"
+  end
+
+  describe "mounted?/2" do
+    test "tells a path on a mount from one on the root filesystem" do
+      assert Storage.mounted?("/data/custyard.db", {:ok, @mounted}) == true
+      assert Storage.mounted?("/data", {:ok, @mounted}) == true
+      assert Storage.mounted?("/data/custyard.db", {:ok, @unmounted}) == false
+      assert Storage.mounted?("/database/custyard.db", {:ok, @mounted}) == false
+      assert Storage.mounted?("/tmp/custyard.db", {:ok, @mounted <> @unmounted}) == false
+    end
+
+    test "is unknown without mountinfo" do
+      assert Storage.mounted?("/data/custyard.db", {:error, :enoent}) == nil
+    end
   end
 end

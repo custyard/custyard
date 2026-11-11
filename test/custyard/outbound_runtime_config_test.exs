@@ -22,13 +22,25 @@ defmodule Custyard.OutboundRuntimeConfigTest do
     assert Reader.read!(@runtime, env: :test)[:custyard][:outbound_delivery_enabled]
   end
 
-  test "invalid recovery settings fail boot rather than silently enabling sending" do
-    for value <- ["", "0", "1", "TRUE", "disabled"] do
+  # runtime.exs never raises (Custyard.Boot.Env reports the problem and a
+  # production boot serves the doctor card). A mistyped value must still never
+  # enable sending.
+  test "invalid recovery settings keep delivery stopped instead of enabling sending" do
+    for value <- ["0", "1", "TRUE", "disabled"] do
       System.put_env(@key, value)
 
-      assert_raise RuntimeError, ~r/OUTBOUND_DELIVERY_ENABLED must be true or false/, fn ->
-        Reader.read!(@runtime, env: :test)
-      end
+      refute Reader.read!(@runtime, env: :test)[:custyard][:outbound_delivery_enabled]
+
+      prod = Reader.read!(@runtime, env: :prod)[:custyard]
+      refute prod[:outbound_delivery_enabled]
+      assert Enum.any?(prod[:boot_env].problems, &(&1.variable == @key and &1.kind == :malformed))
+      assert prod[:boot_env].verdict == :unconfigured
     end
+  end
+
+  test "a blank value is unset, as for every other variable" do
+    System.put_env(@key, "")
+    assert Reader.read!(@runtime, env: :test)[:custyard][:outbound_delivery_enabled]
+    assert Reader.read!(@runtime, env: :prod)[:custyard][:outbound_delivery_enabled]
   end
 end

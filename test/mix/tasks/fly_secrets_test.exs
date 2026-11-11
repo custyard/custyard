@@ -16,6 +16,130 @@ defmodule Mix.Tasks.Fly.SecretsTest do
 
   @tmp_dir System.tmp_dir!()
 
+  describe "explicit deployment targets" do
+    setup do
+      test_dir = Path.join(@tmp_dir, "fly_target_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(test_dir)
+      previous_dir = File.cwd!()
+      previous_path = System.get_env("PATH")
+      File.cd!(test_dir)
+
+      on_exit(fn ->
+        File.cd!(previous_dir)
+        System.put_env("PATH", previous_path)
+        File.rm_rf(test_dir)
+      end)
+
+      File.write!("fly.toml", "app = \"custyard\"\n")
+      File.write!("fly.staging.toml", "app = \"custyard-staging\"\n")
+      File.write!(".env", "PHX_HOST=production.example.com\n")
+      File.write!(".env.secrets", "SECRET_KEY_BASE=production-secret-must-not-be-read\n")
+      File.write!(".env.staging.local", "PHX_HOST=staging.example.com\n")
+      File.write!(".env.staging.secrets.local", "SECRET_KEY_BASE=staging-secret-for-preview\n")
+
+      File.write!("fly", """
+      #!/bin/sh
+      printf '%s\\n' "$@" > fly-args
+      cat > fly-stdin
+      """)
+
+      File.chmod!("fly", 0o700)
+      System.put_env("PATH", test_dir <> ":" <> previous_path)
+      :ok
+    end
+
+    test "preview selects staging files and masks credentials" do
+      output = ExUnit.CaptureIO.capture_io(fn -> Secrets.run(staging_args()) end)
+      assert output =~ "staging.example.com"
+      refute output =~ "production.example.com"
+      refute output =~ "production-secret"
+      refute output =~ "staging-secret-for-preview"
+      refute File.exists?("fly-args")
+    end
+
+    test "apply updates only selected TOML and imports into its exact app" do
+      original = File.read!("fly.toml")
+      ExUnit.CaptureIO.capture_io(fn -> Secrets.run(staging_args() ++ ["--apply", "--stage"]) end)
+
+      assert File.read!("fly.toml") == original
+      assert File.read!("fly.staging.toml") =~ "PHX_HOST = \"staging.example.com\""
+
+      assert File.read!("fly-args") ==
+               "secrets\nimport\n--config\nfly.staging.toml\n-a\ncustyard-staging\n--stage\n"
+
+      assert File.read!("fly-stdin") == "SECRET_KEY_BASE=staging-secret-for-preview"
+    end
+
+    test "mismatched app fails before TOML mutation or secret import" do
+      original = File.read!("fly.staging.toml")
+
+      assert_failure(staging_args() ++ ["--app", "custyard", "--apply"])
+      assert File.read!("fly.staging.toml") == original
+      refute File.exists?("fly-args")
+    end
+
+    test "app override alone cannot redirect default production source files" do
+      original = File.read!("fly.toml")
+      assert_failure(["--app", "custyard-staging", "--apply"])
+      assert File.read!("fly.toml") == original
+      refute File.exists?("fly-args")
+    end
+
+    test "partial source selection fails instead of falling back to production files" do
+      assert_failure(["--config", "fly.staging.toml", "--apply"])
+      refute File.exists?("fly-args")
+    end
+
+    test "both explicitly selected sources must exist before any mutation" do
+      File.rm!(".env.staging.secrets.local")
+      original = File.read!("fly.staging.toml")
+      assert_failure(staging_args() ++ ["--apply"])
+      assert File.read!("fly.staging.toml") == original
+      refute File.exists?("fly-args")
+    end
+
+    test "credentials accidentally placed in environment file are never displayed or committed" do
+      File.write!(
+        ".env.staging.local",
+        "BUNNY_DATABASE_AUTH_TOKEN=credential-that-must-not-leak\n"
+      )
+
+      original = File.read!("fly.staging.toml")
+
+      output =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          assert catch_exit(Secrets.run(staging_args() ++ ["--apply"])) == {:shutdown, 1}
+        end)
+
+      refute output =~ "credential-that-must-not-leak"
+      assert File.read!("fly.staging.toml") == original
+      refute File.exists?("fly-args")
+    end
+
+    test "unknown and incomplete options fail closed" do
+      assert_failure(["--env-fil", "staging", "--apply"])
+      assert_failure(["--app"])
+      refute File.exists?("fly-args")
+    end
+  end
+
+  defp staging_args do
+    [
+      "--config",
+      "fly.staging.toml",
+      "--env-file",
+      ".env.staging.local",
+      "--secrets-file",
+      ".env.staging.secrets.local"
+    ]
+  end
+
+  defp assert_failure(args) do
+    ExUnit.CaptureIO.capture_io(:stderr, fn ->
+      assert catch_exit(Secrets.run(args)) == {:shutdown, 1}
+    end)
+  end
+
   describe "run/1 preview mode" do
     setup do
       test_dir = Path.join(@tmp_dir, "fly_secrets_preview_#{:erlang.unique_integer([:positive])}")

@@ -12,7 +12,7 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
   alias Custyard.{Thread, Message, Repo, Scoring}
   alias Custyard.Email.LanguageDetector
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @doc """
   Enrich a thread with additional metadata from the normalized payload.
@@ -36,14 +36,21 @@ defmodule Custyard.Webhooks.Purposes.Enrichment do
           )
 
         {:error, changeset} ->
-          Logger.error("Failed to enrich thread #{thread.id}: #{inspect(changeset.errors)}")
+          Log.error(
+            :thread_enrichment_record_failed,
+            [thread_id: thread.id] ++ Log.failure(changeset)
+          )
       end
     end
 
     :ok
   rescue
     error ->
-      Logger.error("Enrichment failed for thread #{thread.id}: #{inspect(error)}")
+      Log.error(
+        :thread_enrichment_failed,
+        [thread_id: thread.id] ++ Log.failure(error)
+      )
+
       :ok
   end
 

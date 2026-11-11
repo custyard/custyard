@@ -78,6 +78,8 @@ defmodule Custyard.TursoTestServer do
     config = %{
       database: database,
       auth_token: Keyword.get(opts, :auth_token),
+      protocol: Keyword.get(opts, :protocol, :v3),
+      interactive: Keyword.get(opts, :interactive, true),
       stream_expiry: Keyword.get(opts, :stream_expiry, 10_000),
       route_streams: Keyword.get(opts, :route_streams, false),
       tls: Keyword.get(opts, :tls),
@@ -129,13 +131,28 @@ defmodule Custyard.TursoTestServer.Router do
   def init(config), do: config
 
   @impl Plug
-  def call(%{method: "POST", path_info: ["v3", "pipeline"]} = conn, config) do
+  def call(%{method: "POST", path_info: [version, "pipeline"]} = conn, config)
+      when version in ["v2", "v3"] do
+    if version != Atom.to_string(config.protocol) do
+      send_resp(conn, 404, "")
+    else
+      pipeline(conn, config)
+    end
+  end
+
+  def call(%{method: "GET", path_info: path} = conn, _config)
+      when path in [["v2"], ["v3"], ["health"]],
+      do: send_resp(conn, 200, "")
+
+  def call(conn, _config), do: send_resp(conn, 404, "")
+
+  defp pipeline(conn, config) do
     with :ok <- authorize(conn, config),
          {:ok, body, conn} <- read_body(conn, length: 64_000_000),
          {:ok, %{"requests" => requests} = pipeline} <- Jason.decode(body),
          {:ok, stream} <- stream(pipeline["baton"], config) do
       {results, open?} = Stream.run(stream, requests)
-      baton = if open?, do: new_baton(stream, config)
+      baton = if open? and config.interactive, do: new_baton(stream, config)
       base_url = if open?, do: base_url(config)
       json(conn, 200, %{"baton" => baton, "base_url" => base_url, "results" => results})
     else
@@ -155,11 +172,6 @@ defmodule Custyard.TursoTestServer.Router do
         json(conn, 400, %{"message" => "Invalid pipeline request"})
     end
   end
-
-  def call(%{method: "GET", path_info: path} = conn, _config) when path in [["v3"], ["health"]],
-    do: send_resp(conn, 200, "")
-
-  def call(conn, _config), do: send_resp(conn, 404, "")
 
   defp authorize(_conn, %{auth_token: nil}), do: :ok
 
@@ -226,15 +238,23 @@ defmodule Custyard.TursoTestServer.Stream do
     Process.monitor(config.server)
     {:ok, db} = Sqlite3.open(config.database)
     :ok = Sqlite3.set_busy_timeout(db, 30_000)
-    {:ok, %{db: db, expiry: config.stream_expiry}, config.stream_expiry}
+
+    {:ok, %{db: db, expiry: config.stream_expiry, protocol: config.protocol},
+     config.stream_expiry}
   end
 
   @impl true
   def handle_call({:run, requests}, _from, state) do
     {results, open?} =
       Enum.map_reduce(requests, true, fn
-        %{"type" => "close"}, _open? -> {ok(%{"type" => "close"}), false}
-        request, open? -> {handle_request(request, state.db), open?}
+        %{"type" => "close"}, _open? ->
+          {ok(%{"type" => "close"}), false}
+
+        %{"type" => "get_autocommit"}, open? when state.protocol == :v2 ->
+          {error("Unsupported request", "PROTOCOL_ERROR"), open?}
+
+        request, open? ->
+          {handle_request(request, state.db), open?}
       end)
 
     if open? do
@@ -261,6 +281,33 @@ defmodule Custyard.TursoTestServer.Stream do
   defp handle_request(%{"type" => "get_autocommit"}, db) do
     {:ok, status} = Sqlite3.transaction_status(db)
     ok(%{"type" => "get_autocommit", "is_autocommit" => status == :idle})
+  end
+
+  defp handle_request(%{"type" => "batch", "batch" => %{"steps" => steps}}, db) do
+    {results, errors} =
+      Enum.reduce(steps, {[], []}, fn step, {results, errors} ->
+        permitted? =
+          case step["condition"] do
+            nil -> true
+            %{"type" => "ok", "step" => index} -> is_map(Enum.at(results, index))
+          end
+
+        if permitted? do
+          case execute(db, step["stmt"]["sql"], Enum.map(step["stmt"]["args"] || [], &decode/1)) do
+            {:ok, result} ->
+              {results ++ [result], errors ++ [nil]}
+
+            {:error, reason} ->
+              {results ++ [nil],
+               errors ++
+                 [%{"message" => "SQLite error: " <> to_string(reason), "code" => "SQLITE_ERROR"}]}
+          end
+        else
+          {results ++ [nil], errors ++ [nil]}
+        end
+      end)
+
+    ok(%{"type" => "batch", "result" => %{"step_results" => results, "step_errors" => errors}})
   end
 
   defp handle_request(request, _db),

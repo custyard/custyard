@@ -20,7 +20,7 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   alias Custyard.{Thread, Threads, Message, Repo, Scoring}
   alias Custyard.Email.{Normalizer, SenderMatcher, SieveHeaderMapper, ThreadMatcher}
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @doc """
   Process an incoming normalized payload and create/update a thread.
@@ -416,8 +416,8 @@ defmodule Custyard.Webhooks.Purposes.SenderMatching do
   defp message_source(:public_intake), do: :prospect
   defp message_source(source) when source in [:email, :portal, :staff], do: source
 
-  defp message_source(other) do
-    Logger.warning("Unknown message source #{inspect(other)}, defaulting to :email")
+  defp message_source(_other) do
+    Log.warning(:message_source_defaulted, reason: :unknown_source)
     :email
   end
 
