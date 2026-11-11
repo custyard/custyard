@@ -5,7 +5,8 @@ defmodule Custyard.Boot.RuntimeConfigTest do
   alias Custyard.Boot.Env
 
   @runtime_config Path.expand("../../../config/runtime.exs", __DIR__)
-  @env_vars Env.known_names() ++ ~w(FLY_APP_NAME BUNNY_DATABASE_URL BUNNY_DATABASE_AUTH_TOKEN)
+  @env_vars Env.known_names() ++
+              ~w(FLY_APP_NAME BUNNY_DATABASE_URL BUNNY_DATABASE_AUTH_TOKEN BUNNY_ORIGIN_SECRET)
 
   @minimal %{
     "SECRET_KEY_BASE" => String.duplicate("s", 64),
@@ -54,6 +55,10 @@ defmodule Custyard.Boot.RuntimeConfigTest do
     assert custyard[:credential_keys] == [current: nil, previous: []]
     assert custyard[:email_enabled] == false
     assert custyard[:trust_proxy_headers] == false
+    assert custyard[:storage_provider] == :local
+    assert custyard[:proxy_provider] == :none
+    assert custyard[:bunny_origin_secret] == nil
+    assert custyard[:data_volume_id] == nil
     assert custyard[:upload_dir] == "/data/uploads"
     assert custyard[:attachment_dir] == "/data/attachments"
   end
@@ -125,6 +130,8 @@ defmodule Custyard.Boot.RuntimeConfigTest do
       read_prod!(Map.merge(Map.delete(@minimal, "PHX_HOST"), %{"FLY_APP_NAME" => "custyard-eu"}))
 
     assert config[:custyard][:trust_proxy_headers] == true
+    assert config[:custyard][:storage_provider] == :fly
+    assert config[:custyard][:proxy_provider] == :fly
     assert config[:custyard][CustyardWeb.Endpoint][:url][:host] == "custyard-eu.fly.dev"
     assert config[:custyard][:boot_env].verdict == :configured
   end

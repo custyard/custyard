@@ -205,12 +205,25 @@ if config_env() == :prod do
   config :custyard, :boot_env, env
   settings = env.settings
 
-  # Rate limiting keys on the client IP. Behind Fly's edge proxy every
-  # request arrives from the proxy address, so without header trust all
-  # visitors would collapse into one shared bucket. Trust is never enabled
-  # off-Fly, where the spoofable headers would come straight from clients.
-  # CustyardWeb.ClientIP only honors proxy-authoritative values.
-  config :custyard, :trust_proxy_headers, settings.trust_proxy_headers
+  # Hosting, proxy trust and database provider are independent. Fly staging
+  # may use Bunny Database while retaining Fly's proxy and file-volume checks.
+  # Custyard.Storage checks the selected volume before the Repo starts.
+  #
+  # Rate limiting keys on the client IP. Behind an edge proxy every request
+  # arrives from the proxy address, so without header trust all visitors
+  # would collapse into one shared bucket. Trust is never enabled without a
+  # proxy provider, where the spoofable headers would come straight from
+  # clients; CustyardWeb.ClientIP only honors proxy-authoritative values, and
+  # CustyardWeb.Proxy authenticates Bunny's origin (BUNNY_ORIGIN_SECRET)
+  # before trusting its forwarded headers. With that secret missing or short
+  # the setting is nil and the proxy refuses every request but the health
+  # probes.
+  config :custyard,
+    storage_provider: settings.storage_provider,
+    data_volume_id: settings.data_volume_id,
+    proxy_provider: settings.proxy_provider,
+    bunny_origin_secret: settings.bunny_origin_secret,
+    trust_proxy_headers: settings.trust_proxy_headers
 
   # Operator login is magic-link-only, so an unset or unknown MAIL_ADAPTER is
   # a configuration problem (Custyard.Boot.Env), not a silent fallback to the
@@ -305,11 +318,13 @@ if config_env() == :prod do
         busy_timeout: 5000
 
     {:turso, url, token} ->
-      # Turso: the same SQLite database, reached over HTTP by
-      # Custyard.Turso.Connection. `turso db show --url` prints this URL.
+      # Turso or Bunny Database: the same SQLite database, reached over HTTP
+      # by Custyard.Turso.Connection (Hrana v3 for Turso, v2 for Bunny).
+      # `turso db show --url` prints the Turso URL.
       config :custyard, Custyard.Repo,
         turso_url: url,
         turso_auth_token: token,
+        turso_provider: settings.turso_provider,
         pool_size: settings.pool_size
 
     {:postgres, url} when repo_adapter == Ecto.Adapters.Postgres ->

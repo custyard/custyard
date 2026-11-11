@@ -549,6 +549,8 @@ defmodule Custyard.LogTest do
                 "lib/custyard/release.ex",
                 "lib/custyard/release/dsar.ex",
                 "lib/custyard/release/acknowledgments.ex",
+                # bin/data-volume: fixed sentences for the operator's terminal.
+                "lib/custyard/release/volume.ex",
                 # The boot report (names only) for `docker logs`; see its moduledoc.
                 "lib/custyard/boot/console.ex"
               ]

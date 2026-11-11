@@ -344,7 +344,7 @@ LETTERMINT_PROJECT_TOKEN=…
 | `OPERATOR_NOTIFICATION_EMAIL` defaults to `OPERATOR_EMAIL`, then the first super_admin | none |
 | `EMAIL_NOTIFICATIONS_ENABLED` defaults on unless `MAIL_ADAPTER=local` | set `false` for silence |
 | `CREDENTIAL_ENCRYPTION_KEY` stays required and random (`openssl rand -base64 32`); the doctor card generates one in its paste block; `_PREVIOUS` rotation unchanged | deriving it from `SECRET_KEY_BASE` was rejected because it couples two secrets with different rotation needs: rotating the session secret would silently make every stored tenant credential undecryptable |
-| `BUNNY_DATABASE_URL` / `BUNNY_DATABASE_AUTH_TOKEN` accepted as fallbacks for `DATABASE_URL` / `TURSO_AUTH_TOKEN` | already proposed in docs/ops/bunny-production-fly-staging.md |
+| `BUNNY_DATABASE_URL` / `BUNNY_DATABASE_AUTH_TOKEN` accepted; either one selects Bunny Database (libSQL over Hrana v2), with `DATABASE_URL` / `TURSO_AUTH_TOKEN` as its other names under `DATABASE_PROVIDER=bunny` | a conflict between the two naming schemes, or a Bunny setting next to another provider, is a doctor problem rather than a silent choice (docs/ops/bunny-setup.md) |
 | `PHX_HOST` required in prod; falls back to `FLY_APP_NAME.fly.dev` on Fly | replaces the silent `localhost` default |
 | `postgres://` on the SQLite build is a doctor problem ("image built for SQLite/libSQL") | compiled Postgres adapter unchanged |
 | Delete `BASE_URL` and `IMAP_*` from `fly.toml`, `LIVE_VIEW_SIGNING_SALT` from the secrets sample | none |

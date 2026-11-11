@@ -39,6 +39,10 @@ defmodule Custyard.Boot.Env do
   @mail_adapters ~w(mailgun sendgrid smtp postmark lettermint local)
   @lettermint_api_url "https://api.lettermint.co/v1"
   @default_database_path "/data/custyard.db"
+  @database_providers ~w(sqlite turso bunny postgres)
+  @storage_providers ~w(local fly bunny)
+  @proxy_providers ~w(none fly bunny)
+  @origin_secret_bytes 32
   @near_miss_threshold 0.9
 
   @known_names Enum.sort(~w(
@@ -51,7 +55,9 @@ defmodule Custyard.Boot.Env do
     CREDENTIAL_ENCRYPTION_KEY
     CREDENTIAL_ENCRYPTION_KEY_PREVIOUS
     DATABASE_PATH
+    DATABASE_PROVIDER
     DATABASE_URL
+    DATA_VOLUME_ID
     EMAIL_FROM_ADDRESS
     EMAIL_FROM_NAME
     EMAIL_NOTIFICATIONS_ENABLED
@@ -79,6 +85,7 @@ defmodule Custyard.Boot.Env do
     POOL_SIZE
     PORT
     POSTMARK_API_KEY
+    PROXY_PROVIDER
     SECRET_KEY_BASE
     SENDGRID_API_KEY
     SENTRY_DSN
@@ -92,6 +99,7 @@ defmodule Custyard.Boot.Env do
     SMTP_PORT
     SMTP_SSL
     SMTP_USERNAME
+    STORAGE_PROVIDER
     TURSO_AUTH_TOKEN
     UPLOAD_DIR
     WEBHOOK_SECRET_INTERCOM
@@ -143,6 +151,7 @@ defmodule Custyard.Boot.Env do
       |> acknowledgments()
       |> skip_migrations()
       |> imap()
+      |> hosting()
       |> directories_and_platform()
 
     problems = Enum.reverse(acc.problems)
@@ -412,38 +421,142 @@ defmodule Custyard.Boot.Env do
 
   defp email?(value), do: String.match?(value, ~r/\A[^@\s]+@[^@\s]+\z/)
 
+  # The database provider is independent of where the container runs: Fly
+  # staging may use Bunny Database. BUNNY_DATABASE_URL or
+  # BUNNY_DATABASE_AUTH_TOKEN select the Bunny provider (libSQL over Hrana v2)
+  # unless DATABASE_PROVIDER says otherwise, which is then a conflict. No
+  # combination falls back to the SQLite file: a stale or half-set remote
+  # database leaves the database undecided and the verdict unconfigured.
   defp database(acc) do
-    acc = integer(acc, "POOL_SIZE", 10, :pool_size)
+    acc = acc |> integer("POOL_SIZE", 10, :pool_size) |> put(:turso_provider, nil)
 
-    {source, url} =
-      case {get(acc, "DATABASE_URL"), get(acc, "BUNNY_DATABASE_URL")} do
-        {nil, nil} -> {nil, nil}
-        {nil, bunny} -> {"BUNNY_DATABASE_URL", bunny}
-        {url, _} -> {"DATABASE_URL", url}
-      end
+    db = %{
+      url: get(acc, "DATABASE_URL"),
+      token: get(acc, "TURSO_AUTH_TOKEN"),
+      bunny_url: get(acc, "BUNNY_DATABASE_URL"),
+      bunny_token: get(acc, "BUNNY_DATABASE_AUTH_TOKEN")
+    }
 
+    bunny_settings? = is_binary(db.bunny_url) or is_binary(db.bunny_token)
+
+    provider =
+      get(acc, "DATABASE_PROVIDER") || if(bunny_settings?, do: "bunny", else: :automatic)
+
+    select_database(acc, db, provider, bunny_settings?)
+  end
+
+  defp select_database(acc, db, :automatic, _bunny_settings?), do: automatic(acc, db)
+  defp select_database(acc, db, "bunny", _bunny_settings?), do: bunny(acc, db)
+
+  defp select_database(acc, _db, provider, true) when provider in @database_providers do
+    acc
+    |> problem(
+      "DATABASE_PROVIDER",
+      :malformed,
+      "conflicts with the BUNNY_DATABASE_* settings; set it to bunny or unset them"
+    )
+    |> no_database("DATABASE_PROVIDER conflicts with BUNNY_DATABASE_*, so no database")
+  end
+
+  defp select_database(acc, db, "sqlite", _bunny_settings?), do: explicit_sqlite(acc, db)
+
+  defp select_database(acc, db, "turso", _bunny_settings?),
+    do: explicit_remote(acc, db, "turso", "libsql://", ["libsql://"])
+
+  defp select_database(acc, db, "postgres", _bunny_settings?),
+    do: explicit_remote(acc, db, "postgres", "postgres://", ["postgres://", "postgresql://"])
+
+  defp select_database(acc, _db, _unknown, _bunny_settings?) do
+    acc
+    |> problem(
+      "DATABASE_PROVIDER",
+      :unsupported,
+      "must be one of #{Enum.join(@database_providers, ", ")}"
+    )
+    |> no_database("DATABASE_PROVIDER is not recognized, so no database")
+  end
+
+  # No DATABASE_PROVIDER and no Bunny settings: the URL's scheme decides.
+  defp automatic(acc, %{url: nil, token: token}) when is_binary(token) do
+    acc
+    |> problem(
+      "DATABASE_URL",
+      :missing,
+      "TURSO_AUTH_TOKEN is set, so the libsql:// URL is needed too; " <>
+        "unset the token to use the SQLite file"
+    )
+    |> no_database("TURSO_AUTH_TOKEN is set without DATABASE_URL, so no database")
+  end
+
+  defp automatic(acc, %{url: nil}), do: sqlite(acc)
+
+  defp automatic(acc, %{url: url, token: token}) do
     cond do
-      is_nil(url) ->
-        sqlite(acc)
-
       String.starts_with?(url, "libsql://") ->
-        turso(acc, source, url)
+        turso(acc, url, token)
 
       String.starts_with?(url, ["postgres://", "postgresql://"]) ->
-        acc
-        |> put(:database, {:postgres, url})
-        |> put(:database_reason, "#{source} is set, so PostgreSQL")
+        postgres(acc, url)
 
       true ->
         acc
         |> problem(
-          source,
+          "DATABASE_URL",
           :malformed,
-          "must start with libsql:// (Turso) or postgres://; unset it to use the SQLite file"
+          "must start with libsql:// (Turso) or postgres://; unset it to use the SQLite " <>
+            "file, or set DATABASE_PROVIDER=bunny for a Bunny Database URL"
         )
-        |> put(:database, nil)
-        |> put(:database_reason, "#{source} has an unsupported scheme, so no database")
+        |> no_database("DATABASE_URL has an unsupported scheme, so no database")
     end
+  end
+
+  defp explicit_sqlite(acc, %{url: nil, token: nil}), do: sqlite(acc)
+
+  defp explicit_sqlite(acc, _db) do
+    acc
+    |> problem(
+      "DATABASE_PROVIDER",
+      :malformed,
+      "sqlite conflicts with DATABASE_URL or TURSO_AUTH_TOKEN; unset them or change the provider"
+    )
+    |> no_database("DATABASE_PROVIDER=sqlite conflicts with remote settings, so no database")
+  end
+
+  defp explicit_remote(acc, %{url: nil}, provider, example, _schemes) do
+    acc
+    |> problem(
+      "DATABASE_URL",
+      :missing,
+      "DATABASE_PROVIDER=#{provider} needs a #{example} URL"
+    )
+    |> no_database("DATABASE_PROVIDER=#{provider} without DATABASE_URL, so no database")
+  end
+
+  defp explicit_remote(acc, %{url: url, token: token}, provider, example, schemes) do
+    cond do
+      not String.starts_with?(url, schemes) ->
+        acc
+        |> problem(
+          "DATABASE_URL",
+          :malformed,
+          "must start with #{example} when DATABASE_PROVIDER=#{provider}"
+        )
+        |> no_database(
+          "DATABASE_URL does not match DATABASE_PROVIDER=#{provider}, so no database"
+        )
+
+      provider == "turso" ->
+        turso(acc, url, token)
+
+      true ->
+        postgres(acc, url)
+    end
+  end
+
+  defp no_database(acc, reason) do
+    acc
+    |> put(:database, nil)
+    |> put(:database_reason, reason)
   end
 
   defp sqlite(acc) do
@@ -464,15 +577,18 @@ defmodule Custyard.Boot.Env do
         else
           acc
           |> problem("DATABASE_PATH", :malformed, "must be an absolute filesystem path")
-          |> put(:database, nil)
-          |> put(:database_reason, "DATABASE_PATH is relative, so no database")
+          |> no_database("DATABASE_PATH is relative, so no database")
         end
     end
   end
 
-  defp turso(acc, source, url) do
-    token = get(acc, "TURSO_AUTH_TOKEN") || get(acc, "BUNNY_DATABASE_AUTH_TOKEN")
+  defp postgres(acc, url) do
+    acc
+    |> put(:database, {:postgres, url})
+    |> put(:database_reason, "DATABASE_URL is set, so PostgreSQL")
+  end
 
+  defp turso(acc, url, token) do
     acc =
       if is_nil(token) and not plain_http?(url) do
         problem(
@@ -487,8 +603,92 @@ defmodule Custyard.Boot.Env do
 
     acc
     |> put(:database, {:turso, url, token})
-    |> put(:database_reason, "#{source} is set, so remote libSQL")
+    |> put(:turso_provider, :turso)
+    |> put(:database_reason, "DATABASE_URL is set, so remote libSQL")
   end
+
+  # Bunny Database: the same libSQL driver over Hrana v2. Either name of each
+  # pair is accepted; two different values for one setting are a conflict
+  # rather than a silent choice. Values are never part of a problem detail.
+  defp bunny(acc, db) do
+    cond do
+      differ?(db.bunny_url, db.url) ->
+        acc
+        |> problem(
+          "BUNNY_DATABASE_URL",
+          :malformed,
+          "conflicts with DATABASE_URL; set one URL or identical aliases"
+        )
+        |> no_database("BUNNY_DATABASE_URL conflicts with DATABASE_URL, so no database")
+
+      differ?(db.bunny_token, db.token) ->
+        acc
+        |> problem(
+          "BUNNY_DATABASE_AUTH_TOKEN",
+          :malformed,
+          "conflicts with TURSO_AUTH_TOKEN; set one token or identical aliases"
+        )
+        |> no_database(
+          "BUNNY_DATABASE_AUTH_TOKEN conflicts with TURSO_AUTH_TOKEN, so no database"
+        )
+
+      is_nil(db.bunny_url || db.url) ->
+        acc
+        |> problem(
+          "BUNNY_DATABASE_URL",
+          :missing,
+          "Bunny Database is selected, so its URL is needed (DATABASE_URL is accepted too)"
+        )
+        |> no_database("Bunny Database is selected without a URL, so no database")
+
+      true ->
+        source = if db.bunny_url, do: "BUNNY_DATABASE_URL", else: "DATABASE_URL"
+        bunny_url(acc, source, db.bunny_url || db.url, db.bunny_token || db.token)
+    end
+  end
+
+  defp bunny_url(acc, source, url, token) do
+    if bunny_url?(url) do
+      acc =
+        if is_nil(token) do
+          problem(
+            acc,
+            "BUNNY_DATABASE_AUTH_TOKEN",
+            :missing,
+            "a Bunny Database needs its access token (TURSO_AUTH_TOKEN is accepted too)"
+          )
+        else
+          acc
+        end
+
+      acc
+      |> put(:database, {:turso, url, token})
+      |> put(:turso_provider, :bunny)
+      |> put(:database_reason, "#{source} is set, so Bunny Database (remote libSQL)")
+    else
+      acc
+      |> problem(
+        source,
+        :malformed,
+        "a Bunny Database URL must be https:// or libsql:// with a host and without " <>
+          "credentials, query parameters or a fragment"
+      )
+      |> no_database("#{source} is not a usable Bunny Database URL, so no database")
+    end
+  end
+
+  defp bunny_url?(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host, query: nil, userinfo: nil, fragment: nil}}
+      when scheme in ["libsql", "https"] and is_binary(host) and host != "" ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp differ?(a, b), do: is_binary(a) and is_binary(b) and a != b
 
   defp plain_http?(url) do
     url
@@ -638,9 +838,121 @@ defmodule Custyard.Boot.Env do
     end
   end
 
+  # Where files live and which proxy is in front are chosen separately from
+  # the database (Fly staging can run on Bunny Database). Both default to Fly
+  # when FLY_APP_NAME is present and to nothing special otherwise.
+  defp hosting(acc) do
+    fly? = is_binary(get(acc, "FLY_APP_NAME"))
+
+    acc
+    |> choice(
+      "STORAGE_PROVIDER",
+      :storage_provider,
+      @storage_providers,
+      if(fly?, do: :fly, else: :local),
+      :invalid
+    )
+    |> choice(
+      "PROXY_PROVIDER",
+      :proxy_provider,
+      @proxy_providers,
+      if(fly?, do: :fly, else: :none),
+      nil
+    )
+    |> data_volume_id()
+    |> bunny_origin_secret()
+  end
+
+  # An unrecognized value is never echoed. `invalid` is what the setting
+  # becomes then: storage has a value that Custyard.Storage refuses, so a
+  # release command cannot skip the volume check; the proxy keeps the
+  # platform default so the doctor card that reports the problem is reachable.
+  defp choice(acc, name, key, allowed, default, invalid) do
+    case get(acc, name) do
+      nil ->
+        put(acc, key, default)
+
+      value ->
+        if value in allowed do
+          put(acc, key, String.to_existing_atom(value))
+        else
+          acc
+          |> problem(name, :unsupported, "must be one of #{Enum.join(allowed, ", ")}")
+          |> put(key, invalid || default)
+        end
+    end
+  end
+
+  # The identity `bin/data-volume init` wrote to the volume marker. Required,
+  # and checked for shape, only where Custyard.Storage compares it.
+  defp data_volume_id(%{settings: %{storage_provider: :bunny}} = acc) do
+    case get(acc, "DATA_VOLUME_ID") do
+      nil ->
+        acc
+        |> credential(
+          "DATA_VOLUME_ID",
+          "STORAGE_PROVIDER=bunny needs the identity of the mounted file volume " <>
+            "(the one given to `bin/data-volume init`)"
+        )
+        |> put(:data_volume_id, nil)
+
+      value ->
+        if String.match?(value, ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\z/) do
+          put(acc, :data_volume_id, value)
+        else
+          acc
+          |> problem(
+            "DATA_VOLUME_ID",
+            :malformed,
+            "must be 1 to 128 letters, digits, dots, dashes or underscores, " <>
+              "starting with a letter or digit"
+          )
+          |> put(:data_volume_id, nil)
+        end
+    end
+  end
+
+  defp data_volume_id(acc), do: put(acc, :data_volume_id, get(acc, "DATA_VOLUME_ID"))
+
+  # Bunny's edge rule overwrites X-Custyard-Origin with this value and
+  # CustyardWeb.Proxy compares it before trusting any forwarded header. A
+  # missing or short secret leaves the setting nil, so the proxy refuses every
+  # request but the health probes: the report on the container console and
+  # `bin/doctor` name the problem, the doctor card is not served.
+  defp bunny_origin_secret(%{settings: %{proxy_provider: :bunny}} = acc) do
+    case get(acc, "BUNNY_ORIGIN_SECRET") do
+      nil ->
+        acc
+        |> credential(
+          "BUNNY_ORIGIN_SECRET",
+          "PROXY_PROVIDER=bunny authenticates the CDN with this shared secret; " <>
+            "generate with `openssl rand -hex 32`"
+        )
+        |> put(:bunny_origin_secret, nil)
+
+      value when byte_size(value) < @origin_secret_bytes ->
+        acc
+        |> problem(
+          "BUNNY_ORIGIN_SECRET",
+          :malformed,
+          "must be at least #{@origin_secret_bytes} bytes (#{byte_size(value)} given); " <>
+            "generate with `openssl rand -hex 32`"
+        )
+        |> put(:bunny_origin_secret, nil)
+
+      value ->
+        put(acc, :bunny_origin_secret, value)
+    end
+  end
+
+  defp bunny_origin_secret(acc), do: put(acc, :bunny_origin_secret, nil)
+
   defp directories_and_platform(acc) do
     fly? = is_binary(get(acc, "FLY_APP_NAME"))
-    bunny? = Enum.any?(acc.present, &String.starts_with?(&1, "BUNNY_"))
+
+    bunny? =
+      :bunny in [acc.settings.storage_provider, acc.settings.proxy_provider] or
+        Enum.any?(acc.present, &String.starts_with?(&1, "BUNNY_"))
 
     platform =
       cond do
@@ -652,7 +964,7 @@ defmodule Custyard.Boot.Env do
     acc
     |> put(:upload_dir, get(acc, "UPLOAD_DIR") || "/data/uploads")
     |> put(:attachment_dir, get(acc, "ATTACHMENT_DIR") || "/data/attachments")
-    |> put(:trust_proxy_headers, fly?)
+    |> put(:trust_proxy_headers, acc.settings.proxy_provider == :fly)
     |> put(:platform, platform)
   end
 

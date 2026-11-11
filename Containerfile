@@ -43,16 +43,18 @@ COPY priv/repo priv/repo
 # (enable_source_code_context). Must run before the release is assembled.
 RUN mix sentry.package_source_code
 
-# Release overlays (bin/operator, bin/acknowledgments, bin/doctor) and env.sh.eex, which
-# turns Erlang distribution off. Copied late so edits here rebuild only the
-# release, and checked so a missing or non-executable overlay fails the build.
+# Release overlays (bin/operator, bin/acknowledgments, bin/doctor,
+# bin/data-volume) and env.sh.eex, which turns Erlang distribution off. Copied
+# late so edits here rebuild only the release, and checked so a missing or
+# non-executable overlay fails the build.
 COPY rel rel
 
 # Build release
 RUN mix release
 RUN test -x _build/prod/rel/custyard/bin/operator && \
     test -x _build/prod/rel/custyard/bin/acknowledgments && \
-    test -x _build/prod/rel/custyard/bin/doctor
+    test -x _build/prod/rel/custyard/bin/doctor && \
+    test -x _build/prod/rel/custyard/bin/data-volume
 
 # Runtime stage
 # Use Debian 12 (bookworm) to match the Elixir builder image base.

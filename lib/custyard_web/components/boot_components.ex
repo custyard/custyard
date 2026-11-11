@@ -148,9 +148,16 @@ defmodule CustyardWeb.BootComponents do
 
   @doc """
   The resolved database, without a URL: `SQLite file at /data/custyard.db`,
-  `Turso / libSQL over HTTPS`, `PostgreSQL`; `nil` when nothing is known.
+  `Turso / libSQL over HTTPS`, `Bunny Database / libSQL over HTTPS`,
+  `PostgreSQL`; `nil` when nothing is known.
   """
   @spec database_kind(State.t()) :: String.t() | nil
+  def database_kind(%State{
+        env: %Env{settings: %{database: {:turso, _, _}, turso_provider: :bunny}}
+      }) do
+    "Bunny Database / libSQL over HTTPS"
+  end
+
   def database_kind(%State{env: %Env{settings: %{database: database}}})
       when not is_nil(database) do
     describe_database(database)

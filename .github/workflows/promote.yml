@@ -1,0 +1,123 @@
+name: Promote image
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target
+        type: choice
+        options: [staging, production]
+        required: true
+      image_digest:
+        description: Published image digest (sha256 followed by 64 lowercase hex characters)
+        type: string
+        required: true
+      source_sha:
+        description: Full source commit SHA from successful main CI
+        type: string
+        required: true
+      previous_digest:
+        description: Current production digest for rollback and stale-target protection (required for production)
+        type: string
+        required: false
+      acceptance_record:
+        description: HTTPS link to acceptance of this exact staged digest (required for production)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+concurrency:
+  group: custyard-promotion-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.repository == 'custyard/custyard' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.HEALTHCHECK_URL }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+      IMAGE_DIGEST: ${{ inputs.image_digest }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      PREVIOUS_DIGEST: ${{ inputs.previous_digest }}
+      ACCEPTANCE_RECORD: ${{ inputs.acceptance_record }}
+      HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test promotion validation
+        run: python3 -m unittest discover -s .github/scripts -p promotion_test.py
+      - name: Verify candidate, CI, environment protections and previous production digest
+        id: candidate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUNNY_APP_ID: ${{ vars.BUNNY_APP_ID }}
+          BUNNY_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME }}
+          BUNNYNET_API_KEY: ${{ secrets.BUNNYNET_API_KEY }}
+        run: python3 .github/scripts/promotion.py validate
+      - name: Set up Fly CLI
+        if: inputs.environment == 'staging'
+        uses: superfly/flyctl-actions/setup-flyctl@98172f70657cb3e15db199af139be99bd3e61200
+        with:
+          version: 0.5.4
+      - name: Authenticate to GHCR for the staging registry mirror
+        if: inputs.environment == 'staging'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Mirror the exact OCI digest to Fly's private registry
+        if: inputs.environment == 'staging'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          VERIFIED_IMAGE: ${{ steps.candidate.outputs.image_reference }}
+          VERIFIED_TAG: ${{ steps.candidate.outputs.image_tag }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+          flyctl auth docker
+          skopeo copy --all --preserve-digests --authfile "$HOME/.docker/config.json" \
+            --digestfile fly-mirror.digest \
+            "docker://$VERIFIED_IMAGE" "docker://registry.fly.io/custyard-staging:$VERIFIED_TAG"
+          test "$(cat fly-mirror.digest)" = "$IMAGE_DIGEST"
+      - name: Deploy the verified digest to the separate staging app
+        if: inputs.environment == 'staging'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config fly.staging.toml --app custyard-staging --image "registry.fly.io/custyard-staging@$IMAGE_DIGEST" --ha=false
+      - name: Update the Bunny production container by digest
+        if: inputs.environment == 'production'
+        env:
+          BUNNY_APP_ID: ${{ vars.BUNNY_APP_ID }}
+          BUNNY_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME }}
+          BUNNYNET_API_KEY: ${{ secrets.BUNNYNET_API_KEY }}
+        run: python3 .github/scripts/promotion.py update-bunny
+      - name: Verify Bunny stored the requested digest
+        if: inputs.environment == 'production'
+        env:
+          BUNNY_APP_ID: ${{ vars.BUNNY_APP_ID }}
+          BUNNY_CONTAINER_NAME: ${{ vars.BUNNY_CONTAINER_NAME }}
+          BUNNYNET_API_KEY: ${{ secrets.BUNNYNET_API_KEY }}
+        run: python3 .github/scripts/promotion.py verify-bunny
+      - name: Verify HTTPS runtime health
+        run: |
+          for _ in $(seq 1 24); do
+            if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+                --header 'Cache-Control: no-cache' "$HEALTHCHECK_URL" -o promotion-health.json && \
+                python3 .github/scripts/promotion.py health; then
+              printf 'Provider update completed; HTTPS application health checks passed.\n' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          printf 'HTTPS application health checks did not pass. Inspect the deployment; the previous digest is recorded above.\n' >&2
+          exit 1

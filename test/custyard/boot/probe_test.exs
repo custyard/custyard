@@ -139,6 +139,41 @@ defmodule Custyard.Boot.ProbeTest do
 
       assert State.get().database.category == :volume_missing
     end
+
+    @tag :tmp_dir
+    test "an unverified Bunny volume is reported before anything is opened", %{tmp_dir: dir} do
+      env =
+        env(%{
+          "BUNNY_DATABASE_URL" => "https://127.0.0.1:1",
+          "BUNNY_DATABASE_AUTH_TOKEN" => "t",
+          "STORAGE_PROVIDER" => "bunny",
+          "DATA_VOLUME_ID" => "probe-volume"
+        })
+
+      storage = [
+        provider: env.settings.storage_provider,
+        data_dir: dir,
+        data_volume_id: env.settings.data_volume_id,
+        upload_dir: Path.join(dir, "uploads"),
+        attachment_dir: Path.join(dir, "attachments"),
+        mountinfo: "36 28 0:29 / #{dir} rw,relatime - ext4 /dev/vdb rw\n"
+      ]
+
+      capture_log(fn ->
+        # Mounted but never initialized: no marker, so no connection attempt.
+        assert {:error, :volume_missing, detail} = Probe.run(env, storage: storage)
+        assert detail =~ "File-volume marker is missing or does not match DATA_VOLUME_ID"
+        refute detail =~ "probe-volume"
+
+        assert {:error, :volume_missing, detail} =
+                 Probe.run(env, storage: Keyword.put(storage, :mountinfo, @unmounted))
+
+        assert detail =~ "Bunny requires a mounted file volume"
+      end)
+
+      assert State.get().database.category == :volume_missing
+      assert File.ls!(dir) == []
+    end
   end
 
   describe "run/2 with a remote database" do
@@ -191,7 +226,24 @@ defmodule Custyard.Boot.ProbeTest do
 
       assert Probe.repo_config(
                env(%{"DATABASE_URL" => "libsql://db.turso.io", "TURSO_AUTH_TOKEN" => "t"})
-             ) == [turso_url: "libsql://db.turso.io", turso_auth_token: "t", pool_size: 10]
+             ) == [
+               turso_url: "libsql://db.turso.io",
+               turso_auth_token: "t",
+               turso_provider: :turso,
+               pool_size: 10
+             ]
+
+      assert Probe.repo_config(
+               env(%{
+                 "BUNNY_DATABASE_URL" => "https://db-id.lite.bunnydb.net",
+                 "BUNNY_DATABASE_AUTH_TOKEN" => "t"
+               })
+             ) == [
+               turso_url: "https://db-id.lite.bunnydb.net",
+               turso_auth_token: "t",
+               turso_provider: :bunny,
+               pool_size: 10
+             ]
 
       assert Probe.repo_config(env(%{"DATABASE_URL" => "postgres://db/custyard"})) ==
                [url: "postgres://db/custyard", pool_size: 10]

@@ -18,9 +18,11 @@ defmodule Custyard.Boot.Probe do
   terminal, and is classified (never rendered) in the `boot_database_probe_failed`
   log event.
 
-  Before the connection, `Custyard.Storage.check/1` runs on Fly: a missing
-  volume must be reported before SQLite creates an empty database on the
-  container filesystem. Both of its problems become `:volume_missing`.
+  Before the connection, `Custyard.Storage.check/1` runs for the selected
+  storage provider (Fly or Bunny): a missing volume must be reported before
+  SQLite creates an empty database on the container filesystem, and a Bunny
+  volume that is unmounted, unmarked or mid-restore before anything writes to
+  it. All of its problems become `:volume_missing`.
   """
 
   alias Custyard.Boot.{Env, State}
@@ -59,7 +61,7 @@ defmodule Custyard.Boot.Probe do
   @spec check(Env.t(), keyword) :: :ok | {:error, category, String.t(), Exception.t() | nil}
   def check(%Env{} = env, opts \\ []) do
     with :ok <- volume(env, opts) do
-      connect(env.settings[:database])
+      connect(env.settings[:database], env.settings)
     end
   end
 
@@ -103,7 +105,7 @@ defmodule Custyard.Boot.Probe do
 
     case settings[:database] do
       {:sqlite, path} -> [database: path, journal_mode: :wal, busy_timeout: 5000] ++ pool
-      {:turso, url, token} -> [turso_url: url, turso_auth_token: token] ++ pool
+      {:turso, url, token} -> turso_config(url, token, settings) ++ pool
       {:postgres, url} -> [url: url] ++ pool
       nil -> pool
     end
@@ -129,8 +131,8 @@ defmodule Custyard.Boot.Probe do
 
   def detail(:auth_rejected),
     do:
-      "the database rejected the credentials; check that TURSO_AUTH_TOKEN was created for " <>
-        "the database in DATABASE_URL"
+      "the database rejected the credentials; check that TURSO_AUTH_TOKEN (or " <>
+        "BUNNY_DATABASE_AUTH_TOKEN) was created for the database in the configured URL"
 
   def detail(:not_writable),
     do:
@@ -160,11 +162,16 @@ defmodule Custyard.Boot.Probe do
     end
   end
 
-  defp connect(nil) do
+  # Hrana v3 for Turso, v2 for Bunny Database (Custyard.Turso.Connection).
+  defp turso_config(url, token, settings) do
+    [turso_url: url, turso_auth_token: token, turso_provider: settings[:turso_provider] || :turso]
+  end
+
+  defp connect(nil, _settings) do
     {:error, :unknown, "no database is configured; see the configuration report", nil}
   end
 
-  defp connect({:sqlite, path}) do
+  defp connect({:sqlite, path}, _settings) do
     opts = [database: path, journal_mode: :wal, busy_timeout: 5000]
 
     case Exqlite.Connection.connect(opts) do
@@ -182,17 +189,14 @@ defmodule Custyard.Boot.Probe do
     end
   end
 
-  defp connect({:turso, url, token}) do
+  defp connect({:turso, url, token}, settings) do
     # `bin/doctor` runs under `bin/custyard eval`, where no application has been
     # started; Mint needs :ssl for the HTTPS connection. A no-op in the app.
     {:ok, _} = Application.ensure_all_started(:ssl)
 
-    opts = [
-      turso_url: url,
-      turso_auth_token: token,
-      connect_timeout: @connect_timeout,
-      timeout: @turso_timeout
-    ]
+    opts =
+      turso_config(url, token, settings) ++
+        [connect_timeout: @connect_timeout, timeout: @turso_timeout]
 
     # connect/1 already runs SELECT 1, so a wrong URL or token fails here.
     case Custyard.Turso.Connection.connect(opts) do
@@ -207,7 +211,7 @@ defmodule Custyard.Boot.Probe do
     error -> failure(error)
   end
 
-  defp connect({:postgres, url}) do
+  defp connect({:postgres, url}, _settings) do
     if Application.get_env(:custyard, :repo_adapter, Custyard.Repo.Adapter) ==
          Ecto.Adapters.Postgres do
       postgres(url)

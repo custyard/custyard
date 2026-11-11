@@ -549,6 +549,18 @@ defmodule Custyard.ReleaseTest do
       assert {1, "", stderr} = run_doctor(["--probe-database", "relative/path.db"])
       assert stderr =~ "DATABASE_PATH  malformed"
     end
+
+    test "an https:// target is probed as Bunny Database" do
+      assert {1, "", stderr} = run_doctor(["--probe-database", "https://127.0.0.1:1"])
+      assert stderr =~ "BUNNY_DATABASE_AUTH_TOKEN  missing"
+
+      assert {1, stdout, ""} =
+               run_doctor(["--probe-database", "https://127.0.0.1:1", "--token", "t"])
+
+      assert stdout =~ "kind    turso"
+      assert stdout =~ "failed  unreachable:"
+      refute stdout =~ "custyard_doctor_probe"
+    end
   end
 
   describe "setup_operator/1,2" do

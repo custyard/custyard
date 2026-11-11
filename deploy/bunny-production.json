@@ -1,0 +1,65 @@
+{
+  "format": "custyard-dashboard-review-record-v1",
+  "purpose": "Local review checklist; this is not a Bunny API request or a deploy command.",
+  "application_name": "app-custyard-prod",
+  "image": "ghcr.io/custyard/custyard@sha256:<verified-published-digest>",
+  "previous_image": "<record-before-promotion>",
+  "region": "<one-European-region-near-the-primary-database>",
+  "min_replicas": 1,
+  "max_replicas": 1,
+  "additional_regions": false,
+  "container_port": 4000,
+  "working_directory": "/app",
+  "persistent_volume": {
+    "name": "custyard-data",
+    "mount_path": "/data",
+    "expected_marker": "/data/.custyard-volume",
+    "expected_identity": "<chosen-stable-production-volume-id>"
+  },
+  "environment": {
+    "PHX_HOST": "<temporary-proof-host-before-cutover>",
+    "PORT": "4000",
+    "STORAGE_PROVIDER": "bunny",
+    "DATA_VOLUME_ID": "<chosen-stable-production-volume-id>",
+    "PROXY_PROVIDER": "bunny",
+    "DATABASE_PROVIDER": "bunny",
+    "UPLOAD_DIR": "/data/uploads",
+    "ATTACHMENT_DIR": "/data/attachments",
+    "MAIL_ADAPTER": "lettermint",
+    "EMAIL_FROM_ADDRESS": "<verified-installation-sender>",
+    "EMAIL_NOTIFICATIONS_ENABLED": "false",
+    "ACKNOWLEDGMENTS_ENABLED": "false",
+    "LMTP_ENABLED": "false",
+    "SENTRY_ENVIRONMENT": "production"
+  },
+  "protected_environment_names": [
+    "SECRET_KEY_BASE",
+    "CREDENTIAL_ENCRYPTION_KEY",
+    "BUNNY_DATABASE_URL",
+    "BUNNY_DATABASE_AUTH_TOKEN",
+    "BUNNY_ORIGIN_SECRET",
+    "LETTERMINT_PROJECT_TOKEN"
+  ],
+  "optional_protected_environment_names": [
+    "LETTERMINT_TEAM_TOKEN",
+    "SENTRY_DSN"
+  ],
+  "one_time_bootstrap_environment": ["OPERATOR_EMAIL"],
+  "health_checks": {
+    "startup": {"method": "GET", "port": 4000, "path": "/api/health/live"},
+    "readiness": {"method": "GET", "port": 4000, "path": "/api/health/live"}
+  },
+  "cdn": {
+    "endpoint_type": "CDN",
+    "container_port": 4000,
+    "ssl_for_origin": false,
+    "forward_host_header": true,
+    "websockets": true,
+    "override_cache_time_seconds": 0,
+    "perma_cache": false,
+    "purge_existing_cache_before_use": true,
+    "set_origin_request_header": "X-Custyard-Origin: <same protected BUNNY_ORIGIN_SECRET>",
+    "origin_guard": "Overwrite any visitor-supplied X-Custyard-Origin value; direct origin requests must fail."
+  },
+  "acceptance_record": "<link-to-disposable-database-and-runtime-acceptance-results-before-production-promotion>"
+}

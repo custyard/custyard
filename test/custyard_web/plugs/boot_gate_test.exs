@@ -109,9 +109,18 @@ defmodule CustyardWeb.Plugs.BootGateTest do
       unconfigured(%{"FLY_APP_NAME" => "custyard-prod"})
       assert html_response(get(conn, "/"), 503) =~ "fly secrets set"
 
-      unconfigured(%{"BUNNY_DATABASE_URL" => "libsql://x.turso.io", "TURSO_AUTH_TOKEN" => "t"})
+      unconfigured(%{
+        "BUNNY_DATABASE_URL" => "https://x.lite.bunnydb.net",
+        "BUNNY_DATABASE_AUTH_TOKEN" => "t"
+      })
+
       body = html_response(get(build_conn(), "/"), 503)
       assert body =~ "Magic Container"
+      assert body =~ "Bunny Database / libSQL over HTTPS"
+      refute body =~ "x.lite.bunnydb.net"
+
+      unconfigured(%{"DATABASE_URL" => "libsql://x.turso.io", "TURSO_AUTH_TOKEN" => "t"})
+      body = html_response(get(build_conn(), "/"), 503)
       assert body =~ "Turso / libSQL over HTTPS"
       refute body =~ "x.turso.io"
     end

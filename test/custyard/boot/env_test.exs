@@ -315,22 +315,205 @@ defmodule Custyard.Boot.EnvTest do
       assert env.settings.database == {:turso, "libsql://db-org.turso.io", "tok"}
     end
 
-    test "BUNNY_DATABASE_URL and BUNNY_DATABASE_AUTH_TOKEN are fallbacks" do
+    test "the Bunny names select Bunny Database and its driver" do
       env =
         prod(
           Map.merge(@minimal, %{
-            "BUNNY_DATABASE_URL" => "libsql://bunny.turso.io",
+            "BUNNY_DATABASE_URL" => "https://db-id.lite.bunnydb.net",
             "BUNNY_DATABASE_AUTH_TOKEN" => "bunny-tok"
           })
         )
 
       assert env.verdict == :configured
-      assert env.settings.database == {:turso, "libsql://bunny.turso.io", "bunny-tok"}
-      assert env.settings.database_reason == "BUNNY_DATABASE_URL is set, so remote libSQL"
+      assert env.settings.database == {:turso, "https://db-id.lite.bunnydb.net", "bunny-tok"}
+      assert env.settings.turso_provider == :bunny
+
+      assert env.settings.database_reason ==
+               "BUNNY_DATABASE_URL is set, so Bunny Database (remote libSQL)"
+
       assert env.settings.platform == :bunny
       assert env.settings.trust_proxy_headers == false
       assert "BUNNY_DATABASE_URL" in env.present
       assert env.near_misses == []
+    end
+
+    test "a Turso database keeps the Turso driver" do
+      env =
+        prod(
+          Map.merge(@minimal, %{
+            "DATABASE_URL" => "libsql://db-org.turso.io",
+            "TURSO_AUTH_TOKEN" => "tok"
+          })
+        )
+
+      assert env.settings.turso_provider == :turso
+      assert prod(@minimal).settings.turso_provider == nil
+    end
+
+    test "DATABASE_PROVIDER=bunny accepts the generic names and identical aliases" do
+      generic = %{
+        "DATABASE_PROVIDER" => "bunny",
+        "DATABASE_URL" => "libsql://db-id.lite.bunnydb.net",
+        "TURSO_AUTH_TOKEN" => "tok"
+      }
+
+      env = prod(Map.merge(@minimal, generic))
+      assert env.verdict == :configured
+      assert env.settings.database == {:turso, "libsql://db-id.lite.bunnydb.net", "tok"}
+      assert env.settings.turso_provider == :bunny
+      assert env.settings.database_reason =~ "DATABASE_URL is set, so Bunny Database"
+
+      aliases = %{
+        "BUNNY_DATABASE_URL" => "libsql://db-id.lite.bunnydb.net",
+        "BUNNY_DATABASE_AUTH_TOKEN" => "tok"
+      }
+
+      env = prod(@minimal |> Map.merge(generic) |> Map.merge(aliases))
+      assert env.verdict == :configured
+      assert env.settings.turso_provider == :bunny
+    end
+
+    test "Bunny settings never fall back to the SQLite file" do
+      env = prod(Map.put(@minimal, "DATABASE_PROVIDER", "bunny"))
+      assert [%{kind: :missing}] = problems_for(env, "BUNNY_DATABASE_URL")
+      assert env.settings.database == nil
+
+      env = prod(Map.put(@minimal, "BUNNY_DATABASE_URL", "https://db-id.lite.bunnydb.net"))
+      assert [%{kind: :missing}] = problems_for(env, "BUNNY_DATABASE_AUTH_TOKEN")
+      assert env.verdict == :unconfigured
+      assert {:turso, _url, nil} = env.settings.database
+
+      env = prod(Map.put(@minimal, "BUNNY_DATABASE_AUTH_TOKEN", "orphan-token"))
+      assert [%{kind: :missing}] = problems_for(env, "BUNNY_DATABASE_URL")
+      assert env.settings.database == nil
+    end
+
+    test "conflicting aliases are problems that expose neither value" do
+      bunny = %{
+        "BUNNY_DATABASE_URL" => "https://db-id.lite.bunnydb.net",
+        "BUNNY_DATABASE_AUTH_TOKEN" => "private-bunny-token"
+      }
+
+      env =
+        prod(@minimal |> Map.merge(bunny) |> Map.put("DATABASE_URL", "libsql://other.invalid"))
+
+      assert [%{kind: :malformed, detail: detail}] = problems_for(env, "BUNNY_DATABASE_URL")
+      assert detail =~ "conflicts with DATABASE_URL"
+      refute inspect(env.problems) =~ "other.invalid"
+      refute inspect(env.problems) =~ "bunnydb.net"
+      assert env.settings.database == nil
+
+      env = prod(@minimal |> Map.merge(bunny) |> Map.put("TURSO_AUTH_TOKEN", "another-token"))
+
+      assert [%{kind: :malformed, detail: detail}] =
+               problems_for(env, "BUNNY_DATABASE_AUTH_TOKEN")
+
+      assert detail =~ "conflicts with TURSO_AUTH_TOKEN"
+      refute inspect(env.problems) =~ "another-token"
+      refute inspect(env.problems) =~ "private-bunny-token"
+      assert env.settings.database == nil
+    end
+
+    test "an unsafe Bunny URL is malformed and never echoed" do
+      for url <- [
+            "http://db.invalid",
+            "libsql://db.invalid?tls=0",
+            "https://user:pass@db.invalid",
+            "https://db.invalid#fragment",
+            "https://"
+          ] do
+        env =
+          prod(
+            Map.merge(@minimal, %{
+              "BUNNY_DATABASE_URL" => url,
+              "BUNNY_DATABASE_AUTH_TOKEN" => "tok"
+            })
+          )
+
+        assert [%{kind: :malformed, detail: detail}] = problems_for(env, "BUNNY_DATABASE_URL"),
+               url
+
+        assert detail =~ "https:// or libsql://"
+        refute inspect(env.problems) =~ "db.invalid"
+        assert env.settings.database == nil
+      end
+    end
+
+    test "DATABASE_PROVIDER must be a known provider and agree with the other settings" do
+      env = prod(Map.put(@minimal, "DATABASE_PROVIDER", "private-invalid-provider"))
+      assert [%{kind: :unsupported, detail: detail}] = problems_for(env, "DATABASE_PROVIDER")
+      assert detail =~ "sqlite, turso, bunny, postgres"
+      refute detail =~ "private-invalid-provider"
+      assert env.settings.database == nil
+
+      stale =
+        Map.merge(@minimal, %{
+          "DATABASE_PROVIDER" => "turso",
+          "BUNNY_DATABASE_URL" => "https://db-id.lite.bunnydb.net"
+        })
+
+      env = prod(stale)
+      assert [%{kind: :malformed, detail: detail}] = problems_for(env, "DATABASE_PROVIDER")
+      assert detail =~ "conflicts with the BUNNY_DATABASE_*"
+      assert env.settings.database == nil
+    end
+
+    test "an explicit remote provider needs a matching URL" do
+      for {provider, wrong} <- [
+            {"turso", "postgres://u:p@db/custyard"},
+            {"postgres", "libsql://db-org.turso.io"}
+          ] do
+        env = prod(Map.put(@minimal, "DATABASE_PROVIDER", provider))
+        assert [%{kind: :missing}] = problems_for(env, "DATABASE_URL"), provider
+        assert env.settings.database == nil
+
+        env =
+          prod(Map.merge(@minimal, %{"DATABASE_PROVIDER" => provider, "DATABASE_URL" => wrong}))
+
+        assert [%{kind: :malformed}] = problems_for(env, "DATABASE_URL"), provider
+        assert env.settings.database == nil
+      end
+
+      turso = %{
+        "DATABASE_PROVIDER" => "turso",
+        "DATABASE_URL" => "libsql://db-org.turso.io",
+        "TURSO_AUTH_TOKEN" => "tok"
+      }
+
+      assert prod(Map.merge(@minimal, turso)).settings.database ==
+               {:turso, "libsql://db-org.turso.io", "tok"}
+
+      postgres = %{
+        "DATABASE_PROVIDER" => "postgres",
+        "DATABASE_URL" => "postgresql://db/custyard"
+      }
+
+      assert prod(Map.merge(@minimal, postgres)).settings.database ==
+               {:postgres, "postgresql://db/custyard"}
+    end
+
+    test "a token alone does not select SQLite, and sqlite refuses remote settings" do
+      env = prod(Map.put(@minimal, "TURSO_AUTH_TOKEN", "orphan-token"))
+      assert [%{kind: :missing, detail: detail}] = problems_for(env, "DATABASE_URL")
+      assert detail =~ "TURSO_AUTH_TOKEN is set"
+      assert env.settings.database == nil
+
+      for {name, value} <- [
+            {"TURSO_AUTH_TOKEN", "orphan-token"},
+            {"DATABASE_URL", "libsql://db-org.turso.io"}
+          ] do
+        env = prod(Map.merge(@minimal, %{"DATABASE_PROVIDER" => "sqlite", name => value}))
+        assert [%{kind: :malformed}] = problems_for(env, "DATABASE_PROVIDER"), name
+        assert env.settings.database == nil
+      end
+
+      env =
+        prod(
+          Map.merge(@minimal, %{"DATABASE_PROVIDER" => "sqlite", "DATABASE_PATH" => "/d/c.db"})
+        )
+
+      assert env.verdict == :configured
+      assert env.settings.database == {:sqlite, "/d/c.db"}
     end
 
     test "postgres URLs pass through" do
@@ -374,6 +557,136 @@ defmodule Custyard.Boot.EnvTest do
         assert [%{kind: :malformed}] = problems_for(env, "PORT"), value
         assert env.settings.port == 4000
       end
+    end
+  end
+
+  describe "hosting" do
+    test "defaults to nothing special, and to Fly on Fly" do
+      env = prod(@minimal)
+      assert env.settings.storage_provider == :local
+      assert env.settings.proxy_provider == :none
+      assert env.settings.trust_proxy_headers == false
+      assert env.settings.data_volume_id == nil
+      assert env.settings.bunny_origin_secret == nil
+
+      fly = prod(Map.put(@minimal, "FLY_APP_NAME", "custyard-eu"))
+      assert fly.settings.storage_provider == :fly
+      assert fly.settings.proxy_provider == :fly
+      assert fly.settings.trust_proxy_headers == true
+    end
+
+    test "Bunny Database selects neither the storage nor the proxy provider" do
+      bunny = %{
+        "BUNNY_DATABASE_URL" => "https://db-id.lite.bunnydb.net",
+        "BUNNY_DATABASE_AUTH_TOKEN" => "tok"
+      }
+
+      env = prod(Map.merge(@minimal, bunny))
+      assert env.settings.storage_provider == :local
+      assert env.settings.proxy_provider == :none
+
+      staging = prod(@minimal |> Map.merge(bunny) |> Map.put("FLY_APP_NAME", "custyard-staging"))
+      assert staging.verdict == :configured
+      assert staging.settings.turso_provider == :bunny
+      assert staging.settings.storage_provider == :fly
+      assert staging.settings.proxy_provider == :fly
+      assert staging.settings.platform == :fly
+    end
+
+    test "explicit providers override Fly detection" do
+      env =
+        prod(
+          Map.merge(@minimal, %{
+            "FLY_APP_NAME" => "custyard-eu",
+            "STORAGE_PROVIDER" => "local",
+            "PROXY_PROVIDER" => "none"
+          })
+        )
+
+      assert env.verdict == :configured
+      assert env.settings.storage_provider == :local
+      assert env.settings.proxy_provider == :none
+      assert env.settings.trust_proxy_headers == false
+    end
+
+    test "an unknown provider is unsupported and its value is not echoed" do
+      env = prod(Map.put(@minimal, "STORAGE_PROVIDER", "private-invalid-provider"))
+      assert [%{kind: :unsupported, detail: detail}] = problems_for(env, "STORAGE_PROVIDER")
+      assert detail == "must be one of local, fly, bunny"
+      # Not a provider Custyard.Storage accepts, so release commands stop too.
+      assert env.settings.storage_provider == :invalid
+
+      env = prod(Map.put(@minimal, "PROXY_PROVIDER", "private-invalid-provider"))
+      assert [%{kind: :unsupported, detail: detail}] = problems_for(env, "PROXY_PROVIDER")
+      assert detail == "must be one of none, fly, bunny"
+      assert env.settings.proxy_provider == :none
+      refute inspect(env.problems) =~ "private-invalid-provider"
+
+      fly =
+        prod(Map.merge(@minimal, %{"FLY_APP_NAME" => "custyard-eu", "PROXY_PROVIDER" => "nope"}))
+
+      # The platform default, so the doctor card naming the problem is reachable.
+      assert fly.settings.proxy_provider == :fly
+    end
+
+    test "STORAGE_PROVIDER=bunny requires a well-formed DATA_VOLUME_ID" do
+      env = prod(Map.put(@minimal, "STORAGE_PROVIDER", "bunny"))
+      assert [%{kind: :missing, detail: detail}] = problems_for(env, "DATA_VOLUME_ID")
+      assert detail =~ "bin/data-volume init"
+      assert env.settings.storage_provider == :bunny
+      assert env.settings.platform == :bunny
+
+      env =
+        prod(
+          Map.merge(@minimal, %{"STORAGE_PROVIDER" => "bunny", "DATA_VOLUME_ID" => "../escape"})
+        )
+
+      assert [%{kind: :malformed, detail: detail}] = problems_for(env, "DATA_VOLUME_ID")
+      refute detail =~ "escape"
+      assert env.settings.data_volume_id == nil
+
+      env =
+        prod(
+          Map.merge(@minimal, %{
+            "STORAGE_PROVIDER" => "bunny",
+            "DATA_VOLUME_ID" => "custyard-prod-files-v1"
+          })
+        )
+
+      assert env.verdict == :configured
+      assert env.settings.data_volume_id == "custyard-prod-files-v1"
+    end
+
+    test "PROXY_PROVIDER=bunny requires an origin secret of at least 32 bytes" do
+      for value <- [nil, "", "short-private-value"] do
+        vars = Map.put(@minimal, "PROXY_PROVIDER", "bunny")
+        vars = if value, do: Map.put(vars, "BUNNY_ORIGIN_SECRET", value), else: vars
+        env = prod(vars)
+
+        assert [%{kind: kind}] = problems_for(env, "BUNNY_ORIGIN_SECRET")
+        assert kind == if(value in [nil, ""], do: :missing, else: :malformed)
+        refute inspect(env.problems) =~ "short-private-value"
+        # nil: CustyardWeb.Proxy then refuses everything but the health probes.
+        assert env.settings.proxy_provider == :bunny
+        assert env.settings.bunny_origin_secret == nil
+        assert env.settings.trust_proxy_headers == false
+      end
+
+      secret = String.duplicate("o", 32)
+
+      env =
+        prod(Map.merge(@minimal, %{"PROXY_PROVIDER" => "bunny", "BUNNY_ORIGIN_SECRET" => secret}))
+
+      assert env.verdict == :configured
+      assert env.settings.bunny_origin_secret == secret
+      assert env.settings.trust_proxy_headers == false
+      assert env.settings.platform == :bunny
+    end
+
+    test "the origin secret is ignored without the Bunny proxy" do
+      env = prod(Map.put(@minimal, "BUNNY_ORIGIN_SECRET", "short"))
+      assert env.verdict == :configured
+      assert env.settings.bunny_origin_secret == nil
     end
   end
 

@@ -56,10 +56,11 @@ defmodule Custyard.Release do
         Also connect to the configured database and report what happened.
         Exits 1 when either the configuration or the connection has a problem.
     --probe-database URL [--token TOKEN]
-        Connect to URL instead (libsql://... with its token, or an absolute
-        SQLite path), then create and drop a throwaway table inside a
-        transaction, reporting each step. Run from a laptop against a
-        disposable database before deploying.
+        Connect to URL instead (libsql://... with its token for Turso,
+        https://... with its token for Bunny Database, or an absolute SQLite
+        path), then create and drop a throwaway table inside a transaction,
+        reporting each step. Run from a laptop against a disposable database
+        before deploying.
     help
         Show this help.
 
@@ -69,10 +70,16 @@ defmodule Custyard.Release do
 
   @doctor_table "custyard_doctor_probe"
 
+  # Every variable that takes part in choosing the database.
+  @database_variables ~w(
+    DATABASE_PROVIDER DATABASE_URL BUNNY_DATABASE_URL
+    TURSO_AUTH_TOKEN BUNNY_DATABASE_AUTH_TOKEN DATABASE_PATH
+  )
+
   def migrate do
     startup_task(:migrate, fn ->
       load_app()
-      Custyard.Storage.validate_fly_storage!()
+      Custyard.Storage.validate!()
 
       for repo <- repos() do
         case Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true)) do
@@ -86,7 +93,7 @@ defmodule Custyard.Release do
   def rollback(repo, version) do
     startup_task(:rollback, fn ->
       load_app()
-      Custyard.Storage.validate_fly_storage!()
+      Custyard.Storage.validate!()
 
       case Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version)) do
         {:ok, _, _} = result -> result
@@ -266,17 +273,22 @@ defmodule Custyard.Release do
 
   # The environment with the database replaced by the one named on the
   # command line, so Env's own rules (scheme, token, absolute path) apply.
+  # Only Bunny Database is addressed by an https:// URL, so that scheme
+  # selects its provider; everything else is decided by the URL as usual.
   defp override_env(target, token) do
-    base =
-      System.get_env()
-      |> Map.drop(
-        ~w(DATABASE_URL BUNNY_DATABASE_URL TURSO_AUTH_TOKEN BUNNY_DATABASE_AUTH_TOKEN DATABASE_PATH)
-      )
+    base = Map.drop(System.get_env(), @database_variables)
 
     overrides =
-      if String.contains?(target, "://"),
-        do: %{"DATABASE_URL" => target},
-        else: %{"DATABASE_PATH" => target}
+      cond do
+        String.starts_with?(target, "https://") ->
+          %{"DATABASE_PROVIDER" => "bunny", "DATABASE_URL" => target}
+
+        String.contains?(target, "://") ->
+          %{"DATABASE_URL" => target}
+
+        true ->
+          %{"DATABASE_PATH" => target}
+      end
 
     overrides = if token, do: Map.put(overrides, "TURSO_AUTH_TOKEN", token), else: overrides
     Env.read(Map.merge(base, overrides), config_env: :prod)
@@ -309,8 +321,6 @@ defmodule Custyard.Release do
         1
     end
   end
-
-  @database_variables ~w(DATABASE_URL BUNNY_DATABASE_URL TURSO_AUTH_TOKEN DATABASE_PATH)
 
   defp database_problems(%Env{problems: problems, settings: settings}) do
     problems = Enum.filter(problems, &(&1.variable in @database_variables))
@@ -382,7 +392,15 @@ defmodule Custyard.Release do
 
     config =
       previous_config
-      |> Keyword.drop([:database, :turso_url, :turso_auth_token, :url, :pool, :pool_size])
+      |> Keyword.drop([
+        :database,
+        :turso_url,
+        :turso_auth_token,
+        :turso_provider,
+        :url,
+        :pool,
+        :pool_size
+      ])
       |> Keyword.merge(config)
       |> Keyword.put(:pool_size, 1)
 
@@ -598,7 +616,8 @@ defmodule Custyard.Release do
   # Repo config may be incomplete, and the running app refuses it too. The
   # storage check runs before the Repo starts, as migrate/0 does: opening
   # SQLite first would create an empty database on the container's root
-  # filesystem when the Fly volume is missing. Shared with Custyard.Release.Dsar.
+  # filesystem when the Fly volume is missing, and Bunny's file volume must be
+  # the initialized one. Shared with Custyard.Release.Dsar.
   def with_repo(fun) when is_function(fun, 0) do
     load_app()
 
@@ -613,7 +632,7 @@ defmodule Custyard.Release do
   end
 
   defp start_repo_for(fun) do
-    Custyard.Storage.validate_fly_storage!()
+    Custyard.Storage.validate!()
 
     case Ecto.Migrator.with_repo(Repo, fn _repo -> fun.() end) do
       {:ok, result, _started} ->

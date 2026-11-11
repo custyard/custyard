@@ -219,6 +219,8 @@ git clone https://github.com/owner/private-repo.git
 
 ## Docs
 
+- [Set up Custyard on Bunny](docs/ops/bunny-setup.md)
+
 - [Development Guide](docs/development.md)
 - [Publishing container images to GHCR](docs/ops/ghcr-publishing.md)
 - [Bunny production and Fly staging plan](docs/ops/bunny-production-fly-staging.md)

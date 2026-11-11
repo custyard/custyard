@@ -1,0 +1,55 @@
+# A separate app until production has moved off Fly. Provision this app and its
+# own volume explicitly; these settings do not repurpose the live custyard app.
+# The manual Promote image workflow mirrors the CI-verified GHCR image into
+# Fly's private registry without changing its digest, then deploys it with this
+# explicit config and app. See docs/ops/bunny-setup.md.
+app = "custyard-staging"
+org = "custyard"
+primary_region = "ams"
+
+[env]
+PHX_HOST = "staging.custyard.com"
+PORT = "4000"
+STORAGE_PROVIDER = "fly"
+PROXY_PROVIDER = "fly"
+DATABASE_PROVIDER = "bunny"
+UPLOAD_DIR = "/data/uploads"
+ATTACHMENT_DIR = "/data/attachments"
+MAIL_ADAPTER = "lettermint"
+EMAIL_FROM_ADDRESS = "staging@custyard.com"
+EMAIL_FROM_NAME = "Custyard Staging"
+EMAIL_NOTIFICATIONS_ENABLED = "false"
+ACKNOWLEDGMENTS_ENABLED = "false"
+LMTP_ENABLED = "false"
+SENTRY_ENVIRONMENT = "staging"
+
+[http_service]
+internal_port = 4000
+force_https = true
+auto_stop_machines = "off"
+auto_start_machines = true
+min_machines_running = 1
+
+[http_service.concurrency]
+type = "connections"
+hard_limit = 200
+soft_limit = 150
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "1gb"
+
+[mounts]
+source = "custyard_staging_data"
+destination = "/data"
+
+[checks.health]
+port = 4000
+type = "http"
+interval = "10s"
+timeout = "2s"
+grace_period = "60s"
+method = "GET"
+# Liveness only, so a machine in doctor mode keeps serving the card. The
+# promotion workflow verifies readiness (/api/health) after the deploy.
+path = "/api/health/live"
