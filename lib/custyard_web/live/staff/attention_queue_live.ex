@@ -4,6 +4,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   import CustyardWeb.StaffComponents
 
   alias Custyard.{Threads, EmailSetup, Labels, Scoring}
+  alias Custyard.Threads.QueuePreview
 
   # Debounce delay for PubSub-triggered reloads (milliseconds)
   # This prevents N+1 query storms when multiple threads update rapidly
@@ -17,41 +18,45 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       Process.send_after(self(), :refresh_deadlines, 60_000)
     end
 
+    # The queue itself is loaded by handle_params/3, which always runs after
+    # mount and before the first render; loading here as well ran every query
+    # twice per page view.
     socket =
       socket
       |> assign(:page_title, "Attention Queue")
-      |> assign(:filter, "all")
-      |> assign(:label_id, nil)
-      |> assign(
-        :labels,
-        Labels.list(socket.assigns.current_scope)
-      )
       |> assign(:show_score_breakdown, nil)
       |> assign(:show_snooze_menu, nil)
       |> assign(:reload_timer, nil)
-      |> load_threads()
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :staff}}
   end
 
   @impl true
   def handle_params(params, _uri, socket) do
-    filter = params["filter"] || "all"
-
-    labels =
-      Labels.list(socket.assigns.current_scope)
-
+    labels = Labels.list(socket.assigns.current_scope)
     label = Enum.find(labels, &(to_string(&1.id) == params["label"]))
 
     socket =
       socket
-      |> assign(:filter, filter)
+      |> assign(:filter, params["filter"] || "all")
       |> assign(:labels, labels)
       |> assign(:label_id, label && label.id)
+      # The conversation the staff member came back from, so the keyboard
+      # selection resumes there (see the QueueKeys hook).
+      |> assign(:selected_id, positive_integer(params["at"]))
       |> load_threads()
 
     {:noreply, socket}
   end
+
+  defp positive_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer > 0 -> integer
+      _ -> nil
+    end
+  end
+
+  defp positive_integer(_value), do: nil
 
   @impl true
   def handle_event("filter", %{"filter" => filter}, socket) do
@@ -85,6 +90,11 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     end
   end
 
+  # Click outside the open menu, or Escape.
+  def handle_event("close_snooze", _params, socket) do
+    {:noreply, assign(socket, :show_snooze_menu, nil)}
+  end
+
   def handle_event("snooze", %{"id" => id, "duration" => duration}, socket) do
     with {id, ""} <- Integer.parse(id),
          true <- queue_contains_thread?(socket, id) do
@@ -101,7 +111,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             {:thread_updated, id}
           )
 
-          {:noreply, socket |> assign(:show_snooze_menu, nil) |> load_threads()}
+          {:noreply, socket |> assign(:show_snooze_menu, nil) |> reload_queue()}
 
         {:error, _changeset} ->
           {:noreply, put_flash(socket, :error, "Failed to snooze thread")}
@@ -125,7 +135,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             {:thread_updated, id}
           )
 
-          {:noreply, load_threads(socket)}
+          {:noreply, reload_queue(socket)}
 
         {:error, _changeset} ->
           {:noreply, put_flash(socket, :error, "Failed to un-snooze thread")}
@@ -153,12 +163,12 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     {:noreply,
      socket
      |> assign(:reload_timer, nil)
-     |> load_threads()}
+     |> reload_queue()}
   end
 
   def handle_info(:refresh_deadlines, socket) do
     Process.send_after(self(), :refresh_deadlines, 60_000)
-    {:noreply, load_threads(socket)}
+    {:noreply, reload_queue(socket)}
   end
 
   # Catch-all for unexpected PubSub messages to prevent LiveView crashes
@@ -176,6 +186,13 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     # Schedule new reload
     timer = Process.send_after(self(), :debounced_reload, @reload_debounce_ms)
     assign(socket, :reload_timer, timer)
+  end
+
+  # Refresh after a change: labels may have been added since the page loaded.
+  defp reload_queue(socket) do
+    socket
+    |> assign(:labels, Labels.list(socket.assigns.current_scope))
+    |> load_threads()
   end
 
   defp load_threads(socket) do
@@ -214,13 +231,14 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           breakdown: breakdown,
           hours_idle: hours_idle,
           message_count: message_count,
+          exchange_count: item.exchange_count,
           due_task_count: item.due_task_count,
           labels: Map.get(labels_by_thread, conv.id, []),
           is_snoozed: is_snoozed,
           # Derived from preloaded contact/prospect — no extra queries
           reply_channel: Threads.reply_channel(conv),
           preview: preview,
-          turn: turn(conv, preview),
+          turn: QueuePreview.turn(conv, preview),
           last_exchange_at: (preview && preview.last_spoke_at) || conv.inserted_at
         }
       end)
@@ -232,10 +250,6 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     |> assign(
       :can_setup_email,
       EmailSetup.authorized?(socket.assigns.current_staff, socket.assigns.current_tenant.id)
-    )
-    |> assign(
-      :labels,
-      Labels.list(socket.assigns.current_scope)
     )
   end
 
@@ -262,14 +276,6 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     DateTime.add(DateTime.utc_now(), hours, :hour)
   end
 
-  # Who has to act next. An explicit "waiting" state wins over the message
-  # history; otherwise the last speaker in the conversation decides, and a
-  # thread nobody has answered yet is ours.
-  defp turn(%{state: :resolved}, _preview), do: :none
-  defp turn(%{state: :waiting}, _preview), do: :theirs
-  defp turn(_thread, %{last_speaker: :staff}), do: :theirs
-  defp turn(_thread, _preview), do: :ours
-
   defp format_idle_time(hours) when hours < 24, do: "#{hours}h"
   defp format_idle_time(hours), do: "#{div(hours, 24)}d"
 
@@ -294,6 +300,26 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     name = String.downcase(org.name)
 
     if shown == name or String.ends_with?(shown, "@" <> name), do: nil, else: org.name
+  end
+
+  defp messages_summary(%{exchange_count: exchanged, message_count: total})
+       when total > exchanged,
+       do: "#{exchanged} exchanged with the customer, #{total - exchanged} internal or automatic"
+
+  defp messages_summary(%{exchange_count: exchanged}),
+    do: "#{exchanged} exchanged with the customer"
+
+  # A row's link carries the queue it was opened from (filter, label and the
+  # row's position), so the conversation can offer previous and next in the
+  # same order.
+  defp thread_path(thread_id, filter, label_id, pos) do
+    params =
+      Enum.reject(
+        [filter: if(filter != "all", do: filter), label: label_id, pos: pos],
+        fn {_key, value} -> is_nil(value) end
+      )
+
+    ~p"/app/threads/#{thread_id}?#{params}"
   end
 
   # "billing@onetimesecret.com" -> "billing@"; the full address stays in the title.
@@ -349,6 +375,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
   @filters [
     {"all", "all"},
+    {"needs_reply", "needs reply"},
     {"new", "new"},
     {"active", "active"},
     {"waiting", "waiting"},
@@ -399,9 +426,20 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         >
           What needs attention
         </h1>
-        <span class="text-xs text-gray-600 dark:text-zinc-400" data-testid="staff-queue-count">
-          {length(@threads)} {if length(@threads) == 1, do: "conversation", else: "conversations"}
-        </span>
+        <div class="flex items-baseline gap-4 text-xs text-gray-600 dark:text-zinc-400">
+          <%!-- Keyboard hint: only where a keyboard is likely. --%>
+          <p class="hidden lg:block" data-testid="staff-queue-keys">
+            <.key>j</.key>
+
+            <.key>k</.key>
+            move
+            <.key>Enter</.key>
+            open
+          </p>
+          <span data-testid="staff-queue-count">
+            {length(@threads)} {if length(@threads) == 1, do: "conversation", else: "conversations"}
+          </span>
+        </div>
       </div>
 
       <div class="mb-3 flex flex-wrap items-center gap-2">
@@ -447,21 +485,37 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       >
         Nothing needs attention right now.
       </div>
+      <%!-- j/k and the arrow keys move the selection (the focused row link),
+      o or Enter opens it; data-select resumes at the conversation just left. --%>
       <ul
         :if={not Enum.empty?(@threads)}
+        id="staff-queue-list"
+        phx-hook="QueueKeys"
+        data-select={@selected_id}
         role="list"
         class="divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white dark:divide-zinc-700 dark:border-zinc-700 dark:bg-zinc-800"
         data-testid="staff-queue-list"
       >
         <.queue_row
-          :for={item <- @threads}
+          :for={{item, pos} <- Enum.with_index(@threads)}
           item={item}
+          thread_path={thread_path(item.thread.id, @filter, @label_id, pos)}
           staff_id={@current_staff.id}
           show_score={@show_score_breakdown == item.thread.id}
           show_snooze={@show_snooze_menu == item.thread.id}
         />
       </ul>
     </div>
+    """
+  end
+
+  slot :inner_block, required: true
+
+  defp key(assigns) do
+    ~H"""
+    <kbd class="rounded border border-gray-300 px-1 font-sans text-[11px] text-gray-700 dark:border-zinc-600 dark:text-zinc-300">{render_slot(
+      @inner_block
+    )}</kbd>
     """
   end
 
@@ -499,6 +553,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   end
 
   attr :item, :map, required: true
+  attr :thread_path, :string, required: true
   attr :staff_id, :integer, required: true
   attr :show_score, :boolean, required: true
   attr :show_snooze, :boolean, required: true
@@ -530,6 +585,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
     ~H"""
     <li
+      id={"queue-row-#{@item.thread.id}"}
       class={["group border-l-4 first:rounded-t-lg last:rounded-b-lg", @accent]}
       data-testid={"staff-queue-card-#{@item.thread.id}"}
       data-turn={@item.turn}
@@ -537,8 +593,9 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     >
       <div class="relative">
         <.link
-          navigate={~p"/app/threads/#{@item.thread.id}"}
-          class="grid grid-cols-[0.5rem_minmax(0,1fr)_auto_auto] gap-x-2.5 px-3 py-3 hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500 dark:hover:bg-zinc-700/40 md:grid-cols-[0.5rem_13rem_minmax(0,1fr)_auto_4rem] md:gap-x-3"
+          navigate={@thread_path}
+          class="grid grid-cols-[0.5rem_minmax(0,1fr)_auto_auto] gap-x-2.5 px-3 py-3 hover:bg-gray-50 focus:bg-indigo-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500 dark:hover:bg-zinc-700/40 dark:focus:bg-indigo-950/40 md:grid-cols-[0.5rem_13rem_minmax(0,1fr)_auto_4rem] md:gap-x-3"
+          data-row-link
           data-testid="staff-queue-row-link"
         >
           <span class="col-start-1 row-start-1 flex h-5 items-center" aria-hidden="true">
@@ -560,12 +617,12 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
                 {@who}
               </span>
               <span
-                :if={@item.message_count > 1}
+                :if={@item.exchange_count > 1}
                 class="shrink-0 text-xs tabular-nums text-gray-500 dark:text-zinc-400"
-                title={"#{@item.message_count} messages"}
+                title={"#{@item.exchange_count} messages exchanged with the customer"}
                 data-testid="staff-queue-msg-count"
               >
-                {@item.message_count}<span class="sr-only"> messages</span>
+                {@item.exchange_count}<span class="sr-only"> messages</span>
               </span>
             </span>
             <span
@@ -754,7 +811,16 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           >
             <.icon name="hero-bell-alert-mini" class="h-4 w-4" />
           </button>
-          <div :if={not @item.is_snoozed} class="relative">
+          <%!-- The button is inside the click-away area, so clicking it while
+          the menu is open closes the menu instead of closing and reopening. --%>
+          <div
+            :if={not @item.is_snoozed}
+            class="relative"
+            phx-click-away={@show_snooze && "close_snooze"}
+            phx-window-keydown={@show_snooze && "close_snooze"}
+            phx-key="escape"
+            data-testid="staff-queue-snooze"
+          >
             <button
               type="button"
               phx-click="toggle_snooze"
@@ -776,10 +842,6 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             </button>
             <div
               :if={@show_snooze}
-              phx-click-away="toggle_snooze"
-              phx-window-keydown="toggle_snooze"
-              phx-key="escape"
-              phx-value-id={@item.thread.id}
               role="menu"
               aria-label="Snooze duration options"
               class="absolute right-0 top-full z-20 mt-1 w-28 rounded border border-gray-200 bg-white p-1 shadow-lg dark:border-zinc-600 dark:bg-zinc-800"
@@ -836,7 +898,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           <.neglect_badge level={@item.neglect_status} />
         </dd>
         <dt class="text-gray-500 dark:text-zinc-400">Messages</dt>
-        <dd>{@item.message_count}</dd>
+        <dd data-testid="staff-queue-rank-messages">{messages_summary(@item)}</dd>
         <%= if @item.thread.organization do %>
           <dt class="text-gray-500 dark:text-zinc-400">Customer</dt>
           <dd class="break-words">

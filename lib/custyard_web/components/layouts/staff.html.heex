@@ -18,155 +18,179 @@ nav_active? = fn target_path, target_views ->
   path_match || view_match
 end
 
+# Link labels never break; when the row is too narrow the links wrap whole.
 active_class =
-  "text-sm font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2 py-1 rounded-md border-b-2 border-indigo-600 dark:border-indigo-400"
+  "whitespace-nowrap text-sm font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2 py-1 rounded-md border-b-2 border-indigo-600 dark:border-indigo-400"
 
 inactive_class =
-  "text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200 px-2 py-1 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-800" %>
+  "whitespace-nowrap text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200 px-2 py-1 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-800" %>
 <div class="h-screen flex flex-col bg-gray-100 dark:bg-zinc-900" data-testid="staff-layout">
   <%!-- Top nav --%>
   <div
     class="bg-white dark:bg-zinc-800 border-b border-gray-200 dark:border-zinc-700 px-4 py-2"
     data-testid="staff-layout-nav"
   >
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-4">
-        <span class="font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight">
-          {if assigns[:current_tenant],
-            do: @current_tenant.name,
-            else: "Custyard"}
-        </span>
-        <span :if={assigns[:current_staff]} data-testid="staff-identity" class="text-sm">Staff · {@current_staff.email}</span>
-        <span class="hidden md:inline text-gray-300 dark:text-zinc-600">|</span>
-        <%!-- Desktop nav links - hidden on mobile --%>
-        <nav class="hidden md:flex items-center gap-4">
-          <.link
-            navigate={~p"/app"}
-            class={
-              if nav_active?.("/app", [CustyardWeb.Staff.AttentionQueueLive]) &&
-                   !nav_active?.("/app/", []),
-                 do: active_class,
-                 else: inactive_class
-            }
-            data-testid="staff-nav-queue"
-          >
-            Attention Queue
-          </.link>
-          <.link
-            navigate={~p"/app/neglect"}
-            class={
-              if nav_active?.("/app/neglect", [CustyardWeb.Staff.NeglectReportLive]),
-                do: active_class,
-                else: inactive_class
-            }
-            data-testid="staff-nav-neglect"
-          >
-            Neglect Report
-          </.link>
-          <.link
-            navigate={~p"/app/customers"}
-            class={
-              if nav_active?.("/app/customers", [
-                   CustyardWeb.Staff.OrganizationsLive,
-                   CustyardWeb.Staff.OrganizationDetailLive
-                 ]),
-                 do: active_class,
-                 else: inactive_class
-            }
-            data-testid="staff-nav-orgs"
-          >
-            Customers
-          </.link>
-          <.link
-            navigate={~p"/app/projects"}
-            class={
-              if nav_active?.("/app/projects", [CustyardWeb.Staff.ProjectsLive]),
-                do: active_class,
-                else: inactive_class
-            }
-            data-testid="staff-nav-projects"
-          >
-            Projects
-          </.link>
-          <.link
-            navigate={~p"/app/settings/intake"}
-            class={
-              if nav_active?.("/app/settings/intake", [
-                   CustyardWeb.Staff.IntakeSourcesLive
-                 ]),
-                 do: active_class,
-                 else: inactive_class
-            }
-            data-testid="staff-nav-intake-sources"
-          >
-            Intake Sources
-          </.link>
-          <.link
-            navigate={~p"/app/settings/slugs"}
-            class={
-              if nav_active?.("/app/settings/slugs", [CustyardWeb.Staff.SlugsLive]),
-                do: active_class,
-                else: inactive_class
-            }
-            data-testid="staff-nav-slugs"
-          >
-            Slugs
-          </.link>
-          <.link
-            navigate={~p"/app/settings/integrations"}
-            class={
-              if nav_active?.("/app/settings/integrations", [
-                   CustyardWeb.Staff.AcknowledgmentsLive
-                 ]),
-                 do: active_class,
-                 else: inactive_class
-            }
-            data-testid="staff-nav-acknowledgments"
-          >
-            Acknowledgments
-          </.link>
-          <.link
-            navigate={~p"/app/settings/workflow"}
-            class={
-              if nav_active?.("/app/settings/workflow", [CustyardWeb.Staff.SettingsLive]),
-                do: active_class,
-                else: inactive_class
-            }
-            data-testid="staff-nav-settings"
-          >
-            Settings
-          </.link>
-        </nav>
-      </div>
-      <%!-- Desktop logout - hidden on mobile --%>
-      <div class="hidden md:block">
-        <.link href={CustyardWeb.Endpoint.url() <> "/admin/login"} class="text-xs mr-3">Instance admin sign in</.link>
+    <%!-- One row from 1280px up: workspace name, destinations, then the
+    account group (who is signed in, instance admin, log out) at the end.
+    From md to 1280px the destinations take a row of their own beneath, and
+    below md they move into the menu. Link labels never break. --%>
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span
+        class="max-w-[45%] shrink-0 truncate font-bold text-gray-900 dark:text-zinc-100 text-sm tracking-tight md:max-w-[12rem]"
+        title={if assigns[:current_tenant], do: @current_tenant.name, else: "Custyard"}
+      >
+        {if assigns[:current_tenant],
+          do: @current_tenant.name,
+          else: "Custyard"}
+      </span>
+      <%!-- Desktop nav links - hidden on mobile --%>
+      <nav
+        class="hidden items-center gap-x-0.5 gap-y-1 md:order-last md:flex md:w-full md:flex-wrap xl:order-none xl:w-auto xl:flex-none xl:flex-nowrap"
+        aria-label="Staff"
+      >
+        <.link
+          navigate={~p"/app"}
+          class={
+            if nav_active?.("/app", [CustyardWeb.Staff.AttentionQueueLive]) &&
+                 !nav_active?.("/app/", []),
+               do: active_class,
+               else: inactive_class
+          }
+          data-testid="staff-nav-queue"
+        >
+          Attention Queue
+        </.link>
+        <.link
+          navigate={~p"/app/neglect"}
+          class={
+            if nav_active?.("/app/neglect", [CustyardWeb.Staff.NeglectReportLive]),
+              do: active_class,
+              else: inactive_class
+          }
+          data-testid="staff-nav-neglect"
+        >
+          Neglect Report
+        </.link>
+        <.link
+          navigate={~p"/app/customers"}
+          class={
+            if nav_active?.("/app/customers", [
+                 CustyardWeb.Staff.OrganizationsLive,
+                 CustyardWeb.Staff.OrganizationDetailLive
+               ]),
+               do: active_class,
+               else: inactive_class
+          }
+          data-testid="staff-nav-orgs"
+        >
+          Customers
+        </.link>
+        <.link
+          navigate={~p"/app/projects"}
+          class={
+            if nav_active?.("/app/projects", [CustyardWeb.Staff.ProjectsLive]),
+              do: active_class,
+              else: inactive_class
+          }
+          data-testid="staff-nav-projects"
+        >
+          Projects
+        </.link>
+        <.link
+          navigate={~p"/app/settings/intake"}
+          class={
+            if nav_active?.("/app/settings/intake", [
+                 CustyardWeb.Staff.IntakeSourcesLive
+               ]),
+               do: active_class,
+               else: inactive_class
+          }
+          data-testid="staff-nav-intake-sources"
+        >
+          Intake Sources
+        </.link>
+        <.link
+          navigate={~p"/app/settings/slugs"}
+          class={
+            if nav_active?.("/app/settings/slugs", [CustyardWeb.Staff.SlugsLive]),
+              do: active_class,
+              else: inactive_class
+          }
+          data-testid="staff-nav-slugs"
+        >
+          Slugs
+        </.link>
+        <.link
+          navigate={~p"/app/settings/integrations"}
+          class={
+            if nav_active?.("/app/settings/integrations", [
+                 CustyardWeb.Staff.AcknowledgmentsLive
+               ]),
+               do: active_class,
+               else: inactive_class
+          }
+          data-testid="staff-nav-acknowledgments"
+        >
+          Acknowledgments
+        </.link>
+        <.link
+          navigate={~p"/app/settings/workflow"}
+          class={
+            if nav_active?.("/app/settings/workflow", [CustyardWeb.Staff.SettingsLive]),
+              do: active_class,
+              else: inactive_class
+          }
+          data-testid="staff-nav-settings"
+        >
+          Settings
+        </.link>
+      </nav>
+      <%!-- Account group. The address shortens before anything wraps. --%>
+      <div class="ml-auto flex min-w-0 flex-1 items-center justify-end gap-x-1">
+        <span
+          :if={assigns[:current_staff]}
+          data-testid="staff-identity"
+          class="min-w-0 truncate text-sm text-gray-700 dark:text-zinc-200"
+          title={"Signed in as staff: #{@current_staff.email}"}
+        >Staff · {@current_staff.email}</span>
+        <%!-- Desktop only: the mobile menu carries these two. The admin
+        link is an icon below 1536px; its name stays the same for assistive
+        technology and as the tooltip. --%>
+        <.link
+          href={CustyardWeb.Endpoint.url() <> "/admin/login"}
+          class="hidden shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-700 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 md:inline-flex"
+          title="Instance admin sign in"
+          data-testid="staff-nav-instance-admin"
+        >
+          <.icon name="hero-shield-check-mini" class="h-4 w-4" />
+          <span class="sr-only 2xl:not-sr-only">Instance admin sign in</span>
+        </.link>
         <.link
           href={~p"/app/logout"}
           method="delete"
-          class="text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
+          class="hidden shrink-0 whitespace-nowrap rounded-md px-1.5 py-1 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-700 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 md:inline"
           data-testid="staff-nav-logout"
         >
           Log out
         </.link>
+        <%!-- Mobile menu button --%>
+        <button
+          type="button"
+          class="md:hidden shrink-0 p-2 text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
+          phx-click={JS.toggle(to: "#mobile-menu")}
+          aria-label="Toggle navigation menu"
+          data-testid="staff-nav-mobile-toggle"
+        >
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 6h16M4 12h16M4 18h16"
+            />
+          </svg>
+        </button>
       </div>
-      <%!-- Mobile menu button --%>
-      <button
-        type="button"
-        class="md:hidden p-2 text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
-        phx-click={JS.toggle(to: "#mobile-menu")}
-        aria-label="Toggle navigation menu"
-        data-testid="staff-nav-mobile-toggle"
-      >
-        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M4 6h16M4 12h16M4 18h16"
-          />
-        </svg>
-      </button>
     </div>
     <%!-- Mobile menu - hidden by default, toggled by button --%>
     <nav
@@ -263,9 +287,16 @@ inactive_class =
         Settings
       </.link>
       <.link
+        href={CustyardWeb.Endpoint.url() <> "/admin/login"}
+        class="text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200 px-2 py-1"
+        data-testid="staff-nav-mobile-instance-admin"
+      >
+        Instance admin sign in
+      </.link>
+      <.link
         href={~p"/app/logout"}
         method="delete"
-        class="text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
+        class="text-sm text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200 px-2 py-1"
       >
         Log out
       </.link>

@@ -691,7 +691,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
 
       assert has_element?(
                view,
-               "li[data-testid=staff-queue-card-#{conv.id}] a[data-testid=staff-queue-row-link][href='/app/threads/#{conv.id}']",
+               "li[data-testid=staff-queue-card-#{conv.id}] a[data-testid=staff-queue-row-link][href='/app/threads/#{conv.id}?pos=0']",
                "Opens on click"
              )
 
@@ -908,6 +908,265 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
 
       refute has_element?(view, card)
       assert Repo.get!(Custyard.Thread, conv.id).snoozed_until == nil
+    end
+  end
+
+  describe "loading" do
+    test "the queue is loaded once per render", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+      insert_message(thread_id: conv.id, body: "Hello")
+
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        "queue-single-load-#{inspect(ref)}",
+        [:custyard, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          # One preview query (the only one that cuts bodies) per queue load.
+          if self() == test_pid and metadata.query =~ "substr(",
+            do: send(test_pid, {ref, :queue_loaded})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("queue-single-load-#{inspect(ref)}") end)
+
+      # A plain GET renders the page once: mount, then handle_params.
+      assert html_response(get(conn, ~p"/app"), 200) =~ conv.subject
+      assert_received {^ref, :queue_loaded}
+      refute_received {^ref, :queue_loaded}
+    end
+
+    test "label changes made elsewhere still appear after a reload", %{conn: conn, staff: staff} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      refute has_element?(view, "#queue-label-filter")
+
+      scope = Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+      {:ok, label} = Custyard.Labels.create_and_assign(scope, conv, "Billing")
+      send(view.pid, :debounced_reload)
+
+      assert has_element?(view, "#queue-label option[value='#{label.id}']", "Billing")
+    end
+  end
+
+  describe "needs reply filter" do
+    test "the chip lists and counts the conversations waiting on staff", %{conn: conn} do
+      org = insert_organization()
+      waiting_on_us = insert_thread(organization_id: org.id, state: :active, subject: "Ours")
+      insert_message(thread_id: waiting_on_us.id, body: "Any news?")
+
+      replied = insert_thread(organization_id: org.id, state: :active, subject: "Theirs")
+      insert_message(thread_id: replied.id, body: "Question")
+      insert_message(thread_id: replied.id, source: :staff, body: "Answer")
+
+      parked = insert_thread(organization_id: org.id, state: :waiting, subject: "Parked")
+      insert_message(thread_id: parked.id, body: "Will check")
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-needs_reply]", "needs reply")
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-needs_reply]", "1")
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-all]", "3")
+
+      view |> element("[data-testid=staff-queue-filter-needs_reply]") |> render_click()
+      assert_patch(view, ~p"/app?filter=needs_reply&label=")
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-needs_reply][aria-pressed=true]")
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{waiting_on_us.id}][data-turn=ours]"
+             )
+
+      refute has_element?(view, "[data-testid=staff-queue-card-#{replied.id}]")
+      refute has_element?(view, "[data-testid=staff-queue-card-#{parked.id}]")
+      assert has_element?(view, "[data-testid=staff-queue-count]", "1 conversation")
+
+      # Every listed row says "Needs reply": the chip and the rows share a rule.
+      refute has_element?(view, "[data-testid^=staff-queue-card-][data-turn=theirs]")
+    end
+  end
+
+  describe "snooze menu" do
+    test "the button toggles the menu and sits inside its click-away area", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      area = "[data-testid=staff-queue-card-#{conv.id}] [data-testid=staff-queue-snooze]"
+      button = "#{area} > button[data-testid=staff-queue-snooze-btn]"
+
+      # Closed: nothing listens for outside clicks.
+      refute has_element?(view, "#{area}[phx-click-away]")
+      refute has_element?(view, "[phx-click-away]")
+
+      view |> element(button) |> render_click()
+
+      assert has_element?(
+               view,
+               "#{area}[phx-click-away=close_snooze] [data-testid=staff-queue-snooze-menu]"
+             )
+
+      assert has_element?(view, "#{button}[aria-expanded=true]")
+
+      # The button is not outside the area, so this click is the only event.
+      view |> element(button) |> render_click()
+      refute has_element?(view, "[data-testid=staff-queue-snooze-menu]")
+      assert has_element?(view, "#{button}[aria-expanded=false]")
+    end
+
+    test "an outside click or Escape closes it", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      area = "[data-testid=staff-queue-card-#{conv.id}] [data-testid=staff-queue-snooze]"
+
+      view |> element("#{area} [data-testid=staff-queue-snooze-btn]") |> render_click()
+      assert has_element?(view, "#{area}[phx-window-keydown=close_snooze][phx-key=escape]")
+
+      render_click(view, "close_snooze", %{})
+      refute has_element?(view, "[data-testid=staff-queue-snooze-menu]")
+      assert Repo.get!(Custyard.Thread, conv.id).snoozed_until == nil
+    end
+  end
+
+  describe "keyboard triage" do
+    test "rows are a keyboard-navigable list and carry their place in the queue", %{
+      conn: conn,
+      staff: staff
+    } do
+      org = insert_organization()
+      first = insert_thread(organization_id: org.id, state: :active, cached_score: 90)
+      second = insert_thread(organization_id: org.id, state: :active, cached_score: 50)
+      insert_message(thread_id: first.id, body: "One")
+      insert_message(thread_id: second.id, body: "Two")
+
+      scope = Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+      {:ok, label} = Custyard.Labels.create_and_assign(scope, first, "Billing")
+      {:ok, _} = Custyard.Labels.assign(scope, second, label.id)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(view, "ul#staff-queue-list[phx-hook=QueueKeys]")
+      refute has_element?(view, "ul#staff-queue-list[data-select]")
+      assert has_element?(view, "[data-testid=staff-queue-keys]", "move")
+
+      assert has_element?(
+               view,
+               "li#queue-row-#{first.id} a[data-row-link][href='/app/threads/#{first.id}?pos=0']"
+             )
+
+      assert has_element?(
+               view,
+               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?pos=1']"
+             )
+
+      # Under a filter and a label, the links say which queue they belong to.
+      {:ok, filtered, _html} = live(conn, ~p"/app?filter=needs_reply&label=#{label.id}")
+
+      assert has_element?(
+               filtered,
+               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?filter=needs_reply&label=#{label.id}&pos=1']"
+             )
+    end
+
+    test "coming back from a conversation selects its row", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app?at=#{conv.id}")
+      assert has_element?(view, "ul#staff-queue-list[data-select='#{conv.id}']")
+
+      # Changing the filter starts a fresh pass through the list.
+      view |> element("[phx-click=filter][phx-value-filter=active]") |> render_click()
+      refute has_element?(view, "ul#staff-queue-list[data-select]")
+
+      {:ok, junk, _html} = live(conn, ~p"/app?at=not-a-number")
+      refute has_element?(junk, "ul#staff-queue-list[data-select]")
+    end
+  end
+
+  describe "row message count" do
+    test "counts messages exchanged with the customer, not internal notes", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+      insert_message(thread_id: conv.id, body: "Question")
+      insert_message(thread_id: conv.id, source: :staff, body: "Answer")
+      insert_message(thread_id: conv.id, source: :staff, is_internal_note: true, body: "Memo")
+      insert_message(thread_id: conv.id, source: :staff, is_internal_note: true, body: "Memo 2")
+
+      noted = insert_thread(organization_id: org.id, state: :active)
+      insert_message(thread_id: noted.id, body: "Only message")
+      insert_message(thread_id: noted.id, source: :staff, is_internal_note: true, body: "Memo")
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      card = "[data-testid=staff-queue-card-#{conv.id}]"
+
+      assert has_element?(
+               view,
+               "#{card} [data-testid=staff-queue-msg-count][title='2 messages exchanged with the customer']",
+               "2"
+             )
+
+      # One exchanged message: no count on the row.
+      refute has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{noted.id}] [data-testid=staff-queue-msg-count]"
+             )
+
+      view |> element("#{card} [data-testid=staff-queue-score-toggle]") |> render_click()
+
+      assert has_element?(
+               view,
+               "#{card} [data-testid=staff-queue-rank-messages]",
+               "2 exchanged with the customer, 2 internal or automatic"
+             )
+    end
+  end
+
+  describe "staff navigation" do
+    test "keeps every destination and the account group", %{conn: conn, staff: staff} do
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      for {testid, text, href} <- [
+            {"staff-nav-queue", "Attention Queue", "/app"},
+            {"staff-nav-neglect", "Neglect Report", "/app/neglect"},
+            {"staff-nav-orgs", "Customers", "/app/customers"},
+            {"staff-nav-projects", "Projects", "/app/projects"},
+            {"staff-nav-intake-sources", "Intake Sources", "/app/settings/intake"},
+            {"staff-nav-slugs", "Slugs", "/app/settings/slugs"},
+            {"staff-nav-acknowledgments", "Acknowledgments", "/app/settings/integrations"},
+            {"staff-nav-settings", "Settings", "/app/settings/workflow"}
+          ] do
+        assert has_element?(
+                 view,
+                 "nav[aria-label=Staff] a[data-testid=#{testid}][href='#{href}']",
+                 text
+               )
+      end
+
+      assert has_element?(view, "[data-testid=staff-identity]", "Staff · #{staff.email}")
+
+      # Shown as an icon on narrower screens; the name is still its text.
+      assert has_element?(
+               view,
+               "a[data-testid=staff-nav-instance-admin][href$='/admin/login'][title='Instance admin sign in']",
+               "Instance admin sign in"
+             )
+
+      assert has_element?(view, "a[data-testid=staff-nav-logout][href='/app/logout']", "Log out")
+
+      assert has_element?(
+               view,
+               "#mobile-menu a[data-testid=staff-nav-mobile-instance-admin][href$='/admin/login']",
+               "Instance admin sign in"
+             )
     end
   end
 
