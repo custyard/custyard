@@ -14,8 +14,8 @@ services:
       PORT: "4000"
       DATABASE_PATH: /data/custyard.db
       # SECRET_KEY_BASE: "generate-with-mix-phx.gen.secret"
-      # First super_admin, created on boot if absent; remove after first login.
-      # OPERATOR_EMAIL: you@example.com
+      # First instance administrator, created on boot if absent; remove after first login.
+      # INSTANCE_ADMIN_EMAIL: you@example.com
       # MAIL_ADAPTER: smtp
       # LMTP_ENABLED: "false"
       # CREDENTIAL_ENCRYPTION_KEY: "openssl rand -base64 32" (IMAP channels)
