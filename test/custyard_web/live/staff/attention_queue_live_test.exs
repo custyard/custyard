@@ -573,6 +573,344 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
     end
   end
 
+  describe "inbox rows" do
+    test "a row previews the latest message as escaped plain text", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+      insert_message(thread_id: conv.id, body: "First question")
+
+      insert_message(
+        thread_id: conv.id,
+        body: "Second line\n<script>alert(1)</script> & more",
+        html_body: "<p>Second <b>line</b></p>"
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      snippet =
+        view
+        |> element("[data-testid=staff-queue-card-#{conv.id}] [data-testid=staff-queue-snippet]")
+        |> render()
+
+      assert snippet =~ "Second line &lt;script&gt;alert(1)&lt;/script&gt; &amp; more"
+      refute snippet =~ "<script>"
+      refute snippet =~ "<b>"
+      refute snippet =~ "First question"
+    end
+
+    test "a row without messages and a row whose latest message was deleted say so", %{
+      conn: conn,
+      staff: staff
+    } do
+      org = insert_organization()
+      empty = insert_thread(organization_id: org.id, state: :active)
+      deleted = insert_thread(organization_id: org.id, state: :active)
+      message = insert_message(thread_id: deleted.id, body: "Card number 4111 1111")
+      {:ok, _} = Custyard.Threads.soft_delete_message(message, staff)
+
+      {:ok, view, html} = live(conn, ~p"/app")
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{empty.id}] [data-testid=staff-queue-snippet]",
+               "No messages yet"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{deleted.id}] [data-testid=staff-queue-snippet]",
+               "Message deleted"
+             )
+
+      refute html =~ "4111 1111"
+    end
+
+    test "shows who has to act next", %{conn: conn, staff: staff} do
+      org = insert_organization()
+      needs_reply = insert_thread(organization_id: org.id, state: :active)
+      insert_message(thread_id: needs_reply.id, source: :staff, body: "Could you send a log?")
+      insert_message(thread_id: needs_reply.id, body: "Here is the log")
+
+      insert_message(
+        thread_id: needs_reply.id,
+        source: :staff,
+        is_internal_note: true,
+        body: "Looks like the cache bug"
+      )
+
+      replied = insert_thread(organization_id: org.id, state: :active)
+      insert_message(thread_id: replied.id, body: "Is this fixed?")
+      reply = insert_message(thread_id: replied.id, source: :staff, body: "Yes, since Monday")
+
+      Repo.update!(Ecto.Changeset.change(reply, author_staff_id: staff.id))
+
+      parked = insert_thread(organization_id: org.id, state: :waiting)
+      insert_message(thread_id: parked.id, body: "I will check with my team")
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{needs_reply.id}][data-turn=ours] [data-testid=staff-queue-turn]",
+               "Needs reply"
+             )
+
+      # The note is previewed, but it is not a reply to the customer.
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{needs_reply.id}] [data-testid=staff-queue-snippet]",
+               "Note: Looks like the cache bug"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{replied.id}][data-turn=theirs] [data-testid=staff-queue-turn]",
+               "Waiting on customer"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{replied.id}] [data-testid=staff-queue-snippet]",
+               "You: Yes, since Monday"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{parked.id}][data-turn=theirs] [data-testid=staff-queue-turn]",
+               "Waiting on customer"
+             )
+    end
+
+    test "the whole row links to the conversation and the row actions sit outside the link", %{
+      conn: conn
+    } do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active, subject: "Opens on click")
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(
+               view,
+               "li[data-testid=staff-queue-card-#{conv.id}] a[data-testid=staff-queue-row-link][href='/app/threads/#{conv.id}']",
+               "Opens on click"
+             )
+
+      refute has_element?(view, "a[data-testid=staff-queue-row-link] button")
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{conv.id}] button[data-testid=staff-queue-score-toggle][aria-label='Why this rank?'][aria-expanded=false]"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{conv.id}] button[data-testid=staff-queue-snooze-btn][aria-label=Snooze]"
+             )
+    end
+
+    test "values that say nothing stay off the row and move into Why this rank", %{conn: conn} do
+      org = insert_organization(name: "Plain Customer", tier: :standard)
+
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          public_address: "billing@acme.example.com",
+          state: :active
+        )
+
+      old = DateTime.add(DateTime.utc_now(), -30, :day) |> DateTime.truncate(:second)
+
+      conv =
+        insert_thread(
+          organization_id: org.id,
+          state: :active,
+          source: :lettermint,
+          inbound_channel_id: channel.id,
+          last_staff_action_at: old
+        )
+
+      insert_message(thread_id: conv.id, body: "Still waiting")
+      Scoring.calculate_and_cache(conv.id)
+      score = Repo.get!(Custyard.Thread, conv.id).cached_score
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      card = "[data-testid=staff-queue-card-#{conv.id}]"
+      row = view |> element(card) |> render()
+
+      refute row =~ "staff-tier-badge"
+      refute row =~ "source-badge-lettermint"
+      refute row =~ "staff-neglect-badge"
+      refute row =~ "staff-queue-score\""
+      refute row =~ "Score #{score}"
+
+      # Neglect is an accent on the row and a sentence for screen readers.
+      assert has_element?(view, "#{card}[data-neglect=critical]")
+      assert has_element?(view, "#{card} [data-testid=staff-queue-age]", "Neglected")
+
+      # The mailbox is shortened; the full address is one hover away.
+      assert has_element?(
+               view,
+               "#{card} [data-testid=staff-queue-channel][title='Received at billing@acme.example.com']",
+               "billing@"
+             )
+
+      refute view |> element("#{card} [data-testid=staff-queue-channel]") |> render() =~
+               ">billing@acme.example.com<"
+
+      view |> element("#{card} [data-testid=staff-queue-score-toggle]") |> render_click()
+
+      assert has_element?(view, "#{card} [data-testid=staff-queue-score]", "Score #{score}")
+
+      assert has_element?(
+               view,
+               "#{card} [data-testid=staff-queue-rank] [data-testid=source-badge-lettermint]"
+             )
+
+      assert has_element?(
+               view,
+               "#{card} [data-testid=staff-queue-rank] [data-testid=staff-tier-badge-standard]"
+             )
+
+      assert has_element?(
+               view,
+               "#{card} [data-testid=staff-queue-rank] [data-testid=staff-neglect-badge-critical]"
+             )
+
+      assert has_element?(
+               view,
+               "#{card} [data-testid=staff-queue-score-toggle][aria-expanded=true]"
+             )
+    end
+
+    test "a non-default tier stays on the row", %{conn: conn} do
+      org = insert_organization(tier: :enterprise)
+      conv = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{conv.id}] [data-testid=staff-queue-chips] [data-testid=staff-tier-badge-enterprise]"
+             )
+    end
+
+    test "leads with the contact and names the customer only when it adds something", %{
+      conn: conn
+    } do
+      named_org = insert_organization(name: "yorb.tech")
+
+      named =
+        insert_contact(organization_id: named_org.id, name: "Zef Sowman", email: "zef@yorb.tech")
+
+      with_name =
+        insert_thread(organization_id: named_org.id, contact_id: named.id, state: :active)
+
+      same_org = insert_organization(name: "onetime.example")
+
+      same =
+        insert_contact(organization_id: same_org.id, name: nil, email: "secure@onetime.example")
+
+      redundant = insert_thread(organization_id: same_org.id, contact_id: same.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{with_name.id}] [data-testid=staff-queue-who]",
+               "Zef Sowman"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{with_name.id}] [data-testid=staff-queue-org-name]",
+               "yorb.tech"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{redundant.id}] [data-testid=staff-queue-who]",
+               "secure@onetime.example"
+             )
+
+      refute has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{redundant.id}] [data-testid=staff-queue-org-name]"
+             )
+    end
+  end
+
+  describe "filter counts" do
+    test "each filter chip shows how many conversations it lists", %{conn: conn} do
+      org = insert_organization()
+      later = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+
+      insert_thread(organization_id: org.id, state: :new)
+      insert_thread(organization_id: org.id, state: :new)
+      insert_thread(organization_id: org.id, state: :active)
+      insert_thread(organization_id: org.id, state: :waiting)
+      insert_thread(organization_id: org.id, state: :resolved)
+      insert_thread(organization_id: org.id, state: :active, snoozed_until: later)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      for {filter, count} <- [
+            {"all", 4},
+            {"new", 2},
+            {"active", 1},
+            {"waiting", 1},
+            {"dormant", 0},
+            {"snoozed", 1},
+            {"due_tasks", 0}
+          ] do
+        assert view
+               |> element("[data-testid=staff-queue-filter-count-#{filter}]")
+               |> render()
+               |> Floki.parse_fragment!()
+               |> Floki.text()
+               |> String.trim() == to_string(count),
+               "count on the #{filter} chip"
+      end
+
+      # The counts do not depend on the filter being viewed.
+      view |> element("[phx-click=filter][phx-value-filter=new]") |> render_click()
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-all]", "4")
+      assert has_element?(view, "[data-testid=staff-queue-count]", "2 conversations")
+    end
+
+    test "counts follow the label filter", %{conn: conn, staff: staff} do
+      org = insert_organization()
+      labelled = insert_thread(organization_id: org.id, state: :new)
+      insert_thread(organization_id: org.id, state: :new)
+
+      scope = Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+      {:ok, label} = Custyard.Labels.create_and_assign(scope, labelled, "Billing")
+
+      {:ok, view, _html} = live(conn, ~p"/app?label=#{label.id}")
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-all]", "1")
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-new]", "1")
+    end
+  end
+
+  describe "snoozed rows" do
+    test "can be un-snoozed from the snoozed filter", %{conn: conn} do
+      org = insert_organization()
+      later = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+      conv = insert_thread(organization_id: org.id, state: :active, snoozed_until: later)
+
+      {:ok, view, _html} = live(conn, ~p"/app?filter=snoozed")
+      card = "[data-testid=staff-queue-card-#{conv.id}]"
+
+      assert has_element?(view, "#{card} [data-testid=staff-queue-snoozed]", "snoozed until")
+      refute has_element?(view, "#{card} [data-testid=staff-queue-snooze-btn]")
+
+      view |> element("#{card} [data-testid=staff-queue-unsnooze-btn]") |> render_click()
+
+      refute has_element?(view, card)
+      assert Repo.get!(Custyard.Thread, conv.id).snoozed_until == nil
+    end
+  end
+
   describe "channel and suspect badges" do
     test "rows show the channel's public address and the suspect flag", %{conn: conn} do
       org = insert_organization()

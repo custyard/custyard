@@ -24,11 +24,11 @@ defmodule CustyardWeb.StaffComponentsTest do
       assert html =~ ~s(data-testid="staff-tier-badge-standard")
     end
 
-    test "renders basic tier badge with lighter gray styling" do
+    test "renders basic tier badge with readable gray styling" do
       html = render_component(&StaffComponents.tier_badge/1, tier: :basic)
 
       assert html =~ "basic"
-      assert html =~ "text-gray-400"
+      assert html =~ "text-gray-600"
       assert html =~ "bg-gray-50"
       assert html =~ ~s(data-testid="staff-tier-badge-basic")
     end
@@ -78,12 +78,12 @@ defmodule CustyardWeb.StaffComponentsTest do
       assert html =~ ~s(data-testid="staff-state-badge-dormant")
     end
 
-    test "renders resolved state badge with lighter gray styling" do
+    test "renders resolved state badge with readable gray styling" do
       html = render_component(&StaffComponents.state_badge/1, state: :resolved)
 
       assert html =~ "resolved"
       assert html =~ "bg-gray-100"
-      assert html =~ "text-gray-400"
+      assert html =~ "text-gray-600"
       assert html =~ ~s(data-testid="staff-state-badge-resolved")
     end
 
@@ -331,6 +331,30 @@ defmodule CustyardWeb.StaffComponentsTest do
       assert html =~ "No reply channel"
       assert html =~ "text-amber-700"
       assert html =~ ~s(data-testid="no-reply-channel-badge")
+    end
+  end
+
+  describe "short_age/2" do
+    test "formats elapsed time in the largest whole unit" do
+      now = ~U[2026-11-11 12:00:00Z]
+
+      assert StaffComponents.short_age(~U[2026-11-11 11:59:30Z], now) == "now"
+      assert StaffComponents.short_age(~U[2026-11-11 11:15:00Z], now) == "45m"
+      assert StaffComponents.short_age(~U[2026-11-11 09:00:00Z], now) == "3h"
+      assert StaffComponents.short_age(~U[2026-11-10 12:00:00Z], now) == "1d"
+      assert StaffComponents.short_age(~U[2026-10-30 12:00:00Z], now) == "12d"
+    end
+
+    test "never shows a negative age for a timestamp slightly in the future" do
+      assert StaffComponents.short_age(~U[2026-11-11 12:00:05Z], ~U[2026-11-11 12:00:00Z]) ==
+               "now"
+    end
+  end
+
+  describe "format_timestamp/1" do
+    test "renders an absolute UTC timestamp" do
+      assert StaffComponents.format_timestamp(~U[2026-11-09 23:21:00Z]) ==
+               "Nov 9, 2026 23:21 UTC"
     end
   end
 

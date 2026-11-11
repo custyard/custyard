@@ -1,6 +1,7 @@
 defmodule CustyardWeb.Staff.ThreadLiveTest do
   use CustyardWeb.ConnCase, async: true
 
+  import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
@@ -1670,6 +1671,303 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       refute identity =~
                Application.get_env(:custyard, :email_from_address, "support@custyard.local")
+    end
+  end
+
+  describe "conversation layout" do
+    setup do
+      org = insert_organization(name: "Acme Corp")
+      contact = insert_contact(organization_id: org.id, name: "Alice", email: "alice@acme.com")
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id, subject: "Invoice")
+      %{org: org, contact: contact, conv: conv}
+    end
+
+    test "the subject is the page title with customer and contact beneath it", %{
+      conn: conn,
+      conv: conv,
+      org: org
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      assert has_element?(view, "h1[data-testid=staff-thread-subject]", "Invoice")
+      refute has_element?(view, "h1 a")
+
+      assert has_element?(
+               view,
+               "header [data-testid=staff-thread-customer-link][href='/app/customers/#{org.public_id}']",
+               "Acme Corp"
+             )
+
+      assert has_element?(
+               view,
+               "header [data-testid=staff-thread-contact]",
+               "Alice <alice@acme.com>"
+             )
+
+      assert has_element?(view, "header [data-testid=staff-thread-back][href='/app']")
+      assert has_element?(view, "header [data-testid=staff-state-badge-active]")
+    end
+
+    test "a contact that only repeats the customer is not printed twice", %{conn: conn} do
+      org = insert_organization(name: "solo@example.com")
+      contact = insert_contact(organization_id: org.id, name: nil, email: "solo@example.com")
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      refute has_element?(view, "[data-testid=staff-thread-contact]")
+
+      sidebar = view |> element("[data-testid=staff-sidebar-contact]") |> render()
+      assert length(String.split(sidebar, "solo@example.com")) == 2
+    end
+
+    test "messages carry sender, channel and a time with the absolute timestamp on hover", %{
+      conn: conn,
+      conv: conv
+    } do
+      message = insert_message(thread_id: conv.id, body: "Hello", sender_email: "alice@acme.com")
+
+      Repo.update_all(
+        from(m in Custyard.Message, where: m.id == ^message.id),
+        set: [inserted_at: ~U[2026-03-04 15:06:00Z]]
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      entry = "[data-testid=staff-message-#{message.id}]"
+
+      assert has_element?(view, "#{entry} [data-testid=staff-message-sender]", "alice@acme.com")
+      assert has_element?(view, entry, "via email")
+
+      assert has_element?(
+               view,
+               "#{entry} time[data-testid=staff-message-time][datetime='2026-03-04T15:06:00Z'][title='Mar 4, 2026 15:06 UTC']"
+             )
+    end
+
+    test "a plain-text body renders without stray leading whitespace", %{conn: conn, conv: conv} do
+      message = insert_message(thread_id: conv.id, body: "First line\n  indented line")
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      assert view
+             |> element(
+               "[data-testid=staff-message-#{message.id}] [data-testid=staff-message-body]"
+             )
+             |> render() =~ ">First line\n  indented line</div>"
+    end
+
+    test "customer messages, staff replies and internal notes are marked apart", %{
+      conn: conn,
+      conv: conv
+    } do
+      customer = insert_message(thread_id: conv.id, body: "Question")
+      reply = insert_message(thread_id: conv.id, source: :staff, body: "Answer")
+
+      note =
+        insert_message(thread_id: conv.id, source: :staff, is_internal_note: true, body: "Memo")
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-message-#{customer.id}] [data-testid=staff-message-email]"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-message-#{reply.id}] [data-testid=staff-message-staff]"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-message-#{note.id}] [data-testid=staff-message-internal] [data-testid=staff-message-internal-badge]",
+               "internal note"
+             )
+
+      refute has_element?(
+               view,
+               "[data-testid=staff-message-#{reply.id}] [data-testid=staff-message-internal-badge]"
+             )
+    end
+
+    test "the sidebar starts with the state actions and keeps the score collapsed", %{
+      conn: conn,
+      conv: conv
+    } do
+      {:ok, view, html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      {actions, _} = :binary.match(html, ~s(data-testid="staff-state-actions"))
+      {customer, _} = :binary.match(html, ~s(data-testid="staff-sidebar-org"))
+      assert actions < customer
+
+      assert has_element?(view, "details[data-testid=staff-sidebar-score] summary", "score")
+      refute has_element?(view, "details[data-testid=staff-sidebar-score][open]")
+
+      assert has_element?(
+               view,
+               "details[data-testid=staff-sidebar-score] [data-testid=staff-score-breakdown]"
+             )
+
+      # The contact's address is printed once.
+      sidebar = view |> element("[data-testid=staff-thread-sidebar]") |> render()
+      assert length(String.split(sidebar, "alice@acme.com")) == 2
+    end
+
+    test "other open conversations show their subject, state and age", %{
+      conn: conn,
+      conv: conv,
+      org: org
+    } do
+      other =
+        insert_thread(
+          organization_id: org.id,
+          state: :waiting,
+          subject: "Feedback on Nov 10, 2026 via eu.example.com (custom)"
+        )
+
+      Repo.update_all(
+        from(t in Custyard.Thread, where: t.id == ^other.id),
+        set: [
+          inserted_at: DateTime.add(DateTime.utc_now(), -3, :day) |> DateTime.truncate(:second)
+        ]
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      entry = "a[data-testid=staff-other-conv-#{other.id}][href='/app/threads/#{other.id}']"
+
+      assert has_element?(view, entry, "Feedback on Nov 10, 2026 via eu.example.com (custom)")
+      assert has_element?(view, "#{entry} [data-testid=staff-state-badge-waiting]", "waiting")
+      assert has_element?(view, "#{entry} time", "opened 3d ago")
+    end
+  end
+
+  describe "collapsed composer" do
+    setup do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "alice@customer.example")
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id)
+
+      insert_message(
+        thread_id: conv.id,
+        source: :email,
+        sender_email: "alice@customer.example",
+        cc_addresses: ["boss@customer.example"],
+        triage_class: :customer
+      )
+
+      %{conv: conv}
+    end
+
+    test "From, To and CC start as one summary line with the fields still in the form", %{
+      conn: conn,
+      conv: conv,
+      sending_channel: channel
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      recipients = "#staff-reply-form details[data-testid=composer-recipients]"
+
+      assert has_element?(view, recipients)
+      refute has_element?(view, "#{recipients}[open]")
+
+      assert has_element?(
+               view,
+               "#{recipients} summary [data-testid=staff-reply-to]",
+               "alice@customer.example"
+             )
+
+      assert has_element?(
+               view,
+               "#{recipients} summary [data-testid=composer-cc-summary]",
+               "boss@customer.example"
+             )
+
+      assert has_element?(
+               view,
+               "#{recipients} summary [data-testid=composer-from-identity]",
+               channel.public_address
+             )
+
+      # Collapsed is not removed: the fields are submitted with the reply.
+      assert has_element?(view, "#{recipients} select#staff-reply-from[name=reply_channel_id]")
+      assert has_element?(view, "#{recipients} input[name=cc][value='boss@customer.example']")
+      refute has_element?(view, "#{recipients} summary input")
+      refute has_element?(view, "#{recipients} summary select")
+
+      assert has_element?(
+               view,
+               "#staff-reply-form textarea#staff-reply-textarea[rows='3'][phx-hook=ComposerInput]"
+             )
+    end
+
+    test "the summary follows edits to the CC list", %{conn: conn, conv: conv} do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      view |> form("#staff-reply-form", body: "Hi", cc: "") |> render_change()
+      assert has_element?(view, "[data-testid=composer-cc-summary]", "nobody else")
+
+      view |> form("#staff-reply-form", body: "Hi", cc: "ops@customer.example") |> render_change()
+      assert has_element?(view, "[data-testid=composer-cc-summary]", "ops@customer.example")
+    end
+
+    test "a reply sent while collapsed still goes to the summarised recipients", %{
+      conn: conn,
+      conv: conv,
+      sending_channel: channel
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      view |> form("#staff-reply-form", body: "Sent while collapsed") |> render_submit()
+
+      [reply] = Threads.list_public_messages(conv.id) |> Enum.filter(&(&1.source == :staff))
+      assert reply.cc_addresses == ["boss@customer.example"]
+      assert reply.inbound_channel_id == channel.id
+    end
+
+    test "opens when there is no sending address to reply from", %{
+      conn: conn,
+      conv: conv,
+      sending_channel: channel
+    } do
+      Repo.update!(Ecto.Changeset.change(channel, state: :paused))
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      assert has_element?(view, "details[data-testid=composer-recipients][open]")
+
+      assert has_element?(
+               view,
+               "[data-testid=composer-from-identity]",
+               "Choose a tenant sending address"
+             )
+    end
+
+    test "opens when a draft was restored so the recipients get re-read", %{
+      conn: conn,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      view
+      |> form("#staff-reply-form", body: "Unsent", cc: "late@customer.example")
+      |> render_change()
+
+      {:ok, restored, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      assert has_element?(restored, "details[data-testid=composer-recipients][open]")
+      assert has_element?(restored, "[data-testid=composer-cc-summary]", "late@customer.example")
+    end
+
+    test "the note composer has no recipients and is marked as private", %{conn: conn, conv: conv} do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      assert has_element?(view, "[data-testid=staff-composer][data-composer-mode=reply]")
+
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+
+      assert has_element?(view, "[data-testid=staff-composer][data-composer-mode=note]")
+      refute has_element?(view, "[data-testid=composer-recipients]")
+      assert has_element?(view, "#staff-note-form textarea[rows='3'][phx-hook=ComposerInput]")
+      assert has_element?(view, "[data-testid=staff-note-submit]", "Save internal note")
+      refute has_element?(view, "[data-testid=staff-reply-submit]")
     end
   end
 end
