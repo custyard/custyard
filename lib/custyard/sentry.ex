@@ -441,7 +441,14 @@ defmodule Custyard.Sentry do
   defp safe_route(_url), do: nil
 
   defp safe_route_path(path)
-       when path in ["/", "/operator", "/operator/login", "/operator/login/sent", "/api/health"],
+       when path in [
+              "/",
+              "/operator",
+              "/operator/login",
+              "/operator/login/sent",
+              "/api/health",
+              "/api/health/live"
+            ],
        do: path
 
   defp safe_route_path("/operator/login/verify/" <> _token),

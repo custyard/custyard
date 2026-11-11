@@ -135,6 +135,15 @@ inactive_class =
           >
             Settings
           </.link>
+          <.link
+            href={~p"/operator/system"}
+            class={
+              if nav_active?.("/operator/system", []), do: active_class, else: inactive_class
+            }
+            data-testid="operator-nav-system"
+          >
+            System
+          </.link>
         </nav>
       </div>
       <%!-- Desktop logout - hidden on mobile --%>
@@ -259,6 +268,12 @@ inactive_class =
         }
       >
         Settings
+      </.link>
+      <.link
+        href={~p"/operator/system"}
+        class={if nav_active?.("/operator/system", []), do: active_class, else: inactive_class}
+      >
+        System
       </.link>
       <.link
         href={~p"/operator/logout"}

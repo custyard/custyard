@@ -7,7 +7,7 @@ config :custyard, env: :prod, https_required: true
 
 # Health check path accessible over plain HTTP for Fly.io machine-level probes.
 # These probes bypass the proxy (no x-forwarded-proto), so Plug.SSL must skip them.
-config :custyard, :health_check, path: "/api/health"
+config :custyard, :health_check, path: "/api/health", live_path: "/api/health/live"
 
 config :custyard, CustyardWeb.Endpoint,
   server: true,

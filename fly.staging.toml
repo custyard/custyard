@@ -50,4 +50,6 @@ interval = "10s"
 timeout = "2s"
 grace_period = "60s"
 method = "GET"
-path = "/api/health"
+# Liveness only, so a machine in doctor mode keeps serving the card. The
+# promotion workflow verifies readiness (/api/health) after the deploy.
+path = "/api/health/live"

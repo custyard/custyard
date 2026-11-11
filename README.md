@@ -63,26 +63,60 @@ mix dev.create_operator --email you@example.com
 
 ### Production (Docker / Fly)
 
-Login links need a real mailer, so set `MAIL_ADAPTER` (`lettermint` | `postmark` |
-`sendgrid` | `mailgun` | `smtp`) and its credentials (see `.env.sample`). Then create
-the first `super_admin` in one of two ways.
+A new install needs six variables. SQLite lives on the `/data` volume, so
+there are no database variables.
 
-F󠄁o󠄁r󠄁 L󠄁e󠄁t󠄁t󠄁e󠄁r󠄁m󠄁i󠄁n󠄁t󠄁,󠄁 `LETTERMINT_PROJECT_TOKEN` s󠄁e󠄁n󠄁d󠄁s󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 m󠄁a󠄁i󠄁l󠄁 (󠄁i󠄁n󠄁c󠄁l󠄁u󠄁d󠄁i󠄁n󠄁g󠄁
-l󠄁o󠄁g󠄁i󠄁n󠄁 l󠄁i󠄁n󠄁k󠄁s󠄁)󠄁,󠄁 w󠄁h󠄁i󠄁l󠄁e󠄁 t󠄁h󠄁e󠄁 s󠄁e󠄁p󠄁a󠄁r󠄁a󠄁t󠄁e󠄁 `LETTERMINT_TEAM_TOKEN` a󠄁u󠄁t󠄁h󠄁o󠄁r󠄁i󠄁z󠄁e󠄁s󠄁 m󠄁a󠄁n󠄁a󠄁g󠄁e󠄁m󠄁e󠄁n󠄁t󠄁
-r󠄁e󠄁a󠄁d󠄁s󠄁.󠄁 `LETTERMINT_API_KEY` r󠄁e󠄁m󠄁a󠄁i󠄁n󠄁s󠄁 a󠄁 d󠄁e󠄁p󠄁r󠄁e󠄁c󠄁a󠄁t󠄁e󠄁d󠄁 s󠄁e󠄁n󠄁d󠄁i󠄁n󠄁g󠄁-󠄁o󠄁n󠄁l󠄁y󠄁 f󠄁a󠄁l󠄁l󠄁b󠄁a󠄁c󠄁k󠄁.󠄁 A󠄁 m󠄁i󠄁s󠄁s󠄁i󠄁n󠄁g󠄁
-T󠄁e󠄁a󠄁m󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁 d󠄁i󠄁s󠄁a󠄁b󠄁l󠄁e󠄁s󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 m󠄁a󠄁n󠄁a󠄁g󠄁e󠄁m󠄁e󠄁n󠄁t󠄁;󠄁 i󠄁t󠄁 n󠄁e󠄁v󠄁e󠄁r󠄁 c󠄁r󠄁e󠄁a󠄁t󠄁e󠄁s󠄁 m󠄁o󠄁c󠄁k󠄁 r󠄁o󠄁u󠄁t󠄁e󠄁s󠄁.󠄁
+```bash
+SECRET_KEY_BASE=              # mix phx.gen.secret
+CREDENTIAL_ENCRYPTION_KEY=    # openssl rand -base64 32
+PHX_HOST=custyard.example.com
+OPERATOR_EMAIL=you@example.com
+MAIL_ADAPTER=lettermint       # or smtp | postmark | sendgrid | mailgun
+LETTERMINT_PROJECT_TOKEN=     # the credential for the chosen adapter; see .env.sample
+```
 
-A󠄁f󠄁t󠄁e󠄁r󠄁 l󠄁o󠄁g󠄁i󠄁n󠄁,󠄁 c󠄁h󠄁o󠄁o󠄁s󠄁e󠄁 t󠄁h󠄁e󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 a󠄁n󠄁d󠄁 o󠄁p󠄁e󠄁n󠄁 **E󠄁m󠄁a󠄁i󠄁l󠄁 s󠄁e󠄁t󠄁u󠄁p󠄁** a󠄁t󠄁
-`/operator/email-setup`.󠄁 T󠄁h󠄁e󠄁 m󠄁i󠄁g󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 p󠄁l󠄁a󠄁c󠄁e󠄁s󠄁 e󠄁x󠄁i󠄁s󠄁t󠄁i󠄁n󠄁g󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 o󠄁r󠄁g󠄁a󠄁n󠄁i󠄁z󠄁a󠄁t󠄁i󠄁o󠄁n󠄁s󠄁,󠄁
-c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁s󠄁 a󠄁n󠄁d󠄁 c󠄁h󠄁a󠄁n󠄁n󠄁e󠄁l󠄁s󠄁 i󠄁n󠄁 t󠄁h󠄁e󠄁 **D󠄁e󠄁f󠄁a󠄁u󠄁l󠄁t󠄁** t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁.󠄁 G󠄁l󠄁o󠄁b󠄁a󠄁l󠄁 e󠄁n󠄁v󠄁i󠄁r󠄁o󠄁n󠄁m󠄁e󠄁n󠄁t󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁s󠄁
-o󠄁n󠄁l󠄁y󠄁 b󠄁o󠄁o󠄁t󠄁s󠄁t󠄁r󠄁a󠄁p󠄁 t󠄁h󠄁a󠄁t󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁.󠄁 E󠄁a󠄁c󠄁h󠄁 a󠄁d󠄁d󠄁i󠄁t󠄁i󠄁o󠄁n󠄁a󠄁l󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 s󠄁a󠄁v󠄁e󠄁s󠄁 i󠄁t󠄁s󠄁 o󠄁w󠄁n󠄁 e󠄁n󠄁c󠄁r󠄁y󠄁p󠄁t󠄁e󠄁d󠄁
-p󠄁r󠄁o󠄁j󠄁e󠄁c󠄁t󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁,󠄁 T󠄁e󠄁a󠄁m󠄁 t󠄁o󠄁k󠄁e󠄁n󠄁,󠄁 s󠄁e󠄁l󠄁e󠄁c󠄁t󠄁e󠄁d󠄁 p󠄁r󠄁o󠄁j󠄁e󠄁c󠄁t󠄁 a󠄁n󠄁d󠄁 w󠄁e󠄁b󠄁h󠄁o󠄁o󠄁k󠄁 s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁s󠄁;󠄁 s󠄁e󠄁t󠄁
-`CREDENTIAL_ENCRYPTION_KEY` b󠄁e󠄁f󠄁o󠄁r󠄁e󠄁 d󠄁o󠄁i󠄁n󠄁g󠄁 s󠄁o󠄁.󠄁 S󠄁e󠄁e󠄁 t󠄁h󠄁e󠄁 [s󠄁u󠄁p󠄁p󠄁o󠄁r󠄁t󠄁 e󠄁m󠄁a󠄁i󠄁l󠄁 s󠄁e󠄁t󠄁u󠄁p󠄁
-g󠄁u󠄁i󠄁d󠄁e󠄁](docs/ops/lettermint-email-setup.md) f󠄁o󠄁r󠄁 m󠄁a󠄁n󠄁u󠄁a󠄁l󠄁 L󠄁e󠄁t󠄁t󠄁e󠄁r󠄁m󠄁i󠄁n󠄁t󠄁 s󠄁t󠄁e󠄁p󠄁s󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁
-r󠄁e󠄁c󠄁e󠄁i󠄁v󠄁e󠄁/󠄁r󠄁e󠄁p󠄁l󠄁y󠄁 v󠄁e󠄁r󠄁i󠄁f󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁l󠄁i󠄁s󠄁t󠄁.󠄁
+On Fly, `PHX_HOST` falls back to `FLY_APP_NAME.fly.dev`. `CREDENTIAL_ENCRYPTION_KEY`
+encrypts stored tenant credentials; rotate it by moving the old value to
+`CREDENTIAL_ENCRYPTION_KEY_PREVIOUS`. `EMAIL_FROM_ADDRESS` defaults to
+`noreply@PHX_HOST` and must be a sender the provider has verified; otherwise
+the welcome mail and the login links fail the same way.
 
-On the next boot: set `OPERATOR_EMAIL` and the entrypoint creates that account if
-it does not exist. An existing account is never modified.
+#### What happens on boot
+
+With variables missing or malformed, the container stays up and serves a doctor
+card at every HTML path (HTTP 503). The card names the variables and gives a
+paste block; the same report prints to the log. Fix them and restart. With
+variables set, the HTTP endpoint comes up first and serves a starting card while
+the database is probed and migrations run, so liveness answers throughout. With
+no reachable database it then serves a database card and retries
+every 10 s; once the database answers it exits with status 1 so the platform's
+restart policy (Fly's default `on-failure`, compose `unless-stopped`) runs a
+normal boot. A failed migration does not retry. With an empty database it runs
+the migrations, creates the `super_admin` from `OPERATOR_EMAIL`, sends a welcome
+mail through the real adapter, and shows the setup checklist on `/` for the rest
+of that boot; sign in at `/operator/login`. Credential values never appear on a
+card or in the log, only variable names; the SQLite path is the one value shown.
+
+Platform health checks must use `/api/health/live`, which is 200 whenever the
+process answers. `/api/health` is readiness and returns 503 in doctor modes.
+
+`bin/doctor` prints the same report from a shell (exit 1 unless complete);
+`--probe-database` also connects to the configured database and exits 1 if
+either has a problem. Before deploying against a remote database, probe a
+disposable one from your laptop. Images are published per commit as
+`sha-<commit>`; there is no `latest` tag:
+
+```bash
+docker run --rm ghcr.io/custyard/custyard:sha-<commit> bin/doctor --probe-database libsql://scratch.turso.io --token "$TURSO_AUTH_TOKEN"
+```
+
+After login, `/operator/system` shows the same report plus the last mail
+delivery result (`super_admin` only).
+
+#### Operators
+
+The account named by `OPERATOR_EMAIL` is created on the first run if absent and
+never modified afterwards.
 
 ```bash
 fly secrets set OPERATOR_EMAIL=you@example.com
@@ -92,9 +126,21 @@ Log in at `/operator/login`, then `fly secrets unset OPERATOR_EMAIL`. While it i
 set, every boot logs a reminder, and an operator you remove with that address is
 recreated on the next boot.
 
+For Lettermint, `LETTERMINT_PROJECT_TOKEN` sends installation mail, including
+login links; `LETTERMINT_TEAM_TOKEN` authorizes management reads in Email setup
+(without it, management is disabled, never mocked). `LETTERMINT_API_KEY` is a
+deprecated name for the project token and logs a warning; rename it.
+
+After login, choose the tenant and open **Email setup** at
+`/operator/email-setup`. The environment tokens configure only the **Default**
+tenant; each additional tenant stores its own encrypted project token, Team
+token, project and webhook secrets. See the [support email setup
+guide](docs/ops/lettermint-email-setup.md) for the verification checklist.
+
 From a shell on the running machine: `bin/operator` starts only the database,
 never the app, so it is safe while the server runs. Under `fly ssh console` it
-switches to the `custyard` user itself.
+switches to the `custyard` user itself. In a doctor mode it prints the boot
+report and exits 1.
 
 ```bash
 fly ssh console -a custyard -C "/app/bin/operator add you@example.com"
@@ -131,6 +177,16 @@ Erlang distribution is off in the release, so `bin/custyard remote` and
 `bin/custyard rpc` do not work. Use `bin/operator`, or `bin/custyard eval` for
 one-off code (a separate VM with the app's configuration; the app is not started).
 
+Local Docker run (plain `docker compose up --build` also works and reports the
+build as unknown):
+
+```bash
+GIT_SHA=$(git rev-parse HEAD) BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose up --build
+```
+
+Then open http://localhost:4000. With no environment set it shows the doctor
+card; add the six variables to `docker-compose.yml` and run it again.
+
 ## Phoenix.new / Remote VM Setup
 
 ### GitHub Auth (Device Flow)
@@ -163,10 +219,10 @@ git clone https://github.com/owner/private-repo.git
 
 ## Docs
 
-- [S󠄁e󠄁t󠄁 u󠄁p󠄁 C󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁 o󠄁n󠄁 B󠄁u󠄁n󠄁n󠄁y󠄁](docs/ops/bunny-setup.md)
+- [Set up Custyard on Bunny](docs/ops/bunny-setup.md)
 
 - [Development Guide](docs/development.md)
-- [P󠄁u󠄁b󠄁l󠄁i󠄁s󠄁h󠄁i󠄁n󠄁g󠄁 c󠄁o󠄁n󠄁t󠄁a󠄁i󠄁n󠄁e󠄁r󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁s󠄁 t󠄁o󠄁 G󠄁H󠄁C󠄁R󠄁](docs/ops/ghcr-publishing.md)
-- [B󠄁u󠄁n󠄁n󠄁y󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁n󠄁d󠄁 F󠄁l󠄁y󠄁 s󠄁t󠄁a󠄁g󠄁i󠄁n󠄁g󠄁 p󠄁l󠄁a󠄁n󠄁](docs/ops/bunny-production-fly-staging.md)
+- [Publishing container images to GHCR](docs/ops/ghcr-publishing.md)
+- [Bunny production and Fly staging plan](docs/ops/bunny-production-fly-staging.md)
 - [LMTP Troubleshooting](docs/lmtp-troubleshooting.md)
 - [Email Test Strategy](docs/backlog/0323-email-test-strategy.md)

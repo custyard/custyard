@@ -133,4 +133,12 @@ config :custyard,
   imap_client: Custyard.Email.ImapClient.Plover,
   imap_poll_interval_ms: 60_000
 
+# Build identity, reported by Custyard.Boot.Build on every boot report and
+# doctor card. Evaluated when the release is built: the Containerfile exports
+# GIT_SHA and BUILD_TIME (CI build args) before `mix compile`; any other build
+# says "unknown".
+config :custyard, :build,
+  git_sha: System.get_env("GIT_SHA", "unknown"),
+  built_at: System.get_env("BUILD_TIME", "unknown")
+
 import_config "#{config_env()}.exs"

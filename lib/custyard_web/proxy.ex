@@ -5,7 +5,11 @@ defmodule CustyardWeb.Proxy do
   The endpoint wrapper runs before Phoenix's socket dispatch as well as the
   HTTP plug stack. Bunny must overwrite `X-Custyard-Origin` at its CDN edge;
   the value is removed before socket connect info and error context are built.
-  Only the exact health-probe route bypasses origin authentication.
+  Only the exact health-probe routes bypass origin authentication and the
+  HTTPS redirect: readiness (`/api/health`) and liveness (`/api/health/live`),
+  which platform checks request from inside the container or the private
+  network, without the CDN's header. The liveness route is what keeps a
+  container in doctor mode running (docs/backlog/1103-first-run-experience.md).
   """
 
   import Plug.Conn
@@ -117,7 +121,7 @@ defmodule CustyardWeb.Proxy do
 
   @doc false
   def health_probe?(conn) do
-    conn.method in ["GET", "HEAD"] and conn.request_path == "/api/health" and
-      conn.query_string == ""
+    conn.method in ["GET", "HEAD"] and conn.query_string == "" and
+      CustyardWeb.HealthCheck.skip_ssl?(conn)
   end
 end

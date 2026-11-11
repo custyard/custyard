@@ -1,5 +1,12 @@
 import Config
 
+# This file never raises. In production the environment is parsed once by
+# Custyard.Boot.Env, which reports every missing or malformed variable as a
+# problem; Custyard.Application reads the verdict and either starts the app or
+# serves the doctor card (docs/backlog/1103-first-run-experience.md). Whatever
+# is valid is configured below so that the endpoint, the mailer and the
+# release commands have something to run with.
+
 # Safe integer parsing helper (returns default on invalid input)
 parse_int = fn env_var, default ->
   case System.get_env(env_var) do
@@ -35,24 +42,21 @@ end
 # block below). Whether URL and source are complete is decided at application
 # start (Custyard.Acknowledgments.Config.startup/2), not here, so release
 # commands such as bin/operator still run when that configuration is broken.
+# A value that is neither true nor false, or a prefetch out of range, is
+# reported by Custyard.Boot.Env; here it falls back to the default.
 acknowledgments_enabled =
   case System.get_env("ACKNOWLEDGMENTS_ENABLED") do
-    value when value in [nil, ""] -> config_env() == :prod
     "true" -> true
     "false" -> false
-    _ -> raise "ACKNOWLEDGMENTS_ENABLED must be true or false"
+    _ -> config_env() == :prod
   end
 
 acknowledgments_prefetch =
-  case System.get_env("ACKNOWLEDGMENTS_PREFETCH") do
-    value when value in [nil, ""] ->
-      1
-
-    value ->
-      case Integer.parse(value) do
-        {count, ""} when count > 0 and count <= 100 -> count
-        _ -> raise "ACKNOWLEDGMENTS_PREFETCH must be an integer between 1 and 100"
-      end
+  with value when is_binary(value) <- System.get_env("ACKNOWLEDGMENTS_PREFETCH"),
+       {count, ""} when count > 0 and count <= 100 <- Integer.parse(value) do
+    count
+  else
+    _ -> 1
   end
 
 config :custyard, :acknowledgments,
@@ -68,117 +72,6 @@ maybe_put_env_secret = fn map, key, env_var ->
     nil -> map
     "" -> map
     value -> Map.put(map, key, value)
-  end
-end
-
-# Configure Swoosh mailer for production
-if config_env() == :prod do
-  # MAIL_ADAPTER is required in prod, and "local" must be chosen explicitly.
-  #
-  # The old behaviour — unset or misspelled silently keeps Swoosh's
-  # in-memory Local adapter — is the worst kind of failure this app has.
-  # Operator login is magic-link-only, so a discarded mail queue is not
-  # degraded service, it is total lockout: nobody can sign in, and every
-  # claim confirmation, arrival notification, and prospect receipt is
-  # accepted and thrown away with no error anywhere. Refusing to boot
-  # surfaces it at deploy time, while Fly still has the previous machine.
-  #
-  # This is deliberately stricter than the Lettermint route-provisioning
-  # management configuration below, which can remain unavailable without
-  # preventing operators from opening existing conversations.
-  known_mail_adapters = ~w(mailgun sendgrid smtp postmark lettermint local)
-
-  mail_adapter =
-    case System.get_env("MAIL_ADAPTER") do
-      nil -> nil
-      "" -> nil
-      value -> value
-    end
-
-  cond do
-    is_nil(mail_adapter) ->
-      raise """
-      MAIL_ADAPTER is not set.
-
-      Set it to one of: #{Enum.join(known_mail_adapters, ", ")}
-
-      Operator login is magic-link-only, so an instance without working
-      mail cannot be signed into at all. Use MAIL_ADAPTER=local to run
-      without outbound mail on purpose — it discards every message.
-      """
-
-    mail_adapter not in known_mail_adapters ->
-      raise """
-      MAIL_ADAPTER is not recognized.
-
-      Set it to one of: #{Enum.join(known_mail_adapters, ", ")}
-
-      An unrecognized value used to fall through to the in-memory Local
-      adapter, which accepts and discards every message — including the
-      magic links operators sign in with.
-      """
-
-    true ->
-      :ok
-  end
-
-  if mail_adapter == "local" do
-    IO.warn("""
-    MAIL_ADAPTER=local: outbound mail is discarded.
-
-    Magic-link logins, prospect receipts, and operator notifications will
-    not be delivered. This is only appropriate for a smoke-test instance.
-    """)
-  end
-
-  if mail_adapter do
-    case mail_adapter do
-      "mailgun" ->
-        config :custyard, Custyard.Mailer,
-          adapter: Swoosh.Adapters.Mailgun,
-          api_key: System.get_env("MAILGUN_API_KEY"),
-          domain: System.get_env("MAILGUN_DOMAIN")
-
-      "sendgrid" ->
-        config :custyard, Custyard.Mailer,
-          adapter: Swoosh.Adapters.Sendgrid,
-          api_key: System.get_env("SENDGRID_API_KEY")
-
-      "smtp" ->
-        config :custyard, Custyard.Mailer,
-          adapter: Swoosh.Adapters.SMTP,
-          relay: System.get_env("SMTP_HOST"),
-          port: parse_int.("SMTP_PORT", 587),
-          username: System.get_env("SMTP_USERNAME"),
-          password: System.get_env("SMTP_PASSWORD"),
-          ssl: System.get_env("SMTP_SSL") == "true",
-          tls: :always,
-          auth: :always
-
-      "postmark" ->
-        config :custyard, Custyard.Mailer,
-          adapter: Swoosh.Adapters.Postmark,
-          api_key: System.get_env("POSTMARK_API_KEY")
-
-      "lettermint" ->
-        # Swoosh.Adapters.Lettermint available since swoosh 1.17+
-        config :custyard, Custyard.Mailer,
-          adapter: Swoosh.Adapters.Lettermint,
-          api_token:
-            blank_to_nil.(System.get_env("LETTERMINT_PROJECT_TOKEN")) ||
-              blank_to_nil.(System.get_env("LETTERMINT_API_KEY")),
-          base_url:
-            blank_to_nil.(System.get_env("LETTERMINT_API_URL")) || "https://api.lettermint.co/v1"
-
-      "local" ->
-        # Explicitly opted into the in-memory adapter; warned about above.
-        # Unrecognized values never reach here — they raise.
-        :ok
-    end
-
-    # Tenant credentials may select Lettermint independently of the installation
-    # adapter, including SMTP or Local, and can be saved after the app boots.
-    config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: Custyard.Finch
   end
 end
 
@@ -249,35 +142,40 @@ if lmtp_enabled do
 end
 
 # IMAP channels (spec-inbound-channels D8) replaced the single global IMAP
-# poller. A leftover IMAP_ENABLED is reported at application start
-# (Custyard.Application), not raised here, so release commands still run.
+# poller. A leftover IMAP_ENABLED is a Custyard.Boot.Env problem in
+# production; the flag only keeps Custyard.Application from starting pollers.
 config :custyard,
   legacy_imap_enabled: blank_to_nil.(System.get_env("IMAP_ENABLED")) not in [nil, "false"]
 
 # Encryption key for stored third-party credentials such as IMAP channel
-# passwords (Custyard.Credentials). Base64 of 32 bytes. A malformed key fails
-# here; a missing one only blocks storing a credential.
-parse_credential_key = fn encoded, name ->
-  case Base.decode64(String.trim(encoded)) do
-    {:ok, <<_::binary-size(32)>> = key} -> key
-    _ -> raise "#{name} must be Base64 of exactly 32 bytes (openssl rand -base64 32)"
+# passwords (Custyard.Credentials), Base64 of 32 bytes. Outside production
+# an explicit key is read here; a malformed one is ignored (config/test.exs
+# sets a test key). Production requires it and takes it from Custyard.Boot.Env
+# below; it is never derived from SECRET_KEY_BASE, so the two rotate
+# independently.
+if config_env() != :prod do
+  parse_credential_key = fn encoded ->
+    case Base.decode64(String.trim(encoded)) do
+      {:ok, <<_::binary-size(32)>> = key} -> key
+      _ -> nil
+    end
   end
-end
 
-case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY")) do
-  nil ->
-    if config_env() == :prod, do: config(:custyard, :credential_keys, current: nil, previous: [])
+  case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY")) do
+    nil ->
+      :ok
 
-  encoded ->
-    previous =
-      case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY_PREVIOUS")) do
-        nil -> []
-        old -> [parse_credential_key.(old, "CREDENTIAL_ENCRYPTION_KEY_PREVIOUS")]
-      end
+    encoded ->
+      previous =
+        case blank_to_nil.(System.get_env("CREDENTIAL_ENCRYPTION_KEY_PREVIOUS")) do
+          nil -> []
+          old -> [parse_credential_key.(old)]
+        end
 
-    config :custyard, :credential_keys,
-      current: parse_credential_key.(encoded, "CREDENTIAL_ENCRYPTION_KEY"),
-      previous: previous
+      config :custyard, :credential_keys,
+        current: parse_credential_key.(encoded),
+        previous: Enum.reject(previous, &is_nil/1)
+  end
 end
 
 # Sending tokens never authenticate management requests. These environment
@@ -302,59 +200,43 @@ else
   end
 end
 
-# Hosting, proxy trust and database provider are independent. Fly staging
-# may use Bunny Database while retaining Fly's proxy and file-volume checks.
-# Bunny origin authentication runs before trusting its forwarded headers.
 if config_env() == :prod do
-  storage_provider =
-    case blank_to_nil.(System.get_env("STORAGE_PROVIDER")) do
-      nil -> if System.get_env("FLY_APP_NAME"), do: :fly, else: :local
-      "local" -> :local
-      "fly" -> :fly
-      "bunny" -> :bunny
-      _ -> raise "STORAGE_PROVIDER must be local, fly or bunny"
-    end
+  env = Custyard.Boot.Env.read(System.get_env(), config_env: config_env())
+  config :custyard, :boot_env, env
+  settings = env.settings
 
-  proxy_provider =
-    case blank_to_nil.(System.get_env("PROXY_PROVIDER")) do
-      nil -> if System.get_env("FLY_APP_NAME"), do: :fly, else: :none
-      "none" -> :none
-      "fly" -> :fly
-      "bunny" -> :bunny
-      _ -> raise "PROXY_PROVIDER must be none, fly or bunny"
-    end
-
-  origin_secret = blank_to_nil.(System.get_env("BUNNY_ORIGIN_SECRET"))
-
-  if proxy_provider == :bunny and (is_nil(origin_secret) or byte_size(origin_secret) < 32),
-    do: raise("BUNNY_ORIGIN_SECRET must contain at least 32 bytes when PROXY_PROVIDER=bunny")
-
-  volume_id = blank_to_nil.(System.get_env("DATA_VOLUME_ID"))
-
-  if storage_provider == :bunny and is_nil(volume_id),
-    do: raise("DATA_VOLUME_ID is required when STORAGE_PROVIDER=bunny")
-
+  # Hosting, proxy trust and database provider are independent. Fly staging
+  # may use Bunny Database while retaining Fly's proxy and file-volume checks.
+  # Custyard.Storage checks the selected volume before the Repo starts.
+  #
+  # Rate limiting keys on the client IP. Behind an edge proxy every request
+  # arrives from the proxy address, so without header trust all visitors
+  # would collapse into one shared bucket. Trust is never enabled without a
+  # proxy provider, where the spoofable headers would come straight from
+  # clients; CustyardWeb.ClientIP only honors proxy-authoritative values, and
+  # CustyardWeb.Proxy authenticates Bunny's origin (BUNNY_ORIGIN_SECRET)
+  # before trusting its forwarded headers. With that secret missing or short
+  # the setting is nil and the proxy refuses every request but the health
+  # probes.
   config :custyard,
-    storage_provider: storage_provider,
-    data_volume_id: volume_id,
-    proxy_provider: proxy_provider,
-    bunny_origin_secret: origin_secret,
-    trust_proxy_headers: proxy_provider == :fly
-end
+    storage_provider: settings.storage_provider,
+    data_volume_id: settings.data_volume_id,
+    proxy_provider: settings.proxy_provider,
+    bunny_origin_secret: settings.bunny_origin_secret,
+    trust_proxy_headers: settings.trust_proxy_headers
 
-if config_env() == :prod do
-  secret_key_base =
-    System.get_env("SECRET_KEY_BASE") ||
-      raise """
-      environment variable SECRET_KEY_BASE is missing.
-      You can generate one by calling: mix phx.gen.secret
-      """
+  # Operator login is magic-link-only, so an unset or unknown MAIL_ADAPTER is
+  # a configuration problem (Custyard.Boot.Env), not a silent fallback to the
+  # in-memory adapter. A recognized adapter is configured even while its
+  # credential is missing: the problem is reported and the app does not
+  # start, but the doctor card and the release commands still load.
+  if settings.mail do
+    config :custyard, Custyard.Mailer, settings.mail.config
 
-  # Email-only auth: operators log in via magic link, no password needed.
-  # OPERATOR_PASSWORD is no longer required.
-
-  host = System.get_env("PHX_HOST") || "localhost"
-  port = parse_int.("PORT", 4000)
+    # Tenant credentials may select Lettermint independently of the installation
+    # adapter, including SMTP or Local, and can be saved after the app boots.
+    config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: Custyard.Finch
+  end
 
   # Per-source webhook HMAC secrets for routed webhooks (POST /api/webhook/route/:token)
   # These enable signature verification on incoming webhook requests.
@@ -374,35 +256,47 @@ if config_env() == :prod do
   end
 
   # Email notifications for neglect alerts and system events
-  # These configure the Notifications.Email module for sending alert emails
+  # (Custyard.Notifications.Email). Defaults: on unless MAIL_ADAPTER=local,
+  # to OPERATOR_EMAIL, from noreply@PHX_HOST.
+  notifications = settings.notifications
+
   config :custyard,
-    email_enabled: System.get_env("EMAIL_NOTIFICATIONS_ENABLED") == "true",
-    operator_email: System.get_env("OPERATOR_NOTIFICATION_EMAIL") || "operator@example.com",
-    email_from_name: System.get_env("EMAIL_FROM_NAME") || "Custyard Alerts",
-    email_from_address: System.get_env("EMAIL_FROM_ADDRESS") || "alerts@custyard.local"
+    email_enabled: notifications.enabled,
+    operator_email: notifications.operator_email || "operator@example.com",
+    email_from_name: notifications.from_name,
+    email_from_address: notifications.from_address || "alerts@custyard.local"
+
+  config :custyard, :credential_keys,
+    current: settings.credential_keys.current,
+    previous: settings.credential_keys.previous
+
+  # Without SECRET_KEY_BASE nothing is signed: the doctor card is served
+  # with a throwaway key so the endpoint can start at all.
+  secret_key_base = settings.secret_key_base || Base.encode64(:crypto.strong_rand_bytes(64))
+  host = settings.host || "localhost"
 
   # Derive session and LiveView salts from SECRET_KEY_BASE
   # This ensures unique salts per deployment without requiring additional env vars.
   # Falls back to env vars if explicitly set (for backward compatibility or rotation).
   session_signing_salt =
-    System.get_env("SESSION_SIGNING_SALT") ||
+    blank_to_nil.(System.get_env("SESSION_SIGNING_SALT")) ||
       Base.encode64(:crypto.hash(:sha256, "session_signing:" <> secret_key_base), padding: false)
 
   session_encryption_salt =
-    System.get_env("SESSION_ENCRYPTION_SALT") ||
+    blank_to_nil.(System.get_env("SESSION_ENCRYPTION_SALT")) ||
       Base.encode64(:crypto.hash(:sha256, "session_encryption:" <> secret_key_base),
         padding: false
       )
 
   live_view_signing_salt =
-    System.get_env("LIVE_VIEW_SIGNING_SALT") ||
+    blank_to_nil.(System.get_env("LIVE_VIEW_SIGNING_SALT")) ||
       Base.encode64(:crypto.hash(:sha256, "live_view:" <> secret_key_base), padding: false)
 
   config :custyard, CustyardWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
-      port: port
+      port: settings.port
     ],
     # MFA callback for dynamic origin validation (custom domains from DB)
     # Note: [[]] passes empty list as 2nd arg to match check_origin?/2 arity
@@ -413,143 +307,42 @@ if config_env() == :prod do
     session_signing_salt: session_signing_salt,
     session_encryption_salt: session_encryption_salt
 
-  generic_url = blank_to_nil.(System.get_env("DATABASE_URL"))
-  generic_token = blank_to_nil.(System.get_env("TURSO_AUTH_TOKEN"))
-  bunny_url = blank_to_nil.(System.get_env("BUNNY_DATABASE_URL"))
-  bunny_token = blank_to_nil.(System.get_env("BUNNY_DATABASE_AUTH_TOKEN"))
-  bunny_settings? = not is_nil(bunny_url) or not is_nil(bunny_token)
-
-  database_provider =
-    case blank_to_nil.(System.get_env("DATABASE_PROVIDER")) do
-      nil -> if bunny_settings?, do: "bunny", else: "auto"
-      value when value in ~w(sqlite turso bunny postgres) -> value
-      _ -> raise "DATABASE_PROVIDER must be sqlite, turso, bunny or postgres"
-    end
-
-  if bunny_settings? and database_provider != "bunny",
-    do: raise("BUNNY_DATABASE_* settings conflict with DATABASE_PROVIDER")
-
-  if database_provider == "bunny" do
-    if bunny_url && generic_url && bunny_url != generic_url,
-      do:
-        raise("BUNNY_DATABASE_URL conflicts with DATABASE_URL; set one URL or identical aliases")
-
-    if bunny_token && generic_token && bunny_token != generic_token,
-      do: raise("BUNNY_DATABASE_AUTH_TOKEN conflicts with TURSO_AUTH_TOKEN")
-  end
-
-  database_url = if database_provider == "bunny", do: bunny_url || generic_url, else: generic_url
-
-  database_token =
-    if database_provider == "bunny", do: bunny_token || generic_token, else: generic_token
-
-  if database_provider in ~w(bunny turso postgres) and is_nil(database_url),
-    do:
-      raise(
-        "DATABASE_URL (or BUNNY_DATABASE_URL for Bunny) is required for the selected DATABASE_PROVIDER"
-      )
-
-  if database_provider == "sqlite" and (database_url || generic_token),
-    do: raise("DATABASE_PROVIDER=sqlite conflicts with remote database settings")
-
-  if database_provider == "auto" and is_nil(database_url) and generic_token,
-    do: raise("TURSO_AUTH_TOKEN is set without DATABASE_URL")
-
-  pool_size = parse_int.("POOL_SIZE", 10)
   repo_adapter = Application.get_env(:custyard, :repo_adapter, Custyard.Repo.Adapter)
 
-  cond do
-    database_provider == "bunny" and repo_adapter == Custyard.Repo.Adapter ->
-      uri =
-        case URI.new(database_url) do
-          {:ok, uri} -> uri
-          {:error, _} -> raise "Bunny database URL is invalid"
-        end
-
-      if uri.scheme not in ["libsql", "https"] or is_nil(uri.host) or uri.host == "" or
-           uri.query != nil or uri.userinfo != nil or uri.fragment != nil,
-         do:
-           raise(
-             "Bunny database URL must be an HTTPS or libsql URL without credentials or query parameters"
-           )
-
-      if is_nil(database_token),
-        do:
-          raise("BUNNY_DATABASE_AUTH_TOKEN (or TURSO_AUTH_TOKEN) is required for Bunny Database")
-
+  case settings.database do
+    {:sqlite, path} ->
       config :custyard, Custyard.Repo,
-        turso_url: database_url,
-        turso_auth_token: database_token,
-        turso_provider: :bunny,
-        pool_size: pool_size
-
-    database_provider in ["auto", "turso"] and is_binary(database_url) and
-      String.starts_with?(database_url, "libsql://") and
-        repo_adapter == Custyard.Repo.Adapter ->
-      # Turso: the same SQLite database, reached over HTTP by
-      # Custyard.Turso.Connection. `turso db show --url` prints this URL.
-      turso_auth_token = database_token
-
-      plain_http? =
-        database_url
-        |> URI.parse()
-        |> Map.get(:query)
-        |> to_string()
-        |> URI.decode_query()
-        |> Map.get("tls") == "0"
-
-      # A Turso database always needs a token. Only a libSQL server on plain
-      # HTTP (?tls=0), such as one on a private network, may run without auth.
-      if is_nil(turso_auth_token) and not plain_http? do
-        raise """
-        DATABASE_URL is a libsql:// URL but TURSO_AUTH_TOKEN is not set.
-        Create a token with `turso db tokens create <database>` and set it:
-
-            fly secrets set TURSO_AUTH_TOKEN=...
-        """
-      end
-
-      config :custyard, Custyard.Repo,
-        turso_url: database_url,
-        turso_auth_token: turso_auth_token,
-        turso_provider: :turso,
-        pool_size: pool_size
-
-    database_provider in ["auto", "postgres"] and is_binary(database_url) and
-      repo_adapter == Ecto.Adapters.Postgres and
-        (String.starts_with?(database_url, "postgres://") or
-           String.starts_with?(database_url, "postgresql://")) ->
-      config :custyard, Custyard.Repo,
-        url: database_url,
-        pool_size: pool_size
-
-    is_binary(database_url) ->
-      raise "DATABASE_URL is not supported by the compiled #{inspect(repo_adapter)} adapter"
-
-    repo_adapter == Ecto.Adapters.Postgres ->
-      raise "DATABASE_URL is required when the app is compiled with Ecto.Adapters.Postgres"
-
-    database_provider in ["auto", "sqlite"] and repo_adapter == Custyard.Repo.Adapter ->
-      database_path = System.get_env("DATABASE_PATH") || "/data/custyard.db"
-
-      if Path.type(database_path) != :absolute do
-        raise "DATABASE_PATH must be an absolute filesystem path"
-      end
-
-      config :custyard, Custyard.Repo,
-        database: database_path,
-        pool_size: pool_size,
+        database: path,
+        pool_size: settings.pool_size,
         journal_mode: :wal,
         busy_timeout: 5000
 
-    true ->
-      raise "No production database configuration for #{inspect(repo_adapter)}"
+    {:turso, url, token} ->
+      # Turso or Bunny Database: the same SQLite database, reached over HTTP
+      # by Custyard.Turso.Connection (Hrana v3 for Turso, v2 for Bunny).
+      # `turso db show --url` prints the Turso URL.
+      config :custyard, Custyard.Repo,
+        turso_url: url,
+        turso_auth_token: token,
+        turso_provider: settings.turso_provider,
+        pool_size: settings.pool_size
+
+    {:postgres, url} when repo_adapter == Ecto.Adapters.Postgres ->
+      config :custyard, Custyard.Repo,
+        url: url,
+        pool_size: settings.pool_size
+
+    _unsupported_or_nil ->
+      # A malformed URL or path is a Custyard.Boot.Env problem; a postgres://
+      # URL on the SQLite/libSQL build is reported by Custyard.Boot.Probe.
+      # Either way the Repo stays unconfigured and is never started.
+      :ok
   end
 
   # Persistent upload directory (survives deployments, unlike priv/static)
   config :custyard,
-    upload_dir: System.get_env("UPLOAD_DIR") || "/data/uploads",
+    upload_dir: settings.upload_dir,
     # Inbound email attachments, served only through the authenticated
     # operator endpoint (never a static path).
-    attachment_dir: System.get_env("ATTACHMENT_DIR") || "/data/attachments"
+    attachment_dir: settings.attachment_dir
 end

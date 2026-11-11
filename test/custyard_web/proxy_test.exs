@@ -62,15 +62,19 @@ defmodule CustyardWeb.ProxyTest do
   end
 
   test "only exact GET/HEAD health probes bypass authentication" do
-    for method <- [:get, :head] do
-      refute Proxy.call(conn(method, "/api/health"), @bunny).halted
+    for method <- [:get, :head], path <- ["/api/health", "/api/health/live"] do
+      refute Proxy.call(conn(method, path), @bunny).halted
     end
 
     for {method, path} <- [
           {:post, "/api/health"},
           {:get, "/api/health?token=value"},
           {:get, "/api/health/"},
-          {:get, "/api/health/other"}
+          {:get, "/api/health/other"},
+          {:post, "/api/health/live"},
+          {:get, "/api/health/live?token=value"},
+          {:get, "/api/health/live/"},
+          {:get, "/api/health/live/other"}
         ] do
       assert Proxy.call(conn(method, path), @bunny).status == 403
     end
@@ -146,13 +150,15 @@ defmodule CustyardWeb.ProxyTest do
     refute result.halted
     assert get_resp_header(result, "strict-transport-security") == ["max-age=31536000"]
 
-    health =
-      Proxy.call(
-        conn(:get, "http://probe.internal/api/health"),
-        Keyword.put(@bunny, :https_required, true)
-      )
+    for path <- ["/api/health", "/api/health/live"] do
+      health =
+        Proxy.call(
+          conn(:get, "http://probe.internal" <> path),
+          Keyword.put(@bunny, :https_required, true)
+        )
 
-    refute health.halted
-    assert health.scheme == :http
+      refute health.halted
+      assert health.scheme == :http
+    end
   end
 end

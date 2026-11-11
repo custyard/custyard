@@ -46,8 +46,8 @@
   ],
   "one_time_bootstrap_environment": ["OPERATOR_EMAIL"],
   "health_checks": {
-    "startup": {"method": "GET", "port": 4000, "path": "/api/health"},
-    "readiness": {"method": "GET", "port": 4000, "path": "/api/health"}
+    "startup": {"method": "GET", "port": 4000, "path": "/api/health/live"},
+    "readiness": {"method": "GET", "port": 4000, "path": "/api/health/live"}
   },
   "cdn": {
     "endpoint_type": "CDN",

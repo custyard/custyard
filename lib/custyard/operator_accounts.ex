@@ -336,11 +336,20 @@ defmodule Custyard.OperatorAccounts do
 
   defp keep_a_super_admin(_operator), do: :ok
 
-  # Login looks emails up normalized, and nothing delivers mail to the
-  # placeholder, so only these accounts can ever sign in. Compared in Elixir
-  # because normalization is Unicode-aware and SQLite lower() is not.
-  defp can_log_in?(%OperatorAccount{email: email}),
-    do: email == OperatorAccount.normalize_email(email) and email != @placeholder_email
+  @doc """
+  Whether this account can ever sign in: its stored email is normalized
+  (login looks emails up normalized), it is not the #{@placeholder_email}
+  placeholder (nothing delivers mail there), and it is not orphaned
+  (`Custyard.OperatorAccount.orphaned?/1`). Compared in Elixir because
+  normalization is Unicode-aware and SQLite lower() is not.
+  """
+  def can_log_in?(%OperatorAccount{email: email} = operator) do
+    email == OperatorAccount.normalize_email(email) and email != @placeholder_email and
+      not OperatorAccount.orphaned?(operator)
+  end
+
+  @doc "How many operators `can_log_in?/1`; zero means first run is not over."
+  def count_can_log_in, do: Enum.count(list_operators(), &can_log_in?/1)
 
   # organization_id goes in the payload only: audit_events.organization_id is
   # a foreign key without ON DELETE, so setting the column would block

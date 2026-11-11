@@ -225,7 +225,13 @@ defmodule CustyardWeb.Telemetry do
   end
 
   @doc false
+  # In doctor modes (Custyard.Boot.State) the Repo is not started at all;
+  # polling it would raise every 10 s for nothing.
   def measure_conversation_counts do
+    if Process.whereis(Custyard.Repo), do: do_measure_conversation_counts(), else: :ok
+  end
+
+  defp do_measure_conversation_counts do
     # Import Ecto.Query for this measurement function
     import Ecto.Query, only: [from: 2]
 

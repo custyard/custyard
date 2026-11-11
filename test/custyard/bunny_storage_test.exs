@@ -154,6 +154,34 @@ defmodule Custyard.BunnyStorageTest do
     assert_raise RuntimeError, ~r/UPLOAD_DIR must be writable/, fn -> Storage.validate!(opts) end
   end
 
+  test "check/1 returns the Bunny problem instead of raising it", %{opts: opts} do
+    assert {:error, :volume_unverified, detail} = Storage.check(opts)
+    assert detail =~ "File-volume marker is missing or does not match DATA_VOLUME_ID"
+    refute detail =~ "test-volume"
+    refute detail =~ opts[:data_dir]
+
+    Storage.initialize_volume!(opts)
+    assert :ok == Storage.check(opts)
+
+    assert {:error, :volume_unverified, "Bunny storage requires the configured Bunny" <> _} =
+             Storage.check(Keyword.put(opts, :repo_config, database: "/data/custyard.db"))
+  end
+
+  test "the provider decides which volume is checked", %{opts: opts} do
+    # Local checks nothing, whatever else is configured.
+    assert :ok == Storage.check(Keyword.put(opts, :provider, :local))
+
+    assert {:error, :provider_unsupported, "STORAGE_PROVIDER must be local, fly or bunny"} ==
+             Storage.check(Keyword.put(opts, :provider, :invalid))
+
+    assert_raise RuntimeError, "STORAGE_PROVIDER must be local, fly or bunny", fn ->
+      Storage.validate!(Keyword.put(opts, :provider, :invalid))
+    end
+
+    # The Fly-only entry point never runs the Bunny check.
+    assert :ok == Storage.validate_fly_storage!(Keyword.put(opts, :fly_app_name, nil))
+  end
+
   test "explicit Fly selection cannot bypass mount checks without automatic platform metadata" do
     assert_raise RuntimeError, ~r/no mounted volume/, fn ->
       Storage.validate!(
