@@ -22,7 +22,7 @@ graph TD
 ```
 
 A tenant has many actual hostnames, each globally unique. The configured
-installation hostname i󠄁s󠄁 r󠄁e󠄁s󠄁e󠄁r󠄁v󠄁e󠄁d󠄁;󠄁 e󠄁v󠄁e󠄁r󠄁y󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 n󠄁e󠄁e󠄁d󠄁s󠄁 a󠄁 d󠄁i󠄁s󠄁t󠄁i󠄁n󠄁c󠄁t󠄁 w󠄁o󠄁r󠄁k󠄁s󠄁p󠄁a󠄁c󠄁e󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁.󠄁 A customer
+installation hostname is reserved; every tenant needs a distinct workspace hostname. A customer
 has a domain, email or manual identity unique within its tenant. Personal
 senders use their normalized email identity and display name.
 

@@ -2,7 +2,7 @@
 
 Research reviewed: 2026-10-23. Status: advisory research and proposed extension guidance, not an accepted specification or an implementation report.
 
-This document captures the membership-growth discussion and its technical research for Custyard. It distinguishes the proposed customer checkpoint from the existing Colonel acknowledgment flow. Earlier c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁a󠄁l󠄁 recommendations are proposals; silence in the discussion does not establish acceptance.
+This document captures the membership-growth discussion and its technical research for Custyard. It distinguishes the proposed customer checkpoint from the existing Colonel acknowledgment flow. Earlier conversational recommendations are proposals; silence in the discussion does not establish acceptance.
 
 ## 1. Scope and source authority
 
@@ -23,7 +23,7 @@ Consequently, applying a one-per-organization constraint to the existing evidenc
 
 ## 2. The originating use case
 
-The c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 proposes fixed subscription pricing with unlimited members and a one-time organization acknowledgment when membership growth reaches a checkpoint, replacing a soft numerical limit. These are requested product semantics, not verified Custyard or OTS behavior.
+The conversation proposes fixed subscription pricing with unlimited members and a one-time organization acknowledgment when membership growth reaches a checkpoint, replacing a soft numerical limit. These are requested product semantics, not verified Custyard or OTS behavior.
 
 | Approach | Purpose | Experience |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ The c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 proposes fixed 
 
 The proposed checkpoint has no upgrade, discretionary approval, or recurring sequence of numerical caps. Only a person authorized to manage that organization's members can confirm. Confirmation neither grants permissions nor bypasses unrelated restrictions. Repeated submissions preserve the original fact. Renewal, billing synchronization, plan changes, and entitlement recalculation do not erase it. Copy revisions do not automatically require confirmation again.
 
-These requirements come from the user's c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁,󠄁 including: “one confirmation per organization for the membership-growth policy” and “Billing synchronization, renewal, plan changes, and entitlement recalculation must not erase the acknowledgment.” They are requirements for a proposed customer flow, not guarantees supplied by the existing Colonel service.
+These requirements come from the user's conversation, including: “one confirmation per organization for the membership-growth policy” and “Billing synchronization, renewal, plan changes, and entitlement recalculation must not erase the acknowledgment.” They are requirements for a proposed customer flow, not guarantees supplied by the existing Colonel service.
 
 An acknowledgment records an action; it does not prove subsequent usage is appropriate. Resource monitoring and abuse controls remain separate design concerns.
 
@@ -177,7 +177,7 @@ These are research references, not dependency selections or procurement recommen
 | Fides [R11] | Privacy-engineering reference implementation | Public application repository is archived; distinguish it from the Fides ontology used by Astralis |
 | Ethyca Astralis [R12–R18] | Consent history, effective preferences, and runtime governance built on Fides | Commercial platform reference; its organization acknowledgment fit and migration terms need separate evaluation |
 
-Recommendation for Custyard: retain the existing dedicated evidence model and snapshot approach. Introduce a separate customer checkpoint contract and state model only when that feature is accepted. A general limits-override framework, document-authoring service, and event-sourced consent engine are not implied by the c󠄁o󠄁n󠄁v󠄁e󠄁r󠄁s󠄁a󠄁t󠄁i󠄁o󠄁n󠄁.󠄁
+Recommendation for Custyard: retain the existing dedicated evidence model and snapshot approach. Introduce a separate customer checkpoint contract and state model only when that feature is accepted. A general limits-override framework, document-authoring service, and event-sourced consent engine are not implied by the conversation.
 
 ### Ethyca Astralis and the Fides lineage
 

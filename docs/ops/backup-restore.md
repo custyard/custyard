@@ -1,20 +1,20 @@
 # Back up and verify a restored volume
 
-T󠄁h󠄁e󠄁 S󠄁Q󠄁L󠄁i󠄁t󠄁e󠄁 d󠄁e󠄁p󠄁l󠄁o󠄁y󠄁m󠄁e󠄁n󠄁t󠄁 s󠄁t󠄁o󠄁r󠄁e󠄁s󠄁 i󠄁t󠄁s󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁,󠄁 u󠄁p󠄁l󠄁o󠄁a󠄁d󠄁s󠄁 a󠄁n󠄁d󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁s󠄁 t󠄁o󠄁g󠄁e󠄁t󠄁h󠄁e󠄁r󠄁 o󠄁n󠄁
-o󠄁n󠄁e󠄁 F󠄁l󠄁y󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁.󠄁 A󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁 e󠄁x󠄁p󠄁o󠄁r󠄁t󠄁 a󠄁l󠄁o󠄁n󠄁e󠄁 i󠄁s󠄁 i󠄁n󠄁c󠄁o󠄁m󠄁p󠄁l󠄁e󠄁t󠄁e󠄁.󠄁 K󠄁e󠄁e󠄁p󠄁 e󠄁n󠄁c󠄁r󠄁y󠄁p󠄁t󠄁i󠄁o󠄁n󠄁 k󠄁e󠄁y󠄁s󠄁 i󠄁n󠄁
-t󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁'󠄁s󠄁 s󠄁e󠄁p󠄁a󠄁r󠄁a󠄁t󠄁e󠄁 s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁 s󠄁t󠄁o󠄁r󠄁e󠄁:󠄁 s󠄁n󠄁a󠄁p󠄁s󠄁h󠄁o󠄁t󠄁s󠄁 d󠄁o󠄁 n󠄁o󠄁t󠄁 r󠄁e󠄁c󠄁o󠄁v󠄁e󠄁r󠄁 l󠄁o󠄁s󠄁t󠄁 k󠄁e󠄁y󠄁s󠄁.󠄁
+The SQLite deployment stores its database, uploads and attachments together on
+one Fly volume. A database export alone is incomplete. Keep encryption keys in
+the installation's separate secret store: snapshots do not recover lost keys.
 
 ## Establish a recovery point
 
-R󠄁e󠄁c󠄁o󠄁r󠄁d󠄁 t󠄁h󠄁e󠄁 s󠄁o󠄁u󠄁r󠄁c󠄁e󠄁 a󠄁p󠄁p󠄁,󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁,󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁,󠄁 r󠄁e󠄁g󠄁i󠄁o󠄁n󠄁,󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁 s󠄁i󠄁z󠄁e󠄁 a󠄁n󠄁d󠄁 e󠄁x󠄁a󠄁c󠄁t󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁
-d󠄁i󠄁g󠄁e󠄁s󠄁t󠄁.󠄁 R󠄁e󠄁s󠄁o󠄁l󠄁v󠄁e󠄁 t󠄁h󠄁e󠄁s󠄁e󠄁 w󠄁i󠄁t󠄁h󠄁 `fly status --app APP --json`,󠄁
-`fly machine status MACHINE --app APP --display-config` a󠄁n󠄁d󠄁
-`fly volumes list --app APP`.󠄁 N󠄁e󠄁v󠄁e󠄁r󠄁 p󠄁u󠄁t󠄁 s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁s󠄁 o󠄁r󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 r󠄁e󠄁c󠄁o󠄁r󠄁d󠄁s󠄁 i󠄁n󠄁 t󠄁h󠄁e󠄁
-e󠄁v󠄁i󠄁d󠄁e󠄁n󠄁c󠄁e󠄁 l󠄁o󠄁g󠄁.󠄁
+Record the source app, machine, volume, region, volume size and exact image
+digest. Resolve these with `fly status --app APP --json`,
+`fly machine status MACHINE --app APP --display-config` and
+`fly volumes list --app APP`. Never put secrets or customer records in the
+evidence log.
 
-E󠄁n󠄁t󠄁e󠄁r󠄁 m󠄁a󠄁i󠄁n󠄁t󠄁e󠄁n󠄁a󠄁n󠄁c󠄁e󠄁 m󠄁o󠄁d󠄁e󠄁 f󠄁o󠄁r󠄁 a󠄁 c󠄁o󠄁n󠄁s󠄁i󠄁s󠄁t󠄁e󠄁n󠄁t󠄁 s󠄁n󠄁a󠄁p󠄁s󠄁h󠄁o󠄁t󠄁 o󠄁f󠄁 r󠄁o󠄁w󠄁s󠄁 a󠄁n󠄁d󠄁 f󠄁i󠄁l󠄁e󠄁s󠄁.󠄁 T󠄁h󠄁i󠄁s󠄁
-b󠄁r󠄁i󠄁e󠄁f󠄁l󠄁y󠄁 s󠄁t󠄁o󠄁p󠄁s󠄁 i󠄁n󠄁t󠄁a󠄁k󠄁e󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁 w󠄁e󠄁b󠄁 a󠄁p󠄁p󠄁l󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁;󠄁 t󠄁h󠄁e󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁 s󠄁t󠄁a󠄁y󠄁s󠄁 a󠄁v󠄁a󠄁i󠄁l󠄁a󠄁b󠄁l󠄁e󠄁 f󠄁o󠄁r󠄁
-a󠄁d󠄁m󠄁i󠄁n󠄁i󠄁s󠄁t󠄁r󠄁a󠄁t󠄁i󠄁v󠄁e󠄁 c󠄁o󠄁m󠄁m󠄁a󠄁n󠄁d󠄁s󠄁.󠄁 C󠄁o󠄁n󠄁f󠄁i󠄁r󠄁m󠄁 t󠄁h󠄁e󠄁 l󠄁o󠄁g󠄁s󠄁 s󠄁a󠄁y󠄁 `MAINTENANCE_MODE is true`.󠄁
+Enter maintenance mode for a consistent snapshot of rows and files. This
+briefly stops intake and the web application; the machine stays available for
+administrative commands. Confirm the logs say `MAINTENANCE_MODE is true`.
 
 ```sh
 fly secrets set MAINTENANCE_MODE=true --app SOURCE_APP
@@ -22,24 +22,24 @@ fly volumes snapshots create SOURCE_VOLUME --app SOURCE_APP --json
 fly volumes snapshots list SOURCE_VOLUME --app SOURCE_APP --json
 ```
 
-W󠄁a󠄁i󠄁t󠄁 f󠄁o󠄁r󠄁 t󠄁h󠄁e󠄁 s󠄁n󠄁a󠄁p󠄁s󠄁h󠄁o󠄁t󠄁 t󠄁o󠄁 f󠄁i󠄁n󠄁i󠄁s󠄁h󠄁.󠄁 R󠄁e󠄁c󠄁o󠄁r󠄁d󠄁 i󠄁t󠄁s󠄁 I󠄁D󠄁 a󠄁n󠄁d󠄁 t󠄁i󠄁m󠄁e󠄁,󠄁 t󠄁h󠄁e󠄁n󠄁 r󠄁e󠄁s󠄁u󠄁m󠄁e󠄁 s󠄁e󠄁r󠄁v󠄁i󠄁c󠄁e󠄁:󠄁
+Wait for the snapshot to finish. Record its ID and time, then resume service:
 
 ```sh
 fly secrets unset MAINTENANCE_MODE --app SOURCE_APP
 ```
 
-A󠄁 r󠄁u󠄁n󠄁n󠄁i󠄁n󠄁g󠄁-󠄁v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁 s󠄁n󠄁a󠄁p󠄁s󠄁h󠄁o󠄁t󠄁 p󠄁r󠄁o󠄁v󠄁i󠄁d󠄁e󠄁s󠄁 c󠄁r󠄁a󠄁s󠄁h󠄁 r󠄁e󠄁c󠄁o󠄁v󠄁e󠄁r󠄁y󠄁,󠄁 b󠄁u󠄁t󠄁 d󠄁o󠄁e󠄁s󠄁 n󠄁o󠄁t󠄁 e󠄁s󠄁t󠄁a󠄁b󠄁l󠄁i󠄁s󠄁h󠄁
-t󠄁h󠄁a󠄁t󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁 f󠄁i󠄁l󠄁e󠄁s󠄁 a󠄁n󠄁d󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁 r󠄁o󠄁w󠄁s󠄁 w󠄁e󠄁r󠄁e󠄁 c󠄁a󠄁p󠄁t󠄁u󠄁r󠄁e󠄁d󠄁 t󠄁o󠄁g󠄁e󠄁t󠄁h󠄁e󠄁r󠄁.󠄁 M󠄁a󠄁i󠄁n󠄁t󠄁a󠄁i󠄁n󠄁 a󠄁n󠄁
-i󠄁n󠄁d󠄁e󠄁p󠄁e󠄁n󠄁d󠄁e󠄁n󠄁t󠄁 e󠄁n󠄁c󠄁r󠄁y󠄁p󠄁t󠄁e󠄁d󠄁 b󠄁a󠄁c󠄁k󠄁u󠄁p󠄁 o󠄁u󠄁t󠄁s󠄁i󠄁d󠄁e󠄁 t󠄁h󠄁e󠄁 h󠄁o󠄁s󠄁t󠄁i󠄁n󠄁g󠄁 a󠄁c󠄁c󠄁o󠄁u󠄁n󠄁t󠄁 a󠄁s󠄁 w󠄁e󠄁l󠄁l󠄁.󠄁 W󠄁h󠄁i󠄁l󠄁e󠄁 i󠄁n󠄁
-m󠄁a󠄁i󠄁n󠄁t󠄁e󠄁n󠄁a󠄁n󠄁c󠄁e󠄁 m󠄁o󠄁d󠄁e󠄁,󠄁 a󠄁r󠄁c󠄁h󠄁i󠄁v󠄁e󠄁 t󠄁h󠄁e󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁 a󠄁n󠄁d󠄁 S󠄁Q󠄁L󠄁i󠄁t󠄁e󠄁 s󠄁i󠄁d󠄁e󠄁c󠄁a󠄁r󠄁s󠄁,󠄁 `uploads/` a󠄁n󠄁d󠄁
-`attachments/` t󠄁o󠄁g󠄁e󠄁t󠄁h󠄁e󠄁r󠄁;󠄁 c󠄁o󠄁p󠄁y󠄁 i󠄁t󠄁 o󠄁f󠄁f󠄁 t󠄁h󠄁e󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁 a󠄁n󠄁d󠄁 r󠄁e󠄁s󠄁t󠄁r󠄁i󠄁c󠄁t󠄁 l󠄁o󠄁c󠄁a󠄁l󠄁 a󠄁c󠄁c󠄁e󠄁s󠄁s󠄁 t󠄁o󠄁
-i󠄁t󠄁s󠄁 o󠄁w󠄁n󠄁e󠄁r󠄁.󠄁 N󠄁e󠄁v󠄁e󠄁r󠄁 p󠄁u󠄁b󠄁l󠄁i󠄁s󠄁h󠄁 t󠄁h󠄁i󠄁s󠄁 a󠄁r󠄁c󠄁h󠄁i󠄁v󠄁e󠄁 a󠄁s󠄁 a󠄁 b󠄁u󠄁i󠄁l󠄁d󠄁 a󠄁r󠄁t󠄁i󠄁f󠄁a󠄁c󠄁t󠄁.󠄁
+A running-volume snapshot provides crash recovery, but does not establish
+that attachment files and database rows were captured together. Maintain an
+independent encrypted backup outside the hosting account as well. While in
+maintenance mode, archive the database and SQLite sidecars, `uploads/` and
+`attachments/` together; copy it off the machine and restrict local access to
+its owner. Never publish this archive as a build artifact.
 
 ## Restore into a separate app
 
-C󠄁r󠄁e󠄁a󠄁t󠄁e󠄁 a󠄁 d󠄁i󠄁s󠄁p󠄁o󠄁s󠄁a󠄁b󠄁l󠄁e󠄁 F󠄁l󠄁y󠄁 a󠄁p󠄁p󠄁 i󠄁n󠄁 t󠄁h󠄁e󠄁 s󠄁a󠄁m󠄁e󠄁 o󠄁r󠄁g󠄁a󠄁n󠄁i󠄁z󠄁a󠄁t󠄁i󠄁o󠄁n󠄁.󠄁 I󠄁t󠄁 m󠄁u󠄁s󠄁t󠄁 h󠄁a󠄁v󠄁e󠄁 n󠄁o󠄁 s󠄁e󠄁r󠄁v󠄁i󠄁c󠄁e󠄁s󠄁,󠄁
-p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁s󠄁 o󠄁r󠄁 a󠄁p󠄁p󠄁l󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 p󠄁r󠄁o󠄁c󠄁e󠄁s󠄁s󠄁e󠄁s󠄁.󠄁 K󠄁e󠄁e󠄁p󠄁 e󠄁x󠄁a󠄁c󠄁t󠄁l󠄁y󠄁 o󠄁n󠄁e󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁 i󠄁n󠄁 t󠄁h󠄁e󠄁
-p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁p󠄁p󠄁.󠄁
+Create a disposable Fly app in the same organization. It must have no services,
+production secrets or application processes. Keep exactly one machine in the
+production app.
 
 ```sh
 fly apps create DRILL_APP --org SOURCE_ORG
@@ -47,8 +47,8 @@ fly volumes create restore_data --app DRILL_APP --region SOURCE_REGION \
   --snapshot-id SNAPSHOT_ID --size SOURCE_SIZE_GB --json
 ```
 
-S󠄁a󠄁v󠄁e󠄁 t󠄁h󠄁i󠄁s󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁 c󠄁o󠄁n󠄁f󠄁i󠄁g󠄁u󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 l󠄁o󠄁c󠄁a󠄁l󠄁l󠄁y󠄁,󠄁 s󠄁u󠄁b󠄁s󠄁t󠄁i󠄁t󠄁u󠄁t󠄁i󠄁n󠄁g󠄁 t󠄁h󠄁e󠄁 c󠄁l󠄁o󠄁n󠄁e󠄁d󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁 I󠄁D󠄁.󠄁
-T󠄁h󠄁e󠄁 k󠄁e󠄁y󠄁 b󠄁a󠄁s󠄁e󠄁 b󠄁e󠄁l󠄁o󠄁w󠄁 i󠄁s󠄁 a󠄁 d󠄁i󠄁s󠄁p󠄁o󠄁s󠄁a󠄁b󠄁l󠄁e󠄁 v󠄁a󠄁l󠄁u󠄁e󠄁 f󠄁o󠄁r󠄁 l󠄁o󠄁a󠄁d󠄁i󠄁n󠄁g󠄁 r󠄁e󠄁l󠄁e󠄁a󠄁s󠄁e󠄁 c󠄁o󠄁n󠄁f󠄁i󠄁g󠄁u󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁.󠄁
+Save this machine configuration locally, substituting the cloned volume ID.
+The key base below is a disposable value for loading release configuration.
 
 ```json
 {
@@ -68,8 +68,8 @@ T󠄁h󠄁e󠄁 k󠄁e󠄁y󠄁 b󠄁a󠄁s󠄁e󠄁 b󠄁e󠄁l󠄁o󠄁w󠄁 i
 }
 ```
 
-R󠄁u󠄁n󠄁 t󠄁h󠄁e󠄁 s󠄁o󠄁u󠄁r󠄁c󠄁e󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁 w󠄁i󠄁t󠄁h󠄁 t󠄁h󠄁i󠄁s󠄁 e󠄁x󠄁p󠄁l󠄁i󠄁c󠄁i󠄁t󠄁 c󠄁o󠄁n󠄁f󠄁i󠄁g󠄁u󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁.󠄁 I󠄁t󠄁 c󠄁o󠄁n󠄁t󠄁a󠄁i󠄁n󠄁s󠄁 E󠄁x󠄁q󠄁l󠄁i󠄁t󠄁e󠄁,󠄁 s󠄁o󠄁
-n󠄁o󠄁 d󠄁o󠄁w󠄁n󠄁l󠄁o󠄁a󠄁d󠄁e󠄁d󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁 u󠄁t󠄁i󠄁l󠄁i󠄁t󠄁y󠄁 i󠄁s󠄁 n󠄁e󠄁e󠄁d󠄁e󠄁d󠄁.󠄁
+Run the source image with this explicit configuration. It contains Exqlite, so
+no downloaded database utility is needed.
 
 ```sh
 fly machine run SOURCE_IMAGE_DIGEST --app DRILL_APP \
@@ -78,17 +78,17 @@ fly machine run SOURCE_IMAGE_DIGEST --app DRILL_APP \
 fly machine status DRILL_MACHINE --app DRILL_APP --display-config
 ```
 
-C󠄁o󠄁n󠄁f󠄁i󠄁r󠄁m󠄁 t󠄁h󠄁e󠄁 r󠄁e󠄁s󠄁u󠄁l󠄁t󠄁i󠄁n󠄁g󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁 h󠄁a󠄁s󠄁 `services: []`,󠄁 t󠄁h󠄁e󠄁 c󠄁l󠄁o󠄁n󠄁e󠄁d󠄁 m󠄁o󠄁u󠄁n󠄁t󠄁,󠄁
-`/bin/sleep` a󠄁s󠄁 i󠄁t󠄁s󠄁 e󠄁n󠄁t󠄁r󠄁y󠄁p󠄁o󠄁i󠄁n󠄁t󠄁 a󠄁n󠄁d󠄁 n󠄁o󠄁 p󠄁r󠄁o󠄁d󠄁u󠄁c󠄁t󠄁i󠄁o󠄁n󠄁 s󠄁e󠄁c󠄁r󠄁e󠄁t󠄁s󠄁.󠄁 D󠄁o󠄁 n󠄁o󠄁t󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁 C󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁,󠄁
-m󠄁i󠄁g󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁s󠄁,󠄁 m󠄁a󠄁i󠄁l󠄁 w󠄁o󠄁r󠄁k󠄁e󠄁r󠄁s󠄁,󠄁 p󠄁o󠄁l󠄁l󠄁e󠄁r󠄁s󠄁 o󠄁r󠄁 t󠄁h󠄁e󠄁 s󠄁c󠄁a󠄁n󠄁n󠄁e󠄁r󠄁.󠄁 T󠄁h󠄁e󠄁 `local` m󠄁a󠄁i󠄁l󠄁e󠄁r󠄁 a󠄁l󠄁o󠄁n󠄁e󠄁 i󠄁s󠄁
-i󠄁n󠄁s󠄁u󠄁f󠄁f󠄁i󠄁c󠄁i󠄁e󠄁n󠄁t󠄁 p󠄁r󠄁o󠄁t󠄁e󠄁c󠄁t󠄁i󠄁o󠄁n󠄁:󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 s󠄁e󠄁n󠄁d󠄁i󠄁n󠄁g󠄁 c󠄁r󠄁e󠄁d󠄁e󠄁n󠄁t󠄁i󠄁a󠄁l󠄁s󠄁 l󠄁i󠄁v󠄁e󠄁 i󠄁n󠄁 t󠄁h󠄁e󠄁 d󠄁a󠄁t󠄁a󠄁b󠄁a󠄁s󠄁e󠄁.󠄁
+Confirm the resulting machine has `services: []`, the cloned mount,
+`/bin/sleep` as its entrypoint and no production secrets. Do not start Custyard,
+migrations, mail workers, pollers or the scanner. The `local` mailer alone is
+insufficient protection: tenant sending credentials live in the database.
 
 ## Verify without starting Custyard
 
-S󠄁a󠄁v󠄁e󠄁 t󠄁h󠄁e󠄁 f󠄁o󠄁l󠄁l󠄁o󠄁w󠄁i󠄁n󠄁g󠄁 s󠄁c󠄁r󠄁i󠄁p󠄁t󠄁 l󠄁o󠄁c󠄁a󠄁l󠄁l󠄁y󠄁 a󠄁n󠄁d󠄁 t󠄁r󠄁a󠄁n󠄁s󠄁f󠄁e󠄁r󠄁 i󠄁t󠄁 t󠄁o󠄁
-`/tmp/restore-verify.exs` w󠄁i󠄁t󠄁h󠄁 `fly ssh sftp put --app DRILL_APP --machine
-DRILL_MACHINE`.󠄁 R󠄁u󠄁n󠄁 i󠄁t󠄁 t󠄁h󠄁r󠄁o󠄁u󠄁g󠄁h󠄁 r󠄁e󠄁l󠄁e󠄁a󠄁s󠄁e󠄁 `eval`.󠄁 I󠄁t󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁s󠄁 o󠄁n󠄁l󠄁y󠄁 E󠄁x󠄁q󠄁l󠄁i󠄁t󠄁e󠄁;󠄁 i󠄁t󠄁 d󠄁o󠄁e󠄁s󠄁
-n󠄁o󠄁t󠄁 c󠄁a󠄁l󠄁l󠄁 `Custyard.Release.with_repo/1` o󠄁r󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁 C󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁.󠄁
+Save the following script locally and transfer it to
+`/tmp/restore-verify.exs` with `fly ssh sftp put --app DRILL_APP --machine
+DRILL_MACHINE`. Run it through release `eval`. It starts only Exqlite; it does
+not call `Custyard.Release.with_repo/1` or start Custyard.
 
 ```sh
 fly ssh console --app DRILL_APP --machine DRILL_MACHINE \
@@ -148,26 +148,26 @@ IO.inspect(%{integrity: :ok, foreign_keys: :ok, row_counts: counts,
   upload_manifest_sha256: uploads_hash}, label: "restore_verification")
 ```
 
-R󠄁e󠄁c󠄁o󠄁r󠄁d󠄁 o󠄁n󠄁l󠄁y󠄁 s󠄁n󠄁a󠄁p󠄁s󠄁h󠄁o󠄁t󠄁 I󠄁D󠄁/󠄁t󠄁i󠄁m󠄁e󠄁,󠄁 i󠄁m󠄁a󠄁g󠄁e󠄁 d󠄁i󠄁g󠄁e󠄁s󠄁t󠄁,󠄁 d󠄁r󠄁i󠄁l󠄁l󠄁 r󠄁e󠄁s󠄁o󠄁u󠄁r󠄁c󠄁e󠄁 I󠄁D󠄁s󠄁,󠄁 v󠄁e󠄁r󠄁i󠄁f󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁
-s󠄁u󠄁m󠄁m󠄁a󠄁r󠄁y󠄁,󠄁 e󠄁l󠄁a󠄁p󠄁s󠄁e󠄁d󠄁 r󠄁e󠄁s󠄁t󠄁o󠄁r󠄁e󠄁 t󠄁i󠄁m󠄁e󠄁 a󠄁n󠄁d󠄁 c󠄁l󠄁e󠄁a󠄁n󠄁u󠄁p󠄁 r󠄁e󠄁s󠄁u󠄁l󠄁t󠄁.󠄁 C󠄁o󠄁m󠄁p󠄁a󠄁r󠄁e󠄁 r󠄁o󠄁w󠄁 c󠄁o󠄁u󠄁n󠄁t󠄁s󠄁 a󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁
-u󠄁p󠄁l󠄁o󠄁a󠄁d󠄁 m󠄁a󠄁n󠄁i󠄁f󠄁e󠄁s󠄁t󠄁 w󠄁i󠄁t󠄁h󠄁 t󠄁h󠄁e󠄁 s󠄁a󠄁m󠄁e󠄁 r󠄁e󠄁a󠄁d󠄁-󠄁o󠄁n󠄁l󠄁y󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁s󠄁 t󠄁a󠄁k󠄁e󠄁n󠄁 a󠄁t󠄁 t󠄁h󠄁e󠄁 r󠄁e󠄁c󠄁o󠄁v󠄁e󠄁r󠄁y󠄁 p󠄁o󠄁i󠄁n󠄁t󠄁.󠄁
-Z󠄁e󠄁r󠄁o󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁s󠄁 d󠄁o󠄁e󠄁s󠄁 n󠄁o󠄁t󠄁 e󠄁x󠄁e󠄁r󠄁c󠄁i󠄁s󠄁e󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h󠄁m󠄁e󠄁n󠄁t󠄁 r󠄁e󠄁s󠄁t󠄁o󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁;󠄁 r󠄁e󠄁c󠄁o󠄁r󠄁d󠄁 t󠄁h󠄁a󠄁t󠄁 l󠄁i󠄁m󠄁i󠄁t󠄁.󠄁
+Record only snapshot ID/time, image digest, drill resource IDs, verification
+summary, elapsed restore time and cleanup result. Compare row counts and the
+upload manifest with the same read-only checks taken at the recovery point.
+Zero attachments does not exercise attachment restoration; record that limit.
 
-T󠄁h󠄁i󠄁s󠄁 p󠄁r󠄁o󠄁v󠄁e󠄁s󠄁 s󠄁t󠄁o󠄁r󠄁a󠄁g󠄁e󠄁 r󠄁e󠄁c󠄁o󠄁v󠄁e󠄁r󠄁y󠄁,󠄁 n󠄁o󠄁t󠄁 m󠄁a󠄁i󠄁l󠄁b󠄁o󠄁x󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁 o󠄁r󠄁 c󠄁o󠄁m󠄁p󠄁l󠄁e󠄁t󠄁e󠄁 a󠄁p󠄁p󠄁l󠄁i󠄁c󠄁a󠄁t󠄁i󠄁o󠄁n󠄁
-r󠄁e󠄁c󠄁o󠄁v󠄁e󠄁r󠄁y󠄁.󠄁 T󠄁e󠄁s󠄁t󠄁 m󠄁i󠄁g󠄁r󠄁a󠄁t󠄁i󠄁o󠄁n󠄁s󠄁 a󠄁g󠄁a󠄁i󠄁n󠄁s󠄁t󠄁 a󠄁 d󠄁i󠄁s󠄁p󠄁o󠄁s󠄁a󠄁b󠄁l󠄁e󠄁 r󠄁e󠄁s󠄁t󠄁o󠄁r󠄁e󠄁d󠄁 c󠄁o󠄁p󠄁y󠄁 b󠄁e󠄁f󠄁o󠄁r󠄁e󠄁 d󠄁e󠄁p󠄁l󠄁o󠄁y󠄁i󠄁n󠄁g󠄁
-s󠄁c󠄁h󠄁e󠄁m󠄁a󠄁 c󠄁h󠄁a󠄁n󠄁g󠄁e󠄁s󠄁.󠄁 A󠄁 r󠄁e󠄁a󠄁l󠄁 f󠄁a󠄁i󠄁l󠄁o󠄁v󠄁e󠄁r󠄁 m󠄁u󠄁s󠄁t󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁 w󠄁i󠄁t󠄁h󠄁 o󠄁u󠄁t󠄁b󠄁o󠄁u󠄁n󠄁d󠄁 d󠄁e󠄁l󠄁i󠄁v󠄁e󠄁r󠄁y󠄁 p󠄁a󠄁u󠄁s󠄁e󠄁d󠄁 a󠄁n󠄁d󠄁
-r󠄁e󠄁c󠄁o󠄁n󠄁c󠄁i󠄁l󠄁e󠄁 p󠄁e󠄁n󠄁d󠄁i󠄁n󠄁g󠄁/󠄁u󠄁n󠄁c󠄁e󠄁r󠄁t󠄁a󠄁i󠄁n󠄁 m󠄁e󠄁s󠄁s󠄁a󠄁g󠄁e󠄁s󠄁 a󠄁g󠄁a󠄁i󠄁n󠄁s󠄁t󠄁 p󠄁r󠄁o󠄁v󠄁i󠄁d󠄁e󠄁r󠄁 a󠄁c󠄁t󠄁i󠄁v󠄁i󠄁t󠄁y󠄁 b󠄁e󠄁f󠄁o󠄁r󠄁e󠄁 r󠄁e󠄁s󠄁u󠄁m󠄁i󠄁n󠄁g󠄁.󠄁
+This proves storage recovery, not mailbox delivery or complete application
+recovery. Test migrations against a disposable restored copy before deploying
+schema changes. A real failover must start with outbound delivery paused and
+reconcile pending/uncertain messages against provider activity before resuming.
 
 ## Remove only drill resources
 
-F󠄁o󠄁r󠄁 a󠄁n󠄁 a󠄁c󠄁t󠄁u󠄁a󠄁l󠄁 f󠄁a󠄁i󠄁l󠄁o󠄁v󠄁e󠄁r󠄁,󠄁 s󠄁e󠄁t󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 e󠄁n󠄁v󠄁i󠄁r󠄁o󠄁n󠄁m󠄁e󠄁n󠄁t󠄁
-`OUTBOUND_DELIVERY_ENABLED=false` b󠄁e󠄁f󠄁o󠄁r󠄁e󠄁 s󠄁t󠄁a󠄁r󠄁t󠄁i󠄁n󠄁g󠄁 t󠄁h󠄁e󠄁 r󠄁e󠄁s󠄁t󠄁o󠄁r󠄁e󠄁d󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁.󠄁
-T󠄁h󠄁i󠄁s󠄁 h󠄁o󠄁l󠄁d󠄁s󠄁 a󠄁l󠄁l󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁s󠄁'󠄁 q󠄁u󠄁e󠄁u󠄁e󠄁d󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁e󠄁r󠄁 r󠄁e󠄁p󠄁l󠄁i󠄁e󠄁s󠄁,󠄁 i󠄁n󠄁c󠄁l󠄁u󠄁d󠄁i󠄁n󠄁g󠄁 o󠄁l󠄁d󠄁e󠄁r󠄁 s󠄁n󠄁a󠄁p󠄁s󠄁h󠄁o󠄁t󠄁s󠄁
-w󠄁i󠄁t󠄁h󠄁o󠄁u󠄁t󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 p󠄁a󠄁u󠄁s󠄁e󠄁 c󠄁o󠄁n󠄁t󠄁r󠄁o󠄁l󠄁s󠄁.󠄁 T󠄁h󠄁e󠄁 v󠄁a󠄁l󠄁u󠄁e󠄁 i󠄁s󠄁 s󠄁t󠄁r󠄁i󠄁c󠄁t󠄁l󠄁y󠄁 `true` o󠄁r󠄁 `false` a󠄁n󠄁d󠄁
-d󠄁e󠄁f󠄁a󠄁u󠄁l󠄁t󠄁s󠄁 t󠄁o󠄁 `true`.󠄁 R󠄁e󠄁-󠄁e󠄁n󠄁a󠄁b󠄁l󠄁e󠄁 i󠄁t󠄁 a󠄁f󠄁t󠄁e󠄁r󠄁 r󠄁e󠄁c󠄁o󠄁n󠄁c󠄁i󠄁l󠄁i󠄁a󠄁t󠄁i󠄁o󠄁n󠄁;󠄁 i󠄁n󠄁d󠄁i󠄁v󠄁i󠄁d󠄁u󠄁a󠄁l󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁
-a󠄁d󠄁m󠄁i󠄁n󠄁i󠄁s󠄁t󠄁r󠄁a󠄁t󠄁o󠄁r󠄁s󠄁 c󠄁a󠄁n󠄁 s󠄁t󠄁i󠄁l󠄁l󠄁 h󠄁o󠄁l󠄁d󠄁 t󠄁h󠄁e󠄁i󠄁r󠄁 o󠄁w󠄁n󠄁 t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁'󠄁s󠄁 m󠄁a󠄁i󠄁l󠄁.󠄁
+For an actual failover, set installation environment
+`OUTBOUND_DELIVERY_ENABLED=false` before starting the restored installation.
+This holds all tenants' queued customer replies, including older snapshots
+without tenant pause controls. The value is strictly `true` or `false` and
+defaults to `true`. Re-enable it after reconciliation; individual tenant
+administrators can still hold their own tenant's mail.
 
-C󠄁h󠄁e󠄁c󠄁k󠄁 e󠄁a󠄁c󠄁h󠄁 I󠄁D󠄁 b󠄁e󠄁l󠄁o󠄁n󠄁g󠄁s󠄁 t󠄁o󠄁 t󠄁h󠄁e󠄁 d󠄁i󠄁s󠄁p󠄁o󠄁s󠄁a󠄁b󠄁l󠄁e󠄁 a󠄁p󠄁p󠄁 b󠄁e󠄁f󠄁o󠄁r󠄁e󠄁 r󠄁u󠄁n󠄁n󠄁i󠄁n󠄁g󠄁:󠄁
+Check each ID belongs to the disposable app before running:
 
 ```sh
 fly machine stop DRILL_MACHINE --app DRILL_APP
@@ -176,7 +176,7 @@ fly volumes destroy CLONED_VOLUME_ID --app DRILL_APP --yes
 fly apps destroy DRILL_APP --yes
 ```
 
-T󠄁h󠄁e󠄁 s󠄁n󠄁a󠄁p󠄁s󠄁h󠄁o󠄁t󠄁 a󠄁n󠄁d󠄁 s󠄁o󠄁u󠄁r󠄁c󠄁e󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁 r󠄁e󠄁m󠄁a󠄁i󠄁n󠄁 i󠄁n󠄁t󠄁a󠄁c󠄁t󠄁.󠄁 T󠄁h󠄁e󠄁 c󠄁u󠄁r󠄁r󠄁e󠄁n󠄁t󠄁 C󠄁L󠄁I󠄁 r󠄁e󠄁s󠄁t󠄁o󠄁r󠄁e󠄁s󠄁 w󠄁i󠄁t󠄁h󠄁
-`volumes create --snapshot-id`;󠄁 i󠄁t󠄁 h󠄁a󠄁s󠄁 n󠄁o󠄁 `volumes snapshots restore` c󠄁o󠄁m󠄁m󠄁a󠄁n󠄁d󠄁.󠄁
-S󠄁e󠄁e󠄁 [F󠄁l󠄁y󠄁 v󠄁o󠄁l󠄁u󠄁m󠄁e󠄁 m󠄁a󠄁n󠄁a󠄁g󠄁e󠄁m󠄁e󠄁n󠄁t󠄁](https://fly.io/docs/volumes/volume-manage/)
-a󠄁n󠄁d󠄁 [c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁 m󠄁a󠄁c󠄁h󠄁i󠄁n󠄁e󠄁 e󠄁n󠄁t󠄁r󠄁y󠄁p󠄁o󠄁i󠄁n󠄁t󠄁s󠄁](https://fly.io/docs/machines/flyctl/fly-machine-run/).󠄁
+The snapshot and source volume remain intact. The current CLI restores with
+`volumes create --snapshot-id`; it has no `volumes snapshots restore` command.
+See [Fly volume management](https://fly.io/docs/volumes/volume-manage/)
+and [custom machine entrypoints](https://fly.io/docs/machines/flyctl/fly-machine-run/).
