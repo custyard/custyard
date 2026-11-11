@@ -157,6 +157,8 @@ defmodule Custyard.Threads do
           # Messages exchanged with the customer: no internal notes, no
           # automatic replies.
           exchange_count: coalesce(mf.exchanged, 0),
+          # The 24h count behind the score's velocity term.
+          recent_count: coalesce(mf.recent, 0),
           due_task_count: coalesce(dt.count, 0)
         }
       )
