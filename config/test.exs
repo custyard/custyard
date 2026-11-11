@@ -25,9 +25,17 @@ case System.get_env("TURSO_TEST_URL") do
       busy_timeout: 30_000
 
   url ->
+    provider =
+      case System.get_env("TURSO_TEST_PROVIDER") do
+        value when value in [nil, "", "turso"] -> :turso
+        "bunny" -> :bunny
+        _ -> raise "TURSO_TEST_PROVIDER must be turso or bunny"
+      end
+
     config :custyard, Custyard.Repo,
       turso_url: url,
-      turso_auth_token: System.get_env("TURSO_TEST_AUTH_TOKEN")
+      turso_auth_token: System.get_env("TURSO_TEST_AUTH_TOKEN"),
+      turso_provider: provider
 end
 
 config :custyard, CustyardWeb.Endpoint,

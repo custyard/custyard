@@ -2,6 +2,7 @@
 !priv/static/robots.txt
 .serena
 .claude
+/.codex/
 .remember
 .elixir_ls
 *.dump
@@ -59,3 +60,6 @@ custyard-*.tar
 .env.secrets
 .env.local
 .env.*.local
+__pycache__/
+/.env.staging
+/.env.staging.secrets

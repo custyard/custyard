@@ -7,6 +7,51 @@ defmodule CustyardWeb.ClientIPTest do
 
   alias CustyardWeb.ClientIP
 
+  setup do
+    provider = Application.fetch_env(:custyard, :proxy_provider)
+    Application.delete_env(:custyard, :proxy_provider)
+
+    on_exit(fn ->
+      case provider do
+        {:ok, value} -> Application.put_env(:custyard, :proxy_provider, value)
+        :error -> Application.delete_env(:custyard, :proxy_provider)
+      end
+    end)
+  end
+
+  describe "Bunny provider" do
+    setup do
+      Application.put_env(:custyard, :proxy_provider, :bunny)
+      :ok
+    end
+
+    test "HTTP ignores Fly-Client-IP and uses Bunny's single overwritten visitor IP" do
+      request =
+        conn(:get, "/")
+        |> put_req_header("fly-client-ip", "1.2.3.4")
+        |> put_req_header("x-forwarded-for", "198.51.100.10")
+
+      assert ClientIP.from_conn(request) == "198.51.100.10"
+    end
+
+    test "HTTP and LiveView reject lists, duplicates and invalid visitor IPs" do
+      for values <- [["1.2.3.4, 198.51.100.10"], ["invalid"], ["1.2.3.4", "198.51.100.10"]] do
+        headers = Enum.map(values, &{"x-forwarded-for", &1})
+        request = %{conn(:get, "/") | req_headers: headers}
+        assert ClientIP.from_conn(request) == "127.0.0.1"
+        assert ClientIP.from_peer_data(%{address: {127, 0, 0, 1}}, headers) == "127.0.0.1"
+      end
+    end
+
+    test "HTTP and LiveView keep distinct IPv4 and IPv6 clients" do
+      for address <- ["198.51.100.10", "2001:db8::2"] do
+        headers = [{"x-forwarded-for", address}]
+        assert ClientIP.from_conn(%{conn(:get, "/") | req_headers: headers}) == address
+        assert ClientIP.from_peer_data(%{address: {127, 0, 0, 1}}, headers) == address
+      end
+    end
+  end
+
   describe "from_conn/1 with trust_proxy_headers disabled (default)" do
     setup do
       original = Application.get_env(:custyard, :trust_proxy_headers)

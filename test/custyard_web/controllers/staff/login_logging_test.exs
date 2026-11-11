@@ -1,18 +1,25 @@
 defmodule CustyardWeb.Staff.LoginLoggingTest.MailerAdapter do
   use Swoosh.Adapter
 
-  require Logger
+  require Custyard.Log, as: Log
 
   def deliver(email, config) do
     send(self(), {:login_delivery_attempt, email})
-    Logger.info("login_test_adapter_called")
+    Log.info(:logging_self_test, stage: :deliver)
 
     case Keyword.get(config, :result, :accepted) do
       :accepted ->
         {:ok, %{id: "login-test-message", status: "queued"}}
 
       :provider_rejected ->
-        {:error, {422, %{message: "UNTRUSTED_PROVIDER_ECHO", submitted_email: email}}}
+        {:error,
+         {422,
+          %{
+            code: "validation_failed",
+            errors: %{"from" => [email.html_body]},
+            message: "UNTRUSTED_PROVIDER_ECHO",
+            submitted_email: email
+          }}}
 
       :transport_error ->
         {:error,
@@ -28,6 +35,7 @@ defmodule CustyardWeb.Staff.LoginLoggingTest do
   import ExUnit.CaptureLog, only: [with_log: 2]
 
   alias Custyard.{StaffAccount, RateLimit, Repo}
+  alias Custyard.Auth.Account
   alias CustyardWeb.Staff.LoginLoggingTest.MailerAdapter
 
   @ip {10, 53, 1, 1}
@@ -50,7 +58,9 @@ defmodule CustyardWeb.Staff.LoginLoggingTest do
     {conn, log} = request_login(%{"email" => staff.email})
 
     assert redirected_to(conn) == "/app/login/sent"
-    assert log =~ "POST /app/login"
+    assert log =~ "http_request_started"
+    assert log =~ "method=POST"
+    assert log =~ "route=staff_login"
 
     assert_flow(log, conn, [
       "account_login_requested",
@@ -59,8 +69,8 @@ defmodule CustyardWeb.Staff.LoginLoggingTest do
     ])
 
     assert log =~ "account_id=#{staff.id}"
-    assert_before(log, "account_login_delivery_started", "login_test_adapter_called")
-    assert_before(log, "login_test_adapter_called", "account_login_provider_accepted")
+    assert_before(log, "account_login_delivery_started", "logging_self_test")
+    assert_before(log, "logging_self_test", "account_login_provider_accepted")
     assert_received {:login_delivery_attempt, email}
 
     token = Repo.get!(StaffAccount, staff.id).login_token
@@ -158,6 +168,7 @@ defmodule CustyardWeb.Staff.LoginLoggingTest do
     assert log =~ "account_id=#{staff.id}"
     assert log =~ "provider_status=422"
     assert log =~ "reason=provider_response"
+    assert log =~ "provider_code=validation_failed"
     refute log =~ "UNTRUSTED_PROVIDER_ECHO"
     assert_received {:login_delivery_attempt, _}
     assert_no_secrets(log, staff)
@@ -180,7 +191,7 @@ defmodule CustyardWeb.Staff.LoginLoggingTest do
       "account_login_provider_rejected"
     ])
 
-    assert log =~ "reason=delivery_error"
+    assert log =~ "reason=unclassified_error"
     refute log =~ "provider_status="
     refute log =~ "untrusted_transport_error"
     refute log =~ "UNTRUSTED_TRANSPORT_ECHO"
@@ -188,7 +199,195 @@ defmodule CustyardWeb.Staff.LoginLoggingTest do
     assert_no_secrets(log, staff)
   end
 
+  test "safe provider validation fields reach the production JSON formatter" do
+    Application.put_env(:custyard, Custyard.Mailer,
+      adapter: MailerAdapter,
+      result: :provider_rejected
+    )
+
+    staff = insert_staff_account(role: "admin")
+    Logger.put_module_level(Custyard.Auth.LoginEmail, :info)
+    on_exit(fn -> Logger.delete_module_level(Custyard.Auth.LoginEmail) end)
+
+    {conn, records} =
+      Custyard.LogCapture.with_json(fn ->
+        build_conn()
+        |> Map.put(:remote_ip, @ip)
+        |> post("/app/login", %{"email" => staff.email})
+      end)
+
+    assert redirected_to(conn) == "/app/login/sent"
+    rejected = Enum.find(records, &(&1["event"] == "account_login_provider_rejected"))
+    assert rejected["provider_code"] == "validation_failed"
+    assert rejected["provider_status"] == 422
+    assert rejected["validation_fields"] == ["from"]
+    assert rejected["request_id"] == hd(get_resp_header(conn, "x-request-id"))
+    refute Jason.encode!(records) =~ staff.email
+    refute Jason.encode!(records) =~ "/app/login/verify/"
+  end
+
+  test "a supplied request ID cannot smuggle personal data into logging" do
+    private = "PRIVATE-HEADER-CANARY-/app/login/verify/request-secret"
+    Logger.put_module_level(CustyardWeb.Plugs.RequestLog, :info)
+    Logger.put_module_level(CustyardWeb.Staff.SessionController, :info)
+
+    on_exit(fn ->
+      Logger.delete_module_level(CustyardWeb.Plugs.RequestLog)
+      Logger.delete_module_level(CustyardWeb.Staff.SessionController)
+    end)
+
+    {conn, log} =
+      with_log(Application.fetch_env!(:logger, :console), fn ->
+        build_conn()
+        |> Map.put(:remote_ip, @ip)
+        |> put_req_header("x-request-id", private)
+        |> post("/app/login", %{})
+      end)
+
+    assert [request_id] = get_resp_header(conn, "x-request-id")
+    refute request_id == private
+    assert log =~ request_id
+    refute log =~ private
+    refute log =~ "request-secret"
+  end
+
+  test "successful token consumption records the authenticated staff without a request URL" do
+    staff =
+      insert_staff_account(role: "admin")
+      |> Account.login_token_changeset()
+      |> Repo.update!()
+
+    token = staff.login_token
+    {conn, log} = capture_login(fn -> post(build_conn(), "/app/login/verify/#{token}") end)
+
+    assert redirected_to(conn) == "/app"
+    assert get_session(conn, :staff_id) == staff.id
+    assert get_session(conn, :staff_claim) == StaffAccount.session_claim(staff)
+    assert Repo.get!(StaffAccount, staff.id).login_token == nil
+    assert_flow(log, conn, ["account_login_succeeded"])
+    assert log =~ "staff_id=#{staff.id}"
+    refute log =~ "http_request_started"
+    refute log =~ "http_request_completed"
+    refute log =~ token
+    assert_no_secrets(log, staff)
+
+    {replayed, replay_log} =
+      capture_login(fn -> post(build_conn(), "/app/login/verify/#{token}") end)
+
+    assert html_response(replayed, 200) =~ "Invalid or expired login link"
+    refute get_session(replayed, :staff_id)
+    assert_flow(replay_log, replayed, ["account_login_rejected"])
+    assert replay_log =~ "reason=invalid_or_expired_token"
+    refute replay_log =~ "staff_id="
+    refute replay_log =~ token
+  end
+
+  test "expired, unknown and malformed token attempts get a fixed token-free rejection" do
+    staff =
+      insert_staff_account(role: "admin")
+      |> Account.login_token_changeset()
+      |> Repo.update!()
+
+    expired_at = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
+    staff |> Ecto.Changeset.change(login_token_expires_at: expired_at) |> Repo.update!()
+
+    for {token, response} <- [
+          {staff.login_token, "has expired"},
+          {String.duplicate("x", 43), "Invalid or expired login link"},
+          {"not%20a%20token", "Invalid or expired login link"}
+        ] do
+      {conn, log} = capture_login(fn -> post(build_conn(), "/app/login/verify/#{token}") end)
+
+      assert html_response(conn, 200) =~ response
+      refute get_session(conn, :staff_id)
+      assert_flow(log, conn, ["account_login_rejected"])
+      assert log =~ "reason=invalid_or_expired_token"
+      refute log =~ "staff_id="
+      refute log =~ "http_request_started"
+      refute log =~ "http_request_completed"
+      refute log =~ token
+      assert_no_secrets(log, staff)
+    end
+  end
+
+  # A suspended workspace never reaches the session controller: the host plug
+  # answers before any account is read, so no login event names an account.
+  test "a valid token on a suspended workspace is refused before any account is read" do
+    staff =
+      insert_staff_account(role: "admin")
+      |> Account.login_token_changeset()
+      |> Repo.update!()
+
+    Custyard.Tenants.get_tenant!(staff.tenant_id)
+    |> Ecto.Changeset.change(status: "suspended")
+    |> Repo.update!()
+
+    {conn, log} =
+      capture_login(fn -> post(build_conn(), "/app/login/verify/#{staff.login_token}") end)
+
+    assert conn.status == 403
+    assert conn.halted
+    refute log =~ "account_login_"
+    refute log =~ "staff_id="
+    refute log =~ staff.login_token
+    assert Repo.get!(StaffAccount, staff.id).login_token == staff.login_token
+  end
+
+  test "logout records the signed session identity without claiming current account validation" do
+    staff = insert_staff_account(role: "admin")
+
+    {conn, log} =
+      capture_login(fn ->
+        build_conn()
+        |> init_test_session(%{staff_id: staff.id, staff_claim: "stale-session-claim"})
+        |> delete("/app/logout")
+      end)
+
+    assert redirected_to(conn) == "/app/login"
+    refute get_session(conn, :staff_id)
+    refute get_session(conn, :staff_claim)
+    assert [request_id] = get_resp_header(conn, "x-request-id")
+    assert log =~ "account_logout"
+    assert log =~ "request_id=#{request_id}"
+    assert log =~ "session_staff_id=#{staff.id}"
+    refute Regex.match?(~r/(?:^|\s)staff_id=/, log)
+    refute log =~ "stale-session-claim"
+    assert_no_secrets(log, staff)
+  end
+
+  test "logout remains available without a numeric session identity and never logs session claims" do
+    for staff_id <- [nil, "PRIVATE-SESSION-IDENTITY-CANARY"] do
+      {conn, log} =
+        capture_login(fn ->
+          build_conn()
+          |> init_test_session(%{
+            staff_id: staff_id,
+            staff_claim: "PRIVATE-CLAIM-CANARY"
+          })
+          |> delete("/app/logout")
+        end)
+
+      assert redirected_to(conn) == "/app/login"
+      refute get_session(conn, :staff_id)
+      refute get_session(conn, :staff_claim)
+      assert log =~ "account_logout"
+      assert log =~ "request_id=#{hd(get_resp_header(conn, "x-request-id"))}"
+      refute log =~ "session_staff_id="
+      refute Regex.match?(~r/(?:^|\s)staff_id=/, log)
+      refute log =~ "PRIVATE-SESSION-IDENTITY-CANARY"
+      refute log =~ "PRIVATE-CLAIM-CANARY"
+    end
+  end
+
   defp request_login(params) do
+    capture_login(fn ->
+      build_conn()
+      |> Map.put(:remote_ip, @ip)
+      |> post("/app/login", params)
+    end)
+  end
+
+  defp capture_login(fun) do
     # Use the application's real formatter and metadata allowlist so these
     # assertions also catch fields accidentally hidden from production logs.
     capture_options = Application.fetch_env!(:logger, :console) |> Keyword.put(:level, :info)
@@ -197,6 +396,7 @@ defmodule CustyardWeb.Staff.LoginLoggingTest do
       CustyardWeb.Staff.SessionController,
       Custyard.Auth.LoginEmail,
       Phoenix.Logger,
+      CustyardWeb.Plugs.RequestLog,
       MailerAdapter
     ]
 
@@ -207,11 +407,7 @@ defmodule CustyardWeb.Staff.LoginLoggingTest do
     Enum.each(modules, &Logger.put_module_level(&1, :info))
 
     try do
-      with_log(capture_options, fn ->
-        build_conn()
-        |> Map.put(:remote_ip, @ip)
-        |> post("/app/login", params)
-      end)
+      with_log(capture_options, fun)
     after
       Enum.each(modules, &Logger.delete_module_level/1)
       Enum.each(previous_levels, fn {module, level} -> Logger.put_module_level(module, level) end)

@@ -15,7 +15,7 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
 
   alias Custyard.{Attachments, InboundChannel, Message, Repo}
 
-  require Logger
+  require Custyard.Log, as: Log
 
   def process(thread, normalized, route_context) do
     descriptors = descriptors(normalized)
@@ -35,7 +35,7 @@ defmodule Custyard.Webhooks.Purposes.Attachments do
     end
   rescue
     _error ->
-      Logger.error("Attachment processing failed for thread #{thread.id}")
+      Log.error(:webhook_attachment_processing_failed, thread_id: thread.id)
       {:error, :attachment_processing_failed}
   end
 

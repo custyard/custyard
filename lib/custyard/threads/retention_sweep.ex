@@ -28,7 +28,7 @@ defmodule Custyard.Threads.RetentionSweep do
 
   use GenServer
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{Threads, InboundChannels}
 
@@ -72,26 +72,23 @@ defmodule Custyard.Threads.RetentionSweep do
   retries.
   """
   def sweep(opts \\ []) do
+    Log.operation([], fn -> do_sweep(opts) end)
+  end
+
+  defp do_sweep(opts) do
     counts =
       opts
       |> Threads.run_cleanup()
       |> Map.merge(channel_counts(opts))
 
     if Enum.any?(counts, fn {_key, count} -> count > 0 end) do
-      Logger.info(
-        "Threads.RetentionSweep: deleted " <>
-          "#{counts.resolved_threads} threads, " <>
-          "#{counts.orphaned_contacts} contacts, #{counts.orphaned_tasks} tasks, " <>
-          "#{counts.channel_rejections} channel rejections; cleared " <>
-          "#{counts.channel_verifications} channel verifications, " <>
-          "#{counts.channel_tokens} rotated channel tokens"
-      )
+      Log.info(:retention_sweep_completed, Map.to_list(counts))
     end
 
     counts
   rescue
     e ->
-      Logger.error("Threads.RetentionSweep: sweep failed: #{inspect(e)}")
+      Log.error(:retention_sweep_failed, Log.failure(e))
       @zero_counts
   end
 

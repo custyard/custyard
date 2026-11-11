@@ -32,9 +32,9 @@ defmodule Custyard.MixProject do
     [
       {:phoenix, "~> 1.8"},
       {:phoenix_live_view, "~> 1.0"},
-      {:phoenix_html, "~> 4.0"},
+      {:phoenix_html, "~> 4.4"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
-      {:ecto, "~> 3.13"},
+      {:ecto, "~> 3.14 and >= 3.14.3"},
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, "~> 0.15"},
       {:postgrex, "~> 0.19", optional: true},
@@ -48,7 +48,7 @@ defmodule Custyard.MixProject do
        compile: false,
        depth: 1},
       {:jason, "~> 1.4"},
-      {:bandit, "~> 1.0"},
+      {:bandit, "~> 1.0 and >= 1.14.1"},
       {:finch, "~> 0.18"},
       # HTTP client for the Turso driver (Custyard.Turso.HTTP); also under Finch.
       {:mint, "~> 1.6"},

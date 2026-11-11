@@ -13,7 +13,7 @@ defmodule CustyardWeb.EmailStatusController do
 
   use CustyardWeb, :controller
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Email.DeliveryStatus
   alias Custyard.Webhooks.Adapters.Lettermint
@@ -50,9 +50,9 @@ defmodule CustyardWeb.EmailStatusController do
         json(conn, %{status: "ignored", reason: to_string(reason)})
 
       {:error, reason} ->
-        Logger.warning(
-          "Lettermint status webhook failed (delivery #{delivery_id(params)}, " <>
-            "event #{event}): #{inspect(reason)}"
+        Log.warning(
+          :email_status_processing_failed,
+          [tenant_id: tenant_id] ++ Log.failure(reason)
         )
 
         conn |> put_status(422) |> json(%{status: "error", reason: "processing failed"})
@@ -71,8 +71,4 @@ defmodule CustyardWeb.EmailStatusController do
       raw_body -> Lettermint.verify_request(raw_body, nil, signature, secret)
     end
   end
-
-  # Only the provider's delivery id is logged; never recipient or subject.
-  defp delivery_id(%{"id" => id}) when is_binary(id), do: String.slice(id, 0, 64)
-  defp delivery_id(_params), do: "unknown"
 end

@@ -5,9 +5,19 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   def init(opts), do: opts
 
   def call(conn, _) do
-    if Tenants.normalize_host(conn.host) == Tenants.normalize_host(Tenants.app_host()),
-      do: installation(conn),
-      else: workspace(conn, Tenants.resolve_host(conn.host))
+    cond do
+      Tenants.normalize_host(conn.host) == Tenants.normalize_host(Tenants.app_host()) ->
+        installation(conn)
+
+      # Container platforms probe the port directly and cannot send a
+      # registered hostname. The exact probe carries no tenant data and is the
+      # same request the origin guard admits (CustyardWeb.Proxy).
+      CustyardWeb.Proxy.health_probe?(conn) ->
+        conn
+
+      true ->
+        workspace(conn, Tenants.resolve_host(conn.host))
+    end
   end
 
   defp installation(conn) do
@@ -36,7 +46,7 @@ defmodule CustyardWeb.Plugs.CustomDomain do
   end
 
   defp installation_request?(conn) do
-    conn.request_path in ["/", "/api/health"] or
+    conn.request_path in ["/", "/api/health", "/api/health/live"] or
       admin_request?(conn) or callback_request?(conn) or
       development_request?(conn)
   end

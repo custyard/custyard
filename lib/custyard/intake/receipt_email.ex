@@ -32,7 +32,7 @@ defmodule Custyard.Intake.ReceiptEmail do
 
   import Swoosh.Email
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Email.Headers
   alias Custyard.{IntakeSource, RateLimit}
@@ -85,9 +85,12 @@ defmodule Custyard.Intake.ReceiptEmail do
 
   defp deliver(email_struct, config) do
     if Application.get_env(:custyard, :deliver_replies_async?, true) do
-      case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn ->
-             do_deliver(email_struct, config)
-           end) do
+      case Task.Supervisor.start_child(
+             Custyard.TaskSupervisor,
+             Log.task(fn ->
+               do_deliver(email_struct, config)
+             end)
+           ) do
         {:ok, _pid} -> {:ok, :queued}
         {:error, _reason} -> {:error, :queue_failed}
       end
@@ -101,11 +104,11 @@ defmodule Custyard.Intake.ReceiptEmail do
   defp do_deliver(email_struct, config) do
     case Custyard.Mailer.deliver(email_struct, config) do
       {:ok, _metadata} = result ->
-        Logger.info("Intake receipt sent")
+        Log.info(:intake_receipt_email_accepted)
         result
 
-      {:error, _reason} = error ->
-        Logger.error("Failed to send intake receipt")
+      {:error, reason} = error ->
+        Log.error(:intake_receipt_email_failed, Log.failure(reason))
         error
     end
   end

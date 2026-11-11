@@ -18,6 +18,49 @@ defmodule Custyard.TenantStaffAuthorizationTest do
     %{tenant: tenant, other: other, admin: admin, agent: agent}
   end
 
+  test "staff provisioning and removal emit typed events without addresses", c do
+    import ExUnit.CaptureLog
+
+    Logger.put_module_level(Tenants, :info)
+    on_exit(fn -> Logger.delete_module_level(Tenants) end)
+
+    {invited, created_log} =
+      with_log([metadata: [:staff_id, :tenant_id, :role]], fn ->
+        assert {:ok, invited} =
+                 Tenants.invite_staff(c.admin, c.tenant.id, %{
+                   "email" => "logged@invited.example",
+                   "role" => "agent"
+                 })
+
+        invited
+      end)
+
+    assert created_log =~ "staff_account_created"
+    assert created_log =~ "staff_id=#{invited.id}"
+    assert created_log =~ "tenant_id=#{c.tenant.id}"
+    assert created_log =~ "role=agent"
+    refute created_log =~ "logged@invited.example"
+
+    removed_log =
+      capture_log([metadata: [:staff_id, :tenant_id, :role]], fn ->
+        assert {:ok, _} = Tenants.remove_staff(c.admin, c.tenant.id, invited.id)
+      end)
+
+    assert removed_log =~ "staff_account_removed"
+    assert removed_log =~ "staff_id=#{invited.id}"
+    refute removed_log =~ "logged@invited.example"
+
+    rejected_log =
+      capture_log(fn ->
+        assert {:error, _} =
+                 Tenants.invite_staff(c.admin, c.tenant.id, %{email: "nope", role: "agent"})
+
+        assert {:error, :not_found} = Tenants.remove_staff(c.admin, c.tenant.id, invited.id)
+      end)
+
+    refute rejected_log =~ "staff_account_"
+  end
+
   test "tenant administrators invite only tenant staff and update their current tenant", c do
     for role <- ["admin", "agent"] do
       assert {:ok, invited} =

@@ -5,6 +5,11 @@ defmodule Custyard.Acknowledgments.Broker do
   # Bounds the TCP connect and TLS handshake; amqp_client's default is a minute.
   @connection_timeout 5_000
 
+  @open_failure_categories ~w(invalid_url channel_failed connection_failed unreachable timeout auth_failed access_refused tls_failed)a
+
+  @doc "Every fixed failure category returned while opening a broker connection."
+  def open_failure_categories, do: @open_failure_categories
+
   @doc """
   Opens a connection and channel. Every failure is a fixed atom: amqp_client
   errors can embed the URI with its password, so none is passed through.

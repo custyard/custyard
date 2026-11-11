@@ -1,5 +1,10 @@
 import Config
 
+# Only reviewed deployment labels may enter operational error events.
+config :custyard,
+       :log_environments,
+       ~w(dev test prod development production staging custyard-eu-prod)
+
 config :custyard,
   ecto_repos: [Custyard.Repo],
   repo_adapter: Custyard.Repo.Adapter,
@@ -12,8 +17,8 @@ config :custyard,
   attachment_dir: Path.expand("../priv/attachments", __DIR__),
   attachment_client: Custyard.Attachments.FinchClient
 
-# config/runtime.exs decides at boot: on by default in production, off by
-# default elsewhere, and ACKNOWLEDGMENTS_ENABLED overrides either way.
+# Acknowledgment subscriptions are tenant records; config/runtime.exs sets
+# only the consumption limit.
 config :custyard, :acknowledgments, enabled: false
 
 config :custyard, CustyardWeb.Endpoint,
@@ -44,44 +49,24 @@ config :tailwind,
     cd: Path.expand("../assets", __DIR__)
   ]
 
+# The application installs a JSON formatter and a privacy filter before its
+# children start. This text formatter is also used by ExUnit capture helpers;
+# the primary filter has already restricted every metadata field.
 config :logger, :console,
-  format: "$time $metadata[$level] $message\n",
-  metadata: [
-    :request_id,
-    :actual_size,
-    :bucket,
-    :client_hostname,
-    :command,
-    :current_count,
-    :declared_size,
-    :email_captured,
-    :error_type,
-    :extension,
-    :hostname,
-    :limit_type,
-    :max_recipients,
-    :max_size,
-    :message_count,
-    :messages_processed,
-    :mode,
-    :staff_id,
-    :account_id,
-    :peer,
-    :provider_status,
-    :reason,
-    :receipt,
-    :received_count,
-    :recipient,
-    :recipient_count,
-    :sender,
-    :size_bytes,
-    :source_key,
-    :source,
-    :submission_id
-  ]
+  format: "$dateT$timeZ $metadata[$level] $message\n",
+  metadata: :all
+
+config :logger, :default_formatter,
+  format: "$dateT$timeZ $metadata[$level] $message\n",
+  metadata: :all,
+  utc_log: true
+
+config :custyard, Custyard.Repo,
+  log: false,
+  show_sensitive_data_on_connection_error: false
 
 config :phoenix, :json_library, Jason
-config :phoenix, :filter_parameters, ["password", "token", "secret", "api_key", "authorization"]
+config :phoenix, :filter_parameters, {:keep, []}
 
 # Error tracking (self-hosted Sentry at catch.onetimesecret.com).
 #
@@ -148,5 +133,13 @@ config :custyard, :lmtp,
 config :custyard,
   imap_client: Custyard.Email.ImapClient.Plover,
   imap_poll_interval_ms: 60_000
+
+# Build identity, reported by Custyard.Boot.Build on every boot report and
+# doctor card. Evaluated when the release is built: the Containerfile exports
+# GIT_SHA and BUILD_TIME (CI build args) before `mix compile`; any other build
+# says "unknown".
+config :custyard, :build,
+  git_sha: System.get_env("GIT_SHA", "unknown"),
+  built_at: System.get_env("BUILD_TIME", "unknown")
 
 import_config "#{config_env()}.exs"

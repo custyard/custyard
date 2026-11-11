@@ -266,8 +266,10 @@ defmodule Custyard.DataSubjectsTest do
 
   test "erasure scrubs sender and subject audit fields while preserving operational evidence",
        ctx do
+    # Seed rows as stored before payload minimization; the changeset now omits
+    # these keys from every new event.
     own =
-      insert_audit_event(
+      legacy_audit(%{
         organization_id: ctx.org.id,
         thread_id: ctx.sent.thread_id,
         payload: %{
@@ -276,48 +278,57 @@ defmodule Custyard.DataSubjectsTest do
           "operation_id" => "keep",
           "actor_role" => "agent"
         }
-      )
+      })
 
     associated =
-      insert_audit_event(
+      legacy_audit(%{
         thread_id: ctx.sent.thread_id,
         payload: %{
           "from" => "staff@example.com",
           "subject" => "Pat copied subject",
           "event_id" => "keep too"
         }
-      )
+      })
 
     unrelated_thread = insert_thread(organization_id: ctx.org.id)
 
     unrelated =
-      insert_audit_event(
+      legacy_audit(%{
         organization_id: ctx.org.id,
         thread_id: unrelated_thread.id,
         payload: %{
           "sender_email" => "someone@example.com",
           "subject" => "Another person's subject"
         }
-      )
+      })
 
     another_customer =
-      insert_audit_event(
+      legacy_audit(%{
         thread_id: ctx.foreign.thread_id,
         payload: %{"sender_email" => "pat@example.com", "subject" => "Different customer"}
-      )
+      })
 
     foreign_customer = insert_organization(tenant_id: insert_tenant().id)
 
     foreign =
-      insert_audit_event(
+      legacy_audit(%{
         organization_id: foreign_customer.id,
         tenant_id: foreign_customer.tenant_id,
         payload: %{"sender_email" => "pat@example.com", "subject" => "Different tenant"}
-      )
+      })
 
     assert {:ok, _} = DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
-    assert Repo.reload!(own).payload == %{"operation_id" => "keep", "actor_role" => "agent"}
-    assert Repo.reload!(associated).payload == %{"event_id" => "keep too"}
+
+    assert Repo.reload!(own).payload == %{
+             "sender_email" => "[ERASED]",
+             "subject" => "[ERASED]",
+             "operation_id" => "keep",
+             "actor_role" => "agent"
+           }
+
+    # A thread the person wrote in but does not own keeps its subject, as the
+    # thread row itself does; only rows that name the person are redacted.
+    assert Repo.reload!(associated).payload == associated.payload
     assert Repo.reload!(unrelated).payload == unrelated.payload
     assert Repo.reload!(another_customer).payload == another_customer.payload
     assert Repo.reload!(foreign).payload == foreign.payload
@@ -595,7 +606,8 @@ defmodule Custyard.DataSubjectsTest do
                attachments_removed: 1,
                threads_retitled: 1,
                contacts_removed: 1,
-               rejections_removed: 1
+               rejections_removed: 1,
+               audit_events_redacted: 0
              }
 
       for id <- [ctx.sent.id, ctx.own_message.id] do
@@ -637,6 +649,215 @@ defmodule Custyard.DataSubjectsTest do
       assert Repo.get!(Thread, ctx.sent.thread_id).subject == "Invoice"
     end
 
+    test "redacts legacy audit correspondence in scope and preserves the action evidence", ctx do
+      # Seed old persisted records directly, bypassing the new-payload schema.
+      legacy =
+        legacy_audit(%{
+          organization_id: ctx.org.id,
+          thread_id: ctx.own.id,
+          payload: %{
+            "sender_email" => "Pat <PAT@example.com>",
+            "subject" => "My order",
+            "nested" => [%{"body" => "Order 42 for Pat"}],
+            "staff_email" => "staff@example.com",
+            "staff_id" => 17,
+            "from" => "sent",
+            "to" => "failed"
+          }
+        })
+
+      unscoped_legacy =
+        legacy_audit(%{
+          thread_id: ctx.own.id,
+          payload: %{"email" => "pat@example.com", "subject" => "Old release"}
+        })
+
+      shared =
+        legacy_audit(%{
+          organization_id: ctx.org.id,
+          thread_id: ctx.sent.thread_id,
+          payload: %{
+            "sender_email" => "pat@example.com",
+            "subject" => "Shared thread",
+            "staff_email" => "staff@example.com"
+          }
+        })
+
+      assert {:ok, counts} =
+               DataSubjects.erase_subject(scope(ctx.org), " PAT@example.com ", ctx.org.id)
+
+      assert counts.audit_events_redacted == 3
+
+      reloaded = Repo.get!(AuditEvent, legacy.id)
+      assert %{reloaded | payload: legacy.payload} == legacy
+      assert reloaded.payload["sender_email"] == "[ERASED]"
+      assert reloaded.payload["subject"] == "[ERASED]"
+      assert reloaded.payload["nested"] == [%{"body" => "[ERASED]"}]
+      assert reloaded.payload["staff_email"] == "staff@example.com"
+      assert reloaded.payload["staff_id"] == 17
+      assert reloaded.payload["from"] == "sent"
+      assert reloaded.payload["to"] == "failed"
+      assert Repo.get!(AuditEvent, shared.id).payload["subject"] == "[ERASED]"
+      assert Repo.get!(AuditEvent, unscoped_legacy.id).payload["email"] == "[ERASED]"
+
+      audit = Repo.get_by!(AuditEvent, event_type: :data_subject_erasure)
+      assert audit.payload["audit_events_redacted"] == 3
+
+      assert audit.payload["redacted_audit_event_ids"] == [
+               legacy.id,
+               unscoped_legacy.id,
+               shared.id
+             ]
+
+      refute Jason.encode!(audit.payload) =~ "pat@example.com"
+    end
+
+    test "leaves unrelated organizations, tenant evidence and staff actions intact", ctx do
+      other_tenant =
+        %Custyard.Tenant{}
+        |> Custyard.Tenant.changeset(%{
+          name: "Other tenant",
+          slug: "audit-other-#{System.unique_integer([:positive])}"
+        })
+        |> Repo.insert!()
+
+      other_org = insert_organization(tenant_id: other_tenant.id)
+      other_thread = insert_thread(organization_id: other_org.id)
+
+      records = [
+        legacy_audit(%{
+          organization_id: other_org.id,
+          thread_id: other_thread.id,
+          message_id: "<pat@example.com>",
+          payload: %{"sender_email" => "pat@example.com", "subject" => "Other tenant"}
+        }),
+        legacy_audit(%{
+          organization_id: ctx.org.id,
+          thread_id: ctx.sent.thread_id,
+          payload: %{"sender_email" => "alice@example.com", "subject" => "Alice's thread"}
+        }),
+        legacy_audit(%{
+          payload: %{"sender_email" => "pat@example.com", "subject" => "No organization scope"}
+        }),
+        legacy_audit(%{
+          event_type: :acknowledgment_replayed,
+          organization_id: ctx.org.id,
+          message_id: "<pat@example.com>",
+          payload: %{
+            "submission_id" => "pat@example.com",
+            "body_sha256" => String.duplicate("a", 64)
+          }
+        }),
+        legacy_audit(%{
+          event_type: :staff_created,
+          organization_id: ctx.org.id,
+          message_id: "<pat@example.com>",
+          payload: %{"email" => "pat@example.com", "staff_id" => 17}
+        })
+      ]
+
+      assert {:ok, counts} =
+               DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
+
+      assert counts.audit_events_redacted == 0
+      for record <- records, do: assert(Repo.get!(AuditEvent, record.id) == record)
+    end
+
+    test "erases matching Message-IDs and nested legacy content without matching other mailboxes",
+         ctx do
+      target =
+        legacy_audit(%{
+          organization_id: ctx.org.id,
+          message_id: "<PAT@example.com>",
+          payload: nil
+        })
+
+      nested =
+        legacy_audit(%{
+          organization_id: ctx.org.id,
+          payload: %{
+            "envelope" => %{"sender_email" => "pat@example.com", "subject" => "Private subject"}
+          }
+        })
+
+      embedded =
+        legacy_audit(%{
+          organization_id: ctx.org.id,
+          payload: %{"reason" => "Cannot deliver to PAT@example.com."}
+        })
+
+      triaged =
+        legacy_audit(%{
+          event_type: :inbound_triaged,
+          organization_id: ctx.org.id,
+          message_id: "<pat@example.com>",
+          payload: %{"class" => "no_channel", "route_id" => 7}
+        })
+
+      unrelated =
+        for address <- ["notpat@example.com", "pat@example.com.au", "pat@example.com-other"] do
+          legacy_audit(%{
+            organization_id: ctx.org.id,
+            message_id: "<#{address}>",
+            payload: %{"sender_email" => address, "subject" => "Other person's subject"}
+          })
+        end
+
+      nullable = legacy_audit(%{organization_id: ctx.org.id, payload: nil})
+
+      assert {:ok, counts} =
+               DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
+
+      assert counts.audit_events_redacted == 4
+      assert Repo.get!(AuditEvent, triaged.id).message_id == "[ERASED]"
+      assert Repo.get!(AuditEvent, triaged.id).payload == triaged.payload
+      assert Repo.get!(AuditEvent, target.id).message_id == "[ERASED]"
+      assert Repo.get!(AuditEvent, target.id).payload == nil
+      assert Repo.get!(AuditEvent, nested.id).payload["envelope"]["subject"] == "[ERASED]"
+      assert Repo.get!(AuditEvent, embedded.id).payload["reason"] == "[ERASED]"
+      for record <- [nullable | unrelated], do: assert(Repo.get!(AuditEvent, record.id) == record)
+
+      assert {:ok, %{audit_events_redacted: 0}} =
+               DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
+    end
+
+    test "audit redaction rolls back when the erasure evidence cannot be persisted", ctx do
+      legacy =
+        legacy_audit(%{
+          organization_id: ctx.org.id,
+          thread_id: ctx.own.id,
+          payload: %{"sender_email" => "pat@example.com", "subject" => "My order"}
+        })
+
+      Repo.query!("""
+      CREATE TRIGGER refuse_contact_audit BEFORE INSERT ON audit_events
+      WHEN NEW.event_type = 'data_subject_erasure'
+      BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END
+      """)
+
+      try do
+        assert_raise Exqlite.Error, fn ->
+          DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
+        end
+
+        assert Repo.get!(AuditEvent, legacy.id) == legacy
+        assert Repo.get!(Contact, ctx.pat.id)
+        assert Repo.get!(Message, ctx.own_message.id).body == "Order 42 for Pat"
+      after
+        Repo.query!("DROP TRIGGER refuse_contact_audit")
+      end
+    end
+
+    test "audit redaction requires an explicit transaction and valid address", ctx do
+      assert_raise ArgumentError, "audit redaction requires a transaction", fn ->
+        AuditEvent.redact_subject_data("pat@example.com", ctx.org.id, [])
+      end
+
+      assert_raise ArgumentError, "audit redaction requires a valid address", fn ->
+        Repo.transaction(fn -> AuditEvent.redact_subject_data("", ctx.org.id, []) end)
+      end
+    end
+
     test "writes one audit event with counts and no address", ctx do
       DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
 
@@ -645,5 +866,22 @@ defmodule Custyard.DataSubjectsTest do
       assert event.payload["messages_erased"] == 2
       refute Jason.encode!(event.payload) =~ "pat"
     end
+  end
+
+  # Rows as earlier releases stored them, bypassing the payload allowlist.
+  # Every stored row carries its tenant; default to the audited customer's.
+  defp legacy_audit(attrs) do
+    tenant_id =
+      case attrs do
+        %{tenant_id: id} -> id
+        %{organization_id: id} -> Repo.get!(Custyard.Organization, id).tenant_id
+        _ -> Custyard.Factory.factory_tenant_id()
+      end
+
+    struct(
+      AuditEvent,
+      Map.merge(%{event_type: :webhook_received, source: "email", tenant_id: tenant_id}, attrs)
+    )
+    |> Repo.insert!()
   end
 end

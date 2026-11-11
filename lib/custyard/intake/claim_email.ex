@@ -22,7 +22,7 @@ defmodule Custyard.Intake.ClaimEmail do
 
   import Swoosh.Email
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.{RateLimit, Slug}
   alias Custyard.Intake.EmailBranding
@@ -76,9 +76,15 @@ defmodule Custyard.Intake.ClaimEmail do
 
   defp deliver(email, slug, config) do
     if Application.get_env(:custyard, :deliver_replies_async?, true) do
-      case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn ->
-             do_deliver(email, slug, config)
-           end) do
+      case Task.Supervisor.start_child(
+             Custyard.TaskSupervisor,
+             Log.task(
+               fn ->
+                 do_deliver(email, slug, config)
+               end,
+               slug_id: slug.id
+             )
+           ) do
         {:ok, _pid} -> {:ok, :queued}
         {:error, _reason} -> {:error, :queue_failed}
       end
@@ -90,12 +96,12 @@ defmodule Custyard.Intake.ClaimEmail do
   defp do_deliver(email, slug, config) do
     case Custyard.Mailer.deliver(email, config) do
       {:ok, _metadata} = result ->
-        Logger.info("Slug claim confirmation sent for #{slug.slug}")
+        Log.info(:claim_confirmation_email_accepted, slug_id: slug.id)
         result
 
-      {:error, _reason} = error ->
+      {:error, reason} = error ->
         # The claim row is untouched: it stays intact and re-sendable.
-        Logger.error("Failed to send slug claim confirmation for #{slug.slug}")
+        Log.error(:claim_confirmation_email_failed, [slug_id: slug.id] ++ Log.failure(reason))
 
         error
     end

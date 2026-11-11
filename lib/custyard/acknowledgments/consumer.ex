@@ -1,7 +1,7 @@
 defmodule Custyard.Acknowledgments.Consumer do
   @moduledoc "Single bounded consumer: commit first, acknowledge second; transfers confirm first."
   use GenServer
-  require Logger
+  require Custyard.Log, as: Log
   alias Custyard.Acknowledgments.{Broker, Config, Evidence, Topology}
 
   # Failure headers, and so the staff UI, only ever carry one of these.
@@ -46,9 +46,7 @@ defmodule Custyard.Acknowledgments.Consumer do
       _error ->
         publish_status(:invalid_config)
 
-        Logger.warning("Tenant acknowledgment subscription is invalid; consumer not started",
-          tenant_id: tenant_id
-        )
+        Log.warning(:acknowledgment_configuration_invalid, tenant_id: tenant_id)
 
         :ignore
     end
@@ -87,12 +85,12 @@ defmodule Custyard.Acknowledgments.Consumer do
             publish_status(:connected)
             {:noreply, %{state | connection: connection, channel: channel, consumer_tag: tag}}
 
-          _ ->
-            reconnect(state)
+          error ->
+            reconnect(state, error)
         end
 
-      {:error, _} ->
-        reconnect(state)
+      {:error, reason} ->
+        reconnect(state, reason)
     end
   end
 
@@ -102,60 +100,63 @@ defmodule Custyard.Acknowledgments.Consumer do
         {:basic_deliver, body, %{consumer_tag: tag} = meta},
         %{consumer_tag: tag} = state
       ) do
-    case process(body, state.config[:tenant_id], state.config[:source]) do
-      {:ok, record} ->
-        Logger.info("Acknowledgment committed",
-          source: record.source,
-          submission_id: record.submission_id
-        )
+    Log.operation([], fn ->
+      case process(body, state.config[:tenant_id], state.config[:source]) do
+        {:ok, record} ->
+          Log.info(:acknowledgment_committed,
+            acknowledgment_id: record.id,
+            submission_ref:
+              Log.reference(:erlang.term_to_binary({record.source, record.submission_id}))
+          )
 
-        case ack(state.channel, meta.delivery_tag) do
-          :ok -> {:noreply, state}
-          _ -> reconnect(state)
-        end
+          case ack(state.channel, meta.delivery_tag) do
+            :ok -> {:noreply, state}
+            error -> reconnect(state, error)
+          end
 
-      {:error, reason} ->
-        attempt = attempts(meta[:headers]) + 1
+        {:error, reason} ->
+          attempt = attempts(meta[:headers]) + 1
 
-        queue =
-          if reason != :tenant_suspended and attempt <= length(state.config[:retry_delays]),
-            do: Topology.retry(state.config, attempt),
-            else: Topology.failure(state.config)
+          queue =
+            if reason != :tenant_suspended and attempt <= length(state.config[:retry_delays]),
+              do: Topology.retry(state.config, attempt),
+              else: Topology.failure(state.config)
 
-        headers = [
-          {"custyard-attempt", :long, attempt},
-          {"custyard-failure", :longstr, failure_reason(reason)}
-        ]
+          headers = [
+            {"custyard-attempt", :long, attempt},
+            {"custyard-failure", :longstr, failure_reason(reason)}
+          ]
 
-        Logger.warning(
-          "Acknowledgment processing failed; transferring to #{queue}: #{failure_reason(reason)}",
-          trace(body, state.config[:source])
-        )
+          Log.warning(
+            :acknowledgment_processing_failed,
+            trace(body, state.config[:source]) ++ Log.failure(reason)
+          )
 
-        with :ok <-
-               Broker.publish(
-                 state.connection,
-                 queue,
-                 body,
-                 headers,
-                 state.config[:confirm_timeout]
-               ),
-             :ok <- ack(state.channel, meta.delivery_tag) do
-          {:noreply, state}
-        else
-          _ -> reconnect(state)
-        end
-    end
+          with :ok <-
+                 Broker.publish(
+                   state.connection,
+                   queue,
+                   body,
+                   headers,
+                   state.config[:confirm_timeout]
+                 ),
+               :ok <- ack(state.channel, meta.delivery_tag) do
+            {:noreply, state}
+          else
+            error -> reconnect(state, error)
+          end
+      end
+    end)
   end
 
   def handle_info({:basic_deliver, _, _}, state), do: {:noreply, state}
 
-  def handle_info({:DOWN, ref, :process, _, _}, state) do
-    if ref in state.monitors, do: reconnect(state), else: {:noreply, state}
+  def handle_info({:DOWN, ref, :process, _, reason}, state) do
+    if ref in state.monitors, do: reconnect(state, reason), else: {:noreply, state}
   end
 
   def handle_info({:basic_cancel, %{consumer_tag: tag}}, %{consumer_tag: tag} = state),
-    do: reconnect(state)
+    do: reconnect(state, :subscription_cancelled)
 
   def handle_info({:basic_cancel, _}, state), do: {:noreply, state}
   def handle_info({:basic_consume_ok, _}, state), do: {:noreply, state}
@@ -206,9 +207,9 @@ defmodule Custyard.Acknowledgments.Consumer do
          {:ok, event} when is_map(event) <- Jason.decode(body),
          id when is_binary(id) <- event["submission_id"],
          true <- Evidence.valid_identity?(id) do
-      [source: source, submission_id: id]
+      [submission_ref: Log.reference(:erlang.term_to_binary({source, id}))]
     else
-      _ -> [source: source]
+      _ -> []
     end
   end
 
@@ -225,8 +226,12 @@ defmodule Custyard.Acknowledgments.Consumer do
   defp publish_status(status),
     do: :persistent_term.put({@status_key, Process.get(:acknowledgment_tenant_id)}, status)
 
-  defp reconnect(state) do
-    Logger.warning("Acknowledgment broker unavailable; connection retry scheduled")
+  defp reconnect(state, reason) do
+    Log.warning(
+      :acknowledgment_broker_unavailable,
+      [outcome: :retrying, retry_after_ms: state.config[:reconnect_delay]] ++ Log.failure(reason)
+    )
+
     publish_status(:connecting)
     Enum.each(state.monitors, &Process.demonitor(&1, [:flush]))
     close_subscription(state)

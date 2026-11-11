@@ -64,6 +64,8 @@ jobs:
       - run: mix format --check-formatted
       - run: mix test
       - run: mix credo --strict
+      - name: Test promotion validation
+        run: python3 -m unittest discover -s .github/scripts -p promotion_test.py
 
   # The suite again over the Turso driver (Custyard.Turso.Connection, Hrana
   # over HTTP) against a real libSQL server, the server Turso runs. One test
@@ -73,6 +75,10 @@ jobs:
   turso:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [turso, bunny]
 
     services:
       libsql:
@@ -82,6 +88,7 @@ jobs:
 
     env:
       TURSO_TEST_URL: libsql://127.0.0.1:8080?tls=0
+      TURSO_TEST_PROVIDER: ${{ matrix.provider }}
 
     steps:
       - uses: actions/checkout@v7
@@ -166,3 +173,108 @@ jobs:
       - run: mix sobelow --exit
       - run: mix hex.audit
       - run: mix deps.audit
+
+  # Validate the deployable image on PRs/manual runs without registry credentials.
+  # Pushes to main build it in publish, after all application checks succeed.
+  container:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Record build time
+        id: build_time
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Build release image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Containerfile
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.build_time.outputs.value }}
+          load: true
+          tags: custyard:test
+          cache-from: type=gha,scope=custyard-container
+          cache-to: type=gha,mode=max,scope=custyard-container
+      - name: Smoke test release image
+        run: bin/container-smoke-test custyard:test
+
+  publish:
+    needs: [test, turso, release, security]
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'custyard/custyard'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/custyard/custyard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Record build time
+        id: build_time
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Build and publish release image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Containerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          # Baked into the release for Custyard.Boot.Build (boot report, doctor card).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.build_time.outputs.value }}
+          cache-from: type=gha,scope=custyard-container
+          cache-to: type=gha,mode=max,scope=custyard-container
+      - name: Record published image
+        env:
+          COMMIT: ${{ github.sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          digest = os.environ["DIGEST"]
+          assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), "Build did not return an immutable digest"
+          record = {"version": 1, "repository": os.environ["GITHUB_REPOSITORY"],
+                    "image": os.environ["IMAGE"], "source_sha": os.environ["COMMIT"],
+                    "digest": digest, "run_id": int(os.environ["GITHUB_RUN_ID"]),
+                    "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"])}
+          with open("published-image.json", "w", encoding="utf-8") as output:
+              json.dump(record, output, sort_keys=True)
+              output.write("\n")
+          PY
+          printf 'Published: %s:sha-%s\n\nDeploy by digest: %s@%s\n' \
+            "$IMAGE" "$COMMIT" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - name: Save immutable published image record
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: published-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: published-image.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+          archive: true

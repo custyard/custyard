@@ -281,7 +281,7 @@ defmodule Custyard.OrganizationsTest do
 
       assert event.organization_id == converted.organization_id
       assert event.payload["staff_id"] == staff.id
-      assert event.payload["staff_email"] == staff.email
+      assert event.payload == %{"staff_id" => staff.id}
     end
 
     test "refuses a thread already linked to an organization", %{staff: staff} do

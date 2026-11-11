@@ -1,7 +1,7 @@
 defmodule Custyard.Notifications.TenantDelivery do
   @moduledoc false
   import Ecto.Query
-  require Logger
+  require Custyard.Log, as: Log
   alias Custyard.{StaffAccount, Repo}
   alias Custyard.Intake.EmailBranding
 
@@ -53,7 +53,7 @@ defmodule Custyard.Notifications.TenantDelivery do
   end
 
   defp skip(id, reason) do
-    Logger.info("tenant_notification_skipped", tenant_id: id, reason: reason)
+    Log.info(:tenant_notification_skipped, tenant_id: id, reason: reason)
     {:error, reason}
   end
 end

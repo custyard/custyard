@@ -1,8 +1,8 @@
 defmodule Custyard.Turso.Protocol do
   @moduledoc """
-  Hrana 3 over HTTP, the JSON protocol Turso and libSQL servers speak.
+  Hrana 2 and 3 over HTTP, the JSON protocol Bunny and Turso speak.
 
-  A client POSTs a pipeline to `/v3/pipeline`: a list of stream requests and
+  A client POSTs a pipeline to `/v2/pipeline` or `/v3/pipeline`: stream requests and
   an optional baton. Without a baton the server opens a new stream, which is
   one SQLite connection on its side; the response returns a baton that names
   the stream for the next pipeline, until a `close` request ends it. Every
@@ -12,8 +12,6 @@ defmodule Custyard.Turso.Protocol do
   This module only builds and reads the JSON. `Custyard.Turso.Connection`
   decides which requests to send.
   """
-
-  @pipeline_path "/v3/pipeline"
 
   # sqld prefixes SQLite's own message. Ecto.Adapters.SQLite3 recognises
   # constraint violations by matching that message from its first character,
@@ -27,7 +25,9 @@ defmodule Custyard.Turso.Protocol do
           path: String.t()
         }
 
-  def pipeline_path(%{path: path}), do: path <> @pipeline_path
+  def pipeline_path(endpoint, protocol \\ :v3)
+  def pipeline_path(%{path: path}, :v2), do: path <> "/v2/pipeline"
+  def pipeline_path(%{path: path}, :v3), do: path <> "/v3/pipeline"
 
   @doc """
   Parses a database URL into the endpoint the HTTP client connects to.
@@ -36,22 +36,51 @@ defmodule Custyard.Turso.Protocol do
   server on plain HTTP. `https://` and `http://` URLs are taken as they are.
   """
   @spec parse_url(String.t()) :: {:ok, endpoint} | {:error, String.t()}
-  def parse_url(url) when is_binary(url) do
+  def parse_url(url, protocol \\ :v3)
+
+  def parse_url(url, protocol) when is_binary(url) do
     uri = URI.parse(url)
 
     with {:ok, scheme} <- scheme(uri),
-         {:ok, host} <- host(uri) do
+         {:ok, host} <- host(uri),
+         :ok <- safe_url(uri),
+         {:ok, path} <- database_path(uri.path, protocol) do
       {:ok,
        %{
          scheme: scheme,
          host: host,
          port: uri.port || default_port(scheme),
-         path: String.trim_trailing(uri.path || "", "/")
+         path: path
        }}
     end
+  rescue
+    ArgumentError -> {:error, "database URL is invalid"}
   end
 
-  def parse_url(other), do: {:error, "expected a database URL, got #{inspect(other)}"}
+  def parse_url(_other, _protocol), do: {:error, "expected a database URL"}
+
+  defp safe_url(%URI{userinfo: nil, fragment: nil, query: query})
+       when query in [nil, "tls=0", "tls=1"],
+       do: :ok
+
+  defp safe_url(_uri),
+    do: {:error, "database URL must not contain credentials, fragments or extra query parameters"}
+
+  defp database_path(path, protocol) do
+    path = String.trim_trailing(path || "", "/")
+    expected = if protocol == :v2, do: "/v2/pipeline", else: "/v3/pipeline"
+
+    cond do
+      String.ends_with?(path, expected) ->
+        {:ok, String.replace_suffix(path, expected, "")}
+
+      Regex.match?(~r{/v[0-9]+/pipeline$}, path) ->
+        {:error, "database URL pipeline version conflicts with the database provider"}
+
+      true ->
+        {:ok, path}
+    end
+  end
 
   defp scheme(%URI{scheme: "libsql", query: query}) do
     tls = query |> to_string() |> URI.decode_query() |> Map.get("tls")
@@ -75,6 +104,60 @@ defmodule Custyard.Turso.Protocol do
   def execute(sql, args), do: %{"type" => "execute", "stmt" => stmt(sql, args)}
 
   def get_autocommit, do: %{"type" => "get_autocommit"}
+
+  # V2 has no get_autocommit. A conditional batch guarantees a standalone
+  # operation reaches the primary and cannot run if BEGIN failed. Closing
+  # the stream rolls back if the statement or COMMIT failed.
+  def primary_batch([statement]) do
+    %{
+      "type" => "batch",
+      "batch" => %{
+        "steps" => [
+          %{"stmt" => stmt("BEGIN TRANSACTION", [])},
+          %{"condition" => %{"type" => "ok", "step" => 0}, "stmt" => statement["stmt"]},
+          %{"condition" => %{"type" => "ok", "step" => 1}, "stmt" => stmt("COMMIT", [])}
+        ]
+      }
+    }
+  end
+
+  def guarded_batch(statements, transition?, active?) do
+    release = stmt("RELEASE SAVEPOINT custyard_transaction_guard", [])
+    savepoint = stmt("SAVEPOINT custyard_transaction_guard", [])
+    statements = Enum.map(statements, & &1["stmt"])
+
+    if transition? do
+      prefix = if active?, do: [release], else: []
+
+      steps =
+        (prefix ++ statements ++ [savepoint])
+        |> Enum.with_index()
+        |> Enum.map(fn
+          {stmt, 0} ->
+            %{"stmt" => stmt}
+
+          {stmt, index} ->
+            %{"stmt" => stmt, "condition" => %{"type" => "ok", "step" => index - 1}}
+        end)
+
+      {%{"type" => "batch", "batch" => %{"steps" => steps}}, length(prefix)}
+    else
+      # Assert continuity before allowing SQL and again afterwards. An error
+      # may roll SQLite back; the guard must never create a new transaction
+      # in that case. Ordinary constraint errors retain the outer transaction.
+      [statement] = statements
+
+      steps = [
+        %{"stmt" => release},
+        %{"stmt" => savepoint, "condition" => %{"type" => "ok", "step" => 0}},
+        %{"stmt" => statement, "condition" => %{"type" => "ok", "step" => 1}},
+        %{"stmt" => release, "condition" => %{"type" => "ok", "step" => 1}},
+        %{"stmt" => savepoint, "condition" => %{"type" => "ok", "step" => 3}}
+      ]
+
+      {%{"type" => "batch", "batch" => %{"steps" => steps}}, 2}
+    end
+  end
 
   def close, do: %{"type" => "close"}
 

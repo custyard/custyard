@@ -4,7 +4,7 @@ defmodule Custyard.Notifications.Email do
   Each tenant uses its staff recipients and sending credentials.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
   alias Custyard.Notifications.TenantDelivery
 
   @doc """
@@ -61,9 +61,10 @@ defmodule Custyard.Notifications.Email do
   end
 
   defp log_channel_quiet(channel) do
-    Logger.info(
-      "[Email stub] Quiet channel notice would be sent: channel #{channel.id} " <>
-        "quiet for more than #{channel.quiet_after_hours}h"
+    Log.info(:channel_quiet_notification_stubbed,
+      channel_id: channel.id,
+      quiet_after_hours: channel.quiet_after_hours,
+      mode: :stub
     )
 
     :ok
@@ -83,7 +84,10 @@ defmodule Custyard.Notifications.Email do
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to send quiet channel notice for channel #{channel.id}")
+        Log.error(
+          :channel_quiet_notification_failed,
+          [channel_id: channel.id] ++ Log.failure(reason)
+        )
 
         {:error, reason}
     end
@@ -133,9 +137,11 @@ defmodule Custyard.Notifications.Email do
   end
 
   defp log_delivery_failure(thread, status) do
-    Logger.info(
-      "[Email stub] Delivery failure notice would be sent: thread #{thread.id} " <>
-        "reply #{status}"
+    Log.info(:delivery_failure_notification_stubbed,
+      thread_id: thread.id,
+      tenant_id: thread.tenant_id,
+      status: status,
+      mode: :stub
     )
 
     :ok
@@ -155,7 +161,11 @@ defmodule Custyard.Notifications.Email do
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to send delivery failure notice for thread #{thread.id}")
+        Log.error(
+          :delivery_failure_notification_failed,
+          [thread_id: thread.id, tenant_id: thread.tenant_id] ++
+            Log.failure(reason)
+        )
 
         {:error, reason}
     end
@@ -227,13 +237,12 @@ defmodule Custyard.Notifications.Email do
   defp tenant_display(tenant_id), do: Custyard.Tenants.get_tenant!(tenant_id).name
 
   defp log_neglect_alert(thread, level) do
-    Logger.info("""
-    [Email stub] Neglect alert would be sent:
-      Level: #{level}
-      Thread: #{thread.id} - #{thread.subject}
-      Organization: #{organization_display(thread.organization)}
-      Contact: #{contact_display(thread.contact)}
-    """)
+    Log.info(:neglect_notification_stubbed,
+      thread_id: thread.id,
+      tenant_id: thread.tenant_id,
+      notification_level: level,
+      mode: :stub
+    )
 
     :ok
   end
@@ -252,7 +261,12 @@ defmodule Custyard.Notifications.Email do
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to send neglect alert email")
+        Log.error(
+          :neglect_notification_failed,
+          [thread_id: thread.id, tenant_id: thread.tenant_id] ++
+            Log.failure(reason)
+        )
+
         {:error, reason}
     end
   end

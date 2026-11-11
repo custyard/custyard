@@ -1,0 +1,29 @@
+<%!-- Root layout for the doctor and first-run cards (CustyardWeb.BootController).
+     Rendered by CustyardWeb.Plugs.BootGate before Plug.Session and the router:
+     no CSRF token, no tenant lookup, no app.js (LiveView would need
+     check_origin to agree with the PHX_HOST being fixed). Only the compiled
+     stylesheet. :refresh (seconds) adds a meta refresh for cards that change
+     without a restart. --%>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta :if={assigns[:refresh]} http-equiv="refresh" content={to_string(@refresh)} />
+    <title>{assigns[:page_title] || "Custyard"}</title>
+    <link rel="icon" href={~p"/favicon.svg"} type="image/svg+xml" />
+    <link rel="stylesheet" href={~p"/assets/app.css"} />
+  </head>
+  <body
+    class="min-h-screen bg-zinc-100 text-zinc-900 antialiased dark:bg-zinc-900 dark:text-zinc-100"
+    data-testid="boot-layout-body"
+  >
+    <main class="px-4 py-10 sm:px-6">
+      <div class="mx-auto max-w-2xl">
+        {@inner_content}
+      </div>
+    </main>
+  </body>
+</html>

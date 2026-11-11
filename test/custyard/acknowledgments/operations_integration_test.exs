@@ -220,7 +220,6 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
       assert replayed.payload == %{
                "actor" => "staff",
                "staff_id" => staff.id,
-               "staff_email" => staff.email,
                "source" => "ots.integration",
                "submission_id" => "audited",
                "body_sha256" => sha256(body("audited")),
@@ -246,7 +245,7 @@ defmodule Custyard.Acknowledgments.OperationsIntegrationTest do
                    {:error, :audit_failed}
         end)
 
-      assert log =~ "Failed to record acknowledgment_replayed audit event"
+      assert log =~ "acknowledgment_audit_record_failed"
       assert Operations.error_message(:audit_failed) =~ "nothing was replayed"
       Repo.query!("DROP TRIGGER refuse_audit")
 

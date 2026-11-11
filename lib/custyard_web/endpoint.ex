@@ -1,4 +1,7 @@
 defmodule CustyardWeb.Endpoint do
+  # Wrap Phoenix's generated call/2 so origin authentication also precedes
+  # socket_dispatch, which bypasses ordinary endpoint plugs for LiveView.
+  use CustyardWeb.Proxy
   # Sentry.PlugCapture wraps the whole plug stack to report exceptions raised
   # anywhere in it. It must come before `use Phoenix.Endpoint`. When no DSN is
   # configured (dev/test) it is a no-op.
@@ -102,6 +105,11 @@ defmodule CustyardWeb.Endpoint do
     gzip: false,
     only: CustyardWeb.static_paths()
 
+  # Boot verdict gate: doctor cards and 503s while the app cannot run, the
+  # first-run card on "/". Before anything that could touch the Repo or the
+  # session (UploadedFiles reads config only, but keep the gate first).
+  plug CustyardWeb.Plugs.BootGate
+
   # Serve uploaded files from persistent storage directory (configurable via :upload_dir)
   plug CustyardWeb.Plugs.UploadedFiles
 
@@ -112,11 +120,12 @@ defmodule CustyardWeb.Endpoint do
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :custyard
   end
 
-  plug Plug.RequestId
+  plug :server_request_id
+  plug CustyardWeb.Plugs.RequestLog
 
   plug Plug.Telemetry,
     event_prefix: [:phoenix, :endpoint],
-    log: {__MODULE__, :request_log_level, []}
+    log: false
 
   @doc false
   # Custyard's bearer credentials travel in the path: thread resume
@@ -129,20 +138,13 @@ defmodule CustyardWeb.Endpoint do
     if Custyard.Sentry.token_path?(path), do: false, else: :info
   end
 
-  # Debug plug for origin header diagnosis. Uncomment to trace check_origin issues.
-  # See: docs/lessons-learned/06-phoenix-check-origin-fly.md, PR #34
-  # plug :log_origin_header
-  #
-  # defp log_origin_header(conn, _opts) do
-  #   require Logger
-  #   origin = Plug.Conn.get_req_header(conn, "origin")
-  #   host_header = Plug.Conn.get_req_header(conn, "host")
-  #   Logger.debug(
-  #     "[OriginDebug] path=#{conn.request_path} origin=#{inspect(origin)} " <>
-  #       "host=#{inspect(host_header)} conn.host=#{inspect(conn.host)} conn.scheme=#{inspect(conn.scheme)}"
-  #   )
-  #   conn
-  # end
+  # Incoming request IDs are untrusted strings and can themselves contain a
+  # credential or personal data. Correlation uses a fresh server-generated ID.
+  defp server_request_id(conn, _opts) do
+    conn
+    |> Plug.Conn.delete_req_header("x-request-id")
+    |> Plug.RequestId.call(Plug.RequestId.init([]))
+  end
 
   # Parsers for supported content types.
   # pass: restricts which additional content types pass through unparsed.
@@ -176,17 +178,8 @@ defmodule CustyardWeb.Endpoint do
     Plug.Session.call(conn, Plug.Session.init(session_options(realm)))
   end
 
-  # Trust Fly.io proxy headers - rewrites conn.scheme/port from x-forwarded-*
-  # Required for check_origin validation (Origin scheme must match conn.scheme).
-  # X-Forwarded-Host is deliberately NOT trusted: the proxy preserves the
-  # Host header, and CustyardWeb.Plugs.CustomDomain resolves conn.host to an
-  # organization's white-label portal, so honoring a client-supplied
-  # X-Forwarded-Host let anyone reach any organization's portal without its
-  # token by naming its (public) custom domain in that header.
-  plug Plug.RewriteOn, [:x_forwarded_port, :x_forwarded_proto]
-
   # Attach request context (method, scrubbed URL, headers) to Sentry events.
-  # Placed after RewriteOn so the URL reflects the real external scheme/host.
+  # The outer proxy wrapper already resolved the external scheme.
   # url_scrubber redacts bearer tokens in the path (Custyard's tokens live in
   # the path, which the default scrubber does not cover); body_scrubber sends no
   # params (public-intake bodies carry prospect PII). Default header/cookie
