@@ -26,6 +26,16 @@
   }
 }
 
+/* Secondary row controls (queue snooze and rank, task edit and delete).
+   Always visible where there is no hover (touch); with a pointer they appear
+   when the enclosing .group is hovered, holds focus, or has one of them open. */
+@media (hover: hover) {
+  .hover-reveal { opacity: 0; }
+  .group:hover .hover-reveal,
+  .group:focus-within .hover-reveal,
+  .hover-reveal[data-open="true"] { opacity: 1; }
+}
+
 /* Sanitised inbound email HTML (Custyard.Email.HtmlSanitizer). Preflight
    removes list and heading styles; restore the few the allowlist keeps and
    fence the content so a wide table or long URL cannot widen the thread. */
@@ -56,3 +66,12 @@
 .email-html table { display: block; overflow-x: auto; border-collapse: collapse; }
 .email-html td, .email-html th { padding: 0.125rem 0.375rem; vertical-align: top; }
 .email-html img { display: inline-block; max-width: 100%; height: auto; }
+/* The staff theme follows the system colour scheme; keep links and quotes
+   readable on the dark message surface. */
+@media (prefers-color-scheme: dark) {
+  .email-html a { color: var(--color-indigo-300); }
+  .email-html blockquote {
+    border-inline-start-color: var(--color-zinc-600);
+    color: var(--color-zinc-400);
+  }
+}
