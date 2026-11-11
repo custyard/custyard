@@ -2,6 +2,9 @@ defmodule Custyard.InstanceAdmins do
   @moduledoc "Installation administrator provisioning and removal."
   import Ecto.Query
   alias Custyard.{Auth.Account, InstanceAdmin, Repo}
+
+  require Custyard.Log, as: Log
+
   def get_by_email(email), do: Repo.get_by(InstanceAdmin, email: Account.normalize_email(email))
   def list_admins, do: Repo.all(from a in InstanceAdmin, order_by: a.id)
 
@@ -19,6 +22,7 @@ defmodule Custyard.InstanceAdmins do
               payload: %{instance_admin_id: admin.id}
             })
 
+            Log.info(:instance_admin_created, instance_admin_id: admin.id)
             {:created, admin}
 
           {:error, changeset} ->
@@ -28,6 +32,15 @@ defmodule Custyard.InstanceAdmins do
   end
 
   def remove_admin(email) do
+    result = delete_admin(email)
+
+    with {:ok, removed} <- result,
+         do: Log.info(:instance_admin_removed, instance_admin_id: removed.id)
+
+    result
+  end
+
+  defp delete_admin(email) do
     Repo.transaction(
       fn ->
         admin = get_by_email(email) || Repo.rollback(:not_found)

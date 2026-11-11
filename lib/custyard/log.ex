@@ -69,6 +69,8 @@ defmodule Custyard.Log do
     inbound_route_delete_failed
     inbound_route_sync_failed
     instance_admin_bootstrap_failed
+    instance_admin_created
+    instance_admin_removed
     intake_arrival_email_accepted
     intake_arrival_email_failed
     intake_arrival_email_rate_limited
@@ -135,6 +137,8 @@ defmodule Custyard.Log do
     slug_claim_expiry_completed
     slug_claim_expiry_failed
     slug_release_audit_record_failed
+    staff_account_created
+    staff_account_removed
     tenant_notification_skipped
     thread_enrichment_failed
     thread_enrichment_record_failed

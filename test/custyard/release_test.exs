@@ -176,9 +176,19 @@ defmodule Custyard.ReleaseTest do
   test "bootstrap provisions one normalized identity and rejects malformed configuration" do
     System.put_env("INSTANCE_ADMIN_EMAIL", " BOOTSTRAP@EXAMPLE.COM ")
 
-    assert Release.bootstrap_instance_admin() == :ok
+    Logger.put_module_level(InstanceAdmins, :info)
+    on_exit(fn -> Logger.delete_module_level(InstanceAdmins) end)
+
+    created_log =
+      capture_log([metadata: [:instance_admin_id]], fn ->
+        assert Release.bootstrap_instance_admin() == :ok
+      end)
+
     admin = InstanceAdmins.get_by_email("bootstrap@example.com")
     assert admin
+    assert created_log =~ "instance_admin_created"
+    assert created_log =~ "instance_admin_id=#{admin.id}"
+    refute String.downcase(created_log) =~ "bootstrap@example.com"
     assert Release.bootstrap_instance_admin() == :ok
     assert Repo.aggregate(InstanceAdmin, :count) == 1
 

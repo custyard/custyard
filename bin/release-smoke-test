@@ -96,7 +96,8 @@ if grep -q 'RELEASE_BOOT_PRIVATE_CANARY' "$work/bootstrap.log"; then
   echo "release eval leaked a raw diagnostic before server startup" >&2
   exit 1
 fi
-if ! grep -Fq '"event":"external_log"' "$work/bootstrap.log"; then
+if ! grep -Fq '"event":"external_log"' "$work/bootstrap.log" ||
+   ! grep -Fq '"event":"instance_admin_created"' "$work/bootstrap.log"; then
   echo "release eval did not emit expected structured privacy-safe events:" >&2
   cat "$work/bootstrap.log" >&2
   exit 1
