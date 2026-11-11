@@ -26,7 +26,9 @@ defmodule CustyardWeb.TenantStaffRemovalTest do
     refute has_element?(admin_view, "[data-testid=staff-#{c.agent.id}]")
     audit = Repo.get_by!(AuditEvent, event_type: :staff_removed)
     assert audit.payload["staff_id"] == c.agent.id
-    assert audit.source == "tenant:#{c.tenant.id}:staff:#{c.admin.id}"
+    assert audit.source == "staff"
+    assert audit.payload["actor_staff_id"] == c.admin.id
+    assert audit.tenant_id == c.tenant.id
     render_click(agent_view, "toggle_score", %{"id" => "1"})
     assert_redirect(agent_view, "/app/login")
   end

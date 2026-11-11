@@ -27,7 +27,7 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   import Swoosh.Email
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.Email.Headers
   alias Custyard.{Thread, IntakeSource, RateLimit, Tenants}
@@ -61,9 +61,10 @@ defmodule Custyard.Intake.ArrivalEmail do
       with :ok <- TenantDelivery.ready?(source.tenant_id) do
         case RateLimit.check_rate(:intake_arrival_email, {source.tenant_id, source.key}) do
           {:deny, _retry_after_ms} ->
-            Logger.warning(
-              "Intake arrival notification rate-limited for source #{source.key}; " <>
-                "thread #{thread.id} is in the queue but unannounced"
+            Log.warning(:intake_arrival_email_rate_limited,
+              thread_id: thread.id,
+              source_id: source.id,
+              tenant_id: source.tenant_id
             )
 
             {:error, :rate_limited}
@@ -96,9 +97,16 @@ defmodule Custyard.Intake.ArrivalEmail do
 
   defp deliver(email, thread) do
     if Application.get_env(:custyard, :deliver_replies_async?, true) do
-      case Task.Supervisor.start_child(Custyard.TaskSupervisor, fn ->
-             do_deliver(email, thread)
-           end) do
+      case Task.Supervisor.start_child(
+             Custyard.TaskSupervisor,
+             Log.task(
+               fn ->
+                 do_deliver(email, thread)
+               end,
+               thread_id: thread.id,
+               tenant_id: thread.tenant_id
+             )
+           ) do
         {:ok, _pid} -> {:ok, :queued}
         {:error, _reason} -> {:error, :queue_failed}
       end
@@ -110,15 +118,20 @@ defmodule Custyard.Intake.ArrivalEmail do
   defp do_deliver(email, thread) do
     case TenantDelivery.deliver(email, thread.tenant_id) do
       {:ok, _metadata} = result ->
-        Logger.info("Intake arrival notification sent for thread #{thread.id}")
+        Log.info(:intake_arrival_email_accepted,
+          thread_id: thread.id,
+          tenant_id: thread.tenant_id
+        )
+
         result
 
-      {:error, _reason} = error ->
+      {:error, reason} = error ->
         # The thread is committed and already in the queue; a failed
         # alert costs triage latency, not data.
-        Logger.error(
-          "Failed to send intake arrival notification for thread " <>
-            "#{thread.id}"
+        Log.error(
+          :intake_arrival_email_failed,
+          [thread_id: thread.id, tenant_id: thread.tenant_id] ++
+            Log.failure(reason)
         )
 
         error

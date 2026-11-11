@@ -26,7 +26,7 @@ defmodule CustyardWeb.Staff.SettingsLive do
       |> assign(:editing_intake, false)
       |> assign(
         :weight_form,
-        to_form(Map.new(weights, fn {key, value} -> {to_string(key), value} end), as: "weights")
+        weights_form(weights)
       )
       |> assign(:threshold_form, to_form(flatten_thresholds(thresholds), as: "thresholds"))
 
@@ -120,12 +120,7 @@ defmodule CustyardWeb.Staff.SettingsLive do
            socket
            |> assign(:weights, saved)
            |> assign(:editing_weights, false)
-           |> assign(
-             :weight_form,
-             to_form(Map.new(saved, fn {key, value} -> {to_string(key), value} end),
-               as: "weights"
-             )
-           )
+           |> assign(:weight_form, weights_form(saved))
            |> put_flash(:info, "Weights updated successfully")}
 
         {:error, _changeset} ->
@@ -253,6 +248,15 @@ defmodule CustyardWeb.Staff.SettingsLive do
 
   defp parse_int(num) when is_integer(num), do: num
   defp parse_int(_), do: :error
+
+  # Phoenix.HTML renders invalid atom-keyed form maps to stderr, bypassing
+  # Logger's privacy filter. Forms use string parameter keys; scoring keeps
+  # its separate atom-keyed weights map.
+  defp weights_form(weights) do
+    weights
+    |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    |> to_form(as: "weights")
+  end
 
   defp flatten_thresholds(thresholds) do
     Enum.reduce(thresholds, %{}, fn {tier, [warning, critical]}, acc ->

@@ -6,7 +6,7 @@ defmodule Custyard.Auth.LoginEmail do
   import Swoosh.Email
   alias Custyard.Auth.Account
 
-  require Logger
+  require Custyard.Log, as: Log
 
   def deliver_login_link(account, login_url) do
     email =
@@ -19,36 +19,23 @@ defmodule Custyard.Auth.LoginEmail do
       |> html_body(login_html(login_url))
       |> text_body(login_text(login_url))
 
-    Logger.info("account_login_delivery_started", account_id: account.id)
+    Log.info(:account_login_delivery_started, account_id: account.id)
 
     case Custyard.Mailer.deliver(email) do
       {:ok, _} = result ->
         # Provider acceptance does not establish inbox delivery.
-        Logger.info("account_login_provider_accepted", account_id: account.id)
+        Log.info(:account_login_provider_accepted, account_id: account.id)
         result
 
       {:error, reason} = error ->
-        Logger.info(
-          "account_login_provider_rejected",
-          [account_id: account.id] ++ failure_metadata(reason)
+        Log.info(
+          :account_login_provider_rejected,
+          [account_id: account.id] ++ Log.failure(reason)
         )
 
         error
     end
   end
-
-  # Provider errors can echo the email body, including the magic link. Only
-  # emit a numeric HTTP status or a fixed, known reason; never inspect them.
-  defp failure_metadata({status, _response}) when is_integer(status) and status in 100..599 do
-    [reason: :provider_response, provider_status: status]
-  end
-
-  defp failure_metadata(reason)
-       when reason in [:timeout, :closed, :econnrefused, :nxdomain, :from_not_set] do
-    [reason: reason]
-  end
-
-  defp failure_metadata(_reason), do: [reason: :delivery_error]
 
   defp from_address do
     Application.get_env(:custyard, :email_from_address, "noreply@custyard.local")

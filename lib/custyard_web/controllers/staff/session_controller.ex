@@ -6,13 +6,15 @@ defmodule CustyardWeb.Staff.SessionController do
   alias CustyardWeb.Live.StaffAuth
   alias CustyardWeb.Plugs.PublicRateLimit
 
-  require Logger
+  require Custyard.Log, as: Log
 
   # Base64url character class for validating token format
   @token_pattern ~r/^[A-Za-z0-9_-]+$/
 
-  plug :rate_limit_login,
-       [bucket: :account_login_ip] when action == :create
+  plug(
+    :rate_limit_login,
+    [bucket: :account_login_ip] when action == :create
+  )
 
   # Shows the flash set by whatever sent the staff here: the
   # :require_staff plug, the LiveView auth hooks, or logout.
@@ -32,7 +34,7 @@ defmodule CustyardWeb.Staff.SessionController do
 
     case RateLimit.check_rate(:account_login_email, {conn.assigns.host_tenant.id, email}) do
       {:deny, retry_after_ms} ->
-        Logger.info("account_login_skipped", reason: :email_rate_limited)
+        Log.info(:account_login_skipped, reason: :email_rate_limited)
 
         retry_after_s = max(div(retry_after_ms + 999, 1000), 1)
 
@@ -48,7 +50,7 @@ defmodule CustyardWeb.Staff.SessionController do
   end
 
   def create(conn, _params) do
-    Logger.info("account_login_skipped", reason: :missing_email)
+    Log.info(:account_login_skipped, reason: :missing_email)
 
     render(conn, :new,
       error: "Email is required.",
@@ -61,12 +63,12 @@ defmodule CustyardWeb.Staff.SessionController do
   defp rate_limit_login(conn, opts) do
     # Log before the IP limiter can halt, without recording submitted params.
     # Plug.RequestId metadata follows this synchronous request through delivery.
-    Logger.info("account_login_requested")
+    Log.info(:account_login_requested)
 
     conn = PublicRateLimit.call(conn, PublicRateLimit.init(opts))
 
     if conn.halted do
-      Logger.info("account_login_skipped", reason: :ip_rate_limited)
+      Log.info(:account_login_skipped, reason: :ip_rate_limited)
     end
 
     conn
@@ -76,16 +78,13 @@ defmodule CustyardWeb.Staff.SessionController do
     case Repo.get_by(StaffAccount, tenant_id: conn.assigns.host_tenant.id, email: email) do
       nil ->
         # Don't reveal whether the email exists — always show success page
-        Logger.info("account_login_skipped", reason: :unknown_account)
+        Log.info(:account_login_skipped, reason: :unknown_account)
 
       %StaffAccount{} = staff ->
         if StaffAccount.orphaned?(staff) do
           # An admin or agent whose organization was deleted gets no link;
           # the response below stays identical so this reveals nothing.
-          Logger.info("account_login_skipped",
-            reason: :no_organization,
-            staff_id: staff.id
-          )
+          Log.info(:account_login_skipped, reason: :no_organization, staff_id: staff.id)
         else
           send_login_link(staff, conn.assigns.host_tenant)
         end
@@ -151,6 +150,8 @@ defmodule CustyardWeb.Staff.SessionController do
   def consume(conn, %{"token" => token}) do
     with {:ok, staff} <- lookup_login_token(conn, token),
          :ok <- clear_login_token(staff, token) do
+      Log.info(:account_login_succeeded, staff_id: staff.id)
+
       conn
       |> configure_session(renew: true)
       |> put_session(:staff_id, staff.id)
@@ -160,9 +161,17 @@ defmodule CustyardWeb.Staff.SessionController do
       |> put_flash(:info, "Welcome back")
       |> redirect(to: ~p"/app")
     else
-      {:error, :expired} -> render_expired_token(conn)
-      {:error, :invalid} -> render_invalid_token(conn)
-      {:error, :no_organization} -> render_no_organization(conn)
+      {:error, :expired} ->
+        Log.info(:account_login_rejected, reason: :invalid_or_expired_token)
+        render_expired_token(conn)
+
+      {:error, :invalid} ->
+        Log.info(:account_login_rejected, reason: :invalid_or_expired_token)
+        render_invalid_token(conn)
+
+      {:error, :no_organization} ->
+        Log.info(:account_login_rejected, reason: :no_organization)
+        render_no_organization(conn)
     end
   end
 
@@ -201,6 +210,11 @@ defmodule CustyardWeb.Staff.SessionController do
   end
 
   def delete(conn, _params) do
+    # This is a signed session's identity snapshot, not a newly validated
+    # account. Keep it separate from staff_id and preserve logout's lack of
+    # a database dependency, including for expired or deleted accounts.
+    Log.info(:account_logout, session_staff_id: get_session(conn, :staff_id))
+
     conn
     |> delete_session(:staff_id)
     |> delete_session(:staff_claim)

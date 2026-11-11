@@ -7,7 +7,7 @@ defmodule Custyard.Webhooks.Purposes.Audit do
   Tolerates duplicates using message_id as a deduplication key at query time.
   """
 
-  require Logger
+  require Custyard.Log, as: Log
 
   alias Custyard.AuditEvent
 
@@ -30,19 +30,18 @@ defmodule Custyard.Webhooks.Purposes.Audit do
 
     case AuditEvent.create(attrs) do
       {:ok, _event} ->
-        Logger.info(
-          "Webhook audit: thread=#{thread.id} " <>
-            "source=#{attrs.source} " <>
-            "message_id=#{attrs.message_id} " <>
-            "org=#{route_context[:organization_id]} " <>
-            "project=#{route_context[:project_id]}"
+        Log.info(:webhook_audit_recorded,
+          thread_id: thread.id,
+          organization_id: route_context[:organization_id],
+          project_id: route_context[:project_id]
         )
 
         :ok
 
       {:error, changeset} ->
-        Logger.error(
-          "Audit persistence failed for thread #{thread.id}: #{inspect(changeset.errors)}"
+        Log.error(
+          :webhook_audit_record_failed,
+          [thread_id: thread.id] ++ Log.failure(changeset)
         )
 
         # Still return :ok to avoid blocking the webhook pipeline
@@ -50,7 +49,7 @@ defmodule Custyard.Webhooks.Purposes.Audit do
     end
   rescue
     error ->
-      Logger.error("Audit logging failed for thread #{thread.id}: #{inspect(error)}")
+      Log.error(:webhook_audit_failed, [thread_id: thread.id] ++ Log.failure(error))
 
       :ok
   end

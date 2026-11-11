@@ -38,26 +38,82 @@ INSTANCE_ADMIN_EMAIL=installer@example.com overmind start -f Procfile.dev
 ```
 
 Open `/admin/login` on the configured installation host. In development,
-login mail appears at `/dev/mailbox`. Configure a production system mailer
-with `MAIL_ADAPTER` and its credentials before starting a production instance.
-System login mail is independent of tenant support email configuration.
+login mail appears at `/dev/mailbox`. System login mail is independent of
+tenant support email configuration.
 
-Use the installation console to create a t󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 o󠄁n󠄁 i󠄁t󠄁s󠄁 o󠄁w󠄁n󠄁 s󠄁u󠄁b󠄁d󠄁o󠄁m󠄁a󠄁i󠄁n󠄁 o󠄁r󠄁 c󠄁u󠄁s󠄁t󠄁o󠄁m󠄁
-h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁 a󠄁n󠄁d󠄁 p󠄁r󠄁o󠄁v󠄁i󠄁s󠄁i󠄁o󠄁n󠄁 i󠄁t󠄁s󠄁 f󠄁i󠄁r󠄁s󠄁t󠄁 s󠄁t󠄁a󠄁f󠄁f󠄁 a󠄁d󠄁m󠄁i󠄁n󠄁i󠄁s󠄁t󠄁r󠄁a󠄁t󠄁o󠄁r󠄁.󠄁 T󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁
-i󠄁s󠄁 r󠄁e󠄁s󠄁e󠄁r󠄁v󠄁e󠄁d󠄁 f󠄁o󠄁r󠄁 C󠄁u󠄁s󠄁t󠄁y󠄁a󠄁r󠄁d󠄁.󠄁 S󠄁t󠄁a󠄁f󠄁f󠄁 c󠄁a󠄁n󠄁 f󠄁i󠄁n󠄁d󠄁 t󠄁h󠄁e󠄁i󠄁r󠄁 w󠄁o󠄁r󠄁k󠄁s󠄁p󠄁a󠄁c󠄁e󠄁 f󠄁r󠄁o󠄁m󠄁 t󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁
-h󠄁o󠄁m󠄁e󠄁p󠄁a󠄁g󠄁e󠄁,󠄁 t󠄁h󠄁e󠄁n󠄁 s󠄁i󠄁g󠄁n󠄁 i󠄁n󠄁 a󠄁t󠄁 `/app/login` o󠄁n󠄁 t󠄁h󠄁a󠄁t󠄁 w󠄁o󠄁r󠄁k󠄁s󠄁p󠄁a󠄁c󠄁e󠄁'󠄁s󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁.󠄁 U󠄁n󠄁k󠄁n󠄁o󠄁w󠄁n󠄁
-h󠄁o󠄁s󠄁t󠄁s󠄁 a󠄁r󠄁e󠄁 r󠄁e󠄁j󠄁e󠄁c󠄁t󠄁e󠄁d󠄁.󠄁
+Use the installation console to create a tenant on its own subdomain or custom
+hostname and provision its first staff administrator. The installation hostname
+is reserved for Custyard. Staff can find their workspace from the installation
+homepage, then sign in at `/app/login` on that workspace's hostname. Unknown
+hosts are rejected.
 
 Configure encrypted tenant provider credentials and support channels at
-`/app/settings/email`. Set `CREDENTIAL_ENCRYPTION_KEY` before storing provider
-or IMAP credentials. The installation's mail credentials never supply tenant
+`/app/settings/email`. The installation's mail credentials never supply tenant
 support access. Channels can suggest a customer, project and label for new
 threads; those hints cannot override an existing thread or known sender.
 See the [support email setup guide](docs/ops/lettermint-email-setup.md).
 
-Production container startup provisions `INSTANCE_ADMIN_EMAIL` if configured.
-Unset it after bootstrap to stop recreating that installation administrator on
-future boots. The account remains stored in the installation database.
+### Production (Docker / Fly)
+
+A new install needs six variables. SQLite lives on the `/data` volume, so
+there are no database variables.
+
+```bash
+SECRET_KEY_BASE=              # mix phx.gen.secret
+CREDENTIAL_ENCRYPTION_KEY=    # openssl rand -base64 32
+PHX_HOST=custyard.example.com # the installation hostname
+INSTANCE_ADMIN_EMAIL=you@example.com
+MAIL_ADAPTER=lettermint       # or smtp | postmark | sendgrid | mailgun
+LETTERMINT_PROJECT_TOKEN=     # the credential for the chosen adapter; see .env.sample
+```
+
+On Fly, `PHX_HOST` falls back to `FLY_APP_NAME.fly.dev`. `CREDENTIAL_ENCRYPTION_KEY`
+encrypts stored tenant credentials; rotate it by moving the old value to
+`CREDENTIAL_ENCRYPTION_KEY_PREVIOUS`. `EMAIL_FROM_ADDRESS` defaults to
+`noreply@PHX_HOST` and must be a sender the provider has verified; otherwise
+the welcome mail and the login links fail the same way.
+
+#### What happens on boot
+
+With variables missing or malformed, the container stays up and serves a doctor
+card at every HTML path (HTTP 503). The card names the variables and gives a
+paste block; the same report prints to the log. Fix them and restart. With
+variables set, the HTTP endpoint comes up first and serves a starting card while
+the database is probed and migrations run, so liveness answers throughout. With
+no reachable database it then serves a database card and retries
+every 10 s; once the database answers it exits with status 1 so the platform's
+restart policy (Fly's default `on-failure`, compose `unless-stopped`) runs a
+normal boot. A failed migration does not retry. With an empty database it runs
+the migrations, creates the installation administrator from
+`INSTANCE_ADMIN_EMAIL`, sends a welcome mail through the real adapter, and shows
+the setup checklist on `/` for the rest of that boot; sign in at `/admin/login`.
+No tenant, staff membership or support connection is created implicitly.
+Credential values never appear on a card or in the log, only variable names;
+the SQLite path is the one value shown.
+
+Platform health checks must use `/api/health/live`, which is 200 whenever the
+process answers. `/api/health` is readiness and returns 503 in doctor modes.
+Both answer on any hostname, because platform probes cannot send the
+installation or a tenant hostname.
+
+`bin/doctor` prints the same report from a shell (exit 1 unless complete);
+`--probe-database` also connects to the configured database and exits 1 if
+either has a problem. Before deploying against a remote database, probe a
+disposable one from your laptop. Images are published per commit as
+`sha-<commit>`; there is no `latest` tag:
+
+```bash
+docker run --rm ghcr.io/custyard/custyard:sha-<commit> bin/doctor --probe-database libsql://scratch.turso.io --token "$TURSO_AUTH_TOKEN"
+```
+
+After login, `/admin/system` shows the same report plus the last mail
+delivery result (installation administrators only).
+
+#### Installation administrators
+
+The account named by `INSTANCE_ADMIN_EMAIL` is created on the first run if
+absent and never modified afterwards. Unset it after the first login; the
+account remains stored in the installation database.
 
 ```bash
 fly secrets set INSTANCE_ADMIN_EMAIL=installer@example.com
@@ -65,7 +121,9 @@ fly secrets set INSTANCE_ADMIN_EMAIL=installer@example.com
 fly secrets unset INSTANCE_ADMIN_EMAIL
 ```
 
-The database-only release CLI manages installation administrators:
+The database-only release CLI manages installation administrators. It starts
+only the database, never the app, so it is safe while the server runs. In a
+doctor mode it prints the boot report and exits 1.
 
 ```bash
 bin/instance-admin add installer@example.com
@@ -88,6 +146,16 @@ The schema is a fresh baseline. After validating changes, explicitly reset the
 intended development database with `mix ecto.reset`. No compatibility migration
 or default tenant is created. Resetting invalidates existing login, thread,
 portal and claim links. Provision tenants and staff again through `/admin`.
+
+Local Docker run (plain `docker compose up --build` also works and reports the
+build as unknown):
+
+```bash
+GIT_SHA=$(git rev-parse HEAD) BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose up --build
+```
+
+Then open http://localhost:4000. With no environment set it shows the doctor
+card; add the six variables to `docker-compose.yml` and run it again.
 
 ## Phoenix.new / Remote VM Setup
 
@@ -121,6 +189,10 @@ git clone https://github.com/owner/private-repo.git
 
 ## Docs
 
+- [Set up Custyard on Bunny](docs/ops/bunny-setup.md)
+
 - [Development Guide](docs/development.md)
+- [Publishing container images to GHCR](docs/ops/ghcr-publishing.md)
+- [Bunny production and Fly staging plan](docs/ops/bunny-production-fly-staging.md)
 - [LMTP Troubleshooting](docs/lmtp-troubleshooting.md)
 - [Email Test Strategy](docs/backlog/0323-email-test-strategy.md)

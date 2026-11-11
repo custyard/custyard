@@ -9,8 +9,6 @@ defmodule Custyard.Email.ImapChannelPoller do
   """
   use GenServer, restart: :transient
 
-  require Logger
-
   alias Custyard.{InboundChannel, Repo}
   alias Custyard.Email.{ImapPoll, ImapPollers}
 

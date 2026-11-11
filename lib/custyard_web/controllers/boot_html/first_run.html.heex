@@ -1,0 +1,65 @@
+<%!-- Shown on "/" only; every other path is the live app. Self-refreshing while
+     Boot.FirstRun works through the steps. --%>
+<div
+  class="rounded-lg border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-700 dark:bg-zinc-800"
+  data-testid="boot-card-first-run"
+>
+  <h1 class="text-xl font-semibold">Setting up Custyard</h1>
+  <p class="mt-2 text-zinc-600 dark:text-zinc-400">
+    First start on an empty database. What is happening:
+  </p>
+
+  <ol class="mt-6 space-y-3 text-sm" data-testid="boot-first-run-steps">
+    <li
+      :for={step <- @first_run.steps}
+      class="flex gap-3"
+      data-step={step.key}
+      data-status={step.status}
+    >
+      <.step_glyph step={step} />
+      <div class="min-w-0">
+        <span class="font-medium">{step_label(step.key)}</span>
+        <span :if={step.detail} class="ml-1 text-zinc-600 dark:text-zinc-400">{step.detail}</span>
+        <p
+          :if={step.key == :instance_admin and step.status == :skipped}
+          class="mt-1 text-zinc-600 dark:text-zinc-400"
+        >
+          Set <code>INSTANCE_ADMIN_EMAIL=you@example.com</code>
+          and restart, or run <code>docker exec &lt;container&gt; bin/instance-admin add you@example.com</code>.
+          This page updates when one exists.
+        </p>
+        <p
+          :if={step.key == :mail and step.status == :failed}
+          class="mt-1 text-zinc-600 dark:text-zinc-400"
+        >
+          Login links will fail the same way. Fix the sender at the provider, or set <code>EMAIL_FROM_ADDRESS</code>, then restart.
+        </p>
+      </div>
+    </li>
+  </ol>
+
+  <div :if={@first_run.completed_at} class="mt-6 text-sm" data-testid="boot-first-run-complete">
+    <p>
+      <span class="font-mono" aria-hidden="true">→</span>
+      Sign in at
+      <a
+        href={~p"/admin/login"}
+        class="font-medium text-indigo-600 underline dark:text-indigo-400"
+      >
+        /admin/login
+      </a>
+      <span :if={@first_run.instance_admin_email}>with
+      <code>{@first_run.instance_admin_email}</code></span>
+    </p>
+    <p class="mt-1 text-zinc-600 dark:text-zinc-400">
+      After your first login, remove <code>INSTANCE_ADMIN_EMAIL</code>, then create a tenant and its first staff account.
+    </p>
+  </div>
+
+  <p class="mt-6 text-xs text-zinc-500">This page refreshes itself.</p>
+
+  <div class="mt-8 border-t border-zinc-200 pt-4 dark:border-zinc-700">
+    <.ground_truth state={@state} />
+    <p class="mt-3 text-xs text-zinc-500">The full report is also in the container log.</p>
+  </div>
+</div>

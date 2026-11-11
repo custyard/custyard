@@ -3,75 +3,101 @@ defmodule Custyard.MailAdapterConfigTest do
   use ExUnit.Case, async: false
 
   @runtime_config Path.expand("../../config/runtime.exs", __DIR__)
+  @env_vars ~w(MAIL_ADAPTER LETTERMINT_PROJECT_TOKEN LETTERMINT_API_KEY SECRET_KEY_BASE PHX_HOST)
 
   setup do
-    original = System.get_env("MAIL_ADAPTER")
+    saved = Map.new(@env_vars, &{&1, System.get_env(&1)})
 
     on_exit(fn ->
-      if original do
-        System.put_env("MAIL_ADAPTER", original)
-      else
-        System.delete_env("MAIL_ADAPTER")
-      end
+      Enum.each(saved, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
     end)
 
+    Enum.each(@env_vars, &System.delete_env/1)
     :ok
   end
 
   defp read_prod_config! do
-    Config.Reader.read!(@runtime_config, env: :prod)
+    Config.Reader.read!(@runtime_config, env: :prod)[:custyard]
+  end
+
+  defp mail_problems(config) do
+    Enum.filter(config[:boot_env].problems, &(&1.variable == "MAIL_ADAPTER"))
   end
 
   describe "MAIL_ADAPTER in :prod" do
     # Staff login is magic-link-only, so silently keeping the in-memory
-    # Local adapter locks everyone out with no error anywhere.
-    test "an unset value refuses to boot" do
-      System.delete_env("MAIL_ADAPTER")
+    # Local adapter locks everyone out with no error anywhere. The problem is
+    # reported in the boot verdict (Custyard.Boot.Env) and the mailer is left
+    # unconfigured; runtime.exs never raises.
+    test "an unset value is a missing problem and configures no mailer" do
+      config = read_prod_config!()
 
-      assert_raise RuntimeError, ~r/MAIL_ADAPTER is not set/, &read_prod_config!/0
+      assert [%{kind: :missing, detail: detail}] = mail_problems(config)
+      assert detail =~ "login is by emailed link"
+      assert config[:boot_env].verdict == :unconfigured
+      assert config[Custyard.Mailer] == nil
     end
 
     test "an empty value is treated as unset" do
       System.put_env("MAIL_ADAPTER", "")
 
-      assert_raise RuntimeError, ~r/MAIL_ADAPTER is not set/, &read_prod_config!/0
+      config = read_prod_config!()
+      assert [%{kind: :missing}] = mail_problems(config)
+      assert config[Custyard.Mailer] == nil
     end
 
-    test "an unrecognized value refuses to boot and names it" do
-      System.put_env("MAIL_ADAPTER", "lettermnit")
+    test "an unrecognized value is reported without exposing it" do
+      secret = "provider-token-person@example.test\r\nFORGED EVENT"
+      System.put_env("MAIL_ADAPTER", secret)
 
-      assert_raise RuntimeError, ~r/"lettermnit", which is not recognized/, &read_prod_config!/0
-    end
+      config = read_prod_config!()
 
-    test "the error lists the accepted values" do
-      System.delete_env("MAIL_ADAPTER")
-
-      error = assert_raise RuntimeError, &read_prod_config!/0
+      assert [%{kind: :unsupported, detail: detail}] = mail_problems(config)
+      refute inspect(config[:boot_env]) =~ "person@example.test"
+      refute inspect(config[:boot_env]) =~ "FORGED EVENT"
+      assert config[Custyard.Mailer] == nil
 
       for adapter <- ~w(mailgun sendgrid smtp postmark lettermint local) do
-        assert error.message =~ adapter
+        assert detail =~ adapter
       end
     end
 
-    # A recognized adapter must get past the mail block. Reading the rest of
-    # runtime.exs then fails on the next unset prod requirement, which is
-    # the signal that the mail guard let it through.
-    test "a recognized value passes the guard" do
+    test "a recognized value configures its adapter even while its credential is missing" do
       System.put_env("MAIL_ADAPTER", "lettermint")
 
-      error = assert_raise RuntimeError, &read_prod_config!/0
+      config = read_prod_config!()
 
-      refute error.message =~ "MAIL_ADAPTER"
-      assert error.message =~ "SECRET_KEY_BASE"
+      assert mail_problems(config) == []
+      assert config[Custyard.Mailer][:adapter] == Swoosh.Adapters.Lettermint
+      assert config[Custyard.Mailer][:api_token] == nil
+
+      assert Enum.any?(
+               config[:boot_env].problems,
+               &(&1.variable == "LETTERMINT_PROJECT_TOKEN" and &1.kind == :missing)
+             )
+
+      System.put_env("LETTERMINT_PROJECT_TOKEN", "lm_token")
+      config = read_prod_config!()
+      assert config[Custyard.Mailer][:api_token] == "lm_token"
+      refute Enum.any?(config[:boot_env].problems, &(&1.variable == "LETTERMINT_PROJECT_TOKEN"))
     end
 
-    test "local passes the guard as an explicit opt-in" do
+    test "local is an explicit opt-in with a warning" do
       System.put_env("MAIL_ADAPTER", "local")
 
-      error = assert_raise RuntimeError, &read_prod_config!/0
+      config = read_prod_config!()
 
-      refute error.message =~ "MAIL_ADAPTER is not set"
-      refute error.message =~ "not recognized"
+      assert mail_problems(config) == []
+      assert config[Custyard.Mailer] == [adapter: Swoosh.Adapters.Local]
+      assert config[:email_enabled] == false
+
+      assert Enum.any?(
+               config[:boot_env].warnings,
+               &(&1.variable == "MAIL_ADAPTER" and &1.detail =~ "discarded")
+             )
     end
   end
 end

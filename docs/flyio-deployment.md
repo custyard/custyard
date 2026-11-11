@@ -2,6 +2,11 @@
 
 Deploy Custyard to [Fly.io](https://fly.io), with its SQLite database on a persistent volume or on [Turso](#turso-libsql).
 
+For the proposed move of production to Bunny Magic Containers and conversion of
+Fly to `staging.custyard.com`, see the [migration plan](ops/bunny-production-fly-staging.md).
+The configuration in this guide still describes Fly hosting; the migration has
+not been applied.
+
 Use tenant-authenticated provider callbacks at `/api/webhook/route/:callback_token`
 for hosted inbound email. Configure LMTP or IMAP channels where the installation's
 network supports those transports.
@@ -21,11 +26,13 @@ fly launch --no-deploy
 # at /data for both SQLite and uploaded files.
 fly volumes create custyard_data --region <your-region> --size 1
 
-# Set required secrets (deployment fails without these)
+# Set the required secrets. Without them the app boots into a doctor card
+# that names what is missing (see "Deployment lifecycle").
 fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
+fly secrets set CREDENTIAL_ENCRYPTION_KEY=$(openssl rand -base64 32)
 fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_PROJECT_TOKEN="..."
 
-# Name the first installation administrator; the entrypoint creates it on boot.
+# Name the first installation administrator; the app creates it on the next boot.
 # Tenant staff are provisioned separately as tenant database memberships.
 fly secrets set INSTANCE_ADMIN_EMAIL=you@example.com
 
@@ -40,12 +47,13 @@ Instead of `INSTANCE_ADMIN_EMAIL` you can create the account on the running mach
 with `fly ssh console -a custyard -C "/app/bin/instance-admin add you@example.com"`.
 See [Instance administrators and tenant staff](#instance-administrators-and-tenant-staff).
 
-> **System authentication mail:** Instance administrators and staff use magic links: the
-> app emails a single-use token and there is no password path. `config/runtime.exs`
-> refuses to boot if `MAIL_ADAPTER` is unset or unrecognized, which surfaces the
-> problem at deploy time while Fly still has the previous machine running. Use
-> `MAIL_ADAPTER=local` only for a smoke-test instance — it discards every message,
-> including your own login links.
+> **Mail is required, not optional.** Instance administrators and staff sign in
+> by magic link: the app emails a single-use token and there is no password
+> path. With `MAIL_ADAPTER` unset or unrecognized the app boots into the doctor
+> card and stays there; the Fly health check is liveness only, so the deploy
+> still reports healthy. Open the site or read the boot report in `fly logs`
+> after every deploy. Use `MAIL_ADAPTER=local` only for a smoke-test instance —
+> it discards every message, including your own login links.
 
 > `fly launch --no-deploy` reads the existing `fly.toml`. Accept the defaults or change the app name/region when prompted. See [fly launch docs](https://fly.io/docs/launch/create/).
 
@@ -60,7 +68,7 @@ The included `fly.toml` is pre-configured with:
 | `primary_region` | `ams` | Change to your preferred [region](https://fly.io/docs/reference/regions/) |
 | `auto_stop_machines` | `stop` | Saves cost; machines restart on traffic |
 | `min_machines_running` | `1` | Keeps one machine warm for WebSocket (LiveView). A floor, not a cap — cap the count with `fly scale count 1` |
-| `mounts` | `custyard_data` at `/data` | Required for SQLite and uploads. The app refuses to start on Fly if `/data` is not mounted. |
+| `mounts` | `custyard_data` at `/data` | Required for SQLite and uploads. With `/data` not mounted the boot probe reports it and the app serves the database card. |
 
 Edit `PHX_HOST` in `fly.toml` `[env]` to match your domain (or `<app-name>.fly.dev`).
 
@@ -69,12 +77,13 @@ Edit `PHX_HOST` in `fly.toml` `[env]` to match your domain (or `<app-name>.fly.d
 Manage secrets with [`fly secrets`](https://fly.io/docs/apps/secrets/):
 
 ```bash
-# Required (deployment will fail without SECRET_KEY_BASE)
+# Required: without these the app serves the doctor card instead of the site
 fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)
+fly secrets set CREDENTIAL_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
-# Required — outbound email (pick one adapter; the app refuses to boot
-# without MAIL_ADAPTER, because operator login is magic-link-only)
-fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_PROJECT_TOKEN="..." LETTERMINT_API_URL="..."
+# Required — outbound email (pick one adapter; the doctor card names
+# MAIL_ADAPTER as missing otherwise, because login is magic-link-only)
+fly secrets set MAIL_ADAPTER=lettermint LETTERMINT_PROJECT_TOKEN="..."
 # or
 fly secrets set MAIL_ADAPTER=postmark POSTMARK_API_KEY="..."
 # or
@@ -89,12 +98,8 @@ fly secrets set MAIL_ADAPTER=local
 # Optional (derived from SECRET_KEY_BASE if not set)
 fly secrets set LIVE_VIEW_SIGNING_SALT=$(mix phx.gen.secret 32)
 
-# Optional — inbound webhook signature verification, one secret per source.
-# Omit a source to leave its signature check unconfigured.
-fly secrets set WEBHOOK_SECRET_LETTERMINT="..."
-fly secrets set WEBHOOK_SECRET_ZENDESK="..."
-fly secrets set WEBHOOK_SECRET_INTERCOM="..."
-fly secrets set WEBHOOK_SECRET_SLACK="..."
+# Inbound webhook signing secrets are not environment settings: each tenant
+# route stores its own, encrypted, in Email setup.
 
 # Optional — error tracking (prod only; unset means the Sentry SDK stays off)
 fly secrets set SENTRY_DSN="https://<public_key>@catch.onetimesecret.com/11"
@@ -121,13 +126,13 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 | `PHX_HOST` | `custyard.fly.dev` | Public hostname |
 | `DATABASE_URL` | — | A Turso `libsql://` URL (with the `TURSO_AUTH_TOKEN` secret), or a PostgreSQL URL when the release was compiled with `Ecto.Adapters.Postgres`. Unset: the SQLite file at `DATABASE_PATH` |
 | `DATABASE_PATH` | `/data/custyard.db` | SQLite DB path (must be on the mounted volume); unused when `DATABASE_URL` is set |
-| `MAIL_ADAPTER` | — | **Required.** One of `lettermint`, `postmark`, `sendgrid`, `mailgun`, `smtp`, `local`. Set as a secret alongside its credential; the app raises on boot if unset or unrecognized |
+| `MAIL_ADAPTER` | — | **Required.** One of `lettermint`, `postmark`, `sendgrid`, `mailgun`, `smtp`, `local`. Set as a secret alongside its credential; unset or unrecognized is a doctor-card problem |
 | `POOL_SIZE` | `10` | Ecto connection pool size |
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
 | `UPLOAD_DIR` | `/data/uploads` | Persistent upload directory (must be on the mounted volume) |
 | `ATTACHMENT_DIR` | `/data/attachments` | Inbound email attachments, served only through the authenticated operator endpoint (must be on the mounted volume) |
 
-`CREDENTIAL_ENCRYPTION_KEY` is a secret (`fly secrets set CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"`). IMAP channels need it to store their passwords; see [inbound channels](ops/inbound-channels.md#credential-encryption-key). The global `IMAP_*` settings were removed, and a deployment that still sets `IMAP_ENABLED` refuses to start.
+`CREDENTIAL_ENCRYPTION_KEY` is a required secret (`fly secrets set CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"`): every boot checks it, and tenant credentials (IMAP passwords, Lettermint tokens) are encrypted with it; see [inbound channels](ops/inbound-channels.md#credential-encryption-key). The global `IMAP_*` settings were removed, and a deployment that still sets `IMAP_ENABLED` gets a doctor-card problem.
 
 ## Colonel acknowledgments
 
@@ -147,7 +152,7 @@ for tenant configuration, TLS, permissions and the command set.
 
 ## Health check
 
-`GET /api/health` returns `{"status":"ok"}` with a 200 status. Fly.io uses this to verify machine readiness. Configured in `fly.toml` under `[checks.health]`.
+`GET /api/health` returns `{"status":"ok"}` with a 200 status once the app is fully up, and 503 while it is in doctor mode (configuration or database problem). Fly's machine check in `fly.toml` under `[checks.health]` uses `GET /api/health/live`, which answers 200 whenever the process is up, so a machine in doctor mode keeps serving its setup page.
 
 S󠄁e󠄁t󠄁 t󠄁h󠄁e󠄁 c󠄁h󠄁e󠄁c󠄁k󠄁'󠄁s󠄁 `headers.Host` t󠄁o󠄁 t󠄁h󠄁e󠄁 i󠄁n󠄁s󠄁t󠄁a󠄁l󠄁l󠄁a󠄁t󠄁i󠄁o󠄁n󠄁'󠄁s󠄁 `PHX_HOST`.󠄁 T󠄁e󠄁n󠄁a󠄁n󠄁t󠄁 h󠄁o󠄁s󠄁t󠄁
 v󠄁a󠄁l󠄁i󠄁d󠄁a󠄁t󠄁i󠄁o󠄁n󠄁 a󠄁l󠄁s󠄁o󠄁 a󠄁p󠄁p󠄁l󠄁i󠄁e󠄁s󠄁 t󠄁o󠄁 h󠄁e󠄁a󠄁l󠄁t󠄁h󠄁 r󠄁e󠄁q󠄁u󠄁e󠄁s󠄁t󠄁s󠄁;󠄁 a󠄁 p󠄁r󠄁o󠄁b󠄁e󠄁 s󠄁e󠄁n󠄁t󠄁 t󠄁o󠄁 a󠄁n󠄁 u󠄁n󠄁r󠄁e󠄁g󠄁i󠄁s󠄁t󠄁e󠄁r󠄁e󠄁d󠄁 I󠄁P󠄁
@@ -155,22 +160,32 @@ o󠄁r󠄁 h󠄁o󠄁s󠄁t󠄁n󠄁a󠄁m󠄁e󠄁 r󠄁e󠄁c󠄁e󠄁i󠄁v�
 
 ## Deployment lifecycle
 
-On every deploy, the container entrypoint (`entrypoint.sh`) runs:
+The container entrypoint (`entrypoint.sh`) only hands off to the release; the
+application does the rest on every boot:
 
-1. Validates `SECRET_KEY_BASE` is set (fails fast if missing)
-2. Runs Ecto migrations
+1. Reads and checks the environment. With variables missing or malformed it
+   stays up and serves a doctor card at every HTML path (HTTP 503) naming
+   them, prints the same report to `fly logs`, and waits for a restart.
+2. Starts the HTTP endpoint, so `/api/health/live` answers, then probes the
+   database and runs the Ecto migrations one at a time. An unreachable
+   database is a database card with retries every 10 s; a failed migration
+   names the migration and does not retry.
 3. With `INSTANCE_ADMIN_EMAIL` set, creates that installation administrator if
-   absent and logs a reminder to unset the variable. Existing accounts remain
-   unchanged. Invalid email input fails bootstrap. No implicit administrator,
-   tenant, staff membership or support connection is created. Migration and
-   bootstrap run in one database-only `bin/custyard eval`.
-4. Starts the Phoenix server
+   it does not exist (an existing account is left unmodified), sends the
+   welcome mail through the real adapter, and shows the setup checklist on
+   `/` for the rest of that boot. No tenant, staff membership or support
+   connection is created implicitly. Unset the variable after the first login.
 
-With `MAINTENANCE_MODE=true` it does none of this and keeps the machine running
-for `fly ssh`, so nothing writes the database. Moving SQLite to Turso uses it
+`bin/doctor` prints the same report from `fly ssh console`, with
+`--probe-database` to connect as well. With `MAINTENANCE_MODE=true` the
+entrypoint does none of this and keeps the machine running for `fly ssh`, so
+nothing writes the database. Moving SQLite to Turso uses it
 (`docs/ops/database.md`).
 
-> **Important:** `SECRET_KEY_BASE` must be set via `fly secrets set` before deploying. The entrypoint will refuse to start without it. This prevents session/LiveView invalidation when machines restart (which happens regularly with `auto_stop_machines`).
+> **Important:** set `SECRET_KEY_BASE` with `fly secrets set` before deploying.
+> Without it the app serves the doctor card, and a value that changes between
+> deploys invalidates every session and LiveView (machines restart regularly
+> with `auto_stop_machines`).
 
 ### Deploy commands
 
@@ -178,7 +193,7 @@ for `fly ssh`, so nothing writes the database. Moving SQLite to Turso uses it
 # Deploy latest code ()
 fly deploy
 
-# Migrations are run automatically by the entrypoint, but you can also run them
+# Migrations run automatically on boot, but you can also run them
 # manually. Run as custyard: `fly ssh console` is root, and root-owned SQLite
 # -wal/-shm files would leave the app with a read-only database.
 # fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.migrate()'"
@@ -286,7 +301,7 @@ Then create a CNAME record pointing your domain to `<app-name>.fly.dev`. Update 
 
 ## Volumes and backups
 
-SQLite data and uploads are stored on a [Fly volume](https://fly.io/docs/volumes/) mounted at `/data`. Volumes are region-specific and tied to a single machine. Before migrations run, the app checks the Linux mount table and refuses to start if Fly has not mounted `/data`.
+SQLite data and uploads are stored on a [Fly volume](https://fly.io/docs/volumes/) mounted at `/data`. Volumes are region-specific and tied to a single machine. Before migrations run, the app checks the Linux mount table; if Fly has not mounted `/data` it serves the database card instead of writing to the root filesystem.
 
 ```bash
 # List volumes
@@ -317,9 +332,9 @@ u󠄁p󠄁l󠄁o󠄁a󠄁d󠄁s󠄁 a󠄁n󠄁d󠄁 a󠄁t󠄁t󠄁a󠄁c󠄁h�
 >
 > Check `fly scale show` before every deploy that touches `[mounts]`. A deploy
 > that introduces a mount while the app has two machines creates a second
-> volume and splits the data. The app refuses to boot when it has more than
-> one machine and keeps anything under `/data` (`Custyard.Storage`), but the
-> refusal is a backstop, not a substitute for the scale check.
+> volume and splits the data. The app serves the database card when it has
+> more than one machine and keeps anything under `/data` (`Custyard.Storage`),
+> but that is a backstop, not a substitute for the scale check.
 >
 > Turso and PostgreSQL do not lift this limit. Uploads and attachments are still files
 > under `/data`, so each machine's volume holds its own copy.
@@ -384,8 +399,8 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 
 | Symptom | Fix |
 |---------|-----|
-| "ERROR: SECRET_KEY_BASE is not set" | Run `fly secrets set SECRET_KEY_BASE=$(mix phx.gen.secret)` |
-| App won't start | Check `fly logs`; verify `SECRET_KEY_BASE` is set via `fly secrets list` |
+| Every page is a doctor card (HTTP 503) | The card and the top of `fly logs` name the missing or malformed variables; `fly ssh console -a custyard -C /app/bin/doctor` prints the same report. Set them and `fly apps restart custyard` |
+| App won't start | Check `fly logs`; the boot report at the top names configuration problems, and `/api/health/live` answers whenever the process is up |
 | Health check fails | Ensure port 4000 matches `internal_port` in `fly.toml` |
 | Database errors | Confirm the volume is attached with `fly volumes list` and mounted with `fly ssh console -C "mountpoint /data"` |
 | `Turso: HTTP 401` in `fly logs` | `TURSO_AUTH_TOKEN` is wrong or expired. Create one with `turso db tokens create custyard` and `fly secrets set TURSO_AUTH_TOKEN=...` |
@@ -393,7 +408,7 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 | Migration failures | Run manually as the app user: `fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.migrate()'"` |
 | Nobody can log in | `fly ssh console -a custyard -C "/app/bin/instance-admin list"`; create an account with `/app/bin/instance-admin add you@example.com` or `fly secrets set INSTANCE_ADMIN_EMAIL=you@example.com` and redeploy |
 | Login link never arrives | The "check your email" page is shown even for unknown addresses. Confirm the account with `/app/bin/instance-admin list`, then check `MAIL_ADAPTER` and `fly logs` |
-| Boot fails with `INSTANCE_ADMIN_EMAIL: ...` | The value is not a valid address. Fix or unset it: `fly secrets unset INSTANCE_ADMIN_EMAIL` |
+| Doctor card names `INSTANCE_ADMIN_EMAIL` | The value is not a valid address. Fix or unset it: `fly secrets unset INSTANCE_ADMIN_EMAIL` |
 | Database becomes read-only after an SSH session | Something wrote the database as root. Run app commands as `custyard` (`bin/instance-admin` does). Assuming the default `DATABASE_PATH`, run `chown custyard:custyard /data/custyard.db*`, then restart the app (`fly apps restart custyard`) |
 | `bin/custyard remote` or `rpc` fails | Erlang distribution is off. Use `/app/bin/instance-admin` or `bin/custyard eval` |
 

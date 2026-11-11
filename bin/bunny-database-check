@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Destructive test suite: supply only a new, empty, disposable database.
+set -euo pipefail
+
+if [ "${BUNNY_TEST_DISPOSABLE:-}" != "true" ]; then
+  echo "Set BUNNY_TEST_DISPOSABLE=true only for a new disposable test database." >&2
+  exit 1
+fi
+
+: "${BUNNY_TEST_DATABASE_URL:?Set a disposable database URL}"
+: "${BUNNY_TEST_DATABASE_AUTH_TOKEN:?Set its full-access database token}"
+
+cd "$(dirname "$0")/.."
+export MIX_ENV=test
+export TURSO_TEST_PROVIDER=bunny
+export TURSO_TEST_URL="$BUNNY_TEST_DATABASE_URL"
+export TURSO_TEST_AUTH_TOKEN="$BUNNY_TEST_DATABASE_AUTH_TOKEN"
+
+mix run --no-start bin/bunny-database-preflight.exs
+mix test --max-cases 1 "$@"

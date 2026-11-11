@@ -16,6 +16,8 @@ defmodule Custyard.Tenants do
   alias Custyard.Acknowledgments.Subscriptions
   alias Custyard.Email.OutboundQueue
 
+  require Custyard.Log, as: Log
+
   def get_tenant(id), do: Repo.get(Tenant, id)
   def get_tenant!(id), do: Repo.get!(Tenant, id)
   def list_tenants, do: Repo.all(from t in Tenant, order_by: t.name, preload: [:hosts])
@@ -105,7 +107,7 @@ defmodule Custyard.Tenants do
         case AuditEvent.create(%{
                tenant_id: tenant_id,
                event_type: :outbound_pause_changed,
-               source: "tenant:#{tenant_id}:staff:#{current.id}",
+               source: "staff",
                payload: %{staff_id: current.id, paused: paused}
              }) do
           {:ok, _} -> updated
@@ -177,8 +179,17 @@ defmodule Custyard.Tenants do
       })
 
     case Repo.insert(changeset) do
-      {:ok, staff} -> staff
-      {:error, changeset} -> Repo.rollback(changeset)
+      {:ok, staff} ->
+        Log.info(:staff_account_created,
+          staff_id: staff.id,
+          tenant_id: staff.tenant_id,
+          role: staff.role
+        )
+
+        staff
+
+      {:error, changeset} ->
+        Repo.rollback(changeset)
     end
   end
 
@@ -210,9 +221,10 @@ defmodule Custyard.Tenants do
       case AuditEvent.create(%{
              tenant_id: tenant_id,
              event_type: :staff_removed,
-             source: "tenant:#{tenant_id}:staff:#{current.id}",
+             source: "staff",
              payload: %{
                staff_id: target.id,
+               actor_staff_id: current.id,
                role: target.role,
                deleted_message_ids: deleted_message_ids,
                forwarded_message_ids: forwarded_message_ids,
@@ -222,6 +234,17 @@ defmodule Custyard.Tenants do
         {:ok, _} -> deleted
         {:error, reason} -> Repo.rollback(reason)
       end
+    end)
+    |> tap(fn
+      {:ok, removed} ->
+        Log.info(:staff_account_removed,
+          staff_id: removed.id,
+          tenant_id: removed.tenant_id,
+          role: removed.role
+        )
+
+      _ ->
+        :ok
     end)
   end
 

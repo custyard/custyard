@@ -15,7 +15,7 @@ defmodule Custyard.Email.OutboundQueue do
   alias Custyard.{Message, Repo, Tenant}
   alias Custyard.Email.Outbound
 
-  require Logger
+  require Custyard.Log, as: Log
 
   @scan_interval_ms 30_000
   @batch_size 100
@@ -54,7 +54,9 @@ defmodule Custyard.Email.OutboundQueue do
       |> Repo.all()
 
     Enum.each(pending, fn message ->
-      case Outbound.deliver(message) do
+      case Log.operation([message_id: message.id, thread_id: message.thread_id], fn ->
+             Outbound.deliver(message)
+           end) do
         {:ok, _} -> :ok
         {:error, _, _} -> :ok
       end
@@ -93,8 +95,9 @@ defmodule Custyard.Email.OutboundQueue do
         ]
       )
 
-      Logger.warning(
-        "Outbound message #{message.id} was interrupted mid-delivery; marked failed, not re-sent"
+      Log.warning(:outbound_delivery_interrupted,
+        message_id: message.id,
+        reason: :acceptance_unknown
       )
 
       Outbound.broadcast_delivery_update(message)
@@ -137,7 +140,7 @@ defmodule Custyard.Email.OutboundQueue do
     error ->
       # A fresh installation can start the application before migrations have
       # created messages. Keep the worker alive and retry on the next scan.
-      Logger.error("outbound_queue_scan_failed", error_type: error.__struct__)
+      Log.error(:outbound_queue_scan_failed, Log.failure(error))
       0
   end
 end
