@@ -866,6 +866,8 @@ defmodule Custyard.Boot.EnvTest do
       env = prod(Map.put(@minimal, "IMAP_ENABLED", "true"))
       assert [%{kind: :unsupported, detail: detail}] = problems_for(env, "IMAP_ENABLED")
       assert detail =~ "IMAP channel"
+      # The page where a staff admin adds one; it moved off the organization page.
+      assert detail =~ "/app/settings/email"
       assert prod(Map.put(@minimal, "IMAP_ENABLED", "false")).problems == []
     end
   end

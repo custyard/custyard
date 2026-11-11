@@ -70,8 +70,9 @@ See [docs/lmtp-troubleshooting.md](lmtp-troubleshooting.md) for debugging.
 
 #### IMAP channels
 
-An IMAP mailbox is a channel: create it on the organization page (Channels,
-New channel, "Read a mailbox over IMAP"). Development encrypts the stored
+An IMAP mailbox is a channel: create it on the Email setup page
+(`/app/settings/email`, Add support address, "Read a mailbox over IMAP").
+Development encrypts the stored
 password with a fixed key from `config/dev.exs` and allows a local test server
 (`localhost` or an IP) through `:imap_allow_private_hosts`. Production needs
 `CREDENTIAL_ENCRYPTION_KEY`. See [docs/ops/inbound-channels.md](ops/inbound-channels.md).
