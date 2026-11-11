@@ -861,7 +861,8 @@ defmodule Custyard.Boot.Env do
           "IMAP_ENABLED",
           :unsupported,
           "no longer supported; connect the mailbox as an IMAP channel " <>
-            "(organization page > Channels > New channel > \"Read a mailbox over IMAP\"), " <>
+            "(Email setup at /app/settings/email > Add support address > " <>
+            "\"Read a mailbox over IMAP\"), " <>
             "then unset IMAP_ENABLED and the other IMAP_* variables"
         )
     end
