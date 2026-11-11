@@ -8,6 +8,30 @@ defmodule CustyardWeb.StaffComponents do
   use Phoenix.Component
 
   @doc """
+  Compact elapsed time for dense lists: `now`, `5m`, `3h`, `12d`.
+
+  ## Examples
+
+      short_age(~U[2026-11-09 10:00:00Z], ~U[2026-11-11 10:00:00Z])
+      #=> "2d"
+  """
+  def short_age(%DateTime{} = at, %DateTime{} = now \\ DateTime.utc_now()) do
+    seconds = max(DateTime.diff(now, at, :second), 0)
+
+    cond do
+      seconds < 60 -> "now"
+      seconds < 3_600 -> "#{div(seconds, 60)}m"
+      seconds < 86_400 -> "#{div(seconds, 3_600)}h"
+      true -> "#{div(seconds, 86_400)}d"
+    end
+  end
+
+  @doc """
+  Absolute UTC timestamp for hover titles, for example `Nov 9, 2026 23:21 UTC`.
+  """
+  def format_timestamp(%DateTime{} = at), do: Calendar.strftime(at, "%b %-d, %Y %H:%M UTC")
+
+  @doc """
   Renders a tier badge (enterprise/standard/basic).
 
   ## Examples
@@ -21,7 +45,7 @@ defmodule CustyardWeb.StaffComponents do
       case assigns.tier do
         :enterprise -> "text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950"
         :standard -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
-        :basic -> "text-gray-400 dark:text-zinc-500 bg-gray-50 dark:bg-zinc-800"
+        :basic -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
         _ -> "text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800"
       end
 
@@ -52,9 +76,9 @@ defmodule CustyardWeb.StaffComponents do
         :new -> "bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300"
         :active -> "bg-green-100 dark:bg-green-950 text-green-800 dark:text-green-300"
         :waiting -> "bg-yellow-100 dark:bg-yellow-950 text-yellow-800 dark:text-yellow-300"
-        :dormant -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
-        :resolved -> "bg-gray-100 dark:bg-zinc-700 text-gray-400 dark:text-zinc-500"
-        _ -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-400"
+        :dormant -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300"
+        :resolved -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300"
+        _ -> "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300"
       end
 
     assigns = assign(assigns, :colors, colors)
