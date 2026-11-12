@@ -14,12 +14,43 @@ defmodule Custyard.Threads do
   }
 
   alias Custyard.Email.{OutboundQueue, ReplyAudit, ReplyRecipients}
+  alias Custyard.Threads.QueuePreview
   import Ecto.Query
 
   def list(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
     if Custyard.Scope.current_staff(scope),
       do: list_for_attention_queue(Keyword.put(opts, :tenant_id, tenant_id)),
       else: []
+  end
+
+  @queue_filters ~w(all new active waiting dormant snoozed due_tasks)
+  @queue_state_filters %{new: "new", active: "active", waiting: "waiting", dormant: "dormant"}
+
+  @doc """
+  How many threads each attention-queue filter lists, keyed by filter name
+  (`"all"`, `"new"`, `"active"`, `"waiting"`, `"dormant"`, `"snoozed"`,
+  `"due_tasks"`).
+
+  Takes the same `:label_id` and `:organization_id` options as `list/2` and
+  applies the same visibility rules, so each count equals the length of the
+  matching `list/2` result. One query, whatever the number of filters.
+  """
+  def queue_counts(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
+    if Custyard.Scope.current_staff(scope),
+      do: count_attention_queue(Keyword.put(opts, :tenant_id, tenant_id)),
+      else: Map.new(@queue_filters, &{&1, 0})
+  end
+
+  @doc """
+  Latest-message snippet and last speaker for the given threads, keyed by
+  thread id (see `Custyard.Threads.QueuePreview`). Only messages belonging to
+  the scope's tenant are read.
+  """
+  def queue_previews(%Custyard.Scope{tenant_id: tenant_id} = scope, thread_ids)
+      when is_list(thread_ids) do
+    if thread_ids != [] and Custyard.Scope.current_staff(scope),
+      do: QueuePreview.for_threads(tenant_id, thread_ids),
+      else: %{}
   end
 
   def get(%Custyard.Scope{tenant_id: tenant_id} = scope, id) do
@@ -73,13 +104,6 @@ defmodule Custyard.Threads do
         select: %{thread_id: m.thread_id, count: count(m.id)}
       )
 
-    due_task_subquery =
-      from(t in Custyard.WorkItem,
-        where: t.state != :done and not is_nil(t.due_at) and t.due_at <= ^now,
-        group_by: t.thread_id,
-        select: %{thread_id: t.thread_id, count: count(t.id), due_at: min(t.due_at)}
-      )
-
     query =
       from(c in Thread,
         # Left join: disambiguation/public-intake threads have nil organization_id
@@ -90,7 +114,7 @@ defmodule Custyard.Threads do
         left_join: ch in assoc(c, :inbound_channel),
         left_join: mc in subquery(message_count_subquery),
         on: mc.thread_id == c.id,
-        left_join: dt in subquery(due_task_subquery),
+        left_join: dt in subquery(due_task_subquery(now)),
         as: :due_tasks,
         on: dt.thread_id == c.id,
         # Resolving/snoozing a thread must not hide an unfinished task
@@ -113,6 +137,52 @@ defmodule Custyard.Threads do
     |> apply_label_filter(Keyword.get(opts, :label_id))
     |> Repo.all()
   end
+
+  # Unfinished tasks that have reached their deadline, per thread.
+  defp due_task_subquery(now) do
+    from(t in Custyard.WorkItem,
+      where: t.state != :done and not is_nil(t.due_at) and t.due_at <= ^now,
+      group_by: t.thread_id,
+      select: %{thread_id: t.thread_id, count: count(t.id), due_at: min(t.due_at)}
+    )
+  end
+
+  # One light row per open thread, tallied here rather than in seven filtered
+  # queries. The rules mirror list_for_attention_queue/1 with
+  # apply_snooze_filter/3 and apply_state_filter/2; a test compares every
+  # count with the length of the matching list.
+  defp count_attention_queue(opts) do
+    # The list queries compare snoozed_until at whole seconds; so must the tally.
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    from(c in Thread,
+      left_join: dt in subquery(due_task_subquery(now)),
+      on: dt.thread_id == c.id,
+      where: c.state != :resolved or not is_nil(dt.thread_id),
+      select: {c.state, c.snoozed_until, coalesce(dt.count, 0)}
+    )
+    |> apply_organization_filter(Keyword.get(opts, :organization_id))
+    |> apply_tenant_filter(Keyword.get(opts, :tenant_id))
+    |> apply_label_filter(Keyword.get(opts, :label_id))
+    |> Repo.all()
+    |> Enum.reduce(Map.new(@queue_filters, &{&1, 0}), &tally_queue_row(&1, &2, now))
+  end
+
+  defp tally_queue_row({state, snoozed_until, due_count}, counts, now) do
+    snoozed? = not is_nil(snoozed_until) and DateTime.compare(snoozed_until, now) != :lt
+    due? = due_count > 0
+    # A due task keeps a snoozed thread in every unsnoozed view.
+    listed? = due? or not snoozed?
+
+    counts
+    |> bump("snoozed", snoozed?)
+    |> bump("all", listed?)
+    |> bump("due_tasks", due?)
+    |> bump(@queue_state_filters[state], listed?)
+  end
+
+  defp bump(counts, key, true) when is_binary(key), do: Map.update!(counts, key, &(&1 + 1))
+  defp bump(counts, _key, _listed?), do: counts
 
   # Filter for snoozed threads - only show snoozed when explicitly filtered
   defp apply_snooze_filter(query, "snoozed", now) do
@@ -676,7 +746,9 @@ defmodule Custyard.Threads do
   Broadcasts `{:message_updated, thread_id}` on the thread topic
   (`"thread:{id}"`) — the same message-level pattern
   `Custyard.Email.Outbound` uses for delivery updates — so open staff,
-  prospect, and portal views swap in the tombstone without a remount.
+  prospect, and portal views swap in the tombstone without a remount. Also
+  broadcasts `{:thread_updated, thread_id}` on `"threads"`, so an open
+  attention queue stops previewing the deleted body.
   """
   def soft_delete_message(%Message{deleted_at: %DateTime{}} = message, _staff) do
     {:ok, message}
@@ -690,6 +762,9 @@ defmodule Custyard.Threads do
           "thread:#{deleted.thread_id}",
           {:message_updated, deleted.thread_id}
         )
+
+        # An open attention queue still shows the body as the row snippet.
+        Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, deleted.thread_id})
 
         {:ok, deleted}
 

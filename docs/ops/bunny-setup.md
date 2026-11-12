@@ -219,10 +219,11 @@ them:
 
 Point the Bunny container's registry at `registry.gitlab.com`, image
 `custyard/custyard`. The updater changes only the tag and digest; a container
-still reading GHCR cannot pull a GitLab-built digest. The project is public, so
-the registry and API need no credentials; if it becomes private, add a
-`read_api` project access token as `PROMOTION_API_TOKEN` and give Bunny and Fly
-registry deploy tokens.
+still reading GHCR cannot pull a GitLab-built digest. Bunny's registry form
+requires credentials even for this public registry: give it a deploy token with
+only the `read_registry` scope. The promotion jobs read the registry and API
+anonymously; if the project becomes private, add a `read_api` project access
+token as `PROMOTION_API_TOKEN` and give Fly a registry deploy token.
 
 The account API key used by deployment is different from the database access
 token. It belongs in the protected CI/CD variable, not the application image.
