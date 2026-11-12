@@ -428,9 +428,10 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
+      # In the summary, so it is seen while the recipient details are closed.
       assert has_element?(
                view,
-               ~s([data-testid="composer-archive-copy"]),
+               ~s(details#composer-recipients > summary [data-testid="composer-archive-copy"]),
                "a copy is kept in help@acme.example"
              )
     end
@@ -949,6 +950,23 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert note.is_internal_note
       assert is_nil(note.delivery_status)
       assert Threads.list_public_messages(conv.id) == []
+    end
+
+    test "tells open attention queues, which preview the note", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+      thread_id = conv.id
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
+
+      view
+      |> form("form[phx-submit=add_note]", body: "Asked finance")
+      |> render_submit()
+
+      assert_receive {:thread_updated, ^thread_id}
     end
   end
 
@@ -1843,6 +1861,20 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert has_element?(view, "#{entry} [data-testid=staff-state-badge-waiting]", "waiting")
       assert has_element?(view, "#{entry} time", "opened 3d ago")
     end
+
+    test "another open conversation under a minute old was opened just now", %{
+      conn: conn,
+      conv: conv,
+      org: org
+    } do
+      other = insert_thread(organization_id: org.id, state: :waiting)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      entry = "a[data-testid=staff-other-conv-#{other.id}]"
+
+      assert has_element?(view, "#{entry} time", "opened just now")
+      refute has_element?(view, "#{entry} time", "ago")
+    end
   end
 
   describe "collapsed composer" do
@@ -2005,13 +2037,13 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                view,
-               "#{nav} a[data-testid=staff-thread-prev][data-shortcut=k][href='/app/threads/#{a.id}?pos=0']",
+               "#{nav} a[data-testid=staff-thread-prev][data-shortcut=k][href='/app/threads/#{a.id}?pos=0&before=#{b.id}']",
                "Previous"
              )
 
       assert has_element?(
                view,
-               "#{nav} a[data-testid=staff-thread-next][data-shortcut=j][href='/app/threads/#{c.id}?pos=2']",
+               "#{nav} a[data-testid=staff-thread-next][data-shortcut=j][href='/app/threads/#{c.id}?pos=2&after=#{b.id}']",
                "Next"
              )
 
@@ -2030,14 +2062,14 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                first,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{b.id}?pos=1']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{b.id}?pos=1&after=#{a.id}&before=#{c.id}']"
              )
 
       {:ok, last, _html} = live(conn, ~p"/app/threads/#{c.id}")
 
       assert has_element?(
                last,
-               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=1']"
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=1&after=#{a.id}&before=#{c.id}']"
              )
 
       assert has_element?(last, "[data-testid=staff-thread-next-none][aria-disabled=true]")
@@ -2065,7 +2097,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=needs_reply&label=#{label.id}&pos=1']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=needs_reply&label=#{label.id}&pos=1&after=#{a.id}']"
              )
 
       assert has_element?(
@@ -2090,12 +2122,12 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?filter=needs_reply&pos=0']"
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?filter=needs_reply&pos=0&before=#{c.id}']"
              )
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=needs_reply&pos=1']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=needs_reply&pos=1&after=#{a.id}']"
              )
     end
 
@@ -2115,12 +2147,12 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-prev][href='/app/threads/#{first.id}?filter=new&pos=0']"
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{first.id}?filter=new&pos=0&before=#{third.id}']"
              )
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{third.id}?filter=new&pos=1']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{third.id}?filter=new&pos=1&after=#{first.id}']"
              )
     end
 
@@ -2137,19 +2169,121 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       order = Threads.queue_ids(Custyard.Factory.staff_scope(fresh.tenant_id))
       assert List.last(order) == fresh.id, "the opened thread sank to the end of the queue"
-      [^a, after_fresh | _] = Enum.map(order, &Repo.get!(Custyard.Thread, &1))
+      [^a, after_fresh, third | _] = Enum.map(order, &Repo.get!(Custyard.Thread, &1))
 
       assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 4")
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0']"
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0&before=#{after_fresh.id}']"
              )
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{after_fresh.id}?pos=1']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{after_fresh.id}?pos=1&after=#{a.id}&before=#{third.id}']"
              )
+    end
+
+    test "Next leads on from the conversation just read after the queue changed above it", %{
+      conn: conn,
+      org: org,
+      a: a,
+      b: b,
+      c: c
+    } do
+      [d, e] =
+        for score <- [20, 10] do
+          insert_thread(organization_id: org.id, state: :active, cached_score: score)
+        end
+
+      follow_next = fn view ->
+        {:ok, next, _html} =
+          view
+          |> element("a[data-testid=staff-thread-next]")
+          |> render_click()
+          |> follow_redirect(conn)
+
+        assert has_element?(next, "[data-testid=staff-thread-subject]", "Thread C")
+        next
+      end
+
+      # A colleague resolves the conversation above while B is being read.
+      # B's page is not told, so its Next link is the one rendered before.
+      {:ok, reading_b, _html} = live(conn, ~p"/app/threads/#{b.id}?pos=1")
+      Repo.update_all(from(t in Custyard.Thread, where: t.id == ^a.id), set: [state: :resolved])
+      next = follow_next.(reading_b)
+
+      assert has_element?(next, "[data-testid=staff-thread-queue-position]", "2 of 4")
+
+      assert has_element?(
+               next,
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=0&before=#{c.id}']"
+             )
+
+      assert has_element?(
+               next,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{d.id}?pos=2&after=#{c.id}&before=#{e.id}']"
+             )
+
+      # Or a new conversation arrives on top of the queue.
+      Repo.update_all(from(t in Custyard.Thread, where: t.id == ^a.id), set: [state: :active])
+      {:ok, reading_b, _html} = live(conn, ~p"/app/threads/#{b.id}?pos=1")
+      insert_thread(organization_id: org.id, state: :new, cached_score: 95)
+      next = follow_next.(reading_b)
+
+      assert has_element?(next, "[data-testid=staff-thread-queue-position]", "4 of 6")
+
+      assert has_element?(
+               next,
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=2&after=#{a.id}&before=#{c.id}']"
+             )
+
+      assert has_element?(
+               next,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{d.id}?pos=4&after=#{c.id}&before=#{e.id}']"
+             )
+    end
+
+    test "a reload starts from the neighbours last shown, not from those in the link", %{
+      conn: conn,
+      org: org,
+      a: a,
+      b: b,
+      c: c
+    } do
+      [d, e] =
+        for score <- [20, 10] do
+          insert_thread(organization_id: org.id, state: :active, cached_score: score)
+        end
+
+      resolve = fn thread ->
+        Repo.update_all(
+          from(t in Custyard.Thread, where: t.id == ^thread.id),
+          set: [state: :resolved]
+        )
+      end
+
+      {:ok, view, _html} =
+        live(conn, ~p"/app/threads/#{c.id}?pos=2&after=#{b.id}&before=#{d.id}")
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "3 of 5")
+
+      # The conversation before it leaves the queue: the one after still places it.
+      resolve.(b)
+      send(view.pid, {:thread_updated, c.id})
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 4")
+      assert has_element?(view, "a[data-testid=staff-thread-prev][href^='/app/threads/#{a.id}?']")
+      assert has_element?(view, "a[data-testid=staff-thread-next][href^='/app/threads/#{d.id}?']")
+
+      # Then the one after it leaves too. Both ids of the link are gone by now,
+      # but A was shown as the previous one on the last reload.
+      resolve.(d)
+      send(view.pid, {:thread_updated, c.id})
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 3")
+      assert has_element?(view, "a[data-testid=staff-thread-prev][href^='/app/threads/#{a.id}?']")
+      assert has_element?(view, "a[data-testid=staff-thread-next][href^='/app/threads/#{e.id}?']")
     end
 
     test "shows no queue controls for a conversation that is not in the queue", %{
@@ -2164,17 +2298,139 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert has_element?(view, "a[data-testid=staff-thread-back][href='/app?at=#{resolved.id}']")
     end
 
-    test "ignores unknown filters and malformed positions", %{conn: conn, a: a, b: b} do
+    test "a reload is not led astray by a neighbour that moved", %{
+      conn: conn,
+      org: org,
+      a: a,
+      b: b,
+      c: c
+    } do
+      [d, _e] =
+        for score <- [20, 10] do
+          insert_thread(organization_id: org.id, state: :active, cached_score: score)
+        end
+
+      rescore = fn thread, score ->
+        Repo.update_all(
+          from(t in Custyard.Thread, where: t.id == ^thread.id),
+          set: [cached_score: score]
+        )
+      end
+
+      placed_between_a_and_d = fn view ->
+        has_element?(view, "a[data-testid=staff-thread-prev][href^='/app/threads/#{a.id}?']") and
+          has_element?(view, "a[data-testid=staff-thread-next][href^='/app/threads/#{d.id}?']")
+      end
+
+      {:ok, view, _html} =
+        live(conn, ~p"/app/threads/#{c.id}?pos=2&after=#{b.id}&before=#{d.id}")
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "3 of 5")
+
+      # B, listed just before, sinks to the end: a colleague answered it.
+      rescore.(b, 5)
+      send(view.pid, {:thread_updated, c.id})
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 5")
+      assert placed_between_a_and_d.(view)
+
+      # Then B rises to the top: its customer wrote again.
+      rescore.(b, 95)
+      send(view.pid, {:thread_updated, c.id})
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "3 of 5")
+      assert placed_between_a_and_d.(view)
+    end
+
+    test "a new conversation opened from a link takes the place it is listed at", %{
+      conn: conn,
+      org: org
+    } do
+      [n1, n2, n3, n4] =
+        for score <- [99, 98, 97, 96] do
+          insert_thread(organization_id: org.id, state: :new, cached_score: score)
+        end
+
+      {:ok, reading, _html} = live(conn, ~p"/app/threads/#{n1.id}?pos=0&before=#{n2.id}")
+      next_path = "/app/threads/#{n2.id}?pos=0&before=#{n3.id}"
+      assert has_element?(reading, "a[data-testid=staff-thread-next][href='#{next_path}']")
+
+      # A colleague opens the conversation that link names as the one after
+      # its target. Opening activates it, and it sinks to the end.
+      {:ok, _colleague, _html} = live(conn, ~p"/app/threads/#{n3.id}")
+      scope = Custyard.Factory.staff_scope(n3.tenant_id)
+      assert List.last(Threads.queue_ids(scope)) == n3.id
+
+      # Following the link as the browser does, without a page load, the
+      # target is still new and still listed first when it mounts.
+      {:ok, next, _html} = live_redirect(reading, to: next_path)
+
+      assert has_element?(next, "[data-testid=staff-thread-queue-position]", "1 of 7")
+      assert has_element?(next, "[data-testid=staff-thread-prev-none]")
+
+      assert has_element?(
+               next,
+               "a[data-testid=staff-thread-next][href^='/app/threads/#{n4.id}?']"
+             )
+    end
+
+    test "ignores unknown filters and malformed positions", %{conn: conn, a: a, b: b, c: c} do
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{a.id}?filter=everything&label=x&pos=-4")
 
       assert has_element?(view, "[data-testid=staff-thread-queue-position]", "1 of 3")
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{b.id}?pos=1']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{b.id}?pos=1&after=#{a.id}&before=#{c.id}']"
              )
 
       assert has_element?(view, "a[data-testid=staff-thread-back][href='/app?at=#{a.id}']")
+    end
+
+    test "falls back to the whole queue for a label id too large for the database", %{
+      conn: conn,
+      a: a
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{a.id}?label=9223372036854775808")
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "1 of 3")
+      assert has_element?(view, "a[data-testid=staff-thread-back][href='/app?at=#{a.id}']")
+    end
+
+    test "an anchor that is not in the queue is the same as no anchor", %{
+      conn: conn,
+      a: a,
+      b: b,
+      c: c
+    } do
+      foreign =
+        insert_thread(
+          tenant_id: insert_tenant().id,
+          source: :public_intake,
+          state: :active,
+          cached_score: 95
+        )
+
+      # Another tenant's conversation, not integers, out of range.
+      for anchor <- [foreign.id, "x", "1.5", "-1", "0", "9223372036854775808"] do
+        {:ok, view, html} =
+          live(conn, ~p"/app/threads/#{b.id}?pos=1&after=#{anchor}&before=#{anchor}")
+
+        assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 3")
+
+        assert has_element?(
+                 view,
+                 "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0&before=#{b.id}']"
+               )
+
+        assert has_element?(
+                 view,
+                 "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?pos=2&after=#{b.id}']"
+               )
+
+        assert has_element?(view, "a[data-testid=staff-thread-back][href='/app?at=#{b.id}']")
+        refute html =~ "/app/threads/#{foreign.id}"
+      end
     end
 
     test "never offers a conversation from another tenant", %{conn: conn, a: a} do

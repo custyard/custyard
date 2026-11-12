@@ -311,16 +311,29 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     do: "#{exchanged} exchanged with the customer"
 
   # A row's link carries the queue it was opened from (filter, label and the
-  # row's position), so the conversation can offer previous and next in the
+  # row's place), so the conversation can offer previous and next in the
   # same order.
-  defp thread_path(thread_id, filter, label_id, pos) do
+  defp thread_path(thread_id, filter, label_id, place) do
     params =
       Enum.reject(
-        [filter: if(filter != "all", do: filter), label: label_id, pos: pos],
+        [filter: if(filter != "all", do: filter), label: label_id] ++ place,
         fn {_key, value} -> is_nil(value) end
       )
 
     ~p"/app/threads/#{thread_id}?#{params}"
+  end
+
+  # Each row with its place: its position and the ids listed just before and
+  # after it, which still locate it once the queue has changed above it (see
+  # Custyard.Threads.QueueNav).
+  defp with_places(threads) do
+    ids = Enum.map(threads, & &1.thread.id)
+
+    [threads, [nil | ids], Enum.drop(ids, 1) ++ [nil]]
+    |> Enum.zip()
+    |> Enum.with_index(fn {item, after_id, before_id}, pos ->
+      {item, [pos: pos, after: after_id, before: before_id]}
+    end)
   end
 
   # "billing@onetimesecret.com" -> "billing@"; the full address stays in the title.
@@ -498,9 +511,9 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         data-testid="staff-queue-list"
       >
         <.queue_row
-          :for={{item, pos} <- Enum.with_index(@threads)}
+          :for={{item, place} <- with_places(@threads)}
           item={item}
-          thread_path={thread_path(item.thread.id, @filter, @label_id, pos)}
+          thread_path={thread_path(item.thread.id, @filter, @label_id, place)}
           staff_id={@current_staff.id}
           show_score={@show_score_breakdown == item.thread.id}
           show_snooze={@show_snooze_menu == item.thread.id}
@@ -734,13 +747,24 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
                    changes how the thread is handled does. --%>
               <.source_badge :if={routing_source?(@item.thread.source)} source={@item.thread.source} />
               <.state_badge state={@item.thread.state} />
+              <%!-- The chips are one clipped line, so the snooze and the labels
+                   come before tier and mailbox. --%>
               <span
                 :if={@item.is_snoozed}
                 class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300"
+                title={"Snoozed until #{format_snooze_time(@item.thread.snoozed_until)}"}
                 data-testid="staff-queue-snoozed"
               >
-                snoozed until {format_snooze_time(@item.thread.snoozed_until)}
+                snoozed
+                <span class="hidden md:inline">
+                  until {format_snooze_time(@item.thread.snoozed_until)}
+                </span>
               </span>
+              <span
+                :for={label <- @item.labels}
+                class="text-xs rounded px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
+                data-testid={"queue-label-#{label.id}"}
+              >{label.name}</span>
               <.tier_badge
                 :if={@item.thread.organization && @item.thread.organization.tier != :standard}
                 tier={@item.thread.organization.tier}
@@ -755,11 +779,6 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
               >
                 {mailbox_local(@item.thread.inbound_channel.public_address)}
               </span>
-              <span
-                :for={label <- @item.labels}
-                class="text-xs rounded px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
-                data-testid={"queue-label-#{label.id}"}
-              >{label.name}</span>
               <.intake_source_tag
                 :if={@item.thread.intake_source_key}
                 source_key={@item.thread.intake_source_key}

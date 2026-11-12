@@ -75,6 +75,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "tenant_outbound:#{thread.tenant_id}")
     end
 
+    socket = place_before_opening(socket, thread)
+
     case activate_if_new(thread, socket.assigns.current_scope) do
       {:ok, current} ->
         if current &&
@@ -119,6 +121,22 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   defp activate_if_new(thread, _scope), do: {:ok, thread}
+
+  # Opening a new conversation activates it, which moves it in the queue or
+  # takes it out of the filter. Until then its own place is exact, unlike the
+  # one in the link, which is as old as the page the link was on.
+  defp place_before_opening(socket, %Thread{state: :new} = thread) do
+    case socket.assigns.queue_context do
+      %{pos: nil, after: nil, before: nil} ->
+        socket
+
+      %{filter: filter, label_id: label_id} = context ->
+        ids = Threads.queue_ids(socket.assigns.current_scope, filter: filter, label_id: label_id)
+        assign(socket, :queue_context, keep_place(context, QueueNav.neighbors(ids, thread.id)))
+    end
+  end
+
+  defp place_before_opening(socket, _thread), do: socket
 
   defp mount_loaded_thread(socket, thread) do
     breakdown = Scoring.breakdown(thread)
@@ -264,6 +282,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
           "thread:#{thread.id}",
           {:message_added, thread.id}
         )
+
+        broadcast_thread_update(thread.id, thread.organization_id)
 
         {:noreply,
          socket |> assign(:note_text, "") |> acknowledge_submitted_draft() |> reload_thread()}
@@ -1107,22 +1127,26 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   # Which queue the staff member opened this conversation from: its filter,
-  # its label and the row's position, as carried by the row link. Anything
-  # unrecognised falls back to the whole queue. The values only choose among
-  # queue queries that are tenant-scoped whatever is passed.
+  # its label, the row's position and the ids listed around the row, as
+  # carried by the row link. Anything unrecognised falls back to the whole
+  # queue. The values only choose among queue queries that are tenant-scoped
+  # whatever is passed; the ids are only looked up in that queue's own list.
   defp queue_context(params) do
     filter = params["filter"]
 
     %{
       filter: if(filter in Threads.queue_filters(), do: filter, else: "all"),
       label_id: query_integer(params["label"], 1),
-      pos: query_integer(params["pos"], 0)
+      pos: query_integer(params["pos"], 0),
+      after: query_integer(params["after"], 1),
+      before: query_integer(params["before"], 1)
     }
   end
 
+  # The upper bound is the largest integer the database driver accepts.
   defp query_integer(value, min) when is_binary(value) do
     case Integer.parse(value) do
-      {integer, ""} when integer >= min -> integer
+      {integer, ""} when integer >= min and integer <= 9_223_372_036_854_775_807 -> integer
       _ -> nil
     end
   end
@@ -1131,10 +1155,28 @@ defmodule CustyardWeb.Staff.ThreadLive do
 
   # Previous and next conversation in that queue's order. One id-only query.
   defp assign_queue_nav(socket) do
-    %{filter: filter, label_id: label_id, pos: pos} = socket.assigns.queue_context
+    %{filter: filter, label_id: label_id, pos: pos, after: after_id, before: before_id} =
+      context = socket.assigns.queue_context
+
     ids = Threads.queue_ids(socket.assigns.current_scope, filter: filter, label_id: label_id)
-    assign(socket, :queue_nav, QueueNav.neighbors(ids, socket.assigns.thread.id, pos))
+
+    nav =
+      QueueNav.neighbors(ids, socket.assigns.thread.id, pos, after: after_id, before: before_id)
+
+    socket
+    |> assign(:queue_nav, nav)
+    |> assign(:queue_context, keep_place(context, nav))
   end
+
+  # The place in the URL describes the queue as it was when the link was
+  # rendered. The neighbours just found replace it, so the next reload starts
+  # from the queue as last seen. A conversation opened without a place keeps
+  # following its own.
+  defp keep_place(%{pos: nil, after: nil, before: nil} = context, _nav), do: context
+  defp keep_place(context, %{position: nil}), do: context
+
+  defp keep_place(context, %{position: position, prev: prev, next: next}),
+    do: %{context | pos: position - 1, after: prev && prev.id, before: next && next.id}
 
   defp queue_params(%{filter: filter, label_id: label_id}, extra) do
     Enum.reject(
@@ -1147,8 +1189,10 @@ defmodule CustyardWeb.Staff.ThreadLive do
   # this conversation's row.
   defp queue_path(context, thread_id), do: ~p"/app?#{queue_params(context, at: thread_id)}"
 
-  defp neighbor_path(context, %{id: id, pos: pos}),
-    do: ~p"/app/threads/#{id}?#{queue_params(context, pos: pos)}"
+  defp neighbor_path(context, %{id: id, pos: pos, after: after_id, before: before_id}) do
+    params = queue_params(context, pos: pos, after: after_id, before: before_id)
+    ~p"/app/threads/#{id}?#{params}"
+  end
 
   # "3 of 24 in needs reply": the place in the queue being stepped through.
   defp queue_position(%{position: position, total: total}, %{filter: "all"}),
@@ -1167,6 +1211,13 @@ defmodule CustyardWeb.Staff.ThreadLive do
     |> Threads.list_for_organization(include_resolved: false)
     |> Enum.reject(&(&1.id == thread.id))
     |> Enum.take(5)
+  end
+
+  defp opened_ago(inserted_at) do
+    case short_age(inserted_at) do
+      "now" -> "opened just now"
+      age -> "opened #{age} ago"
+    end
   end
 
   # Truncate subject for page title (browser tab)
@@ -1572,6 +1623,15 @@ defmodule CustyardWeb.Staff.ThreadLive do
                     </span>
                     <code :if={@reply_identity.address} class="text-gray-900 dark:text-zinc-100">&lt;{@reply_identity.address}&gt;</code>
                   </span>
+                  <%!-- In the summary, not the body: D4 wants it seen while
+                  the details are closed. --%>
+                  <span
+                    :if={@archive_copy_address}
+                    class="min-w-0 max-w-full"
+                    data-testid="composer-archive-copy"
+                  >
+                    Besides the customer, a copy is kept in {@archive_copy_address}
+                  </span>
                   <span class="underline decoration-dotted underline-offset-2 group-open/recipients:hidden">
                     Change
                   </span>
@@ -1612,13 +1672,6 @@ defmodule CustyardWeb.Staff.ThreadLive do
                     data-testid="staff-reply-cc"
                     class="w-full border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 text-xs dark:bg-zinc-800 dark:text-zinc-100"
                   />
-                  <p
-                    :if={@archive_copy_address}
-                    class="sm:col-span-2"
-                    data-testid="composer-archive-copy"
-                  >
-                    Besides the customer, a copy is kept in {@archive_copy_address}
-                  </p>
                 </div>
               </details>
               <div class="flex items-end gap-2">
@@ -1632,7 +1685,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   aria-label="Reply to customer"
                   aria-describedby="composer-audience"
                   data-testid="staff-reply-input"
-                  class="min-w-0 flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm leading-6 resize-y dark:bg-zinc-900 dark:text-zinc-100"
+                  class="min-w-0 flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm leading-6 resize-none dark:bg-zinc-900 dark:text-zinc-100"
                 >{@reply_text}</textarea>
                 <button
                   type="submit"
@@ -1663,7 +1716,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                 aria-label="Internal note (not visible to customer)"
                 aria-describedby="composer-audience"
                 data-testid="staff-note-input"
-                class="min-w-0 flex-1 resize-y border border-amber-400 dark:border-amber-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm leading-6"
+                class="min-w-0 flex-1 resize-none border border-amber-400 dark:border-amber-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm leading-6"
               >{@note_text}</textarea>
               <button
                 type="submit"
@@ -2081,7 +2134,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                       datetime={DateTime.to_iso8601(conv.inserted_at)}
                       title={"Opened #{format_timestamp(conv.inserted_at)}"}
                     >
-                      opened {short_age(conv.inserted_at)} ago
+                      {opened_ago(conv.inserted_at)}
                     </time>
                   </span>
                 </.link>

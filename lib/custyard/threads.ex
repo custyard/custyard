@@ -39,9 +39,8 @@ defmodule Custyard.Threads do
     if Custyard.Scope.current_staff(scope) do
       opts
       |> Keyword.put(:tenant_id, tenant_id)
-      |> attention_queue_query()
+      |> attention_queue_query(Keyword.get(opts, :filter, "all") == "needs_reply")
       |> exclude(:preload)
-      |> exclude(:select)
       |> select([c], c.id)
       |> Repo.all()
     else
@@ -116,10 +115,27 @@ defmodule Custyard.Threads do
     end
   end
 
-  defp list_for_attention_queue(opts), do: opts |> attention_queue_query() |> Repo.all()
+  defp list_for_attention_queue(opts) do
+    from([c, message_facts: mf, due_tasks: dt] in attention_queue_query(opts, true),
+      select: %{
+        thread: c,
+        message_count: coalesce(mf.count, 0),
+        # Messages exchanged with the customer: no internal notes, no
+        # automatic replies.
+        exchange_count: coalesce(mf.exchanged, 0),
+        # The 24h count behind the score's velocity term.
+        recent_count: coalesce(mf.recent, 0),
+        due_task_count: coalesce(dt.count, 0)
+      }
+    )
+    |> Repo.all()
+  end
 
   # The one query behind the queue list and the queue order (queue_ids/2).
-  defp attention_queue_query(opts) do
+  # The message facts aggregate every message the tenant has stored, so they
+  # are joined only for a caller that reads them: the list, and the order of
+  # the "needs_reply" filter.
+  defp attention_queue_query(opts, message_facts?) do
     filter = Keyword.get(opts, :filter, "all")
     organization_id = Keyword.get(opts, :organization_id)
     tenant_id = Keyword.get(opts, :tenant_id)
@@ -133,9 +149,6 @@ defmodule Custyard.Threads do
         # Prospect preload feeds reply_channel/1 without N+1 queries
         left_join: p in assoc(c, :prospect),
         left_join: ch in assoc(c, :inbound_channel),
-        left_join: mf in subquery(QueuePreview.message_facts(tenant_id)),
-        as: :message_facts,
-        on: mf.thread_id == c.id,
         left_join: dt in subquery(due_task_subquery(now)),
         as: :due_tasks,
         on: dt.thread_id == c.id,
@@ -150,25 +163,26 @@ defmodule Custyard.Threads do
           desc: c.cached_score,
           asc: c.id
         ],
-        preload: [organization: o, contact: ct, prospect: p, inbound_channel: ch],
-        select: %{
-          thread: c,
-          message_count: coalesce(mf.count, 0),
-          # Messages exchanged with the customer: no internal notes, no
-          # automatic replies.
-          exchange_count: coalesce(mf.exchanged, 0),
-          # The 24h count behind the score's velocity term.
-          recent_count: coalesce(mf.recent, 0),
-          due_task_count: coalesce(dt.count, 0)
-        }
+        preload: [organization: o, contact: ct, prospect: p, inbound_channel: ch]
       )
 
     query
+    |> join_message_facts(tenant_id, message_facts?)
     |> apply_organization_filter(organization_id)
     |> apply_tenant_filter(tenant_id)
     |> apply_snooze_filter(filter, now)
     |> apply_state_filter(filter)
     |> apply_label_filter(Keyword.get(opts, :label_id))
+  end
+
+  defp join_message_facts(query, _tenant_id, false), do: query
+
+  defp join_message_facts(query, tenant_id, true) do
+    from(c in query,
+      left_join: mf in subquery(QueuePreview.message_facts(tenant_id)),
+      as: :message_facts,
+      on: mf.thread_id == c.id
+    )
   end
 
   # Unfinished tasks that have reached their deadline, per thread.
@@ -181,12 +195,13 @@ defmodule Custyard.Threads do
   end
 
   # One light row per open thread, tallied here rather than in one filtered
-  # query per chip. The rules mirror attention_queue_query/1 with
+  # query per chip. The rules mirror attention_queue_query/2 with
   # apply_snooze_filter/3 and apply_state_filter/2; a test compares every
   # count with the length of the matching list.
   defp count_attention_queue(opts) do
     tenant_id = Keyword.get(opts, :tenant_id)
-    now = DateTime.utc_now()
+    # The list queries compare snoozed_until at whole seconds; so must the tally.
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     from(c in Thread,
       left_join: mf in subquery(QueuePreview.message_facts(tenant_id)),
@@ -807,7 +822,9 @@ defmodule Custyard.Threads do
   Broadcasts `{:message_updated, thread_id}` on the thread topic
   (`"thread:{id}"`) — the same message-level pattern
   `Custyard.Email.Outbound` uses for delivery updates — so open staff,
-  prospect, and portal views swap in the tombstone without a remount.
+  prospect, and portal views swap in the tombstone without a remount. Also
+  broadcasts `{:thread_updated, thread_id}` on `"threads"`, so an open
+  attention queue stops previewing the deleted body.
   """
   def soft_delete_message(%Message{deleted_at: %DateTime{}} = message, _staff) do
     {:ok, message}
@@ -821,6 +838,9 @@ defmodule Custyard.Threads do
           "thread:#{deleted.thread_id}",
           {:message_updated, deleted.thread_id}
         )
+
+        # An open attention queue still shows the body as the row snippet.
+        Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, deleted.thread_id})
 
         {:ok, deleted}
 
