@@ -22,9 +22,10 @@ Only `publish` logs in: the `container` job reads the build cache
 (`registry.gitlab.com/custyard/custyard:buildcache`) anonymously, so merge
 request pipelines cannot write the cache that `publish` builds from.
 
-The project is public, so its registry allows anonymous pulls. If the project
-or its registry becomes private, give each pulling host a deploy token with
-the `read_registry` scope. Do not save the pipeline's short-lived job token in
+The project is public, so its registry allows anonymous pulls. Bunny's
+registry form still requires a username and token: give it a deploy token
+with only the `read_registry` scope. If the project or its registry becomes
+private, give Fly one too. Do not save the pipeline's short-lived job token in
 Bunny or Fly.
 
 See GitLab's [container registry](https://docs.gitlab.com/user/packages/container_registry/)
