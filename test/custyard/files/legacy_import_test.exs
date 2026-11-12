@@ -661,6 +661,11 @@ defmodule Custyard.Files.LegacyImportTest do
       nowhere = Path.join(tmp_dir, "does-not-exist")
       opts = [attachment_dir: nowhere, upload_dir: nowhere]
 
+      # The first call of a function can load a module, which reads its file
+      # in the calling process. Run both once before watching them.
+      LegacyImport.run(opts)
+      LegacyImport.boot(opts)
+
       assert {@zero, []} = with_file_calls(fn -> LegacyImport.run(opts) end)
       assert {@zero, []} = with_file_calls(fn -> LegacyImport.boot(opts) end)
       refute File.exists?(nowhere)
