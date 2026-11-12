@@ -4,7 +4,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   import CustyardWeb.StaffComponents
 
   alias Custyard.{Threads, EmailSetup, Labels, Scoring}
-  alias Custyard.Threads.QueuePreview
+  alias Custyard.Threads.{QueueNav, QueuePreview}
 
   # Debounce delay for PubSub-triggered reloads (milliseconds)
   # This prevents N+1 query storms when multiple threads update rapidly
@@ -324,17 +324,19 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   end
 
   # Each row with its place: its position and the ids listed just before and
-  # after it, which still locate it once the queue has changed above it (see
+  # after it, which still locate it once the queue has changed (see
   # Custyard.Threads.QueueNav).
   defp with_places(threads) do
     ids = Enum.map(threads, & &1.thread.id)
 
-    [threads, [nil | ids], Enum.drop(ids, 1) ++ [nil]]
-    |> Enum.zip()
-    |> Enum.with_index(fn {item, after_id, before_id}, pos ->
-      {item, [pos: pos, after: after_id, before: before_id]}
+    Enum.with_index(threads, fn item, pos ->
+      %{after: after_ids, before: before_ids} = QueueNav.place(ids, pos)
+      {item, [pos: pos, after: id_list(after_ids), before: id_list(before_ids)]}
     end)
   end
+
+  defp id_list([]), do: nil
+  defp id_list(ids), do: Enum.join(ids, ",")
 
   # "billing@onetimesecret.com" -> "billing@"; the full address stays in the title.
   defp mailbox_local(address) do

@@ -2037,13 +2037,13 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                view,
-               "#{nav} a[data-testid=staff-thread-prev][data-shortcut=k][href='/app/threads/#{a.id}?pos=0&before=#{b.id}']",
+               "#{nav} a[data-testid=staff-thread-prev][data-shortcut=k][href='/app/threads/#{a.id}?pos=0&before=#{b.id}%2C#{c.id}']",
                "Previous"
              )
 
       assert has_element?(
                view,
-               "#{nav} a[data-testid=staff-thread-next][data-shortcut=j][href='/app/threads/#{c.id}?pos=2&after=#{b.id}']",
+               "#{nav} a[data-testid=staff-thread-next][data-shortcut=j][href='/app/threads/#{c.id}?pos=2&after=#{b.id}%2C#{a.id}']",
                "Next"
              )
 
@@ -2175,12 +2175,12 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0&before=#{after_fresh.id}']"
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0&before=#{after_fresh.id}%2C#{third.id}%2C#{fresh.id}']"
              )
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{after_fresh.id}?pos=1&after=#{a.id}&before=#{third.id}']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{after_fresh.id}?pos=1&after=#{a.id}&before=#{third.id}%2C#{fresh.id}']"
              )
     end
 
@@ -2217,30 +2217,30 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                next,
-               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=0&before=#{c.id}']"
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=0&before=#{c.id}%2C#{d.id}%2C#{e.id}']"
              )
 
       assert has_element?(
                next,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{d.id}?pos=2&after=#{c.id}&before=#{e.id}']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{d.id}?pos=2&after=#{c.id}%2C#{b.id}&before=#{e.id}']"
              )
 
       # Or a new conversation arrives on top of the queue.
       Repo.update_all(from(t in Custyard.Thread, where: t.id == ^a.id), set: [state: :active])
       {:ok, reading_b, _html} = live(conn, ~p"/app/threads/#{b.id}?pos=1")
-      insert_thread(organization_id: org.id, state: :new, cached_score: 95)
+      n = insert_thread(organization_id: org.id, state: :new, cached_score: 95)
       next = follow_next.(reading_b)
 
       assert has_element?(next, "[data-testid=staff-thread-queue-position]", "4 of 6")
 
       assert has_element?(
                next,
-               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=2&after=#{a.id}&before=#{c.id}']"
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{b.id}?pos=2&after=#{a.id}%2C#{n.id}&before=#{c.id}%2C#{d.id}%2C#{e.id}']"
              )
 
       assert has_element?(
                next,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{d.id}?pos=4&after=#{c.id}&before=#{e.id}']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{d.id}?pos=4&after=#{c.id}%2C#{b.id}%2C#{a.id}&before=#{e.id}']"
              )
     end
 
@@ -2346,7 +2346,8 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
     # names as the one after its target is the one a colleague takes next.
     test "a link still places its target after a colleague opened the next conversation", %{
       conn: conn,
-      org: org
+      org: org,
+      a: a
     } do
       [n1, n2, n3, n4] =
         for score <- [99, 98, 97, 96] do
@@ -2354,7 +2355,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
         end
 
       {:ok, reading, _html} = live(conn, ~p"/app/threads/#{n1.id}?pos=0&before=#{n2.id}")
-      next_path = "/app/threads/#{n2.id}?pos=0&before=#{n3.id}"
+      next_path = "/app/threads/#{n2.id}?pos=0&before=#{n3.id}%2C#{n4.id}%2C#{a.id}"
       assert has_element?(reading, "a[data-testid=staff-thread-next][href='#{next_path}']")
 
       # Opening activates it, and it sinks to the end.
@@ -2425,6 +2426,56 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert has_element?(top, "[data-testid=staff-thread-prev-none]")
       assert has_element?(top, "a[data-testid=staff-thread-next][href^='/app/threads/#{t3.id}?']")
       refute has_element?(top, "a[data-testid=staff-thread-next][href^='/app/threads/#{a.id}?']")
+    end
+
+    # Two changes that hit the nearest conversation on each side of a link's
+    # target: the other two on each side still place it.
+    test "a link's target stays in place when both of its neighbours moved", %{
+      conn: conn,
+      org: org
+    } do
+      [n1, n2, n3, n4, n5, n6, n7, _n8] =
+        for score <- 99..92//-1 do
+          insert_thread(organization_id: org.id, state: :new, cached_score: score)
+        end
+
+      # From the queue page, as staff do.
+      {:ok, queue, _html} = live(conn, ~p"/app")
+
+      [row_path] =
+        queue
+        |> element("li#queue-row-#{n4.id} a[data-row-link]")
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.attribute("href")
+
+      {:ok, reading, _html} = live(conn, row_path)
+
+      next_path =
+        "/app/threads/#{n5.id}?pos=3&after=#{n3.id}%2C#{n2.id}%2C#{n1.id}&before=#{n6.id}%2C#{n7.id}"
+
+      assert has_element?(reading, "a[data-testid=staff-thread-next][href^='#{next_path}']")
+
+      # A colleague opens n3, which sinks to the end, and n6's customer
+      # writes again, which raises it to the top.
+      {:ok, _colleague, _html} = live(conn, ~p"/app/threads/#{n3.id}")
+      Repo.update_all(from(t in Custyard.Thread, where: t.id == ^n6.id), set: [cached_score: 100])
+
+      {:ok, next, _html} =
+        reading
+        |> element("a[data-testid=staff-thread-next]")
+        |> render_click()
+        |> follow_redirect(conn)
+
+      assert has_element?(
+               next,
+               "a[data-testid=staff-thread-prev][href^='/app/threads/#{n2.id}?']"
+             )
+
+      assert has_element?(
+               next,
+               "a[data-testid=staff-thread-next][href^='/app/threads/#{n7.id}?']"
+             )
     end
 
     test "two people working down the queue are each offered every conversation once", %{
@@ -2515,12 +2566,12 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
         assert has_element?(
                  view,
-                 "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0&before=#{b.id}']"
+                 "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0&before=#{b.id}%2C#{c.id}']"
                )
 
         assert has_element?(
                  view,
-                 "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?pos=2&after=#{b.id}']"
+                 "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?pos=2&after=#{b.id}%2C#{a.id}']"
                )
 
         assert has_element?(view, "a[data-testid=staff-thread-back][href='/app?at=#{b.id}']")

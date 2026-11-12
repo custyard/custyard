@@ -23,21 +23,21 @@ defmodule Custyard.Threads.QueueNav do
   one that keeps the most witnesses on their side. Among several such places
   it is the one nearest the position hint, then the one that keeps the
   nearer witnesses, then the earlier one. With no witness listed that is the
-  position hint itself. A link carries one witness on each side; a page
-  remembers a few more for its own reloads (`:place` in the result), where
-  one that moved is outvoted.
+  position hint itself. A place names up to three witnesses on each side,
+  in a link and in what a page remembers for its own reloads (`:place` in
+  the result), so that one that moved is outvoted by the others.
 
   A conversation that arrived next to the place is offered as the next one,
   so stepping can show a conversation twice but does not pass one by.
   """
 
+  @type place :: %{pos: non_neg_integer(), after: [integer()], before: [integer()]}
   @type neighbor :: %{
           id: integer(),
           pos: non_neg_integer(),
-          after: integer() | nil,
-          before: integer() | nil
+          after: [integer()],
+          before: [integer()]
         }
-  @type place :: %{pos: non_neg_integer(), after: [integer()], before: [integer()]}
   @type t :: %{
           prev: neighbor() | nil,
           next: neighbor() | nil,
@@ -46,8 +46,26 @@ defmodule Custyard.Threads.QueueNav do
           place: place() | nil
         }
 
-  # Witnesses a page keeps on each side of its place.
+  # Witnesses named on each side of a place.
   @witnesses 3
+
+  @doc "How many witnesses a place names on each side at most."
+  @spec witnesses() :: pos_integer()
+  def witnesses, do: @witnesses
+
+  @doc """
+  The place of the conversation at `pos` in `ids`, to carry with a link to
+  it: its position and the ids listed just before and just after it, nearest
+  first.
+  """
+  @spec place([integer()], non_neg_integer()) :: place()
+  def place(ids, pos) do
+    %{
+      pos: pos,
+      after: ids |> Enum.take(pos) |> Enum.reverse() |> Enum.take(@witnesses),
+      before: ids |> Enum.drop(pos + 1) |> Enum.take(@witnesses)
+    }
+  end
 
   @doc """
   Neighbors of `current_id` in `ids`, the queue's thread ids in listed order.
@@ -60,10 +78,10 @@ defmodule Custyard.Threads.QueueNav do
   conversation's current position is used, and a conversation that is not
   listed then has no neighbors.
 
-  Each neighbor carries its own current position and the ids listed right
-  around it, to pass on with the link that leads to it. `:place` is the
-  place found, with up to #{@witnesses} witnesses on each side, nearest
-  first, for the caller to pass back on its next call.
+  Each neighbor carries its own place (`place/2`), to pass on with the link
+  that leads to it. `:place` is the place found for the conversation itself,
+  with up to #{@witnesses} witnesses on each side, nearest first, for the
+  caller to pass back on its next call.
 
   `:position` is the one-based place in the queue being stepped through and
   `:total` the number of conversations listed now.
@@ -127,15 +145,5 @@ defmodule Custyard.Threads.QueueNav do
   defp index_of(ids, id), do: Enum.find_index(ids, &(&1 == id))
 
   defp neighbor(_ids, id) when id in [nil, false], do: nil
-
-  defp neighbor(ids, id) do
-    pos = index_of(ids, id)
-
-    %{
-      id: id,
-      pos: pos,
-      after: if(pos > 0, do: Enum.at(ids, pos - 1)),
-      before: Enum.at(ids, pos + 1)
-    }
-  end
+  defp neighbor(ids, id), do: ids |> place(index_of(ids, id)) |> Map.put(:id, id)
 end

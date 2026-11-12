@@ -1193,6 +1193,30 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
              )
     end
 
+    test "a row link names up to three conversations on each side of the row", %{conn: conn} do
+      org = insert_organization()
+
+      [t1, t2, t3, t4, t5] =
+        for score <- [90, 80, 70, 60, 50] do
+          insert_thread(organization_id: org.id, state: :active, cached_score: score)
+        end
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      link = fn thread, query ->
+        "li#queue-row-#{thread.id} a[data-row-link][href$='#{query}']"
+      end
+
+      assert has_element?(view, link.(t1, "?pos=0&before=#{t2.id}%2C#{t3.id}%2C#{t4.id}"))
+
+      assert has_element?(
+               view,
+               link.(t3, "?pos=2&after=#{t2.id}%2C#{t1.id}&before=#{t4.id}%2C#{t5.id}")
+             )
+
+      assert has_element?(view, link.(t5, "?pos=4&after=#{t4.id}%2C#{t3.id}%2C#{t2.id}"))
+    end
+
     test "coming back from a conversation selects its row", %{conn: conn} do
       org = insert_organization()
       conv = insert_thread(organization_id: org.id, state: :active)
