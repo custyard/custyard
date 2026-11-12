@@ -47,11 +47,13 @@ during acceptance, `POOL_SIZE` (default 10).
 
 ## Create the app
 
-1. Create the database in the Turso location nearest `primary_region`
-   (`ams`). Each statement is an HTTPS round trip.
+1. Create the database in a Turso group located near `primary_region`
+   (`ams`). Each statement is an HTTPS round trip. A database's location is
+   its group's; `turso group list` shows them.
 
    ```sh
-   turso db create custyard
+   turso group create <group> --location <nearest to ams>
+   turso db create custyard --group <group>
    turso db show custyard --url
    turso db tokens create custyard
    ```
@@ -82,7 +84,7 @@ during acceptance, `POOL_SIZE` (default 10).
    Turso lifts the single-machine refusal, but nothing else about running
    several machines has been tested ([Limits](database.md#limits)).
 
-4. Open the site, sign in with the link mailed to `INSTANCE_ADMIN_EMAIL`, then
+4. Sign in at `https://<PHX_HOST>/admin/login` as `INSTANCE_ADMIN_EMAIL`, then
    `fly secrets unset INSTANCE_ADMIN_EMAIL`. Read the boot report at the top of
    `fly logs` after every deploy: a configuration problem serves the doctor
    card while the Fly check stays green.
@@ -94,16 +96,21 @@ app and database are up); use it for monitoring.
 ## Move an existing app to Turso
 
 For an app whose SQLite file, logos and attachments are on the `custyard_data`
-volume. The app is down from step 3 to step 7. Background and rollback are in
+volume. The app is down from step 3 to step 7; steps 1 and 2 decide whether to
+start. Background and rollback are in
 [Database operations](database.md#moving-an-existing-sqlite-database).
 
 1. `fly secrets list` must not show `DATABASE_URL`, `TURSO_AUTH_TOKEN` or
    `DATABASE_PROVIDER`. The steps below run against the SQLite file;
    `export_sqlite` refuses a Turso configuration.
-2. Snapshot the volume and check space. The file import needs the size of
-   `/data/uploads` plus `/data/attachments`, and the export then needs the
-   size of the database, both on `/data`. A full volume fails every write
-   while `/api/health/live` stays 200.
+2. Snapshot the volume and check space and size. With D the size of
+   `custyard.db` and F the size of `/data/uploads` plus `/data/attachments`:
+   - `/data` needs D + 2F free, plus a few MB. The import grows the database
+     by F, and the export copies the grown database. A full volume fails every
+     write while `/api/health/live` stays 200.
+   - D + F must stay under 2 GB, the limit of `turso db create --from-file`,
+     and within the Turso plan's storage. If it does not, stop here: this
+     procedure does not fit.
 
    ```sh
    fly volumes list
@@ -121,7 +128,9 @@ volume. The app is down from step 3 to step 7. Background and rollback are in
    ```
 
 4. Migrate, then copy the files into the SQLite file. Repeat the import until
-   it reports `pending 0`, with `missing` and `failed` 0.
+   `failed` is 0. What is still `pending` must all be `missing`: files already
+   gone from the volume, which no repeat recovers
+   ([Upgrading from a release that kept files on disk](database.md#upgrading-from-a-release-that-kept-files-on-disk)).
 
    ```sh
    fly ssh console -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.migrate()'"
@@ -135,18 +144,20 @@ volume. The app is down from step 3 to step 7. Background and rollback are in
    fly ssh sftp get /data/turso-import.db ./turso-import.db
    ```
 
-6. Create the database from the copy. `--from-file` only creates; delete an
-   older database of the same name first or pick another name. Setting the
-   secrets restarts the machine, still in maintenance mode.
+6. Create the database from the copy, in the group near `ams`. `--from-file`
+   only creates; delete an older database of the same name first or pick
+   another name. Stage the secrets: applied now, they restart a machine whose
+   health check cannot pass, and flyctl reports a failure.
 
    ```sh
-   turso db create custyard --from-file ./turso-import.db
+   turso db create custyard --group <group> --from-file ./turso-import.db
    turso db show custyard --url
    turso db tokens create custyard
-   fly secrets set DATABASE_PROVIDER=turso DATABASE_URL="libsql://..." TURSO_AUTH_TOKEN="..."
+   fly secrets set --stage DATABASE_PROVIDER=turso DATABASE_URL="libsql://..." TURSO_AUTH_TOKEN="..."
    ```
 
-7. `fly secrets unset MAINTENANCE_MODE`. Sign in, open recent threads, load a
+7. `fly secrets unset MAINTENANCE_MODE` applies all staged secrets and starts
+   the app on Turso. Sign in, open recent threads, load a
    tenant logo and download an attachment. Then
    `fly ssh console -C "rm /data/turso-import.db"`.
 
@@ -154,10 +165,16 @@ Never start the app on a database without the production rows while the
 volume is mounted: the daily retention sweep deletes every file under
 `ATTACHMENT_DIR` that no attachment row refers to.
 
-To go back, unset `DATABASE_PROVIDER`, `DATABASE_URL` and `TURSO_AUTH_TOKEN`.
-The app serves the file again, without anything written to Turso since.
-Every boot logs `unused_local_database_detected` while `/data/custyard.db`
-exists. When it is no longer wanted as a way back, follow
+While the app runs on Turso, every boot logs `unused_local_database_detected`
+as long as `/data/custyard.db` exists.
+
+To go back, set `MAINTENANCE_MODE=true`, then unset `DATABASE_PROVIDER`,
+`DATABASE_URL` and `TURSO_AUTH_TOKEN`. The app serves the file as it was at
+the export: everything written to Turso since is lost unless copied back by
+hand, and every `bin/dsar` erasure run since must be run again against the
+file before users return.
+
+When the file is no longer wanted as a way back, follow
 [Removing the volume](database.md#removing-the-volume): remove `[mounts]`,
 deploy, check a logo and an attachment, `fly volumes destroy <id>`, and unset
 `UPLOAD_DIR`, `ATTACHMENT_DIR`, `DATA_VOLUME_ID` and `DATABASE_PATH`.
