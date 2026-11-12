@@ -49,10 +49,11 @@ registry cleanup policy is disabled, so old versions are kept.
 
 ## Promotion
 
-The promotion workflow (`.github/workflows/promote.yml` and
-`.github/scripts/promotion.py`) still verifies GHCR images through GitHub's
-API. It has not been ported to GitLab and cannot promote images published
-here.
+The promotion jobs in `.gitlab-ci.yml` deploy a published digest to Fly
+staging or Bunny production after checking it against this job's record. See
+[Bunny setup](bunny-setup.md) for inputs, gates and required variables. Images
+built before the move to GitLab carry the GitHub source label and cannot be
+promoted.
 
 ## Failed publishes
 

@@ -4,7 +4,6 @@
 import argparse
 import base64
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
@@ -14,15 +13,23 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import zipfile
 
 REPOSITORY = "custyard/custyard"
-IMAGE = "ghcr.io/custyard/custyard"
+SOURCE_URL = "https://gitlab.com/" + REPOSITORY
+PROJECT_API = "https://gitlab.com/api/v4/projects/" + urllib.parse.quote(REPOSITORY, safe="")
+REGISTRY = "registry.gitlab.com"
+IMAGE = REGISTRY + "/" + REPOSITORY
+REGISTRY_TOKEN_URL = ("https://gitlab.com/jwt/auth?service=container_registry"
+                      f"&scope=repository:{REPOSITORY}:pull")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 RECORD_FILE = "published-image.json"
+DOTENV_FILE = "promotion.env"
 MAX_RECORD_SIZE = 4096
 MAX_RECORD_ARCHIVE = 65_536
+MAX_HEALTH_SIZE = 65_536
+# Job names in .gitlab-ci.yml; a parallel:matrix job reports one name per value.
+REQUIRED_JOBS = {"test", "turso: [turso]", "turso: [bunny]", "release", "security", "publish"}
 MANIFEST_TYPES = ", ".join([
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.oci.image.manifest.v1+json",
@@ -69,18 +76,18 @@ def read_bytes(url, headers=None, redirects=0, method="GET", data=None, limit=16
         raise ValidationError("Remote metadata request failed") from None
 
 
-def github_bytes(path, limit=16_777_216):
-    token = os.environ.get("GITHUB_TOKEN", "")
-    require(bool(token), "GITHUB_TOKEN is required")
-    return read_bytes(f"https://api.github.com/repos/{REPOSITORY}/{path}", {
-        "Authorization": "Bearer " + token,
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2026-03-10",
-    }, limit=limit)
+def gitlab_bytes(path, limit=16_777_216):
+    """Read the project API. The project is public; PROMOTION_API_TOKEN (a
+    read_api project access token) is only needed if it becomes private."""
+    headers = {"Accept": "application/json"}
+    token = os.environ.get("PROMOTION_API_TOKEN", "")
+    if token:
+        headers["PRIVATE-TOKEN"] = token
+    return read_bytes(f"{PROJECT_API}/{path}", headers, limit=limit)
 
 
-def github(path):
-    return json.loads(github_bytes(path))
+def gitlab(path):
+    return json.loads(gitlab_bytes(path))
 
 
 def validate_inputs(environment, digest, source_sha, previous_digest, acceptance_record, health_url):
@@ -106,88 +113,73 @@ def valid_https_url(value):
             and not any(c.isspace() or c in '<>"()' for c in value))
 
 
-def validate_environment(environment):
-    config = github("environments/" + environment)
-    policy = config.get("deployment_branch_policy") or {}
-    restricted = policy.get("protected_branches") is True
-    if policy.get("custom_branch_policies") is True:
-        rules = github(f"environments/{environment}/deployment-branch-policies").get("branch_policies", [])
-        restricted = bool(rules) and all(rule.get("name") == "main" and rule.get("type", "branch") == "branch" for rule in rules)
-    require(restricted, "Deployment environment must restrict deployments to main or protected branches")
-    if environment == "production":
-        require(any(rule.get("type") == "required_reviewers" and rule.get("reviewers")
-                    for rule in config.get("protection_rules", [])),
-                "Production environment must have required reviewers")
+def validate_pipeline_context():
+    """The GitLab stand-in for GitHub's environment branch policy: only a
+    manually started pipeline on Custyard's protected main branch promotes.
+    Protected CI/CD variables keep the deploy credentials off other refs."""
+    require(os.environ.get("CI_PROJECT_PATH") == REPOSITORY
+            and os.environ.get("CI_COMMIT_BRANCH") == "main"
+            and os.environ.get("CI_COMMIT_REF_PROTECTED") == "true"
+            and os.environ.get("CI_PIPELINE_SOURCE") in ("web", "api"),
+            "Promotions must run from a manual pipeline on Custyard's protected main branch")
 
 
 def validate_ci(source_sha, digest):
-    query = urllib.parse.urlencode({"head_sha": source_sha, "branch": "main", "event": "push", "status": "success", "per_page": 100})
-    runs = github("actions/workflows/ci.yml/runs?" + query).get("workflow_runs", [])
-    for run in runs:
-        if not (run.get("head_sha") == source_sha and run.get("head_branch") == "main"
-                and run.get("event") == "push" and run.get("status") == "completed"
-                and run.get("conclusion") == "success"):
+    query = urllib.parse.urlencode({"sha": source_sha, "ref": "main", "source": "push",
+                                    "status": "success", "per_page": 100})
+    pipelines = gitlab("pipelines?" + query)
+    require(isinstance(pipelines, list), "CI pipeline list is invalid")
+    for pipeline in pipelines:
+        if not (isinstance(pipeline, dict) and pipeline.get("sha") == source_sha
+                and pipeline.get("ref") == "main" and pipeline.get("source") == "push"
+                and pipeline.get("status") == "success"):
             continue
-        run_id, attempt = run.get("id"), run.get("run_attempt")
-        if not (type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0):
+        pipeline_id = pipeline.get("id")
+        if not (type(pipeline_id) is int and pipeline_id > 0):
             continue
-        jobs = github(f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100").get("jobs", [])
-        required = {"test", "turso (turso)", "turso (bunny)", "release", "security", "publish"}
-        successful = {job.get("name") for job in jobs if job.get("conclusion") == "success"}
-        if required <= successful:
-            try:
-                validate_published_record(run_id, attempt, source_sha, digest)
-            except ValidationError:
-                continue
-            return run["html_url"] + f"/attempts/{attempt}"
-    raise ValidationError("Candidate has no successful push-to-main CI run with all release/publish gates and a matching published image record")
+        # Without include_retried, each name appears once: its latest attempt.
+        jobs = gitlab(f"pipelines/{pipeline_id}/jobs?per_page=100")
+        if not isinstance(jobs, list):
+            continue
+        jobs = [job for job in jobs if isinstance(job, dict)]
+        successful = {job.get("name") for job in jobs if job.get("status") == "success"}
+        publish = [job for job in jobs if job.get("name") == "publish"]
+        if not (REQUIRED_JOBS <= successful and len(publish) == 1):
+            continue
+        try:
+            validate_published_record(pipeline_id, publish[0], source_sha, digest)
+        except ValidationError:
+            continue
+        return f"{SOURCE_URL}/-/pipelines/{pipeline_id}"
+    raise ValidationError("Candidate has no successful push-to-main CI pipeline with all release/publish gates and a matching published image record")
 
 
-def validate_published_record(run_id, attempt, source_sha, digest):
-    # Attempt-specific immutable names prevent a rerun from using the record
-    # of an earlier publish. Legacy, expired or incomplete records fail closed.
-    name = f"published-image-{run_id}-{attempt}"
-    query = urllib.parse.urlencode({"name": name, "per_page": 100})
-    listing = github(f"actions/runs/{run_id}/artifacts?{query}")
-    require(isinstance(listing, dict), "CI published image record list is invalid")
-    artifacts = listing.get("artifacts", [])
-    require(isinstance(artifacts, list) and type(listing.get("total_count")) is int
-            and listing["total_count"] == len(artifacts)
-            and len(artifacts) == 1, "CI published image record is missing or ambiguous")
-    artifact = artifacts[0]
-    require(isinstance(artifact, dict), "CI published image record metadata is invalid")
-    origin = artifact.get("workflow_run") or {}
-    require(isinstance(origin, dict), "CI published image record origin is invalid")
-    artifact_id, size = artifact.get("id"), artifact.get("size_in_bytes")
-    archive_digest = artifact.get("digest", "")
-    require(artifact.get("name") == name and artifact.get("expired") is False
-            and origin.get("id") == run_id and origin.get("head_sha") == source_sha
-            and origin.get("head_branch") == "main"
-            and type(artifact_id) is int and artifact_id > 0
-            and type(size) is int and 0 < size <= MAX_RECORD_ARCHIVE
-            and isinstance(archive_digest, str) and bool(DIGEST.fullmatch(archive_digest)),
+def validate_published_record(pipeline_id, job, source_sha, digest):
+    # The record names the publish job that wrote it, so a retried publish
+    # cannot borrow the record of an earlier attempt. Expired, legacy or
+    # incomplete records fail closed.
+    job_id = job.get("id")
+    origin = job.get("pipeline")
+    archives = [item for item in job.get("artifacts") or []
+                if isinstance(item, dict) and item.get("file_type") == "archive"]
+    require(type(job_id) is int and job_id > 0 and job.get("name") == "publish"
+            and job.get("status") == "success" and job.get("ref") == "main"
+            and isinstance(origin, dict) and origin.get("id") == pipeline_id
+            and origin.get("sha") == source_sha and len(archives) == 1
+            and type(archives[0].get("size")) is int
+            and 0 < archives[0]["size"] <= MAX_RECORD_ARCHIVE,
             "CI published image record is expired or invalid")
-    body = github_bytes(f"actions/artifacts/{artifact_id}/zip", limit=MAX_RECORD_ARCHIVE)
-    require(len(body) == size and "sha256:" + hashlib.sha256(body).hexdigest() == archive_digest,
-            "CI published image record archive does not match its digest")
+    # GitLab serves one bounded member of the archive; nothing is extracted.
+    body = gitlab_bytes(f"jobs/{job_id}/artifacts/{RECORD_FILE}", limit=MAX_RECORD_SIZE)
     try:
-        # Read one bounded member in memory; never extract supplied paths.
-        with zipfile.ZipFile(io.BytesIO(body)) as archive:
-            entries = archive.infolist()
-            require(len(entries) == 1 and entries[0].filename == RECORD_FILE
-                    and 0 < entries[0].file_size <= MAX_RECORD_SIZE,
-                    "CI published image record archive has invalid contents")
-            with archive.open(entries[0]) as member:
-                record_bytes = member.read(MAX_RECORD_SIZE + 1)
-            require(len(record_bytes) <= MAX_RECORD_SIZE, "CI published image record exceeds the supported size")
-            record = json.loads(record_bytes)
-    except (ValueError, OSError, RuntimeError, zipfile.BadZipFile):
+        record = json.loads(body)
+    except ValueError:
         raise ValidationError("CI published image record could not be decoded") from None
-    expected = {"version": 1, "repository": REPOSITORY, "image": IMAGE,
-                "source_sha": source_sha, "digest": digest, "run_id": run_id, "run_attempt": attempt}
+    expected = {"version": 1, "repository": REPOSITORY, "image": IMAGE, "source_sha": source_sha,
+                "digest": digest, "pipeline_id": pipeline_id, "job_id": job_id}
     require(isinstance(record, dict)
-            and all(type(record.get(key)) is int for key in ("version", "run_id", "run_attempt"))
-            and record == expected, "Candidate digest does not match the image published by this CI run attempt")
+            and all(type(record.get(key)) is int for key in ("version", "pipeline_id", "job_id"))
+            and record == expected, "Candidate digest does not match the image published by this CI publish job")
 
 
 def verify_hash(body, digest):
@@ -196,18 +188,27 @@ def verify_hash(body, digest):
     return json.loads(body)
 
 
+def registry_token():
+    headers = {}
+    job_token = os.environ.get("CI_JOB_TOKEN", "")
+    if job_token:
+        credentials = base64.b64encode(("gitlab-ci-token:" + job_token).encode()).decode()
+        headers["Authorization"] = "Basic " + credentials
+    token = json.loads(read_bytes(REGISTRY_TOKEN_URL, headers)).get("token")
+    require(isinstance(token, str) and bool(token), "Registry pull token could not be obtained")
+    return token
+
+
 def validate_image(digest, source_sha):
-    credentials = base64.b64encode((os.environ["GITHUB_ACTOR"] + ":" + os.environ["GITHUB_TOKEN"]).encode()).decode()
-    token_url = "https://ghcr.io/token?service=ghcr.io&scope=repository:custyard/custyard:pull"
-    token = json.loads(read_bytes(token_url, {"Authorization": "Basic " + credentials}))["token"]
-    headers = {"Authorization": "Bearer " + token, "Accept": MANIFEST_TYPES}
+    headers = {"Authorization": "Bearer " + registry_token(), "Accept": MANIFEST_TYPES}
 
     def manifest_at(value):
-        body = read_bytes(f"https://ghcr.io/v2/{REPOSITORY}/manifests/{value}", headers)
+        body = read_bytes(f"https://{REGISTRY}/v2/{REPOSITORY}/manifests/{value}", headers)
         return verify_hash(body, value)
 
     manifest = manifest_at(digest)
     if "manifests" in manifest:
+        # The index also lists buildx's attestation manifest (unknown/unknown).
         candidates = [item for item in manifest["manifests"]
                       if item.get("platform", {}).get("os") == "linux"
                       and item.get("platform", {}).get("architecture") == "amd64"]
@@ -215,7 +216,7 @@ def validate_image(digest, source_sha):
         manifest = manifest_at(candidates[0]["digest"])
     config_digest = manifest["config"]["digest"]
     require(bool(DIGEST.fullmatch(config_digest)), "Image config has an invalid digest")
-    config = verify_hash(read_bytes(f"https://ghcr.io/v2/{REPOSITORY}/blobs/{config_digest}", headers), config_digest)
+    config = verify_hash(read_bytes(f"https://{REGISTRY}/v2/{REPOSITORY}/blobs/{config_digest}", headers), config_digest)
     validate_image_config(config, source_sha)
 
 
@@ -223,7 +224,7 @@ def validate_image_config(config, source_sha):
     require(config.get("os") == "linux" and config.get("architecture") == "amd64", "Candidate must target linux/amd64")
     labels = config.get("config", {}).get("Labels") or {}
     require(labels.get("org.opencontainers.image.revision") == source_sha, "Image revision does not match the selected source SHA")
-    require(labels.get("org.opencontainers.image.source") == "https://github.com/custyard/custyard", "Image source repository does not match Custyard")
+    require(labels.get("org.opencontainers.image.source") == SOURCE_URL, "Image source repository does not match Custyard")
 
 
 def bunny_container():
@@ -276,53 +277,69 @@ def verify_bunny_digest(digest):
 
 def validate_health(body):
     health = json.loads(body)
+    require(isinstance(health, dict), "Application health checks have not passed")
     checks = health.get("checks", {})
     expected = {"database", "pubsub", "scheduler", "task_supervisor"}
-    require(health.get("status") == "ok" and expected <= checks.keys()
+    require(health.get("status") == "ok" and isinstance(checks, dict) and expected <= checks.keys()
             and all(value == "ok" for value in checks.values()), "Application health checks have not passed")
 
 
-def write_record(environment, digest, source_sha, previous_digest, acceptance_record, ci_url):
+def wait_healthy(health_url, attempts=24, delay=5):
+    for _ in range(attempts):
+        try:
+            validate_health(read_bytes(health_url, {"Cache-Control": "no-cache"}, limit=MAX_HEALTH_SIZE))
+            print("Provider update completed; HTTPS application health checks passed.")
+            return
+        except (ValidationError, ValueError, OSError):
+            time.sleep(delay)
+    raise ValidationError("HTTPS application health checks did not pass. Inspect the deployment; "
+                          "the previous digest is recorded in the promote:validate job")
+
+
+def write_record(environment, digest, source_sha, previous_digest, acceptance_record, ci_url, health_url):
+    """Hand the verified reference to the deploy job (dotenv report) and log it."""
     reference = IMAGE + "@" + digest
-    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-        output.write(f"image_reference={reference}\nimage_tag=sha-{source_sha}\n")
-    with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-        summary.write(f"Promotion target: {environment}\n\nCandidate: `{reference}`\n\nSource: `{source_sha}`\n\n")
-        summary.write(f"Previous digest: `{previous_digest or 'initial staging deployment'}`\n\nCI: {ci_url}\n\n")
-        if acceptance_record:
-            summary.write(f"Operator acceptance record: {acceptance_record}\n\n")
-        summary.write("This record precedes deployment. Check subsequent provider and HTTPS health steps for their results.\n")
+    environment_url = "https://" + urllib.parse.urlsplit(health_url).netloc
+    Path(DOTENV_FILE).write_text(f"IMAGE_REFERENCE={reference}\nIMAGE_TAG=sha-{source_sha}\n"
+                                 f"ENVIRONMENT_URL={environment_url}\n", encoding="utf-8")
+    print(f"Promotion target: {environment}\nCandidate: {reference}\nSource: {source_sha}")
+    print(f"Previous digest: {previous_digest or 'initial staging deployment'}\nCI: {ci_url}")
+    if acceptance_record:
+        print(f"Operator acceptance record: {acceptance_record}")
+    print("This record precedes deployment. Check the deploy job for provider and HTTPS health results.")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["validate", "update-bunny", "verify-bunny", "health"])
+    parser.add_argument("command", choices=["validate", "update-bunny", "verify-bunny", "wait-healthy"])
     args = parser.parse_args()
-    if args.command == "health":
-        validate_health(Path("promotion-health.json").read_bytes())
-        return
-    require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY
-            and os.environ.get("GITHUB_REF") == "refs/heads/main", "Promotions must run from Custyard's main branch")
+    validate_pipeline_context()
     digest = os.environ.get("IMAGE_DIGEST", "")
     require(bool(DIGEST.fullmatch(digest)), "Image must be an immutable sha256 digest")
     if args.command == "verify-bunny":
         verify_bunny_digest(digest)
         return
-    environment = os.environ.get("DEPLOY_ENVIRONMENT", "")
+    environment = os.environ.get("PROMOTE_ENVIRONMENT", "")
     source_sha = os.environ.get("SOURCE_SHA", "")
     previous_digest = os.environ.get("PREVIOUS_DIGEST", "")
     acceptance_record = os.environ.get("ACCEPTANCE_RECORD", "")
-    validate_inputs(environment, digest, source_sha, previous_digest, acceptance_record, os.environ.get("HEALTHCHECK_URL", ""))
+    health_url = os.environ.get("HEALTHCHECK_URL", "")
+    validate_inputs(environment, digest, source_sha, previous_digest, acceptance_record, health_url)
+    if args.command == "wait-healthy":
+        wait_healthy(health_url)
+        return
     if args.command == "update-bunny":
         require(environment == "production", "Bunny image updates require the production environment")
+        # GitLab Free has no deployment approvals; the production deploy job is
+        # manual, and this refuses to run unless a person started it.
+        require(os.environ.get("CI_JOB_MANUAL") == "true", "Production updates must be started by hand from the promote:production job")
         update_bunny(digest, source_sha, previous_digest)
         return
-    validate_environment(environment)
     ci_url = validate_ci(source_sha, digest)
     validate_image(digest, source_sha)
     if environment == "production":
         validate_bunny_previous(previous_digest)
-    write_record(environment, digest, source_sha, previous_digest, acceptance_record, ci_url)
+    write_record(environment, digest, source_sha, previous_digest, acceptance_record, ci_url, health_url)
 
 
 def cli():
