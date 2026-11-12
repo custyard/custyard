@@ -189,6 +189,13 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveIntegrationTest do
     view |> element("[data-testid=acknowledgments-replay]") |> render_click()
     view |> element("[data-testid=acknowledgments-confirm-replay]") |> render_click()
 
+    # Freeze the view while the replay is in flight. The view re-reads staff on
+    # every callback and follows a replay with a counts task; killing either
+    # mid-query takes the shared sandbox connection down with it (a test
+    # artifact; a real pool reconnects). Suspended, it runs no callbacks, and
+    # the only task it links to is the one awaiting the unlinked replay.
+    :sys.suspend(view.pid)
+
     # Once the replay holds (or has removed) the message, close the page.
     eventually(fn -> ready_count(ctx, Topology.failure(ctx.config)) == 0 end)
     Process.exit(view.pid, :kill)
