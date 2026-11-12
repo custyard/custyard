@@ -7,7 +7,7 @@ defmodule Custyard.Turso.HTTP do
   passive mode and the caller reads its own response.
   """
 
-  defstruct [:conn, :endpoint, :transport_opts, :used_at]
+  defstruct [:conn, :endpoint, :transport_opts, :used_at, :max_idle]
 
   @type t :: %__MODULE__{}
 
@@ -20,6 +20,14 @@ defmodule Custyard.Turso.HTTP do
   @close_wait 1
   @idle_check_after 50
 
+  # Turso closes a keep-alive connection idle for about 7 s (measured from Fly
+  # ams to aws-eu-west-1). From a shared-CPU machine the 1 ms read above does
+  # not notice that close, and the next request fails with "socket closed";
+  # it is not sent again. A connection idle for longer than this is replaced
+  # before a request instead of trusting the read. Pings only close it, so an
+  # idle pool does not reconnect every few seconds.
+  @default_max_idle 5_000
+
   @spec connect(Custyard.Turso.Protocol.endpoint(), keyword) ::
           {:ok, t} | {:error, Exception.t()}
   def connect(endpoint, opts \\ []) do
@@ -29,7 +37,11 @@ defmodule Custyard.Turso.HTTP do
         Keyword.get(opts, :transport_opts, [])
       )
 
-    http = %__MODULE__{endpoint: endpoint, transport_opts: transport_opts}
+    http = %__MODULE__{
+      endpoint: endpoint,
+      transport_opts: transport_opts,
+      max_idle: Keyword.get(opts, :max_idle, @default_max_idle)
+    }
 
     with {:ok, conn} <- open(endpoint, transport_opts), do: {:ok, used(%{http | conn: conn})}
   end
@@ -37,8 +49,8 @@ defmodule Custyard.Turso.HTTP do
   @doc """
   POSTs `body` to `path` on `endpoint` and reads the whole response.
 
-  Reconnects first when the server closed the previous connection or the
-  request is for another endpoint. A request that then fails is never sent
+  Reconnects first when the server closed the previous connection, it sat
+  idle longer than `:max_idle`, or the request is for another endpoint. A request that then fails is never sent
   again, not even one that failed while being written: the server may have
   received all of it and run it.
   """
@@ -47,7 +59,12 @@ defmodule Custyard.Turso.HTTP do
   def post(http, endpoint, path, headers, body, timeout) do
     deadline = deadline(timeout)
 
-    http = if idle_for(http) >= @idle_check_after, do: notice_close(http), else: http
+    http =
+      cond do
+        stale?(http) -> retire(http)
+        idle_for(http) >= @idle_check_after -> notice_close(http)
+        true -> http
+      end
 
     with {:ok, http} <- ensure_open(http, endpoint),
          {:ok, conn, ref} <- request(http, path, headers, body) do
@@ -57,10 +74,15 @@ defmodule Custyard.Turso.HTTP do
 
   @doc """
   Notices a connection the server closed while it sat idle, without a round
-  trip, and replaces it.
+  trip, and replaces it. A connection idle longer than `:max_idle` is closed
+  and left for the next request to reopen.
   """
   @spec check(t) :: {:ok, t} | {:error, t, Exception.t()}
-  def check(http), do: ensure_open(notice_close(http), http.endpoint)
+  def check(http) do
+    if stale?(http),
+      do: {:ok, retire(http)},
+      else: ensure_open(notice_close(http), http.endpoint)
+  end
 
   @spec close(t) :: :ok
   def close(%__MODULE__{conn: nil}), do: :ok
@@ -68,6 +90,14 @@ defmodule Custyard.Turso.HTTP do
   def close(%__MODULE__{conn: conn}) do
     {:ok, _conn} = Mint.HTTP1.close(conn)
     :ok
+  end
+
+  defp stale?(%__MODULE__{conn: nil}), do: false
+  defp stale?(http), do: idle_for(http) >= http.max_idle
+
+  defp retire(http) do
+    {:ok, conn} = Mint.HTTP1.close(http.conn)
+    %{http | conn: conn}
   end
 
   # Nothing to read means the connection is still open; a close the server
