@@ -200,7 +200,8 @@ defmodule Custyard.Log do
       ~w(pending queued sending sent accepted delivered deferred bounced suppressed failed withheld unknown dormant active resolved closed)a,
     boot_mode: ~w(unconfigured starting database_unavailable first_run ready)a,
     database_category:
-      ~w(unreachable auth_rejected not_writable locked migration_failed volume_missing unknown)a,
+      ~w(unreachable auth_rejected not_writable locked migration_failed volume_missing
+         bunny_database_required unknown)a,
     step: ~w(schema instance_admin mail sign_in)a,
     failure_kind: ~w(rejected unknown temporary permanent configuration transport provider)a,
     error_type: ~w(temporary permanent exception exit throw validation transport provider)a,

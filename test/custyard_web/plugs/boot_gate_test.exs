@@ -179,11 +179,29 @@ defmodule CustyardWeb.Plugs.BootGateTest do
             {:not_writable, "database path is not writable"},
             {:locked, "database file is locked"},
             {:volume_missing, "no volume mounted at /data"},
+            {:bunny_database_required, "Bunny hosting requires Bunny Database"},
             {:unknown, "connection failed"}
           ] do
         database_unavailable(category)
         assert html_response(get(conn, "/"), 503) =~ label
       end
+    end
+
+    test "the Bunny database rule is not shown as a missing volume", %{conn: conn} do
+      database_unavailable(:bunny_database_required, %{
+        detail: "Bunny storage requires the configured Bunny remote database"
+      })
+
+      body = html_response(get(conn, "/"), 503)
+
+      assert body =~ "Bunny hosting requires Bunny Database"
+      assert body =~ "Bunny storage requires the configured Bunny remote database"
+      assert body =~ "BUNNY_DATABASE_URL and BUNNY_DATABASE_AUTH_TOKEN are set"
+      assert body =~ "DATABASE_PROVIDER is unset or `bunny`"
+      assert body =~ "STORAGE_PROVIDER is `bunny` only when the container runs on Bunny hosting"
+      refute body =~ "no volume mounted at /data"
+      refute body =~ "create a volume and mount it at /data"
+      refute body =~ "DATABASE_PATH is under the mounted volume"
     end
 
     test "a failed migration never promises a retry", %{conn: conn} do

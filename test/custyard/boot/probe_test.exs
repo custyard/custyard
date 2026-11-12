@@ -141,14 +141,36 @@ defmodule Custyard.Boot.ProbeTest do
       env = env(%{"STORAGE_PROVIDER" => "bunny", "DATABASE_PATH" => path})
       storage = [provider: env.settings.storage_provider]
 
-      capture_log(fn ->
-        assert {:error, :volume_missing, detail} = Probe.run(env, storage: storage)
-        assert detail =~ "requires the configured Bunny remote database"
-        refute detail =~ dir
-      end)
+      log =
+        capture_log(fn ->
+          assert {:error, :bunny_database_required, detail} = Probe.run(env, storage: storage)
+          assert detail =~ "requires the configured Bunny remote database"
+          refute detail =~ dir
+        end)
 
-      assert State.get().database.category == :volume_missing
+      # Its own category: no volume is involved, so nothing may say one is missing.
+      assert log =~ "database_category=bunny_database_required"
+      refute log =~ "volume_missing"
+
+      assert State.get().database.category == :bunny_database_required
+      assert State.get().database.detail =~ "Bunny remote database"
       refute File.exists?(path)
+
+      assert {:error, :bunny_database_required, _detail, nil} = Probe.check(env, storage: storage)
+    end
+  end
+
+  describe "detail/1" do
+    test "has one sentence for every category the log accepts" do
+      categories = Custyard.Log.enum_values(:database_category)
+      assert :bunny_database_required in categories
+
+      for category <- categories do
+        assert Probe.detail(category) =~ ~r/\A[^\n]{20,200}\z/
+      end
+
+      assert Probe.detail(:bunny_database_required) =~ "Bunny Database"
+      refute Probe.detail(:bunny_database_required) =~ "volume"
     end
   end
 

@@ -22,8 +22,10 @@ defmodule Custyard.Boot.Probe do
   storage provider (Fly or Bunny): on Fly a missing volume must be reported
   before SQLite creates an empty database on the container filesystem, and
   Bunny hosting refuses any database but its remote one before a local file
-  is opened. All of its problems become `:volume_missing`, with the storage
-  check's own sentence as the detail.
+  is opened. The Bunny refusal is the category `:bunny_database_required`:
+  no volume is involved, and the fix is the database setting. Its other
+  problems become `:volume_missing`. Either way the detail is the storage
+  check's own sentence.
   """
 
   alias Custyard.Boot.{Env, State}
@@ -147,6 +149,11 @@ defmodule Custyard.Boot.Probe do
 
   def detail(:volume_missing), do: "the data volume is not mounted at /data"
 
+  def detail(:bunny_database_required),
+    do:
+      "Bunny hosting keeps no local files, so the database must be Bunny Database; " <>
+        "set BUNNY_DATABASE_URL and BUNNY_DATABASE_AUTH_TOKEN"
+
   def detail(:unknown),
     do:
       "the database connection failed for a reason the probe does not classify; " <>
@@ -158,8 +165,14 @@ defmodule Custyard.Boot.Probe do
     storage_opts = Keyword.merge([repo_config: repo_config(env)], Keyword.get(opts, :storage, []))
 
     case Storage.check(storage_opts) do
-      :ok -> :ok
-      {:error, _problem, detail} -> {:error, :volume_missing, String.trim(detail), nil}
+      :ok ->
+        :ok
+
+      {:error, :bunny_database_required, detail} ->
+        {:error, :bunny_database_required, String.trim(detail), nil}
+
+      {:error, _problem, detail} ->
+        {:error, :volume_missing, String.trim(detail), nil}
     end
   end
 

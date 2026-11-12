@@ -36,6 +36,7 @@ defmodule Custyard.Boot.State do
           | :locked
           | :migration_failed
           | :volume_missing
+          | :bunny_database_required
           | :unknown
 
   @typedoc """

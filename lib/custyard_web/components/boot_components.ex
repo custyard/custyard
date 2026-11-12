@@ -30,6 +30,7 @@ defmodule CustyardWeb.BootComponents do
     locked: "database file is locked",
     migration_failed: "a migration failed",
     volume_missing: "no volume mounted at /data",
+    bunny_database_required: "Bunny hosting requires Bunny Database",
     unknown: "connection failed"
   }
 
@@ -58,6 +59,11 @@ defmodule CustyardWeb.BootComponents do
     volume_missing: [
       "create a volume and mount it at /data",
       "DATABASE_PATH is under the mounted volume"
+    ],
+    bunny_database_required: [
+      "BUNNY_DATABASE_URL and BUNNY_DATABASE_AUTH_TOKEN are set to this app's Bunny Database",
+      "DATABASE_PROVIDER is unset or `bunny`; a SQLite file or another remote database is refused",
+      "STORAGE_PROVIDER is `bunny` only when the container runs on Bunny hosting"
     ],
     unknown: ["the container log has the full error"]
   }
