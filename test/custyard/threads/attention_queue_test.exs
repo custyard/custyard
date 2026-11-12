@@ -408,10 +408,24 @@ defmodule Custyard.Threads.AttentionQueueTest do
       {:ok, _} =
         Threads.create_task(%{title: "Due", thread_id: due.id, due_at: DateTime.add(now, -60)})
 
+      # Answered, so only the message facts keep it out of "needs_reply".
+      insert_message(thread_id: top.id, body: "Question")
+      insert_message(thread_id: top.id, source: :staff, body: "Answer")
+
+      insert_thread(
+        organization_id: c.org.id,
+        state: :active,
+        cached_score: 40,
+        snoozed_until: DateTime.add(now, 86_400)
+      )
+
       for filter <- Threads.queue_filters() do
         listed = Threads.list(c.scope, filter: filter) |> Enum.map(& &1.thread.id)
+        assert listed != [], "filter #{filter}"
         assert Threads.queue_ids(c.scope, filter: filter) == listed, "filter #{filter}"
       end
+
+      refute top.id in Threads.queue_ids(c.scope, filter: "needs_reply")
 
       all = Threads.queue_ids(c.scope)
       assert Enum.take(all, 2) == [due.id, top.id]
@@ -428,13 +442,51 @@ defmodule Custyard.Threads.AttentionQueueTest do
       Repo.delete!(c.staff)
       assert Threads.queue_ids(c.scope) == []
     end
+
+    test "reads the message facts only for the filter that needs them", c do
+      thread = insert_thread(organization_id: c.org.id, state: :active)
+      insert_message(thread_id: thread.id, body: "Question")
+
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach(
+        "queue-ids-queries-#{inspect(ref)}",
+        [:custyard, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid, do: send(test_pid, {ref, metadata.query})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("queue-ids-queries-#{inspect(ref)}") end)
+
+      for filter <- Threads.queue_filters() do
+        Threads.queue_ids(c.scope, filter: filter)
+
+        queries =
+          Stream.repeatedly(fn ->
+            receive do
+              {^ref, sql} -> sql
+            after
+              0 -> nil
+            end
+          end)
+          |> Enum.take_while(& &1)
+
+        assert Enum.any?(queries, &(&1 =~ ~s("threads"))), "filter #{filter}"
+
+        assert Enum.any?(queries, &(&1 =~ ~s("messages"))) == (filter == "needs_reply"),
+               "filter #{filter}"
+      end
+    end
   end
 
-  describe "QueueNav.neighbors/3" do
+  describe "QueueNav.neighbors/4" do
     test "finds the neighbors of a listed conversation" do
       assert QueueNav.neighbors([10, 20, 30], 20) == %{
-               prev: %{id: 10, pos: 0},
-               next: %{id: 30, pos: 2},
+               prev: %{id: 10, pos: 0, after: nil, before: 20},
+               next: %{id: 30, pos: 2, after: 20, before: nil},
                position: 2,
                total: 3
              }
@@ -453,8 +505,8 @@ defmodule Custyard.Threads.AttentionQueueTest do
     test "keeps the place it was opened at when opening made it sink in the queue" do
       # 20 was second (position 1). Opening it dropped its score to the end.
       assert QueueNav.neighbors([10, 30, 40, 20], 20, 1) == %{
-               prev: %{id: 10, pos: 0},
-               next: %{id: 30, pos: 1},
+               prev: %{id: 10, pos: 0, after: nil, before: 30},
+               next: %{id: 30, pos: 1, after: 10, before: 40},
                position: 2,
                total: 4
              }
@@ -464,11 +516,104 @@ defmodule Custyard.Threads.AttentionQueueTest do
                QueueNav.neighbors([20, 10, 30, 40], 20, 2)
     end
 
+    test "follows the conversation listed before it when the queue changed above" do
+      # The queue was 10..50 and 20 was being read: its link to 30 says third,
+      # after 20 and before 40.
+      link = [after: 20, before: 40]
+
+      # A colleague resolved 10 meanwhile, so 30 is second.
+      assert QueueNav.neighbors([20, 30, 40, 50], 30, 2, link) == %{
+               prev: %{id: 20, pos: 0, after: nil, before: 30},
+               next: %{id: 40, pos: 2, after: 30, before: 50},
+               position: 2,
+               total: 4
+             }
+
+      # Or a new conversation arrived on top, so 30 is fourth and 20 is behind it.
+      assert %{prev: %{id: 20}, next: %{id: 40}, position: 4, total: 6} =
+               QueueNav.neighbors([5, 10, 20, 30, 40, 50], 30, 2, link)
+
+      # Opening 30 also made it sink: the anchor still gives the place it had.
+      assert %{prev: %{id: 20}, next: %{id: 40}, position: 2, total: 4} =
+               QueueNav.neighbors([20, 40, 50, 30], 30, 2, link)
+    end
+
+    test "falls back to the conversation listed after it, then to the position" do
+      # A first row has nothing before it. A new conversation arrived on top.
+      assert %{prev: %{id: 5}, next: %{id: 20}, position: 2} =
+               QueueNav.neighbors([5, 10, 20, 30], 10, 0, before: 20)
+
+      # "new" filter: a colleague opened 10, opening 30 took it out as well.
+      assert %{prev: nil, next: %{id: 40}, position: 1} =
+               QueueNav.neighbors([40, 50], 30, 1, after: 10, before: 40)
+
+      # Both have left: the position is all there is.
+      assert QueueNav.neighbors([10, 50], 30, 1, after: 20, before: 40) ==
+               QueueNav.neighbors([10, 50], 30, 1)
+    end
+
+    test "anchors that moved point at different places" do
+      # The queue was 10..50 and 30 was third, after 20 and before 40.
+      place = [after: 20, before: 40]
+
+      # A colleague replied to 20, which sank; then 30 sank the same way.
+      assert %{prev: %{id: 10}, next: %{id: 40}, position: 2, total: 5} =
+               QueueNav.neighbors([10, 40, 50, 20, 30], 30, 2, place)
+
+      # 20 sank and 30 stayed where it was.
+      assert %{prev: %{id: 10}, next: %{id: 40}, position: 2} =
+               QueueNav.neighbors([10, 30, 40, 50, 20], 30, 2, place)
+
+      # The customer of 20 wrote again, which raised it to the top.
+      assert %{prev: %{id: 10}, next: %{id: 40}, position: 3} =
+               QueueNav.neighbors([20, 10, 40, 50, 30], 30, 2, place)
+
+      # 40 sank instead: what followed it is next.
+      assert %{prev: %{id: 20}, next: %{id: 50}, position: 3} =
+               QueueNav.neighbors([10, 20, 50, 40, 30], 30, 2, place)
+    end
+
+    test "a conversation that arrived between the anchors is not skipped" do
+      place = [after: 20, before: 40]
+
+      # 30 is still listed between the two: its own place is right.
+      assert %{prev: %{id: 25}, next: %{id: 40}, position: 4, total: 6} =
+               QueueNav.neighbors([10, 20, 25, 30, 40, 50], 30, 2, place)
+
+      # 30 has left the list ("new" filter): the newcomer is next.
+      assert %{prev: %{id: 20}, next: %{id: 25}} =
+               QueueNav.neighbors([10, 20, 25, 40, 50], 30, 2, place)
+
+      # Equally near the position: the earlier place, which skips nothing.
+      assert %{prev: %{id: 20}, next: %{id: 60}} =
+               QueueNav.neighbors([20, 60, 70, 40], 30, 2, place)
+
+      # No position to compare with: the earlier place as well.
+      assert %{prev: %{id: 20}, next: %{id: 60}} =
+               QueueNav.neighbors([20, 60, 70, 40], 30, nil, place)
+    end
+
+    test "an anchor that is not listed counts as no anchor" do
+      ids = [10, 20, 30]
+
+      # An id from somewhere else, such as another tenant, or its own id.
+      for anchors <- [[after: 99], [before: 99], [after: 99, before: 98], [after: 20, before: 20]] do
+        assert QueueNav.neighbors(ids, 20, 1, anchors) == QueueNav.neighbors(ids, 20, 1)
+        assert QueueNav.neighbors(ids, 20, nil, anchors) == QueueNav.neighbors(ids, 20)
+      end
+
+      assert QueueNav.neighbors(ids, 20, 1, after: nil, before: nil) ==
+               QueueNav.neighbors(ids, 20, 1)
+
+      assert QueueNav.neighbors([10, 30], 20, nil, after: 99, before: 98) ==
+               %{prev: nil, next: nil, position: nil, total: 2}
+    end
+
     test "uses the position hint once the conversation has left the list" do
       # 20 was second (position 1) and is gone: 30 now sits where it was.
       assert QueueNav.neighbors([10, 30, 40], 20, 1) == %{
-               prev: %{id: 10, pos: 0},
-               next: %{id: 30, pos: 1},
+               prev: %{id: 10, pos: 0, after: nil, before: 30},
+               next: %{id: 30, pos: 1, after: 10, before: 40},
                position: 2,
                total: 3
              }

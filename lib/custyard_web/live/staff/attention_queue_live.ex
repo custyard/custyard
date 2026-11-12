@@ -310,16 +310,29 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     do: "#{exchanged} exchanged with the customer"
 
   # A row's link carries the queue it was opened from (filter, label and the
-  # row's position), so the conversation can offer previous and next in the
+  # row's place), so the conversation can offer previous and next in the
   # same order.
-  defp thread_path(thread_id, filter, label_id, pos) do
+  defp thread_path(thread_id, filter, label_id, place) do
     params =
       Enum.reject(
-        [filter: if(filter != "all", do: filter), label: label_id, pos: pos],
+        [filter: if(filter != "all", do: filter), label: label_id] ++ place,
         fn {_key, value} -> is_nil(value) end
       )
 
     ~p"/app/threads/#{thread_id}?#{params}"
+  end
+
+  # Each row with its place: its position and the ids listed just before and
+  # after it, which still locate it once the queue has changed above it (see
+  # Custyard.Threads.QueueNav).
+  defp with_places(threads) do
+    ids = Enum.map(threads, & &1.thread.id)
+
+    [threads, [nil | ids], Enum.drop(ids, 1) ++ [nil]]
+    |> Enum.zip()
+    |> Enum.with_index(fn {item, after_id, before_id}, pos ->
+      {item, [pos: pos, after: after_id, before: before_id]}
+    end)
   end
 
   # "billing@onetimesecret.com" -> "billing@"; the full address stays in the title.
@@ -497,9 +510,9 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         data-testid="staff-queue-list"
       >
         <.queue_row
-          :for={{item, pos} <- Enum.with_index(@threads)}
+          :for={{item, place} <- with_places(@threads)}
           item={item}
-          thread_path={thread_path(item.thread.id, @filter, @label_id, pos)}
+          thread_path={thread_path(item.thread.id, @filter, @label_id, place)}
           staff_id={@current_staff.id}
           show_score={@show_score_breakdown == item.thread.id}
           show_snooze={@show_snooze_menu == item.thread.id}

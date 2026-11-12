@@ -1059,12 +1059,12 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
 
       assert has_element?(
                view,
-               "li#queue-row-#{first.id} a[data-row-link][href='/app/threads/#{first.id}?pos=0']"
+               "li#queue-row-#{first.id} a[data-row-link][href='/app/threads/#{first.id}?pos=0&before=#{second.id}']"
              )
 
       assert has_element?(
                view,
-               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?pos=1']"
+               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?pos=1&after=#{first.id}']"
              )
 
       # Under a filter and a label, the links say which queue they belong to.
@@ -1072,7 +1072,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
 
       assert has_element?(
                filtered,
-               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?filter=needs_reply&label=#{label.id}&pos=1']"
+               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?filter=needs_reply&label=#{label.id}&pos=1&after=#{first.id}']"
              )
     end
 

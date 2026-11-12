@@ -75,6 +75,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "tenant_outbound:#{thread.tenant_id}")
     end
 
+    socket = place_before_opening(socket, thread)
+
     case activate_if_new(thread, socket.assigns.current_scope) do
       {:ok, current} ->
         if current &&
@@ -119,6 +121,22 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   defp activate_if_new(thread, _scope), do: {:ok, thread}
+
+  # Opening a new conversation activates it, which moves it in the queue or
+  # takes it out of the filter. Until then its own place is exact, unlike the
+  # one in the link, which is as old as the page the link was on.
+  defp place_before_opening(socket, %Thread{state: :new} = thread) do
+    case socket.assigns.queue_context do
+      %{pos: nil, after: nil, before: nil} ->
+        socket
+
+      %{filter: filter, label_id: label_id} = context ->
+        ids = Threads.queue_ids(socket.assigns.current_scope, filter: filter, label_id: label_id)
+        assign(socket, :queue_context, keep_place(context, QueueNav.neighbors(ids, thread.id)))
+    end
+  end
+
+  defp place_before_opening(socket, _thread), do: socket
 
   defp mount_loaded_thread(socket, thread) do
     breakdown = Scoring.breakdown(thread)
@@ -1107,22 +1125,26 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   # Which queue the staff member opened this conversation from: its filter,
-  # its label and the row's position, as carried by the row link. Anything
-  # unrecognised falls back to the whole queue. The values only choose among
-  # queue queries that are tenant-scoped whatever is passed.
+  # its label, the row's position and the ids listed around the row, as
+  # carried by the row link. Anything unrecognised falls back to the whole
+  # queue. The values only choose among queue queries that are tenant-scoped
+  # whatever is passed; the ids are only looked up in that queue's own list.
   defp queue_context(params) do
     filter = params["filter"]
 
     %{
       filter: if(filter in Threads.queue_filters(), do: filter, else: "all"),
       label_id: query_integer(params["label"], 1),
-      pos: query_integer(params["pos"], 0)
+      pos: query_integer(params["pos"], 0),
+      after: query_integer(params["after"], 1),
+      before: query_integer(params["before"], 1)
     }
   end
 
+  # The upper bound is the largest integer the database driver accepts.
   defp query_integer(value, min) when is_binary(value) do
     case Integer.parse(value) do
-      {integer, ""} when integer >= min -> integer
+      {integer, ""} when integer >= min and integer <= 9_223_372_036_854_775_807 -> integer
       _ -> nil
     end
   end
@@ -1131,10 +1153,28 @@ defmodule CustyardWeb.Staff.ThreadLive do
 
   # Previous and next conversation in that queue's order. One id-only query.
   defp assign_queue_nav(socket) do
-    %{filter: filter, label_id: label_id, pos: pos} = socket.assigns.queue_context
+    %{filter: filter, label_id: label_id, pos: pos, after: after_id, before: before_id} =
+      context = socket.assigns.queue_context
+
     ids = Threads.queue_ids(socket.assigns.current_scope, filter: filter, label_id: label_id)
-    assign(socket, :queue_nav, QueueNav.neighbors(ids, socket.assigns.thread.id, pos))
+
+    nav =
+      QueueNav.neighbors(ids, socket.assigns.thread.id, pos, after: after_id, before: before_id)
+
+    socket
+    |> assign(:queue_nav, nav)
+    |> assign(:queue_context, keep_place(context, nav))
   end
+
+  # The place in the URL describes the queue as it was when the link was
+  # rendered. The neighbours just found replace it, so the next reload starts
+  # from the queue as last seen. A conversation opened without a place keeps
+  # following its own.
+  defp keep_place(%{pos: nil, after: nil, before: nil} = context, _nav), do: context
+  defp keep_place(context, %{position: nil}), do: context
+
+  defp keep_place(context, %{position: position, prev: prev, next: next}),
+    do: %{context | pos: position - 1, after: prev && prev.id, before: next && next.id}
 
   defp queue_params(%{filter: filter, label_id: label_id}, extra) do
     Enum.reject(
@@ -1147,8 +1187,10 @@ defmodule CustyardWeb.Staff.ThreadLive do
   # this conversation's row.
   defp queue_path(context, thread_id), do: ~p"/app?#{queue_params(context, at: thread_id)}"
 
-  defp neighbor_path(context, %{id: id, pos: pos}),
-    do: ~p"/app/threads/#{id}?#{queue_params(context, pos: pos)}"
+  defp neighbor_path(context, %{id: id, pos: pos, after: after_id, before: before_id}) do
+    params = queue_params(context, pos: pos, after: after_id, before: before_id)
+    ~p"/app/threads/#{id}?#{params}"
+  end
 
   # "3 of 24 in needs reply": the place in the queue being stepped through.
   defp queue_position(%{position: position, total: total}, %{filter: "all"}),

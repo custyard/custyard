@@ -99,7 +99,9 @@ const shortcutBlocked = (e) => {
 Hooks.QueueKeys = {
   mounted() {
     this.onKey = (e) => {
-      if (shortcutBlocked(e) || e.target.closest?.("[role=menu]")) return
+      // An open snooze menu keeps the keys: moving the selection would leave
+      // it open on a row that is no longer selected.
+      if (shortcutBlocked(e) || this.el.querySelector("[role=menu]")) return
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
       const links = Array.from(this.el.querySelectorAll("[data-row-link]"))
       if (links.length === 0) return
@@ -138,7 +140,9 @@ Hooks.QueueKeys = {
 Hooks.Shortcuts = {
   mounted() {
     this.onKey = (e) => {
-      if (shortcutBlocked(e) || e.key.length !== 1) return
+      // A held key repeats: j would open, and so activate, every conversation
+      // on the way.
+      if (e.repeat || shortcutBlocked(e) || e.key.length !== 1) return
       const target = this.el.querySelector(`[data-shortcut="${CSS.escape(e.key.toLowerCase())}"]`)
       if (!target) return
       e.preventDefault()
