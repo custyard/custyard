@@ -1116,14 +1116,30 @@ defmodule CustyardWeb.Staff.ThreadLive do
   defp queue_context(params) do
     filter = params["filter"]
 
+    pos = query_integer(params["pos"], 0)
+
     %{
       filter: if(filter in Threads.queue_filters(), do: filter, else: "all"),
       label_id: query_integer(params["label"], 1),
-      pos: query_integer(params["pos"], 0),
-      after: query_integer(params["after"], 1),
-      before: query_integer(params["before"], 1)
+      pos: pos,
+      # Witnesses belong to a position: without one the page follows the
+      # conversation's own place.
+      after: if(pos, do: query_ids(params["after"]), else: []),
+      before: if(pos, do: query_ids(params["before"]), else: [])
     }
   end
+
+  # "12,9,7": the ids a link names on one side of its target. Anything that
+  # is not a thread id is dropped, and no more are read than a link carries.
+  defp query_ids(value) when is_binary(value) do
+    value
+    |> String.split(",", parts: QueueNav.witnesses() + 1)
+    |> Enum.take(QueueNav.witnesses())
+    |> Enum.map(&query_integer(&1, 1))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp query_ids(_value), do: []
 
   # The upper bound is the largest integer the database driver accepts.
   defp query_integer(value, min) when is_binary(value) do
@@ -1137,13 +1153,13 @@ defmodule CustyardWeb.Staff.ThreadLive do
 
   # Previous and next conversation in that queue's order. One id-only query.
   defp assign_queue_nav(socket) do
-    %{filter: filter, label_id: label_id, pos: pos, after: after_id, before: before_id} =
+    %{filter: filter, label_id: label_id, pos: pos, after: after_ids, before: before_ids} =
       context = socket.assigns.queue_context
 
     ids = Threads.queue_ids(socket.assigns.current_scope, filter: filter, label_id: label_id)
 
     nav =
-      QueueNav.neighbors(ids, socket.assigns.thread.id, pos, after: after_id, before: before_id)
+      QueueNav.neighbors(ids, socket.assigns.thread.id, pos, after: after_ids, before: before_ids)
 
     socket
     |> assign(:queue_nav, nav)
@@ -1151,10 +1167,10 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   # The place in the URL describes the queue as it was when the link was
-  # rendered. The place just found replaces it, with more witnesses than a
-  # link carries, so the next reload starts from the queue as last seen. A
-  # conversation opened without a place keeps following its own.
-  defp keep_place(%{pos: nil, after: nil, before: nil} = context, _nav), do: context
+  # rendered. The place just found replaces it, so the next reload starts
+  # from the queue as last seen. A conversation opened without a place keeps
+  # following its own.
+  defp keep_place(%{pos: nil} = context, _nav), do: context
   defp keep_place(context, %{place: nil}), do: context
   defp keep_place(context, %{place: place}), do: Map.merge(context, place)
 
@@ -1169,10 +1185,15 @@ defmodule CustyardWeb.Staff.ThreadLive do
   # this conversation's row.
   defp queue_path(context, thread_id), do: ~p"/app?#{queue_params(context, at: thread_id)}"
 
-  defp neighbor_path(context, %{id: id, pos: pos, after: after_id, before: before_id}) do
-    params = queue_params(context, pos: pos, after: after_id, before: before_id)
+  defp neighbor_path(context, %{id: id, pos: pos, after: after_ids, before: before_ids}) do
+    params =
+      queue_params(context, pos: pos, after: id_list(after_ids), before: id_list(before_ids))
+
     ~p"/app/threads/#{id}?#{params}"
   end
+
+  defp id_list([]), do: nil
+  defp id_list(ids), do: Enum.join(ids, ",")
 
   # "3 of 24 in needs reply": the place in the queue being stepped through.
   defp queue_position(%{position: position, total: total}, %{filter: "all"}),
