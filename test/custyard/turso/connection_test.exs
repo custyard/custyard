@@ -312,6 +312,46 @@ defmodule Custyard.Turso.ConnectionTest do
              Connection.handle_execute(query, [], [], state)
   end
 
+  # Turso closes an idle connection after about 7 s, and over TLS from a busy
+  # machine the 1 ms read does not always notice. A connection idle past
+  # :max_idle is replaced without waiting for the server's close.
+  test "replaces a connection idle past max_idle before the server closes it", %{url: url} do
+    query = Exqlite.Query.build(statement: "SELECT 41 + 1")
+
+    {:ok, state} = Connection.connect(turso_url: url, turso_auth_token: @token, max_idle: 200)
+    first = state.http.conn.socket
+
+    assert {:ok, _query, %Exqlite.Result{rows: [[42]]}, state} =
+             Connection.handle_execute(query, [], [], state)
+
+    assert state.http.conn.socket == first
+
+    Process.sleep(300)
+
+    assert {:ok, _query, %Exqlite.Result{rows: [[42]]}, state} =
+             Connection.handle_execute(query, [], [], state)
+
+    refute state.http.conn.socket == first
+  end
+
+  test "a ping closes a connection idle past max_idle and the next query reopens it",
+       %{url: url} do
+    query = Exqlite.Query.build(statement: "SELECT 41 + 1")
+    {:ok, state} = Connection.connect(turso_url: url, turso_auth_token: @token, max_idle: 200)
+
+    Process.sleep(300)
+    {:ok, state} = Connection.ping(state)
+    refute Mint.HTTP1.open?(state.http.conn)
+
+    {:ok, state} = Connection.ping(state)
+    refute Mint.HTTP1.open?(state.http.conn)
+
+    assert {:ok, _query, %Exqlite.Result{rows: [[42]]}, state} =
+             Connection.handle_execute(query, [], [], state)
+
+    assert Mint.HTTP1.open?(state.http.conn)
+  end
+
   # Turso is HTTPS: the certificate is verified, and an idle connection the
   # server closed is replaced, as over plain HTTP.
   @tag tls: true, server: [idle_timeout: 100]
