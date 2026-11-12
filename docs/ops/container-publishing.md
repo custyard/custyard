@@ -22,6 +22,11 @@ Only `publish` logs in: the `container` job reads the build cache
 (`registry.gitlab.com/custyard/custyard:buildcache`) anonymously, so merge
 request pipelines cannot write the cache that `publish` builds from.
 
+One other job writes to the registry. `image-tag` (see Version tags) asks the
+registry for a pull and push token with its `CI_JOB_TOKEN` and uses it to add
+a version tag to an image that already exists. It pushes no layers and runs
+only for a protected version tag.
+
 The project is public, so its registry allows anonymous pulls. Bunny's
 registry form still requires a username and token: give it a deploy token
 with only the `read_registry` scope. If the project or its registry becomes
@@ -82,6 +87,13 @@ whose `main` pipeline published an image), if the record has expired
 (`publish` keeps it 90 days), or if the version tag already points at a
 different digest; a version tag is never moved. The tagged commit must
 contain the job itself, so commits older than it cannot be tagged this way.
+
+If the tag was pushed before the commit's `main` pipeline finished, wait for
+`publish` to succeed and retry the `image-tag` job in the tag's pipeline. Run
+pipeline on the tag does not work: the job accepts only the tag push itself.
+To replace a version tag that points at the wrong image, delete that tag in
+the registry first (Deploy > Container registry), then retry the job. Version
+tag jobs run one at a time.
 Only tags matching `vMAJOR.MINOR.PATCH` start a pipeline. To tag by hand
 instead, `oras tag registry.gitlab.com/custyard/custyard@sha256:<digest>
 v1.2.3` after `oras login registry.gitlab.com` with a token that has

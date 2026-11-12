@@ -217,8 +217,11 @@ class PublishedDigestTest(unittest.TestCase):
         message = "no successful push-to-main CI pipeline"
         for pipeline in [self.pipeline(ref="feature"), self.pipeline(source="merge_request_event"),
                          self.pipeline(source="web"), self.pipeline(status="failed"), self.pipeline(sha="d" * 40)]:
-            with self.subTest(pipeline=pipeline), patch.object(promotion, "gitlab", return_value=[pipeline]), \
-                    patch.object(promotion, "gitlab_bytes") as download, \
+            # Complete jobs and a valid record sit behind each pipeline, so only
+            # the checks on the pipeline itself can refuse it.
+            with self.subTest(pipeline=pipeline), \
+                    patch.object(promotion, "gitlab", side_effect=[[pipeline], self.jobs()]), \
+                    patch.object(promotion, "gitlab_bytes", return_value=self.record()) as download, \
                     self.assertRaisesRegex(promotion.ValidationError, message):
                 promotion.published_digest(SHA)
             download.assert_not_called()
