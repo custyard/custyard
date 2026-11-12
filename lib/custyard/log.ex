@@ -5,6 +5,8 @@ defmodule Custyard.Log do
   Unknown messages keep severity and code location, never rendered contents.
   """
 
+  alias Custyard.Boot.Probe
+
   @known_exception_types [
     RuntimeError,
     ArgumentError,
@@ -189,7 +191,7 @@ defmodule Custyard.Log do
     receipt: ~w(sent skipped)a,
     role: ~w(admin agent staff instance_admin customer contact prospect to cc bcc)a,
     stage:
-      ~w(startup connect poll fetch parse dispatch persist deliver notify audit sweep retry shutdown weights intake_config neglect_thresholds)a,
+      ~w(startup connect disconnect poll fetch parse dispatch persist deliver notify audit sweep retry shutdown weights intake_config neglect_thresholds)a,
     purpose:
       ~w(sender_matching enrichment notification audit attachments disambiguation login claim arrival receipt neglect quiet_channel delivery_failure)a,
     notification_level:
@@ -333,7 +335,7 @@ defmodule Custyard.Log do
           {name, fields}
 
         _ ->
-          {:external_log, Map.merge(fields, report_failure(Map.get(event, :msg)))}
+          {:external_log, Map.merge(fields, external_failure(Map.get(event, :msg), metadata))}
       end
 
     safe_metadata =
@@ -741,6 +743,79 @@ defmodule Custyard.Log do
   end
 
   defp safe_location(_metadata), do: %{}
+
+  defp external_failure(message, %{mfa: {DBConnection.Connection, :handle_event, 4}} = metadata) do
+    case metadata[:crash_reason] do
+      {error, stack} when is_list(stack) ->
+        error
+        |> failure()
+        |> Keyword.put(:database_category, database_exception_category(error))
+        |> Keyword.put(:stage, :connect)
+        |> sanitize_metadata()
+
+      _ ->
+        Map.merge(report_failure(message), disconnect_failure(message))
+    end
+  end
+
+  defp external_failure(message, _metadata), do: report_failure(message)
+
+  # DBConnection 2.10 emits disconnects as chardata with a binary exception
+  # banner, but no structured reason. Match that shape, not arbitrary log text;
+  # never render the driver, PID/label, banner or exception message for handlers.
+  defp disconnect_failure({:string, [_driver, 32, 40, _pid, ") disconnected: " | banner]}) do
+    fields = %{stage: "disconnect", reason: "connection_failed", database_category: "unknown"}
+    Map.merge(fields, database_banner(banner))
+  end
+
+  defp disconnect_failure(_message), do: %{}
+
+  @database_message_limit 16_384
+
+  defp database_banner("** (" <> banner) when byte_size(banner) <= @database_message_limit do
+    case :binary.split(banner, ") ") do
+      [name, message] when byte_size(name) <= 160 ->
+        module = String.to_existing_atom("Elixir." <> name)
+
+        if exception_module?(module) do
+          sanitize_metadata(%{
+            reason: :exception,
+            error_type: module,
+            database_category: database_message_category(module, message)
+          })
+        else
+          %{}
+        end
+
+      _ ->
+        %{}
+    end
+  rescue
+    _ -> %{}
+  end
+
+  defp database_banner(_banner), do: %{}
+
+  defp database_exception_category(%{__struct__: module} = error),
+    do: database_message_category(module, Map.get(error, :message))
+
+  defp database_exception_category(_error), do: :unknown
+
+  defp database_message_category(module, _message)
+       when module in [Mint.TransportError, Mint.HTTPError],
+       do: :unreachable
+
+  defp database_message_category(module, message)
+       when is_binary(message) and byte_size(message) <= @database_message_limit do
+    if String.valid?(message) do
+      error = if module == Exqlite.Error, do: %Exqlite.Error{message: message}, else: message
+      Probe.categorize(error)
+    else
+      :unknown
+    end
+  end
+
+  defp database_message_category(_module, _message), do: :unknown
 
   defp report_failure({:report, report}) do
     case crash_details(report) do

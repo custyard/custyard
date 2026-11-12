@@ -9,8 +9,8 @@ defmodule Custyard.Boot.Probe do
   pool would use (`Exqlite.Connection` for a file, `Custyard.Turso.Connection`
   for libSQL), runs `SELECT 1` and closes it. Going through the driver rather
   than a temporary Repo is what makes the error classifiable: a pool reports
-  every connect failure as a generic `DBConnection.ConnectionError` and logs
-  the real reason, which the privacy logger then discards.
+  every connect failure as a generic `DBConnection.ConnectionError`; its
+  logs retain safe categories and exception classes, not the raw reason.
 
   A failure is one of `Custyard.Boot.State.database_category/0` with a short
   sentence that names no host, token, path or raw error. The raw exception is
@@ -115,8 +115,8 @@ defmodule Custyard.Boot.Probe do
   end
 
   @doc """
-  The category for a driver error, from its class and message. Exposed for
-  the unit tests; `check/2` applies it.
+  The category for a driver error, from its class and message. Shared by
+  `check/2` and the privacy logger; neither logs the raw message.
   """
   @spec categorize(term) :: category
   def categorize(%Exqlite.Error{message: message}), do: sqlite_category(message)
