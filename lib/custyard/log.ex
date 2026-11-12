@@ -88,6 +88,8 @@ defmodule Custyard.Log do
     intake_source_unavailable
     intake_submission_accepted
     intake_submission_rejected
+    legacy_file_import_completed
+    legacy_file_import_failed
     lmtp_command_unrecognized
     lmtp_connection_rejected
     lmtp_ehlo_received
@@ -169,7 +171,7 @@ defmodule Custyard.Log do
   )
   @events Enum.map(@event_names, &String.to_atom/1)
   @context_keys ~w(request_id operation_id parent_operation_id tenant_id organization_id staff_id channel_id route_id thread_id message_id)a
-  @integer_fields ~w(staff_id session_staff_id organization_id tenant_id thread_id message_id channel_id inbound_channel_id route_id project_id audit_event_id slug_id contact_id source_id acknowledgment_id existing_organization_id new_organization_id uid port count limit current_count max_size max_recipients actual_size declared_size size_bytes recipient_count received_count message_count messages_processed retry_after_ms retry_after_s attempt duration_ms deleted_count deleted_threads deleted_messages deleted_attachments deleted_contacts deleted_staff deleted_routes deleted_channels organization_count quiet_after_hours threads_deleted messages_deleted attachments_deleted contacts_deleted staff_deleted routes_deleted channels_deleted rejection_count rows affected_rows generation score dormant_count notification_count contacts_to_delete threads_to_delete resolved_threads orphaned_contacts orphaned_tasks channel_rejections channel_verifications channel_tokens attachment_files account_id instance_admin_id existing_tenant_id message_drafts)a
+  @integer_fields ~w(staff_id session_staff_id organization_id tenant_id thread_id message_id channel_id inbound_channel_id route_id project_id audit_event_id slug_id contact_id source_id acknowledgment_id existing_organization_id new_organization_id uid port count limit current_count max_size max_recipients actual_size declared_size size_bytes recipient_count received_count message_count messages_processed retry_after_ms retry_after_s attempt duration_ms deleted_count deleted_threads deleted_messages deleted_attachments deleted_contacts deleted_staff deleted_routes deleted_channels organization_count quiet_after_hours threads_deleted messages_deleted attachments_deleted contacts_deleted staff_deleted routes_deleted channels_deleted rejection_count rows affected_rows generation score dormant_count notification_count contacts_to_delete threads_to_delete resolved_threads orphaned_contacts orphaned_tasks channel_rejections channel_verifications channel_tokens attachment_files legacy_attachment_files incomplete_files account_id instance_admin_id existing_tenant_id message_drafts imported_attachments imported_logos missing_files failed_files)a
   @boolean_fields ~w(enabled email_captured tls used_default configured accepted async tls_enabled)a
   @id_fields ~w(request_id operation_id parent_operation_id)a
   @reference_fields ~w(submission_ref source_ref receipt_ref)a
@@ -200,7 +202,8 @@ defmodule Custyard.Log do
       ~w(pending queued sending sent accepted delivered deferred bounced suppressed failed withheld unknown dormant active resolved closed)a,
     boot_mode: ~w(unconfigured starting database_unavailable first_run ready)a,
     database_category:
-      ~w(unreachable auth_rejected not_writable locked migration_failed volume_missing unknown)a,
+      ~w(unreachable auth_rejected not_writable locked migration_failed volume_missing
+         bunny_database_required unknown)a,
     step: ~w(schema instance_admin mail sign_in)a,
     failure_kind: ~w(rejected unknown temporary permanent configuration transport provider)a,
     error_type: ~w(temporary permanent exception exit throw validation transport provider)a,
@@ -254,7 +257,7 @@ defmodule Custyard.Log do
     singleton size skip_reason slug sniffed_type snoozed_until
     source source_organization_id spam_score staff_account staff_account_id staff_accounts
     start_date state statement_hash statement_key statement_text statement_version
-    status status_at status_callback_token status_secret_ciphertext status_webhook_id storage_path
+    status status_at status_callback_token status_secret_ciphertext status_webhook_id
     subject submission_id suspect tag tags target_completion_date
     tasks team_token_ciphertext tenant tenant_id text thread
     thread_id threads tier title to to_addresses

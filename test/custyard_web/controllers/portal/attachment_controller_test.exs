@@ -4,7 +4,7 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
   import Custyard.Factory
   import Phoenix.LiveViewTest
 
-  alias Custyard.{Attachments, PortalCredentials}
+  alias Custyard.{Attachments, Files, PortalCredentials}
   alias Custyard.Attachments.StubClient
   alias Custyard.Repo
 
@@ -16,9 +16,11 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
     %{org: org, conv: conv, attachment: fetched_attachment(message)}
   end
 
+  @html "<html><script>alert(1)</script></html>"
+
   defp fetched_attachment(message) do
     url = StubClient.unique_url()
-    StubClient.put(url, "<html><script>alert(1)</script></html>")
+    StubClient.put(url, @html)
 
     {:ok, [attachment]} =
       Attachments.fetch_for_message(message, [
@@ -37,12 +39,48 @@ defmodule CustyardWeb.Portal.AttachmentControllerTest do
       conn = get(conn, "/portal/#{portal_token(org)}/attachments/#{attachment.id}")
 
       assert conn.status == 200
-      assert conn.resp_body =~ "alert(1)"
+      assert conn.resp_body == @html
       assert get_resp_header(conn, "content-type") == ["text/plain"]
-      assert [disposition] = get_resp_header(conn, "content-disposition")
-      assert disposition =~ "attachment"
+
+      assert get_resp_header(conn, "content-disposition") == [
+               ~s(attachment; filename="invoice.html")
+             ]
+
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
       assert get_resp_header(conn, "content-security-policy") == ["default-src 'none'; sandbox"]
+      assert get_resp_header(conn, "cache-control") == ["private, no-store"]
+    end
+
+    test "content of several chunks downloads byte for byte", %{conn: conn, org: org, conv: conv} do
+      bytes = :crypto.strong_rand_bytes(5 * Files.chunk_bytes() + 311)
+
+      {:ok, [large]} =
+        Attachments.fetch_for_message(insert_message(thread_id: conv.id), [
+          %{filename: "export.bin", content: bytes}
+        ])
+
+      conn = get(conn, "/portal/#{portal_token(org)}/attachments/#{large.id}")
+
+      assert conn.status == 200
+      assert conn.resp_body == bytes
+      assert get_resp_header(conn, "content-type") == ["application/octet-stream"]
+    end
+
+    test "an attachment whose stored content is gone is the same 404", %{
+      conn: conn,
+      org: org,
+      attachment: attachment
+    } do
+      path = "/portal/#{portal_token(org)}/attachments/#{attachment.id}"
+      assert get(conn, path).status == 200
+
+      :ok = Files.delete(attachment.tenant_id, :attachment, attachment.sha256)
+
+      gone = get(conn, path)
+      assert gone.status == 404
+
+      assert gone.resp_body ==
+               get(conn, "/portal/#{portal_token(org)}/attachments/999999").resp_body
     end
 
     test "is reachable on the tenant's registered custom domain", %{

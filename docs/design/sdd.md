@@ -269,7 +269,7 @@ Inbound email is treated as hostile. HTML bodies are sanitized before storage an
 
 **Data at Rest**
 
-Customer data, attachments, and thread content require encryption at rest. The specific mechanism depends on deployment environment (filesystem encryption, database-level encryption, or both). Attachment storage is encrypted independently of the database.
+Customer data, attachments, and thread content require encryption at rest. The specific mechanism depends on deployment environment (filesystem encryption, database-level encryption, or both). Attachment content is stored in the database, so its encryption at rest is the database's.
 
 **Multi-Tenancy Model**
 
@@ -336,8 +336,8 @@ A single communication within a Thread.
 A file attached to a Message.
 
 - Linked to a Message
-- Has filename, content type, size, and storage path
-- Stored outside web root, encrypted at rest
+- Has filename, content type, size, and the SHA-256 that keys its content
+- Content stored in the database, never under the web root; encrypted at rest with it
 
 **Task**
 

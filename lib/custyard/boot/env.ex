@@ -876,9 +876,10 @@ defmodule Custyard.Boot.Env do
     end)
   end
 
-  # Where files live and which proxy is in front are chosen separately from
-  # the database (Fly staging can run on Bunny Database). Both default to Fly
-  # when FLY_APP_NAME is present and to nothing special otherwise.
+  # Whose storage rules apply (Custyard.Storage) and which proxy is in front
+  # are chosen separately from the database (Fly staging can run on Bunny
+  # Database). Both default to Fly when FLY_APP_NAME is present and to nothing
+  # special otherwise.
   defp hosting(acc) do
     fly? = is_binary(get(acc, "FLY_APP_NAME"))
 
@@ -897,13 +898,13 @@ defmodule Custyard.Boot.Env do
       if(fly?, do: :fly, else: :none),
       nil
     )
-    |> data_volume_id()
+    |> unused_data_volume_id()
     |> bunny_origin_secret()
   end
 
   # An unrecognized value is never echoed. `invalid` is what the setting
   # becomes then: storage has a value that Custyard.Storage refuses, so a
-  # release command cannot skip the volume check; the proxy keeps the
+  # release command cannot skip the storage check; the proxy keeps the
   # platform default so the doctor card that reports the problem is reachable.
   defp choice(acc, name, key, allowed, default, invalid) do
     case get(acc, name) do
@@ -921,36 +922,20 @@ defmodule Custyard.Boot.Env do
     end
   end
 
-  # The identity `bin/data-volume init` wrote to the volume marker. Required,
-  # and checked for shape, only where Custyard.Storage compares it.
-  defp data_volume_id(%{settings: %{storage_provider: :bunny}} = acc) do
-    case get(acc, "DATA_VOLUME_ID") do
-      nil ->
-        acc
-        |> credential(
-          "DATA_VOLUME_ID",
-          "STORAGE_PROVIDER=bunny needs the identity of the mounted file volume " <>
-            "(the one given to `bin/data-volume init`)"
-        )
-        |> put(:data_volume_id, nil)
-
-      value ->
-        if String.match?(value, ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\z/) do
-          put(acc, :data_volume_id, value)
-        else
-          acc
-          |> problem(
-            "DATA_VOLUME_ID",
-            :malformed,
-            "must be 1 to 128 letters, digits, dots, dashes or underscores, " <>
-              "starting with a letter or digit"
-          )
-          |> put(:data_volume_id, nil)
-        end
+  # Named the Bunny file volume while uploads and attachments were files on
+  # it. Still a known name, so a deployment that sets it boots as before; its
+  # value is not used.
+  defp unused_data_volume_id(acc) do
+    if "DATA_VOLUME_ID" in acc.present do
+      warn(
+        acc,
+        "DATA_VOLUME_ID",
+        "no longer used; files are stored in the database, so this variable can be removed"
+      )
+    else
+      acc
     end
   end
-
-  defp data_volume_id(acc), do: put(acc, :data_volume_id, get(acc, "DATA_VOLUME_ID"))
 
   # Bunny's edge rule overwrites X-Custyard-Origin with this value and
   # CustyardWeb.Proxy compares it before trusting any forwarded header. A
@@ -999,6 +984,10 @@ defmodule Custyard.Boot.Env do
         true -> :unknown
       end
 
+    # Where earlier releases wrote tenant logos and inbound attachments. Files
+    # are stored in the database; these only locate what such a release left
+    # behind, for a one-time import and for the sweep of attachment files
+    # whose rows are gone. Neither is validated or has to exist.
     acc
     |> put(:upload_dir, get(acc, "UPLOAD_DIR") || "/data/uploads")
     |> put(:attachment_dir, get(acc, "ATTACHMENT_DIR") || "/data/attachments")

@@ -10,7 +10,7 @@ Custyard records replies before attempting delivery. Routine customer email requ
 4. Test tenant and customer isolation, portal revocation, staff session revocation, and attachment access. Describe portal credentials as bearer access; contact attribution does not verify identity.
 5. Keep hostile HTML and remote images out of message rendering. Quarantine attachments until scanning succeeds; scanner errors fail closed.
 6. Run the full test suite and security checks on the integrated code. Review the sending path and migration behavior before deployment.
-7. Take a database and attachment backup, demonstrate restoration in isolation, deploy, and verify production health. Never reset the live database.
+7. Take a database backup, which includes attachment content, demonstrate restoration in isolation, deploy, and verify production health. Never reset the live database.
 
 ## Acceptance evidence
 
@@ -18,7 +18,7 @@ Local tests, production health, provider acceptance, recipient mailbox delivery,
 
 The live acceptance run covers support and billing addresses, portal-created requests, From/To/CC review, internal-note privacy, pause/resume, delivery errors and retries, access revocation, and recovery. Do not send customer messages as an automated acceptance test. Use designated test mailboxes with explicit authorization.
 
-Original support mail remains in the source mailbox. Preserve database and attachment backups together. Restoring a backup must not automatically send old pending replies: start with outbound delivery paused and reconcile provider activity first.
+Original support mail remains in the source mailbox. Attachment content is stored in the database, so one database backup covers rows and attachments. An installation that still has attachments on disk from an earlier release keeps that directory with the backup until [its import has finished](database.md#upgrading-from-a-release-that-kept-files-on-disk). Restoring a backup must not automatically send old pending replies: start with outbound delivery paused and reconcile provider activity first.
 
 The [backup and restore drill](backup-restore.md) specifies a separate utility
 machine, complete-volume recovery and checks that do not start Custyard.

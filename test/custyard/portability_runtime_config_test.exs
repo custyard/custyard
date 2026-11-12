@@ -40,6 +40,9 @@ defmodule Custyard.PortabilityRuntimeConfigTest do
     problem
   end
 
+  defp warnings(config, variable),
+    do: Enum.filter(config[:boot_env].warnings, &(&1.variable == variable))
+
   defp bunny_database do
     System.put_env("BUNNY_DATABASE_URL", "https://test.lite.bunnydb.net")
     System.put_env("BUNNY_DATABASE_AUTH_TOKEN", "isolated-test-token")
@@ -73,17 +76,21 @@ defmodule Custyard.PortabilityRuntimeConfigTest do
     assert staging[:proxy_provider] == :fly
   end
 
-  test "Bunny hosting requires an explicit file-volume identity" do
+  test "Bunny hosting needs no file-volume identity, and one left behind is only a warning" do
     System.put_env("STORAGE_PROVIDER", "bunny")
     config = runtime()
-    assert problem(config, "DATA_VOLUME_ID").kind == :missing
+    assert config[:boot_env].verdict == :configured
+    assert warnings(config, "DATA_VOLUME_ID") == []
     assert config[:storage_provider] == :bunny
-    assert config[:data_volume_id] == nil
+    refute Keyword.has_key?(config, :data_volume_id)
 
     System.put_env("DATA_VOLUME_ID", "isolated-test-volume")
     config = runtime()
     assert config[:boot_env].verdict == :configured
-    assert config[:data_volume_id] == "isolated-test-volume"
+    assert [%{detail: detail}] = warnings(config, "DATA_VOLUME_ID")
+    assert detail =~ "no longer used"
+    refute detail =~ "isolated-test-volume"
+    refute Keyword.has_key?(config, :data_volume_id)
   end
 
   test "Bunny proxy cannot enable forwarded trust without a strong origin secret" do
@@ -132,28 +139,32 @@ defmodule Custyard.PortabilityRuntimeConfigTest do
       end
     end)
 
+    # Bunny hosting without its database: the SQLite default is refused.
     System.put_env("STORAGE_PROVIDER", "bunny")
-    System.put_env("DATA_VOLUME_ID", "isolated-test-volume")
-    bunny_database()
     config = runtime()
     Application.put_env(:custyard, :storage_provider, config[:storage_provider])
 
-    assert {:error, :volume_unverified, detail} =
+    assert {:error, :bunny_database_required, detail} =
+             Custyard.Storage.check(repo_config: config[Custyard.Repo])
+
+    assert detail ==
+             "Bunny storage requires the configured Bunny remote database; refusing local fallback"
+
+    # With it, nothing is mounted and nothing else is asked for.
+    bunny_database()
+    config = runtime()
+
+    assert :ok ==
              Custyard.Storage.check(
                repo_config: config[Custyard.Repo],
-               data_volume_id: config[:data_volume_id],
-               upload_dir: config[:upload_dir],
-               attachment_dir: config[:attachment_dir],
                mountinfo: "35 28 0:28 / / rw - overlay overlay rw\n"
              )
-
-    assert detail == "Bunny requires a mounted file volume at /data"
 
     Application.put_env(:custyard, :storage_provider, :local)
     assert :ok == Custyard.Storage.check(repo_config: config[Custyard.Repo])
   end
 
-  test "an unknown storage provider stops release commands at the volume check" do
+  test "an unknown storage provider stops release commands at the storage check" do
     System.put_env("STORAGE_PROVIDER", "private-invalid-provider")
     config = runtime()
     assert config[:storage_provider] == :invalid

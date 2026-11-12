@@ -38,6 +38,32 @@ defmodule Custyard.ApplicationTest do
     end
   end
 
+  describe "legacy file import" do
+    test "is off in the test environment and not running" do
+      refute Application.get_env(:custyard, :start_legacy_file_import, true)
+      refute Custyard.Files.LegacyImport in ids(App.deferred_children([]))
+
+      refute Enum.any?(
+               Supervisor.which_children(Custyard.Supervisor),
+               &match?({Custyard.Files.LegacyImport, _pid, _type, _modules}, &1)
+             )
+    end
+
+    test "is the last deferred child, as a temporary task, unless flagged off" do
+      Application.delete_env(:custyard, :start_legacy_file_import)
+
+      try do
+        children = App.deferred_children(first_run: [env: %{}, schema: %{}])
+        assert List.last(children) == Custyard.Files.LegacyImport
+
+        assert %{restart: :temporary, start: {Task, :start_link, _args}} =
+                 Supervisor.child_spec(List.last(children), [])
+      after
+        Application.put_env(:custyard, :start_legacy_file_import, false)
+      end
+    end
+  end
+
   describe "scheduler configuration" do
     test "scheduler is disabled in test environment" do
       # In test.exs, :start_scheduler is set to false

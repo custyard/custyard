@@ -18,9 +18,9 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
        |> assign(:page_title, "Tenant settings")
        |> load()
        |> allow_upload(:logo,
-         accept: ~w(.png .jpg .jpeg .svg .webp),
+         accept: Uploads.logo_extensions(),
          max_entries: 1,
-         max_file_size: 2_000_000
+         max_file_size: Uploads.max_logo_bytes()
        ), layout: {CustyardWeb.Layouts, :staff}}
     else
       {:ok, redirect(socket, to: ~p"/app")}
@@ -133,26 +133,37 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
   end
 
   defp save_tenant_logo(socket, attrs) do
-    old_logo = socket.assigns.current_tenant.logo_url
+    tenant_id = socket.assigns.current_tenant.id
 
-    uploaded_logo =
-      socket
-      |> consume_uploaded_entries(:logo, fn %{path: path}, entry ->
-        {:ok, Uploads.save_logo(path, entry.client_name)}
+    # At most one entry. The form has already limited what reaches this
+    # point; Uploads.save_logo/3 checks again and may still refuse the file.
+    stored =
+      consume_uploaded_entries(socket, :logo, fn %{path: path}, entry ->
+        {:ok, Uploads.save_logo(tenant_id, path, entry.client_name)}
       end)
-      |> List.first()
 
+    case stored do
+      [{:error, reason}] ->
+        {:noreply, put_flash(socket, :error, upload_error(reason))}
+
+      [{:ok, uploaded_logo}] ->
+        update_tenant(socket, attrs, uploaded_logo)
+
+      [] ->
+        update_tenant(socket, attrs, nil)
+    end
+  end
+
+  defp update_tenant(socket, attrs, uploaded_logo) do
+    tenant_id = socket.assigns.current_tenant.id
+    old_logo = socket.assigns.current_tenant.logo_url
     logo = resolved_logo(attrs, uploaded_logo, old_logo)
 
     attrs = Map.put(attrs, "logo_url", logo)
 
-    case Tenants.update_tenant_for_staff(
-           socket.assigns.current_staff,
-           socket.assigns.current_tenant.id,
-           attrs
-         ) do
+    case Tenants.update_tenant_for_staff(socket.assigns.current_staff, tenant_id, attrs) do
       {:ok, tenant} ->
-        if old_logo && old_logo != logo, do: Uploads.delete_logo(old_logo)
+        if old_logo && old_logo != logo, do: Uploads.delete_logo(tenant_id, old_logo)
 
         {:noreply,
          socket
@@ -161,11 +172,11 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
          |> put_flash(:info, "Tenant updated")}
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        if uploaded_logo, do: Uploads.delete_logo(uploaded_logo)
+        if uploaded_logo, do: Uploads.delete_logo(tenant_id, uploaded_logo)
         {:noreply, assign(socket, :form, to_form(changeset))}
 
       {:error, :unauthorized} ->
-        if uploaded_logo, do: Uploads.delete_logo(uploaded_logo)
+        if uploaded_logo, do: Uploads.delete_logo(tenant_id, uploaded_logo)
         {:noreply, put_flash(socket, :error, "Tenant administrator required")}
     end
   end

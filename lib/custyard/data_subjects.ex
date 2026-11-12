@@ -132,8 +132,9 @@ defmodule Custyard.DataSubjects do
       shows "This message was deleted") and emptied: body, HTML, sender,
       recipients, `Reply-To` and authentication. The rows stay so threading
       by Message-ID keeps working;
-    * those messages' attachment rows are deleted; the attachment sweep
-      removes the files once nothing references them;
+    * those messages' attachment rows are deleted; the daily sweep removes
+      their content, and any file an earlier release left on disk for it,
+      once no row references it (`Custyard.Threads.RetentionSweep`);
     * the person's contact record is deleted, and the threads it
       owned lose the contact and their subject;
     * rejection-log entries from the address are deleted;

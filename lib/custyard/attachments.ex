@@ -4,30 +4,34 @@ defmodule Custyard.Attachments do
 
   The provider delivers each attachment as a signed URL. After the message is
   stored, `fetch_for_message/3` walks the descriptors in order, fetches each
-  within the channel's per-message cap into a content-addressed file under
-  the attachment directory and records a `Custyard.MessageAttachment` row.
+  within the channel's per-message cap, stores the content in the database
+  through `Custyard.Files` and records a `Custyard.MessageAttachment` row.
   Attachments past the cap are listed as skipped so the staff knows they
   existed. The signed URL is never persisted and never logged.
 
-  Files are tenant scoped and named by SHA-256 (`<dir>/<tenant>/<ab>/<sha256>`), so a declared
-  filename can never become a path and identical content is stored once.
-  Serving goes through `CustyardWeb.Staff.AttachmentController`, which
-  checks the staff's access to the thread; the directory is never
-  a static path.
+  Content belongs to a tenant and is keyed by its SHA-256, so a declared
+  filename never names anything in storage, identical content is stored once
+  per tenant and no tenant shares content with another. A row points at its
+  content by `sha256` alone; `stored_file/1` resolves it. Serving goes
+  through `CustyardWeb.Staff.AttachmentController` and
+  `CustyardWeb.Portal.AttachmentController`, which check access to the
+  thread first.
   """
 
   import Ecto.Query
 
-  alias Custyard.{Thread, Message, MessageAttachment, Repo, Scope}
+  alias Custyard.{Files, Message, MessageAttachment, Repo, Scope, Thread}
   alias Custyard.Attachments.{Client, Scanner, Sniffer}
+  alias Custyard.Files.StoredFile
 
   require Custyard.Log, as: Log
 
   @default_limit_mb 10
   @megabyte 1_048_576
-
-  @doc "The configured attachment directory."
-  def dir, do: Application.fetch_env!(:custyard, :attachment_dir)
+  # Content published less than a day ago is never swept as an orphan. Writers
+  # publish their reference first (persist_result/3), so this is margin and
+  # not what keeps a concurrent store safe.
+  @orphan_grace 86_400
 
   @doc "Default per-message cap in bytes for integrations without an email channel."
   def default_limit_bytes, do: @default_limit_mb * @megabyte
@@ -246,16 +250,13 @@ defmodule Custyard.Attachments do
 
     query = owned_slot_query(row, batch_token)
 
-    # Publish the reference before the file. SQLite's immediate transaction in the
-    # sweeper then orders deletion before this reservation or sees the reference.
+    # Publish the reference before the content. The orphan sweep checks for
+    # references and deletes inside one immediate transaction, so it either
+    # commits before this update, and the content is then stored afresh, or
+    # sees the reference and keeps the file (remove_orphan/2).
     case Repo.update_all(query, set: [sha256: sha]) do
-      {1, _} ->
-        file_lock({row.tenant_id, sha}, fn ->
-          finish_slot(row, store(row.tenant_id, bytes), batch_token)
-        end)
-
-      {0, _} ->
-        Repo.get!(MessageAttachment, row.id)
+      {1, _} -> finish_slot(row, store(row.tenant_id, sha, bytes), batch_token)
+      {0, _} -> Repo.get!(MessageAttachment, row.id)
     end
   end
 
@@ -313,8 +314,6 @@ defmodule Custyard.Attachments do
           exists(subquery(batch))
   end
 
-  defp file_lock(sha, fun), do: :global.trans({{__MODULE__, :file, sha}, self()}, fun)
-
   defp process_descriptor(_descriptor, used, _limit, skip) when is_binary(skip),
     do: {skipped(skip), used}
 
@@ -366,31 +365,32 @@ defmodule Custyard.Attachments do
 
   defp skipped(reason), do: %{state: :skipped, skip_reason: reason}
 
-  # Content-addressed write: the temp file lands next to its final name so the
-  # rename is atomic on the same filesystem; identical content is kept once.
-  defp store(tenant_id, bytes) do
-    sha = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
-    relative = Path.join([Integer.to_string(tenant_id), binary_part(sha, 0, 2), sha])
-    final = Path.join(dir(), relative)
+  # Content-addressed write: the key is the content's own hash, so the store
+  # keeps identical content once per tenant. The scan runs on the bytes in
+  # hand, which are the bytes the store just accepted.
+  defp store(tenant_id, sha, bytes) do
+    case Files.put(tenant_id, :attachment, sha, bytes) do
+      {:ok, %StoredFile{}} ->
+        :ok
 
-    unless File.exists?(final) do
-      File.mkdir_p!(Path.dirname(final))
-      tmp = final <> ".tmp-" <> Integer.to_string(System.unique_integer([:positive]))
-      File.write!(tmp, bytes)
-      File.rename!(tmp, final)
+      # The store only refuses a hash as key when the file already under it
+      # is some other content. Raising does what any failed write does: the
+      # slot stays leased and unfinished, and a replay takes it up again.
+      {:error, reason} ->
+        raise "attachment content was not stored: #{reason}"
     end
 
-    attrs = %{
+    status = Scanner.scan(bytes)
+
+    %{
       state: :fetched,
       skip_reason: nil,
       sha256: sha,
-      storage_path: relative,
       size: byte_size(bytes),
-      sniffed_type: Sniffer.sniff(bytes)
+      sniffed_type: Sniffer.sniff(bytes),
+      scan_status: status,
+      scanned_at: scan_time(status)
     }
-
-    status = Scanner.scan_file(final, sha)
-    Map.merge(attrs, %{scan_status: status, scanned_at: scan_time(status)})
   end
 
   defp descriptor_attrs(message_id, descriptor) when is_map(descriptor) do
@@ -414,19 +414,25 @@ defmodule Custyard.Attachments do
   defp declared_or_nil(%{size: size}) when is_integer(size) and size >= 0, do: size
   defp declared_or_nil(_descriptor), do: nil
 
-  @doc "Absolute path of a fetched attachment's file, nil for other states."
-  def file_path(%MessageAttachment{
-        state: :fetched,
-        tenant_id: tenant_id,
-        sha256: sha,
-        storage_path: path
-      })
+  @doc """
+  The stored file that holds a fetched attachment's content, without the
+  content: read it with `Custyard.Files.read/1` or `Custyard.Files.stream/1`.
+
+  `nil` for a row in any other state, for one without a SHA-256, and when
+  the tenant has no published file with that content.
+  """
+  @spec stored_file(MessageAttachment.t()) :: StoredFile.t() | nil
+  def stored_file(%MessageAttachment{state: :fetched, tenant_id: tenant_id, sha256: sha})
       when is_integer(tenant_id) and is_binary(sha) and byte_size(sha) == 64 do
-    expected = Path.join([Integer.to_string(tenant_id), binary_part(sha, 0, 2), sha])
-    if path == expected, do: Path.join(dir(), path), else: nil
+    case Files.get(tenant_id, :attachment, sha) do
+      # The key is the content's hash. A file recorded with a different hash
+      # is not this attachment's content, whatever its key says.
+      %StoredFile{sha256: ^sha} = file -> file
+      _other -> nil
+    end
   end
 
-  def file_path(%MessageAttachment{}), do: nil
+  def stored_file(%MessageAttachment{}), do: nil
 
   @doc """
   An attachment the staff may download: fetched, on a message the
@@ -502,7 +508,7 @@ defmodule Custyard.Attachments do
   def scan_label(%MessageAttachment{scan_status: :clean}), do: "Security scan passed"
   def scan_label(_), do: "Quarantined: awaiting security scan"
 
-  @doc "Rescan stored files after an authorized administrator explicitly requests it."
+  @doc "Rescan stored content after an authorized administrator explicitly requests it."
   def rescan_thread(%Scope{role: "admin"} = scope, thread_id) do
     case Scope.current_staff(scope) do
       %{role: "admin"} ->
@@ -518,7 +524,7 @@ defmodule Custyard.Attachments do
 
   def rescan_thread(_, _), do: {:error, :unauthorized}
 
-  @doc "Operator release task: scan existing stored files; never assume old files are clean."
+  @doc "Operator release task: scan the content already stored; never assume old content is clean."
   def rescan_all do
     rescan_query(from(m in Message))
   end
@@ -556,7 +562,7 @@ defmodule Custyard.Attachments do
       |> Ecto.Changeset.change(scan_status: :pending, scanned_at: nil, scan_token: token)
       |> Repo.update!()
 
-    status = Scanner.scan_file(file_path(row), row.sha256)
+    status = scan_stored(row)
 
     # Fence concurrent rescans: an older scan cannot publish a clean verdict
     # over a newer quarantine or failure.
@@ -570,66 +576,160 @@ defmodule Custyard.Attachments do
     if written == 1 && current, do: current.scan_status, else: :pending
   end
 
+  # A rescan reads the content back from the store. Content that is missing,
+  # past the scan bound or no longer the bytes that were stored gets no
+  # verdict, only :error, so it stays quarantined.
+  defp scan_stored(row) do
+    max_bytes = Scanner.max_bytes()
+
+    with %StoredFile{size: size} = file when size <= max_bytes <- stored_file(row),
+         {:ok, bytes} <- Files.read(file) do
+      Scanner.scan(bytes)
+    else
+      _unreadable -> :error
+    end
+  end
+
   defp scan_time(:pending), do: nil
   defp scan_time(_), do: now()
 
   @doc """
-  Delete files in the attachment directory that no row references any more
-  (their messages were swept or hard-deleted). Returns the count removed.
+  Remove stored attachment content that no row references any more (its
+  messages were swept or hard-deleted) once it is more than a day old.
+  Returns the count removed.
   """
   def sweep_orphan_files do
-    directory = dir()
+    cutoff = DateTime.add(now(), -@orphan_grace, :second)
 
-    if File.dir?(directory) do
-      directory
-      |> Path.join("*/*/*")
-      |> Path.wildcard()
-      |> Enum.filter(fn path ->
-        parts = path |> Path.relative_to(directory) |> Path.split()
+    orphans(cutoff)
+    |> select([f], {f.tenant_id, f.key})
+    |> Repo.all()
+    |> Enum.count(&remove_orphan(&1, cutoff))
+  end
 
-        match?([_, _, _], parts) and Regex.match?(~r/^[0-9]+$/, hd(parts)) and
-          Regex.match?(~r/^[0-9a-f]{64}$/, Path.basename(path))
-      end)
-      |> Enum.reduce(0, fn path, count ->
-        sha = Path.basename(path)
-        relative = Path.relative_to(path, directory)
-        tenant_id = relative |> Path.split() |> hd() |> String.to_integer()
+  # Published attachment files older than the cutoff that no attachment row
+  # of their tenant names. A file still being written has no completed_at and
+  # never matches; Custyard.Files.sweep_incomplete/1 removes abandoned ones.
+  defp orphans(cutoff) do
+    from f in StoredFile,
+      as: :file,
+      where: f.kind == :attachment and f.completed_at < ^cutoff,
+      where:
+        not exists(
+          from a in MessageAttachment,
+            where: a.tenant_id == parent_as(:file).tenant_id and a.sha256 == parent_as(:file).key,
+            select: 1
+        )
+  end
 
-        removed =
-          file_lock({tenant_id, sha}, fn ->
-            # Check each file immediately before removal, under the same lock as
-            # publication. Never remove an in-progress temporary file.
-            {:ok, result} =
-              Repo.transaction(
-                fn ->
-                  referenced? =
-                    Repo.exists?(
-                      from a in MessageAttachment,
-                        where: a.tenant_id == ^tenant_id and a.sha256 == ^sha
-                    )
+  # The candidate list is a hint, already stale when it arrives. Each file is
+  # checked again and removed inside one immediate transaction, which takes
+  # SQLite's write lock before it reads. A writer publishes its row's sha256
+  # before it stores content (persist_result/3), and that update needs the
+  # same lock. So the update either commits first and the check here sees the
+  # reference, or it waits until the file is gone and the writer's put, which
+  # comes after it, finds nothing to reuse and stores the content again. No
+  # lock between processes is needed, and this holds across machines. One
+  # short transaction per file keeps the write lock brief.
+  defp remove_orphan({tenant_id, key}, cutoff) do
+    {:ok, removed?} =
+      Repo.transaction(
+        fn ->
+          orphan? =
+            Repo.exists?(
+              from f in orphans(cutoff), where: f.tenant_id == ^tenant_id and f.key == ^key
+            )
 
-                  if not referenced? and old_file?(path), do: File.rm(path), else: :kept
-                end,
-                mode: :immediate
-              )
+          if orphan?, do: Files.delete(tenant_id, :attachment, key)
+          orphan?
+        end,
+        mode: :immediate
+      )
 
-            result
-          end)
+    removed?
+  end
 
-        if removed == :ok, do: count + 1, else: count
-      end)
-    else
-      0
+  @doc """
+  Remove attachment files an earlier release left in the attachment
+  directory that no row of their tenant references any more (their messages
+  were swept or hard-deleted) once they are a day old. Returns the count
+  removed.
+
+  That release kept a fetched attachment at
+  `<attachment_dir>/<tenant id>/<first two hex chars of its SHA-256>/<SHA-256>`.
+  `Custyard.Files.LegacyImport` copies those files into the database and
+  leaves the originals where they are, so erasure and retention reach an
+  original only here. A file that some row of its tenant still names is
+  kept, imported or not. Only regular files at a path of exactly that shape
+  are considered, and a directory that is missing or cannot be read has
+  nothing to sweep.
+
+  Options: `:attachment_dir` replaces the configured directory (tests).
+  """
+  @spec sweep_legacy_files(keyword) :: non_neg_integer
+  def sweep_legacy_files(opts \\ []) do
+    configured = fn -> Application.get_env(:custyard, :attachment_dir) end
+
+    case Keyword.get_lazy(opts, :attachment_dir, configured) do
+      dir when is_binary(dir) and dir != "" -> sweep_legacy_dir(dir)
+      _unset -> 0
     end
   end
 
-  # Leave a full day for another database transaction/process to publish its
-  # reference, and for interrupted filesystem writes to be investigated.
-  defp old_file?(path) do
-    case File.stat(path, time: :posix) do
-      {:ok, %{mtime: mtime}} -> System.os_time(:second) - mtime >= 86_400
-      _other -> false
+  # A tenant id as the earlier release wrote it, no leading zero, and at most
+  # eighteen digits, which keeps it inside a 64-bit id. A hash sits under its
+  # own first two characters.
+  defp sweep_legacy_dir(dir) do
+    for tenant <- legacy_directories(dir, ~r/\A[1-9][0-9]{0,17}\z/),
+        prefix <- legacy_directories(Path.join(dir, tenant), ~r/\A[0-9a-f]{2}\z/),
+        sha <- legacy_names(Path.join([dir, tenant, prefix]), ~r/\A[0-9a-f]{64}\z/),
+        String.starts_with?(sha, prefix),
+        remove_legacy_orphan?(
+          String.to_integer(tenant),
+          sha,
+          Path.join([dir, tenant, prefix, sha])
+        ),
+        reduce: 0 do
+      count -> count + 1
     end
+  end
+
+  # lstat, not stat: a symlink is reported as one, so the walk never follows
+  # one out of the directory and never removes a file through one.
+  defp legacy_directories(dir, pattern) do
+    Enum.filter(legacy_names(dir, pattern), fn name ->
+      match?({:ok, %File.Stat{type: :directory}}, File.lstat(Path.join(dir, name)))
+    end)
+  end
+
+  defp legacy_names(dir, pattern) do
+    case File.ls(dir) do
+      {:ok, names} -> Enum.filter(names, &Regex.match?(pattern, &1))
+      {:error, _missing_or_unreadable} -> []
+    end
+  end
+
+  # Nothing writes these files any more, so no lock spans the check and the
+  # removal: a row that appears in between stores its content in the
+  # database (store/3) and never reads this file.
+  defp remove_legacy_orphan?(tenant_id, sha, path) do
+    old_regular_file?(path) and not legacy_referenced?(tenant_id, sha) and File.rm(path) == :ok
+  end
+
+  defp old_regular_file?(path) do
+    case File.lstat(path, time: :posix) do
+      {:ok, %File.Stat{type: :regular, mtime: mtime}} ->
+        System.os_time(:second) - mtime >= @orphan_grace
+
+      _not_a_file ->
+        false
+    end
+  end
+
+  defp legacy_referenced?(tenant_id, sha) do
+    Repo.exists?(
+      from a in MessageAttachment, where: a.tenant_id == ^tenant_id and a.sha256 == ^sha
+    )
   end
 
   @doc "Human-readable size."

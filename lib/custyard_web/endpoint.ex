@@ -107,10 +107,11 @@ defmodule CustyardWeb.Endpoint do
 
   # Boot verdict gate: doctor cards and 503s while the app cannot run, the
   # first-run card on "/". Before anything that could touch the Repo or the
-  # session (UploadedFiles reads config only, but keep the gate first).
+  # session, which includes UploadedFiles below.
   plug CustyardWeb.Plugs.BootGate
 
-  # Serve uploaded files from persistent storage directory (configurable via :upload_dir)
+  # Tenant logos at /uploads/logos/, read from the database. Must stay behind
+  # the gate: the Repo is not running in the modes the gate answers.
   plug CustyardWeb.Plugs.UploadedFiles
 
   if code_reloading? do

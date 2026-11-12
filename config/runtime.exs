@@ -197,8 +197,9 @@ if config_env() == :prod do
   settings = env.settings
 
   # Hosting, proxy trust and database provider are independent. Fly staging
-  # may use Bunny Database while retaining Fly's proxy and file-volume checks.
-  # Custyard.Storage checks the selected volume before the Repo starts.
+  # may use Bunny Database behind Fly's proxy. Custyard.Storage applies the
+  # storage provider's rules for where the database lives before the Repo
+  # starts.
   #
   # Rate limiting keys on the client IP. Behind an edge proxy every request
   # arrives from the proxy address, so without header trust all visitors
@@ -211,7 +212,6 @@ if config_env() == :prod do
   # probes.
   config :custyard,
     storage_provider: settings.storage_provider,
-    data_volume_id: settings.data_volume_id,
     proxy_provider: settings.proxy_provider,
     bunny_origin_secret: settings.bunny_origin_secret,
     trust_proxy_headers: settings.trust_proxy_headers
@@ -324,10 +324,12 @@ if config_env() == :prod do
       :ok
   end
 
-  # Persistent upload directory (survives deployments, unlike priv/static)
+  # Where earlier releases wrote tenant logos (UPLOAD_DIR) and inbound email
+  # attachments (ATTACHMENT_DIR). Files are stored in the database; these
+  # only locate what such a release left behind, for a one-time import and
+  # for the sweep of attachment files whose rows are gone. Neither is
+  # validated or has to exist.
   config :custyard,
     upload_dir: settings.upload_dir,
-    # Inbound email attachments, served only through the authenticated
-    # staff endpoint (never a static path).
     attachment_dir: settings.attachment_dir
 end

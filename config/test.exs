@@ -57,6 +57,10 @@ config :custyard, start_intake_sweeps: false
 # outlive the SQL sandbox owner.
 config :custyard, start_outbound_queue: false
 
+# Run the import of files left on disk by earlier releases explicitly in
+# tests; a boot task would read the database outside the SQL sandbox.
+config :custyard, start_legacy_file_import: false
+
 # Public-intake notification mail still uses supervised tasks. Keep those
 # synchronous in tests so their database reads stay with the sandbox owner.
 config :custyard, deliver_replies_async?: false
@@ -69,8 +73,11 @@ config :phoenix, :plug_init_mode, :runtime
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
 
-# Attachments land in a throwaway directory and are fetched from an in-memory
-# stub instead of the network (Custyard.Attachments.StubClient, test/support).
+# Attachments are fetched from an in-memory stub instead of the network
+# (Custyard.Attachments.StubClient, test/support) and stored in the test
+# database. attachment_dir is a throwaway directory that only the one-time
+# import of files left on disk by an older version and the sweep of such
+# files read.
 config :custyard,
   attachment_dir:
     Path.expand("../tmp/test_attachments#{System.get_env("MIX_TEST_PARTITION")}", __DIR__),

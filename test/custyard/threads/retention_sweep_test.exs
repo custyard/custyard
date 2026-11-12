@@ -3,7 +3,8 @@ defmodule Custyard.Threads.RetentionSweepTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Thread, InboundChannelRejection, InboundChannels}
+  alias Custyard.{Attachments, Files, InboundChannelRejection, InboundChannels, Thread}
+  alias Custyard.Files.{Chunk, StoredFile}
   alias Custyard.Threads.RetentionSweep
 
   @zero_counts %{
@@ -14,8 +15,41 @@ defmodule Custyard.Threads.RetentionSweepTest do
     channel_verifications: 0,
     channel_tokens: 0,
     attachment_files: 0,
+    legacy_attachment_files: 0,
+    incomplete_files: 0,
     message_drafts: 0
   }
+
+  @moduletag :tmp_dir
+
+  # The sweep walks the configured attachment directory, where an earlier
+  # release kept files. Each test gets directories of its own.
+  setup %{tmp_dir: tmp_dir} do
+    dirs = %{attachment_dir: Path.join(tmp_dir, "attachments"), upload_dir: tmp_dir}
+    previous = Map.new(dirs, fn {key, _dir} -> {key, Application.get_env(:custyard, key)} end)
+    Enum.each(dirs, fn {key, dir} -> Application.put_env(:custyard, key, dir) end)
+
+    on_exit(fn ->
+      Enum.each(previous, fn {key, dir} -> Application.put_env(:custyard, key, dir) end)
+    end)
+
+    dirs
+  end
+
+  # A file under the test's directories, last written two days ago.
+  defp old_file!(path) do
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "left by an earlier release")
+    File.touch!(path, System.os_time(:second) - 48 * 3600)
+    path
+  end
+
+  # An attachment as an earlier release kept it on disk, with no row left
+  # that references it.
+  defp legacy_attachment!(attachment_dir) do
+    sha = String.duplicate("c", 64)
+    old_file!(Path.join([attachment_dir, "1", "cc", sha]))
+  end
 
   # cleanup_resolved_threads/2 bounds on :updated_at, so ageing a row
   # means backdating that column past the changeset.
@@ -32,6 +66,38 @@ defmodule Custyard.Threads.RetentionSweepTest do
 
   defp hours_ago(hours),
     do: DateTime.utc_now() |> DateTime.add(-hours * 3600, :second) |> DateTime.truncate(:second)
+
+  # Stored attachment content: one file a message still references, one no
+  # row names any more, and one write that stopped before it was published.
+  # All three are older than any grace period.
+  defp stored_content! do
+    message = insert_message(thread_id: insert_thread().id)
+    tenant_id = message.tenant_id
+
+    {:ok, [row]} =
+      Attachments.fetch_for_message(message, [%{filename: "kept.txt", content: "referenced"}])
+
+    {:ok, orphan} = Files.put(tenant_id, :attachment, String.duplicate("a", 64), "orphaned")
+
+    Repo.update_all(from(f in StoredFile, where: f.tenant_id == ^tenant_id),
+      set: [completed_at: hours_ago(48)]
+    )
+
+    abandoned =
+      Repo.insert!(%StoredFile{
+        tenant_id: tenant_id,
+        kind: :attachment,
+        key: String.duplicate("b", 64),
+        sha256: String.duplicate("b", 64),
+        size: 9,
+        chunk_count: 1,
+        inserted_at: hours_ago(48)
+      })
+
+    Repo.insert!(%Chunk{file_id: abandoned.id, position: 0, data: "abandoned"})
+
+    %{row: row, orphan: orphan, abandoned: abandoned}
+  end
 
   test "the sweep process is not running in tests (flag off in config/test.exs)" do
     refute Application.get_env(:custyard, :start_intake_sweeps, true)
@@ -127,6 +193,60 @@ defmodule Custyard.Threads.RetentionSweepTest do
       swept = InboundChannels.get_channel!(channel.id)
       assert is_nil(swept.verification_code)
       assert is_nil(swept.previous_ingress_token)
+    end
+
+    test "removes unreferenced attachment content and unpublished writes in the same pass" do
+      %{row: row, orphan: orphan, abandoned: abandoned} = stored_content!()
+
+      counts = RetentionSweep.sweep()
+
+      assert counts.attachment_files == 1
+      assert counts.incomplete_files == 1
+      refute Repo.get(StoredFile, orphan.id)
+      refute Repo.get(StoredFile, abandoned.id)
+      assert Files.read(Attachments.stored_file(row)) == {:ok, "referenced"}
+      # Only the referenced file's content is left.
+      assert Repo.all(from c in Chunk, select: c.file_id) == [Attachments.stored_file(row).id]
+
+      assert RetentionSweep.sweep() == @zero_counts
+    end
+
+    test "removes attachment files an earlier release left on disk, and no logo", %{
+      attachment_dir: attachment_dir,
+      upload_dir: upload_dir
+    } do
+      attachment = legacy_attachment!(attachment_dir)
+      logo = old_file!(Path.join([upload_dir, "logos", "unreferenced.png"]))
+
+      counts = RetentionSweep.sweep()
+
+      assert counts.legacy_attachment_files == 1
+      refute File.exists?(attachment)
+      assert File.exists?(logo)
+
+      assert RetentionSweep.sweep() == @zero_counts
+    end
+
+    test "dry_run leaves stored files alone and reports zero for them", %{
+      attachment_dir: attachment_dir
+    } do
+      %{orphan: orphan, abandoned: abandoned} = stored_content!()
+      legacy = legacy_attachment!(attachment_dir)
+
+      counts = RetentionSweep.sweep(dry_run: true)
+
+      assert counts.attachment_files == 0
+      assert counts.legacy_attachment_files == 0
+      assert counts.incomplete_files == 0
+      assert Repo.get(StoredFile, orphan.id)
+      assert Repo.get(StoredFile, abandoned.id)
+      assert File.exists?(legacy)
+    end
+
+    test "the sweep's counts are all fields the log accepts" do
+      counts = Map.new(@zero_counts, fn {key, _zero} -> {key, 1} end)
+
+      assert Custyard.Log.sanitize_metadata(Map.to_list(counts)) == counts
     end
 
     test "dry_run leaves channel rows alone and reports zero for them" do

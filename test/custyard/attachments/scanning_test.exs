@@ -3,8 +3,9 @@ defmodule Custyard.Attachments.ScanningTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Attachments, Repo, Scope, Tenants}
+  alias Custyard.{Attachments, Files, Repo, Scope, Tenants}
   alias Custyard.Attachments.Scanner
+  alias Custyard.Files.{Chunk, StoredFile}
 
   setup do
     previous = Application.get_env(:custyard, :attachment_scanner)
@@ -35,7 +36,7 @@ defmodule Custyard.Attachments.ScanningTest do
     row = fetched(message, "Unscanned content")
     assert row.state == :fetched
     assert row.scan_status == :pending
-    assert File.regular?(Attachments.file_path(row))
+    assert Files.read(Attachments.stored_file(row)) == {:ok, "Unscanned content"}
     refute Attachments.get(scope, row.id)
     refute Attachments.get_for_portal(row.id, customer.id)
     refute Attachments.downloadable?(row)
@@ -87,10 +88,77 @@ defmodule Custyard.Attachments.ScanningTest do
     scope: scope
   } do
     row = fetched(message, "Original content")
-    File.write!(Attachments.file_path(row), "Tampered content")
+    assert row.scan_status == :clean
+    %StoredFile{id: file_id} = Attachments.stored_file(row)
+
+    # Same length, so only the hash can tell.
+    Repo.update_all(from(c in Chunk, where: c.file_id == ^file_id),
+      set: [data: "Tampered content"]
+    )
+
     assert {:ok, %{error: 1}} = Attachments.rescan_thread(scope, thread.id)
     assert Repo.reload!(row).scan_status == :error
     refute Attachments.get(scope, row.id)
+  end
+
+  test "stored content that is gone cannot receive a clean verdict", %{
+    thread: thread,
+    message: message,
+    scope: scope
+  } do
+    missing = fetched(message, "Content that will be removed")
+    truncated = fetched(insert_message(thread_id: thread.id), "Content that will lose its chunk")
+    assert missing.scan_status == :clean
+    assert truncated.scan_status == :clean
+
+    :ok = Files.delete(missing.tenant_id, :attachment, missing.sha256)
+    %StoredFile{id: file_id} = Attachments.stored_file(truncated)
+    Repo.delete_all(from c in Chunk, where: c.file_id == ^file_id)
+
+    assert {:ok, %{error: 2, clean: 0}} = Attachments.rescan_thread(scope, thread.id)
+
+    for row <- [missing, truncated] do
+      assert Repo.reload!(row).scan_status == :error
+      refute Attachments.get(scope, row.id)
+      refute Attachments.downloadable?(Repo.reload!(row))
+    end
+  end
+
+  test "stored content past the scan bound is not loaded and gets no verdict", %{
+    thread: thread,
+    message: message,
+    scope: scope
+  } do
+    row = fetched(message, "Recorded as larger than a scan accepts")
+    %StoredFile{id: file_id} = Attachments.stored_file(row)
+
+    Repo.update_all(from(f in StoredFile, where: f.id == ^file_id),
+      set: [size: Scanner.max_bytes() + 1]
+    )
+
+    Application.put_env(:custyard, :attachment_scanner, __MODULE__.BlockingScanner)
+    Application.put_env(:custyard, :attachment_scanner_options, caller: self())
+
+    assert {:ok, %{error: 1}} = Attachments.rescan_thread(scope, thread.id)
+    refute_received {:scanning, _pid}
+    assert Repo.reload!(row).scan_status == :error
+  end
+
+  test "a rescan reads content of several chunks back for the scanner", %{
+    thread: thread,
+    message: message,
+    scope: scope
+  } do
+    bytes = :crypto.strong_rand_bytes(3 * Files.chunk_bytes() + 9)
+    row = fetched(message, bytes)
+    row |> Ecto.Changeset.change(scan_status: :pending, scanned_at: nil) |> Repo.update!()
+
+    Application.put_env(:custyard, :attachment_scanner, __MODULE__.EchoScanner)
+    Application.put_env(:custyard, :attachment_scanner_options, caller: self())
+
+    assert {:ok, %{clean: 1}} = Attachments.rescan_thread(scope, thread.id)
+    assert_received {:scanned, ^bytes}
+    assert Repo.reload!(row).scan_status == :clean
   end
 
   test "scanner exception and unexpected verdict are failures" do
@@ -168,6 +236,14 @@ defmodule Custyard.Attachments.ScanningTest do
 
     assert Repo.reload!(first).scan_status == :infected
     assert Repo.reload!(second).scan_status == :infected
+  end
+
+  defmodule EchoScanner do
+    @behaviour Custyard.Attachments.Scanner
+    def scan(bytes, opts) do
+      send(opts[:caller], {:scanned, bytes})
+      :clean
+    end
   end
 
   defmodule InfectedScanner do

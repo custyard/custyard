@@ -1,7 +1,7 @@
 defmodule Custyard.TenantRecordsTest do
   use Custyard.DataCase
   import Custyard.Factory
-  alias Custyard.{Attachments, Message, PortalCredentials, Repo, Tenant}
+  alias Custyard.{Attachments, Files, Message, PortalCredentials, Repo, Tenant}
 
   defp tenant(name) do
     %Tenant{} |> Tenant.changeset(%{name: name, slug: String.downcase(name)}) |> Repo.insert!()
@@ -98,13 +98,18 @@ defmodule Custyard.TenantRecordsTest do
     assert {:ok, [aa]} = Attachments.fetch_for_message(ma, descriptors)
     assert {:ok, [ab]} = Attachments.fetch_for_message(mb, descriptors)
     assert aa.sha256 == ab.sha256
-    refute aa.storage_path == ab.storage_path
-    assert String.starts_with?(aa.storage_path, "#{a.id}/")
-    assert String.starts_with?(ab.storage_path, "#{b.id}/")
 
-    on_exit(fn ->
-      File.rm(Attachments.file_path(aa))
-      File.rm(Attachments.file_path(ab))
-    end)
+    file_a = Attachments.stored_file(aa)
+    file_b = Attachments.stored_file(ab)
+    refute file_a.id == file_b.id
+    assert file_a.tenant_id == a.id
+    assert file_b.tenant_id == b.id
+
+    # Neither tenant's row resolves to the other's file, and removing one
+    # tenant's content leaves the other's readable.
+    refute Attachments.stored_file(%{aa | tenant_id: insert_tenant().id})
+    :ok = Files.delete(a.id, :attachment, aa.sha256)
+    refute Attachments.stored_file(aa)
+    assert Files.read(Attachments.stored_file(ab)) == {:ok, "shared content"}
   end
 end

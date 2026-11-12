@@ -1,36 +1,35 @@
 defmodule CustyardWeb.Plugs.UploadedFilesTest do
-  use ExUnit.Case, async: true
+  # Custyard.Boot.State lives in :persistent_term, which is global.
+  use CustyardWeb.ConnCase, async: false
 
-  import Plug.Conn
-  import Plug.Test
+  import Custyard.Factory
+  import Ecto.Query
+  import Plug.Test, only: [conn: 2]
 
+  alias Custyard.Boot.{Env, State}
+  alias Custyard.Files
+  alias Custyard.Files.Chunk
+  alias Custyard.Repo
   alias CustyardWeb.Plugs.UploadedFiles
 
-  @test_upload_dir "/tmp/custyard_test_uploads"
+  @png <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "logo bytes">>
+  @svg ~s|<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>|
 
   setup do
-    # Create a temporary upload directory for tests
-    File.rm_rf!(@test_upload_dir)
-    File.mkdir_p!(@test_upload_dir)
-
-    # Set up test configuration
-    original_upload_dir = Application.get_env(:custyard, :upload_dir)
-    Application.put_env(:custyard, :upload_dir, @test_upload_dir)
-
-    on_exit(fn ->
-      # Restore original config
-      if original_upload_dir do
-        Application.put_env(:custyard, :upload_dir, original_upload_dir)
-      else
-        Application.delete_env(:custyard, :upload_dir)
-      end
-
-      # Clean up test files
-      File.rm_rf!(@test_upload_dir)
-    end)
-
-    :ok
+    %{tenant: insert_tenant()}
   end
+
+  # Stores a logo of the tenant under `name` (default: a new UUID with `ext`)
+  # and returns its public path and stored file.
+  defp store_logo(tenant, ext, bytes \\ @png, name \\ nil) do
+    key = name || Ecto.UUID.generate() <> ext
+    {:ok, stored} = Files.put(tenant.id, :logo, key, bytes)
+    %{path: "/uploads/logos/" <> key, key: key, stored: stored}
+  end
+
+  defp call(path), do: UploadedFiles.call(conn(:get, path), [])
+
+  defp drop_chunks(stored), do: Repo.delete_all(from c in Chunk, where: c.file_id == ^stored.id)
 
   describe "init/1" do
     test "returns options unchanged" do
@@ -41,42 +40,98 @@ defmodule CustyardWeb.Plugs.UploadedFilesTest do
 
   describe "call/2 path matching" do
     test "passes through non-upload paths" do
-      conn = conn(:get, "/other/path")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/other/path")
 
       refute result.halted
       refute result.status
     end
 
-    test "handles /uploads/ prefix" do
-      # Create a test file
-      create_test_file("test.png", "PNG content")
+    test "serves a stored logo with its exact bytes", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
 
-      conn = conn(:get, "/uploads/test.png")
-
-      result = UploadedFiles.call(conn, [])
+      result = call(logo.path)
 
       assert result.halted
       assert result.status == 200
+      assert result.resp_body == @png
     end
 
-    test "passes through when upload_dir is not configured" do
-      Application.delete_env(:custyard, :upload_dir)
+    test "serves content that spans several chunks", %{tenant: tenant} do
+      bytes = :crypto.strong_rand_bytes(2 * Files.chunk_bytes() + 17)
+      logo = store_logo(tenant, ".png", bytes)
 
-      conn = conn(:get, "/uploads/test.png")
+      result = call(logo.path)
 
-      result = UploadedFiles.call(conn, [])
+      assert result.status == 200
+      assert result.resp_body == bytes
+    end
+
+    test "passes through an unknown key" do
+      request = conn(:get, "/uploads/logos/#{Ecto.UUID.generate()}.png")
+
+      # Unchanged, so the router answers 404.
+      assert UploadedFiles.call(request, []) == request
+    end
+
+    test "passes through /uploads/ paths outside logos/", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+
+      for path <- ["/uploads/#{logo.key}", "/uploads/other/#{logo.key}"] do
+        result = call(path)
+
+        refute result.halted
+        refute result.status
+      end
+    end
+
+    test "passes through a subdirectory below logos/", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+
+      result = call("/uploads/logos/subdir/#{logo.key}")
 
       refute result.halted
+      refute result.status
+    end
+
+    test "passes through a name that is not a valid key" do
+      result = call("/uploads/logos/my image.png")
+
+      refute result.halted
+      refute result.status
+    end
+
+    test "never serves an attachment stored under the same key", %{tenant: tenant} do
+      key = Ecto.UUID.generate() <> ".png"
+      {:ok, _} = Files.put(tenant.id, :attachment, key, @png)
+
+      refute call("/uploads/logos/#{key}").halted
+    end
+
+    test "answers HEAD like GET", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+
+      result = UploadedFiles.call(conn(:head, logo.path), [])
+
+      assert result.halted
+      assert result.status == 200
+      assert get_resp_header(result, "etag") == [~s("#{logo.stored.sha256}")]
+    end
+
+    test "passes other methods through", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+
+      for method <- [:post, :put, :delete] do
+        result = UploadedFiles.call(conn(method, logo.path), [])
+
+        refute result.halted
+        refute result.status
+      end
     end
   end
 
   describe "path traversal protection" do
     test "rejects paths with .." do
-      conn = conn(:get, "/uploads/../../../etc/passwd")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/../../../etc/passwd")
 
       assert result.halted
       assert result.status == 400
@@ -84,9 +139,15 @@ defmodule CustyardWeb.Plugs.UploadedFilesTest do
     end
 
     test "rejects paths with .. in subdirectory" do
-      conn = conn(:get, "/uploads/subdir/../secret.png")
+      result = call("/uploads/subdir/../secret.png")
 
-      result = UploadedFiles.call(conn, [])
+      assert result.halted
+      assert result.status == 400
+      assert result.resp_body == "Invalid path"
+    end
+
+    test "rejects .. below logos/" do
+      result = call("/uploads/logos/../logos/secret.png")
 
       assert result.halted
       assert result.status == 400
@@ -95,9 +156,7 @@ defmodule CustyardWeb.Plugs.UploadedFilesTest do
 
     test "rejects URL-encoded traversal (lowercase)" do
       # %2e%2e is URL-encoded ".."
-      conn = conn(:get, "/uploads/%2e%2e/secret.png")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/%2e%2e/secret.png")
 
       assert result.halted
       assert result.status == 400
@@ -106,9 +165,7 @@ defmodule CustyardWeb.Plugs.UploadedFilesTest do
 
     test "rejects URL-encoded traversal (uppercase)" do
       # %2E%2E is URL-encoded ".."
-      conn = conn(:get, "/uploads/%2E%2E/secret.png")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/%2E%2E/secret.png")
 
       assert result.halted
       assert result.status == 400
@@ -117,111 +174,54 @@ defmodule CustyardWeb.Plugs.UploadedFilesTest do
 
     test "rejects mixed encoded traversal" do
       # Mix of encoded and plain
-      conn = conn(:get, "/uploads/foo/%2e%2e/bar/%2E%2E/secret.png")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/foo/%2e%2e/bar/%2E%2E/secret.png")
 
       assert result.halted
       assert result.status == 400
     end
 
-    test "allows paths with single dots" do
-      # Single dots in filenames are fine
-      create_test_file("file.name.png", "PNG content")
+    test "rejects a second leading slash" do
+      result = call("/uploads//etc/logo.png")
 
-      conn = conn(:get, "/uploads/file.name.png")
+      assert result.halted
+      assert result.status == 400
+    end
 
-      result = UploadedFiles.call(conn, [])
+    test "allows keys with single dots", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png", @png, "file.name.png")
 
-      assert result.status == 200
+      assert call(logo.path).status == 200
     end
   end
 
   describe "extension allowlist validation" do
-    test "allows .png files" do
-      create_test_file("image.png", "PNG")
+    test "serves every allowed image extension", %{tenant: tenant} do
+      for ext <- ~w(.png .jpg .jpeg .gif .webp .svg) do
+        logo = store_logo(tenant, ext)
 
-      conn = conn(:get, "/uploads/image.png")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert result.status == 200
+        assert call(logo.path).status == 200, "expected #{ext} to be served"
+      end
     end
 
-    test "allows .jpg files" do
-      create_test_file("image.jpg", "JPG")
+    test "finds the lowercased key for an uppercase extension", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png", @png, "IMAGE.png")
 
-      conn = conn(:get, "/uploads/image.jpg")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/logos/IMAGE.PNG")
 
       assert result.status == 200
+      assert result.resp_body == @png
+      assert get_resp_header(result, "content-type") == ["image/png; charset=utf-8"]
+      assert logo.key == "IMAGE.png"
     end
 
-    test "allows .jpeg files" do
-      create_test_file("image.jpeg", "JPEG")
+    test "finds the lowercased key for a mixed case extension", %{tenant: tenant} do
+      store_logo(tenant, ".jpeg", @png, "image.jpeg")
 
-      conn = conn(:get, "/uploads/image.jpeg")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert result.status == 200
-    end
-
-    test "allows .gif files" do
-      create_test_file("image.gif", "GIF")
-
-      conn = conn(:get, "/uploads/image.gif")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert result.status == 200
-    end
-
-    test "allows .webp files" do
-      create_test_file("image.webp", "WEBP")
-
-      conn = conn(:get, "/uploads/image.webp")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert result.status == 200
-    end
-
-    test "allows .svg files" do
-      create_test_file("logo.svg", "<svg></svg>")
-
-      conn = conn(:get, "/uploads/logo.svg")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert result.status == 200
-    end
-
-    test "allows uppercase extensions" do
-      create_test_file("IMAGE.PNG", "PNG")
-
-      conn = conn(:get, "/uploads/IMAGE.PNG")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert result.status == 200
-    end
-
-    test "allows mixed case extensions" do
-      create_test_file("image.JpEg", "JPEG")
-
-      conn = conn(:get, "/uploads/image.JpEg")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert result.status == 200
+      assert call("/uploads/logos/image.JpEg").status == 200
     end
 
     test "rejects .html files" do
-      conn = conn(:get, "/uploads/malicious.html")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/malicious.html")
 
       assert result.halted
       assert result.status == 403
@@ -229,9 +229,7 @@ defmodule CustyardWeb.Plugs.UploadedFilesTest do
     end
 
     test "rejects .js files" do
-      conn = conn(:get, "/uploads/script.js")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/script.js")
 
       assert result.halted
       assert result.status == 403
@@ -239,27 +237,21 @@ defmodule CustyardWeb.Plugs.UploadedFilesTest do
     end
 
     test "rejects .exe files" do
-      conn = conn(:get, "/uploads/virus.exe")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/virus.exe")
 
       assert result.halted
       assert result.status == 403
     end
 
     test "rejects .php files" do
-      conn = conn(:get, "/uploads/shell.php")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/shell.php")
 
       assert result.halted
       assert result.status == 403
     end
 
     test "rejects files without extension" do
-      conn = conn(:get, "/uploads/noextension")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/noextension")
 
       assert result.halted
       assert result.status == 403
@@ -267,238 +259,279 @@ defmodule CustyardWeb.Plugs.UploadedFilesTest do
 
     test "rejects double extension attacks" do
       # Attacker might try to sneak past with image.png.html
-      conn = conn(:get, "/uploads/image.png.html")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/image.png.html")
 
       assert result.halted
       assert result.status == 403
     end
+
+    test "rejects a stored logo key with a disallowed extension", %{tenant: tenant} do
+      logo = store_logo(tenant, ".html", "<script>alert(1)</script>")
+
+      result = call(logo.path)
+
+      assert result.halted
+      assert result.status == 403
+      assert result.resp_body == "File type not allowed"
+    end
   end
 
   describe "MIME type handling" do
-    test "sets correct Content-Type for PNG" do
-      create_test_file("test.png", "PNG content")
+    test "sets the content type from the extension", %{tenant: tenant} do
+      for {ext, type} <- [
+            {".png", "image/png"},
+            {".jpg", "image/jpeg"},
+            {".jpeg", "image/jpeg"},
+            {".svg", "image/svg+xml"},
+            {".gif", "image/gif"},
+            {".webp", "image/webp"}
+          ] do
+        logo = store_logo(tenant, ext)
 
-      conn = conn(:get, "/uploads/test.png")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-type") == ["image/png; charset=utf-8"]
-    end
-
-    test "sets correct Content-Type for JPEG" do
-      create_test_file("test.jpg", "JPEG content")
-
-      conn = conn(:get, "/uploads/test.jpg")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-type") == ["image/jpeg; charset=utf-8"]
-    end
-
-    test "sets correct Content-Type for SVG" do
-      create_test_file("test.svg", "<svg></svg>")
-
-      conn = conn(:get, "/uploads/test.svg")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-type") == ["image/svg+xml; charset=utf-8"]
-    end
-
-    test "sets correct Content-Type for GIF" do
-      create_test_file("test.gif", "GIF content")
-
-      conn = conn(:get, "/uploads/test.gif")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-type") == ["image/gif; charset=utf-8"]
-    end
-
-    test "sets correct Content-Type for WebP" do
-      create_test_file("test.webp", "WebP content")
-
-      conn = conn(:get, "/uploads/test.webp")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-type") == ["image/webp; charset=utf-8"]
+        assert get_resp_header(call(logo.path), "content-type") == ["#{type}; charset=utf-8"]
+      end
     end
   end
 
   describe "Content-Disposition header" do
-    test "does not add Content-Disposition for PNG (safe inline)" do
-      create_test_file("test.png", "PNG content")
+    test "is not added for the image types served inline", %{tenant: tenant} do
+      for ext <- ~w(.png .jpg .gif .webp .svg) do
+        logo = store_logo(tenant, ext)
 
-      conn = conn(:get, "/uploads/test.png")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-disposition") == []
-    end
-
-    test "does not add Content-Disposition for JPEG (safe inline)" do
-      create_test_file("test.jpg", "JPEG content")
-
-      conn = conn(:get, "/uploads/test.jpg")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-disposition") == []
-    end
-
-    test "does not add Content-Disposition for GIF (safe inline)" do
-      create_test_file("test.gif", "GIF content")
-
-      conn = conn(:get, "/uploads/test.gif")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-disposition") == []
-    end
-
-    test "does not add Content-Disposition for WebP (safe inline)" do
-      create_test_file("test.webp", "WebP content")
-
-      conn = conn(:get, "/uploads/test.webp")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-disposition") == []
-    end
-
-    test "does not add Content-Disposition for SVG (safe inline)" do
-      create_test_file("test.svg", "<svg></svg>")
-
-      conn = conn(:get, "/uploads/test.svg")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "content-disposition") == []
+        assert get_resp_header(call(logo.path), "content-disposition") == []
+      end
     end
   end
 
   describe "CSP headers for SVG files" do
-    test "adds script-src none CSP header for SVG" do
-      create_test_file("logo.svg", "<svg></svg>")
+    test "adds script-src none CSP header for SVG", %{tenant: tenant} do
+      logo = store_logo(tenant, ".svg", @svg)
 
-      conn = conn(:get, "/uploads/logo.svg")
+      result = call(logo.path)
 
-      result = UploadedFiles.call(conn, [])
-
-      csp = get_resp_header(result, "content-security-policy")
-      assert csp == ["script-src 'none'"]
+      assert result.resp_body == @svg
+      assert get_resp_header(result, "content-type") == ["image/svg+xml; charset=utf-8"]
+      assert get_resp_header(result, "content-security-policy") == ["script-src 'none'"]
     end
 
-    test "adds CSP header for all served files" do
+    test "adds CSP header for all served files", %{tenant: tenant} do
       # CSP is added to all files for defense in depth
-      create_test_file("test.png", "PNG content")
+      logo = store_logo(tenant, ".png")
 
-      conn = conn(:get, "/uploads/test.png")
-
-      result = UploadedFiles.call(conn, [])
-
-      csp = get_resp_header(result, "content-security-policy")
-      assert csp == ["script-src 'none'"]
+      assert get_resp_header(call(logo.path), "content-security-policy") == ["script-src 'none'"]
     end
   end
 
   describe "X-Content-Type-Options header" do
-    test "adds nosniff header" do
-      create_test_file("test.png", "PNG content")
+    test "adds nosniff header", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
 
-      conn = conn(:get, "/uploads/test.png")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(call(logo.path), "x-content-type-options") == ["nosniff"]
     end
 
-    test "prevents MIME type sniffing for SVG" do
-      create_test_file("test.svg", "<svg><script>alert(1)</script></svg>")
+    test "prevents MIME type sniffing for SVG", %{tenant: tenant} do
+      logo = store_logo(tenant, ".svg", @svg)
 
-      conn = conn(:get, "/uploads/test.svg")
-
-      result = UploadedFiles.call(conn, [])
-
-      assert get_resp_header(result, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(call(logo.path), "x-content-type-options") == ["nosniff"]
     end
   end
 
-  describe "file serving" do
-    test "returns 200 for existing file" do
-      create_test_file("exists.png", "file content")
+  describe "caching" do
+    test "marks a logo immutable with a strong etag from its SHA-256", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+      sha256 = :sha256 |> :crypto.hash(@png) |> Base.encode16(case: :lower)
 
-      conn = conn(:get, "/uploads/exists.png")
+      result = call(logo.path)
 
-      result = UploadedFiles.call(conn, [])
-
-      assert result.status == 200
+      assert get_resp_header(result, "cache-control") == ["public, max-age=31536000, immutable"]
+      assert get_resp_header(result, "etag") == [~s("#{sha256}")]
     end
 
-    test "passes through for non-existent file" do
-      conn = conn(:get, "/uploads/doesnotexist.png")
+    test "answers a matching if-none-match with 304 and no content", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+      [etag] = get_resp_header(call(logo.path), "etag")
 
-      result = UploadedFiles.call(conn, [])
+      result =
+        conn(:get, logo.path) |> put_req_header("if-none-match", etag) |> UploadedFiles.call([])
 
-      # Should not halt, allowing downstream handlers to deal with 404
-      refute result.halted
+      assert result.halted
+      assert result.status == 304
+      assert result.resp_body == ""
+      assert get_resp_header(result, "etag") == [etag]
+      assert get_resp_header(result, "cache-control") == ["public, max-age=31536000, immutable"]
     end
 
-    test "serves files from subdirectories" do
-      File.mkdir_p!(Path.join(@test_upload_dir, "subdir"))
-      create_test_file("subdir/nested.png", "nested content")
+    test "does not read the content to answer 304", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+      drop_chunks(logo.stored)
 
-      conn = conn(:get, "/uploads/subdir/nested.png")
+      result =
+        conn(:get, logo.path)
+        |> put_req_header("if-none-match", ~s("#{logo.stored.sha256}"))
+        |> UploadedFiles.call([])
 
-      result = UploadedFiles.call(conn, [])
+      # Reading would have found the content gone and passed the request on.
+      assert result.status == 304
+    end
+
+    test "matches a weak tag, a list of tags and *", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+      etag = ~s("#{logo.stored.sha256}")
+
+      for value <- ["W/" <> etag, ~s("other", ) <> etag, "*"] do
+        result =
+          conn(:get, logo.path)
+          |> put_req_header("if-none-match", value)
+          |> UploadedFiles.call([])
+
+        assert result.status == 304, "expected #{value} to match"
+      end
+    end
+
+    test "serves the content when if-none-match names another tag", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+
+      result =
+        conn(:get, logo.path)
+        |> put_req_header("if-none-match", ~s("#{String.duplicate("0", 64)}"))
+        |> UploadedFiles.call([])
 
       assert result.status == 200
+      assert result.resp_body == @png
+    end
+  end
+
+  describe "corrupt content" do
+    test "passes the request through unchanged when a chunk is missing", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+      drop_chunks(logo.stored)
+      request = conn(:get, logo.path)
+
+      assert UploadedFiles.call(request, []) == request
+    end
+
+    test "passes the request through unchanged when the content does not match its hash",
+         %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+
+      Repo.update_all(from(c in Chunk, where: c.file_id == ^logo.stored.id),
+        set: [data: String.duplicate("x", byte_size(@png))]
+      )
+
+      request = conn(:get, logo.path)
+
+      assert UploadedFiles.call(request, []) == request
     end
   end
 
   describe "security attack scenarios" do
     test "rejects null byte injection attempts" do
-      # Some systems might truncate at null byte
-      conn = conn(:get, "/uploads/image.png\x00.html")
+      # The extension after the null byte is the one that counts
+      result = call("/uploads/image.png\x00.html")
 
-      result = UploadedFiles.call(conn, [])
-
-      # Should reject - the extension check will see .html after null byte
-      # or the null byte itself makes it an invalid extension
       assert result.halted
       assert result.status == 403
     end
 
     test "rejects semicolon extension bypass attempts" do
-      conn = conn(:get, "/uploads/image.png;.html")
-
-      result = UploadedFiles.call(conn, [])
+      result = call("/uploads/image.png;.html")
 
       # Extension is ".html" so should be rejected
       assert result.halted
       assert result.status == 403
     end
+  end
 
-    test "handles filenames with spaces" do
-      # The plug receives the path already decoded by Phoenix router
-      # so the file on disk and the request path should match
-      create_test_file("my image.png", "PNG")
+  describe "through the endpoint" do
+    test "a logo is served without a session, on any host", %{tenant: tenant} do
+      logo = store_logo(tenant, ".png")
 
-      conn = conn(:get, "/uploads/my image.png")
+      conn = get(%{build_conn() | host: "elsewhere.example.com"}, logo.path)
 
-      result = UploadedFiles.call(conn, [])
+      assert response(conn, 200) == @png
+      assert get_resp_header(conn, "content-type") == ["image/png; charset=utf-8"]
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(conn, "content-security-policy") == ["script-src 'none'"]
+      assert get_resp_header(conn, "cache-control") == ["public, max-age=31536000, immutable"]
+      assert get_resp_header(conn, "etag") == [~s("#{logo.stored.sha256}")]
+    end
 
-      assert result.status == 200
+    test "an unknown key is a 404 from the router", %{conn: conn} do
+      assert get(conn, "/uploads/logos/#{Ecto.UUID.generate()}.png").status == 404
+    end
+
+    test "a deleted logo is a 404 from the router", %{conn: conn, tenant: tenant} do
+      logo = store_logo(tenant, ".png")
+      :ok = Files.delete(tenant.id, :logo, logo.key)
+
+      assert get(conn, logo.path).status == 404
+    end
+
+    test "traversal and a disallowed extension are refused before the router", %{conn: conn} do
+      assert response(get(conn, "/uploads/logos/%2e%2e/secret.png"), 400) == "Invalid path"
+      assert response(get(conn, "/uploads/logos/page.html"), 403) == "File type not allowed"
     end
   end
 
-  # Helper to create test files
-  defp create_test_file(name, content) do
-    path = Path.join(@test_upload_dir, name)
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, content)
+  # In these modes the Repo is not running (Custyard.Application). The boot
+  # gate sits ahead of this plug and answers, so the lookup never happens.
+  describe "while the Repo is not started" do
+    setup %{tenant: tenant} do
+      State.reset()
+      handler = "uploaded-files-test-#{System.unique_integer([:positive])}"
+      :telemetry.attach(handler, [:custyard, :repo, :query], &__MODULE__.report_query/4, self())
+
+      on_exit(fn ->
+        :telemetry.detach(handler)
+        State.reset()
+      end)
+
+      %{logo: store_logo(tenant, ".png")}
+    end
+
+    def report_query(_event, _measurements, _metadata, test_pid), do: send(test_pid, :repo_query)
+
+    defp set_mode(mode) do
+      State.put(%State{
+        mode: mode,
+        env: Env.read(%{}, config_env: :prod),
+        booted_at: ~U[2026-11-03 21:14:08Z]
+      })
+    end
+
+    defp flush_repo_queries do
+      receive do
+        :repo_query -> flush_repo_queries()
+      after
+        0 -> :ok
+      end
+    end
+
+    for {mode, card} <- [
+          unconfigured: "boot-card-unconfigured",
+          starting: "boot-card-starting",
+          database_unavailable: "boot-card-database"
+        ] do
+      test "#{mode}: a logo request gets the boot card and runs no query",
+           %{conn: conn, logo: logo} do
+        set_mode(unquote(mode))
+        flush_repo_queries()
+
+        conn = get(conn, logo.path)
+
+        assert html_response(conn, 503) =~ ~s(data-testid="#{unquote(card)}")
+        assert conn.halted
+        assert get_resp_header(conn, "etag") == []
+        refute_received :repo_query
+      end
+    end
+
+    test "ready: the same request reaches the Repo", %{conn: conn, logo: logo} do
+      assert State.mode() == :ready
+      flush_repo_queries()
+
+      assert response(get(conn, logo.path), 200) == @png
+      assert_received :repo_query
+    end
   end
 end

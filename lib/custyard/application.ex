@@ -19,7 +19,8 @@ defmodule Custyard.Application do
       `deferred_children/1` lists them. `Custyard.Boot.FirstRun`, which comes
       after the Repo, PubSub and the HTTP client, moves the mode out of
       `:starting` as its first step and then finishes the administrator and mail
-      steps.
+      steps. Last comes a one-off task that copies files an earlier release
+      left on disk into the database (`Custyard.Files.LegacyImport`).
     * When they fail, `Custyard.Boot.Monitor` is added instead; it exits the
       VM once the database answers.
 
@@ -203,6 +204,7 @@ defmodule Custyard.Application do
     |> maybe_add_intake_sweeps()
     |> maybe_add_lmtp_server()
     |> maybe_add_imap_pollers()
+    |> maybe_add_legacy_file_import()
   end
 
   # After Finch (API mail adapters send through it), before the workers.
@@ -308,6 +310,20 @@ defmodule Custyard.Application do
 
       true ->
         children
+    end
+  end
+
+  # Copies attachments and logos an earlier release left on disk into the
+  # database (Custyard.Files.LegacyImport). Last, so everything else is
+  # already starting: the child is a temporary task that returns at once,
+  # checks whether anything is pending and ends, so neither boot nor a
+  # health check waits on it and its failure restarts nothing. Flagged off
+  # in config/test.exs; tests call the import directly.
+  defp maybe_add_legacy_file_import(children) do
+    if Application.get_env(:custyard, :start_legacy_file_import, true) do
+      children ++ [Custyard.Files.LegacyImport]
+    else
+      children
     end
   end
 

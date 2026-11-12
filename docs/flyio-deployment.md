@@ -1,6 +1,6 @@
 # Fly.io Deployment
 
-Deploy Custyard to [Fly.io](https://fly.io), with its SQLite database on a persistent volume or on [Turso](#turso-libsql).
+Deploy Custyard to [Fly.io](https://fly.io), with its SQLite database on a persistent volume or on [Turso](#turso-libsql). Uploaded logos and email attachments are stored in the database, so the volume is needed only for a local SQLite file.
 
 For the proposed move of production to Bunny Magic Containers and conversion of
 Fly to `staging.custyard.com`, see the [migration plan](ops/bunny-production-fly-staging.md).
@@ -23,7 +23,7 @@ network supports those transports.
 fly launch --no-deploy
 
 # Create a persistent volume before deploying. The shipped fly.toml mounts it
-# at /data for both SQLite and uploaded files.
+# at /data for the SQLite database, which also holds uploaded files.
 fly volumes create custyard_data --region <your-region> --size 1
 
 # Set the required secrets. Without them the app boots into a doctor card
@@ -68,7 +68,7 @@ The included `fly.toml` is pre-configured with:
 | `primary_region` | `ams` | Change to your preferred [region](https://fly.io/docs/reference/regions/) |
 | `auto_stop_machines` | `stop` | Saves cost; machines restart on traffic |
 | `min_machines_running` | `1` | Keeps one machine warm for WebSocket (LiveView). A floor, not a cap — cap the count with `fly scale count 1` |
-| `mounts` | `custyard_data` at `/data` | Required for SQLite and uploads. With `/data` not mounted the boot probe reports it and the app serves the database card. |
+| `mounts` | `custyard_data` at `/data` | Required while the database is the local SQLite file. With `/data` not mounted the boot probe reports it and the app serves the database card. Not needed with a remote database. |
 
 Edit `PHX_HOST` in `fly.toml` `[env]` to match your domain (or `<app-name>.fly.dev`).
 
@@ -129,8 +129,12 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 | `MAIL_ADAPTER` | — | **Required.** One of `lettermint`, `postmark`, `sendgrid`, `mailgun`, `smtp`, `local`. Set as a secret alongside its credential; unset or unrecognized is a doctor-card problem |
 | `POOL_SIZE` | `10` | Ecto connection pool size |
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
-| `UPLOAD_DIR` | `/data/uploads` | Persistent upload directory (must be on the mounted volume) |
-| `ATTACHMENT_DIR` | `/data/attachments` | Inbound email attachments, served only through the authenticated operator endpoint (must be on the mounted volume) |
+| `UPLOAD_DIR` | `/data/uploads` | Where an earlier release wrote tenant logos. Read only by the import of those files into the database; leave unset on a new install |
+| `ATTACHMENT_DIR` | `/data/attachments` | Where an earlier release wrote inbound email attachments. Read by the same import and by the daily sweep, which removes files there once no attachment refers to them; leave unset on a new install |
+
+Logos and attachments are stored in the database and served from it. See
+[Files in the database](ops/database.md#files-in-the-database) for the
+variables above and for upgrading an app whose files are still on the volume.
 
 `CREDENTIAL_ENCRYPTION_KEY` is a required secret (`fly secrets set CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"`): every boot checks it, and tenant credentials (IMAP passwords, Lettermint tokens) are encrypted with it; see [inbound channels](ops/inbound-channels.md#credential-encryption-key). The global `IMAP_*` settings were removed, and a deployment that still sets `IMAP_ENABLED` gets a doctor-card problem.
 
@@ -175,6 +179,10 @@ application does the rest on every boot:
    welcome mail through the real adapter, and shows the setup checklist on
    `/` for the rest of that boot. No tenant, staff membership or support
    connection is created implicitly. Unset the variable after the first login.
+4. When rows still refer to logos or attachments that an earlier release
+   left on the volume, copies them into the database in the background.
+   Nothing waits for it; see
+   [Upgrading from a release that kept files on disk](ops/database.md#upgrading-from-a-release-that-kept-files-on-disk).
 
 `bin/doctor` prints the same report from `fly ssh console`, with
 `--probe-database` to connect as well. With `MAINTENANCE_MODE=true` the
@@ -301,7 +309,7 @@ Then create a CNAME record pointing your domain to `<app-name>.fly.dev`. Update 
 
 ## Volumes and backups
 
-SQLite data and uploads are stored on a [Fly volume](https://fly.io/docs/volumes/) mounted at `/data`. Volumes are region-specific and tied to a single machine. Before migrations run, the app checks the Linux mount table; if Fly has not mounted `/data` it serves the database card instead of writing to the root filesystem.
+The SQLite database is stored on a [Fly volume](https://fly.io/docs/volumes/) mounted at `/data`. Uploaded logos and attachments are inside the database, so a copy of it includes them. Volumes are region-specific and tied to a single machine. Before migrations run, the app checks the Linux mount table; if Fly has not mounted `/data` it serves the database card instead of writing to the root filesystem. With a remote database nothing is stored on a volume and the mount is not checked; an app that moved from SQLite, or that still has files on disk from an earlier release, can drop its volume as described in [Removing the volume](ops/database.md#removing-the-volume).
 
 ```bash
 # List volumes
@@ -314,12 +322,12 @@ fly volumes snapshots list <volume-id>
 fly volumes create custyard_restore --snapshot-id <snapshot-id> --region <region> --size <GB>
 ```
 
-Use the [backup and restore drill](ops/backup-restore.md) to verify the database,
-uploads and attachments without starting mail delivery.
+Use the [backup and restore drill](ops/backup-restore.md) to verify the database
+and the files stored in it without starting mail delivery.
 
 > **Single-node constraint:** a Fly volume attaches to exactly one machine, so
-> every extra machine gets its own volume with its own SQLite database, uploads
-> and inbound attachments. Two machines means two copies that diverge silently:
+> every extra machine gets its own volume with its own SQLite database, files
+> included. Two machines means two copies that diverge silently:
 > writes land on whichever machine the proxy picked, an attachment stored on one
 > machine is a 404 on the other, and the app keeps reporting healthy.
 >
@@ -333,11 +341,13 @@ uploads and attachments without starting mail delivery.
 > Check `fly scale show` before every deploy that touches `[mounts]`. A deploy
 > that introduces a mount while the app has two machines creates a second
 > volume and splits the data. The app serves the database card when it has
-> more than one machine and keeps anything under `/data` (`Custyard.Storage`),
+> more than one machine and a local SQLite database (`Custyard.Storage`),
 > but that is a backstop, not a substitute for the scale check.
 >
-> Turso and PostgreSQL do not lift this limit. Uploads and attachments are still files
-> under `/data`, so each machine's volume holds its own copy.
+> A remote database (Turso, Bunny Database or PostgreSQL) is not subject to
+> this check: files are stored in the database, so every machine reads the same
+> ones, and no volume is needed. Nothing else about running more than one
+> machine has been tested; see [Limits](ops/database.md#limits).
 
 ## Alternate data stores
 
@@ -356,7 +366,7 @@ fly postgres attach custyard-db  # sets DATABASE_URL automatically
 fly deploy
 ```
 
-Keep the `[mounts]` section: uploads and attachments still use `/data`, so the app stays on one machine (see [Volumes and backups](#volumes-and-backups)). See [Fly Postgres docs](https://fly.io/docs/postgres/).
+With PostgreSQL the app expects no volume: uploaded files are stored in the database. Remove the `[mounts]` section for a new app. An app that already has files on its volume keeps the mount until the import has finished (see [Removing the volume](ops/database.md#removing-the-volume)). CI runs the file store on SQLite and libSQL only, so check a logo upload and an attachment download on a PostgreSQL build before relying on it. See [Fly Postgres docs](https://fly.io/docs/postgres/).
 
 ### Turso (libSQL)
 
@@ -370,9 +380,12 @@ turso db tokens create custyard
 fly secrets set DATABASE_URL="libsql://custyard-<org>.turso.io" TURSO_AUTH_TOKEN="..."
 ```
 
-Keep the volume and `[mounts]`: uploads and inbound attachments are still files
-under `/data`, and the app still runs on one machine. Moving an existing
-database, the limits, and rollback are in
+A new app on Turso needs no volume: remove the `[mounts]` section from
+`fly.toml` and skip `fly volumes create`. An app moving from SQLite keeps the
+volume and `[mounts]` until the old database file is no longer wanted as a way
+back and the import of files from an earlier release reports nothing pending
+([Removing the volume](ops/database.md#removing-the-volume)). Moving an
+existing database, the limits, and rollback are in
 [Database operations](ops/database.md#turso).
 
 Before this release, a `libsql://` `DATABASE_URL` never reached Turso: the
@@ -402,7 +415,8 @@ All migrations use standard Ecto syntax. Two caveats when moving from SQLite to 
 | Every page is a doctor card (HTTP 503) | The card and the top of `fly logs` name the missing or malformed variables; `fly ssh console -a custyard -C /app/bin/doctor` prints the same report. Set them and `fly apps restart custyard` |
 | App won't start | Check `fly logs`; the boot report at the top names configuration problems, and `/api/health/live` answers whenever the process is up |
 | Health check fails | Ensure port 4000 matches `internal_port` in `fly.toml` |
-| Database errors | Confirm the volume is attached with `fly volumes list` and mounted with `fly ssh console -C "mountpoint /data"` |
+| Database errors | With local SQLite, confirm the volume is attached with `fly volumes list` and mounted with `fly ssh console -C "mountpoint /data"` |
+| A logo or an older attachment answers 404 after an upgrade | It has not been copied from the volume into the database. Run `fly ssh console -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.import_legacy_files()'"` and read `pending`, `missing` and `failed` ([Database operations](ops/database.md#upgrading-from-a-release-that-kept-files-on-disk)) |
 | `Turso: HTTP 401` in `fly logs` | `TURSO_AUTH_TOKEN` is wrong or expired. Create one with `turso db tokens create custyard` and `fly secrets set TURSO_AUTH_TOKEN=...` |
 | LiveView disconnects | Verify `PHX_HOST` matches your actual domain; Fly proxy handles WebSocket upgrade automatically |
 | Migration failures | Run manually as the app user: `fly ssh console -a custyard -C "runuser -u custyard -- /app/bin/custyard eval 'Custyard.Release.migrate()'"` |

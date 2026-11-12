@@ -631,7 +631,7 @@ defmodule Custyard.Boot.EnvTest do
       assert env.settings.storage_provider == :local
       assert env.settings.proxy_provider == :none
       assert env.settings.trust_proxy_headers == false
-      assert env.settings.data_volume_id == nil
+      refute Map.has_key?(env.settings, :data_volume_id)
       assert env.settings.bunny_origin_secret == nil
 
       fly = prod(Map.put(@minimal, "FLY_APP_NAME", "custyard-eu"))
@@ -694,32 +694,56 @@ defmodule Custyard.Boot.EnvTest do
       assert fly.settings.proxy_provider == :fly
     end
 
-    test "STORAGE_PROVIDER=bunny requires a well-formed DATA_VOLUME_ID" do
+    test "STORAGE_PROVIDER=bunny needs no DATA_VOLUME_ID" do
       env = prod(Map.put(@minimal, "STORAGE_PROVIDER", "bunny"))
-      assert [%{kind: :missing, detail: detail}] = problems_for(env, "DATA_VOLUME_ID")
-      assert detail =~ "bin/data-volume init"
+      assert env.verdict == :configured
+      assert env.warnings == []
       assert env.settings.storage_provider == :bunny
       assert env.settings.platform == :bunny
+    end
 
-      env =
-        prod(
-          Map.merge(@minimal, %{"STORAGE_PROVIDER" => "bunny", "DATA_VOLUME_ID" => "../escape"})
-        )
+    test "a DATA_VOLUME_ID left behind is a warning, never a problem or a setting" do
+      # Whatever the provider, and whatever the value looks like.
+      for provider <- ["bunny", "fly", "local"],
+          value <- ["custyard-prod-files-v1", "../escape"] do
+        env =
+          prod(Map.merge(@minimal, %{"STORAGE_PROVIDER" => provider, "DATA_VOLUME_ID" => value}))
 
-      assert [%{kind: :malformed, detail: detail}] = problems_for(env, "DATA_VOLUME_ID")
-      refute detail =~ "escape"
-      assert env.settings.data_volume_id == nil
+        assert env.verdict == :configured
+        assert env.problems == []
 
+        assert env.warnings == [
+                 %{
+                   variable: "DATA_VOLUME_ID",
+                   detail:
+                     "no longer used; files are stored in the database, so this variable can be removed"
+                 }
+               ]
+
+        assert "DATA_VOLUME_ID" in env.present
+        assert env.near_misses == []
+        refute Map.has_key?(env.settings, :data_volume_id)
+        refute inspect(env) =~ value
+      end
+
+      # Still a known name, so it is normalized like any other.
+      assert "DATA_VOLUME_ID" in Env.known_names()
+    end
+
+    test "UPLOAD_DIR and ATTACHMENT_DIR are passed through without validation" do
       env =
         prod(
           Map.merge(@minimal, %{
             "STORAGE_PROVIDER" => "bunny",
-            "DATA_VOLUME_ID" => "custyard-prod-files-v1"
+            "UPLOAD_DIR" => "relative/uploads",
+            "ATTACHMENT_DIR" => "/nonexistent/attachments"
           })
         )
 
       assert env.verdict == :configured
-      assert env.settings.data_volume_id == "custyard-prod-files-v1"
+      assert env.warnings == []
+      assert env.settings.upload_dir == "relative/uploads"
+      assert env.settings.attachment_dir == "/nonexistent/attachments"
     end
 
     test "PROXY_PROVIDER=bunny requires an origin secret of at least 32 bytes" do

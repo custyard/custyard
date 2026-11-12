@@ -54,8 +54,6 @@ export PORT=${PORT:-4099}
 if [ -z "${DATABASE_URL:-}" ]; then
   export DATABASE_PATH="$work/custyard.db"
 fi
-export UPLOAD_DIR="$work/uploads"
-mkdir -p "$UPLOAD_DIR"
 
 health="http://localhost:$PORT/api/health"
 
