@@ -30,11 +30,13 @@ spec:
 # branch (stacked MRs included), pushes to the default branch, scheduled
 # pipelines (configure under Build > Pipeline schedules, daily 05:23 UTC) and
 # manual runs (Build > Pipelines > Run pipeline, or the API). Plain branch
-# pushes without an MR do not run a pipeline, as on GitHub.
+# pushes without an MR do not run a pipeline, as on GitHub. Pushing a version
+# tag (v1.2.3) runs only image-tag.
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_PIPELINE_SOURCE == "api"
@@ -68,9 +70,13 @@ variables:
   name: ghcr.io/tursodatabase/libsql-server@sha256:6dd3eb276d9d3604e4a48ac4a999a2e267814732d57d7e94c04ba71482333a67
   alias: libsql
 
+# Jobs for normal CI runs: not promotions, and not version-tag pipelines,
+# which only tag an image main CI already tested and published.
 .ci-only:
   rules:
     - if: $PROMOTE_ENVIRONMENT != "none"
+      when: never
+    - if: $CI_COMMIT_TAG
       when: never
 
 .not-scheduled:
@@ -260,6 +266,33 @@ publish:
     paths: [published-image.json]
     expire_in: 90 days
 
+# Pushing a version tag (v1.2.3) gives the image main CI published for that
+# commit a version tag. Nothing is rebuilt: the version points at the same
+# digest as sha-<commit>, so only commits that passed main CI can be tagged.
+# An existing version tag is never moved to a different digest.
+image-tag:
+  stage: publish
+  image:
+    # oras v1.3.6 (Alpine-based), pinned by digest.
+    name: ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d004243d8003aeb807a3e15b2ed212cdd1326c9eb
+    entrypoint: [""]
+  needs: []
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/ && $CI_PROJECT_PATH == "custyard/custyard"
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | oras login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      DIGEST=$(oras resolve "$IMAGE:sha-$CI_COMMIT_SHA") || {
+        echo "No published image for $CI_COMMIT_SHA; tag a commit whose main pipeline published one" >&2
+        exit 1
+      }
+      if EXISTING=$(oras resolve "$IMAGE:$CI_COMMIT_TAG" 2>/dev/null); then
+        [ "$EXISTING" = "$DIGEST" ] || { echo "$IMAGE:$CI_COMMIT_TAG already points at $EXISTING" >&2; exit 1; }
+      fi
+    - oras tag "$IMAGE@$DIGEST" "$CI_COMMIT_TAG"
+    - 'printf "Tagged: %s:%s\nDeploy by digest: %s@%s\n" "$IMAGE" "$CI_COMMIT_TAG" "$IMAGE" "$DIGEST"'
 # Promotion: translated from .github/workflows/promote.yml. Run pipeline on
 # main with promote_environment set. promote:validate checks the candidate
 # against a successful push-to-main pipeline, its publish record and registry

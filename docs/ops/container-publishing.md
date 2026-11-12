@@ -47,6 +47,25 @@ retry, changing its digest. Record each deployed digest for promotion and
 rollback. The pipeline does not maintain a moving `latest` tag. The project's
 registry cleanup policy is disabled, so old versions are kept.
 
+## Version tags
+
+Pushing a git tag such as `v1.2.3` runs only the `image-tag` job. It adds the
+version as a tag on the image `publish` already built for that commit, so
+`registry.gitlab.com/custyard/custyard:v1.2.3` and `:sha-<commit>` share one
+digest. Nothing is rebuilt or retested:
+
+```sh
+git tag -a v1.2.3 -m "v1.2.3" <commit-on-main>
+git push gitlab v1.2.3
+```
+
+The job fails if the commit has no published `sha-<commit>` image (tag a
+commit whose `main` pipeline published one) or if the version tag already
+points at a different digest. Only tags matching `vMAJOR.MINOR.PATCH` start a
+pipeline. To tag by hand instead, `oras tag
+registry.gitlab.com/custyard/custyard@sha256:<digest> v1.2.3` after `oras login
+registry.gitlab.com` with a token that has `write_registry`.
+
 ## Promotion
 
 The promotion jobs in `.gitlab-ci.yml` deploy a published digest to Fly
