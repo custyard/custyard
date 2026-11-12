@@ -261,6 +261,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
           {:message_added, thread.id}
         )
 
+        broadcast_thread_update(thread.id, thread.organization_id)
+
         {:noreply,
          socket |> assign(:note_text, "") |> acknowledge_submitted_draft() |> reload_thread()}
 
@@ -1108,6 +1110,13 @@ defmodule CustyardWeb.Staff.ThreadLive do
     |> Enum.take(5)
   end
 
+  defp opened_ago(inserted_at) do
+    case short_age(inserted_at) do
+      "now" -> "opened just now"
+      age -> "opened #{age} ago"
+    end
+  end
+
   # Truncate subject for page title (browser tab)
   defp truncate_subject(subject) when byte_size(subject) <= 50, do: subject
 
@@ -1152,364 +1161,436 @@ defmodule CustyardWeb.Staff.ThreadLive do
     Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
   end
 
+  # Header, messages and composer share one reading column so the subject,
+  # the conversation and the reply line up at a readable width.
+  @column "mx-auto w-full max-w-[48rem]"
+
+  # A <details> opened by the staff must survive the next server patch.
+  defp keep_open, do: JS.ignore_attributes(["open"])
+
   @impl true
   def render(assigns) do
+    assigns =
+      assigns
+      |> assign(:column, @column)
+      |> assign(:contact_line, contact_line(assigns.thread))
+      |> assign(:note?, assigns.composer_mode == :note)
+
     ~H"""
     <div class="flex flex-1 min-h-0" data-testid="staff-thread-page">
       <%!-- Left: message thread --%>
       <div class="flex-1 flex flex-col min-w-0" data-testid="staff-thread-thread">
-        <div class="border-b border-gray-200 dark:border-zinc-700 px-4 py-3 flex items-center gap-3 bg-white dark:bg-zinc-800">
-          <.link
-            navigate={~p"/app"}
-            class="text-sm text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
-            data-testid="staff-thread-back"
-          >
-            &larr; Queue
-          </.link>
-          <div class="flex-1 min-w-0">
-            <.link
-              :if={@thread.organization}
-              navigate={~p"/app/customers/#{@thread.organization.public_id}"}
-              class="block text-lg font-semibold text-indigo-700 dark:text-indigo-300 hover:underline truncate"
-              data-testid="staff-thread-customer-link"
-            >
-              {@thread.organization.name}
-            </.link>
-            <p :if={is_nil(@thread.organization)} class="text-sm text-gray-600 dark:text-zinc-300">
-              Unlinked prospect
-            </p>
-            <h1
-              class="font-semibold text-gray-900 dark:text-zinc-100 truncate"
-              data-testid="staff-thread-subject"
-            >
-              {@thread.subject}
-            </h1>
-          </div>
-          <span
-            :if={@thread.inbound_channel}
-            class="text-xs px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300 truncate max-w-[14rem]"
-            title={"Received on channel #{@thread.inbound_channel.public_address}"}
-            data-testid="thread-channel"
-          >
-            {@thread.inbound_channel.public_address}
-          </span>
-          <button
-            :if={not @thread.suspect and recoverable_attachments?(@thread)}
-            type="button"
-            phx-click="retry_attachments"
-            phx-disable-with="Recovering…"
-            class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-            data-testid="retry-attachments"
-          >
-            Retry attachment recovery
-          </button>
-          <button
-            :if={
-              @current_scope.role == "admin" and
-                Enum.any?(@thread.messages, fn message ->
-                  Enum.any?(
-                    message_attachments(message),
-                    &(&1.state == :fetched and not Attachments.downloadable?(&1))
-                  )
-                end)
-            }
-            type="button"
-            phx-click="rescan_attachments"
-            phx-disable-with="Scanning…"
-            class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-            data-testid="rescan-attachments"
-          >
-            Rescan quarantined attachments
-          </button>
-          <span
-            :if={@thread.suspect}
-            class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
-            title="Triage flagged this thread: notifications are suppressed until a staff clears it"
-            data-testid="thread-suspect-badge"
-          >
-            suspect
+        <header class="border-b border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-4 py-3">
+          <div class={[@column, "flex items-start gap-x-3"]}>
+            <div class="min-w-0 flex-1">
+              <.link
+                navigate={~p"/app"}
+                class="text-xs text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-zinc-100 hover:underline"
+                data-testid="staff-thread-back"
+              >
+                &larr; Queue
+              </.link>
+              <div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h1
+                  class="min-w-0 text-lg font-semibold leading-6 text-gray-900 dark:text-zinc-50 line-clamp-2 [overflow-wrap:anywhere]"
+                  title={@thread.subject}
+                  data-testid="staff-thread-subject"
+                >
+                  {@thread.subject}
+                </h1>
+                <.state_badge state={@thread.state} />
+                <span
+                  :if={@thread.inbound_channel}
+                  class="text-xs px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300 truncate max-w-[16rem]"
+                  title={"Received on channel #{@thread.inbound_channel.public_address}"}
+                  data-testid="thread-channel"
+                >
+                  {@thread.inbound_channel.public_address}
+                </span>
+                <.source_badge :if={routing_source?(@thread.source)} source={@thread.source} />
+                <span
+                  :if={@thread.suspect}
+                  class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300"
+                  title="Triage flagged this thread: notifications are suppressed until a staff clears it"
+                  data-testid="thread-suspect-badge"
+                >
+                  suspect
+                  <button
+                    phx-click="dismiss_suspect"
+                    class="underline hover:text-amber-950 dark:hover:text-amber-100"
+                    aria-label="Mark this thread as not suspect"
+                    data-testid="dismiss-suspect"
+                  >
+                    Not suspect
+                  </button>
+                </span>
+                <span
+                  :if={@thread.language}
+                  class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300 uppercase"
+                  title={"Detected language: #{Custyard.Email.LanguageDetector.name(@thread.language)}"}
+                  data-testid="thread-language"
+                >
+                  {@thread.language}
+                </span>
+              </div>
+              <p class="mt-1 flex flex-wrap items-center gap-x-1.5 text-sm text-gray-600 dark:text-zinc-300">
+                <.link
+                  :if={@thread.organization}
+                  navigate={~p"/app/customers/#{@thread.organization.public_id}"}
+                  class="font-medium text-indigo-700 dark:text-indigo-300 hover:underline"
+                  data-testid="staff-thread-customer-link"
+                >
+                  {@thread.organization.name}
+                </.link>
+                <span :if={is_nil(@thread.organization)}>Unlinked prospect</span>
+                <span :if={@contact_line} data-testid="staff-thread-contact">
+                  <span aria-hidden="true">&middot;</span> {@contact_line}
+                </span>
+              </p>
+              <div
+                :if={
+                  (not @thread.suspect and recoverable_attachments?(@thread)) or
+                    rescannable_attachments?(@current_scope, @thread)
+                }
+                class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1"
+              >
+                <button
+                  :if={not @thread.suspect and recoverable_attachments?(@thread)}
+                  type="button"
+                  phx-click="retry_attachments"
+                  phx-disable-with="Recovering…"
+                  class="text-xs text-indigo-600 dark:text-indigo-300 hover:underline"
+                  data-testid="retry-attachments"
+                >
+                  Retry attachment recovery
+                </button>
+                <button
+                  :if={rescannable_attachments?(@current_scope, @thread)}
+                  type="button"
+                  phx-click="rescan_attachments"
+                  phx-disable-with="Scanning…"
+                  class="text-xs text-indigo-600 dark:text-indigo-300 hover:underline"
+                  data-testid="rescan-attachments"
+                >
+                  Rescan quarantined attachments
+                </button>
+              </div>
+            </div>
             <button
-              phx-click="dismiss_suspect"
-              class="underline hover:text-amber-950 dark:hover:text-amber-100"
-              aria-label="Mark this thread as not suspect"
-              data-testid="dismiss-suspect"
+              phx-click="toggle_sidebar"
+              class="lg:hidden shrink-0 rounded p-1 text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-zinc-100"
+              aria-label="Toggle details panel"
+              data-testid="staff-sidebar-toggle"
             >
-              Not suspect
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-5 w-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
             </button>
-          </span>
-          <span
-            :if={@thread.language}
-            class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-zinc-300 uppercase"
-            title={"Detected language: #{Custyard.Email.LanguageDetector.name(@thread.language)}"}
-            data-testid="thread-language"
-          >
-            {@thread.language}
-          </span>
-          <.source_badge source={@thread.source} />
-          <.state_badge state={@thread.state} />
-          <button
-            phx-click="toggle_sidebar"
-            class="lg:hidden text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 p-1"
-            aria-label="Toggle details panel"
-            data-testid="staff-sidebar-toggle"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              class="h-5 w-5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </button>
-        </div>
+          </div>
+        </header>
 
         <div
           id="message-thread"
           phx-hook="ScrollBottom"
-          class="flex-1 overflow-y-auto px-4 py-4 bg-gray-50 dark:bg-zinc-800 space-y-1"
+          class="flex-1 overflow-y-auto px-4 py-4 bg-gray-100 dark:bg-zinc-900"
           data-testid="staff-thread-messages"
         >
-          <div
-            :if={@thread.messages == []}
-            class="text-center py-8 text-gray-500 dark:text-zinc-400"
-            data-testid="staff-no-messages"
-          >
-            No messages yet
-          </div>
-          <%= for message <- @thread.messages do %>
+          <div class={[@column, "space-y-3"]}>
+            <div
+              :if={@thread.messages == []}
+              class="text-center py-8 text-gray-500 dark:text-zinc-400"
+              data-testid="staff-no-messages"
+            >
+              No messages yet
+            </div>
             <.message_bubble
+              :for={message <- @thread.messages}
               message={message}
               prospect_email={@thread.prospect && @thread.prospect.email}
             />
-          <% end %>
+          </div>
         </div>
 
         <div
           class={[
-            "border-t p-3 space-y-3",
-            if(@composer_mode == :note,
+            "border-t px-4 py-3",
+            if(@note?,
               do: "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40",
               else: "border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800"
             )
           ]}
           data-testid="staff-composer"
+          data-composer-mode={@composer_mode}
         >
-          <p
-            :if={@outbound_paused}
-            role="status"
-            class="text-sm font-medium text-amber-700 dark:text-amber-300"
-            data-testid="outbound-paused"
-          >
-            Outbound email is paused. Replies stay queued until sending is resumed by a tenant or installation administrator.
-          </p>
-          <div
-            :if={
-              @composer_mode == :reply and
-                Enum.any?(@thread.messages, &(&1.id > @reviewed_activity_id))
-            }
-            role="alert"
-            class="rounded border border-amber-400 p-2 text-sm"
-            data-testid="conversation-needs-review"
-          >
-            New conversation activity arrived. Read the updated thread before sending.
-            <button type="button" phx-click="review_latest_activity" class="font-medium underline">I have reviewed the latest activity</button>
-          </div>
-          <p
-            :if={@draft_status}
-            role="status"
-            class="text-xs text-gray-600 dark:text-zinc-300"
-            data-testid="draft-status"
-          >
-            <%= case @draft_status do %>
-              <% :saved -> %>
-                Draft saved privately. Unedited drafts expire after 30 days.
-              <% :restored -> %>
-                Your private draft was restored. Review the recipients before sending.
-              <% :conflict -> %>
-                Draft changed in another tab. Copy your text, then reload to review it.
-              <% _ -> %>
-                Draft could not be saved. Keep this page open and copy your text before leaving.
-            <% end %>
-          </p>
-          <div role="group" aria-label="Message audience" class="flex gap-2">
-            <button
-              :for={{mode, label} <- [{:reply, "Customer reply"}, {:note, "Internal note"}]}
-              type="button"
-              phx-click="select_composer_mode"
-              phx-value-mode={mode}
-              aria-pressed={to_string(@composer_mode == mode)}
-              data-testid={"composer-mode-#{mode}"}
-              class={[
-                "rounded border px-3 py-1.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2",
-                if(@composer_mode == mode,
-                  do: "border-zinc-500 bg-white text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100",
-                  else:
-                    "border-transparent text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-700"
-                )
-              ]}
-            >
-              {label}
-            </button>
-          </div>
-          <p
-            id="composer-audience"
-            class={[
-              "text-sm font-medium",
-              if(@composer_mode == :note,
-                do: "text-amber-900 dark:text-amber-200",
-                else: "text-gray-700 dark:text-zinc-200"
-              )
-            ]}
-            data-testid="composer-audience"
-          >
-            {if @composer_mode == :note,
-              do: "Internal note · only your team can see this",
-              else: "Customer reply · visible to the customer"}
-          </p>
-          <%!-- Consent advisory: shown only when a prospect email was
-          captured without the reply-notification opt-in. The reply still
-          saves and stays visible via the thread link, so sending is never
-          blocked — the staff just knows up front that no email goes
-          out. No-email and revoked states are covered by the reply-channel
-          badge, not this opt-in wording. --%>
-          <p
-            :if={@composer_mode == :reply and @reply_delivery == :prospect_no_consent}
-            class="text-xs text-amber-600 dark:text-amber-400"
-            data-testid="staff-reply-consent-advisory"
-          >
-            This prospect has not opted into email replies — replies are not
-            emailed, but stay visible via their thread link.
-          </p>
-          <p
-            :if={@composer_mode == :reply}
-            class="text-xs text-gray-500 dark:text-zinc-400 truncate"
-            data-testid="composer-from-identity"
-            data-identity-source={@reply_identity.source}
-          >
-            <span :if={is_nil(@reply_identity.address)}>Choose a tenant sending address below.</span>
-            <span :if={@reply_identity.address}>Replies go out as</span>
-            <span
-              :if={@reply_identity.address && @reply_identity.name}
-              class="text-gray-700 dark:text-zinc-300"
-            >
-              {@reply_identity.name}
-            </span>
-            <code :if={@reply_identity.address} class="text-gray-700 dark:text-zinc-300">&lt;{@reply_identity.address}&gt;</code>
-            <span :if={@archive_copy_address} data-testid="composer-archive-copy">
-              · a copy is kept in {@archive_copy_address}
-            </span>
-          </p>
-          <form
-            :if={@composer_mode == :reply}
-            id="staff-reply-form"
-            phx-submit="send_reply"
-            phx-change="update_reply"
-            class="space-y-1.5"
-            data-testid="staff-reply-form"
-          >
-            <.input
-              type="select"
-              name="reply_channel_id"
-              id="staff-reply-from"
-              value={@reply_channel_id}
-              label="From"
-              prompt="Choose a sending address"
-              options={
-                Enum.map(
-                  @reply_channels,
-                  &{reply_address_label(&1), &1.id}
-                )
-              }
-            />
+          <div class={[@column, "space-y-2"]}>
             <p
-              :if={@reply_recipient}
-              class="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400"
-              data-testid="staff-reply-to"
+              :if={@outbound_paused}
+              role="status"
+              class="text-sm font-medium text-amber-700 dark:text-amber-300"
+              data-testid="outbound-paused"
             >
-              <span class="w-6">To</span>
-              <code class="text-gray-700 dark:text-zinc-300 truncate">{@reply_recipient.address}</code>
-              <span :if={@reply_recipient.reply_to?} data-testid="staff-reply-to-override">
-                · from the latest customer message
-              </span>
+              Outbound email is paused. Replies stay queued until sending is resumed by a tenant or installation administrator.
             </p>
-            <%!-- Reply-all CC (spec-inbound-channels D5): visible and editable;
-            hidden for prospect threads, which never carry a CC. --%>
-            <label
-              :if={@thread.source != :public_intake}
-              class="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400"
+            <div
+              :if={
+                @composer_mode == :reply and
+                  Enum.any?(@thread.messages, &(&1.id > @reviewed_activity_id))
+              }
+              role="alert"
+              class="rounded border border-amber-400 p-2 text-sm"
+              data-testid="conversation-needs-review"
             >
-              <span class="w-6">CC</span>
-              <input
-                type="text"
-                name="cc"
-                phx-debounce="500"
-                value={@reply_cc}
-                placeholder="Nobody else"
-                aria-label="CC addresses, comma separated"
-                data-testid="staff-reply-cc"
-                class="flex-1 border border-gray-200 dark:border-zinc-600 rounded px-2 py-1 text-xs dark:bg-zinc-700 dark:text-zinc-100"
-              />
-            </label>
-            <div class="flex gap-2">
+              New conversation activity arrived. Read the updated thread before sending.
+              <button type="button" phx-click="review_latest_activity" class="font-medium underline">I have reviewed the latest activity</button>
+            </div>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <div
+                role="group"
+                aria-label="Message audience"
+                class="inline-flex rounded-md border border-gray-300 dark:border-zinc-600 p-0.5"
+              >
+                <button
+                  :for={{mode, label} <- [{:reply, "Customer reply"}, {:note, "Internal note"}]}
+                  type="button"
+                  phx-click="select_composer_mode"
+                  phx-value-mode={mode}
+                  aria-pressed={to_string(@composer_mode == mode)}
+                  data-testid={"composer-mode-#{mode}"}
+                  class={[
+                    "rounded px-3 py-1 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500",
+                    composer_mode_class(mode, @composer_mode == mode)
+                  ]}
+                >
+                  {label}
+                </button>
+              </div>
+              <p
+                id="composer-audience"
+                class={[
+                  "inline-flex items-center gap-1.5 text-sm font-medium",
+                  if(@note?,
+                    do: "text-amber-900 dark:text-amber-200",
+                    else: "text-gray-700 dark:text-zinc-200"
+                  )
+                ]}
+                data-testid="composer-audience"
+              >
+                <.icon :if={@note?} name="hero-lock-closed-mini" class="h-4 w-4" />
+                {if @note?,
+                  do: "Internal note · only your team can see this",
+                  else: "Customer reply · visible to the customer"}
+              </p>
+              <p
+                :if={@draft_status}
+                role="status"
+                class="text-xs text-gray-600 dark:text-zinc-300 sm:ml-auto"
+                data-testid="draft-status"
+              >
+                <%= case @draft_status do %>
+                  <% :saved -> %>
+                    Draft saved privately. Unedited drafts expire after 30 days.
+                  <% :restored -> %>
+                    Your private draft was restored. Review the recipients before sending.
+                  <% :conflict -> %>
+                    Draft changed in another tab. Copy your text, then reload to review it.
+                  <% _ -> %>
+                    Draft could not be saved. Keep this page open and copy your text before leaving.
+                <% end %>
+              </p>
+            </div>
+            <%!-- Consent advisory: shown only when a prospect email was
+            captured without the reply-notification opt-in. The reply still
+            saves and stays visible via the thread link, so sending is never
+            blocked — the staff just knows up front that no email goes
+            out. No-email and revoked states are covered by the reply-channel
+            badge, not this opt-in wording. --%>
+            <p
+              :if={@composer_mode == :reply and @reply_delivery == :prospect_no_consent}
+              class="text-xs text-amber-700 dark:text-amber-400"
+              data-testid="staff-reply-consent-advisory"
+            >
+              This prospect has not opted into email replies — replies are not
+              emailed, but stay visible via their thread link.
+            </p>
+            <form
+              :if={@composer_mode == :reply}
+              id="staff-reply-form"
+              phx-submit="send_reply"
+              phx-change="update_reply"
+              class="space-y-2"
+              data-testid="staff-reply-form"
+            >
+              <%!-- Who the reply goes to and who it comes from, as one line.
+              The fields stay in the form while collapsed, so they are always
+              submitted. Open from the start when there is something to decide:
+              no sending address yet, or a restored draft to re-check. --%>
+              <details
+                id="composer-recipients"
+                class="group/recipients text-xs text-gray-600 dark:text-zinc-300"
+                open={is_nil(@reply_channel_id) or @draft_status == :restored}
+                phx-mounted={keep_open()}
+                data-testid="composer-recipients"
+              >
+                <summary class="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-0.5 rounded py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 [&::-webkit-details-marker]:hidden">
+                  <.icon
+                    name="hero-chevron-right-mini"
+                    class="h-4 w-4 shrink-0 transition-transform group-open/recipients:rotate-90"
+                  />
+                  <span :if={@reply_recipient} class="min-w-0 truncate" data-testid="staff-reply-to">
+                    To
+                    <code class="text-gray-900 dark:text-zinc-100">{@reply_recipient.address}</code>
+                    <span :if={@reply_recipient.reply_to?} data-testid="staff-reply-to-override">
+                      · from the latest customer message
+                    </span>
+                  </span>
+                  <%!-- Reply-all CC (spec-inbound-channels D5): hidden for
+                  prospect threads, which never carry a CC. --%>
+                  <span
+                    :if={@thread.source != :public_intake}
+                    class="min-w-0 max-w-full truncate"
+                    title={if @reply_cc != "", do: "CC #{@reply_cc}"}
+                    data-testid="composer-cc-summary"
+                  >
+                    CC
+                    <code :if={@reply_cc != ""} class="text-gray-900 dark:text-zinc-100">{@reply_cc}</code>
+                    <span :if={@reply_cc == ""}>nobody else</span>
+                  </span>
+                  <span
+                    class="min-w-0 max-w-full truncate"
+                    data-testid="composer-from-identity"
+                    data-identity-source={@reply_identity.source}
+                  >
+                    <span
+                      :if={is_nil(@reply_identity.address)}
+                      class="font-medium text-amber-700 dark:text-amber-300"
+                    >
+                      Choose a tenant sending address below.
+                    </span>
+                    <span :if={@reply_identity.address}>Replies go out as</span>
+                    <span
+                      :if={@reply_identity.address && @reply_identity.name}
+                      class="text-gray-900 dark:text-zinc-100"
+                    >
+                      {@reply_identity.name}
+                    </span>
+                    <code :if={@reply_identity.address} class="text-gray-900 dark:text-zinc-100">&lt;{@reply_identity.address}&gt;</code>
+                  </span>
+                  <%!-- In the summary, not the body: D4 wants it seen while
+                  the details are closed. --%>
+                  <span
+                    :if={@archive_copy_address}
+                    class="min-w-0 max-w-full"
+                    data-testid="composer-archive-copy"
+                  >
+                    Besides the customer, a copy is kept in {@archive_copy_address}
+                  </span>
+                  <span class="underline decoration-dotted underline-offset-2 group-open/recipients:hidden">
+                    Change
+                  </span>
+                  <span class="hidden underline decoration-dotted underline-offset-2 group-open/recipients:inline">
+                    Hide
+                  </span>
+                </summary>
+                <div class="mt-2 grid gap-2 rounded border border-gray-200 dark:border-zinc-700 p-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+                  <label for="staff-reply-from" class="text-gray-600 dark:text-zinc-300">From</label>
+                  <select
+                    id="staff-reply-from"
+                    name="reply_channel_id"
+                    class="w-full rounded border border-gray-300 dark:border-zinc-600 py-1 pl-2 pr-8 text-xs dark:bg-zinc-800 dark:text-zinc-100"
+                    data-testid="input-select-reply_channel_id"
+                  >
+                    <option value="">Choose a sending address</option>
+                    {Phoenix.HTML.Form.options_for_select(
+                      Enum.map(@reply_channels, &{reply_address_label(&1), &1.id}),
+                      @reply_channel_id
+                    )}
+                  </select>
+                  <label
+                    :if={@thread.source != :public_intake}
+                    for="staff-reply-cc"
+                    class="text-gray-600 dark:text-zinc-300"
+                  >
+                    CC
+                  </label>
+                  <input
+                    :if={@thread.source != :public_intake}
+                    type="text"
+                    id="staff-reply-cc"
+                    name="cc"
+                    phx-debounce="500"
+                    value={@reply_cc}
+                    placeholder="Nobody else"
+                    aria-label="CC addresses, comma separated"
+                    data-testid="staff-reply-cc"
+                    class="w-full border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 text-xs dark:bg-zinc-800 dark:text-zinc-100"
+                  />
+                </div>
+              </details>
+              <div class="flex items-end gap-2">
+                <textarea
+                  name="body"
+                  phx-debounce="500"
+                  rows="3"
+                  phx-hook="ComposerInput"
+                  id="staff-reply-textarea"
+                  placeholder="Reply to customer... (Ctrl+Enter to send)"
+                  aria-label="Reply to customer"
+                  aria-describedby="composer-audience"
+                  data-testid="staff-reply-input"
+                  class="min-w-0 flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm leading-6 resize-none dark:bg-zinc-900 dark:text-zinc-100"
+                >{@reply_text}</textarea>
+                <button
+                  type="submit"
+                  phx-disable-with="Sending..."
+                  class="shrink-0 bg-indigo-600 text-white text-sm font-medium px-4 py-2 rounded hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                  data-testid="staff-reply-submit"
+                >
+                  Send reply
+                </button>
+              </div>
+            </form>
+
+            <form
+              :if={@composer_mode == :note}
+              id="staff-note-form"
+              phx-submit="add_note"
+              phx-change="update_note"
+              class="flex items-end gap-2"
+              data-testid="staff-note-form"
+            >
               <textarea
                 name="body"
                 phx-debounce="500"
-                rows="2"
-                phx-hook="CtrlEnterSubmit"
-                id="staff-reply-textarea"
-                placeholder="Reply to customer... (Ctrl+Enter to send)"
-                aria-label="Reply to customer"
+                rows="3"
+                phx-hook="ComposerInput"
+                id="staff-note-input"
+                placeholder="Write an internal note... (Ctrl+Enter to save)"
+                aria-label="Internal note (not visible to customer)"
                 aria-describedby="composer-audience"
-                data-testid="staff-reply-input"
-                class="flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm resize-y dark:bg-zinc-700 dark:text-zinc-100"
-              >{@reply_text}</textarea>
+                data-testid="staff-note-input"
+                class="min-w-0 flex-1 resize-none border border-amber-400 dark:border-amber-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm leading-6"
+              >{@note_text}</textarea>
               <button
                 type="submit"
-                phx-disable-with="Sending..."
-                class="bg-indigo-600 text-white text-sm px-4 py-2 rounded hover:bg-indigo-700"
-                data-testid="staff-reply-submit"
+                phx-disable-with="Saving..."
+                class="shrink-0 bg-amber-400 text-amber-950 text-sm font-medium px-4 py-2 rounded hover:bg-amber-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
+                data-testid="staff-note-submit"
               >
-                Send reply
+                Save internal note
               </button>
-            </div>
-          </form>
-
-          <form
-            :if={@composer_mode == :note}
-            id="staff-note-form"
-            phx-submit="add_note"
-            phx-change="update_note"
-            class="space-y-2"
-            data-testid="staff-note-form"
-          >
-            <textarea
-              name="body"
-              phx-debounce="500"
-              rows="3"
-              phx-hook="CtrlEnterSubmit"
-              id="staff-note-input"
-              placeholder="Write an internal note... (Ctrl+Enter to save)"
-              aria-label="Internal note (not visible to customer)"
-              aria-describedby="composer-audience"
-              data-testid="staff-note-input"
-              class="w-full resize-y border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
-            >{@note_text}</textarea>
-            <button
-              type="submit"
-              phx-disable-with="Saving..."
-              class="bg-amber-400 text-amber-950 text-sm font-medium px-4 py-2 rounded hover:bg-amber-300"
-              data-testid="staff-note-submit"
-            >
-              Save internal note
-            </button>
-          </form>
+            </form>
+          </div>
         </div>
       </div>
 
@@ -1522,15 +1603,16 @@ defmodule CustyardWeb.Staff.ThreadLive do
       />
 
       <%!-- Right: metadata panel --%>
-      <div
+      <aside
         class={[
-          "w-72 border-l border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 overflow-y-auto",
+          "w-80 max-w-[90vw] border-l border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 overflow-y-auto",
           "lg:block lg:relative",
           if(@show_sidebar,
             do: "fixed right-0 top-0 bottom-0 z-50",
             else: "hidden"
           )
         ]}
+        aria-label="Conversation details"
         data-testid="staff-thread-sidebar"
       >
         <%!-- Mobile close button --%>
@@ -1538,7 +1620,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
           <span class="font-medium text-gray-700 dark:text-zinc-300">Details</span>
           <button
             phx-click="toggle_sidebar"
-            class="text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200 p-1"
+            class="text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-zinc-100 p-1"
             aria-label="Close details panel"
             data-testid="staff-sidebar-close"
           >
@@ -1558,126 +1640,16 @@ defmodule CustyardWeb.Staff.ThreadLive do
             </svg>
           </button>
         </div>
-        <div class="p-4 space-y-4">
-          <%!-- Organization --%>
-          <div data-testid="staff-sidebar-org">
-            <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-1">
-              Customer
-            </div>
-            <%= if @thread.organization do %>
-              <.link
-                navigate={~p"/app/customers/#{@thread.organization.public_id}"}
-                class="text-sm text-indigo-700 dark:text-indigo-300 hover:underline font-medium"
-                data-testid="staff-sidebar-org-link"
-              >
-                {@thread.organization.name}
-              </.link>
-              <div class="mt-1">
-                <.tier_badge tier={@thread.organization.tier} />
-              </div>
-            <% else %>
-              <div
-                class="text-sm font-medium text-gray-800 dark:text-zinc-200"
-                data-testid="staff-sidebar-org-unlinked"
-              >
-                Unlinked prospect
-              </div>
-              <button
-                :if={
-                  @thread.source == :public_intake and
-                    Authorization.can_create_organization?(@current_staff) and
-                    not @show_convert_form
-                }
-                phx-click="show_convert_form"
-                class="mt-2 text-xs text-indigo-600 hover:underline"
-                data-testid="staff-convert-prospect-btn"
-              >
-                Convert to organization
-              </button>
-              <form
-                :if={@show_convert_form}
-                id="staff-convert-form"
-                phx-submit="convert_prospect"
-                phx-change="validate_convert_form"
-                class="mt-2 p-2 bg-gray-50 dark:bg-zinc-900 rounded border border-gray-200 dark:border-zinc-700 space-y-2"
-                data-testid="staff-convert-form"
-              >
-                <input
-                  type="text"
-                  name="name"
-                  value={@convert_form_data.name}
-                  placeholder="Organization name"
-                  aria-label="Organization name"
-                  required
-                  autofocus
-                  class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 dark:bg-zinc-700 dark:text-zinc-100"
-                  data-testid="staff-convert-name-input"
-                />
-                <input
-                  type="text"
-                  name="domain"
-                  value={@convert_form_data.domain}
-                  placeholder="Domain (optional)"
-                  aria-label="Domain"
-                  class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 dark:bg-zinc-700 dark:text-zinc-100"
-                  data-testid="staff-convert-domain-input"
-                />
-                <div class="flex gap-2">
-                  <button
-                    type="submit"
-                    phx-disable-with="Converting..."
-                    class="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                    data-testid="staff-convert-submit"
-                  >
-                    Convert
-                  </button>
-                  <button
-                    type="button"
-                    phx-click="hide_convert_form"
-                    class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
-                    data-testid="staff-convert-cancel"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            <% end %>
-          </div>
-
-          <%!-- Contact --%>
-          <div data-testid="staff-sidebar-contact">
-            <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-1">
-              Contact
-            </div>
-            <div class="text-sm text-gray-800 dark:text-zinc-200">
-              {if @thread.contact,
-                do: @thread.contact.name || @thread.contact.email,
-                else: "Unknown"}
-            </div>
-            <%= if @thread.contact && @thread.contact.email do %>
-              <div
-                class="text-xs text-gray-500 dark:text-zinc-400"
-                data-testid="staff-sidebar-contact-email"
-              >
-                {@thread.contact.email}
-              </div>
-              <div :if={@thread.contact.email_status != :valid} class="mt-1">
-                <.email_status_badge status={@thread.contact.email_status} />
-              </div>
-            <% end %>
-          </div>
-
+        <div class="p-4 space-y-5">
           <%!-- State actions --%>
-          <div>
-            <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-2">
-              Actions
-            </div>
+          <section>
+            <.sidebar_heading>State</.sidebar_heading>
             <div class="space-y-1.5" data-testid="staff-state-actions">
               <%= if @thread.state == :resolved do %>
                 <button
                   phx-click="set_state"
                   phx-value-state="active"
-                  class="w-full text-left text-sm px-3 py-1.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200"
+                  class="w-full text-left text-sm px-3 py-1.5 rounded border bg-blue-50 hover:bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/60 dark:hover:bg-blue-900/60 dark:text-blue-200 dark:border-blue-800"
                   data-testid="staff-state-reopen"
                 >
                   Reopen
@@ -1694,8 +1666,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
                     "w-full text-left text-sm px-3 py-1.5 rounded border",
                     if(@thread.state == :waiting,
                       do:
-                        "bg-yellow-200 hover:bg-yellow-100 text-yellow-900 border-yellow-400 font-medium",
-                      else: "bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border-yellow-200"
+                        "bg-yellow-200 hover:bg-yellow-100 text-yellow-900 border-yellow-400 font-medium dark:bg-yellow-500/30 dark:hover:bg-yellow-500/20 dark:text-yellow-100 dark:border-yellow-500",
+                      else:
+                        "bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-950/40 dark:hover:bg-yellow-900/40 dark:text-yellow-200 dark:border-yellow-800"
                     )
                   ]}
                   data-testid="staff-state-waiting"
@@ -1708,25 +1681,139 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   phx-click="set_state"
                   phx-value-state="resolved"
                   data-confirm="Mark this thread as resolved?"
-                  class="w-full text-left text-sm px-3 py-1.5 rounded bg-green-50 hover:bg-green-100 text-green-800 border border-green-200"
+                  class="w-full text-left text-sm px-3 py-1.5 rounded border bg-green-50 hover:bg-green-100 text-green-800 border-green-200 dark:bg-green-950/40 dark:hover:bg-green-900/40 dark:text-green-200 dark:border-green-800"
                   data-testid="staff-state-resolved"
                 >
                   Mark resolved
                 </button>
               <% end %>
             </div>
-          </div>
+          </section>
 
-          <section
-            :if={@thread.tenant_id}
-            class="mb-5"
-            data-testid="staff-labels-section"
-          >
-            <h3 class="text-xs font-semibold text-gray-500 dark:text-zinc-400 mb-2">Labels</h3>
+          <%!-- Customer and contact, each shown once --%>
+          <section>
+            <.sidebar_heading>Customer</.sidebar_heading>
+            <div data-testid="staff-sidebar-org">
+              <%= if @thread.organization do %>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <.link
+                    navigate={~p"/app/customers/#{@thread.organization.public_id}"}
+                    class="text-sm text-indigo-700 dark:text-indigo-300 hover:underline font-medium break-all"
+                    data-testid="staff-sidebar-org-link"
+                  >
+                    {@thread.organization.name}
+                  </.link>
+                  <.tier_badge tier={@thread.organization.tier} />
+                </div>
+              <% else %>
+                <div
+                  class="text-sm font-medium text-gray-800 dark:text-zinc-200"
+                  data-testid="staff-sidebar-org-unlinked"
+                >
+                  Unlinked prospect
+                </div>
+                <button
+                  :if={
+                    @thread.source == :public_intake and
+                      Authorization.can_create_organization?(@current_staff) and
+                      not @show_convert_form
+                  }
+                  phx-click="show_convert_form"
+                  class="mt-2 text-xs text-indigo-600 dark:text-indigo-300 hover:underline"
+                  data-testid="staff-convert-prospect-btn"
+                >
+                  Convert to organization
+                </button>
+                <form
+                  :if={@show_convert_form}
+                  id="staff-convert-form"
+                  phx-submit="convert_prospect"
+                  phx-change="validate_convert_form"
+                  class="mt-2 p-2 bg-gray-50 dark:bg-zinc-900 rounded border border-gray-200 dark:border-zinc-700 space-y-2"
+                  data-testid="staff-convert-form"
+                >
+                  <input
+                    type="text"
+                    name="name"
+                    value={@convert_form_data.name}
+                    placeholder="Organization name"
+                    aria-label="Organization name"
+                    required
+                    autofocus
+                    class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 dark:bg-zinc-700 dark:text-zinc-100"
+                    data-testid="staff-convert-name-input"
+                  />
+                  <input
+                    type="text"
+                    name="domain"
+                    value={@convert_form_data.domain}
+                    placeholder="Domain (optional)"
+                    aria-label="Domain"
+                    class="w-full text-xs border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 dark:bg-zinc-700 dark:text-zinc-100"
+                    data-testid="staff-convert-domain-input"
+                  />
+                  <div class="flex gap-2">
+                    <button
+                      type="submit"
+                      phx-disable-with="Converting..."
+                      class="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                      data-testid="staff-convert-submit"
+                    >
+                      Convert
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="hide_convert_form"
+                      class="text-xs text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-zinc-100"
+                      data-testid="staff-convert-cancel"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              <% end %>
+            </div>
+
+            <div class="mt-2" data-testid="staff-sidebar-contact">
+              <%= cond do %>
+                <% is_nil(@thread.contact) -> %>
+                  <div class="text-sm text-gray-600 dark:text-zinc-300">Contact unknown</div>
+                <% @thread.contact.name in [nil, "", @thread.contact.email] -> %>
+                  <div
+                    class="text-sm text-gray-800 dark:text-zinc-200 break-all"
+                    data-testid="staff-sidebar-contact-email"
+                  >
+                    {@thread.contact.email || "Contact unknown"}
+                  </div>
+                <% true -> %>
+                  <div class="text-sm text-gray-800 dark:text-zinc-200">
+                    {@thread.contact.name}
+                  </div>
+                  <div
+                    :if={@thread.contact.email}
+                    class="text-xs text-gray-600 dark:text-zinc-300 break-all"
+                    data-testid="staff-sidebar-contact-email"
+                  >
+                    {@thread.contact.email}
+                  </div>
+              <% end %>
+              <div
+                :if={
+                  @thread.contact && @thread.contact.email && @thread.contact.email_status != :valid
+                }
+                class="mt-1"
+              >
+                <.email_status_badge status={@thread.contact.email_status} />
+              </div>
+            </div>
+          </section>
+
+          <section :if={@thread.tenant_id} data-testid="staff-labels-section">
+            <.sidebar_heading>Labels</.sidebar_heading>
             <div class="flex flex-wrap gap-1 mb-2">
               <span
                 :for={label <- @thread_labels}
-                class="inline-flex items-center gap-1 rounded bg-indigo-50 dark:bg-indigo-950 px-2 py-1 text-xs"
+                class="inline-flex items-center gap-1 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-200 px-2 py-1 text-xs"
                 data-testid={"thread-label-#{label.id}"}
               >
                 {label.name}
@@ -1737,34 +1824,41 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   aria-label={"Remove label #{label.name}"}
                 >×</button>
               </span>
-              <span :if={@thread_labels == []} class="text-xs text-gray-500">No labels</span>
+              <span :if={@thread_labels == []} class="text-xs text-gray-600 dark:text-zinc-400">
+                No labels
+              </span>
             </div>
             <form
               :if={@available_labels != []}
               id="assign-label-form"
               phx-submit="assign_label"
-              class="flex gap-1 mb-2"
+              class="flex gap-2 mb-2"
             >
               <select
                 name="label_id"
                 aria-label="Label to add"
-                class="min-w-0 flex-1 rounded text-xs dark:bg-zinc-800"
+                class="min-w-0 flex-1 rounded border-gray-300 dark:border-zinc-600 py-1 pl-2 pr-8 text-xs dark:bg-zinc-800"
               >
                 <option :for={label <- @available_labels} value={label.id}>{label.name}</option>
               </select>
-              <button type="submit" class="text-xs text-indigo-600">Add</button>
+              <button
+                type="submit"
+                class="text-xs text-indigo-600 dark:text-indigo-300 hover:underline"
+              >Add</button>
             </form>
             <details
               :if={@current_staff.role == "admin"}
-              class="mt-2 text-xs text-gray-500 dark:text-zinc-400"
+              id="new-label-disclosure"
+              class="mt-2 text-xs text-gray-600 dark:text-zinc-400"
+              phx-mounted={keep_open()}
             >
-              <summary class="cursor-pointer hover:text-gray-700 dark:hover:text-zinc-200">
+              <summary class="cursor-pointer hover:text-gray-900 dark:hover:text-zinc-200">
                 New label
               </summary>
               <form
                 id="create-label-form"
                 phx-submit="create_label"
-                class="mt-2 flex gap-1"
+                class="mt-2 flex gap-2"
               >
                 <input
                   name="name"
@@ -1773,26 +1867,23 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   maxlength="40"
                   placeholder="New label"
                   aria-label="New label name"
-                  class="min-w-0 flex-1 rounded text-xs dark:bg-zinc-800"
+                  class="min-w-0 flex-1 rounded border-gray-300 dark:border-zinc-600 py-1 px-2 text-xs dark:bg-zinc-800"
                 />
-                <button type="submit" class="text-xs text-gray-600 dark:text-zinc-300 hover:underline">Create</button>
+                <button type="submit" class="text-xs text-gray-700 dark:text-zinc-300 hover:underline">Create</button>
               </form>
             </details>
-            <p class="mt-1 text-xs text-gray-500">
+            <p class="mt-1 text-xs text-gray-600 dark:text-zinc-400">
               Labels are internal and shared across your workspace.
             </p>
           </section>
 
           <%!-- Tasks --%>
-          <div>
-            <div
-              class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-2"
-              data-testid="staff-tasks-section"
-            >
+          <section>
+            <.sidebar_heading data-testid="staff-tasks-section">
               Tasks ({length(@thread.tasks)})
-            </div>
+            </.sidebar_heading>
             <%= if Enum.empty?(@thread.tasks) do %>
-              <div class="text-xs text-gray-400 dark:text-zinc-500">No tasks yet</div>
+              <div class="text-xs text-gray-600 dark:text-zinc-400">No tasks yet</div>
             <% else %>
               <div class="space-y-2">
                 <%= for task <- @thread.tasks do %>
@@ -1869,7 +1960,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   <button
                     type="button"
                     phx-click="toggle_task_form"
-                    class="text-xs text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
+                    class="text-xs text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-zinc-100"
                     data-testid="staff-task-cancel-btn"
                   >
                     Cancel
@@ -1879,56 +1970,131 @@ defmodule CustyardWeb.Staff.ThreadLive do
             <% else %>
               <button
                 phx-click="toggle_task_form"
-                class="mt-3 w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                class="mt-2 rounded border border-gray-300 dark:border-zinc-600 px-3 py-1.5 text-sm font-medium text-gray-800 dark:text-zinc-100 hover:bg-gray-50 dark:hover:bg-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
                 data-testid="staff-add-task-btn"
               >
                 + Add task
               </button>
             <% end %>
-          </div>
+          </section>
 
           <%!-- Other open threads for this org --%>
-          <div :if={@other_threads != []} data-testid="staff-sidebar-other-threads">
-            <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-2">
-              Other Open ({length(@other_threads)})
-            </div>
-            <div class="space-y-1.5">
-              <.link
-                :for={conv <- @other_threads}
-                navigate={~p"/app/threads/#{conv.id}"}
-                class="block text-sm text-gray-700 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 truncate"
-                data-testid={"staff-other-conv-#{conv.id}"}
-              >
-                <span
-                  class="inline-block w-2 h-2 rounded-full mr-1.5"
-                  style={state_dot_color(conv.state)}
-                />
-                {conv.subject}
-              </.link>
-            </div>
-          </div>
+          <section :if={@other_threads != []} data-testid="staff-sidebar-other-threads">
+            <.sidebar_heading>Other open ({length(@other_threads)})</.sidebar_heading>
+            <ul role="list" class="-mx-2 space-y-0.5">
+              <li :for={conv <- @other_threads}>
+                <.link
+                  navigate={~p"/app/threads/#{conv.id}"}
+                  class="block rounded px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-zinc-700/60 focus-visible:outline-2 focus-visible:outline-indigo-500"
+                  data-testid={"staff-other-conv-#{conv.id}"}
+                >
+                  <span class="text-sm leading-snug text-gray-800 dark:text-zinc-200 line-clamp-2 [overflow-wrap:anywhere]">
+                    {conv.subject}
+                  </span>
+                  <span class="mt-1 flex items-center gap-2 text-xs text-gray-600 dark:text-zinc-400">
+                    <.state_badge state={conv.state} />
+                    <time
+                      datetime={DateTime.to_iso8601(conv.inserted_at)}
+                      title={"Opened #{format_timestamp(conv.inserted_at)}"}
+                    >
+                      {opened_ago(conv.inserted_at)}
+                    </time>
+                  </span>
+                </.link>
+              </li>
+            </ul>
+          </section>
 
-          <%!-- Neglect status --%>
-          <%= if @neglect_status != :ok do %>
-            <div data-testid="staff-sidebar-neglect">
-              <div class="text-xs text-gray-400 dark:text-zinc-500 uppercase tracking-wide mb-1">
-                Status
-              </div>
-              <.neglect_badge level={@neglect_status} />
+          <%!-- Why this thread ranks where it does: collapsed by default --%>
+          <details
+            id="thread-rank-disclosure"
+            class="group/rank text-xs text-gray-600 dark:text-zinc-300"
+            phx-mounted={keep_open()}
+            data-testid="staff-sidebar-score"
+          >
+            <summary class="flex cursor-pointer list-none items-center gap-2 rounded py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 [&::-webkit-details-marker]:hidden">
+              <.icon
+                name="hero-chevron-right-mini"
+                class="h-4 w-4 shrink-0 transition-transform group-open/rank:rotate-90"
+              />
+              <span class="font-semibold">Rank</span>
+              <span>score {@breakdown.total}</span>
+              <span :if={@neglect_status != :ok} data-testid="staff-sidebar-neglect">
+                <.neglect_badge level={@neglect_status} />
+              </span>
+            </summary>
+            <div class="mt-2 space-y-2">
+              <.score_breakdown breakdown={@breakdown} />
+              <p :if={not routing_source?(@thread.source)}>
+                Received via <.source_badge source={@thread.source} />
+              </p>
             </div>
-          <% end %>
-
-          <%!-- Score breakdown --%>
-          <.score_breakdown breakdown={@breakdown} />
+          </details>
         </div>
-      </div>
+      </aside>
     </div>
     """
+  end
+
+  slot :inner_block, required: true
+  attr :rest, :global
+
+  defp sidebar_heading(assigns) do
+    ~H"""
+    <h2 class="mb-2 text-xs font-semibold text-gray-600 dark:text-zinc-400" {@rest}>
+      {render_slot(@inner_block)}
+    </h2>
+    """
+  end
+
+  # The selected audience is filled in its own colour: indigo for the customer,
+  # amber for the team. The unselected one stays plain.
+  defp composer_mode_class(:reply, true), do: "bg-indigo-600 text-white"
+  defp composer_mode_class(:note, true), do: "bg-amber-400 text-amber-950"
+
+  defp composer_mode_class(_mode, false),
+    do: "text-gray-700 hover:bg-gray-100 dark:text-zinc-300 dark:hover:bg-zinc-700"
+
+  # Name and address of the person on the thread, for the line under the
+  # subject. Nothing when it would only repeat the customer's name.
+  defp contact_line(%{contact: nil}), do: nil
+
+  defp contact_line(%{contact: contact, organization: org}) do
+    label =
+      case contact do
+        %{name: name, email: email} when name not in [nil, "", email] and is_binary(email) ->
+          "#{name} <#{email}>"
+
+        %{name: name, email: email} ->
+          email || name
+      end
+
+    if is_nil(label) or (org && String.downcase(org.name) == String.downcase(label)),
+      do: nil,
+      else: label
+  end
+
+  # Email providers are plumbing; every other source changes how the thread
+  # is handled, so only those get a chip beside the subject.
+  defp routing_source?(source), do: source not in [:email, :lettermint]
+
+  defp rescannable_attachments?(scope, thread) do
+    scope.role == "admin" and
+      Enum.any?(thread.messages, fn message ->
+        Enum.any?(
+          message_attachments(message),
+          &(&1.state == :fetched and not Attachments.downloadable?(&1))
+        )
+      end)
   end
 
   attr :message, Message, required: true
   attr :prospect_email, :string, default: nil
 
+  # One entry in the conversation. Three voices, told apart by position,
+  # border and a text tag as well as colour: the customer sits flush left on
+  # a plain surface, staff replies are indented and tinted, internal notes
+  # are indented with a dashed amber border and an "internal note" tag.
   defp message_bubble(assigns) do
     message = assigns.message
     is_staff = message.source == :staff
@@ -1937,20 +2103,22 @@ defmodule CustyardWeb.Staff.ThreadLive do
     # Provider confirmations, vacation responders and other auto-replies
     # (spec-inbound-channels D6) read as system messages, not as the customer.
     is_system = message.triage_class == :auto_response and not is_internal
+    # A reply sent from the staff's own mailbox is still the staff's voice.
+    staff_voice = is_staff or message.triage_class == :staff_sent
 
-    bg_class =
+    tone =
       cond do
         is_internal ->
-          "bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-700"
+          "border-dashed border-amber-400 bg-amber-50 dark:border-amber-600 dark:bg-amber-950/40"
 
         is_system ->
-          "bg-gray-50 dark:bg-zinc-900 border-dashed border-gray-200 dark:border-zinc-700 text-gray-500 dark:text-zinc-400"
+          "border-dashed border-gray-300 bg-gray-50 text-gray-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
 
-        is_staff ->
-          "bg-indigo-50 dark:bg-indigo-900/30 border-indigo-100 dark:border-indigo-700"
+        staff_voice ->
+          "border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/50"
 
         true ->
-          "bg-white dark:bg-zinc-800 border-gray-200 dark:border-zinc-700"
+          "border-gray-200 bg-white dark:border-zinc-700 dark:bg-zinc-800"
       end
 
     assigns =
@@ -1959,34 +2127,40 @@ defmodule CustyardWeb.Staff.ThreadLive do
       |> assign(:is_internal, is_internal)
       |> assign(:is_deleted, is_deleted)
       |> assign(:is_system, is_system)
+      |> assign(:staff_voice, staff_voice)
       |> assign(:show_details, message.source == :email and not is_deleted)
-      |> assign(:bg_class, bg_class)
+      |> assign(:tone, tone)
       |> assign(:recipient_failures, secondary_recipient_failures(message))
 
     ~H"""
     <div
-      class={"flex #{if @is_staff, do: "justify-end", else: "justify-start"} mb-3"}
+      class={if @staff_voice, do: "pl-5 md:pl-12", else: "pr-5 md:pr-12"}
       data-testid={"staff-message-#{@message.id}"}
     >
-      <div
-        class={"max-w-lg rounded-lg px-4 py-2.5 border #{@bg_class}"}
+      <article
+        class={["rounded-lg border px-4 py-3", @tone]}
         data-testid={"staff-message-#{if @is_internal, do: "internal", else: to_string(@message.source)}"}
       >
-        <div class="flex items-center gap-2 mb-1">
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span
-            class={"text-xs font-medium #{if @is_staff, do: "text-indigo-700", else: "text-gray-700 dark:text-zinc-300"}"}
+            class={[
+              "text-[13px] font-semibold [overflow-wrap:anywhere]",
+              if(@staff_voice,
+                do: "text-indigo-800 dark:text-indigo-200",
+                else: "text-gray-900 dark:text-zinc-100"
+              )
+            ]}
             data-testid="staff-message-sender"
           >
             {sender_name(@message)}
           </span>
-          <%= if @is_internal do %>
-            <span
-              class="text-xs bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded"
-              data-testid="staff-message-internal-badge"
-            >
-              internal note
-            </span>
-          <% end %>
+          <span
+            :if={@is_internal}
+            class="inline-flex items-center gap-1 text-xs bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded"
+            data-testid="staff-message-internal-badge"
+          >
+            <.icon name="hero-lock-closed-micro" class="h-3 w-3" /> internal note
+          </span>
           <span
             :if={@is_system}
             class="text-xs bg-gray-200 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300 px-1.5 py-0.5 rounded"
@@ -2019,116 +2193,130 @@ defmodule CustyardWeb.Staff.ThreadLive do
           >
             forwarded by {@message.forwarded_by_email}
           </span>
-          <span class="text-xs text-gray-400 dark:text-zinc-500">
-            {unless @is_internal, do: via_label(@message.source, @prospect_email)}
+          <span :if={not @is_internal} class="text-xs text-gray-600 dark:text-zinc-400">
+            {via_label(@message.source, @prospect_email)}
           </span>
-          <span
-            class="text-xs text-gray-400 dark:text-zinc-500 ml-auto"
-            data-testid="staff-message-time"
-          >
-            {format_time(@message.inserted_at)}
+          <span class="ml-auto flex items-center gap-2">
+            <time
+              class="text-xs text-gray-600 dark:text-zinc-400"
+              datetime={DateTime.to_iso8601(@message.inserted_at)}
+              title={format_timestamp(@message.inserted_at)}
+              data-testid="staff-message-time"
+            >
+              {format_time(@message.inserted_at)}
+            </time>
+            <.delivery_indicator
+              :if={@is_staff and not @is_internal and not @is_deleted and @message.delivery_status}
+              status={@message.delivery_status}
+              failure_kind={@message.delivery_failure_kind}
+            />
+            <button
+              :if={not @is_deleted}
+              phx-click="delete_message"
+              phx-value-id={@message.id}
+              data-confirm="Delete this message? A tombstone stays visible in the thread and the customer can no longer read it."
+              class="flex items-center text-gray-500 dark:text-zinc-400 hover:text-red-600 dark:hover:text-red-400 focus-visible:outline-2 focus-visible:outline-red-500"
+              title="Delete message"
+              aria-label="Delete message"
+              data-testid={"staff-message-delete-#{@message.id}"}
+            >
+              <.icon name="hero-trash" class="h-3.5 w-3.5" />
+            </button>
           </span>
-          <.delivery_indicator
-            :if={@is_staff and not @is_internal and not @is_deleted and @message.delivery_status}
-            status={@message.delivery_status}
-            failure_kind={@message.delivery_failure_kind}
-          />
-          <button
-            :if={not @is_deleted}
-            phx-click="delete_message"
-            phx-value-id={@message.id}
-            data-confirm="Delete this message? A tombstone stays visible in the thread and the customer can no longer read it."
-            class="text-gray-300 dark:text-zinc-600 hover:text-red-600 dark:hover:text-red-400"
-            title="Delete message"
-            aria-label="Delete message"
-            data-testid={"staff-message-delete-#{@message.id}"}
-          >
-            <.icon name="hero-trash" class="h-3 w-3" />
-          </button>
         </div>
-        <div
-          :if={
-            @is_staff and not @is_internal and not @is_deleted and
-              @message.delivery_status == :failed
-          }
-          class="mb-2 text-xs text-amber-800 dark:text-amber-300"
-          data-testid={"reply-recovery-#{@message.id}"}
-        >
-          <%= if @message.delivery_failure_kind == :unknown do %>
-            Delivery outcome unknown. Check the provider's activity before sending another copy.
-          <% else %>
-            <%= if Outbound.retryable?(@message) do %>
-              Reply not sent. Correct the email setup, then <button
-                type="button"
-                phx-click="retry_reply"
-                phx-value-id={@message.id}
-                class="underline font-medium"
-                data-testid={"retry-reply-#{@message.id}"}
-              >Retry reply</button>.
-            <% else %>
-              Reply needs attention. Check the provider's activity before sending another copy.
-            <% end %>
-          <% end %>
-        </div>
-        <%!-- The indicator above follows the customer's copy; a CC or archive
-        copy that failed is listed here so it never hides that delivery. --%>
-        <div
-          :for={failure <- @recipient_failures}
-          :if={@is_staff and not @is_internal and not @is_deleted}
-          class="mb-1 text-xs text-amber-700 dark:text-amber-400"
-          data-testid="delivery-recipient-failure"
-        >
-          {recipient_failure_text(failure)}
-        </div>
-        <div
-          :if={@is_deleted}
-          class="text-sm italic text-gray-400 dark:text-zinc-500"
-          data-testid="staff-message-tombstone"
-        >
-          This message was deleted
-        </div>
-        <%= if not @is_deleted and @message.html_body do %>
-          <%!-- Sanitised at ingest by Custyard.Email.HtmlSanitizer (D9); the
-          stored markup is the allowlisted output, never provider HTML. --%>
+        <div class="mt-2 max-w-[60ch] text-[15px] leading-6">
           <div
-            class="email-html text-sm break-words text-gray-800 dark:text-zinc-200"
-            data-testid="staff-message-html"
+            :if={
+              @is_staff and not @is_internal and not @is_deleted and
+                @message.delivery_status == :failed
+            }
+            class="mb-2 text-xs text-amber-800 dark:text-amber-300"
+            data-testid={"reply-recovery-#{@message.id}"}
           >
-            {Phoenix.HTML.raw(InlineImages.render(@message.html_body, message_attachments(@message)))}
+            <%= if @message.delivery_failure_kind == :unknown do %>
+              Delivery outcome unknown. Check the provider's activity before sending another copy.
+            <% else %>
+              <%= if Outbound.retryable?(@message) do %>
+                Reply not sent. Correct the email setup, then <button
+                  type="button"
+                  phx-click="retry_reply"
+                  phx-value-id={@message.id}
+                  class="underline font-medium"
+                  data-testid={"retry-reply-#{@message.id}"}
+                >Retry reply</button>.
+              <% else %>
+                Reply needs attention. Check the provider's activity before sending another copy.
+              <% end %>
+            <% end %>
           </div>
-          <details class="mt-1 text-xs text-gray-500 dark:text-zinc-400">
-            <summary class="cursor-pointer select-none">Plain text</summary>
-            <div class="mt-1 whitespace-pre-wrap break-words" data-testid="staff-message-body">
-              {@message.body}
+          <%!-- The indicator above follows the customer's copy; a CC or archive
+          copy that failed is listed here so it never hides that delivery. --%>
+          <div
+            :for={failure <- @recipient_failures}
+            :if={@is_staff and not @is_internal and not @is_deleted}
+            class="mb-1 text-xs text-amber-700 dark:text-amber-400"
+            data-testid="delivery-recipient-failure"
+          >
+            {recipient_failure_text(failure)}
+          </div>
+          <div
+            :if={@is_deleted}
+            class="text-sm italic text-gray-500 dark:text-zinc-400"
+            data-testid="staff-message-tombstone"
+          >
+            This message was deleted
+          </div>
+          <%= if not @is_deleted and @message.html_body do %>
+            <%!-- Sanitised at ingest by Custyard.Email.HtmlSanitizer (D9); the
+            stored markup is the allowlisted output, never provider HTML. --%>
+            <div
+              class="email-html break-words text-gray-800 dark:text-zinc-200"
+              data-testid="staff-message-html"
+            >
+              {Phoenix.HTML.raw(
+                InlineImages.render(@message.html_body, message_attachments(@message))
+              )}
             </div>
-          </details>
-        <% end %>
-        <div
-          :if={not @is_deleted and is_nil(@message.html_body)}
-          class={[
-            "text-sm whitespace-pre-wrap break-words",
-            if(@is_system,
-              do: "text-gray-500 dark:text-zinc-400 italic",
-              else: "text-gray-800 dark:text-zinc-200"
-            )
-          ]}
-          data-testid="staff-message-body"
-        >
-          {@message.body}
+            <details
+              id={"message-plain-#{@message.id}"}
+              class="mt-1 text-xs text-gray-600 dark:text-zinc-400"
+              phx-mounted={keep_open()}
+            >
+              <summary class="cursor-pointer select-none">Plain text</summary>
+              <%!-- No whitespace around the body: pre-wrap would render it. --%>
+              <div
+                class="mt-1 whitespace-pre-wrap break-words"
+                data-testid="staff-message-body"
+                phx-no-format
+              >{@message.body}</div>
+            </details>
+          <% end %>
+          <div
+            :if={not @is_deleted and is_nil(@message.html_body)}
+            class={[
+              "whitespace-pre-wrap break-words",
+              if(@is_system,
+                do: "text-gray-600 dark:text-zinc-400 italic",
+                else: "text-gray-800 dark:text-zinc-200"
+              )
+            ]}
+            data-testid="staff-message-body"
+            phx-no-format
+          >{@message.body}</div>
+          <.attachment_list :if={not @is_deleted} attachments={message_attachments(@message)} />
+          <p
+            :if={
+              @is_staff and not @is_internal and not @is_deleted and
+                @message.cc_addresses not in [nil, []]
+            }
+            class="mt-1 text-xs text-gray-600 dark:text-zinc-400 break-all"
+            data-testid="staff-message-cc"
+          >
+            CC {Enum.join(@message.cc_addresses, ", ")}
+          </p>
+          <.message_details :if={@show_details} message={@message} />
         </div>
-        <.attachment_list :if={not @is_deleted} attachments={message_attachments(@message)} />
-        <p
-          :if={
-            @is_staff and not @is_internal and not @is_deleted and
-              @message.cc_addresses not in [nil, []]
-          }
-          class="mt-1 text-xs text-gray-400 dark:text-zinc-500 break-all"
-          data-testid="staff-message-cc"
-        >
-          CC {Enum.join(@message.cc_addresses, ", ")}
-        </p>
-        <.message_details :if={@show_details} message={@message} />
-      </div>
+      </article>
     </div>
     """
   end
@@ -2169,7 +2357,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
           >
             {att.filename || "attachment"}
           </a>
-          <span class="text-gray-400 dark:text-zinc-500">
+          <span class="text-gray-600 dark:text-zinc-400">
             {Attachments.format_bytes(att.size)}
           </span>
         <% else %>
@@ -2180,7 +2368,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
             {att.filename || "attachment"}
           </span>
           <span
-            class="text-gray-400 dark:text-zinc-500"
+            class="text-gray-600 dark:text-zinc-400"
             title={attachment_skip_title(att.skip_reason)}
             data-testid={"attachment-skipped-#{att.id}"}
           >
@@ -2225,7 +2413,12 @@ defmodule CustyardWeb.Staff.ThreadLive do
     assigns = assign(assigns, :reply_to, reply_to)
 
     ~H"""
-    <details class="mt-2 text-xs text-gray-500 dark:text-zinc-400" data-testid="message-details">
+    <details
+      id={"message-details-#{@message.id}"}
+      class="mt-2 text-xs text-gray-600 dark:text-zinc-400"
+      phx-mounted={keep_open()}
+      data-testid="message-details"
+    >
       <summary class="cursor-pointer select-none inline-flex items-center gap-2">
         <span>Details</span>
         <.auth_badge authentication={@message.authentication} />
@@ -2566,12 +2759,12 @@ defmodule CustyardWeb.Staff.ThreadLive do
           {@task.title}
         </span>
         <%= if @task.due_at do %>
-          <div class="text-xs text-gray-400 dark:text-zinc-500">
+          <div class="text-xs text-gray-600 dark:text-zinc-400">
             Due: {format_due_at(@task.due_at)}
           </div>
         <% end %>
       </div>
-      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+      <div class="hover-reveal flex items-center gap-1 transition-opacity">
         <%= if @task.portal_visible do %>
           <span
             class="text-xs text-gray-400 dark:text-zinc-500"
@@ -2592,7 +2785,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
         <button
           phx-click="edit_task"
           phx-value-id={@task.id}
-          class="text-gray-400 dark:text-zinc-500 hover:text-indigo-600"
+          class="text-gray-500 dark:text-zinc-400 hover:text-indigo-600"
           title="Edit task"
           data-testid={"staff-task-edit-#{@task.id}"}
         >
@@ -2602,7 +2795,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
           phx-click="delete_task"
           phx-value-id={@task.id}
           data-confirm="Delete this task?"
-          class="text-gray-400 dark:text-zinc-500 hover:text-red-600"
+          class="text-gray-500 dark:text-zinc-400 hover:text-red-600"
           title="Delete task"
           data-testid={"staff-task-delete-#{@task.id}"}
         >
@@ -2715,19 +2908,5 @@ defmodule CustyardWeb.Staff.ThreadLive do
     ~H"""
     <span class={"w-2 h-2 rounded-full #{@color}"} data-testid={"staff-task-dot-#{@state}"} />
     """
-  end
-
-  defp state_dot_color(state) do
-    color =
-      case state do
-        :new -> "#3B82F6"
-        :active -> "#22C55E"
-        :waiting -> "#EAB308"
-        :dormant -> "#9CA3AF"
-        :resolved -> "#D1D5DB"
-        _ -> "#9CA3AF"
-      end
-
-    "background-color: #{color}"
   end
 end
