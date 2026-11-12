@@ -38,6 +38,7 @@ defmodule Custyard.Application do
 
   require Custyard.Log, as: Log
 
+  alias Custyard.Attachments.{ScanRetry, Scanner}
   alias Custyard.Boot.{Build, Console, Env, FirstRun, Monitor, Probe, Report, State}
 
   @impl true
@@ -202,6 +203,7 @@ defmodule Custyard.Application do
     |> maybe_add_outbound_queue()
     |> maybe_add_acknowledgment_consumer()
     |> maybe_add_intake_sweeps()
+    |> maybe_add_attachment_scan_retry()
     |> maybe_add_lmtp_server()
     |> maybe_add_imap_pollers()
     |> maybe_add_legacy_file_import()
@@ -265,6 +267,18 @@ defmodule Custyard.Application do
   defp maybe_add_intake_sweeps(children) do
     if Application.get_env(:custyard, :start_intake_sweeps, true) do
       children ++ [Custyard.Slugs.ClaimExpiry, Custyard.Threads.RetentionSweep]
+    else
+      children
+    end
+  end
+
+  # Retries failed attachment malware scans (Custyard.Attachments.ScanRetry).
+  # Without a scanner there is nothing to retry with. Flagged off in
+  # config/test.exs; tests call the retry directly.
+  defp maybe_add_attachment_scan_retry(children) do
+    if Application.get_env(:custyard, :start_attachment_scan_retry, true) and
+         Scanner.configured?() do
+      children ++ [ScanRetry]
     else
       children
     end

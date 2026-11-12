@@ -2,6 +2,7 @@ defmodule Custyard.ApplicationTest do
   use ExUnit.Case, async: false
 
   alias Custyard.Application, as: App
+  alias Custyard.Attachments.ScanRetry
 
   defp ids(children), do: Enum.map(children, &Supervisor.child_spec(&1, []).id)
 
@@ -61,6 +62,31 @@ defmodule Custyard.ApplicationTest do
       after
         Application.put_env(:custyard, :start_legacy_file_import, false)
       end
+    end
+  end
+
+  describe "attachment scan retry" do
+    setup do
+      scanner = Application.get_env(:custyard, :attachment_scanner)
+
+      on_exit(fn ->
+        Application.put_env(:custyard, :attachment_scanner, scanner)
+        Application.put_env(:custyard, :start_attachment_scan_retry, false)
+      end)
+    end
+
+    test "is off in the test environment and not running" do
+      refute Application.get_env(:custyard, :start_attachment_scan_retry, true)
+      refute ScanRetry in ids(App.deferred_children([]))
+      refute Process.whereis(ScanRetry)
+    end
+
+    test "is a deferred child only while a scanner is configured" do
+      Application.delete_env(:custyard, :start_attachment_scan_retry)
+      assert ScanRetry in ids(App.deferred_children([]))
+
+      Application.put_env(:custyard, :attachment_scanner, nil)
+      refute ScanRetry in ids(App.deferred_children([]))
     end
   end
 

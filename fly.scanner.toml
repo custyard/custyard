@@ -1,4 +1,6 @@
-# Private ClamAV daemon. There must be no services or http_service section.
+# Private ClamAV daemon, reached through Flycast so Fly Proxy can start the
+# Machine on demand and stop it when idle. The app holds one private IPv6
+# address only; never allocate a public IP (deploy with --no-public-ips).
 app = "custyard-scanner"
 org = "custyard"
 primary_region = "ams"
@@ -16,9 +18,30 @@ CLAMAV_NO_MILTERD = "true"
 CLAMD_STARTUP_TIMEOUT = "900"
 FRESHCLAM_CHECKS = "24"
 
+[processes]
+# Update signatures before clamd loads them, then run the image's /init.
+app = "sh /etc/clamav/custyard-start.sh"
+
 [[files]]
 guest_path = "/etc/clamav/clamd.conf"
 local_path = "ops/clamav/clamd.conf"
+
+[[files]]
+guest_path = "/etc/clamav/custyard-start.sh"
+local_path = "ops/clamav/start.sh"
+
+# Raw TCP on the private Flycast address. No handlers: clamd speaks its own
+# protocol. Scans arrive at custyard-scanner.flycast:3310.
+[[services]]
+processes = ["app"]
+internal_port = 3310
+protocol = "tcp"
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 0
+
+[[services.ports]]
+port = 3310
 
 [[mounts]]
 source = "clamav_signatures"

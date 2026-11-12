@@ -33,6 +33,14 @@ FailIfCvdOlderThan 7
 
 Keep recursion, scan time and resource limits finite. Encrypted containers and limit-exceeded detections stay blocked. These settings are documented in the upstream [clamd configuration reference](https://github.com/Cisco-Talos/clamav/blob/main/etc/clamd.conf.sample). Review the installed version's settings when provisioning or upgrading the daemon.
 
+## Automatic retry of failed scans
+
+A scan fails when the scanner does not answer within `CLAMAV_TIMEOUT_MS`. A scanner that scales to zero, as the [private Fly deployment](../../ops/clamav/README.md) does, fails the first scan after it went idle: that scan's connection starts the Machine, which needs 30 to 120 seconds to boot, update its signatures and load them. A provider redelivery does not help, because it reuses attachments that were already fetched and does not scan them again.
+
+Custyard therefore retries failed scans itself. When a scanner is configured, each application instance looks once a minute for attachments whose scan failed and that were stored less than 24 hours ago. An attachment is retried a minute after its failed scan, and after that once the time since its last scan is as long as the attachment was old at that scan. Retries come at about 1, 2, 4, 8 and 16 minutes of age and so on, about 11 in the 24 hours. The schedule counts from when the attachment was stored, so a file the scanner keeps failing stops waking it after a day. Attachments on deleted messages and in suspect threads are not retried. When a retry changes the verdict, open thread views refresh.
+
+Until the 24 hours are over, the thread shows "Quarantined: security scan will be retried". After that it shows "Quarantined: security scan failed", and only a manual rescan, described below, scans the file again. A retry that fails again leaves the file quarantined. The log records `attachment_scan_retry_completed` with verdict counts after a pass that rescanned something, and `attachment_scan_retry_failed` when a pass could not run.
+
 ## Scan existing files and retry failures
 
 An infected verdict blocks every reference to those same bytes within the tenant, including later duplicates. Infection is terminal: rescanning does not clear it. Suspected false positives require operator investigation; this workflow provides no automatic or user-facing override.
@@ -47,6 +55,6 @@ The release task returns verdict counts only. It reads each file back from the d
 
 On an installation upgraded from a release that kept attachments on disk, run a rescan only after the import reports nothing pending ([database operations](database.md#upgrading-from-a-release-that-kept-files-on-disk)). The import itself leaves verdicts as they were, but a rescan of an attachment that is not in the database yet ends in an error verdict, which quarantines it until a later rescan succeeds.
 
-Tenant administrators can request rescanning for a trusted thread through its attachment controls. A scanner outage leaves files quarantined until an explicit retry succeeds. Confirm clean-file download, a blocked malware test file and blocked downloads during scanner outage before enabling general attachment use.
+Tenant administrators can request rescanning for a trusted thread through its attachment controls. A scanner outage that lasts longer than the automatic retry leaves files quarantined until an explicit rescan succeeds. Confirm clean-file download, a blocked malware test file and blocked downloads during scanner outage before enabling general attachment use.
 
 Quarantine is an application access restriction on attachment content, which is stored in the application database. Database backups, which include that content, remain necessary; scans do not replace backup restoration or safe handling of downloaded files.

@@ -32,6 +32,19 @@ defmodule Custyard.Attachments do
   # publish their reference first (persist_result/3), so this is margin and
   # not what keeps a concurrent store safe.
   @orphan_grace 86_400
+  # A failed scan is retried for a day after the row was stored
+  # (retry_failed_scans/1), at most once a minute.
+  @scan_retry_window 86_400
+  @scan_retry_min_interval 60
+  @no_scans %{clean: 0, infected: 0, error: 0, pending: 0}
+
+  @typedoc "Verdict counts of a rescan."
+  @type scan_counts :: %{
+          clean: non_neg_integer,
+          infected: non_neg_integer,
+          error: non_neg_integer,
+          pending: non_neg_integer
+        }
 
   @doc "Default per-message cap in bytes for integrations without an email channel."
   def default_limit_bytes, do: @default_limit_mb * @megabyte
@@ -504,9 +517,22 @@ defmodule Custyard.Attachments do
   def downloadable?(_), do: false
 
   def scan_label(%MessageAttachment{scan_status: :infected}), do: "Blocked: malware detected"
-  def scan_label(%MessageAttachment{scan_status: :error}), do: "Quarantined: security scan failed"
+
+  def scan_label(%MessageAttachment{scan_status: :error} = attachment) do
+    if scan_retry_window?(attachment, DateTime.utc_now()),
+      do: "Quarantined: security scan will be retried",
+      else: "Quarantined: security scan failed"
+  end
+
   def scan_label(%MessageAttachment{scan_status: :clean}), do: "Security scan passed"
   def scan_label(_), do: "Quarantined: awaiting security scan"
+
+  # Whether retry_failed_scans/1 still takes a failed scan up: a scanner is
+  # configured and the row was stored less than a day before `now`.
+  defp scan_retry_window?(%MessageAttachment{inserted_at: %DateTime{} = inserted_at}, now),
+    do: Scanner.configured?() and DateTime.diff(now, inserted_at) < @scan_retry_window
+
+  defp scan_retry_window?(_attachment, _now), do: false
 
   @doc "Rescan stored content after an authorized administrator explicitly requests it."
   def rescan_thread(%Scope{role: "admin"} = scope, thread_id) do
@@ -529,6 +555,95 @@ defmodule Custyard.Attachments do
     rescan_query(from(m in Message))
   end
 
+  @doc """
+  Rescan the attachments whose scan failed and that were stored less than
+  a day before `now`, each one only once its backoff has passed. Returns
+  verdict counts like `rescan_thread/2`. `Custyard.Attachments.ScanRetry`
+  calls it every minute.
+
+  A failed scan is usually a scanner that was not ready: one that scales to
+  zero starts on the connection of the scan that then times out. A row is
+  due a minute after its last scan, and later once the time since its last
+  scan is as long as the row was old at that scan. Retries therefore come
+  at about 1, 2, 4, 8 and so on minutes of age, eleven or so in the day.
+  Age counts from when the row was stored, never from its last scan: every
+  rescan moves that, and a window on it would retry for ever and keep the
+  scanner awake. After the day only an explicit rescan remains.
+
+  Rows on deleted messages and in suspect threads are left alone, as by
+  `rescan_thread/2` and `rescan_all/0`. Without a configured scanner nothing
+  is rescanned: a scan would give `:pending` and replace the failure. Each
+  row whose verdict changes refreshes open views of its thread.
+  """
+  @spec retry_failed_scans(DateTime.t()) :: scan_counts
+  def retry_failed_scans(now \\ DateTime.utc_now()) do
+    if Scanner.configured?() do
+      now = DateTime.truncate(now, :second)
+
+      now
+      |> scan_retry_candidates()
+      |> Enum.filter(&scan_retry_due?(&1, now))
+      |> Enum.reduce(@no_scans, fn candidate, counts ->
+        case retry_scan(candidate, now) do
+          nil -> counts
+          status -> Map.update!(counts, status, &(&1 + 1))
+        end
+      end)
+    else
+      @no_scans
+    end
+  end
+
+  # Failed scans inside the window, where rescan_query/1 would reach them.
+  # The backoff needs only these fields and is checked in Elixir.
+  defp scan_retry_candidates(now) do
+    since = DateTime.add(now, -@scan_retry_window, :second)
+
+    from(a in MessageAttachment,
+      join: m in Message,
+      on: m.id == a.message_id and m.tenant_id == a.tenant_id,
+      join: t in Thread,
+      on: t.id == m.thread_id and t.tenant_id == m.tenant_id,
+      where: a.state == :fetched and a.scan_status == :error and a.inserted_at > ^since,
+      where: is_nil(m.deleted_at) and t.suspect == false,
+      order_by: a.id,
+      select: %{id: a.id, thread_id: t.id, inserted_at: a.inserted_at, scanned_at: a.scanned_at}
+    )
+    |> Repo.all()
+  end
+
+  defp scan_retry_due?(%{scanned_at: nil}, _now), do: true
+
+  defp scan_retry_due?(%{scanned_at: scanned_at, inserted_at: inserted_at}, now) do
+    DateTime.diff(now, scanned_at) >=
+      max(@scan_retry_min_interval, DateTime.diff(scanned_at, inserted_at))
+  end
+
+  # The candidates are a snapshot. Another instance or an administrator may
+  # have rescanned the row since, so it is read again and retried only while
+  # it is still a due failure; rescan_row/1 fences any scan that overlaps.
+  defp retry_scan(%{id: id, thread_id: thread_id}, now) do
+    with %MessageAttachment{scan_status: :error} = row <- Repo.get(MessageAttachment, id),
+         true <- scan_retry_due?(row, now) do
+      status = rescan_row(row)
+      if status != :error, do: broadcast_attachment_change(thread_id)
+      status
+    else
+      _not_due -> nil
+    end
+  end
+
+  # The staff, portal and prospect thread views reload the messages and
+  # their attachments on this message-level event, as Custyard.Threads
+  # sends it for a deleted message.
+  defp broadcast_attachment_change(thread_id) do
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      "thread:#{thread_id}",
+      {:message_updated, thread_id}
+    )
+  end
+
   defp rescan_query(messages) do
     ids =
       from(a in MessageAttachment,
@@ -541,7 +656,7 @@ defmodule Custyard.Attachments do
       )
       |> Repo.all()
 
-    Enum.reduce(ids, %{clean: 0, infected: 0, error: 0, pending: 0}, fn id, counts ->
+    Enum.reduce(ids, @no_scans, fn id, counts ->
       case rescan_row(Repo.get(MessageAttachment, id)) do
         nil -> counts
         status -> Map.update!(counts, status, &(&1 + 1))
