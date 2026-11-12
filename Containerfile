@@ -63,7 +63,7 @@ RUN test -x _build/prod/rel/custyard/bin/instance-admin && \
 FROM debian:12-slim
 
 ARG GIT_SHA=unknown
-LABEL org.opencontainers.image.source="https://github.com/custyard/custyard"
+LABEL org.opencontainers.image.source="https://gitlab.com/custyard/custyard"
 LABEL org.opencontainers.image.revision=$GIT_SHA
 LABEL org.opencontainers.image.description="Custyard Service Platform"
 LABEL org.opencontainers.image.licenses="MIT"

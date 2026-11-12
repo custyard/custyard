@@ -313,10 +313,11 @@ Both providers should run the **same image digest** when a release is promoted:
 build once, deploy the candidate to staging, run acceptance checks, then promote
 that digest to Bunny production. Keep runtime secrets separate. Add explicit
 deployment serialization per environment, successful-CI gating, a recorded
-previous digest, and a deliberate production promotion trigger. Bunny provides
-a [GitHub Actions image-update integration](https://bunny.net/docs/magic-containers/deploy-with-github-actions);
-pin actions to reviewed commits and keep its account API key in protected CI
-secrets. Do not deploy production automatically from every development push.
+previous digest, and a deliberate production promotion trigger. The promotion
+jobs in `.gitlab-ci.yml` call Bunny's container API through an in-repo updater
+and keep its account API key in a protected CI/CD variable
+([Bunny setup](bunny-setup.md)). Do not deploy production automatically from
+every development push.
 
 ### 3. Rehearse the transfer and DNS setup
 

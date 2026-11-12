@@ -1,16 +1,43 @@
+# Inputs for "Run pipeline". They default to a normal CI run; choosing a
+# promote_environment runs only the promotion jobs at the end of this file.
+# Translated from .github/workflows/promote.yml (workflow_dispatch inputs).
+spec:
+  inputs:
+    promote_environment:
+      description: Promote a published image instead of running CI. none runs the normal pipeline.
+      options: [none, staging, production]
+      default: none
+    image_digest:
+      description: Published image digest (sha256 followed by 64 lowercase hex characters).
+      default: ""
+      regex: ^(sha256:[0-9a-f]{64})?$
+    source_sha:
+      description: Full source commit SHA from a successful main CI pipeline.
+      default: ""
+      regex: ^([0-9a-f]{40})?$
+    previous_digest:
+      description: Current production digest, for rollback and stale-target protection (required for production).
+      default: ""
+      regex: ^(sha256:[0-9a-f]{64})?$
+    acceptance_record:
+      description: HTTPS link to acceptance of this exact staged digest (required for production).
+      default: ""
+      regex: '^(https://[^\s"''<>()$?#]+)?$'
+---
 # Translated from .github/workflows/ci.yml.
 #
 # Triggers match the GitHub workflow: merge requests against any target
 # branch (stacked MRs included), pushes to the default branch, scheduled
 # pipelines (configure under Build > Pipeline schedules, daily 05:23 UTC) and
-# manual runs (Build > Pipelines > Run pipeline). Plain branch pushes without
-# an MR do not run a pipeline, as on GitHub.
+# manual runs (Build > Pipelines > Run pipeline, or the API). Plain branch
+# pushes without an MR do not run a pipeline, as on GitHub.
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
   auto_cancel:
     on_new_commit: interruptible
 
@@ -18,8 +45,11 @@ stages:
   - test
   - build
   - publish
+  - promote
+  - deploy
 
 variables:
+  PROMOTE_ENVIRONMENT: $[[ inputs.promote_environment ]]
   MIX_ENV: test
   ELIXIR_VERSION: "1.18.3"
   OTP_VERSION: "27.2.4"
@@ -38,10 +68,17 @@ variables:
   name: ghcr.io/tursodatabase/libsql-server@sha256:6dd3eb276d9d3604e4a48ac4a999a2e267814732d57d7e94c04ba71482333a67
   alias: libsql
 
-.not-scheduled: &not-scheduled
-  - if: $CI_PIPELINE_SOURCE == "schedule"
-    when: never
-  - when: on_success
+.ci-only:
+  rules:
+    - if: $PROMOTE_ENVIRONMENT != "none"
+      when: never
+
+.not-scheduled:
+  rules:
+    - !reference [.ci-only, rules]
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
 
 .elixir:
   image: $ELIXIR_IMAGE
@@ -58,13 +95,16 @@ variables:
     - as_user() { runuser -u ci -- "$@"; }
     - as_user mix local.hex --force
     - as_user mix local.rebar --force
+  rules:
+    - !reference [.ci-only, rules]
+    - when: on_success
   cache:
     - *mix-cache
 
 test:
   extends: .elixir
   stage: test
-  rules: *not-scheduled
+  rules: !reference [.not-scheduled, rules]
   services:
     - name: rabbitmq:4.2
       alias: rabbitmq
@@ -87,9 +127,9 @@ promotion-scripts:
   image: python:3.12-slim
   interruptible: true
   needs: []
-  rules: *not-scheduled
+  rules: !reference [.not-scheduled, rules]
   script:
-    - python3 -m unittest discover -s .github/scripts -p promotion_test.py
+    - python3 -m unittest discover -s .gitlab/scripts -p promotion_test.py
 
 # The suite again over the Turso driver (Custyard.Turso.Connection, Hrana
 # over HTTP) against a real libSQL server, the server Turso runs. One test
@@ -99,7 +139,7 @@ promotion-scripts:
 turso:
   extends: .elixir
   stage: test
-  rules: *not-scheduled
+  rules: !reference [.not-scheduled, rules]
   parallel:
     matrix:
       - TURSO_TEST_PROVIDER: [turso, bunny]
@@ -175,8 +215,9 @@ container:
   needs: []
   timeout: 30m
   rules:
+    - !reference [.ci-only, rules]
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE =~ /^(web|api)$/
   script:
     - >-
       docker buildx build --file Containerfile --platform linux/amd64 --load
@@ -191,6 +232,7 @@ publish:
   needs: [test, turso, release, security]
   timeout: 30m
   rules:
+    - !reference [.ci-only, rules]
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PROJECT_PATH == "custyard/custyard"
   variables:
     IMAGE: $CI_REGISTRY_IMAGE
@@ -217,3 +259,127 @@ publish:
     name: published-image-$CI_PIPELINE_ID
     paths: [published-image.json]
     expire_in: 90 days
+
+# Promotion: translated from .github/workflows/promote.yml. Run pipeline on
+# main with promote_environment set. promote:validate checks the candidate
+# against a successful push-to-main pipeline, its publish record and registry
+# metadata. Each deploy job repeats those checks on the digest it deploys,
+# since job and pipeline variables outrank inputs and dotenv values. Staging
+# deploys automatically; production waits for a person to start
+# promote:production (GitLab Free has no deployment approvals). Deploy
+# credentials are protected, environment-scoped CI/CD variables. See
+# docs/ops/bunny-setup.md.
+.promotion:
+  image: python:3.12-slim
+  interruptible: false
+  variables:
+    # Validated again by promotion.py; expand: false keeps a $ literal.
+    IMAGE_DIGEST:
+      value: $[[ inputs.image_digest ]]
+      expand: false
+    SOURCE_SHA:
+      value: $[[ inputs.source_sha ]]
+      expand: false
+    PREVIOUS_DIGEST:
+      value: $[[ inputs.previous_digest ]]
+      expand: false
+    ACCEPTANCE_RECORD:
+      value: $[[ inputs.acceptance_record ]]
+      expand: false
+  rules:
+    - !reference [.promotion-guard, rules]
+    - when: on_success
+
+# Promotion jobs exist only in a manual pipeline on protected main.
+.promotion-guard:
+  rules:
+    - if: $PROMOTE_ENVIRONMENT == "none"
+      when: never
+    - if: $CI_PIPELINE_SOURCE !~ /^(web|api)$/
+      when: never
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH || $CI_COMMIT_REF_PROTECTED != "true"
+      when: never
+    - if: $CI_PROJECT_PATH != "custyard/custyard"
+      when: never
+
+# Fails loudly instead of creating an empty pipeline when promotion is
+# requested anywhere but a manual pipeline on protected main.
+promote:rejected:
+  stage: promote
+  image: python:3.12-slim
+  rules:
+    - if: $PROMOTE_ENVIRONMENT == "none"
+      when: never
+    - if: $CI_PIPELINE_SOURCE =~ /^(web|api)$/ && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true" && $CI_PROJECT_PATH == "custyard/custyard"
+      when: never
+    - when: on_success
+  script:
+    - echo "Promotion rejected - run it from Build > Pipelines > Run pipeline on main" >&2
+    - exit 1
+
+promote:validate:
+  extends: .promotion
+  stage: promote
+  needs: []
+  environment:
+    name: $[[ inputs.promote_environment ]]
+    action: prepare
+  script:
+    - python3 -m unittest discover -s .gitlab/scripts -p promotion_test.py
+    - python3 .gitlab/scripts/promotion.py validate
+  artifacts:
+    reports:
+      dotenv: promotion.env
+
+promote:staging:
+  extends: .promotion
+  stage: deploy
+  needs: [promote:validate]
+  resource_group: custyard-promotion-staging
+  environment:
+    name: staging
+    url: $ENVIRONMENT_URL
+  rules:
+    - if: $PROMOTE_ENVIRONMENT != "staging"
+      when: never
+    - !reference [.promotion, rules]
+  variables:
+    FLYCTL_VERSION: 0.5.4
+    FLYCTL_SHA256: 0e58776a99e561887b82b941b15b63fd8fb1c7153b567b11fb3e63b65dd9780e
+  script:
+    - |
+      python3 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], "flyctl.tar.gz")' \
+        "https://github.com/superfly/flyctl/releases/download/v${FLYCTL_VERSION}/flyctl_${FLYCTL_VERSION}_Linux_x86_64.tar.gz"
+      echo "$FLYCTL_SHA256  flyctl.tar.gz" | sha256sum -c -
+      tar -xzf flyctl.tar.gz flyctl
+    # Revalidates the digest, then deploys it; the registry is public, so Fly
+    # pulls the verified digest directly.
+    - python3 .gitlab/scripts/promotion.py deploy-staging
+    - python3 .gitlab/scripts/promotion.py wait-healthy
+    - echo "ENVIRONMENT_URL=$ENVIRONMENT_URL" > deploy.env
+  artifacts:
+    reports:
+      dotenv: deploy.env
+
+promote:production:
+  extends: .promotion
+  stage: deploy
+  needs: [promote:validate]
+  resource_group: custyard-promotion-production
+  environment:
+    name: production
+    url: $ENVIRONMENT_URL
+  rules:
+    - if: $PROMOTE_ENVIRONMENT != "production"
+      when: never
+    - !reference [.promotion-guard, rules]
+    - when: manual
+      allow_failure: false
+  script:
+    - python3 .gitlab/scripts/promotion.py update-bunny
+    - python3 .gitlab/scripts/promotion.py verify-bunny
+    - python3 .gitlab/scripts/promotion.py wait-healthy
+    - echo "ENVIRONMENT_URL=$ENVIRONMENT_URL" > deploy.env
+  artifacts:
+    reports:
+      dotenv: deploy.env

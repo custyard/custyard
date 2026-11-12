@@ -1,8 +1,8 @@
 # A separate app until production has moved off Fly. Provision this app and its
 # own volume explicitly; these settings do not repurpose the live custyard app.
-# The manual Promote image workflow mirrors the CI-verified GHCR image into
-# Fly's private registry without changing its digest, then deploys it with this
-# explicit config and app. See docs/ops/bunny-setup.md.
+# The promote:staging job deploys the CI-verified image by digest from the
+# public GitLab registry with this explicit config and app. See
+# docs/ops/bunny-setup.md.
 app = "custyard-staging"
 org = "custyard"
 primary_region = "ams"

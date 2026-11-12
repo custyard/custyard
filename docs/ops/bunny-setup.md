@@ -166,46 +166,70 @@ or remote mutation. Staging uses `STORAGE_PROVIDER=fly`, `PROXY_PROVIDER=fly`
 and `DATABASE_PROVIDER=bunny`; these choices are independent.
 
 Run acceptance against the candidate digest in staging, then deliberately promote
-that same digest to Bunny using the manual **Promote image** workflow. It accepts
-the target environment, image digest, full source SHA, previous digest and an
-HTTPS acceptance-record URL. Production requires the last two fields. The
-workflow serializes each environment, verifies registry metadata against the
-digest and source SHA, and requires successful main CI including both database
-providers and publication. The candidate must exactly match the immutable
-`published-image-RUN_ID-RUN_ATTEMPT` artifact from that successful CI attempt.
-Its `published-image.json` record binds the repository, image, source SHA and
-published digest. Records expire after 90 days; a missing, expired or invalid
-record blocks promotion. A recent run that already contains this publisher can
-be rerun in full within [GitHub's 30-day rerun window](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
-to publish a fresh image and record. Reruns retain the original workflow and
-source SHA. For legacy workflows or expired records, create a new reviewed main
-commit and take its newly published digest through staging and acceptance.
-It checks the current Bunny digest before updating it, confirms the provider
-stored the requested digest, and probes HTTPS health. That health probe
-establishes service availability; record which running image was accepted
-during the real rollout.
+that same digest to Bunny. Start a promotion from Build > Pipelines > Run
+pipeline on `main` and set `promote_environment` to `staging` or `production`.
+The other inputs are the image digest, full source SHA, previous digest and an
+HTTPS acceptance-record URL; production requires the last two. Leaving
+`promote_environment` at `none` runs the normal CI pipeline instead.
 
-Before dispatch, create GitHub environments `staging` and `production`, restrict
-them to `main` (or protected branches with main protected), and configure required
-reviewers for production. Set these environment values:
+`promote:validate` refuses to run outside a manual pipeline on protected `main`.
+It requires a successful push-to-main pipeline for the source SHA in which
+`test`, both `turso` providers, `release`, `security` and `publish` passed. The
+candidate must exactly match the `published-image.json` record of that
+pipeline's latest `publish` job, which binds the repository, image, source SHA,
+published digest, pipeline ID and job ID. It then checks the registry
+manifest and config against the digest, the source SHA and the
+`https://gitlab.com/custyard/custyard` source label. Records expire after 90
+days; a missing, expired or invalid record blocks promotion. Retrying `publish`
+in a recent pipeline publishes a fresh image and record for the same source
+SHA. For expired records, create a new reviewed main commit and take its newly
+published digest through staging and acceptance. Images built before the move
+to GitLab carry the GitHub source label and cannot be promoted.
 
-| Environment | Variables | Secrets |
+Each deploy job repeats these checks on the digest it is about to deploy
+rather than trusting the validate job's output. Keep Settings > CI/CD >
+Variables > "Minimum role to use pipeline variables" at "No one allowed" (the
+project default), so nobody can override inputs or provider settings with
+pipeline or manual-job variables.
+
+Staging then deploys automatically: Fly pulls the verified digest straight from
+the public GitLab registry. Production waits until a person starts the manual
+`promote:production` job; GitLab Free has no deployment approvals, so that click
+is the approval, and the job refuses to update Bunny unless it was started by
+hand. It checks the current Bunny digest before updating it, confirms the
+provider stored the requested digest, and probes HTTPS health. Each environment
+is serialized by its own resource group. That health probe establishes service
+availability; record which running image was accepted during the real rollout.
+
+Before the first promotion, keep `main` protected and add these CI/CD variables
+under Settings > CI/CD > Variables, each scoped to its environment. Mark the
+secrets masked and protected so only pipelines on protected branches receive
+them:
+
+| Environment | Variables | Masked and protected |
 | --- | --- | --- |
 | `staging` | `HEALTHCHECK_URL=https://staging.custyard.com/api/health` | `FLY_API_TOKEN` scoped to the staging app |
 | `production` | `HEALTHCHECK_URL=https://custyard.com/api/health`, `BUNNY_APP_ID`, `BUNNY_CONTAINER_NAME` | `BUNNYNET_API_KEY` |
 
+Point the Bunny container's registry at `registry.gitlab.com`, image
+`custyard/custyard`. The updater changes only the tag and digest; a container
+still reading GHCR cannot pull a GitLab-built digest. The project is public, so
+the registry and API need no credentials; if it becomes private, add a
+`read_api` project access token as `PROMOTION_API_TOKEN` and give Bunny and Fly
+registry deploy tokens.
+
 The account API key used by deployment is different from the database access
-token. It belongs in the protected GitHub environment, not the application image.
+token. It belongs in the protected CI/CD variable, not the application image.
 Production uses a narrow in-repo Bunny image updater derived from the reviewed
 provider endpoint. It rechecks the previous digest immediately before the PATCH,
 sends only image fields, discards the response body, and prints static errors.
 This avoids a vendor-action error path that could log provider response bytes.
-See [the workflow](../../.github/workflows/promote.yml). Configure runtime secrets
-in the provider separately. No workflow runs a production promotion on a push.
-Staging mirrors the verified private GHCR image into Fly's registry while
-preserving its digest, then deploys that digest. Retain the database/file backup
-paired with the previous release. Do not roll back application code across
-incompatible schema changes without the matching recovery procedure.
+See the promotion jobs in [.gitlab-ci.yml](../../.gitlab-ci.yml) and
+[the promotion script](../../.gitlab/scripts/promotion.py). Configure runtime
+secrets in the provider separately. No pipeline runs a production promotion on
+a push. Retain the database/file backup paired with the previous release. Do
+not roll back application code across incompatible schema changes without the
+matching recovery procedure.
 
 ## Back up and restore files
 
