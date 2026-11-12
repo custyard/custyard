@@ -531,7 +531,8 @@ defmodule Custyard.Threads.AttentionQueueTest do
                prev: %{id: 10, pos: 0, after: nil, before: 20},
                next: %{id: 30, pos: 2, after: 20, before: nil},
                position: 2,
-               total: 3
+               total: 3,
+               place: %{pos: 1, after: [10], before: [30]}
              }
 
       assert %{prev: nil, next: %{id: 20, pos: 1}, position: 1} =
@@ -551,7 +552,8 @@ defmodule Custyard.Threads.AttentionQueueTest do
                prev: %{id: 10, pos: 0, after: nil, before: 30},
                next: %{id: 30, pos: 1, after: 10, before: 40},
                position: 2,
-               total: 4
+               total: 4,
+               place: %{pos: 1, after: [10], before: [30, 40]}
              }
 
       # And when it rose instead.
@@ -569,7 +571,8 @@ defmodule Custyard.Threads.AttentionQueueTest do
                prev: %{id: 20, pos: 0, after: nil, before: 30},
                next: %{id: 40, pos: 2, after: 30, before: 50},
                position: 2,
-               total: 4
+               total: 4,
+               place: %{pos: 1, after: [20], before: [40, 50]}
              }
 
       # Or a new conversation arrived on top, so 30 is fourth and 20 is behind it.
@@ -582,9 +585,15 @@ defmodule Custyard.Threads.AttentionQueueTest do
     end
 
     test "falls back to the conversation listed after it, then to the position" do
-      # A first row has nothing before it. A new conversation arrived on top.
-      assert %{prev: %{id: 5}, next: %{id: 20}, position: 2} =
+      # A first row has nothing before it. A new conversation arrived on top:
+      # it is offered next, not passed by.
+      assert %{prev: nil, next: %{id: 5}, position: 1} =
                QueueNav.neighbors([5, 10, 20, 30], 10, 0, before: 20)
+
+      # The conversation listed after a first row sank instead: a colleague
+      # opened it. What followed it is next.
+      assert %{prev: nil, next: %{id: 30}, position: 1} =
+               QueueNav.neighbors([30, 40, 20, 10], 10, 0, before: 20)
 
       # "new" filter: a colleague opened 10, opening 30 took it out as well.
       assert %{prev: nil, next: %{id: 40}, position: 1} =
@@ -616,24 +625,88 @@ defmodule Custyard.Threads.AttentionQueueTest do
                QueueNav.neighbors([10, 20, 50, 40, 30], 30, 2, place)
     end
 
-    test "a conversation that arrived between the anchors is not skipped" do
+    test "a conversation that arrived between the witnesses is offered next" do
       place = [after: 20, before: 40]
 
-      # 30 is still listed between the two: its own place is right.
-      assert %{prev: %{id: 25}, next: %{id: 40}, position: 4, total: 6} =
+      assert %{prev: %{id: 20}, next: %{id: 25}, position: 3, total: 6} =
                QueueNav.neighbors([10, 20, 25, 30, 40, 50], 30, 2, place)
 
-      # 30 has left the list ("new" filter): the newcomer is next.
+      # The same when 30 has left the list ("new" filter).
       assert %{prev: %{id: 20}, next: %{id: 25}} =
                QueueNav.neighbors([10, 20, 25, 40, 50], 30, 2, place)
 
-      # Equally near the position: the earlier place, which skips nothing.
-      assert %{prev: %{id: 20}, next: %{id: 60}} =
-               QueueNav.neighbors([20, 60, 70, 40], 30, 2, place)
-
-      # No position to compare with: the earlier place as well.
+      # No position to go by: the earliest place that fits.
       assert %{prev: %{id: 20}, next: %{id: 60}} =
                QueueNav.neighbors([20, 60, 70, 40], 30, nil, place)
+    end
+
+    test "a witness that moved is outvoted by the others" do
+      # Third of five, remembered with two witnesses on each side. 40 rose to
+      # the top and 20 sank to the end.
+      assert %{prev: %{id: 10}, next: %{id: 50}, position: 3} =
+               QueueNav.neighbors([40, 10, 30, 50, 20], 30, 2, after: [20, 10], before: [40, 50])
+
+      # Fourth of five. 30 left the queue and 50 rose to the top.
+      assert %{prev: %{id: 20}, next: nil, position: 4} =
+               QueueNav.neighbors([50, 10, 20, 40], 40, 3, after: [30, 20, 10], before: [50])
+    end
+
+    test "the place it returns names the witnesses on each side, nearest first" do
+      assert %{place: %{pos: 4, after: [40, 30, 20], before: [60, 70, 80]}} =
+               QueueNav.neighbors([10, 20, 30, 40, 50, 60, 70, 80, 90], 50)
+
+      assert %{place: %{pos: 0, after: [], before: [20]}} = QueueNav.neighbors([10, 20], 10)
+      assert %{place: nil} = QueueNav.neighbors([10, 20], 30)
+    end
+
+    # One conversation arrives, leaves or moves while a reader sits in a gap
+    # between the others. Returns the queue afterwards with the gaps that are
+    # right: one, or two when the change landed exactly in the reader's gap.
+    defp single_changes(others, gap) do
+      arrivals =
+        for at <- 0..length(others) do
+          {List.insert_at(others, at, :arrival), after_insert(gap, at)}
+        end
+
+      departures =
+        for at <- 0..(length(others) - 1)//1 do
+          {List.delete_at(others, at), [after_delete(gap, at)]}
+        end
+
+      moves =
+        for from <- 0..(length(others) - 1)//1, to <- 0..(length(others) - 1)//1, from != to do
+          {mover, rest} = List.pop_at(others, from)
+          {List.insert_at(rest, to, mover), after_insert(after_delete(gap, from), to)}
+        end
+
+      arrivals ++ departures ++ moves
+    end
+
+    defp after_delete(gap, at), do: if(at < gap, do: gap - 1, else: gap)
+    defp after_insert(gap, at) when at < gap, do: [gap + 1]
+    defp after_insert(gap, at) when at > gap, do: [gap]
+    defp after_insert(gap, _at), do: [gap, gap + 1]
+
+    test "after any one change it is right wherever the position alone is, and more often" do
+      results =
+        for size <- 1..6, gap <- 0..size, others = Enum.to_list(1..size) do
+          link = [after: if(gap > 0, do: Enum.at(others, gap - 1)), before: Enum.at(others, gap)]
+
+          for {queue, right} <- single_changes(others, gap) do
+            # The reader's conversation is 0 and no longer listed itself.
+            by_position = QueueNav.neighbors(queue, 0, gap).place.pos in right
+            placed = QueueNav.neighbors(queue, 0, gap, link).place.pos in right
+
+            assert placed or not by_position,
+                   "#{inspect(others)} gap #{gap} became #{inspect(queue)}: wrong where the position alone is right"
+
+            {by_position, placed}
+          end
+        end
+        |> List.flatten()
+
+      wrong = fn index -> Enum.count(results, &(not elem(&1, index))) end
+      assert wrong.(1) * 4 < wrong.(0)
     end
 
     test "an anchor that is not listed counts as no anchor" do
@@ -649,7 +722,7 @@ defmodule Custyard.Threads.AttentionQueueTest do
                QueueNav.neighbors(ids, 20, 1)
 
       assert QueueNav.neighbors([10, 30], 20, nil, after: 99, before: 98) ==
-               %{prev: nil, next: nil, position: nil, total: 2}
+               %{prev: nil, next: nil, position: nil, total: 2, place: nil}
     end
 
     test "uses the position hint once the conversation has left the list" do
@@ -658,7 +731,8 @@ defmodule Custyard.Threads.AttentionQueueTest do
                prev: %{id: 10, pos: 0, after: nil, before: 30},
                next: %{id: 30, pos: 1, after: 10, before: 40},
                position: 2,
-               total: 3
+               total: 3,
+               place: %{pos: 1, after: [10], before: [30, 40]}
              }
 
       assert %{prev: nil, next: %{id: 10, pos: 0}, position: 1} =
@@ -670,8 +744,10 @@ defmodule Custyard.Threads.AttentionQueueTest do
     end
 
     test "offers nothing without a hint or without a queue" do
-      assert QueueNav.neighbors([10, 30], 20) == %{prev: nil, next: nil, position: nil, total: 2}
-      assert QueueNav.neighbors([], 20, 3) == %{prev: nil, next: nil, position: nil, total: 0}
+      assert %{prev: nil, next: nil, position: nil, total: 2, place: nil} =
+               QueueNav.neighbors([10, 30], 20)
+
+      assert %{prev: nil, next: nil, position: nil, total: 0} = QueueNav.neighbors([], 20, 3)
     end
   end
 end

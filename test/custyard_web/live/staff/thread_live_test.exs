@@ -2342,7 +2342,9 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert placed_between_a_and_d.(view)
     end
 
-    test "a new conversation opened from a link takes the place it is listed at", %{
+    # Two people working the queue from the top: the conversation a link
+    # names as the one after its target is the one a colleague takes next.
+    test "a link still places its target after a colleague opened the next conversation", %{
       conn: conn,
       org: org
     } do
@@ -2355,23 +2357,116 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       next_path = "/app/threads/#{n2.id}?pos=0&before=#{n3.id}"
       assert has_element?(reading, "a[data-testid=staff-thread-next][href='#{next_path}']")
 
-      # A colleague opens the conversation that link names as the one after
-      # its target. Opening activates it, and it sinks to the end.
+      # Opening activates it, and it sinks to the end.
       {:ok, _colleague, _html} = live(conn, ~p"/app/threads/#{n3.id}")
       scope = Custyard.Factory.staff_scope(n3.tenant_id)
       assert List.last(Threads.queue_ids(scope)) == n3.id
 
-      # Following the link as the browser does, without a page load, the
-      # target is still new and still listed first when it mounts.
-      {:ok, next, _html} = live_redirect(reading, to: next_path)
+      first_with_n4_next = fn view ->
+        has_element?(view, "[data-testid=staff-thread-queue-position]", "1 of 7") and
+          has_element?(view, "[data-testid=staff-thread-prev-none]") and
+          has_element?(view, "a[data-testid=staff-thread-next][href^='/app/threads/#{n4.id}?']")
+      end
 
-      assert has_element?(next, "[data-testid=staff-thread-queue-position]", "1 of 7")
-      assert has_element?(next, "[data-testid=staff-thread-prev-none]")
+      # Followed the way the browser does, without a page load.
+      {:ok, next, _html} = live_redirect(reading, to: next_path)
+      assert first_with_n4_next.(next)
+
+      # And as a page load, where the conversation has already sunk by the
+      # time the socket connects.
+      {:ok, loaded, _html} = live(conn, next_path)
+      assert first_with_n4_next.(loaded)
+    end
+
+    test "a page keeps its place when a colleague opens the next conversation", %{
+      conn: conn,
+      org: org,
+      a: a,
+      b: b
+    } do
+      # Listed between B and C: x, then q1, q2.
+      [x, q1, q2] =
+        for score <- [50, 45, 40] do
+          insert_thread(organization_id: org.id, state: :new, cached_score: score)
+        end
+
+      {:ok, view, _html} =
+        live(conn, ~p"/app/threads/#{x.id}?pos=2&after=#{b.id}&before=#{q1.id}")
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "3 of 6")
 
       assert has_element?(
-               next,
-               "a[data-testid=staff-thread-next][href^='/app/threads/#{n4.id}?']"
+               view,
+               "a[data-testid=staff-thread-next][href^='/app/threads/#{q1.id}?']"
              )
+
+      # A colleague opens q1, which sinks below everything, x included.
+      {:ok, _colleague, _html} = live(conn, ~p"/app/threads/#{q1.id}")
+      send(view.pid, {:thread_updated, x.id})
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "3 of 6")
+      assert has_element?(view, "a[data-testid=staff-thread-prev][href^='/app/threads/#{b.id}?']")
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-next][href^='/app/threads/#{q2.id}?']"
+             )
+
+      # The same at the top of the queue, where nothing is listed before.
+      [t1, t2, t3] =
+        for score <- [99, 98, 97] do
+          insert_thread(organization_id: org.id, state: :new, cached_score: score)
+        end
+
+      {:ok, top, _html} = live(conn, ~p"/app/threads/#{t1.id}?pos=0&before=#{t2.id}")
+      {:ok, _colleague, _html} = live(conn, ~p"/app/threads/#{t2.id}")
+      send(top.pid, {:thread_updated, t1.id})
+
+      assert has_element?(top, "[data-testid=staff-thread-prev-none]")
+      assert has_element?(top, "a[data-testid=staff-thread-next][href^='/app/threads/#{t3.id}?']")
+      refute has_element?(top, "a[data-testid=staff-thread-next][href^='/app/threads/#{a.id}?']")
+    end
+
+    test "two people working down the queue are each offered every conversation once", %{
+      conn: conn,
+      org: org
+    } do
+      new =
+        for score <- 99..92//-1 do
+          insert_thread(organization_id: org.id, state: :new, cached_score: score).id
+        end
+
+      next_id = fn view ->
+        [href] =
+          view
+          |> element("a[data-testid=staff-thread-next]")
+          |> render()
+          |> Floki.parse_fragment!()
+          |> Floki.attribute("href")
+
+        {href, href |> URI.parse() |> Map.fetch!(:path) |> Path.basename() |> String.to_integer()}
+      end
+
+      {:ok, view, _html} =
+        live(conn, ~p"/app/threads/#{hd(new)}?pos=0&before=#{Enum.at(new, 1)}")
+
+      # Each round the colleague opens the conversation the reader would get
+      # next, the reader's page reloads (as it does after a reply), and the
+      # reader steps on.
+      {_view, mine, theirs} =
+        Enum.reduce(1..3, {view, [hd(new)], []}, fn _round, {view, mine, theirs} ->
+          {_href, taken} = next_id.(view)
+          {:ok, _colleague, _html} = live(conn, ~p"/app/threads/#{taken}")
+          send(view.pid, {:thread_updated, List.last(mine)})
+
+          {href, following} = next_id.(view)
+          {:ok, view, _html} = live_redirect(view, to: href)
+          {view, mine ++ [following], theirs ++ [taken]}
+        end)
+
+      [n1, n2, n3, n4, n5, n6, n7, _n8] = new
+      assert mine == [n1, n3, n5, n7]
+      assert theirs == [n2, n4, n6]
     end
 
     test "ignores unknown filters and malformed positions", %{conn: conn, a: a, b: b, c: c} do

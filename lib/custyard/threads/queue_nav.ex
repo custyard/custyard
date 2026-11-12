@@ -6,22 +6,29 @@ defmodule Custyard.Threads.QueueNav do
   Looking at a conversation changes its place in the queue. Opening a new
   thread makes it active and resets its idle time, so its score drops and it
   sinks; replying takes it out of "needs reply"; resolving takes it out of
-  everything. Its own current place is therefore the wrong anchor. The place
-  it had when it was opened travels with the link as a position hint, and the
-  neighbours are read from the queue *without* this conversation: what
-  followed it now sits at that position, what preceded it sits just before.
+  everything. Its own current place is therefore not where the reader is in
+  the queue. The place it had when it was opened travels with the link as a
+  position hint, and the neighbours are read from the queue *without* this
+  conversation: what followed it now sits at that position, what preceded it
+  sits just before.
 
   The queue also changes while staff are reading: a colleague resolves a
   conversation further up, a new one arrives on top. A position counted when
-  the link was rendered is then off by those rows. So the link also names the
-  conversations that were listed just before and just after its target, and
-  the place is read from where those sit now. The position is the fallback
-  for when both have left the queue.
+  the link was rendered is then off by those rows. So a place also names
+  witnesses: conversations that were listed before it and after it. Each one
+  that is still listed says which side of it the place is on.
 
-  Those two can move as well: a colleague opens one, its customer writes
-  again. They then point at different places. If the conversation itself
-  still lies between them, its own place is right. Otherwise the one that
-  moved is taken to be the one further from the position in the link.
+  Witnesses move as well: a colleague opens the next conversation and it
+  sinks, a customer writes again and theirs rises. The place taken is the
+  one that keeps the most witnesses on their side. Among several such places
+  it is the one nearest the position hint, then the one that keeps the
+  nearer witnesses, then the earlier one. With no witness listed that is the
+  position hint itself. A link carries one witness on each side; a page
+  remembers a few more for its own reloads (`:place` in the result), where
+  one that moved is outvoted.
+
+  A conversation that arrived next to the place is offered as the next one,
+  so stepping can show a conversation twice but does not pass one by.
   """
 
   @type neighbor :: %{
@@ -30,28 +37,33 @@ defmodule Custyard.Threads.QueueNav do
           after: integer() | nil,
           before: integer() | nil
         }
+  @type place :: %{pos: non_neg_integer(), after: [integer()], before: [integer()]}
   @type t :: %{
           prev: neighbor() | nil,
           next: neighbor() | nil,
           position: pos_integer() | nil,
-          total: non_neg_integer()
+          total: non_neg_integer(),
+          place: place() | nil
         }
+
+  # Witnesses a page keeps on each side of its place.
+  @witnesses 3
 
   @doc """
   Neighbors of `current_id` in `ids`, the queue's thread ids in listed order.
 
-  `pos_hint` is the zero-based position the conversation had when the link to
-  it was rendered, and `anchors` the ids listed just before it (`:after`) and
-  just after it (`:before`) at that time. The conversation is placed right
-  after the first anchor and right before the second; an anchor that is not
-  listed counts as absent. When the two disagree, the conversation's own
-  position decides if it lies between them, and otherwise the anchor nearer
-  the position hint, the earlier place on a tie: that can offer a
-  conversation twice but never skips one. With neither anchor listed the
-  position hint is used. Without any of them its current position is used,
-  and a conversation that is not listed has no neighbors. Each neighbor
-  carries its own current position and anchors, to pass on with the link
-  that leads to it.
+  `pos_hint` is the zero-based position the conversation had when its place
+  was recorded. `anchors` are the witnesses: under `:after` an id, or a list
+  of ids, that were listed before it then (the place comes after them), and
+  under `:before` those that were listed after it. An id that is not listed
+  now counts for nothing. Without a hint or a listed witness the
+  conversation's current position is used, and a conversation that is not
+  listed then has no neighbors.
+
+  Each neighbor carries its own current position and the ids listed right
+  around it, to pass on with the link that leads to it. `:place` is the
+  place found, with up to #{@witnesses} witnesses on each side, nearest
+  first, for the caller to pass back on its next call.
 
   `:position` is the one-based place in the queue being stepped through and
   `:total` the number of conversations listed now.
@@ -60,43 +72,56 @@ defmodule Custyard.Threads.QueueNav do
   def neighbors(ids, current_id, pos_hint \\ nil, anchors \\ []) when is_list(ids) do
     others = List.delete(ids, current_id)
     total = length(ids)
-    # As many other ids precede it, so this is also its slot among `others`.
-    own = index_of(ids, current_id)
+    before_place = listed(others, anchors[:after])
+    after_place = listed(others, anchors[:before])
 
-    case anchored_slot(others, own, pos_hint, anchors) || pos_hint || own do
+    case placed(others, pos_hint, before_place, after_place) || index_of(ids, current_id) do
       nil ->
-        %{prev: nil, next: nil, position: nil, total: total}
+        %{prev: nil, next: nil, position: nil, total: total, place: nil}
 
       slot ->
-        slot = min(slot, length(others))
-
         %{
           prev: neighbor(ids, slot > 0 && Enum.at(others, slot - 1)),
           next: neighbor(ids, Enum.at(others, slot)),
           position: if(total > 0, do: min(slot + 1, total)),
-          total: total
+          total: total,
+          place: %{
+            pos: slot,
+            after: others |> Enum.take(slot) |> Enum.reverse() |> Enum.take(@witnesses),
+            before: others |> Enum.drop(slot) |> Enum.take(@witnesses)
+          }
         }
     end
   end
 
-  defp anchored_slot(others, own, pos_hint, anchors) do
-    after_slot =
-      with index when is_integer(index) <- index_of(others, anchors[:after]), do: index + 1
-
-    before_slot = index_of(others, anchors[:before])
-
-    cond do
-      is_nil(after_slot) -> before_slot
-      is_nil(before_slot) or after_slot == before_slot -> after_slot
-      is_integer(own) and own >= after_slot and own <= before_slot -> own
-      true -> nearer(after_slot, before_slot, pos_hint)
-    end
+  # Where the witnesses that are still listed sit among `others`, each with
+  # its rank: 0 for the one that was nearest the place.
+  defp listed(others, ids) do
+    ids
+    |> List.wrap()
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {id, rank} ->
+      case index_of(others, id) do
+        nil -> []
+        index -> [{index, rank}]
+      end
+    end)
   end
 
-  defp nearer(slot, other, nil), do: min(slot, other)
+  # A slot is a gap between the other ids: slot 2 has two of them before it.
+  # Enum.max_by keeps the first of equals, which is the earlier slot.
+  defp placed(_others, nil, [], []), do: nil
 
-  defp nearer(slot, other, pos_hint),
-    do: Enum.min_by([min(slot, other), max(slot, other)], &abs(&1 - pos_hint))
+  defp placed(others, pos_hint, before_place, after_place) do
+    Enum.max_by(0..length(others), fn slot ->
+      kept =
+        Enum.filter(before_place, fn {index, _rank} -> index < slot end) ++
+          Enum.filter(after_place, fn {index, _rank} -> index >= slot end)
+
+      ranks = kept |> Enum.map(fn {_index, rank} -> rank end) |> Enum.sum()
+      {length(kept), -abs(slot - (pos_hint || slot)), -ranks}
+    end)
+  end
 
   defp index_of(_ids, nil), do: nil
   defp index_of(ids, id), do: Enum.find_index(ids, &(&1 == id))
