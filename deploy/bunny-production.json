@@ -10,21 +10,13 @@
   "additional_regions": false,
   "container_port": 4000,
   "working_directory": "/app",
-  "persistent_volume": {
-    "name": "custyard-data",
-    "mount_path": "/data",
-    "expected_marker": "/data/.custyard-volume",
-    "expected_identity": "<chosen-stable-production-volume-id>"
-  },
+  "persistent_volume": null,
   "environment": {
     "PHX_HOST": "<temporary-proof-host-before-cutover>",
     "PORT": "4000",
     "STORAGE_PROVIDER": "bunny",
-    "DATA_VOLUME_ID": "<chosen-stable-production-volume-id>",
     "PROXY_PROVIDER": "bunny",
     "DATABASE_PROVIDER": "bunny",
-    "UPLOAD_DIR": "/data/uploads",
-    "ATTACHMENT_DIR": "/data/attachments",
     "MAIL_ADAPTER": "lettermint",
     "EMAIL_FROM_ADDRESS": "<verified-installation-sender>",
     "EMAIL_NOTIFICATIONS_ENABLED": "false",

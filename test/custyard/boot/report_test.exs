@@ -73,6 +73,37 @@ defmodule Custyard.Boot.ReportTest do
     end
   end
 
+  describe "a DATA_VOLUME_ID left over from the Bunny file volume" do
+    test "is a warning line in a complete report, without its value" do
+      env =
+        Env.read(
+          %{
+            "SECRET_KEY_BASE" => String.duplicate("s", 64),
+            "CREDENTIAL_ENCRYPTION_KEY" => @credential_key,
+            "PHX_HOST" => "custyard.example.com",
+            "MAIL_ADAPTER" => "lettermint",
+            "LETTERMINT_PROJECT_TOKEN" => "lm_project_token",
+            "STORAGE_PROVIDER" => "bunny",
+            "DATA_VOLUME_ID" => "volume-" <> @canary
+          },
+          config_env: :prod
+        )
+
+      text = Report.to_text(env)
+
+      assert text =~ "Custyard configuration is complete"
+
+      assert text =~
+               "⚠  DATA_VOLUME_ID  no longer used; files are stored in the database, " <>
+                 "so this variable can be removed"
+
+      assert text =~ ~r/Present .*DATA_VOLUME_ID/
+      assert text =~ "Near misses  none"
+      refute text =~ "✗"
+      refute text =~ @canary
+    end
+  end
+
   describe "paste_block/1" do
     test "zero environment lists all six lines with fresh secrets" do
       block = Report.paste_block(Env.read(%{}, config_env: :prod))

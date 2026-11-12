@@ -58,7 +58,7 @@ defmodule Custyard.Boot.RuntimeConfigTest do
     assert custyard[:storage_provider] == :local
     assert custyard[:proxy_provider] == :none
     assert custyard[:bunny_origin_secret] == nil
-    assert custyard[:data_volume_id] == nil
+    refute Keyword.has_key?(custyard, :data_volume_id)
     assert custyard[:upload_dir] == "/data/uploads"
     assert custyard[:attachment_dir] == "/data/attachments"
   end

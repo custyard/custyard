@@ -463,8 +463,8 @@ defmodule Custyard.Release do
   # Repo config may be incomplete, and the running app refuses it too. The
   # storage check runs before the Repo starts, as migrate/0 does: opening
   # SQLite first would create an empty database on the container's root
-  # filesystem when the Fly volume is missing, and Bunny's file volume must be
-  # the initialized one. Shared with Custyard.Release.Dsar.
+  # filesystem when the Fly volume is missing, or on Bunny hosting, which has
+  # no volume. Shared with Custyard.Release.Dsar.
   def with_repo(fun) when is_function(fun, 0) do
     load_app()
 

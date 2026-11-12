@@ -43,18 +43,17 @@ COPY priv/repo priv/repo
 # (enable_source_code_context). Must run before the release is assembled.
 RUN mix sentry.package_source_code
 
-# Release overlays (bin/instance-admin, bin/acknowledgments, bin/doctor,
-# bin/data-volume) and env.sh.eex, which turns Erlang distribution off. Copied
-# late so edits here rebuild only the release, and checked so a missing or
-# non-executable overlay fails the build.
+# Release overlays (bin/instance-admin, bin/acknowledgments, bin/doctor) and
+# env.sh.eex, which turns Erlang distribution off. Copied late so edits here
+# rebuild only the release, and checked so a missing or non-executable overlay
+# fails the build.
 COPY rel rel
 
 # Build release
 RUN mix release
 RUN test -x _build/prod/rel/custyard/bin/instance-admin && \
     test -x _build/prod/rel/custyard/bin/acknowledgments && \
-    test -x _build/prod/rel/custyard/bin/doctor && \
-    test -x _build/prod/rel/custyard/bin/data-volume
+    test -x _build/prod/rel/custyard/bin/doctor
 
 # Runtime stage
 # Use Debian 12 (bookworm) to match the Elixir builder image base.
@@ -88,8 +87,9 @@ WORKDIR /app
 # to custyard, so an app user able to write /app could plant code root runs.
 COPY --from=builder /app/_build/prod/rel/custyard ./
 
-# custyard writes only /data (SQLite, uploads) and /app/tmp (RELEASE_TMP,
-# which `bin/custyard daemon` uses for its pipe and log, and crash dumps).
+# custyard writes only /data (the SQLite database, when it is local) and
+# /app/tmp (RELEASE_TMP, which `bin/custyard daemon` uses for its pipe and
+# log, and crash dumps).
 RUN mkdir -p /data /app/tmp && chown custyard:custyard /data /app/tmp
 
 # The VM writes erl_crash.dump to its working directory (/app) by default.

@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Exercise the loaded Linux image with disposable volumes and no external network.
+# Exercise the loaded Linux image with a disposable volume and no external network.
 # Usage: bin/container-smoke-test [image] (default: custyard:test)
 set -euo pipefail
 
 image=${1:-custyard:test}
 run_id="custyard-smoke-$$-${RANDOM}"
 label="custyard.smoke-test=$run_id"
-data_volume="$run_id-data"
-backup_volume="$run_id-backup"
 app_volume="$run_id-app"
 app="$run_id-app"
 work=$(mktemp -d)
@@ -18,9 +16,7 @@ common=(-e SECRET_KEY_BASE=isolated-container-smoke-secret-key-base-at-least-six
   -e CREDENTIAL_ENCRYPTION_KEY=aXNvbGF0ZWQtc21va2UtY3JlZGVudGlhbC1rZXktMzI=
   -e MAIL_ADAPTER=local -e LMTP_ENABLED=false)
 bunny=(-e DATABASE_PROVIDER=bunny -e BUNNY_DATABASE_URL=https://database.invalid
-  -e BUNNY_DATABASE_AUTH_TOKEN=isolated-smoke-token -e STORAGE_PROVIDER=bunny
-  -e DATA_VOLUME_ID=isolated-smoke-volume -e MAINTENANCE_MODE=true)
-mounts=(-v "$data_volume:/data" -v "$backup_volume:/backup")
+  -e BUNNY_DATABASE_AUTH_TOKEN=isolated-smoke-token -e STORAGE_PROVIDER=bunny)
 
 cleanup() {
   local containers container
@@ -28,7 +24,7 @@ cleanup() {
   while IFS= read -r container; do
     if [ -n "$container" ]; then timeout 10 docker rm -f "$container" >/dev/null 2>&1 || true; fi
   done <<< "$containers"
-  timeout 10 docker volume rm "$data_volume" "$backup_volume" "$app_volume" >/dev/null 2>&1 || true
+  timeout 10 docker volume rm "$app_volume" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -41,32 +37,17 @@ expect_failure() {
 }
 
 timeout 10 docker image inspect "$image" >/dev/null
-for volume in "$data_volume" "$backup_volume" "$app_volume"; do
-  timeout 10 docker volume create --label "$label" "$volume" >/dev/null
-done
+timeout 10 docker volume create --label "$label" "$app_volume" >/dev/null
 # A mount hides image ownership. Prepare it explicitly, then run every check as
-# the image's normal custyard user, including the release volume commands.
-run --user root "${mounts[@]}" -v "$app_volume:/test-app" --entrypoint /bin/sh "$image" \
-  -ec 'chown custyard:custyard /data /backup /test-app'
+# the image's normal custyard user.
+run --user root -v "$app_volume:/test-app" --entrypoint /bin/sh "$image" \
+  -ec 'chown custyard:custyard /test-app'
 
-echo "==> initialize and verify the mounted Bunny file volume without a database connection"
-run "${bunny[@]}" "${mounts[@]}" --entrypoint /app/bin/data-volume "$image" init
-run "${bunny[@]}" "${mounts[@]}" --entrypoint /app/bin/data-volume "$image" init
-run "${bunny[@]}" "${mounts[@]}" --entrypoint /app/bin/custyard "$image" eval 'Custyard.Storage.validate!()'
-expect_failure 'File-volume marker is missing or does not match' \
-  run "${bunny[@]}" "${mounts[@]}" -e DATA_VOLUME_ID=wrong-volume \
+echo "==> Bunny storage passes with its remote database and no volume, without a database connection"
+run "${bunny[@]}" --entrypoint /app/bin/custyard "$image" eval 'Custyard.Storage.validate!()'
+expect_failure 'requires the configured Bunny remote database' \
+  run -e STORAGE_PROVIDER=bunny -e DATABASE_PROVIDER=sqlite \
   --entrypoint /app/bin/custyard "$image" eval 'Custyard.Storage.validate!()'
-expect_failure 'Bunny requires a mounted file volume' \
-  run "${bunny[@]}" --entrypoint /app/bin/custyard "$image" eval 'Custyard.Storage.validate!()'
-
-echo "==> back up and restore files through the shipped release overlay"
-run "${mounts[@]}" --entrypoint /bin/sh "$image" \
-  -ec 'printf logo > /data/uploads/logo; printf private-mail > /data/attachments/mail'
-run "${bunny[@]}" "${mounts[@]}" --entrypoint /app/bin/data-volume "$image" backup /backup/snapshot
-run "${mounts[@]}" --entrypoint /bin/sh "$image" -ec 'rm /data/uploads/logo /data/attachments/mail'
-run "${bunny[@]}" "${mounts[@]}" --entrypoint /app/bin/data-volume "$image" restore /backup/snapshot
-run "${mounts[@]}" --entrypoint /bin/sh "$image" \
-  -ec 'grep -qx logo /data/uploads/logo; grep -qx private-mail /data/attachments/mail'
 
 echo "==> boot (in-application migrations, first run) and Bunny proxy guard against isolated SQLite"
 timeout 60 docker run -d --network none --label "$label" --name "$app" "${common[@]}" \

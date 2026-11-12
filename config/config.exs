@@ -9,11 +9,14 @@ config :custyard,
   ecto_repos: [Custyard.Repo],
   repo_adapter: Custyard.Repo.Adapter,
   generators: [timestamp_type: :utc_datetime],
-  upload_dir: Path.expand("../priv/static/uploads", __DIR__),
-  # Inbound email attachments (spec-inbound-channels D9). Deliberately not
-  # under priv/static: Plug.Static serves everything below `uploads`, and
+  # Where earlier releases wrote tenant logos (upload_dir) and inbound email
+  # attachments (attachment_dir, spec-inbound-channels D9). Files are stored in
+  # the database; these only locate what such a release left behind, for a
+  # one-time import. The attachment directory is deliberately not under
+  # priv/static: Plug.Static serves everything below `uploads`, and
   # attachments are only ever served through the authenticated download
   # endpoint.
+  upload_dir: Path.expand("../priv/static/uploads", __DIR__),
   attachment_dir: Path.expand("../priv/attachments", __DIR__),
   attachment_client: Custyard.Attachments.FinchClient
 

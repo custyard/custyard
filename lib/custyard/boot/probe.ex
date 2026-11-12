@@ -19,10 +19,11 @@ defmodule Custyard.Boot.Probe do
   log event.
 
   Before the connection, `Custyard.Storage.check/1` runs for the selected
-  storage provider (Fly or Bunny): a missing volume must be reported before
-  SQLite creates an empty database on the container filesystem, and a Bunny
-  volume that is unmounted, unmarked or mid-restore before anything writes to
-  it. All of its problems become `:volume_missing`.
+  storage provider (Fly or Bunny): on Fly a missing volume must be reported
+  before SQLite creates an empty database on the container filesystem, and
+  Bunny hosting refuses any database but its remote one before a local file
+  is opened. All of its problems become `:volume_missing`, with the storage
+  check's own sentence as the detail.
   """
 
   alias Custyard.Boot.{Env, State}

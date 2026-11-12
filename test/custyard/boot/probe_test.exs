@@ -125,14 +125,7 @@ defmodule Custyard.Boot.ProbeTest do
 
       capture_log(fn ->
         assert {:error, :volume_missing, detail} =
-                 Probe.run(env,
-                   storage: [
-                     fly_app_name: "custyard",
-                     upload_dir: "/data/uploads",
-                     attachment_dir: "/data/attachments",
-                     mountinfo: @unmounted
-                   ]
-                 )
+                 Probe.run(env, storage: [fly_app_name: "custyard", mountinfo: @unmounted])
 
         assert detail =~ "no mounted volume at /data"
       end)
@@ -141,38 +134,21 @@ defmodule Custyard.Boot.ProbeTest do
     end
 
     @tag :tmp_dir
-    test "an unverified Bunny volume is reported before anything is opened", %{tmp_dir: dir} do
-      env =
-        env(%{
-          "BUNNY_DATABASE_URL" => "https://127.0.0.1:1",
-          "BUNNY_DATABASE_AUTH_TOKEN" => "t",
-          "STORAGE_PROVIDER" => "bunny",
-          "DATA_VOLUME_ID" => "probe-volume"
-        })
-
-      storage = [
-        provider: env.settings.storage_provider,
-        data_dir: dir,
-        data_volume_id: env.settings.data_volume_id,
-        upload_dir: Path.join(dir, "uploads"),
-        attachment_dir: Path.join(dir, "attachments"),
-        mountinfo: "36 28 0:29 / #{dir} rw,relatime - ext4 /dev/vdb rw\n"
-      ]
+    test "a local database on Bunny hosting is refused before anything is opened", %{
+      tmp_dir: dir
+    } do
+      path = Path.join(dir, "custyard.db")
+      env = env(%{"STORAGE_PROVIDER" => "bunny", "DATABASE_PATH" => path})
+      storage = [provider: env.settings.storage_provider]
 
       capture_log(fn ->
-        # Mounted but never initialized: no marker, so no connection attempt.
         assert {:error, :volume_missing, detail} = Probe.run(env, storage: storage)
-        assert detail =~ "File-volume marker is missing or does not match DATA_VOLUME_ID"
-        refute detail =~ "probe-volume"
-
-        assert {:error, :volume_missing, detail} =
-                 Probe.run(env, storage: Keyword.put(storage, :mountinfo, @unmounted))
-
-        assert detail =~ "Bunny requires a mounted file volume"
+        assert detail =~ "requires the configured Bunny remote database"
+        refute detail =~ dir
       end)
 
       assert State.get().database.category == :volume_missing
-      assert File.ls!(dir) == []
+      refute File.exists?(path)
     end
   end
 
@@ -187,6 +163,37 @@ defmodule Custyard.Boot.ProbeTest do
 
       assert State.get().database.facts.kind == :turso
       refute Map.has_key?(State.get().database.facts, :path)
+    end
+
+    test "is probed without a volume, on Fly with several machines and on Bunny hosting" do
+      fly = env(%{"DATABASE_URL" => "libsql://127.0.0.1:1?tls=0"})
+
+      bunny =
+        env(%{
+          "BUNNY_DATABASE_URL" => "https://127.0.0.1:1",
+          "BUNNY_DATABASE_AUTH_TOKEN" => "t",
+          "STORAGE_PROVIDER" => "bunny"
+        })
+
+      capture_log(fn ->
+        # Past the storage check both times: the failure is the connection's.
+        assert {:error, :unreachable, _} =
+                 Probe.run(fly,
+                   storage: [
+                     fly_app_name: "custyard",
+                     mountinfo: @unmounted,
+                     machine_ids: {:ok, ["080e94edf34038", "d8d0066f561338"]},
+                     sqlite_path: "/nonexistent"
+                   ]
+                 )
+
+        assert {:error, :unreachable, _} =
+                 Probe.run(bunny,
+                   storage: [provider: bunny.settings.storage_provider, mountinfo: @unmounted]
+                 )
+      end)
+
+      assert State.get().database.category == :unreachable
     end
 
     test "a postgres:// URL on the SQLite/libSQL build" do
