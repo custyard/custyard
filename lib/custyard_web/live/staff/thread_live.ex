@@ -75,8 +75,6 @@ defmodule CustyardWeb.Staff.ThreadLive do
       Phoenix.PubSub.subscribe(Custyard.PubSub, "tenant_outbound:#{thread.tenant_id}")
     end
 
-    socket = place_before_opening(socket, thread)
-
     case activate_if_new(thread, socket.assigns.current_scope) do
       {:ok, current} ->
         if current &&
@@ -121,22 +119,6 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   defp activate_if_new(thread, _scope), do: {:ok, thread}
-
-  # Opening a new conversation activates it, which moves it in the queue or
-  # takes it out of the filter. Until then its own place is exact, unlike the
-  # one in the link, which is as old as the page the link was on.
-  defp place_before_opening(socket, %Thread{state: :new} = thread) do
-    case socket.assigns.queue_context do
-      %{pos: nil, after: nil, before: nil} ->
-        socket
-
-      %{filter: filter, label_id: label_id} = context ->
-        ids = Threads.queue_ids(socket.assigns.current_scope, filter: filter, label_id: label_id)
-        assign(socket, :queue_context, keep_place(context, QueueNav.neighbors(ids, thread.id)))
-    end
-  end
-
-  defp place_before_opening(socket, _thread), do: socket
 
   defp mount_loaded_thread(socket, thread) do
     breakdown = Scoring.breakdown(thread)
@@ -1169,14 +1151,12 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   # The place in the URL describes the queue as it was when the link was
-  # rendered. The neighbours just found replace it, so the next reload starts
-  # from the queue as last seen. A conversation opened without a place keeps
-  # following its own.
+  # rendered. The place just found replaces it, with more witnesses than a
+  # link carries, so the next reload starts from the queue as last seen. A
+  # conversation opened without a place keeps following its own.
   defp keep_place(%{pos: nil, after: nil, before: nil} = context, _nav), do: context
-  defp keep_place(context, %{position: nil}), do: context
-
-  defp keep_place(context, %{position: position, prev: prev, next: next}),
-    do: %{context | pos: position - 1, after: prev && prev.id, before: next && next.id}
+  defp keep_place(context, %{place: nil}), do: context
+  defp keep_place(context, %{place: place}), do: Map.merge(context, place)
 
   defp queue_params(%{filter: filter, label_id: label_id}, extra) do
     Enum.reject(
