@@ -17,8 +17,10 @@ defmodule CustyardWeb do
   those modules here.
   """
 
+  # No `uploads`: tenant logos live in the database and are served by
+  # CustyardWeb.Plugs.UploadedFiles, not from priv/static.
   def static_paths,
-    do: ~w(assets fonts images uploads favicon.ico favicon.svg robots.txt site.webmanifest)
+    do: ~w(assets fonts images favicon.ico favicon.svg robots.txt site.webmanifest)
 
   def router do
     quote do
