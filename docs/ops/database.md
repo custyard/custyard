@@ -220,17 +220,32 @@ database. This release copies every referenced file into the database.
 
 1. Take a backup of the volume first
    ([backup and restore](backup-restore.md)). With a local SQLite database,
-   also check free space: the copies go into the database file on the same
-   volume and the originals stay, so the volume holds both until you delete
-   the directories.
+   also check free space before you deploy: the copies go into the database
+   file on the same volume and the originals stay, so the volume holds both
+   until you delete the directories. The import needs the size of the two
+   directories plus about one percent, and a few megabytes for the
+   write-ahead log:
+
+   ```sh
+   fly ssh console -C "du -sk /data/uploads /data/attachments"
+   fly ssh console -C "df -k /data"
+   ```
+
+   Nothing checks this for you. If the files do not fit, the import fills
+   the volume, the files that did not fit count as `failed`, and every write
+   to the database fails with `database or disk is full` while `/api/health`
+   still answers 200. A restart repeats it. Extend the volume
+   (`fly volumes extend`) and restart, and the import finishes.
 2. Deploy with the volume still mounted and `UPLOAD_DIR` and
    `ATTACHMENT_DIR` as they were. Left unset, they default to the paths
    earlier releases used.
 3. Boot creates the two tables and, as the last step of startup, starts the
    import in the background. Neither boot nor a health check waits for it.
    It runs on every boot that still has something to import and does nothing
-   otherwise. With `MAINTENANCE_MODE=true` the app is not started, so it does
-   not run.
+   otherwise. With `MAINTENANCE_MODE=true` the app is not started, so nothing
+   is migrated and the import does not run. To import in that mode, run
+   `Custyard.Release.migrate()` first and then the command below; without
+   the migration the command stops at `no such table: stored_files`.
 4. Read the result with the release command below. `pending 0` means it has
    finished.
 
@@ -245,7 +260,11 @@ on disk, and attachment rows are not changed, so scan verdicts stay as they
 were.
 
 Until a file has been imported, its logo URL and its attachment download
-answer 404. Do not rescan attachments in that time, with
+answer 404. In a rehearsal with built releases a logo answered 404 for about
+15 ms after boot, and 616 files of 323 MB were in after three seconds on a
+laptop; the 404 is not cacheable. Each file is read whole, so the import
+needs memory for the largest attachment, about two and a half times its
+size. Do not rescan attachments in that time, with
 `Custyard.Release.scan_attachments()` or a thread's rescan control: an
 attachment that is not in the database yet ends with an error verdict and
 stays quarantined until a later rescan
@@ -280,6 +299,12 @@ from ATTACHMENT_DIR once no attachment refers to them.
 | `failed` | Files that are there but were refused (not a regular file, too large, or not the content the row names), could not be read, or could not be stored. |
 | `pending` | Referenced files still not in the database after this run. Identical attachment content counts once per tenant, however many messages carry it. |
 
+The command exits 0 whatever the counts are, so a script has to read the
+`pending` line. When something was pending it prints one
+`legacy_file_import_completed` log line before the block. Run while the boot
+import is still going, it is safe, but both then count the files the other
+one stored, so do not add the two up.
+
 The boot import writes the same counts to the log as one
 `legacy_file_import_completed` event with `imported_attachments`,
 `imported_logos`, `missing_files` and `failed_files`, at warning level when
@@ -296,14 +321,40 @@ If `pending` stays above 0:
 - A `missing` file that is not on the volume at all was already unavailable
   before the upgrade. It stays pending, and every boot repeats the warning.
 - A `failed` file is still on the volume and is lost when the volume goes.
-  Look at these before removing anything.
+  Look at these before removing anything. A full volume also shows up as
+  `failed` (step 1).
+
+The counts name no file. To list the referenced files that are not in the
+database, as paths under the data directory:
+
+```sql
+SELECT DISTINCT 'attachments/' || a.tenant_id || '/' || substr(a.sha256, 1, 2) || '/' || a.sha256
+FROM message_attachments a
+WHERE a.state = 'fetched' AND a.sha256 IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM stored_files f
+    WHERE f.kind = 'attachment' AND f.completed_at IS NOT NULL
+      AND f.tenant_id = a.tenant_id AND f.key = a.sha256);
+
+SELECT 'uploads/logos/' || substr(t.logo_url, 16)
+FROM tenants t
+WHERE t.logo_url LIKE '/uploads/logos/%'
+  AND NOT EXISTS (
+    SELECT 1 FROM stored_files f
+    WHERE f.kind = 'logo' AND f.completed_at IS NOT NULL
+      AND f.tenant_id = t.id AND lower(f.key) = lower(substr(t.logo_url, 16)));
+```
 
 To roll back to the earlier release, keep the directories: the import changes
 nothing in them and the daily sweep removes only files that no row refers to
 ([The files left on disk](#the-files-left-on-disk)), so that release still
-finds every file its rows refer to. Logos and attachments received after the
+finds every file its rows refer to. It boots on the upgraded database and
+leaves the two new tables alone. Logos and attachments received after the
 upgrade exist only in the database, and an earlier release does not read
-them.
+them: such a logo answers 404 there, and a rescan under the earlier release
+marks such attachments with an error verdict, which stays until a rescan
+under this release. Files the earlier release receives during the rollback
+are imported on the next boot of this release.
 
 ### The files left on disk
 
