@@ -277,7 +277,10 @@ defmodule Custyard.Files do
 end
 
 defmodule Custyard.Files.CorruptError do
-  @moduledoc "Raised while streaming a stored file when one of its chunks is missing."
+  @moduledoc """
+  Raised while streaming a stored file when one of its chunks is missing, and
+  by a download when the content does not add up to the recorded size.
+  """
   defexception [:file_id]
 
   @impl true

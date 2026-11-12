@@ -10,9 +10,10 @@ defmodule CustyardWeb.AttachmentDownload do
   as `application/octet-stream`. A row whose content is missing is a 404.
 
   The content comes out of the database (`Custyard.Files`) about a megabyte
-  at a time and goes to the client as a chunked response, so a large
-  attachment is never whole in memory. The response therefore carries no
-  `content-length`.
+  at a time and goes to the client part by part, so a large attachment is
+  never whole in memory. The stored file's size is known before the first
+  byte, so the response carries a `content-length` and a browser can show
+  the size and progress of a download.
   """
 
   import Phoenix.Controller, only: [text: 2]
@@ -91,8 +92,11 @@ defmodule CustyardWeb.AttachmentDownload do
       |> put_resp_header("content-security-policy", "default-src 'none'; sandbox")
       |> put_resp_header("cache-control", "private, no-store")
       |> put_resp_header("content-disposition", disposition)
+      # With the length set, Bandit sends the parts as one body of that
+      # length instead of with chunked transfer-encoding.
+      |> put_resp_header("content-length", Integer.to_string(file.size))
       |> send_chunked(200)
-      |> send_parts(parts)
+      |> send_parts(parts, file)
     else
       _not_available -> not_found(conn)
     end
@@ -118,16 +122,19 @@ defmodule CustyardWeb.AttachmentDownload do
     end
   end
 
-  defp send_parts(conn, :done), do: conn
+  defp send_parts(conn, parts, %StoredFile{size: size} = file),
+    do: send_parts(conn, parts, file, size)
+
+  defp send_parts(conn, :done, _file, 0), do: conn
 
   # Past the first part the status is already sent. A chunk missing from here
   # on raises Files.CorruptError out of the request, so the server abandons
   # the response unfinished and the client sees a failed download, not a
   # short file that looks complete.
-  defp send_parts(conn, {part, next}) do
+  defp send_parts(conn, {part, next}, file, owed) when byte_size(part) <= owed do
     case chunk(conn, part) do
       {:ok, conn} ->
-        send_parts(conn, next_part(next))
+        send_parts(conn, next_part(next), file, owed - byte_size(part))
 
       # The client went away. There is nobody to tell and nothing to undo.
       {:error, _reason} ->
@@ -135,6 +142,12 @@ defmodule CustyardWeb.AttachmentDownload do
         conn
     end
   end
+
+  # The length declared is the file's recorded size. Content that does not
+  # add up to it would be framed as a complete body of the wrong bytes, so
+  # it ends the response the same way as a missing chunk.
+  defp send_parts(_conn, _parts, %StoredFile{id: id}, _owed),
+    do: raise(Files.CorruptError, file_id: id)
 
   # The header Phoenix.Controller.send_download/3 writes, which sent these
   # files before: the name percent-encoded, and repeated in the `filename*`
