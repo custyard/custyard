@@ -55,8 +55,12 @@ See the [support email setup guide](docs/ops/lettermint-email-setup.md).
 
 ### Production (Docker / Fly)
 
-A new install needs six variables. SQLite lives on the `/data` volume, so
-there are no database variables.
+A new install needs six variables. The default database is a SQLite file on
+the `/data` volume, so there are no database variables. Uploaded logos and
+email attachments are stored in the database, not on disk: with a remote
+database (Turso, Bunny Database) the container needs no volume. See
+[database operations](docs/ops/database.md#files-in-the-database), which also
+covers upgrading an install whose files are still on a volume.
 
 ```bash
 SECRET_KEY_BASE=              # mix phx.gen.secret

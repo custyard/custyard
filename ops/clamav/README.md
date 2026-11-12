@@ -26,8 +26,8 @@ Configure Custyard with `CLAMAV_HOST=custyard-scanner.internal`, `CLAMAV_PORT=33
 
 From the application Machine, check the protocol against a harmless clean payload and the standard EICAR antivirus test fixture. Verify clean bytes receive a clean verdict, EICAR receives an infected verdict, and scanner unavailability never yields clean. Do not use customer files for the initial probe.
 
-After the application migration, run `Custyard.Release.scan_attachments()` as the Custyard service user. Review verdict counts and verify a clean file downloads, an infected file remains blocked, and a quarantined file has no download or inline image link. The [attachment scanning runbook](../../docs/ops/attachment-scanning.md) describes those application controls.
+After the application migration, run `Custyard.Release.scan_attachments()` as the Custyard service user. On an installation upgraded from a release that kept attachments on disk, wait until their import into the database has finished. Review verdict counts and verify a clean file downloads, an infected file remains blocked, and a quarantined file has no download or inline image link. The [attachment scanning runbook](../../docs/ops/attachment-scanning.md) describes those application controls.
 
 Keep FreshClam running and alert on failed updates, stale signatures, daemon health failures and memory pressure. `FailIfCvdOlderThan 7` prevents continued scans against an excessively old database. Keep stream, expansion, recursion and execution limits finite; encrypted containers and limit-exceeded detections remain blocked. Never clear an infected verdict as part of routine maintenance.
 
-Signature data is reproducible from upstream. Keep the volume through ordinary upgrades to avoid repeated full downloads. Customer mail, the database, attachments and their backups remain exclusively on the Custyard application service.
+Signature data is reproducible from upstream. Keep the volume through ordinary upgrades to avoid repeated full downloads. Customer mail and attachments are stored in the Custyard application database. Neither they nor their backups are ever placed on the scanner.

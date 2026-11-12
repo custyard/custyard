@@ -18,7 +18,7 @@ Set these installation environment variables:
 | `CLAMAV_PORT` | Daemon TCP port | `3310` |
 | `CLAMAV_TIMEOUT_MS` | Total connection, transfer and result deadline | `10000`; allowed range `100`–`60000` |
 
-The client streams bytes with `INSTREAM`; the daemon needs no access to the attachment volume. The client caps files at 100 MiB, matching the maximum channel attachment limit, bounds daemon replies and treats every unexpected response as failure.
+The client streams bytes with `INSTREAM`; the daemon needs no access to the application database, where attachment content is stored. The client caps files at 100 MiB, matching the maximum channel attachment limit, bounds daemon replies and treats every unexpected response as failure.
 
 Use explicit daemon settings that prevent incomplete inspections from appearing clean:
 
@@ -43,8 +43,10 @@ After deploying the migration and configuring the scanner, run as the applicatio
 /app/bin/custyard eval 'IO.inspect(Custyard.Release.scan_attachments())'
 ```
 
-The release task returns verdict counts only. It checks each file's stored hash before scanning, does not start the web application, and does not print file contents or provider URLs. Existing clean verdicts are withdrawn while a rescan is in progress. A concurrent older scan cannot overwrite a newer verdict.
+The release task returns verdict counts only. It reads each file back from the database and checks its size and SHA-256 before scanning, does not start the web application, and does not print file contents or provider URLs. Content that is missing, over 100 MiB or no longer the bytes that were stored gets an error verdict and stays quarantined. Existing clean verdicts are withdrawn while a rescan is in progress. A concurrent older scan cannot overwrite a newer verdict.
+
+On an installation upgraded from a release that kept attachments on disk, run a rescan only after the import reports nothing pending ([database operations](database.md#upgrading-from-a-release-that-kept-files-on-disk)). The import itself leaves verdicts as they were, but a rescan of an attachment that is not in the database yet ends in an error verdict, which quarantines it until a later rescan succeeds.
 
 Tenant administrators can request rescanning for a trusted thread through its attachment controls. A scanner outage leaves files quarantined until an explicit retry succeeds. Confirm clean-file download, a blocked malware test file and blocked downloads during scanner outage before enabling general attachment use.
 
-Quarantine is an application access restriction on files in the private attachment store. Database and attachment-volume backups remain necessary; scans do not replace backup restoration or safe handling of downloaded files.
+Quarantine is an application access restriction on attachment content, which is stored in the application database. Database backups, which include that content, remain necessary; scans do not replace backup restoration or safe handling of downloaded files.

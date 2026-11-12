@@ -7,9 +7,15 @@ registry; use that digest for the acceptance deployment.
 
 Use the published production image with Bunny Magic Containers and Bunny Database.
 Start with a disposable database, a temporary hostname and isolated email.
-The database driver, environment aliases, origin guard and volume validation
+The database driver, environment aliases, origin guard and storage check
 are implemented. Live Bunny database and end-to-end deployment acceptance must
 still be recorded before moving production traffic or customer data.
+
+Uploaded logos and inbound email attachments are stored in Bunny Database, so
+the container needs no persistent volume. A container set up from an earlier
+version of this guide, with a `/data` volume, `DATA_VOLUME_ID` and
+`bin/data-volume init`, follows
+[Upgrade a container that has a file volume](#upgrade-a-container-that-has-a-file-volume).
 
 ## Configure the application
 
@@ -25,10 +31,7 @@ and [environment configuration](https://bunny.net/docs/magic-containers/environm
 | `DATABASE_PROVIDER` | `bunny` |
 | `BUNNY_DATABASE_URL` | Database URL from Bunny's Access page, using `https://` or `libsql://`. |
 | `BUNNY_DATABASE_AUTH_TOKEN` | Database full-access token for writes and migrations; not the account API key. |
-| `STORAGE_PROVIDER` | `bunny` |
-| `DATA_VOLUME_ID` | A stable identity such as `custyard-prod-files-v1`, preserved in the volume marker. |
-| `UPLOAD_DIR` | `/data/uploads` |
-| `ATTACHMENT_DIR` | `/data/attachments` |
+| `STORAGE_PROVIDER` | `bunny`. The app then accepts only the Bunny Database above and expects no volume. |
 | `PROXY_PROVIDER` | `bunny` |
 | `BUNNY_ORIGIN_SECRET` | At least 32 bytes; generate with `openssl rand -hex 32`. Configure the matching CDN request header below. |
 | `SECRET_KEY_BASE` | Persistent secret, generated with `openssl rand -hex 64`. |
@@ -40,6 +43,12 @@ and [environment configuration](https://bunny.net/docs/magic-containers/environm
 | Acknowledgments | No environment switch. Each tenant enables its own integration in Settings, so a new installation consumes nothing; use a dedicated broker/source for acceptance. |
 | `LMTP_ENABLED` | `false` for webhook-based email. |
 | `EMAIL_NOTIFICATIONS_ENABLED` | `false` during initial acceptance. Login mail and replies still send. |
+
+Do not set `DATA_VOLUME_ID`, `UPLOAD_DIR` or `ATTACHMENT_DIR` on a new
+container. `DATA_VOLUME_ID` is no longer used; a container that still sets it
+boots, with a warning in the boot report that it can be removed. `UPLOAD_DIR`
+and `ATTACHMENT_DIR` only tell the app where an earlier release left files to
+import.
 
 Optional: `SENTRY_DSN`,
 `SENTRY_ENVIRONMENT=production`, and `SENTRY_RELEASE` set to the deployed SHA.
@@ -77,7 +86,7 @@ ordinary query calls is rejected. Lost or expired sessions fail the operation;
 the driver does not retry writes whose outcome is unknown. Existing Turso
 configuration retains its v3 behavior.
 
-## Create the container and volume
+## Create the container
 
 Use [container publishing](container-publishing.md) to select a successful CI image by
 digest. The review record [deploy/bunny-production.json](../../deploy/bunny-production.json)
@@ -85,24 +94,16 @@ captures all required dashboard settings; it is a local checklist, not a Bunny
 API payload. Record the current and candidate digests before promotion.
 
 Configure one region near the database primary, minimum and maximum one replica,
-and disable additional regions. Mount the intended persistent volume at `/data`.
-The mount must be writable by the image's `custyard` user; mounting a volume hides
-the ownership baked into the image. Check ownership with the actual container.
+and disable additional regions. Do not attach a persistent volume: the record
+has `"persistent_volume": null`. There is no volume to initialize and no
+`bin/data-volume` command; the image no longer contains it.
 
-For a new empty volume, boot in `MAINTENANCE_MODE=true`, which starts neither
-migrations nor the server. Using the provider's container shell or a deliberately
-configured maintenance container sharing the volume, run as `custyard`:
-
-```sh
-/app/bin/data-volume init
-```
-
-This deliberately creates `/data/.custyard-volume` with `DATA_VOLUME_ID` and the
-upload/attachment directories. It refuses an unmarked nonempty volume, wrong
-identity, symlinked paths or an unmounted `/data`. Normal boot only validates an
-existing marker and directories; it never adopts an empty replacement volume.
-Remove `MAINTENANCE_MODE` after initialization. For an existing installation,
-rehearse data transfer and restoration before starting application writers.
+Before it opens the database, boot checks that the database is the configured
+Bunny Database. A configuration that selects any other database (a SQLite
+file, Turso) stops at the database card "Bunny hosting requires Bunny
+Database" instead of creating a SQLite file that would be lost with the
+container. For an existing installation, rehearse data transfer and
+restoration before starting application writers.
 
 Configure HTTP startup/readiness checks on port `4000`, exact path
 `/api/health/live`. Liveness answers as soon as the server listens, so a
@@ -151,8 +152,14 @@ to preserve mail records and replace both old A and AAAA routes.
 ## Keep staging separate and promote a verified image
 
 [fly.staging.toml](../../fly.staging.toml) targets a separate `custyard-staging`
-app and its own volume while the existing `custyard` app remains live. Provision
-the app/volume explicitly. Copy [staging.env.example](../../deploy/staging.env.example)
+app while the existing `custyard` app remains live. Provision the app
+explicitly. The file still has a `[mounts]` section for a
+`custyard_staging_data` volume at `/data`. With Bunny Database the app does not
+need that volume. A staging app that already has logos or attachments on it
+keeps the mount until the import reports nothing pending
+([Removing the volume](database.md#removing-the-volume)); for a new staging app,
+delete the section before the first deploy or provision the volume it names.
+Copy [staging.env.example](../../deploy/staging.env.example)
 and [staging.secrets.example](../../deploy/staging.secrets.example) into protected,
 ignored local files, fill in staging credentials, and preview with explicit inputs:
 
@@ -227,42 +234,64 @@ This avoids a vendor-action error path that could log provider response bytes.
 See the promotion jobs in [.gitlab-ci.yml](../../.gitlab-ci.yml) and
 [the promotion script](../../.gitlab/scripts/promotion.py). Configure runtime
 secrets in the provider separately. No pipeline runs a production promotion on
-a push. Retain the database/file backup paired with the previous release. Do
+a push. Retain the database backup paired with the previous release. Do
 not roll back application code across incompatible schema changes without the
 matching recovery procedure.
 
-## Back up and restore files
+## Upgrade a container that has a file volume
 
-Stop application writers and boot with `MAINTENANCE_MODE=true`. Mount a separate
-backup location outside `/data`, writable by `custyard`, then run:
+This applies to a container created from an earlier version of this guide: a
+persistent volume at `/data`, initialized with `bin/data-volume init`, with
+`DATA_VOLUME_ID`, `UPLOAD_DIR` and `ATTACHMENT_DIR` set.
 
-```sh
-/app/bin/data-volume backup /backup/custyard-snapshot
-```
+1. Deploy the new image with the volume still attached and `UPLOAD_DIR` and
+   `ATTACHMENT_DIR` unchanged. The `/data/.custyard-volume` marker is no
+   longer read, and `DATA_VOLUME_ID` only produces a warning in the boot
+   report.
+2. Boot copies every logo and attachment that a row refers to from the volume
+   into Bunny Database, in the background. Until a file is copied, its logo
+   URL and its attachment download answer 404.
+3. Check that it finished. From a container shell, which runs as `custyard`:
 
-The new directory contains uploads, attachments and a SHA-256 manifest with volume
-identity, file paths, sizes and hashes. Both backup and restore support a maximum
-16 MiB manifest; backup rejects a larger manifest before creating the snapshot.
-Upload and attachment directories must remain separate after path expansion.
-The snapshot is not encrypted: transfer it securely
-off-node and encrypt it with the deployment's backup tooling. Bunny volume storage
-is not an independent backup. Export the database separately with Bunny's tools,
-retain credential keys separately, and record the same release/backup identifier.
+   ```sh
+   /app/bin/custyard eval 'Custyard.Release.import_legacy_files()'
+   ```
 
-To restore, initialize an empty mounted volume with the intended `DATA_VOLUME_ID`,
-securely copy the snapshot to the external backup mount, and run while stopped:
+   `pending 0` means every referenced file is in the database. Without a
+   shell, read the container log: one `legacy_file_import_completed` event
+   with `missing_files` and `failed_files` both 0 says the same, and a later
+   boot that reaches the running app and logs neither that event nor
+   `legacy_file_import_failed` had nothing left to import.
+4. Remove the persistent volume from the container configuration, then
+   remove `DATA_VOLUME_ID`, `UPLOAD_DIR` and `ATTACHMENT_DIR`.
 
-```sh
-/app/bin/data-volume restore /backup/custyard-snapshot
-```
+The counts, what `missing` and `failed` mean, and the rollback limits are in
+[Upgrading from a release that kept files on disk](database.md#upgrading-from-a-release-that-kept-files-on-disk).
+Whether the account offers a container shell has to be checked in the account.
 
-Restoration verifies identity and checksums, rejects symlinks/special files and
-nonempty target directories, and stages files before moving them into place.
-An interrupted restore leaves `.custyard-restore-in-progress`; boot refuses to
-start. Inspect the staged/partially moved files, preserve the snapshot, and clean
-the partial target only after deciding how to retry. Do not remove the guard and
-start a partially restored installation. Verify database row counts, files and
-credential decryption together before removing maintenance mode.
+## Back up and restore
+
+File content is in Bunny Database, so the database backup is the whole
+backup: there is no separate file snapshot to take or to pair with it. Export
+the database with Bunny's tools, retain credential keys separately, and record
+the release with the backup identifier. The export is larger than before by
+the size of the stored files, which count toward the database's size limit.
+
+`bin/data-volume backup` and `bin/data-volume restore` no longer exist. A
+snapshot directory written earlier by `bin/data-volume backup` holds
+`uploads/`, `attachments/` and `manifest.json`. No command restores it. To
+bring its files into a database whose rows refer to them, copy `uploads/` and
+`attachments/` to a location the container can read, point `UPLOAD_DIR` and
+`ATTACHMENT_DIR` at those two directories, and let the import above copy them.
+
+After restoring an export into a new database, verify row counts, credential
+decryption and the stored files together before admitting writers. The query
+in [Checking stored files](database.md#checking-stored-files) lists any file
+whose content did not arrive complete, and
+`Custyard.Release.import_legacy_files()` prints how many referenced files are
+not in the database. Rehearse this with a real export: the file content is
+256 KiB blobs, and whether Bunny's export and import carry them intact has
+not been recorded.
 
 ## Acceptance evidence
 
@@ -284,16 +313,19 @@ BUNNY_TEST_DISPOSABLE=true bin/bunny-database-check
 
 CI runs the full suite against a real libSQL server in both v3 and Bunny v2 modes.
 Its container job builds and loads the image, then runs
-`bin/container-smoke-test custyard:test` with isolated networking and throwaway
-volumes. That test exercises Linux mount/ownership checks, marker rejection,
-file backup/restore, boot migrations and first run, origin protection for HTTP/static/
+`bin/container-smoke-test custyard:test` with isolated networking and a throwaway
+volume. That test exercises the Bunny storage check (it passes with the Bunny
+database settings and no volume, and refuses a SQLite database), boot
+migrations and first run, origin protection for HTTP/static/
 LiveView paths, redirects/HSTS and bounded shutdown. The database used for this
-container startup check is SQLite; live Bunny Database is checked separately.
+container startup check is SQLite on that volume; live Bunny Database is checked
+separately.
 
 Record live Bunny migrations, transactions/savepoints/rollback, stream expiry and
 reconnect, cross-connection reads, constraints and binary credentials. Also record
-the actual volume owner/identity, blocked origin bypass, HTTPS/Host/cookie behavior,
-LiveView, mail send/receive/status/reply, restored files/database, and graceful
+a logo upload and an attachment stored and downloaded through Bunny Database,
+blocked origin bypass, HTTPS/Host/cookie behavior,
+LiveView, mail send/receive/status/reply, a restored database with its files, and graceful
 restart. Keep the historical [migration plan](bunny-production-fly-staging.md)
 for cutover/rollback details and [research record](../research/2026-10-29-bunny-migration-validation.md)
 for its original evidence. Local or libSQL tests do not substitute for live provider

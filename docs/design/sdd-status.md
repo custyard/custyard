@@ -89,7 +89,7 @@ Security:
 | Contact           | email, name, is_admin, email_status (valid/bounced/suppressed, from delivery events). Composite unique (email, org_id). No portal account yet. | Done    |
 | Thread      | Full state model, urgency, cached_score, snoozed_until, last_neglect_notification. No tags substrate (SDD §4.1 freeform labels). | Partial |
 | Message           | source, origin, sender_email, body, html_body, to/cc addresses, reply_to, message_id, in_reply_to, delivery_status, triage_class, authentication, is_internal_note, deleted_at; inserted_at and updated_at. Per-recipient delivery in `message_recipient_statuses`. | Done    |
-| Attachment        | `message_attachments` (inbound-channels Phase 2): content-addressed files under `ATTACHMENT_DIR`, sniffed type, per-channel cap, authenticated operator and portal download. Outbound attachments not yet. | Partial |
+| Attachment        | `message_attachments` (inbound-channels Phase 2): content stored in the database (`Custyard.Files`), keyed by SHA-256 per tenant, sniffed type, per-channel cap, authenticated operator and portal download. Outbound attachments not yet. | Partial |
 | Task              | title, state, portal_visible, due_at. FK to thread and project.                          | Done    |
 | Project           | title, description, dates, portal_visible, project_type, tags, is_template.                    | Done    |
 | Project Template  | is_template flag on Project. Template instantiation with date calculation.                     | Done    |

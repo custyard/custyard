@@ -7,6 +7,16 @@ text preserves the original migration research and cutover plan. Statements belo
 describing portability code as future work reflect that research date; live Bunny
 acceptance remains required.
 
+Implementation update (2026-11-12): uploaded logos and inbound email attachments
+are stored in the application database, so Bunny production needs no persistent
+volume. `bin/data-volume`, `DATA_VOLUME_ID`, the `/data/.custyard-volume` marker
+and the file backup/restore commands named in the update above are gone. The
+target arrangement, storage, configuration, cutover and acceptance sections
+below have been revised to match. "Evidence and limits" keeps its
+research-date wording, and "Required portability work" is marked where it has
+been superseded. Current detail is in
+[Files in the database](database.md#files-in-the-database).
+
 Research date: 2026-10-29. Status: proposed deployment plan; no infrastructure
 changes have been made and no Bunny deployment has been tested.
 
@@ -26,8 +36,8 @@ and read-after-write behavior before moving customer data.
 The [container publishing pipeline](container-publishing.md) builds the existing
 `Containerfile` for `linux/amd64` after successful CI on `main`. Use its published
 image digest to deploy one replica in one European region using synthetic data
-and a `/data` volume
-for uploads/attachments. Keep production on Fly until database integration,
+and no persistent volume: uploads and attachments are stored in the database.
+Keep production on Fly until database integration,
 LiveView, email and recovery pass acceptance. Bunny documents
 [Docker deployment](https://bunny.net/docs/magic-containers/deploy) and
 [CDN endpoints](https://bunny.net/docs/magic-containers/endpoints) for this model.
@@ -76,26 +86,23 @@ port 4000, the Lettermint mail adapter, disabled LMTP, and the `/data` mount.
 flowchart LR
   Users[Production users and webhooks] --> CDN[Bunny CDN: custyard.com]
   CDN --> App[Magic Containers: one Phoenix replica]
-  App --> Data[Persistent /data: uploads and attachments]
-  App --> DB[Bunny Database: production]
+  App --> DB[Bunny Database: production rows and files]
   App --> Mail[Production Lettermint and optional broker]
-  Data --> Backup[Encrypted off-node backups]
-  DB --> Backup
+  DB --> Backup[Encrypted off-node backups]
   Testers[Staging testers] --> Fly[Fly: staging.custyard.com]
-  Fly --> TestDB[Bunny Database: staging]
-  Fly --> TestData[Separate staging files]
+  Fly --> TestDB[Bunny Database: staging rows and files]
   Fly --> TestMail[Separate test mail and integrations]
 ```
 
-The CDN is global; the initial application and its writable files have one
-authoritative location. Set minimum and maximum replicas to **1** and disable
+The CDN is global; the initial application runs in one location. Set minimum
+and maximum replicas to **1** and disable
 additional-region provisioning. Bunny's
 [scaling limits](https://bunny.net/docs/magic-containers/autoscaling) apply per
 region, so a one-replica cap alone does not prevent multiple regions.
 
 ### Database durability and file storage
 
-Bunny Database lives outside the container volume. Its
+Bunny Database lives outside the container. Its
 [durability documentation](https://bunny.net/docs/database/durability-and-consistency)
 describes primary failover, hourly/idle snapshots and WAL uploads every 10
 seconds or 4096 frames. Writes committed on the primary but not uploaded can be
@@ -103,30 +110,29 @@ lost on primary failover. Confirm customer-controlled restore/export and
 retention before treating managed snapshots as recovery from accidental deletion
 or bad migrations. Keep an independent verified export/restore procedure.
 
-The earlier warning about node-bound volumes and missing automatic backups
-applies to **uploads and attachments on the Magic Containers volume**, not to
-Bunny Database. [Persistent volumes](https://bunny.net/docs/magic-containers/persistent-volumes)
-remain Beta, independent per replica and node-bound, without automatic backups
-or replication. Hardware replacement can lose files; scale-down/scale-up may not
-reattach the old volume. Keep one replica running, record volume identity and
-refuse to initialize a replacement empty production file volume. Published
-throughput is 10 MB/s in each direction.
+Uploaded logos and attachment content are rows in this database, so the same
+durability, loss window and export apply to them. The production container has
+no persistent volume. The Magic Containers
+[persistent volumes](https://bunny.net/docs/magic-containers/persistent-volumes)
+this plan originally used for uploads and attachments (Beta, node-bound,
+without automatic backups or replication) are no longer part of it.
 
-The app still has local files and single-node background workers. Moving live
-files to Bunny Storage requires application changes and private attachment
-access controls. Database replication alone does not establish distributed
-PubSub, shared files or worker coordination. Keep one app replica/region.
+The app still has single-node background workers. Files are shared through the
+database, but database replication alone does not establish distributed PubSub
+or worker coordination. Keep one app replica/region.
 
 With a volume, Bunny [stops the old pod before starting its replacement](https://bunny.net/docs/magic-containers/rolling-updates).
-Expect short deployment downtime; do not add independent file volumes to avoid it.
+Without one, check during the proof of concept how Bunny replaces the pod: if
+the new pod starts before the old one stops, two app instances run for a short
+time, which the one-replica assumption above does not cover.
 
-Automate encrypted database exports and file backups with matching release,
-row/file counts and checksums. Keep credential encryption keys separately.
+Automate encrypted database exports with matching release, row and stored-file
+counts and checksums. Keep credential encryption keys separately.
 Define data-loss/recovery-time targets and measure restoration into a new Bunny
-database and empty file volume. A starting target is hourly exports/file backups
+database. A starting target is hourly exports
 with daily retention for 14 days, adjusted to the cost of lost mail, plus a
-quiesced backup before migrations. Verify raw credential values survive export;
-redacted display output is not a backup.
+quiesced backup before migrations. Verify raw credential values and file
+content survive export; redacted display output is not a backup.
 
 ## Runtime configuration
 
@@ -140,7 +146,7 @@ Staging is an environment with separate data and credentials, not Phoenix dev mo
 | `DATABASE_PATH` | Unused with Bunny Database; never fall back silently to local SQLite | Same |
 | `BUNNY_DATABASE_URL`, `BUNNY_DATABASE_AUTH_TOKEN` | Production Bunny database URL/token; runtime aliases to implement | Different staging Bunny database/token |
 | `DATABASE_URL`, `TURSO_AUTH_TOKEN` | Existing runtime names; explicit bridge can map Bunny URL/token during integration | Map staging credentials only |
-| `UPLOAD_DIR`, `ATTACHMENT_DIR` | `/data/uploads`, `/data/attachments` | Same paths on a separate staging volume |
+| `UPLOAD_DIR`, `ATTACHMENT_DIR` | Unset. Files are stored in the database; these only locate files an earlier release left on disk | Unset, unless the staging app still has such files on its volume |
 | `SECRET_KEY_BASE`, session/LiveView salt overrides | Preserve production values during the host move | Generate independent values |
 | `CREDENTIAL_ENCRYPTION_KEY`, optional previous key | Preserve keys needed to decrypt migrated tenant/channel credentials | Independent key with synthetic credentials/data |
 | `MAIL_ADAPTER` | `lettermint` with working production installation mail | `lettermint` with an isolated test project and controlled recipients |
@@ -177,6 +183,8 @@ database rather than booting an unmodified production copy.
    A successful `SELECT 1` against a freshly created empty database does not
    prove the correct production data was mounted. Check UID ownership with the
    actual image and mounted volume; a mount hides image-layer permissions.
+   (Superseded on 2026-11-12: files are stored in the database, so the Bunny
+   check is only that the database is the configured Bunny Database.)
 3. **Add an explicit trusted-proxy provider setting.** Support Bunny without
    pretending to be Fly. Bunny [replaces `X-Forwarded-For` with the visitor IP](https://bunny.net/docs/cdn/request-headers-to-origin)
    and supplies `X-Forwarded-Proto`. The Bunny HTTP branch must ignore any
@@ -195,6 +203,8 @@ database rather than booting an unmodified production copy.
    The Fly SSH workflow is not a Bunny runbook. Container shell/file-transfer
    availability and permissions must be checked in the account; an authenticated
    backup/restore sidecar sharing `/data` is a fallback to implement and test.
+   (Superseded on 2026-11-12: no `/data` volume remains to share or restore;
+   recovery on Bunny is a database restore.)
 6. **Add deployment configuration and promotion.** Use explicit Fly staging
    configuration and a Bunny manifest/IaC or captured dashboard configuration.
    Review changes to [`lib/mix/tasks/fly.secrets.ex`](../../lib/mix/tasks/fly.secrets.ex)
@@ -239,9 +249,12 @@ Owning sources: [Protocol](../../lib/custyard/turso/protocol.ex),
   values, dates and integer precision. Keep Ecto migration history authoritative;
   do not apply the same schema independently through Bunny CLI migrations.
 - **Capacity and transfer:** Check the [Public Preview 1 GB database limit](https://bunny.net/docs/database/limits)
-  or arrange a higher limit before import. The [Bunny CLI shell](https://bunny.net/docs/cli/commands/db)
+  or arrange a higher limit before import. File content now counts toward it:
+  add the size of the upload and attachment directories to the database size.
+  The [Bunny CLI shell](https://bunny.net/docs/cli/commands/db)
   documents SQL dump/read operations. Rehearse import/export fidelity for
-  `schema_migrations`, IDs, indexes, triggers and raw encrypted credentials,
+  `schema_migrations`, IDs, indexes, triggers, raw encrypted credentials and the
+  `stored_file_chunks` blobs (256 KiB each),
   including masking and large-file behavior. A direct SQLite-file upload is not
   assumed. Prove restoration into a new database before production cutover.
 
@@ -288,7 +301,7 @@ registry.gitlab.com/custyard/custyard@sha256:<digest-from-the-publish-job>
 ```
 
 Connect the registry to Bunny using the authentication notes in that guide, select the
-recorded digest, mount `/data`, and set one region
+recorded digest, attach no volume, and set one region
 and min/max one replica. Set `PHX_HOST` to the temporary hostname, not
 `custyard.com`. Configure [startup/readiness probes](https://bunny.net/docs/magic-containers/health-checks)
 on HTTP port 4000 at `/api/health`; allow for migrations at startup. The endpoint
@@ -304,8 +317,9 @@ suitable for a basic process smoke test.
 ### 2. Prepare staging and release promotion
 
 Prepare `fly.staging.toml` targeting the existing Fly app `custyard`, with
-`PHX_HOST=staging.custyard.com`, a separate `custyard_staging_data` file volume,
-a separate Bunny staging database/token, isolated credentials, and one machine. Do not apply this configuration to the
+`PHX_HOST=staging.custyard.com`,
+a separate Bunny staging database/token (it holds staging's files, so the
+`custyard_staging_data` volume is no longer needed), isolated credentials, and one machine. Do not apply this configuration to the
 production app yet. If staging is needed before cutover, create a temporary
 separate Fly app instead of repurposing the live one early.
 
@@ -354,15 +368,21 @@ Use a planned maintenance window; DNS propagation is not an atomic switch.
    to avoid duplicate mail. The existing `MAINTENANCE_MODE=true` entrypoint runs
    neither migrations nor the app; it returns no application maintenance page.
    Prove the provider retry behavior during rehearsal.
-2. Capture the final consistent database and file backup from the authoritative
+2. Capture the final consistent database backup from the authoritative
    volume. For SQLite use `Custyard.Release.export_sqlite()` as documented in
-   [database operations](database.md), then copy uploads and attachments while
-   writers remain stopped. Do not copy only an active `.db` file and omit WAL
+   [database operations](database.md). The export contains every logo and
+   attachment only if the source ran a release that stores files in the
+   database and its import reported `pending 0` before the window
+   ([Upgrading from a release that kept files on disk](database.md#upgrading-from-a-release-that-kept-files-on-disk));
+   do that upgrade on Fly first. Keep the source volume's `uploads` and
+   `attachments` directories as a recovery artifact; they are not part of the
+   transfer. Do not copy only an active `.db` file and omit WAL
    state. Preserve production credential keys and explicit session salt overrides.
 3. Keep the Bunny app in maintenance while importing the final source snapshot
-   into the new production Bunny database and restoring files/ownership. Use the
+   into the new production Bunny database. No files are restored beside it. Use the
    rehearsed local-SQLite or source-Turso export/import path. Verify database
-   identity, schema history and raw row/file checksums before booting. Keep keys
+   identity, schema history, raw row checksums and the stored files
+   ([Checking stored files](database.md#checking-stored-files)) before booting. Keep keys
    needed to decrypt migrated credentials and the schema compatible with the
    rollback image; normal boot automatically runs migrations. Staging must never
    connect to this production database.
@@ -381,8 +401,8 @@ Use a planned maintenance window; DNS propagation is not an atomic switch.
 
 After production acceptance and the rollback observation window, preserve the
 old production volume as a protected recovery artifact. Deploy the prepared Fly
-staging configuration against a **fresh file volume and separate Bunny staging
-database**, replace
+staging configuration against a **separate Bunny staging database**; staging
+needs no file volume. Replace
 production secrets with independent staging secrets, and enable only test
 channels. Audit both environment credentials and database-stored credentials.
 Update or unset the existing `PHX_HOST` secret so it cannot override the staging
@@ -401,10 +421,10 @@ Production cutover requires all of these observed results:
 - Correct production Bunny database identity; migrations, Ecto transactions and
   consistency tests pass against the service. Missing Bunny settings fail boot
   instead of creating local SQLite.
-- Correct file-volume marker; rows/files survive restart and image update. A
-  missing or wrong file volume fails startup.
-- Restoration into a new Bunny database and empty file volume succeeds with raw
-  encrypted credentials and private attachments; recovery time is recorded.
+- Rows and stored files survive restart and image update with no volume
+  attached. A database other than the configured Bunny Database fails startup.
+- Restoration into a new Bunny database succeeds with raw
+  encrypted credentials, logos and private attachments; recovery time is recorded.
 - Login mail reaches a real operator inbox with a `custyard.com` link; sessions,
   tenant/custom-domain URLs, portal access, CSRF, and private downloads work.
 - LiveView connects over WebSockets and recovers from a deployment; HTTP and
@@ -423,7 +443,7 @@ Production cutover requires all of these observed results:
 **Before Bunny accepts writes**, stop Bunny and restart the preserved Fly
 release/source data, then restore DNS and provider delivery. **After new writes**,
 prefer a compatible recovery image on Fly using the same production Bunny
-database, with current files copied back under a write freeze. That recovery host
+database. Files are in that database, so nothing is copied back. That recovery host
 is temporarily production, never staging. If returning to SQLite/Turso because
 the database service itself fails, export/import the latest recoverable Bunny
 state first. The original Fly database/files are stale. Reconcile side effects
@@ -436,7 +456,9 @@ Bunny's [published rates](https://bunny.net/docs/magic-containers/pricing) list
 CPU at $0.02 per consumed core-hour, RAM at $0.005 per GB-hour, and provisioned
 volume storage at $0.10 per GB-month. For 730 hours, an illustrative 0.05-core
 average, 0.5 GB billed RAM, and 5 GB volume is about **$3.06/month** before
-bandwidth, backups, Bunny Database for each environment, and Fly staging. Memory billing includes
+bandwidth, backups, Bunny Database for each environment, and Fly staging. The
+volume line no longer applies: without it the same illustration is about
+$2.56/month, and file content adds to Bunny Database storage instead. Memory billing includes
 overhead; the documentation's worked RAM example is internally inconsistent,
 so use the stated rate and validate against actual trial billing. This is not
 a workload quote or a verified saving over Fly.
