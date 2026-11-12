@@ -47,11 +47,17 @@ variables:
   image: $ELIXIR_IMAGE
   interruptible: true
   needs: []
+  # The image runs as root, which ignores file permissions (a read-only upload
+  # directory stays writable) and which bin/doctor refuses. GitHub runners run
+  # as an unprivileged user, so the job does too: as_user runs a command as ci.
   before_script:
     - apt-get update -qq
     - apt-get install -y -qq --no-install-recommends build-essential ca-certificates curl git openssl >/dev/null
-    - mix local.hex --force
-    - mix local.rebar --force
+    - useradd --create-home ci
+    - chown -R ci:ci "$CI_PROJECT_DIR"
+    - as_user() { runuser -u ci -- "$@"; }
+    - as_user mix local.hex --force
+    - as_user mix local.rebar --force
   cache:
     - *mix-cache
 
@@ -70,11 +76,11 @@ test:
   variables:
     ACKNOWLEDGMENTS_TEST_AMQP_URL: amqp://custyard_test:custyard_test@rabbitmq:5672
   script:
-    - mix deps.get
-    - mix compile --warnings-as-errors
-    - mix format --check-formatted
-    - mix test
-    - mix credo --strict
+    - as_user mix deps.get
+    - as_user mix compile --warnings-as-errors
+    - as_user mix format --check-formatted
+    - as_user mix test
+    - as_user mix credo --strict
 
 promotion-scripts:
   stage: test
@@ -105,14 +111,14 @@ turso:
     - <<: *mix-cache
       policy: pull
   script:
-    - mix deps.get
+    - as_user mix deps.get
     - |
       for _ in $(seq 1 30); do
         curl -fsS http://libsql:8080/health && break
         sleep 1
       done
       curl -fsS http://libsql:8080/health
-    - mix test --max-cases 1
+    - as_user mix test --max-cases 1
 
 # Builds the prod release and runs Custyard.Release tasks through
 # `bin/custyard eval` against a running server, which `mix test` cannot
@@ -126,11 +132,11 @@ release:
   variables:
     MIX_ENV: prod
   script:
-    - mix deps.get --only prod
-    - mix release --overwrite
-    - bin/release-smoke-test
+    - as_user mix deps.get --only prod
+    - as_user mix release --overwrite
+    - as_user bin/release-smoke-test
     # Release smoke test on a libSQL server.
-    - DATABASE_URL="$LIBSQL_URL" bin/release-smoke-test
+    - as_user env DATABASE_URL="$LIBSQL_URL" bin/release-smoke-test
 
 security:
   extends: .elixir
@@ -139,10 +145,10 @@ security:
     - <<: *mix-cache
       policy: pull
   script:
-    - mix deps.get
-    - mix sobelow --exit
-    - mix hex.audit
-    - mix deps.audit
+    - as_user mix deps.get
+    - as_user mix sobelow --exit
+    - as_user mix hex.audit
+    - as_user mix deps.audit
 
 .docker:
   image: docker:28
@@ -153,7 +159,9 @@ security:
     BUILD_CACHE: $CI_REGISTRY_IMAGE:buildcache
   before_script:
     - apk add --no-cache bash coreutils curl
-    - docker buildx create --use --driver docker-container
+    # buildx cannot build from the TLS env vars directly; wrap them in a context.
+    - docker context create dind
+    - docker buildx create --use --driver docker-container dind
     - BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Validate the deployable image on MRs and manual runs. Pushes to the default
