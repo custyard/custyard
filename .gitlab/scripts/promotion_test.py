@@ -97,10 +97,14 @@ class PromotionTest(unittest.TestCase):
                     patch.object(promotion, "gitlab_bytes") as download, self.assertRaises(promotion.ValidationError):
                 promotion.validate_ci(self.sha, self.digest)
             download.assert_not_called()
+        # Complete jobs and a valid record sit behind each pipeline, so only
+        # the checks on the pipeline itself can refuse it.
         for field, value in [("source", "merge_request_event"), ("sha", "d" * 40), ("ref", "feature"), ("status", "failed")]:
-            with patch.object(promotion, "gitlab", return_value=[self.pipeline(**{field: value})]):
+            with patch.object(promotion, "gitlab", side_effect=[[self.pipeline(**{field: value})], self.jobs()]), \
+                    patch.object(promotion, "gitlab_bytes", return_value=self.record()) as download:
                 with self.assertRaises(promotion.ValidationError):
                     promotion.validate_ci(self.sha, self.digest)
+            download.assert_not_called()
 
     def test_a_later_rebuild_cannot_hide_an_older_matching_ci_publication(self):
         newer = self.pipeline(id=124)
