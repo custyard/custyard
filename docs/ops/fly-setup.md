@@ -29,7 +29,7 @@ check `fly secrets list`, not the file.
 | `EMAIL_FROM_ADDRESS` | `[env]`. Sender on a verified Lettermint domain. |
 | `INSTANCE_ADMIN_EMAIL` | Secret. First instance administrator; unset after the first login. |
 | `LMTP_ENABLED` | `false`. Fly blocks the ports. |
-| `CLAMAV_HOST` | `custyard-scanner.internal`, the separate scanner app ([fly.scanner.toml](../../fly.scanner.toml)). Unset, attachments stay quarantined. |
+| `CLAMAV_HOST` | `custyard-scanner.flycast`, the separate scanner app ([fly.scanner.toml](../../fly.scanner.toml), [setup](../../ops/clamav/README.md)). Fly Proxy starts it on demand; `.internal` cannot wake it. Unset, attachments stay quarantined. |
 
 `STORAGE_PROVIDER` and `PROXY_PROVIDER` default to `fly` when `FLY_APP_NAME`
 is set; leave them unset. With Turso the storage check verifies nothing: no
