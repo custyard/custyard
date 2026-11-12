@@ -134,9 +134,11 @@ defmodule Custyard.Files.LegacyImport do
     attachment_dir = directory(opts, :attachment_dir)
     upload_dir = directory(opts, :upload_dir)
 
+    # Logos first: they are public (portal, sign-in page, email) and answer
+    # 404 until they are in, and there is at most one per tenant.
     @zero
-    |> tally(attachments, :attachments, &import_attachment(attachment_dir, &1))
     |> tally(logos, :logos, &import_logo(upload_dir, &1))
+    |> tally(attachments, :attachments, &import_attachment(attachment_dir, &1))
   end
 
   defp tally(counts, references, kind, import) do

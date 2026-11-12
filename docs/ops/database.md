@@ -234,7 +234,8 @@ database. This release copies every referenced file into the database.
 
 The import copies only files that a row refers to: `message_attachments` rows
 in state `fetched`, and `tenants.logo_url`. A file on disk that nothing
-refers to is left out. Attachments go first, then logos. Each file must be a
+refers to is left out. Logos go first, then attachments: a logo URL is public
+and should not wait for a long attachment import. Each file must be a
 regular file (a symlink or a directory is refused), at most 100 MiB for an
 attachment or 2,000,000 bytes for a logo, and an attachment's content must
 have the SHA-256 it is named by. Nothing on disk is written, moved or

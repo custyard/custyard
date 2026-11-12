@@ -215,6 +215,30 @@ defmodule Custyard.Files.LegacyImportTest do
       assert stored_files() == 3
     end
 
+    # A logo is public and answers 404 until it is in the database, so it
+    # does not wait for the attachments.
+    test "every logo is in the database before the first attachment is stored", %{
+      dirs: dirs,
+      tenant: tenant
+    } do
+      other = insert_tenant()
+      shas = for n <- 1..2, do: legacy_attachment(dirs, tenant, "attachment #{n}")
+      logos = for tenant <- [tenant, other], do: {tenant, legacy_logo(dirs, tenant, @png)}
+
+      # Created inside the test's transaction and rolled back with it.
+      Repo.query!("""
+      CREATE TRIGGER logos_first BEFORE INSERT ON stored_files
+      WHEN NEW.kind = 'attachment' AND
+        (SELECT COUNT(*) FROM stored_files WHERE kind = 'logo' AND completed_at IS NOT NULL) < 2
+      BEGIN SELECT RAISE(ABORT, 'an attachment before a logo'); END
+      """)
+
+      assert LegacyImport.run(dirs) == %{attachments: 2, logos: 2, missing: 0, failed: 0}
+
+      for {tenant, logo} <- logos, do: assert(stored(tenant, :logo, logo) == @png)
+      for sha <- shas, do: assert(Files.get(tenant.id, :attachment, sha))
+    end
+
     test "a second run imports nothing and reports the same missing files", %{
       tmp_dir: tmp_dir,
       dirs: dirs,
