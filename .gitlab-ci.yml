@@ -263,7 +263,8 @@ publish:
 # Promotion: translated from .github/workflows/promote.yml. Run pipeline on
 # main with promote_environment set. promote:validate checks the candidate
 # against a successful push-to-main pipeline, its publish record and registry
-# metadata, then hands the verified reference to the deploy job. Staging
+# metadata. Each deploy job repeats those checks on the digest it deploys,
+# since job and pipeline variables outrank inputs and dotenv values. Staging
 # deploys automatically; production waits for a person to start
 # promote:production (GitLab Free has no deployment approvals). Deploy
 # credentials are protected, environment-scoped CI/CD variables. See
@@ -351,8 +352,9 @@ promote:staging:
         "https://github.com/superfly/flyctl/releases/download/v${FLYCTL_VERSION}/flyctl_${FLYCTL_VERSION}_Linux_x86_64.tar.gz"
       echo "$FLYCTL_SHA256  flyctl.tar.gz" | sha256sum -c -
       tar -xzf flyctl.tar.gz flyctl
-    # The registry is public, so Fly pulls the verified digest directly.
-    - ./flyctl deploy --config fly.staging.toml --app custyard-staging --image "$IMAGE_REFERENCE" --ha=false
+    # Revalidates the digest, then deploys it; the registry is public, so Fly
+    # pulls the verified digest directly.
+    - python3 .gitlab/scripts/promotion.py deploy-staging
     - python3 .gitlab/scripts/promotion.py wait-healthy
     - echo "ENVIRONMENT_URL=$ENVIRONMENT_URL" > deploy.env
   artifacts:

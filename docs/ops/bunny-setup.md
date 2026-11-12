@@ -186,6 +186,12 @@ SHA. For expired records, create a new reviewed main commit and take its newly
 published digest through staging and acceptance. Images built before the move
 to GitLab carry the GitHub source label and cannot be promoted.
 
+Each deploy job repeats these checks on the digest it is about to deploy
+rather than trusting the validate job's output. Keep Settings > CI/CD >
+Variables > "Minimum role to use pipeline variables" at "No one allowed" (the
+project default), so nobody can override inputs or provider settings with
+pipeline or manual-job variables.
+
 Staging then deploys automatically: Fly pulls the verified digest straight from
 the public GitLab registry. Production waits until a person starts the manual
 `promote:production` job; GitLab Free has no deployment approvals, so that click

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -296,12 +297,30 @@ def wait_healthy(health_url, attempts=24, delay=5):
                           "the previous digest is recorded in the promote:validate job")
 
 
+def validate_candidate(environment, digest, source_sha, previous_digest):
+    """Every job that deploys runs this itself on the digest it is about to
+    deploy. A manual job can be started with overriding variables, and
+    pipeline variables outrank dotenv reports, so nothing verified by an
+    earlier job is trusted."""
+    ci_url = validate_ci(source_sha, digest)
+    validate_image(digest, source_sha)
+    if environment == "production":
+        validate_bunny_previous(previous_digest)
+    return ci_url
+
+
+def deploy_staging(digest):
+    """Deploy the verified digest; the reference is rebuilt here, never read
+    from the environment."""
+    subprocess.run(["./flyctl", "deploy", "--config", "fly.staging.toml", "--app", "custyard-staging",
+                    "--image", IMAGE + "@" + digest, "--ha=false"], check=True)
+
+
 def write_record(environment, digest, source_sha, previous_digest, acceptance_record, ci_url, health_url):
-    """Hand the verified reference to the deploy job (dotenv report) and log it."""
+    """Log the verified candidate and give the deploy job its environment link."""
     reference = IMAGE + "@" + digest
     environment_url = "https://" + urllib.parse.urlsplit(health_url).netloc
-    Path(DOTENV_FILE).write_text(f"IMAGE_REFERENCE={reference}\nIMAGE_TAG=sha-{source_sha}\n"
-                                 f"ENVIRONMENT_URL={environment_url}\n", encoding="utf-8")
+    Path(DOTENV_FILE).write_text(f"ENVIRONMENT_URL={environment_url}\n", encoding="utf-8")
     print(f"Promotion target: {environment}\nCandidate: {reference}\nSource: {source_sha}")
     print(f"Previous digest: {previous_digest or 'initial staging deployment'}\nCI: {ci_url}")
     if acceptance_record:
@@ -311,7 +330,7 @@ def write_record(environment, digest, source_sha, previous_digest, acceptance_re
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["validate", "update-bunny", "verify-bunny", "wait-healthy"])
+    parser.add_argument("command", choices=["validate", "deploy-staging", "update-bunny", "verify-bunny", "wait-healthy"])
     args = parser.parse_args()
     validate_pipeline_context()
     digest = os.environ.get("IMAGE_DIGEST", "")
@@ -333,12 +352,15 @@ def main():
         # GitLab Free has no deployment approvals; the production deploy job is
         # manual, and this refuses to run unless a person started it.
         require(os.environ.get("CI_JOB_MANUAL") == "true", "Production updates must be started by hand from the promote:production job")
+        validate_candidate(environment, digest, source_sha, previous_digest)
         update_bunny(digest, source_sha, previous_digest)
         return
-    ci_url = validate_ci(source_sha, digest)
-    validate_image(digest, source_sha)
-    if environment == "production":
-        validate_bunny_previous(previous_digest)
+    if args.command == "deploy-staging":
+        require(environment == "staging", "Fly deploys require the staging environment")
+        validate_candidate(environment, digest, source_sha, previous_digest)
+        deploy_staging(digest)
+        return
+    ci_url = validate_candidate(environment, digest, source_sha, previous_digest)
     write_record(environment, digest, source_sha, previous_digest, acceptance_record, ci_url, health_url)
 
 

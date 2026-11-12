@@ -244,9 +244,39 @@ class PromotionTest(unittest.TestCase):
             update.assert_not_called()
         with patch.dict(os.environ, self.promotion_env(CI_JOB_MANUAL="true"), clear=True), \
                 patch("sys.argv", ["promotion.py", "update-bunny"]), \
+                patch.object(promotion, "validate_candidate") as validate, \
                 patch.object(promotion, "update_bunny") as update:
             promotion.main()
+        validate.assert_called_once_with("production", self.digest, self.sha, self.previous)
         update.assert_called_once_with(self.digest, self.sha, self.previous)
+
+    def test_deploy_jobs_revalidate_the_digest_they_deploy(self):
+        # Variables on a manual job, or pipeline variables, can replace inputs
+        # and dotenv values; an unverified digest never reaches a provider.
+        cases = [("update-bunny", self.promotion_env(CI_JOB_MANUAL="true"), "update_bunny"),
+                 ("deploy-staging", self.promotion_env(PROMOTE_ENVIRONMENT="staging", PREVIOUS_DIGEST="", ACCEPTANCE_RECORD=""), "deploy_staging")]
+        for command, env, deploy in cases:
+            with self.subTest(command=command), patch.dict(os.environ, env, clear=True), \
+                    patch("sys.argv", ["promotion.py", command]), \
+                    patch.object(promotion, "validate_ci", side_effect=promotion.ValidationError("unpublished")), \
+                    patch.object(promotion, deploy) as target, self.assertRaises(promotion.ValidationError):
+                promotion.main()
+            target.assert_not_called()
+
+    def test_staging_deploy_rebuilds_the_reference_from_the_validated_digest(self):
+        env = self.promotion_env(PROMOTE_ENVIRONMENT="staging", PREVIOUS_DIGEST="", ACCEPTANCE_RECORD="",
+                                 IMAGE_REFERENCE="registry.example.com/evil@sha256:" + "f" * 64)
+        with patch.dict(os.environ, env, clear=True), patch("sys.argv", ["promotion.py", "deploy-staging"]), \
+                patch.object(promotion, "validate_candidate") as validate, \
+                patch.object(promotion.subprocess, "run") as run:
+            promotion.main()
+        validate.assert_called_once_with("staging", self.digest, self.sha, "")
+        run.assert_called_once_with(["./flyctl", "deploy", "--config", "fly.staging.toml", "--app", "custyard-staging",
+                                     "--image", "registry.gitlab.com/custyard/custyard@" + self.digest, "--ha=false"], check=True)
+        with patch.dict(os.environ, self.promotion_env(), clear=True), patch("sys.argv", ["promotion.py", "deploy-staging"]), \
+                patch.object(promotion.subprocess, "run") as run, self.assertRaisesRegex(promotion.ValidationError, "staging"):
+            promotion.main()
+        run.assert_not_called()
 
     def test_validate_writes_the_verified_reference_for_the_deploy_job(self):
         with patch.dict(os.environ, self.promotion_env(), clear=True), \
@@ -257,12 +287,10 @@ class PromotionTest(unittest.TestCase):
             promotion.main()
         previous.assert_called_once_with(self.previous)
         path.assert_called_once_with(promotion.DOTENV_FILE)
-        self.assertEqual(path.return_value.write_text.call_args.args[0],
-                         f"IMAGE_REFERENCE=registry.gitlab.com/custyard/custyard@{self.digest}\n"
-                         f"IMAGE_TAG=sha-{self.sha}\nENVIRONMENT_URL=https://custyard.com\n")
+        self.assertEqual(path.return_value.write_text.call_args.args[0], "ENVIRONMENT_URL=https://custyard.com\n")
 
     def test_commands_refuse_to_run_outside_protected_main(self):
-        for command in ["validate", "update-bunny", "verify-bunny", "wait-healthy"]:
+        for command in ["validate", "deploy-staging", "update-bunny", "verify-bunny", "wait-healthy"]:
             with self.subTest(command=command), \
                     patch.dict(os.environ, self.promotion_env(CI_COMMIT_REF_PROTECTED="false", CI_JOB_MANUAL="true"), clear=True), \
                     patch("sys.argv", ["promotion.py", command]), \
