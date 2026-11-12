@@ -242,12 +242,14 @@ defmodule Custyard.Boot.FirstRun do
   defp finish(state, previous) do
     first_run? = state.created? or previous == :first_run
 
+    # The step goes first: whoever sees :ready must also see it done.
+    step(:sign_in, :ok, "an instance administrator can sign in")
+
     State.update(fn s ->
       completed_at = s.first_run.completed_at || if(first_run?, do: DateTime.utc_now())
       %{s | mode: :ready, first_run: %{s.first_run | completed_at: completed_at}}
     end)
 
-    step(:sign_in, :ok, "an instance administrator can sign in")
     if previous != :ready, do: Log.info(:boot_mode_decided, boot_mode: :ready)
     if first_run?, do: Log.info(:boot_first_run_completed)
   end
