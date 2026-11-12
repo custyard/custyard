@@ -215,6 +215,29 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       html = render(view)
       assert html =~ "active"
     end
+
+    test "an open queue stops previewing a message deleted elsewhere", %{
+      conn: conn,
+      staff: staff
+    } do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+      message = insert_message(thread_id: conv.id, body: "Card number 4111 1111")
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      snippet = "[data-testid=staff-queue-card-#{conv.id}] [data-testid=staff-queue-snippet]"
+      assert has_element?(view, snippet, "Card number 4111 1111")
+
+      {:ok, _} = Custyard.Threads.soft_delete_message(message, staff)
+
+      # The reload is debounced, so the row changes a moment after the broadcast.
+      assert Enum.any?(1..40, fn _ ->
+               Process.sleep(50)
+               has_element?(view, snippet, "Message deleted")
+             end)
+
+      refute render(view) =~ "4111 1111"
+    end
   end
 
   describe "organization scoping (RBAC)" do
@@ -791,6 +814,70 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       assert has_element?(
                view,
                "[data-testid=staff-queue-card-#{conv.id}] [data-testid=staff-queue-chips] [data-testid=staff-tier-badge-enterprise]"
+             )
+    end
+
+    test "the snooze and the labels come before the tier and the mailbox", %{
+      conn: conn,
+      staff: staff
+    } do
+      org = insert_organization(tier: :enterprise)
+
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          public_address: "billing@acme.example.com",
+          state: :active
+        )
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      conv =
+        insert_thread(
+          organization_id: org.id,
+          state: :active,
+          inbound_channel_id: channel.id,
+          snoozed_until: DateTime.add(now, 3600)
+        )
+
+      # A due task keeps the snoozed row in the unfiltered list.
+      {:ok, _} =
+        Custyard.Threads.create_task(%{
+          title: "Overdue",
+          thread_id: conv.id,
+          due_at: DateTime.add(now, -60)
+        })
+
+      scope = Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+      {:ok, label} = Custyard.Labels.create_and_assign(scope, conv, "Billing")
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      chips = "[data-testid=staff-queue-card-#{conv.id}] [data-testid=staff-queue-chips]"
+      html = view |> element(chips) |> render()
+
+      positions =
+        for testid <- [
+              "staff-queue-snoozed",
+              "queue-label-#{label.id}",
+              "staff-tier-badge-enterprise",
+              "staff-queue-channel"
+            ] do
+          {position, _} = :binary.match(html, ~s(data-testid="#{testid}"))
+          position
+        end
+
+      assert positions == Enum.sort(positions)
+
+      # Below md the chip is the one word; the time stays in its title.
+      assert has_element?(
+               view,
+               "#{chips} [data-testid=staff-queue-snoozed][title^='Snoozed until ']"
+             )
+
+      assert has_element?(
+               view,
+               "#{chips} [data-testid=staff-queue-snoozed] span[class='hidden md:inline']",
+               "until"
              )
     end
 

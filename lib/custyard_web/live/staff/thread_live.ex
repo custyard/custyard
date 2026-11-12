@@ -261,6 +261,8 @@ defmodule CustyardWeb.Staff.ThreadLive do
           {:message_added, thread.id}
         )
 
+        broadcast_thread_update(thread.id, thread.organization_id)
+
         {:noreply,
          socket |> assign(:note_text, "") |> acknowledge_submitted_draft() |> reload_thread()}
 
@@ -1108,6 +1110,13 @@ defmodule CustyardWeb.Staff.ThreadLive do
     |> Enum.take(5)
   end
 
+  defp opened_ago(inserted_at) do
+    case short_age(inserted_at) do
+      "now" -> "opened just now"
+      age -> "opened #{age} ago"
+    end
+  end
+
   # Truncate subject for page title (browser tab)
   defp truncate_subject(subject) when byte_size(subject) <= 50, do: subject
 
@@ -1477,6 +1486,15 @@ defmodule CustyardWeb.Staff.ThreadLive do
                     </span>
                     <code :if={@reply_identity.address} class="text-gray-900 dark:text-zinc-100">&lt;{@reply_identity.address}&gt;</code>
                   </span>
+                  <%!-- In the summary, not the body: D4 wants it seen while
+                  the details are closed. --%>
+                  <span
+                    :if={@archive_copy_address}
+                    class="min-w-0 max-w-full"
+                    data-testid="composer-archive-copy"
+                  >
+                    Besides the customer, a copy is kept in {@archive_copy_address}
+                  </span>
                   <span class="underline decoration-dotted underline-offset-2 group-open/recipients:hidden">
                     Change
                   </span>
@@ -1517,13 +1535,6 @@ defmodule CustyardWeb.Staff.ThreadLive do
                     data-testid="staff-reply-cc"
                     class="w-full border border-gray-300 dark:border-zinc-600 rounded px-2 py-1 text-xs dark:bg-zinc-800 dark:text-zinc-100"
                   />
-                  <p
-                    :if={@archive_copy_address}
-                    class="sm:col-span-2"
-                    data-testid="composer-archive-copy"
-                  >
-                    Besides the customer, a copy is kept in {@archive_copy_address}
-                  </p>
                 </div>
               </details>
               <div class="flex items-end gap-2">
@@ -1537,7 +1548,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   aria-label="Reply to customer"
                   aria-describedby="composer-audience"
                   data-testid="staff-reply-input"
-                  class="min-w-0 flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm leading-6 resize-y dark:bg-zinc-900 dark:text-zinc-100"
+                  class="min-w-0 flex-1 border border-gray-300 dark:border-zinc-600 rounded px-3 py-2 text-sm leading-6 resize-none dark:bg-zinc-900 dark:text-zinc-100"
                 >{@reply_text}</textarea>
                 <button
                   type="submit"
@@ -1568,7 +1579,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                 aria-label="Internal note (not visible to customer)"
                 aria-describedby="composer-audience"
                 data-testid="staff-note-input"
-                class="min-w-0 flex-1 resize-y border border-amber-400 dark:border-amber-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm leading-6"
+                class="min-w-0 flex-1 resize-none border border-amber-400 dark:border-amber-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm leading-6"
               >{@note_text}</textarea>
               <button
                 type="submit"
@@ -1986,7 +1997,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                       datetime={DateTime.to_iso8601(conv.inserted_at)}
                       title={"Opened #{format_timestamp(conv.inserted_at)}"}
                     >
-                      opened {short_age(conv.inserted_at)} ago
+                      {opened_ago(conv.inserted_at)}
                     </time>
                   </span>
                 </.link>

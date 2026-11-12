@@ -428,9 +428,10 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
+      # In the summary, so it is seen while the recipient details are closed.
       assert has_element?(
                view,
-               ~s([data-testid="composer-archive-copy"]),
+               ~s(details#composer-recipients > summary [data-testid="composer-archive-copy"]),
                "a copy is kept in help@acme.example"
              )
     end
@@ -949,6 +950,23 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert note.is_internal_note
       assert is_nil(note.delivery_status)
       assert Threads.list_public_messages(conv.id) == []
+    end
+
+    test "tells open attention queues, which preview the note", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+      thread_id = conv.id
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      view |> element("[data-testid=composer-mode-note]") |> render_click()
+
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
+
+      view
+      |> form("form[phx-submit=add_note]", body: "Asked finance")
+      |> render_submit()
+
+      assert_receive {:thread_updated, ^thread_id}
     end
   end
 
@@ -1838,6 +1856,20 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       assert has_element?(view, entry, "Feedback on Nov 10, 2026 via eu.example.com (custom)")
       assert has_element?(view, "#{entry} [data-testid=staff-state-badge-waiting]", "waiting")
       assert has_element?(view, "#{entry} time", "opened 3d ago")
+    end
+
+    test "another open conversation under a minute old was opened just now", %{
+      conn: conn,
+      conv: conv,
+      org: org
+    } do
+      other = insert_thread(organization_id: org.id, state: :waiting)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      entry = "a[data-testid=staff-other-conv-#{other.id}]"
+
+      assert has_element?(view, "#{entry} time", "opened just now")
+      refute has_element?(view, "#{entry} time", "ago")
     end
   end
 
