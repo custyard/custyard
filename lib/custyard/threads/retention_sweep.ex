@@ -17,7 +17,9 @@ defmodule Custyard.Threads.RetentionSweep do
   File content lives in the database (`Custyard.Files`), so the same pass
   removes what nothing points at any more: attachment content whose rows
   went with their messages (`attachment_files`) and writes that were started
-  and never published (`incomplete_files`). A dry run skips these too.
+  and never published (`incomplete_files`). Attachment files an earlier
+  release left on disk go the same way once their rows are gone
+  (`legacy_attachment_files`). A dry run skips these too.
 
   Deliberately its own GenServer rather than a fifth task on
   `Scoring.Scheduler`: that runs every five minutes, and a bulk delete
@@ -46,6 +48,7 @@ defmodule Custyard.Threads.RetentionSweep do
     channel_verifications: 0,
     channel_tokens: 0,
     attachment_files: 0,
+    legacy_attachment_files: 0,
     incomplete_files: 0,
     message_drafts: 0
   }
@@ -74,9 +77,9 @@ defmodule Custyard.Threads.RetentionSweep do
   can pass `dry_run: true` or override either bound. Returns the counts map
   `run_cleanup/1` returns plus `channel_rejections`, `channel_verifications`
   and `channel_tokens` from `InboundChannels.sweep_expired/0`,
-  `attachment_files`, `incomplete_files` and `message_drafts`, or a zeroed
-  map when the sweep fails — a failure is logged and the next interval
-  retries.
+  `attachment_files`, `legacy_attachment_files`, `incomplete_files` and
+  `message_drafts`, or a zeroed map when the sweep fails — a failure is
+  logged and the next interval retries.
   """
   def sweep(opts \\ []) do
     Log.operation([], fn -> do_sweep(opts) end)
@@ -106,6 +109,7 @@ defmodule Custyard.Threads.RetentionSweep do
         :channel_verifications,
         :channel_tokens,
         :attachment_files,
+        :legacy_attachment_files,
         :incomplete_files,
         :message_drafts
       ])
@@ -119,6 +123,8 @@ defmodule Custyard.Threads.RetentionSweep do
         channel_tokens: tokens,
         # Stored content whose attachment rows went with their swept threads.
         attachment_files: Custyard.Attachments.sweep_orphan_files(),
+        # The originals of such content that an earlier release left on disk.
+        legacy_attachment_files: Custyard.Attachments.sweep_legacy_files(),
         # Writes of any kind that a crashed or failed writer never published.
         incomplete_files: Custyard.Files.sweep_incomplete(),
         message_drafts: Custyard.MessageDrafts.sweep_expired()

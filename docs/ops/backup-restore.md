@@ -85,8 +85,11 @@ The key base below is a disposable value for loading release configuration.
 
 `UPLOAD_DIR` and `ATTACHMENT_DIR` matter only when the snapshot predates a
 finished import of files from an earlier release: they tell a restored
-installation where the files it still has to import are. The verification
-below does not read them.
+installation where the files it still has to import are. A running app's
+daily sweep also removes files under `ATTACHMENT_DIR` that no attachment
+refers to any more
+([the files left on disk](database.md#the-files-left-on-disk)); the drill
+machine does not run the app. The verification below does not read them.
 
 Run the source image with this explicit configuration. It contains Exqlite, so
 no downloaded database utility is needed.

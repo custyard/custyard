@@ -649,6 +649,89 @@ defmodule Custyard.Attachments do
     removed?
   end
 
+  @doc """
+  Remove attachment files an earlier release left in the attachment
+  directory that no row of their tenant references any more (their messages
+  were swept or hard-deleted) once they are a day old. Returns the count
+  removed.
+
+  That release kept a fetched attachment at
+  `<attachment_dir>/<tenant id>/<first two hex chars of its SHA-256>/<SHA-256>`.
+  `Custyard.Files.LegacyImport` copies those files into the database and
+  leaves the originals where they are, so erasure and retention reach an
+  original only here. A file that some row of its tenant still names is
+  kept, imported or not. Only regular files at a path of exactly that shape
+  are considered, and a directory that is missing or cannot be read has
+  nothing to sweep.
+
+  Options: `:attachment_dir` replaces the configured directory (tests).
+  """
+  @spec sweep_legacy_files(keyword) :: non_neg_integer
+  def sweep_legacy_files(opts \\ []) do
+    configured = fn -> Application.get_env(:custyard, :attachment_dir) end
+
+    case Keyword.get_lazy(opts, :attachment_dir, configured) do
+      dir when is_binary(dir) and dir != "" -> sweep_legacy_dir(dir)
+      _unset -> 0
+    end
+  end
+
+  # A tenant id as the earlier release wrote it, no leading zero, and at most
+  # eighteen digits, which keeps it inside a 64-bit id. A hash sits under its
+  # own first two characters.
+  defp sweep_legacy_dir(dir) do
+    for tenant <- legacy_directories(dir, ~r/\A[1-9][0-9]{0,17}\z/),
+        prefix <- legacy_directories(Path.join(dir, tenant), ~r/\A[0-9a-f]{2}\z/),
+        sha <- legacy_names(Path.join([dir, tenant, prefix]), ~r/\A[0-9a-f]{64}\z/),
+        String.starts_with?(sha, prefix),
+        remove_legacy_orphan?(
+          String.to_integer(tenant),
+          sha,
+          Path.join([dir, tenant, prefix, sha])
+        ),
+        reduce: 0 do
+      count -> count + 1
+    end
+  end
+
+  # lstat, not stat: a symlink is reported as one, so the walk never follows
+  # one out of the directory and never removes a file through one.
+  defp legacy_directories(dir, pattern) do
+    Enum.filter(legacy_names(dir, pattern), fn name ->
+      match?({:ok, %File.Stat{type: :directory}}, File.lstat(Path.join(dir, name)))
+    end)
+  end
+
+  defp legacy_names(dir, pattern) do
+    case File.ls(dir) do
+      {:ok, names} -> Enum.filter(names, &Regex.match?(pattern, &1))
+      {:error, _missing_or_unreadable} -> []
+    end
+  end
+
+  # Nothing writes these files any more, so no lock spans the check and the
+  # removal: a row that appears in between stores its content in the
+  # database (store/3) and never reads this file.
+  defp remove_legacy_orphan?(tenant_id, sha, path) do
+    old_regular_file?(path) and not legacy_referenced?(tenant_id, sha) and File.rm(path) == :ok
+  end
+
+  defp old_regular_file?(path) do
+    case File.lstat(path, time: :posix) do
+      {:ok, %File.Stat{type: :regular, mtime: mtime}} ->
+        System.os_time(:second) - mtime >= @orphan_grace
+
+      _not_a_file ->
+        false
+    end
+  end
+
+  defp legacy_referenced?(tenant_id, sha) do
+    Repo.exists?(
+      from a in MessageAttachment, where: a.tenant_id == ^tenant_id and a.sha256 == ^sha
+    )
+  end
+
   @doc "Human-readable size."
   def format_bytes(nil), do: ""
   def format_bytes(bytes) when bytes < 1024, do: "#{bytes} B"

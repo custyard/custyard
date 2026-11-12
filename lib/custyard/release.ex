@@ -153,10 +153,12 @@ defmodule Custyard.Release do
   are still not in the database. Returns those counts.
 
   The app does the same in the background on every boot. Run this to see
-  the numbers: once pending is 0, nothing reads `ATTACHMENT_DIR` or
-  `UPLOAD_DIR` any more. Running it again is safe, and nothing on disk is
-  changed. Run it as `custyard`, the user that owns the database and the
-  files, as for `export_sqlite/1`.
+  the numbers: once pending is 0, the import does not read `ATTACHMENT_DIR`
+  or `UPLOAD_DIR` again. Running it again is safe, and it changes nothing on
+  disk. The running app's daily retention sweep still removes files from
+  `ATTACHMENT_DIR` once no attachment row refers to them
+  (`Custyard.Attachments.sweep_legacy_files/1`). Run it as `custyard`, the
+  user that owns the database and the files, as for `export_sqlite/1`.
 
       bin/custyard eval "Custyard.Release.import_legacy_files()"
   """
@@ -188,8 +190,9 @@ defmodule Custyard.Release do
 
   defp legacy_import_verdict(0) do
     """
-    Every referenced file is in the database. ATTACHMENT_DIR and UPLOAD_DIR are
-    no longer read.
+    Every referenced file is in the database. The import does not read
+    ATTACHMENT_DIR or UPLOAD_DIR again. The daily sweep still removes files
+    from ATTACHMENT_DIR once no attachment refers to them.
     """
   end
 

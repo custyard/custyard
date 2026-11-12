@@ -986,7 +986,8 @@ defmodule Custyard.Boot.Env do
 
     # Where earlier releases wrote tenant logos and inbound attachments. Files
     # are stored in the database; these only locate what such a release left
-    # behind, for a one-time import. Neither is validated or has to exist.
+    # behind, for a one-time import and for the sweep of attachment files
+    # whose rows are gone. Neither is validated or has to exist.
     acc
     |> put(:upload_dir, get(acc, "UPLOAD_DIR") || "/data/uploads")
     |> put(:attachment_dir, get(acc, "ATTACHMENT_DIR") || "/data/attachments")

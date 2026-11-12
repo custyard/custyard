@@ -15,9 +15,41 @@ defmodule Custyard.Threads.RetentionSweepTest do
     channel_verifications: 0,
     channel_tokens: 0,
     attachment_files: 0,
+    legacy_attachment_files: 0,
     incomplete_files: 0,
     message_drafts: 0
   }
+
+  @moduletag :tmp_dir
+
+  # The sweep walks the configured attachment directory, where an earlier
+  # release kept files. Each test gets directories of its own.
+  setup %{tmp_dir: tmp_dir} do
+    dirs = %{attachment_dir: Path.join(tmp_dir, "attachments"), upload_dir: tmp_dir}
+    previous = Map.new(dirs, fn {key, _dir} -> {key, Application.get_env(:custyard, key)} end)
+    Enum.each(dirs, fn {key, dir} -> Application.put_env(:custyard, key, dir) end)
+
+    on_exit(fn ->
+      Enum.each(previous, fn {key, dir} -> Application.put_env(:custyard, key, dir) end)
+    end)
+
+    dirs
+  end
+
+  # A file under the test's directories, last written two days ago.
+  defp old_file!(path) do
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "left by an earlier release")
+    File.touch!(path, System.os_time(:second) - 48 * 3600)
+    path
+  end
+
+  # An attachment as an earlier release kept it on disk, with no row left
+  # that references it.
+  defp legacy_attachment!(attachment_dir) do
+    sha = String.duplicate("c", 64)
+    old_file!(Path.join([attachment_dir, "1", "cc", sha]))
+  end
 
   # cleanup_resolved_threads/2 bounds on :updated_at, so ageing a row
   # means backdating that column past the changeset.
@@ -179,15 +211,36 @@ defmodule Custyard.Threads.RetentionSweepTest do
       assert RetentionSweep.sweep() == @zero_counts
     end
 
-    test "dry_run leaves stored files alone and reports zero for them" do
+    test "removes attachment files an earlier release left on disk, and no logo", %{
+      attachment_dir: attachment_dir,
+      upload_dir: upload_dir
+    } do
+      attachment = legacy_attachment!(attachment_dir)
+      logo = old_file!(Path.join([upload_dir, "logos", "unreferenced.png"]))
+
+      counts = RetentionSweep.sweep()
+
+      assert counts.legacy_attachment_files == 1
+      refute File.exists?(attachment)
+      assert File.exists?(logo)
+
+      assert RetentionSweep.sweep() == @zero_counts
+    end
+
+    test "dry_run leaves stored files alone and reports zero for them", %{
+      attachment_dir: attachment_dir
+    } do
       %{orphan: orphan, abandoned: abandoned} = stored_content!()
+      legacy = legacy_attachment!(attachment_dir)
 
       counts = RetentionSweep.sweep(dry_run: true)
 
       assert counts.attachment_files == 0
+      assert counts.legacy_attachment_files == 0
       assert counts.incomplete_files == 0
       assert Repo.get(StoredFile, orphan.id)
       assert Repo.get(StoredFile, abandoned.id)
+      assert File.exists?(legacy)
     end
 
     test "the sweep's counts are all fields the log accepts" do

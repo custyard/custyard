@@ -199,9 +199,11 @@ A failed check stops boot at the database card, which names the fix.
 
 - `UPLOAD_DIR` (default `/data/uploads`) and `ATTACHMENT_DIR` (default
   `/data/attachments`) name the directories where earlier releases wrote
-  logos and attachments. Only the import described below reads them. Neither
-  is checked at boot, neither has to exist, and nothing is written there. A
-  deployment that never kept files on disk leaves both unset.
+  logos and attachments. The import described below reads them, and the daily
+  retention sweep removes files from `ATTACHMENT_DIR` once no attachment
+  refers to them. Neither is checked at boot, neither has to exist, and
+  nothing is written there. A deployment that never kept files on disk leaves
+  both unset.
 - `DATA_VOLUME_ID` is no longer used. A deployment that still sets it boots
   as before, with a warning in the boot report saying it can be removed.
 - `bin/data-volume` (`init`, `backup`, `restore`) is no longer in the image.
@@ -238,8 +240,8 @@ refers to is left out. Logos go first, then attachments: a logo URL is public
 and should not wait for a long attachment import. Each file must be a
 regular file (a symlink or a directory is refused), at most 100 MiB for an
 attachment or 2,000,000 bytes for a logo, and an attachment's content must
-have the SHA-256 it is named by. Nothing on disk is written, moved or
-deleted, and attachment rows are not changed, so scan verdicts stay as they
+have the SHA-256 it is named by. The import writes, moves and deletes nothing
+on disk, and attachment rows are not changed, so scan verdicts stay as they
 were.
 
 Until a file has been imported, its logo URL and its attachment download
@@ -266,8 +268,9 @@ Legacy file import
   missing   0
   failed    0
   pending   0
-Every referenced file is in the database. ATTACHMENT_DIR and UPLOAD_DIR are
-no longer read.
+Every referenced file is in the database. The import does not read
+ATTACHMENT_DIR or UPLOAD_DIR again. The daily sweep still removes files
+from ATTACHMENT_DIR once no attachment refers to them.
 ```
 
 | Line | Meaning |
@@ -295,10 +298,38 @@ If `pending` stays above 0:
 - A `failed` file is still on the volume and is lost when the volume goes.
   Look at these before removing anything.
 
-To roll back to the earlier release, keep the directories: nothing in them
-changed, so that release still finds every file it wrote. Logos and
-attachments received after the upgrade exist only in the database, and an
-earlier release does not read them.
+To roll back to the earlier release, keep the directories: the import changes
+nothing in them and the daily sweep removes only files that no row refers to
+([The files left on disk](#the-files-left-on-disk)), so that release still
+finds every file its rows refer to. Logos and attachments received after the
+upgrade exist only in the database, and an earlier release does not read
+them.
+
+### The files left on disk
+
+The import leaves every original where it is. What happens to an original
+after that depends on its rows:
+
+- An attachment whose rows are gone is removed from `ATTACHMENT_DIR` by the
+  daily retention sweep, as in earlier releases. That covers attachments
+  removed by a data subject erasure (`bin/dsar`) and attachments of threads
+  past their retention period, whether the rows went before the import or
+  after it. The sweep removes a file once no attachment row of its tenant
+  refers to it and the file is at least a day old.
+- An attachment whose rows still exist stays on disk until you delete the
+  directories, after the import reports nothing pending
+  ([Removing the volume](#removing-the-volume)). So does every logo: the
+  sweep never touches `UPLOAD_DIR`.
+
+The sweep first runs 24 hours after the app boots and then every 24 hours. A
+restart starts that wait again. When it removes anything, the
+`retention_sweep_completed` event in the log carries the number of files as
+`legacy_attachment_files`. With no directory at `ATTACHMENT_DIR` it does
+nothing.
+
+The sweep goes by the database the app is running on. Do not start the app on
+a database that lacks the attachment rows while the volume is mounted: every
+file would count as unreferenced and be removed.
 
 ### Removing the volume
 
@@ -309,7 +340,10 @@ A volume is still needed while either of these is true:
 
 With a local SQLite database the volume stays. Once `pending` is 0 and a
 backup exists, the `uploads` and `attachments` directories on it can be
-deleted; the app does not read them again.
+deleted. Until then they keep the original of every logo and of every
+attachment whose rows still exist, and the daily sweep goes on removing the
+files of attachments that are erased or expire
+([The files left on disk](#the-files-left-on-disk)).
 
 With a remote database the volume can go once `pending` is 0, or once
 `failed` is 0 and everything still pending is `missing`:

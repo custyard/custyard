@@ -47,8 +47,7 @@ and [environment configuration](https://bunny.net/docs/magic-containers/environm
 Do not set `DATA_VOLUME_ID`, `UPLOAD_DIR` or `ATTACHMENT_DIR` on a new
 container. `DATA_VOLUME_ID` is no longer used; a container that still sets it
 boots, with a warning in the boot report that it can be removed. `UPLOAD_DIR`
-and `ATTACHMENT_DIR` only tell the app where an earlier release left files to
-import.
+and `ATTACHMENT_DIR` only tell the app where an earlier release left files.
 
 Optional: `SENTRY_DSN`,
 `SENTRY_ENVIRONMENT=production`, and `SENTRY_RELEASE` set to the deployed SHA.

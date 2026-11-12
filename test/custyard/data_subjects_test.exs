@@ -661,6 +661,40 @@ defmodule Custyard.DataSubjectsTest do
       assert [%StoredFile{}] = Repo.all(StoredFile)
     end
 
+    # An upgraded deployment still has the files an earlier release wrote to
+    # the attachment directory. The erasure has to reach those too.
+    @tag :tmp_dir
+    test "the files an earlier release left on disk go with the next sweep", ctx do
+      {:ok, [only_pat, also_alice]} =
+        Attachments.fetch_for_message(ctx.sent, [
+          %{filename: "passport.txt", content: "only Pat sent this"},
+          %{filename: "terms.txt", content: "Alice attached this too"}
+        ])
+
+      {:ok, [_kept]} =
+        Attachments.fetch_for_message(ctx.cc, [
+          %{filename: "terms.txt", content: "Alice attached this too"}
+        ])
+
+      [pat_file, shared_file] =
+        for %{sha256: sha} <- [only_pat, also_alice] do
+          path =
+            Path.join([ctx.tmp_dir, "#{ctx.org.tenant_id}", binary_part(sha, 0, 2), sha])
+
+          File.mkdir_p!(Path.dirname(path))
+          File.write!(path, "as an earlier release wrote it")
+          File.touch!(path, System.os_time(:second) - 48 * 3600)
+          path
+        end
+
+      assert Attachments.sweep_legacy_files(attachment_dir: ctx.tmp_dir) == 0
+      assert {:ok, _} = DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
+
+      assert Attachments.sweep_legacy_files(attachment_dir: ctx.tmp_dir) == 1
+      refute File.exists?(pat_file)
+      assert File.exists?(shared_file)
+    end
+
     test "keeps staff replies, without the person's address", ctx do
       DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
 

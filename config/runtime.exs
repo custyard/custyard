@@ -326,8 +326,9 @@ if config_env() == :prod do
 
   # Where earlier releases wrote tenant logos (UPLOAD_DIR) and inbound email
   # attachments (ATTACHMENT_DIR). Files are stored in the database; these
-  # only locate what such a release left behind, for a one-time import.
-  # Neither is validated or has to exist.
+  # only locate what such a release left behind, for a one-time import and
+  # for the sweep of attachment files whose rows are gone. Neither is
+  # validated or has to exist.
   config :custyard,
     upload_dir: settings.upload_dir,
     attachment_dir: settings.attachment_dir

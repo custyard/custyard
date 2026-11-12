@@ -12,8 +12,8 @@ defmodule Custyard.Files.LegacyImport do
   `run/1` stores every referenced file the database does not hold yet: an
   attachment as the tenant's `:attachment` file keyed by its SHA-256, a logo
   as the tenant's `:logo` file keyed by its name with the extension
-  lowercased. Once `pending/1` is zero nothing reads the two directories
-  again, and they can go.
+  lowercased. Logos go first. Once `pending/1` is zero the import does not
+  read the two directories again, and they can go.
 
   It runs in the background on every boot (`child_spec/1`, added by
   `Custyard.Application`) and on demand as
@@ -28,10 +28,16 @@ defmodule Custyard.Files.LegacyImport do
   missing, one that is there but fails a check as failed, and the import
   goes on to the next.
 
-  Nothing on disk is written, moved or deleted, and attachment rows are not
-  touched: a scan verdict stays with its row. A second run finds the
+  The import writes, moves and deletes nothing on disk, and attachment rows
+  are not touched: a scan verdict stays with its row. A second run finds the
   imported files in the database and reports only what is still missing or
   failing.
+
+  The originals stay until someone deletes the directories, with one
+  exception: the daily retention sweep removes an attachment's file once no
+  row of its tenant references it
+  (`Custyard.Attachments.sweep_legacy_files/1`), so erasure and retention
+  still reach what an earlier release wrote. Logos on disk are never removed.
 
   The logs carry counts only, never a path, key, hash or filename.
   """

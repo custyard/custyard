@@ -130,7 +130,7 @@ Non-secret environment variables go in the `[env]` section of `fly.toml`:
 | `POOL_SIZE` | `10` | Ecto connection pool size |
 | `LMTP_ENABLED` | `false` | LMTP server (disabled — ports blocked on Fly.io) |
 | `UPLOAD_DIR` | `/data/uploads` | Where an earlier release wrote tenant logos. Read only by the import of those files into the database; leave unset on a new install |
-| `ATTACHMENT_DIR` | `/data/attachments` | Where an earlier release wrote inbound email attachments. Read only by the same import; leave unset on a new install |
+| `ATTACHMENT_DIR` | `/data/attachments` | Where an earlier release wrote inbound email attachments. Read by the same import and by the daily sweep, which removes files there once no attachment refers to them; leave unset on a new install |
 
 Logos and attachments are stored in the database and served from it. See
 [Files in the database](ops/database.md#files-in-the-database) for the

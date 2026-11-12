@@ -6,7 +6,7 @@ defmodule Custyard.AttachmentsTest do
 
   alias Custyard.{Attachments, Files, MessageAttachment, Repo}
   alias Custyard.Attachments.StubClient
-  alias Custyard.Files.{Chunk, StoredFile}
+  alias Custyard.Files.{Chunk, LegacyImport, StoredFile}
 
   defp scope(staff),
     do: Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
@@ -51,6 +51,43 @@ defmodule Custyard.AttachmentsTest do
   defp publish_hours_ago(%StoredFile{id: id}, hours) do
     at = DateTime.utc_now(:second) |> DateTime.add(-hours * 3600, :second)
     Repo.update_all(from(f in StoredFile, where: f.id == ^id), set: [completed_at: at])
+  end
+
+  # Where an earlier release kept a tenant's attachment with this hash.
+  defp legacy_path(dir, tenant_id, sha),
+    do: Path.join([dir, Integer.to_string(tenant_id), binary_part(sha, 0, 2), sha])
+
+  defp aged_file(path, bytes, hours) do
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, bytes)
+    File.touch!(path, System.os_time(:second) - hours * 3600)
+    path
+  end
+
+  # Such a file, last written `hours` ago. Returns its path.
+  defp legacy_file(dir, tenant_id, bytes, hours),
+    do: aged_file(legacy_path(dir, tenant_id, sha256(bytes)), bytes, hours)
+
+  # A row as that release left it, on a message of its own: it names the
+  # content by hash and nothing is in the store for it.
+  defp legacy_row(thread_id, bytes, attrs \\ []) do
+    message = insert_message(thread_id: thread_id)
+
+    Repo.insert!(
+      struct!(
+        %MessageAttachment{
+          tenant_id: message.tenant_id,
+          message_id: message.id,
+          position: 0,
+          state: :fetched,
+          sha256: sha256(bytes),
+          size: byte_size(bytes),
+          filename: "legacy.pdf",
+          scan_status: :clean
+        },
+        attrs
+      )
+    )
   end
 
   describe "fetch_for_message/3" do
@@ -694,6 +731,224 @@ defmodule Custyard.AttachmentsTest do
 
       again = fetched(insert_message(thread_id: message.thread_id), bytes)
       assert Files.read(Attachments.stored_file(again)) == {:ok, bytes}
+    end
+  end
+
+  describe "sweep_legacy_files/1" do
+    @describetag :tmp_dir
+
+    setup %{tmp_dir: tmp_dir, message: message} do
+      dir = Path.join(tmp_dir, "attachments")
+      File.mkdir_p!(dir)
+      %{dir: dir, tenant_id: message.tenant_id, thread_id: message.thread_id}
+    end
+
+    test "removes files no row references and keeps the rest", %{
+      dir: dir,
+      tenant_id: tenant_id,
+      thread_id: thread_id
+    } do
+      kept = legacy_file(dir, tenant_id, "still referenced", 25)
+      legacy_row(thread_id, "still referenced")
+      orphan = legacy_file(dir, tenant_id, "orphan", 25)
+
+      assert Attachments.sweep_legacy_files(attachment_dir: dir) == 1
+
+      refute File.exists?(orphan)
+      assert File.read!(kept) == "still referenced"
+      assert Attachments.sweep_legacy_files(attachment_dir: dir) == 0
+    end
+
+    test "leaves young files and temporary writes alone", %{dir: dir, tenant_id: tenant_id} do
+      fresh = legacy_file(dir, tenant_id, "written just now", 0)
+      young = legacy_file(dir, tenant_id, "not a day old yet", 23)
+
+      temporary =
+        aged_file(legacy_path(dir, tenant_id, sha256("in progress")) <> ".tmp-123", "in", 25)
+
+      assert Attachments.sweep_legacy_files(attachment_dir: dir) == 0
+
+      assert File.exists?(fresh)
+      assert File.exists?(young)
+      assert File.exists?(temporary)
+    end
+
+    # What erasure and the retention sweep do to an upgraded deployment:
+    # the rows go, before or after the import has copied their content.
+    test "removes a file whose row went before the import and one whose row went after it", %{
+      dir: dir,
+      tenant_id: tenant_id,
+      thread_id: thread_id
+    } do
+      before_import = legacy_file(dir, tenant_id, "erased before the import", 25)
+      early = legacy_row(thread_id, "erased before the import")
+      after_import = legacy_file(dir, tenant_id, "erased after the import", 25)
+      late = legacy_row(thread_id, "erased after the import")
+      kept = legacy_file(dir, tenant_id, "never erased", 25)
+      kept_row = legacy_row(thread_id, "never erased")
+
+      Repo.delete!(early)
+
+      assert LegacyImport.run(attachment_dir: dir, upload_dir: nil) ==
+               %{attachments: 2, logos: 0, missing: 0, failed: 0}
+
+      Repo.delete!(late)
+
+      assert Attachments.sweep_legacy_files(attachment_dir: dir) == 2
+
+      refute File.exists?(before_import)
+      refute File.exists?(after_import)
+      assert File.read!(kept) == "never erased"
+      assert Files.read(Attachments.stored_file(kept_row)) == {:ok, "never erased"}
+    end
+
+    test "keeps a referenced file the import has not reached, whatever the row's state", %{
+      dir: dir,
+      tenant_id: tenant_id,
+      thread_id: thread_id
+    } do
+      paths =
+        for state <- [:fetched, :pending, :skipped, :failed] do
+          bytes = "referenced by a row in state #{state}"
+          legacy_row(thread_id, bytes, state: state)
+          legacy_file(dir, tenant_id, bytes, 48)
+        end
+
+      assert LegacyImport.pending() == 1
+      assert stored_files(tenant_id) == []
+
+      assert Attachments.sweep_legacy_files(attachment_dir: dir) == 0
+      assert Enum.all?(paths, &File.exists?/1)
+    end
+
+    test "another tenant's row with the same hash does not keep the file", %{
+      dir: dir,
+      tenant_id: tenant_id
+    } do
+      bytes = "the same bytes in two tenants"
+      other = insert_organization(tenant_id: insert_tenant().id)
+      their_row = legacy_row(insert_thread(organization_id: other.id).id, bytes)
+      theirs = legacy_file(dir, their_row.tenant_id, bytes, 25)
+      mine = legacy_file(dir, tenant_id, bytes, 25)
+
+      assert Attachments.sweep_legacy_files(attachment_dir: dir) == 1
+
+      refute File.exists?(mine)
+      assert File.read!(theirs) == bytes
+    end
+
+    test "a symlink is neither followed nor removed", %{
+      tmp_dir: tmp_dir,
+      dir: dir,
+      tenant_id: tenant_id
+    } do
+      elsewhere = Path.join(tmp_dir, "elsewhere")
+
+      # In place of a file, pointing at an old file outside the directory.
+      linked = sha256("behind a link")
+      target = aged_file(Path.join(elsewhere, "file"), "behind a link", 25)
+      link = legacy_path(dir, tenant_id, linked)
+      File.mkdir_p!(Path.dirname(link))
+      File.ln_s!(target, link)
+
+      # In place of a prefix directory and of a tenant directory, each
+      # pointing at a directory that holds an old file no row references.
+      under_prefix = sha256("behind a linked prefix directory")
+      prefix = binary_part(under_prefix, 0, 2)
+      prefix_target = Path.join([elsewhere, "prefix", under_prefix])
+      aged_file(prefix_target, "behind a linked prefix directory", 25)
+      File.ln_s!(Path.dirname(prefix_target), Path.join([dir, "#{tenant_id}", prefix]))
+
+      under_tenant = sha256("behind a linked tenant directory")
+
+      tenant_target =
+        Path.join([elsewhere, "tenant", binary_part(under_tenant, 0, 2), under_tenant])
+
+      aged_file(tenant_target, "behind a linked tenant directory", 25)
+      File.ln_s!(Path.join(elsewhere, "tenant"), Path.join(dir, "#{tenant_id + 1}"))
+
+      # Each link leads to what the sweep would remove if it followed it.
+      assert File.stat!(link).type == :regular
+      assert File.exists?(Path.join([dir, "#{tenant_id}", prefix, under_prefix]))
+      assert File.exists?(legacy_path(dir, tenant_id + 1, under_tenant))
+
+      assert Attachments.sweep_legacy_files(attachment_dir: dir) == 0
+
+      assert File.read_link!(link) == target
+      assert File.read!(target) == "behind a link"
+      assert File.exists?(prefix_target)
+      assert File.exists?(tenant_target)
+    end
+
+    defp other_prefix("00"), do: "ff"
+    defp other_prefix(_prefix), do: "00"
+
+    test "only a file at exactly the path an earlier release wrote is considered", %{
+      dir: dir,
+      tenant_id: tenant_id
+    } do
+      sha = sha256("misplaced")
+      prefix = binary_part(sha, 0, 2)
+      tenant = Integer.to_string(tenant_id)
+
+      misplaced =
+        for parts <- [
+              [sha],
+              [tenant, sha],
+              [tenant, prefix, sha, sha],
+              [tenant, prefix, String.upcase(sha256("uppercase"))],
+              [tenant, prefix, binary_part(sha, 0, 63)],
+              [tenant, prefix, sha <> "0"],
+              [tenant, prefix <> "0", sha],
+              [tenant, "zz", sha],
+              [tenant, other_prefix(prefix), sha],
+              ["0" <> tenant, prefix, sha],
+              ["000", prefix, sha],
+              ["tenant-" <> tenant, prefix, sha],
+              [String.duplicate("9", 19), prefix, sha]
+            ] do
+          aged_file(Path.join([dir | parts]), "misplaced", 25)
+        end
+
+      orphan = legacy_file(dir, tenant_id, "orphan", 25)
+
+      assert Attachments.sweep_legacy_files(attachment_dir: dir) == 1
+
+      refute File.exists?(orphan)
+      assert Enum.all?(misplaced, &File.exists?/1)
+    end
+
+    test "a directory that is missing or not set is nothing to sweep", %{
+      tmp_dir: tmp_dir,
+      dir: dir
+    } do
+      gone = Path.join(tmp_dir, "removed")
+      not_a_directory = aged_file(Path.join(dir, "file"), "not a directory", 25)
+
+      for attachment_dir <- [gone, not_a_directory, nil, ""] do
+        assert Attachments.sweep_legacy_files(attachment_dir: attachment_dir) == 0
+      end
+
+      refute File.exists?(gone)
+      assert File.exists?(not_a_directory)
+    end
+
+    test "a directory that cannot be read is nothing to sweep", %{dir: dir, tenant_id: tenant_id} do
+      path = legacy_file(dir, tenant_id, "inside an unreadable directory", 25)
+      tenant_dir = Path.join(dir, Integer.to_string(tenant_id))
+
+      for unreadable <- [tenant_dir, dir] do
+        File.chmod!(unreadable, 0o000)
+        on_exit(fn -> File.chmod(unreadable, 0o755) end)
+
+        # Root reads any directory, so as root there is nothing to see here.
+        if File.ls(unreadable) == {:error, :eacces} do
+          assert Attachments.sweep_legacy_files(attachment_dir: dir) == 0
+        end
+
+        File.chmod!(unreadable, 0o755)
+        assert File.exists?(path)
+      end
     end
   end
 

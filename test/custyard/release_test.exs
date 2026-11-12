@@ -472,8 +472,9 @@ defmodule Custyard.ReleaseTest do
                missing   0
                failed    0
                pending   0
-             Every referenced file is in the database. ATTACHMENT_DIR and UPLOAD_DIR are
-             no longer read.
+             Every referenced file is in the database. The import does not read
+             ATTACHMENT_DIR or UPLOAD_DIR again. The daily sweep still removes files
+             from ATTACHMENT_DIR once no attachment refers to them.
              """
     end
 
