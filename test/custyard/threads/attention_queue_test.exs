@@ -5,7 +5,7 @@ defmodule Custyard.Threads.AttentionQueueTest do
   import Custyard.Factory
 
   alias Custyard.{Labels, Threads}
-  alias Custyard.Threads.QueuePreview
+  alias Custyard.Threads.{QueueNav, QueuePreview}
 
   setup do
     tenant = insert_tenant()
@@ -231,8 +231,11 @@ defmodule Custyard.Threads.AttentionQueueTest do
     test "counts what each filter lists", c do
       counts = Threads.queue_counts(c.scope)
 
+      # None of these threads has a message, so every listed one that is
+      # neither waiting nor resolved needs a reply.
       assert counts == %{
                "all" => 8,
+               "needs_reply" => 5,
                "new" => 2,
                "active" => 2,
                "waiting" => 2,
@@ -240,6 +243,8 @@ defmodule Custyard.Threads.AttentionQueueTest do
                "snoozed" => 2,
                "due_tasks" => 2
              }
+
+      assert Map.keys(counts) |> Enum.sort() == Enum.sort(Threads.queue_filters())
 
       for {filter, count} <- counts do
         assert length(Threads.list(c.scope, filter: filter)) == count, "filter #{filter}"
@@ -288,7 +293,455 @@ defmodule Custyard.Threads.AttentionQueueTest do
       assert %{"all" => 0, "snoozed" => 0} = Threads.queue_counts(other_scope)
 
       Repo.delete!(c.staff)
-      assert %{"all" => 0, "new" => 0, "due_tasks" => 0} = Threads.queue_counts(c.scope)
+
+      assert %{"all" => 0, "new" => 0, "due_tasks" => 0, "needs_reply" => 0} =
+               Threads.queue_counts(c.scope)
+    end
+  end
+
+  describe "needs_reply filter" do
+    setup c do
+      later = DateTime.utc_now() |> DateTime.add(86_400) |> DateTime.truncate(:second)
+      thread = fn attrs -> insert_thread([organization_id: c.org.id] ++ attrs) end
+      customer = fn t -> insert_message(thread_id: t.id, body: "From the customer") end
+      staff = fn t -> insert_message(thread_id: t.id, source: :staff, body: "From staff") end
+
+      note = fn t ->
+        insert_message(thread_id: t.id, source: :staff, is_internal_note: true, body: "Memo")
+      end
+
+      auto = fn t ->
+        insert_message(thread_id: t.id, body: "Out of office", triage_class: :auto_response)
+      end
+
+      mailbox = fn t ->
+        insert_message(thread_id: t.id, body: "Sent from my mailbox", triage_class: :staff_sent)
+      end
+
+      # {name, thread attrs, messages in order, needs a reply?}
+      cases = [
+        {:unanswered, [state: :new], [customer], true},
+        {:no_messages, [state: :active], [], true},
+        {:only_notes, [state: :active], [note], true},
+        {:customer_after_reply, [state: :active], [customer, staff, customer], true},
+        {:note_after_customer, [state: :active], [customer, note], true},
+        {:dormant_customer_last, [state: :dormant], [staff, customer], true},
+        {:staff_replied, [state: :active], [customer, staff], false},
+        {:replied_from_mailbox, [state: :active], [customer, mailbox], false},
+        {:auto_reply_after_reply, [state: :active], [customer, staff, auto], false},
+        {:note_after_reply, [state: :active], [customer, staff, note], false},
+        {:parked_waiting, [state: :waiting], [customer], false},
+        {:resolved, [state: :resolved], [customer], false},
+        {:snoozed, [state: :active, snoozed_until: later], [customer], false}
+      ]
+
+      threads =
+        Map.new(cases, fn {name, attrs, messages, _needs_reply?} ->
+          t = thread.(attrs)
+          Enum.each(messages, & &1.(t))
+          {name, t}
+        end)
+
+      expected =
+        for {name, _attrs, _messages, true} <- cases, into: MapSet.new(), do: threads[name].id
+
+      {:ok, threads: threads, expected: expected}
+    end
+
+    test "lists the threads where the customer is waiting on staff", c do
+      listed = Threads.list(c.scope, filter: "needs_reply")
+
+      assert MapSet.new(listed, & &1.thread.id) == c.expected
+      assert Threads.queue_counts(c.scope)["needs_reply"] == MapSet.size(c.expected)
+    end
+
+    test "agrees with the turn shown on each row", c do
+      rows = Threads.list(c.scope)
+      previews = Threads.queue_previews(c.scope, Enum.map(rows, & &1.thread.id))
+
+      ours =
+        for %{thread: thread} <- rows,
+            QueuePreview.turn(thread, previews[thread.id]) == :ours,
+            into: MapSet.new(),
+            do: thread.id
+
+      assert ours == c.expected
+      assert ours == MapSet.new(Threads.list(c.scope, filter: "needs_reply"), & &1.thread.id)
+    end
+
+    test "combines with the label filter and stays inside the tenant", c do
+      {:ok, label} = Labels.create_and_assign(c.scope, c.threads.unanswered, "Billing")
+      {:ok, _} = Labels.assign(c.scope, c.threads.staff_replied, label.id)
+
+      assert [%{thread: %{id: id}}] =
+               Threads.list(c.scope, filter: "needs_reply", label_id: label.id)
+
+      assert id == c.threads.unanswered.id
+      assert Threads.queue_counts(c.scope, label_id: label.id)["needs_reply"] == 1
+
+      other_tenant = insert_tenant()
+      other_staff = insert_staff_account(role: "admin", tenant_id: other_tenant.id)
+      other_scope = Custyard.Scope.for_staff(other_staff, other_tenant)
+      assert Threads.list(other_scope, filter: "needs_reply") == []
+    end
+
+    test "a snoozed thread with a due task is listed like in every other view", c do
+      {:ok, _} =
+        Threads.create_task(%{
+          title: "Overdue",
+          thread_id: c.threads.snoozed.id,
+          due_at: DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
+        })
+
+      ids = MapSet.new(Threads.list(c.scope, filter: "needs_reply"), & &1.thread.id)
+      assert c.threads.snoozed.id in ids
+      assert Threads.queue_counts(c.scope)["needs_reply"] == MapSet.size(ids)
+    end
+  end
+
+  describe "row message counts" do
+    test "exchange_count leaves out internal notes and automatic replies", c do
+      thread = insert_thread(organization_id: c.org.id, state: :active)
+      insert_message(thread_id: thread.id, body: "Question")
+      insert_message(thread_id: thread.id, source: :staff, body: "Answer")
+      insert_message(thread_id: thread.id, source: :staff, is_internal_note: true, body: "Memo")
+      insert_message(thread_id: thread.id, body: "Away", triage_class: :auto_response)
+
+      empty = insert_thread(organization_id: c.org.id, state: :active)
+
+      rows = Map.new(Threads.list(c.scope), &{&1.thread.id, &1})
+      assert %{message_count: 4, exchange_count: 2} = rows[thread.id]
+      assert %{message_count: 0, exchange_count: 0} = rows[empty.id]
+    end
+  end
+
+  describe "queue_ids/2" do
+    test "returns the ids of list/2 in the same order for every filter", c do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # Equal scores throughout: only the id tie-break orders these.
+      for state <- [:new, :active, :active, :waiting, :dormant, :new] do
+        insert_thread(organization_id: c.org.id, state: state, cached_score: 40)
+      end
+
+      top = insert_thread(organization_id: c.org.id, state: :active, cached_score: 90)
+      due = insert_thread(organization_id: c.org.id, state: :active, cached_score: 1)
+
+      {:ok, _} =
+        Threads.create_task(%{title: "Due", thread_id: due.id, due_at: DateTime.add(now, -60)})
+
+      # Answered, so only the message facts keep it out of "needs_reply".
+      insert_message(thread_id: top.id, body: "Question")
+      insert_message(thread_id: top.id, source: :staff, body: "Answer")
+
+      insert_thread(
+        organization_id: c.org.id,
+        state: :active,
+        cached_score: 40,
+        snoozed_until: DateTime.add(now, 86_400)
+      )
+
+      for filter <- Threads.queue_filters() do
+        listed = Threads.list(c.scope, filter: filter) |> Enum.map(& &1.thread.id)
+        assert listed != [], "filter #{filter}"
+        assert Threads.queue_ids(c.scope, filter: filter) == listed, "filter #{filter}"
+      end
+
+      refute top.id in Threads.queue_ids(c.scope, filter: "needs_reply")
+
+      all = Threads.queue_ids(c.scope)
+      assert Enum.take(all, 2) == [due.id, top.id]
+      assert Enum.drop(all, 2) == Enum.sort(Enum.drop(all, 2))
+    end
+
+    test "is empty for a revoked scope and never crosses tenants", c do
+      own = insert_thread(organization_id: c.org.id, state: :active)
+      foreign_tenant = insert_tenant()
+      insert_thread(tenant_id: foreign_tenant.id, source: :public_intake, state: :new)
+
+      assert Threads.queue_ids(c.scope) == [own.id]
+
+      Repo.delete!(c.staff)
+      assert Threads.queue_ids(c.scope) == []
+    end
+
+    test "reads the message facts only for the filter that needs them", c do
+      thread = insert_thread(organization_id: c.org.id, state: :active)
+      insert_message(thread_id: thread.id, body: "Question")
+
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach(
+        "queue-ids-queries-#{inspect(ref)}",
+        [:custyard, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid, do: send(test_pid, {ref, metadata.query})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("queue-ids-queries-#{inspect(ref)}") end)
+
+      for filter <- Threads.queue_filters() do
+        Threads.queue_ids(c.scope, filter: filter)
+
+        queries =
+          Stream.repeatedly(fn ->
+            receive do
+              {^ref, sql} -> sql
+            after
+              0 -> nil
+            end
+          end)
+          |> Enum.take_while(& &1)
+
+        assert Enum.any?(queries, &(&1 =~ ~s("threads"))), "filter #{filter}"
+
+        assert Enum.any?(queries, &(&1 =~ ~s("messages"))) == (filter == "needs_reply"),
+               "filter #{filter}"
+      end
+    end
+  end
+
+  describe "QueueNav.neighbors/4" do
+    test "finds the neighbors of a listed conversation" do
+      assert QueueNav.neighbors([10, 20, 30], 20) == %{
+               prev: %{id: 10, pos: 0, after: [], before: [20, 30]},
+               next: %{id: 30, pos: 2, after: [20, 10], before: []},
+               position: 2,
+               total: 3,
+               place: %{pos: 1, after: [10], before: [30]}
+             }
+
+      assert %{prev: nil, next: %{id: 20, pos: 1}, position: 1} =
+               QueueNav.neighbors([10, 20, 30], 10)
+
+      assert %{prev: %{id: 20, pos: 1}, next: nil, position: 3} =
+               QueueNav.neighbors([10, 20, 30], 30)
+    end
+
+    test "a hint that matches the current place changes nothing" do
+      assert QueueNav.neighbors([10, 20, 30], 20, 1) == QueueNav.neighbors([10, 20, 30], 20)
+    end
+
+    test "keeps the place it was opened at when opening made it sink in the queue" do
+      # 20 was second (position 1). Opening it dropped its score to the end.
+      assert QueueNav.neighbors([10, 30, 40, 20], 20, 1) == %{
+               prev: %{id: 10, pos: 0, after: [], before: [30, 40, 20]},
+               next: %{id: 30, pos: 1, after: [10], before: [40, 20]},
+               position: 2,
+               total: 4,
+               place: %{pos: 1, after: [10], before: [30, 40]}
+             }
+
+      # And when it rose instead.
+      assert %{prev: %{id: 30, pos: 2}, next: %{id: 40, pos: 3}} =
+               QueueNav.neighbors([20, 10, 30, 40], 20, 2)
+    end
+
+    test "follows the conversation listed before it when the queue changed above" do
+      # The queue was 10..50 and 20 was being read: its link to 30 says third,
+      # after 20 and before 40.
+      link = [after: 20, before: 40]
+
+      # A colleague resolved 10 meanwhile, so 30 is second.
+      assert QueueNav.neighbors([20, 30, 40, 50], 30, 2, link) == %{
+               prev: %{id: 20, pos: 0, after: [], before: [30, 40, 50]},
+               next: %{id: 40, pos: 2, after: [30, 20], before: [50]},
+               position: 2,
+               total: 4,
+               place: %{pos: 1, after: [20], before: [40, 50]}
+             }
+
+      # Or a new conversation arrived on top, so 30 is fourth and 20 is behind it.
+      assert %{prev: %{id: 20}, next: %{id: 40}, position: 4, total: 6} =
+               QueueNav.neighbors([5, 10, 20, 30, 40, 50], 30, 2, link)
+
+      # Opening 30 also made it sink: the anchor still gives the place it had.
+      assert %{prev: %{id: 20}, next: %{id: 40}, position: 2, total: 4} =
+               QueueNav.neighbors([20, 40, 50, 30], 30, 2, link)
+    end
+
+    test "falls back to the conversation listed after it, then to the position" do
+      # A first row has nothing before it. A new conversation arrived on top:
+      # it is offered next, not passed by.
+      assert %{prev: nil, next: %{id: 5}, position: 1} =
+               QueueNav.neighbors([5, 10, 20, 30], 10, 0, before: 20)
+
+      # The conversation listed after a first row sank instead: a colleague
+      # opened it. What followed it is next.
+      assert %{prev: nil, next: %{id: 30}, position: 1} =
+               QueueNav.neighbors([30, 40, 20, 10], 10, 0, before: 20)
+
+      # "new" filter: a colleague opened 10, opening 30 took it out as well.
+      assert %{prev: nil, next: %{id: 40}, position: 1} =
+               QueueNav.neighbors([40, 50], 30, 1, after: 10, before: 40)
+
+      # Both have left: the position is all there is.
+      assert QueueNav.neighbors([10, 50], 30, 1, after: 20, before: 40) ==
+               QueueNav.neighbors([10, 50], 30, 1)
+    end
+
+    test "anchors that moved point at different places" do
+      # The queue was 10..50 and 30 was third, after 20 and before 40.
+      place = [after: 20, before: 40]
+
+      # A colleague replied to 20, which sank; then 30 sank the same way.
+      assert %{prev: %{id: 10}, next: %{id: 40}, position: 2, total: 5} =
+               QueueNav.neighbors([10, 40, 50, 20, 30], 30, 2, place)
+
+      # 20 sank and 30 stayed where it was.
+      assert %{prev: %{id: 10}, next: %{id: 40}, position: 2} =
+               QueueNav.neighbors([10, 30, 40, 50, 20], 30, 2, place)
+
+      # The customer of 20 wrote again, which raised it to the top.
+      assert %{prev: %{id: 10}, next: %{id: 40}, position: 3} =
+               QueueNav.neighbors([20, 10, 40, 50, 30], 30, 2, place)
+
+      # 40 sank instead: what followed it is next.
+      assert %{prev: %{id: 20}, next: %{id: 50}, position: 3} =
+               QueueNav.neighbors([10, 20, 50, 40, 30], 30, 2, place)
+    end
+
+    test "a conversation that arrived between the witnesses is offered next" do
+      place = [after: 20, before: 40]
+
+      assert %{prev: %{id: 20}, next: %{id: 25}, position: 3, total: 6} =
+               QueueNav.neighbors([10, 20, 25, 30, 40, 50], 30, 2, place)
+
+      # The same when 30 has left the list ("new" filter).
+      assert %{prev: %{id: 20}, next: %{id: 25}} =
+               QueueNav.neighbors([10, 20, 25, 40, 50], 30, 2, place)
+
+      # No position to go by: the earliest place that fits.
+      assert %{prev: %{id: 20}, next: %{id: 60}} =
+               QueueNav.neighbors([20, 60, 70, 40], 30, nil, place)
+    end
+
+    test "a witness that moved is outvoted by the others" do
+      # Third of five, remembered with two witnesses on each side. 40 rose to
+      # the top and 20 sank to the end.
+      assert %{prev: %{id: 10}, next: %{id: 50}, position: 3} =
+               QueueNav.neighbors([40, 10, 30, 50, 20], 30, 2, after: [20, 10], before: [40, 50])
+
+      # Fourth of five. 30 left the queue and 50 rose to the top.
+      assert %{prev: %{id: 20}, next: nil, position: 4} =
+               QueueNav.neighbors([50, 10, 20, 40], 40, 3, after: [30, 20, 10], before: [50])
+    end
+
+    test "place/2 names the witnesses around a row for a link to it" do
+      ids = [10, 20, 30, 40, 50, 60, 70, 80, 90]
+
+      assert QueueNav.place(ids, 4) == %{pos: 4, after: [40, 30, 20], before: [60, 70, 80]}
+      assert QueueNav.place(ids, 0) == %{pos: 0, after: [], before: [20, 30, 40]}
+      assert QueueNav.place(ids, 8) == %{pos: 8, after: [80, 70, 60], before: []}
+      assert QueueNav.place([10], 0) == %{pos: 0, after: [], before: []}
+    end
+
+    test "the place it returns names the witnesses on each side, nearest first" do
+      assert %{place: %{pos: 4, after: [40, 30, 20], before: [60, 70, 80]}} =
+               QueueNav.neighbors([10, 20, 30, 40, 50, 60, 70, 80, 90], 50)
+
+      assert %{place: %{pos: 0, after: [], before: [20]}} = QueueNav.neighbors([10, 20], 10)
+      assert %{place: nil} = QueueNav.neighbors([10, 20], 30)
+    end
+
+    # One conversation arrives, leaves or moves while a reader sits in a gap
+    # between the others. Returns the queue afterwards with the gaps that are
+    # right: one, or two when the change landed exactly in the reader's gap.
+    defp single_changes(others, gap) do
+      arrivals =
+        for at <- 0..length(others) do
+          {List.insert_at(others, at, :arrival), after_insert(gap, at)}
+        end
+
+      departures =
+        for at <- 0..(length(others) - 1)//1 do
+          {List.delete_at(others, at), [after_delete(gap, at)]}
+        end
+
+      moves =
+        for from <- 0..(length(others) - 1)//1, to <- 0..(length(others) - 1)//1, from != to do
+          {mover, rest} = List.pop_at(others, from)
+          {List.insert_at(rest, to, mover), after_insert(after_delete(gap, from), to)}
+        end
+
+      arrivals ++ departures ++ moves
+    end
+
+    defp after_delete(gap, at), do: if(at < gap, do: gap - 1, else: gap)
+    defp after_insert(gap, at) when at < gap, do: [gap + 1]
+    defp after_insert(gap, at) when at > gap, do: [gap]
+    defp after_insert(gap, _at), do: [gap, gap + 1]
+
+    test "after any one change it is right wherever the position alone is, and more often" do
+      results =
+        for size <- 1..6, gap <- 0..size, others = Enum.to_list(1..size) do
+          # What a link carries, and the least it can: one witness a side.
+          %{after: before_gap, before: after_gap} = QueueNav.neighbors(others, 0, gap).place
+
+          places = [
+            [after: before_gap, before: after_gap],
+            [after: Enum.take(before_gap, 1), before: Enum.take(after_gap, 1)]
+          ]
+
+          for {queue, right} <- single_changes(others, gap), place <- places do
+            # The reader's conversation is 0 and no longer listed itself.
+            by_position = QueueNav.neighbors(queue, 0, gap).place.pos in right
+            placed = QueueNav.neighbors(queue, 0, gap, place).place.pos in right
+
+            assert placed or not by_position,
+                   "#{inspect(others)} gap #{gap} became #{inspect(queue)}: wrong where the position alone is right"
+
+            {by_position, placed}
+          end
+        end
+        |> List.flatten()
+
+      wrong = fn index -> Enum.count(results, &(not elem(&1, index))) end
+      assert wrong.(1) * 4 < wrong.(0)
+    end
+
+    test "an anchor that is not listed counts as no anchor" do
+      ids = [10, 20, 30]
+
+      # An id from somewhere else, such as another tenant, or its own id.
+      for anchors <- [[after: 99], [before: 99], [after: 99, before: 98], [after: 20, before: 20]] do
+        assert QueueNav.neighbors(ids, 20, 1, anchors) == QueueNav.neighbors(ids, 20, 1)
+        assert QueueNav.neighbors(ids, 20, nil, anchors) == QueueNav.neighbors(ids, 20)
+      end
+
+      assert QueueNav.neighbors(ids, 20, 1, after: nil, before: nil) ==
+               QueueNav.neighbors(ids, 20, 1)
+
+      assert QueueNav.neighbors([10, 30], 20, nil, after: 99, before: 98) ==
+               %{prev: nil, next: nil, position: nil, total: 2, place: nil}
+    end
+
+    test "uses the position hint once the conversation has left the list" do
+      # 20 was second (position 1) and is gone: 30 now sits where it was.
+      assert QueueNav.neighbors([10, 30, 40], 20, 1) == %{
+               prev: %{id: 10, pos: 0, after: [], before: [30, 40]},
+               next: %{id: 30, pos: 1, after: [10], before: [40]},
+               position: 2,
+               total: 3,
+               place: %{pos: 1, after: [10], before: [30, 40]}
+             }
+
+      assert %{prev: nil, next: %{id: 10, pos: 0}, position: 1} =
+               QueueNav.neighbors([10, 30], 20, 0)
+
+      # A hint past the end stops at the end.
+      assert %{prev: %{id: 30, pos: 1}, next: nil, position: 2} =
+               QueueNav.neighbors([10, 30], 20, 9)
+    end
+
+    test "offers nothing without a hint or without a queue" do
+      assert %{prev: nil, next: nil, position: nil, total: 2, place: nil} =
+               QueueNav.neighbors([10, 30], 20)
+
+      assert %{prev: nil, next: nil, position: nil, total: 0} = QueueNav.neighbors([], 20, 3)
     end
   end
 end

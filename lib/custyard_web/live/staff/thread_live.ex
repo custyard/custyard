@@ -15,6 +15,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
 
   alias Custyard.Attachments.Recovery
   alias Custyard.Email.Outbound
+  alias Custyard.Threads.QueueNav
   alias CustyardWeb.InlineImages
 
   alias Custyard.{
@@ -32,7 +33,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
   }
 
   @impl true
-  def mount(%{"id" => id}, _session, socket) do
+  def mount(%{"id" => id} = params, _session, socket) do
+    socket = assign(socket, :queue_context, queue_context(params))
+
     case load_thread(socket.assigns.current_scope, id) do
       nil ->
         {:ok,
@@ -126,6 +129,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
       socket
       |> assign(:page_title, truncate_subject(thread.subject))
       |> assign(:thread, thread)
+      |> assign_queue_nav()
       |> assign_labels(thread)
       |> assign_reply_delivery(thread)
       |> assign_reply_identity(thread)
@@ -975,6 +979,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
 
           socket
           |> assign(:thread, thread)
+          # A reply, a state change or a snooze can move this conversation
+          # out of the queue it was opened from.
+          |> assign_queue_nav()
           |> assign_labels(thread)
           |> assign_reply_delivery(thread)
           |> assign_reply_identity(thread)
@@ -1101,6 +1108,103 @@ defmodule CustyardWeb.Staff.ThreadLive do
       else: "#{channel.public_address} (sends as #{address})"
   end
 
+  # Which queue the staff member opened this conversation from: its filter,
+  # its label, the row's position and the ids listed around the row, as
+  # carried by the row link. Anything unrecognised falls back to the whole
+  # queue. The values only choose among queue queries that are tenant-scoped
+  # whatever is passed; the ids are only looked up in that queue's own list.
+  defp queue_context(params) do
+    filter = params["filter"]
+
+    pos = query_integer(params["pos"], 0)
+
+    %{
+      filter: if(filter in Threads.queue_filters(), do: filter, else: "all"),
+      label_id: query_integer(params["label"], 1),
+      pos: pos,
+      # Witnesses belong to a position: without one the page follows the
+      # conversation's own place.
+      after: if(pos, do: query_ids(params["after"]), else: []),
+      before: if(pos, do: query_ids(params["before"]), else: [])
+    }
+  end
+
+  # "12,9,7": the ids a link names on one side of its target. Anything that
+  # is not a thread id is dropped, and no more are read than a link carries.
+  defp query_ids(value) when is_binary(value) do
+    value
+    |> String.split(",", parts: QueueNav.witnesses() + 1)
+    |> Enum.take(QueueNav.witnesses())
+    |> Enum.map(&query_integer(&1, 1))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp query_ids(_value), do: []
+
+  # The upper bound is the largest integer the database driver accepts.
+  defp query_integer(value, min) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer >= min and integer <= 9_223_372_036_854_775_807 -> integer
+      _ -> nil
+    end
+  end
+
+  defp query_integer(_value, _min), do: nil
+
+  # Previous and next conversation in that queue's order. One id-only query.
+  defp assign_queue_nav(socket) do
+    %{filter: filter, label_id: label_id, pos: pos, after: after_ids, before: before_ids} =
+      context = socket.assigns.queue_context
+
+    ids = Threads.queue_ids(socket.assigns.current_scope, filter: filter, label_id: label_id)
+
+    nav =
+      QueueNav.neighbors(ids, socket.assigns.thread.id, pos, after: after_ids, before: before_ids)
+
+    socket
+    |> assign(:queue_nav, nav)
+    |> assign(:queue_context, keep_place(context, nav))
+  end
+
+  # The place in the URL describes the queue as it was when the link was
+  # rendered. The place just found replaces it, so the next reload starts
+  # from the queue as last seen. A conversation opened without a place keeps
+  # following its own.
+  defp keep_place(%{pos: nil} = context, _nav), do: context
+  defp keep_place(context, %{place: nil}), do: context
+  defp keep_place(context, %{place: place}), do: Map.merge(context, place)
+
+  defp queue_params(%{filter: filter, label_id: label_id}, extra) do
+    Enum.reject(
+      [filter: if(filter != "all", do: filter), label: label_id] ++ extra,
+      fn {_key, value} -> is_nil(value) end
+    )
+  end
+
+  # Back to the queue the conversation was opened from, with the selection on
+  # this conversation's row.
+  defp queue_path(context, thread_id), do: ~p"/app?#{queue_params(context, at: thread_id)}"
+
+  defp neighbor_path(context, %{id: id, pos: pos, after: after_ids, before: before_ids}) do
+    params =
+      queue_params(context, pos: pos, after: id_list(after_ids), before: id_list(before_ids))
+
+    ~p"/app/threads/#{id}?#{params}"
+  end
+
+  defp id_list([]), do: nil
+  defp id_list(ids), do: Enum.join(ids, ",")
+
+  # "3 of 24 in needs reply": the place in the queue being stepped through.
+  defp queue_position(%{position: position, total: total}, %{filter: "all"}),
+    do: "#{position} of #{total}"
+
+  defp queue_position(%{position: position, total: total}, %{filter: "due_tasks"}),
+    do: "#{position} of #{total} in tasks due"
+
+  defp queue_position(%{position: position, total: total}, %{filter: filter}),
+    do: "#{position} of #{total} in #{String.replace(filter, "_", " ")}"
+
   defp fetch_other_org_threads(%{organization_id: nil}), do: []
 
   defp fetch_other_org_threads(thread) do
@@ -1180,16 +1284,50 @@ defmodule CustyardWeb.Staff.ThreadLive do
     <div class="flex flex-1 min-h-0" data-testid="staff-thread-page">
       <%!-- Left: message thread --%>
       <div class="flex-1 flex flex-col min-w-0" data-testid="staff-thread-thread">
-        <header class="border-b border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-4 py-3">
+        <%!-- Shortcuts: u back to the queue, k previous, j next. The hook
+        clicks the element whose data-shortcut matches, and never while the
+        staff member is typing or holding a modifier key. --%>
+        <header
+          id="thread-header"
+          phx-hook="Shortcuts"
+          class="border-b border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-4 py-3"
+        >
           <div class={[@column, "flex items-start gap-x-3"]}>
             <div class="min-w-0 flex-1">
-              <.link
-                navigate={~p"/app"}
-                class="text-xs text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-zinc-100 hover:underline"
-                data-testid="staff-thread-back"
-              >
-                &larr; Queue
-              </.link>
+              <div class="flex items-center gap-3">
+                <.link
+                  navigate={queue_path(@queue_context, @thread.id)}
+                  class="shrink-0 text-xs text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-zinc-100 hover:underline"
+                  title="Back to the queue (u)"
+                  aria-keyshortcuts="u"
+                  data-shortcut="u"
+                  data-testid="staff-thread-back"
+                >
+                  &larr; Queue
+                </.link>
+                <nav
+                  :if={@queue_nav.prev || @queue_nav.next || @queue_nav.position}
+                  class="ml-auto flex min-w-0 items-center gap-1 text-xs text-gray-600 dark:text-zinc-300"
+                  aria-label="Queue order"
+                  data-testid="staff-thread-queue-nav"
+                >
+                  <span
+                    :if={@queue_nav.position}
+                    class="mr-1 truncate tabular-nums"
+                    data-testid="staff-thread-queue-position"
+                  >
+                    {queue_position(@queue_nav, @queue_context)}
+                  </span>
+                  <.queue_step
+                    direction={:prev}
+                    path={@queue_nav.prev && neighbor_path(@queue_context, @queue_nav.prev)}
+                  />
+                  <.queue_step
+                    direction={:next}
+                    path={@queue_nav.next && neighbor_path(@queue_context, @queue_nav.next)}
+                  />
+                </nav>
+              </div>
               <div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
                 <h1
                   class="min-w-0 text-lg font-semibold leading-6 text-gray-900 dark:text-zinc-50 line-clamp-2 [overflow-wrap:anywhere]"
@@ -2033,6 +2171,47 @@ defmodule CustyardWeb.Staff.ThreadLive do
         </div>
       </aside>
     </div>
+    """
+  end
+
+  attr :direction, :atom, values: [:prev, :next], required: true
+  attr :path, :string, default: nil
+
+  # A step to the neighbouring conversation in the queue. Without a neighbour
+  # it stays in place, visibly inactive, so the controls do not jump around.
+  defp queue_step(assigns) do
+    {label, key, icon} =
+      case assigns.direction do
+        :prev -> {"Previous", "k", "hero-chevron-up-mini"}
+        :next -> {"Next", "j", "hero-chevron-down-mini"}
+      end
+
+    assigns = assign(assigns, label: label, key: key, icon: icon)
+
+    ~H"""
+    <.link
+      :if={@path}
+      navigate={@path}
+      class="inline-flex items-center gap-0.5 rounded px-2 py-1.5 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:hover:bg-zinc-700 dark:hover:text-zinc-100 sm:px-1.5 sm:py-0.5"
+      title={"#{@label} conversation in the queue (#{@key})"}
+      aria-label={"#{@label} conversation in the queue"}
+      aria-keyshortcuts={@key}
+      data-shortcut={@key}
+      data-testid={"staff-thread-#{@direction}"}
+    >
+      <.icon name={@icon} class="h-4 w-4" />
+      <span class="hidden sm:inline">{@label}</span>
+    </.link>
+    <span
+      :if={is_nil(@path)}
+      class="inline-flex items-center gap-0.5 px-2 py-1.5 text-gray-400 dark:text-zinc-500 sm:px-1.5 sm:py-0.5"
+      title={"No #{String.downcase(@label)} conversation in this queue"}
+      aria-disabled="true"
+      data-testid={"staff-thread-#{@direction}-none"}
+    >
+      <.icon name={@icon} class="h-4 w-4" />
+      <span class="hidden sm:inline">{@label}</span>
+    </span>
     """
   end
 

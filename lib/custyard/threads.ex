@@ -16,6 +16,7 @@ defmodule Custyard.Threads do
   alias Custyard.Email.{OutboundQueue, ReplyAudit, ReplyRecipients}
   alias Custyard.Threads.QueuePreview
   import Ecto.Query
+  require QueuePreview
 
   def list(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
     if Custyard.Scope.current_staff(scope),
@@ -23,13 +24,34 @@ defmodule Custyard.Threads do
       else: []
   end
 
-  @queue_filters ~w(all new active waiting dormant snoozed due_tasks)
+  @queue_filters ~w(all needs_reply new active waiting dormant snoozed due_tasks)
   @queue_state_filters %{new: "new", active: "active", waiting: "waiting", dormant: "dormant"}
+
+  @doc "The attention-queue filter names `list/2` understands."
+  def queue_filters, do: @queue_filters
+
+  @doc """
+  Thread ids of the attention queue in listed order, for stepping to the
+  previous or next conversation. Takes the options of `list/2` and runs the
+  same query, so the order and the membership always match the list.
+  """
+  def queue_ids(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
+    if Custyard.Scope.current_staff(scope) do
+      opts
+      |> Keyword.put(:tenant_id, tenant_id)
+      |> attention_queue_query(Keyword.get(opts, :filter, "all") == "needs_reply")
+      |> exclude(:preload)
+      |> select([c], c.id)
+      |> Repo.all()
+    else
+      []
+    end
+  end
 
   @doc """
   How many threads each attention-queue filter lists, keyed by filter name
-  (`"all"`, `"new"`, `"active"`, `"waiting"`, `"dormant"`, `"snoozed"`,
-  `"due_tasks"`).
+  (`"all"`, `"needs_reply"`, `"new"`, `"active"`, `"waiting"`, `"dormant"`,
+  `"snoozed"`, `"due_tasks"`).
 
   Takes the same `:label_id` and `:organization_id` options as `list/2` and
   applies the same visibility rules, so each count equals the length of the
@@ -94,15 +116,28 @@ defmodule Custyard.Threads do
   end
 
   defp list_for_attention_queue(opts) do
+    from([c, message_facts: mf, due_tasks: dt] in attention_queue_query(opts, true),
+      select: %{
+        thread: c,
+        message_count: coalesce(mf.count, 0),
+        # Messages exchanged with the customer: no internal notes, no
+        # automatic replies.
+        exchange_count: coalesce(mf.exchanged, 0),
+        due_task_count: coalesce(dt.count, 0)
+      }
+    )
+    |> Repo.all()
+  end
+
+  # The one query behind the queue list and the queue order (queue_ids/2).
+  # The message facts aggregate every message the tenant has stored, so they
+  # are joined only for a caller that reads them: the list, and the order of
+  # the "needs_reply" filter.
+  defp attention_queue_query(opts, message_facts?) do
     filter = Keyword.get(opts, :filter, "all")
     organization_id = Keyword.get(opts, :organization_id)
+    tenant_id = Keyword.get(opts, :tenant_id)
     now = DateTime.utc_now()
-
-    message_count_subquery =
-      from(m in Message,
-        group_by: m.thread_id,
-        select: %{thread_id: m.thread_id, count: count(m.id)}
-      )
 
     query =
       from(c in Thread,
@@ -112,30 +147,40 @@ defmodule Custyard.Threads do
         # Prospect preload feeds reply_channel/1 without N+1 queries
         left_join: p in assoc(c, :prospect),
         left_join: ch in assoc(c, :inbound_channel),
-        left_join: mc in subquery(message_count_subquery),
-        on: mc.thread_id == c.id,
         left_join: dt in subquery(due_task_subquery(now)),
         as: :due_tasks,
         on: dt.thread_id == c.id,
         # Resolving/snoozing a thread must not hide an unfinished task
         # that has reached its own deadline.
         where: c.state != :resolved or not is_nil(dt.thread_id),
-        order_by: [desc: coalesce(dt.count, 0), asc: dt.due_at, desc: c.cached_score],
-        preload: [organization: o, contact: ct, prospect: p, inbound_channel: ch],
-        select: %{
-          thread: c,
-          message_count: coalesce(mc.count, 0),
-          due_task_count: coalesce(dt.count, 0)
-        }
+        # The id settles equal scores, so the list and the previous/next
+        # links in a conversation agree on one order.
+        order_by: [
+          desc: coalesce(dt.count, 0),
+          asc: dt.due_at,
+          desc: c.cached_score,
+          asc: c.id
+        ],
+        preload: [organization: o, contact: ct, prospect: p, inbound_channel: ch]
       )
 
     query
+    |> join_message_facts(tenant_id, message_facts?)
     |> apply_organization_filter(organization_id)
-    |> apply_tenant_filter(Keyword.get(opts, :tenant_id))
+    |> apply_tenant_filter(tenant_id)
     |> apply_snooze_filter(filter, now)
     |> apply_state_filter(filter)
     |> apply_label_filter(Keyword.get(opts, :label_id))
-    |> Repo.all()
+  end
+
+  defp join_message_facts(query, _tenant_id, false), do: query
+
+  defp join_message_facts(query, tenant_id, true) do
+    from(c in query,
+      left_join: mf in subquery(QueuePreview.message_facts(tenant_id)),
+      as: :message_facts,
+      on: mf.thread_id == c.id
+    )
   end
 
   # Unfinished tasks that have reached their deadline, per thread.
@@ -147,38 +192,55 @@ defmodule Custyard.Threads do
     )
   end
 
-  # One light row per open thread, tallied here rather than in seven filtered
-  # queries. The rules mirror list_for_attention_queue/1 with
+  # One light row per open thread, tallied here rather than in one filtered
+  # query per chip. The rules mirror attention_queue_query/2 with
   # apply_snooze_filter/3 and apply_state_filter/2; a test compares every
   # count with the length of the matching list.
   defp count_attention_queue(opts) do
+    tenant_id = Keyword.get(opts, :tenant_id)
     # The list queries compare snoozed_until at whole seconds; so must the tally.
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     from(c in Thread,
+      left_join: mf in subquery(QueuePreview.message_facts(tenant_id)),
+      on: mf.thread_id == c.id,
       left_join: dt in subquery(due_task_subquery(now)),
       on: dt.thread_id == c.id,
       where: c.state != :resolved or not is_nil(dt.thread_id),
-      select: {c.state, c.snoozed_until, coalesce(dt.count, 0)}
+      select: %{
+        state: c.state,
+        snoozed_until: c.snoozed_until,
+        due_count: coalesce(dt.count, 0),
+        last_id: mf.last_id,
+        last_staff_id: mf.last_staff_id
+      }
     )
     |> apply_organization_filter(Keyword.get(opts, :organization_id))
-    |> apply_tenant_filter(Keyword.get(opts, :tenant_id))
+    |> apply_tenant_filter(tenant_id)
     |> apply_label_filter(Keyword.get(opts, :label_id))
     |> Repo.all()
     |> Enum.reduce(Map.new(@queue_filters, &{&1, 0}), &tally_queue_row(&1, &2, now))
   end
 
-  defp tally_queue_row({state, snoozed_until, due_count}, counts, now) do
-    snoozed? = not is_nil(snoozed_until) and DateTime.compare(snoozed_until, now) != :lt
-    due? = due_count > 0
+  defp tally_queue_row(row, counts, now) do
+    snoozed? =
+      not is_nil(row.snoozed_until) and DateTime.compare(row.snoozed_until, now) != :lt
+
+    due? = row.due_count > 0
     # A due task keeps a snoozed thread in every unsnoozed view.
     listed? = due? or not snoozed?
+
+    # The tallied form of the "needs_reply" clause of apply_state_filter/2.
+    needs_reply? =
+      row.state not in [:waiting, :resolved] and
+        (is_nil(row.last_id) or row.last_staff_id != row.last_id)
 
     counts
     |> bump("snoozed", snoozed?)
     |> bump("all", listed?)
     |> bump("due_tasks", due?)
-    |> bump(@queue_state_filters[state], listed?)
+    |> bump("needs_reply", listed? and needs_reply?)
+    |> bump(@queue_state_filters[row.state], listed?)
   end
 
   defp bump(counts, key, true) when is_binary(key), do: Map.update!(counts, key, &(&1 + 1))
@@ -228,6 +290,18 @@ defmodule Custyard.Threads do
 
   defp apply_state_filter(query, "due_tasks"),
     do: from([due_tasks: dt] in query, where: not is_nil(dt.thread_id))
+
+  # Ours to answer: not parked as waiting, not resolved, and staff did not
+  # send the newest message exchanged with the customer (see
+  # QueuePreview.turn/2 for the same rule on a loaded row). A thread with no
+  # exchanged message yet has no facts row and is ours.
+  defp apply_state_filter(query, "needs_reply") do
+    from([c, message_facts: mf] in query,
+      where:
+        c.state != :waiting and c.state != :resolved and
+          (is_nil(mf.last_id) or is_nil(mf.last_staff_id) or mf.last_staff_id != mf.last_id)
+    )
+  end
 
   defp apply_state_filter(query, _), do: query
 
