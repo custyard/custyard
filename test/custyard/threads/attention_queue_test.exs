@@ -413,6 +413,27 @@ defmodule Custyard.Threads.AttentionQueueTest do
       assert %{message_count: 4, exchange_count: 2} = rows[thread.id]
       assert %{message_count: 0, exchange_count: 0} = rows[empty.id]
     end
+
+    test "recent_count is the 24h count the score's velocity term uses", c do
+      thread = insert_thread(organization_id: c.org.id, state: :active)
+      old = insert_message(thread_id: thread.id, body: "Last week")
+      insert_message(thread_id: thread.id, body: "Today")
+      insert_message(thread_id: thread.id, source: :staff, is_internal_note: true, body: "Memo")
+      insert_message(thread_id: thread.id, body: "Away", triage_class: :auto_response)
+
+      Custyard.Repo.update_all(
+        from(m in Custyard.Message, where: m.id == ^old.id),
+        set: [inserted_at: DateTime.add(DateTime.utc_now(:second), -8, :day)]
+      )
+
+      rows = Map.new(Threads.list(c.scope), &{&1.thread.id, &1})
+      row = rows[thread.id]
+      assert %{message_count: 4, recent_count: 2} = row
+
+      # What the queue shows under "Why this rank?" is what the score is built from.
+      assert Custyard.Scoring.breakdown(thread, message_count: row.recent_count) ==
+               Custyard.Scoring.breakdown(thread)
+    end
   end
 
   describe "queue_ids/2" do

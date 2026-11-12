@@ -805,6 +805,36 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
              )
     end
 
+    test "Why this rank builds velocity from the last 24 hours of messages", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+      last_week = DateTime.add(DateTime.utc_now(:second), -8, :day)
+
+      for body <- ["One", "Two", "Three", "Four"] do
+        message = insert_message(thread_id: conv.id, body: body)
+        Repo.update!(Ecto.Changeset.change(message, inserted_at: last_week))
+      end
+
+      insert_message(thread_id: conv.id, body: "Today")
+
+      recent = Scoring.breakdown(conv, message_count: 1).velocity
+      total = Scoring.breakdown(conv, message_count: 5).velocity
+      # The panel can only tell the two counts apart if they score differently.
+      assert recent != total
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      card = "[data-testid=staff-queue-card-#{conv.id}]"
+      view |> element("#{card} [data-testid=staff-queue-score-toggle]") |> render_click()
+
+      # A breakdown row is its label, a bar and its value.
+      assert view
+             |> element("#{card} [data-testid=staff-score-breakdown] > div", "velocity")
+             |> render()
+             |> Floki.parse_fragment!()
+             |> Floki.text(sep: " ")
+             |> String.split() == ["velocity", to_string(recent)]
+    end
+
     test "a non-default tier stays on the row", %{conn: conn} do
       org = insert_organization(tier: :enterprise)
       conv = insert_thread(organization_id: org.id, state: :active)
