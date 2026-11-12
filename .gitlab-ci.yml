@@ -34,7 +34,8 @@ variables:
   paths: [deps/, _build/]
 
 .libsql-service: &libsql-service
-  name: ghcr.io/tursodatabase/libsql-server:latest
+  # latest as of 2026-11-11, pinned by digest.
+  name: ghcr.io/tursodatabase/libsql-server@sha256:6dd3eb276d9d3604e4a48ac4a999a2e267814732d57d7e94c04ba71482333a67
   alias: libsql
 
 .not-scheduled: &not-scheduled
@@ -152,12 +153,13 @@ security:
     BUILD_CACHE: $CI_REGISTRY_IMAGE:buildcache
   before_script:
     - apk add --no-cache bash coreutils curl
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
     - docker buildx create --use --driver docker-container
     - BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Validate the deployable image on MRs and manual runs. Pushes to the default
-# branch build it in publish, after all application checks succeed.
+# branch build it in publish, after all application checks succeed. No
+# registry login here: the job reads the public build cache anonymously and
+# cannot write the cache that publish builds from.
 container:
   extends: .docker
   stage: build
@@ -185,6 +187,7 @@ publish:
   variables:
     IMAGE: $CI_REGISTRY_IMAGE
   script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
     - >-
       docker buildx build --file Containerfile --platform linux/amd64 --push
       --metadata-file build-metadata.json
