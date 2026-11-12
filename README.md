@@ -103,7 +103,7 @@ disposable one from your laptop. Images are published per commit as
 `sha-<commit>`; there is no `latest` tag:
 
 ```bash
-docker run --rm ghcr.io/custyard/custyard:sha-<commit> bin/doctor --probe-database libsql://scratch.turso.io --token "$TURSO_AUTH_TOKEN"
+docker run --rm registry.gitlab.com/custyard/custyard:sha-<commit> bin/doctor --probe-database libsql://scratch.turso.io --token "$TURSO_AUTH_TOKEN"
 ```
 
 After login, `/admin/system` shows the same report plus the last mail
@@ -192,7 +192,7 @@ git clone https://github.com/owner/private-repo.git
 - [Set up Custyard on Bunny](docs/ops/bunny-setup.md)
 
 - [Development Guide](docs/development.md)
-- [Publishing container images to GHCR](docs/ops/ghcr-publishing.md)
+- [Publishing container images](docs/ops/container-publishing.md)
 - [Bunny production and Fly staging plan](docs/ops/bunny-production-fly-staging.md)
 - [LMTP Troubleshooting](docs/lmtp-troubleshooting.md)
 - [Email Test Strategy](docs/backlog/0323-email-test-strategy.md)

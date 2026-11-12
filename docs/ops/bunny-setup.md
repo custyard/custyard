@@ -2,10 +2,10 @@
 
 Choose a release image built from a commit containing this portability work.
 Earlier published images do not support these Bunny aliases or runtime checks.
-After merge, successful main CI publishes the new digest through the existing
-GHCR workflow; use that digest for the acceptance deployment.
+After merge, successful main CI publishes the new digest to the GitLab container
+registry; use that digest for the acceptance deployment.
 
-Use the GHCR production image with Bunny Magic Containers and Bunny Database.
+Use the published production image with Bunny Magic Containers and Bunny Database.
 Start with a disposable database, a temporary hostname and isolated email.
 The database driver, environment aliases, origin guard and volume validation
 are implemented. Live Bunny database and end-to-end deployment acceptance must
@@ -79,7 +79,7 @@ configuration retains its v3 behavior.
 
 ## Create the container and volume
 
-Use [GHCR publishing](ghcr-publishing.md) to select a successful CI image by
+Use [container publishing](container-publishing.md) to select a successful CI image by
 digest. The review record [deploy/bunny-production.json](../../deploy/bunny-production.json)
 captures all required dashboard settings; it is a local checklist, not a Bunny
 API payload. Record the current and candidate digests before promotion.
