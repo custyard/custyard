@@ -445,11 +445,11 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         <div class="flex items-baseline gap-4 text-xs text-gray-600 dark:text-zinc-400">
           <%!-- Keyboard hint: only where a keyboard is likely. --%>
           <p class="hidden lg:block" data-testid="staff-queue-keys">
-            <.key>j</.key>
+            <.kbd>j</.kbd>
 
-            <.key>k</.key>
+            <.kbd>k</.kbd>
             move
-            <.key>Enter</.key>
+            <.kbd>Enter</.kbd>
             open
           </p>
           <span data-testid="staff-queue-count">
@@ -465,9 +465,9 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           aria-label="Filter by status"
           data-testid="staff-queue-filters"
         >
-          <.filter_button
+          <.filter_chip
             :for={{value, label} <- @filters}
-            filter={@filter}
+            current={@filter}
             value={value}
             label={label}
             count={Map.get(@filter_counts, value, 0)}
@@ -522,49 +522,6 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         />
       </ul>
     </div>
-    """
-  end
-
-  slot :inner_block, required: true
-
-  defp key(assigns) do
-    ~H"""
-    <kbd class="rounded border border-gray-300 px-1 font-sans text-[11px] text-gray-700 dark:border-zinc-600 dark:text-zinc-300">{render_slot(
-      @inner_block
-    )}</kbd>
-    """
-  end
-
-  attr :filter, :string, required: true
-  attr :value, :string, required: true
-  attr :label, :string, required: true
-  attr :count, :integer, required: true
-
-  defp filter_button(assigns) do
-    ~H"""
-    <button
-      phx-click="filter"
-      phx-value-filter={@value}
-      aria-pressed={to_string(@filter == @value)}
-      data-testid={"staff-queue-filter-#{@value}"}
-      class={[
-        "inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500",
-        @filter == @value && "bg-indigo-100 font-medium text-indigo-800",
-        @filter != @value &&
-          "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-      ]}
-    >
-      {@label}
-      <span
-        class={[
-          "tabular-nums",
-          if(@filter == @value, do: "text-indigo-700", else: "text-gray-600 dark:text-zinc-400")
-        ]}
-        data-testid={"staff-queue-filter-count-#{@value}"}
-      >
-        {@count}
-      </span>
-    </button>
     """
   end
 

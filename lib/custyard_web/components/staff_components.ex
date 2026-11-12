@@ -7,6 +7,8 @@ defmodule CustyardWeb.StaffComponents do
   """
   use Phoenix.Component
 
+  import CustyardWeb.CoreComponents, only: [icon: 1]
+
   @doc """
   Compact elapsed time for dense lists: `now`, `5m`, `3h`, `12d`.
 
@@ -421,6 +423,105 @@ defmodule CustyardWeb.StaffComponents do
         </div>
       <% end %>
     </div>
+    """
+  end
+
+  @doc """
+  A filter chip with its count, as shown above the attention queue and the
+  task list. Clicking sends `event` with `filter` set to the chip's value.
+
+  The test ids are `"\#{testid}-\#{value}"` for the chip and
+  `"\#{testid}-count-\#{value}"` for its count.
+
+  ## Examples
+
+      <.filter_chip current={@filter} value="new" label="new" count={3} />
+  """
+  attr :current, :string, required: true
+  attr :value, :string, required: true
+  attr :label, :string, required: true
+  attr :count, :integer, required: true
+  attr :event, :string, default: "filter"
+  attr :testid, :string, default: "staff-queue-filter"
+
+  def filter_chip(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click={@event}
+      phx-value-filter={@value}
+      aria-pressed={to_string(@current == @value)}
+      data-testid={"#{@testid}-#{@value}"}
+      class={[
+        "inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500",
+        @current == @value && "bg-indigo-100 font-medium text-indigo-800",
+        @current != @value &&
+          "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+      ]}
+    >
+      {@label}
+      <span
+        class={[
+          "tabular-nums",
+          if(@current == @value, do: "text-indigo-700", else: "text-gray-600 dark:text-zinc-400")
+        ]}
+        data-testid={"#{@testid}-count-#{@value}"}
+      >
+        {@count}
+      </span>
+    </button>
+    """
+  end
+
+  @doc """
+  A keyboard key in a shortcut hint.
+
+  ## Examples
+
+      <.kbd>j</.kbd>
+  """
+  slot :inner_block, required: true
+
+  def kbd(assigns) do
+    ~H"""
+    <kbd class="rounded border border-gray-300 px-1 font-sans text-[11px] text-gray-700 dark:border-zinc-600 dark:text-zinc-300">{render_slot(
+      @inner_block
+    )}</kbd>
+    """
+  end
+
+  @doc """
+  A button that reverses a list's order. It names the order currently shown
+  and sends `event` when clicked; the list owner flips its own state (the
+  staff lists keep it in the URL as `reverse=1`).
+
+  ## Examples
+
+      <.sort_toggle reversed={@reverse} label="Highest priority first" reversed_label="Lowest priority first" />
+  """
+  attr :reversed, :boolean, required: true
+  attr :label, :string, required: true, doc: "names the default order"
+  attr :reversed_label, :string, required: true, doc: "names the reversed order"
+  attr :event, :string, default: "toggle_reverse"
+  attr :testid, :string, default: "staff-queue-sort"
+
+  def sort_toggle(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click={@event}
+      aria-pressed={to_string(@reversed)}
+      title="Reverse the order"
+      data-testid={@testid}
+      data-reversed={to_string(@reversed)}
+      class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-gray-600 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
+    >
+      <.icon
+        name={if @reversed, do: "hero-bars-arrow-up-mini", else: "hero-bars-arrow-down-mini"}
+        class="h-4 w-4"
+      />
+      <span>{if @reversed, do: @reversed_label, else: @label}</span>
+    </button>
     """
   end
 end

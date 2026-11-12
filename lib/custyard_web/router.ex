@@ -132,6 +132,7 @@ defmodule CustyardWeb.Router do
       live "/", AttentionQueueLive, :index
       live "/threads", AttentionQueueLive, :index
       live "/threads/:id", ThreadLive, :show
+      live "/tasks", TasksLive, :index
       live "/projects", ProjectsLive, :index
       live "/projects/:id", ProjectDetailLive, :show
       live "/neglect", NeglectReportLive, :index
