@@ -1,0 +1,208 @@
+# Translated from .github/workflows/ci.yml.
+#
+# Triggers match the GitHub workflow: merge requests against any target
+# branch (stacked MRs included), pushes to the default branch, scheduled
+# pipelines (configure under Build > Pipeline schedules, daily 05:23 UTC) and
+# manual runs (Build > Pipelines > Run pipeline). Plain branch pushes without
+# an MR do not run a pipeline, as on GitHub.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  auto_cancel:
+    on_new_commit: interruptible
+
+stages:
+  - test
+  - build
+  - publish
+
+variables:
+  MIX_ENV: test
+  ELIXIR_VERSION: "1.18.3"
+  OTP_VERSION: "27.2.4"
+  # Exact Elixir/OTP pair, the pin erlef/setup-beam gave the GitHub jobs.
+  ELIXIR_IMAGE: hexpm/elixir:1.18.3-erlang-27.2.4-debian-bookworm-20260610
+  LIBSQL_URL: libsql://libsql:8080?tls=0
+
+.mix-cache: &mix-cache
+  key:
+    files: [mix.lock]
+    prefix: mix-$MIX_ENV-$ELIXIR_VERSION-$OTP_VERSION
+  paths: [deps/, _build/]
+
+.libsql-service: &libsql-service
+  name: ghcr.io/tursodatabase/libsql-server:latest
+  alias: libsql
+
+.not-scheduled: &not-scheduled
+  - if: $CI_PIPELINE_SOURCE == "schedule"
+    when: never
+  - when: on_success
+
+.elixir:
+  image: $ELIXIR_IMAGE
+  interruptible: true
+  needs: []
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends build-essential ca-certificates curl git openssl >/dev/null
+    - mix local.hex --force
+    - mix local.rebar --force
+  cache:
+    - *mix-cache
+
+test:
+  extends: .elixir
+  stage: test
+  rules: *not-scheduled
+  services:
+    - name: rabbitmq:4.2
+      alias: rabbitmq
+      variables:
+        RABBITMQ_DEFAULT_USER: custyard_test
+        RABBITMQ_DEFAULT_PASS: custyard_test
+        # The runner waits for this port before starting the script.
+        HEALTHCHECK_TCP_PORT: "5672"
+  variables:
+    ACKNOWLEDGMENTS_TEST_AMQP_URL: amqp://custyard_test:custyard_test@rabbitmq:5672
+  script:
+    - mix deps.get
+    - mix compile --warnings-as-errors
+    - mix format --check-formatted
+    - mix test
+    - mix credo --strict
+
+promotion-scripts:
+  stage: test
+  image: python:3.12-slim
+  interruptible: true
+  needs: []
+  rules: *not-scheduled
+  script:
+    - python3 -m unittest discover -s .github/scripts -p promotion_test.py
+
+# The suite again over the Turso driver (Custyard.Turso.Connection, Hrana
+# over HTTP) against a real libSQL server, the server Turso runs. One test
+# at a time: each keeps its sandbox transaction open on a stream for its
+# whole run, and how the server arbitrates SQLite's write lock between
+# streams is not what this job tests.
+turso:
+  extends: .elixir
+  stage: test
+  rules: *not-scheduled
+  parallel:
+    matrix:
+      - TURSO_TEST_PROVIDER: [turso, bunny]
+  services:
+    - *libsql-service
+  variables:
+    TURSO_TEST_URL: $LIBSQL_URL
+  cache:
+    - <<: *mix-cache
+      policy: pull
+  script:
+    - mix deps.get
+    - |
+      for _ in $(seq 1 30); do
+        curl -fsS http://libsql:8080/health && break
+        sleep 1
+      done
+      curl -fsS http://libsql:8080/health
+    - mix test --max-cases 1
+
+# Builds the prod release and runs Custyard.Release tasks through
+# `bin/custyard eval` against a running server, which `mix test` cannot
+# exercise: there the application is already started.
+release:
+  extends: .elixir
+  stage: test
+  timeout: 15m
+  services:
+    - *libsql-service
+  variables:
+    MIX_ENV: prod
+  script:
+    - mix deps.get --only prod
+    - mix release --overwrite
+    - bin/release-smoke-test
+    # Release smoke test on a libSQL server.
+    - DATABASE_URL="$LIBSQL_URL" bin/release-smoke-test
+
+security:
+  extends: .elixir
+  stage: test
+  cache:
+    - <<: *mix-cache
+      policy: pull
+  script:
+    - mix deps.get
+    - mix sobelow --exit
+    - mix hex.audit
+    - mix deps.audit
+
+.docker:
+  image: docker:28
+  services:
+    - docker:28-dind
+  variables:
+    DOCKER_TLS_CERTDIR: /certs
+    BUILD_CACHE: $CI_REGISTRY_IMAGE:buildcache
+  before_script:
+    - apk add --no-cache bash coreutils curl
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker buildx create --use --driver docker-container
+    - BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Validate the deployable image on MRs and manual runs. Pushes to the default
+# branch build it in publish, after all application checks succeed.
+container:
+  extends: .docker
+  stage: build
+  interruptible: true
+  needs: []
+  timeout: 30m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  script:
+    - >-
+      docker buildx build --file Containerfile --platform linux/amd64 --load
+      --build-arg GIT_SHA="$CI_COMMIT_SHA" --build-arg BUILD_TIME="$BUILD_TIME"
+      --cache-from type=registry,ref="$BUILD_CACHE"
+      --tag custyard:test .
+    - bin/container-smoke-test custyard:test
+
+publish:
+  extends: .docker
+  stage: publish
+  needs: [test, turso, release, security]
+  timeout: 30m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PROJECT_PATH == "custyard/custyard"
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE
+  script:
+    - >-
+      docker buildx build --file Containerfile --platform linux/amd64 --push
+      --metadata-file build-metadata.json
+      --build-arg GIT_SHA="$CI_COMMIT_SHA" --build-arg BUILD_TIME="$BUILD_TIME"
+      --label org.opencontainers.image.revision="$CI_COMMIT_SHA"
+      --cache-from type=registry,ref="$BUILD_CACHE"
+      --cache-to type=registry,ref="$BUILD_CACHE",mode=max
+      --tag "$IMAGE:sha-$CI_COMMIT_SHA" .
+    - |
+      DIGEST=$(grep -o '"containerimage.digest": *"[^"]*"' build-metadata.json | grep -o 'sha256:[0-9a-f]*')
+      echo "$DIGEST" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo "Build did not return an immutable digest" >&2; exit 1; }
+    - >-
+      printf '{"digest": "%s", "image": "%s", "job_id": %s, "pipeline_id": %s, "repository": "%s", "source_sha": "%s", "version": 1}\n'
+      "$DIGEST" "$IMAGE" "$CI_JOB_ID" "$CI_PIPELINE_ID" "$CI_PROJECT_PATH" "$CI_COMMIT_SHA" > published-image.json
+    - cat published-image.json
+    - |
+      printf 'Published: %s:sha-%s\nDeploy by digest: %s@%s\n' "$IMAGE" "$CI_COMMIT_SHA" "$IMAGE" "$DIGEST"
+  artifacts:
+    name: published-image-$CI_PIPELINE_ID
+    paths: [published-image.json]
+    expire_in: 90 days
