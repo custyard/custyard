@@ -56,13 +56,15 @@ variables:
   ELIXIR_VERSION: "1.18.3"
   OTP_VERSION: "27.2.4"
   # Exact Elixir/OTP pair, the pin erlef/setup-beam gave the GitHub jobs.
-  ELIXIR_IMAGE: hexpm/elixir:1.18.3-erlang-27.2.4-debian-bookworm-20260610
+  # Same Debian release as the Containerfile's build and runtime stages.
+  ELIXIR_IMAGE: hexpm/elixir:1.18.3-erlang-27.2.4-debian-trixie-20260610
   LIBSQL_URL: libsql://libsql:8080?tls=0
 
 .mix-cache: &mix-cache
   key:
     files: [mix.lock]
-    prefix: mix-$MIX_ENV-$ELIXIR_VERSION-$OTP_VERSION
+    # NIFs in _build/ are linked against the image's libc and OpenSSL.
+    prefix: mix-$MIX_ENV-$ELIXIR_VERSION-$OTP_VERSION-trixie
   paths: [deps/, _build/]
 
 .libsql-service: &libsql-service

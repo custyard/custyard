@@ -1,6 +1,7 @@
 # Build stage
-# Keep in sync with .github/workflows/ci.yml
-FROM elixir:1.18.3-otp-27-slim AS builder
+# The Elixir/OTP pair and Debian release CI tests with: keep in sync with
+# ELIXIR_IMAGE in .gitlab-ci.yml.
+FROM hexpm/elixir:1.18.3-erlang-27.2.4-debian-trixie-20260610-slim AS builder
 
 RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
 
@@ -56,10 +57,9 @@ RUN test -x _build/prod/rel/custyard/bin/instance-admin && \
     test -x _build/prod/rel/custyard/bin/doctor
 
 # Runtime stage
-# Use Debian 12 (bookworm) to match the Elixir builder image base.
-# Avoids library version mismatches (libc, openssl) between build and runtime.
-# Debian 13 (trixie) is testing-branch and packages change unpredictably.
-FROM debian:12-slim
+# Debian 13 (trixie), the builder image's release, so the release runs
+# against the libc and OpenSSL it was built with.
+FROM debian:13-slim
 
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.source="https://gitlab.com/custyard/custyard"

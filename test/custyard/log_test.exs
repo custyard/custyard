@@ -266,6 +266,94 @@ defmodule Custyard.LogTest do
     assert Custyard.Log.filter(spoofed, nil).msg == {:string, "external_log"}
   end
 
+  test "database diagnostics are source-scoped, bounded and idempotent" do
+    Code.ensure_loaded!(DBConnection.Connection)
+    Code.ensure_loaded!(DBConnection.ConnectionError)
+
+    for {exception, category} <- [
+          {%DBConnection.ConnectionError{message: "Turso: HTTP 401 " <> @canary},
+           "auth_rejected"},
+          {%DBConnection.ConnectionError{message: "Turso: request timed out " <> @canary},
+           "unreachable"},
+          {%DBConnection.ConnectionError{message: @canary}, "unknown"},
+          {%Exqlite.Error{message: "read-only database " <> @canary}, "not_writable"},
+          {%DBConnection.ConnectionError{message: <<255>>}, "unknown"},
+          {%DBConnection.ConnectionError{message: String.duplicate("timeout ", 3_000)}, "unknown"}
+        ] do
+      raw = %{
+        level: :error,
+        msg: {:string, @canary},
+        meta: %{
+          mfa: {DBConnection.Connection, :handle_event, 4},
+          crash_reason: {exception, []}
+        }
+      }
+
+      safe = Custyard.Log.filter(raw, nil)
+      assert safe.meta.stage == "connect"
+      assert safe.meta.error_type == Atom.to_string(exception.__struct__)
+      assert safe.meta.database_category == category
+      assert Custyard.Log.filter(safe, nil) == safe
+      refute Map.has_key?(safe.meta, :crash_reason)
+      refute inspect(safe) =~ @canary
+
+      unrelated = put_in(raw.meta.mfa, {__MODULE__, :__info__, 1})
+      refute Map.has_key?(Custyard.Log.filter(unrelated, nil).meta, :database_category)
+    end
+  end
+
+  test "database disconnect banner parsing fails closed on unknown or malformed formats" do
+    Code.ensure_loaded!(DBConnection.Connection)
+    Code.ensure_loaded!(DBConnection.ConnectionError)
+
+    for {banner, type, category} <- [
+          {"** (DBConnection.ConnectionError) Turso: HTTP 403 " <> @canary,
+           "Elixir.DBConnection.ConnectionError", "auth_rejected"},
+          {"** (DBConnection.ConnectionError) connection closed " <> @canary,
+           "Elixir.DBConnection.ConnectionError", "unreachable"},
+          {"** (DBConnection.ConnectionError) " <> <<255>>, "Elixir.DBConnection.ConnectionError",
+           "unknown"},
+          {"** (NoSuchDatabaseExceptionPrivateCanary) " <> @canary, nil, "unknown"},
+          {"** (String) " <> @canary, nil, "unknown"},
+          {"** (DBConnection.ConnectionError) " <> String.duplicate("timeout ", 3_000), nil,
+           "unknown"},
+          {@canary, nil, "unknown"},
+          {<<255>>, nil, "unknown"},
+          {[@canary], nil, "unknown"}
+        ] do
+      raw = %{
+        level: :warning,
+        msg: {:string, [@canary, 32, 40, @canary, ") disconnected: " | banner]},
+        meta: %{mfa: {DBConnection.Connection, :handle_event, 4}}
+      }
+
+      safe = Custyard.Log.filter(raw, nil)
+      assert safe.level == :warning
+      assert safe.meta.stage == "disconnect"
+      assert safe.meta[:error_type] == type
+      assert safe.meta.database_category == category
+      assert Custyard.Log.filter(safe, nil) == safe
+      refute inspect(safe) =~ @canary
+      json = Formatter.format(raw, %{}) |> IO.iodata_to_binary()
+      assert Jason.decode!(json)["database_category"] == category
+      refute json =~ @canary
+
+      unrelated = put_in(raw.meta.mfa, {__MODULE__, :__info__, 1})
+      refute Map.has_key?(Custyard.Log.filter(unrelated, nil).meta, :database_category)
+    end
+
+    raw = %{
+      level: :error,
+      msg: {:string, "changed DBConnection format " <> @canary},
+      meta: %{mfa: {DBConnection.Connection, :handle_event, 4}}
+    }
+
+    safe = Custyard.Log.filter(raw, nil)
+    assert safe.msg == {:string, "external_log"}
+    refute Map.has_key?(safe.meta, :database_category)
+    refute inspect(safe) =~ @canary
+  end
+
   test "the real logger boundary protects every handler and JSON keeps diagnostics" do
     assert List.keymember?(:logger.get_primary_config()[:filters], :custyard_log_privacy, 0)
     handler = :custyard_policy_test_handler
