@@ -2,7 +2,7 @@
   "format": "custyard-dashboard-review-record-v1",
   "purpose": "Local review checklist; this is not a Bunny API request or a deploy command.",
   "application_name": "app-custyard-prod",
-  "image": "ghcr.io/custyard/custyard@sha256:<verified-published-digest>",
+  "image": "registry.gitlab.com/custyard/custyard@sha256:<verified-published-digest>",
   "previous_image": "<record-before-promotion>",
   "region": "<one-European-region-near-the-primary-database>",
   "min_replicas": 1,

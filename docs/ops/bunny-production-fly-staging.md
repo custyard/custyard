@@ -23,7 +23,7 @@ documents `/v2/pipeline`. Ecto transactions need interactive sessions that must
 also be verified with Bunny. Prove migrations, transactions, types, constraints
 and read-after-write behavior before moving customer data.
 
-The [GHCR publishing workflow](ghcr-publishing.md) builds the existing
+The [container publishing pipeline](container-publishing.md) builds the existing
 `Containerfile` for `linux/amd64` after successful CI on `main`. Use its published
 image digest to deploy one replica in one European region using synthetic data
 and a `/data` volume
@@ -199,7 +199,8 @@ database rather than booting an unmodified production copy.
    configuration and a Bunny manifest/IaC or captured dashboard configuration.
    Review changes to [`lib/mix/tasks/fly.secrets.ex`](../../lib/mix/tasks/fly.secrets.ex)
    so the existing default app/file cannot accidentally sync production secrets
-   into staging. CI now publishes images to GHCR after successful checks on `main`;
+   into staging. CI now publishes images to the GitLab container registry after successful
+   checks on `main`;
    deployment and promotion still need implementation.
 
 Focused tests belong with these changes: missing/wrong mount, provider-specific
@@ -277,16 +278,16 @@ confirm provider retention/access for logs that cannot be disabled.
 Create a disposable Bunny database and complete the adapter checks above first.
 Use distinct production, staging and disposable-test database IDs/tokens. Then
 create a temporary Bunny app/hostname with synthetic data and isolated email.
-Use the [GHCR publishing workflow](ghcr-publishing.md) to publish the compatible
+Use the [container publishing pipeline](container-publishing.md) to publish the compatible
 release after its checks pass on `main`. It records a `sha-<full-commit-sha>` tag
-and an exact digest in the run summary. Reruns can change the digest behind a
+and an exact digest in the `publish` job. Reruns can change the digest behind a
 commit tag, so record and deploy the digest:
 
 ```text
-ghcr.io/custyard/custyard@sha256:<digest-from-the-publish-summary>
+registry.gitlab.com/custyard/custyard@sha256:<digest-from-the-publish-job>
 ```
 
-Connect GHCR to Bunny using the package-access setup in that guide, select the
+Connect the registry to Bunny using the authentication notes in that guide, select the
 recorded digest, mount `/data`, and set one region
 and min/max one replica. Set `PHX_HOST` to the temporary hostname, not
 `custyard.com`. Configure [startup/readiness probes](https://bunny.net/docs/magic-containers/health-checks)
