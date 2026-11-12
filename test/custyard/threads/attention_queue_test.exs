@@ -251,6 +251,28 @@ defmodule Custyard.Threads.AttentionQueueTest do
       end
     end
 
+    test "agrees with the lists in the second a snooze ends", c do
+      # Every read has to land in that second, so start over if the clock moved on.
+      {counts, listed} =
+        Enum.find_value(1..50, fn _ ->
+          ending = DateTime.utc_now() |> DateTime.truncate(:second)
+          {:ok, _} = Threads.snooze(c.threads.active, ending)
+
+          counts = Threads.queue_counts(c.scope)
+
+          listed =
+            Map.new(counts, fn {filter, _} ->
+              {filter, length(Threads.list(c.scope, filter: filter))}
+            end)
+
+          if DateTime.truncate(DateTime.utc_now(), :second) == ending, do: {counts, listed}
+        end)
+
+      assert counts == listed
+      # Still snoozed for that second, as the snoozed list has it.
+      assert counts["snoozed"] == 3
+    end
+
     test "follows the label filter", c do
       {:ok, label} = Labels.create_and_assign(c.scope, c.threads.active, "Billing")
       {:ok, _} = Labels.assign(c.scope, c.threads.snoozed, label.id)

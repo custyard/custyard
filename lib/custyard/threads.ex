@@ -198,7 +198,8 @@ defmodule Custyard.Threads do
   # count with the length of the matching list.
   defp count_attention_queue(opts) do
     tenant_id = Keyword.get(opts, :tenant_id)
-    now = DateTime.utc_now()
+    # The list queries compare snoozed_until at whole seconds; so must the tally.
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     from(c in Thread,
       left_join: mf in subquery(QueuePreview.message_facts(tenant_id)),
@@ -819,7 +820,9 @@ defmodule Custyard.Threads do
   Broadcasts `{:message_updated, thread_id}` on the thread topic
   (`"thread:{id}"`) — the same message-level pattern
   `Custyard.Email.Outbound` uses for delivery updates — so open staff,
-  prospect, and portal views swap in the tombstone without a remount.
+  prospect, and portal views swap in the tombstone without a remount. Also
+  broadcasts `{:thread_updated, thread_id}` on `"threads"`, so an open
+  attention queue stops previewing the deleted body.
   """
   def soft_delete_message(%Message{deleted_at: %DateTime{}} = message, _staff) do
     {:ok, message}
@@ -833,6 +836,9 @@ defmodule Custyard.Threads do
           "thread:#{deleted.thread_id}",
           {:message_updated, deleted.thread_id}
         )
+
+        # An open attention queue still shows the body as the row snippet.
+        Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, deleted.thread_id})
 
         {:ok, deleted}
 

@@ -746,13 +746,24 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
                    changes how the thread is handled does. --%>
               <.source_badge :if={routing_source?(@item.thread.source)} source={@item.thread.source} />
               <.state_badge state={@item.thread.state} />
+              <%!-- The chips are one clipped line, so the snooze and the labels
+                   come before tier and mailbox. --%>
               <span
                 :if={@item.is_snoozed}
                 class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300"
+                title={"Snoozed until #{format_snooze_time(@item.thread.snoozed_until)}"}
                 data-testid="staff-queue-snoozed"
               >
-                snoozed until {format_snooze_time(@item.thread.snoozed_until)}
+                snoozed
+                <span class="hidden md:inline">
+                  until {format_snooze_time(@item.thread.snoozed_until)}
+                </span>
               </span>
+              <span
+                :for={label <- @item.labels}
+                class="text-xs rounded px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
+                data-testid={"queue-label-#{label.id}"}
+              >{label.name}</span>
               <.tier_badge
                 :if={@item.thread.organization && @item.thread.organization.tier != :standard}
                 tier={@item.thread.organization.tier}
@@ -767,11 +778,6 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
               >
                 {mailbox_local(@item.thread.inbound_channel.public_address)}
               </span>
-              <span
-                :for={label <- @item.labels}
-                class="text-xs rounded px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
-                data-testid={"queue-label-#{label.id}"}
-              >{label.name}</span>
               <.intake_source_tag
                 :if={@item.thread.intake_source_key}
                 source_key={@item.thread.intake_source_key}

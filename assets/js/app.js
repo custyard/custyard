@@ -51,9 +51,9 @@ Hooks.ResetOnSubmit = {
 }
 
 // Staff composer textarea. Ctrl+Enter or Cmd+Enter submits the form, and the
-// box grows with what is typed until it reaches 40% of the viewport, then
-// scrolls. The height is reapplied after every server patch, which drops
-// inline styles.
+// box grows with what is typed until it reaches 40% of the viewport or the
+// room the page chrome leaves, then scrolls. The height is reapplied after
+// every server patch, which drops inline styles.
 Hooks.ComposerInput = {
   mounted() {
     this.el.addEventListener("keydown", (e) => {
@@ -74,7 +74,11 @@ Hooks.ComposerInput = {
   },
   fit() {
     const el = this.el
-    const limit = Math.round(window.innerHeight * 0.4)
+    // The box shares a column with the conversation. Leave room for the page
+    // chrome (about 320px, 470px on a phone, where the header wraps) and some
+    // 150px of conversation. The cap never drops below 96px, about three lines.
+    const room = window.innerHeight - (window.innerWidth < 768 ? 620 : 480)
+    const limit = Math.max(96, Math.min(Math.round(window.innerHeight * 0.4), room))
     el.style.height = "auto"
     const border = el.offsetHeight - el.clientHeight
     const wanted = el.scrollHeight + border
