@@ -50,22 +50,42 @@ registry cleanup policy is disabled, so old versions are kept.
 
 ## Version tags
 
-Pushing a git tag such as `v1.2.3` runs only the `image-tag` job. It adds the
-version as a tag on the image `publish` already built for that commit, so
-`registry.gitlab.com/custyard/custyard:v1.2.3` and `:sha-<commit>` share one
-digest. Nothing is rebuilt or retested:
+Pushing a protected git tag such as `v1.2.3` runs only the `image-tag` job. It
+adds the version as a tag on the image `publish` already built for that
+commit, so `registry.gitlab.com/custyard/custyard:v1.2.3` and `:sha-<commit>`
+share one digest. Nothing is rebuilt or retested:
 
 ```sh
 git tag -a v1.2.3 -m "v1.2.3" <commit-on-main>
 git push gitlab v1.2.3
 ```
 
-The job fails if the commit has no published `sha-<commit>` image (tag a
-commit whose `main` pipeline published one) or if the version tag already
-points at a different digest. Only tags matching `vMAJOR.MINOR.PATCH` start a
-pipeline. To tag by hand instead, `oras tag
-registry.gitlab.com/custyard/custyard@sha256:<digest> v1.2.3` after `oras login
-registry.gitlab.com` with a token that has `write_registry`.
+`v*` must be a protected tag that only Maintainers can create (Settings >
+Repository > Protected tags). The job's rule requires it: until the tag is
+protected, pushing a version tag starts no pipeline. Protect it once:
+
+```sh
+glab api -X POST 'projects/custyard%2Fcustyard/protected_tags' \
+  -f name='v*' -f create_access_level=40
+```
+
+`.gitlab/scripts/image_tag.py` does not trust the `sha-<commit>` registry tag,
+which anyone who can write the registry can repoint. It takes the digest from
+the `published-image.json` record of a successful push-to-main pipeline for
+the tagged commit, with the same checks promotion uses: every release gate
+passed, the record names its own pipeline and publish job, and the image's
+revision and source labels match. It then stores that manifest under the
+version tag and reads it back.
+
+The job fails if the commit has no such pipeline and record (tag a commit
+whose `main` pipeline published an image), if the record has expired
+(`publish` keeps it 90 days), or if the version tag already points at a
+different digest; a version tag is never moved. The tagged commit must
+contain the job itself, so commits older than it cannot be tagged this way.
+Only tags matching `vMAJOR.MINOR.PATCH` start a pipeline. To tag by hand
+instead, `oras tag registry.gitlab.com/custyard/custyard@sha256:<digest>
+v1.2.3` after `oras login registry.gitlab.com` with a token that has
+`write_registry`; that path skips every check above.
 
 ## Promotion
 

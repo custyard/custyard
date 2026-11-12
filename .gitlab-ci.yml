@@ -30,13 +30,13 @@ spec:
 # branch (stacked MRs included), pushes to the default branch, scheduled
 # pipelines (configure under Build > Pipeline schedules, daily 05:23 UTC) and
 # manual runs (Build > Pipelines > Run pipeline, or the API). Plain branch
-# pushes without an MR do not run a pipeline, as on GitHub. Pushing a version
-# tag (v1.2.3) runs only image-tag.
+# pushes without an MR do not run a pipeline, as on GitHub. Pushing a
+# protected version tag (v1.2.3) runs only image-tag.
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/ && $CI_COMMIT_REF_PROTECTED == "true"
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_PIPELINE_SOURCE == "api"
@@ -135,7 +135,7 @@ promotion-scripts:
   needs: []
   rules: !reference [.not-scheduled, rules]
   script:
-    - python3 -m unittest discover -s .gitlab/scripts -p promotion_test.py
+    - python3 -m unittest discover -s .gitlab/scripts -p '*_test.py'
 
 # The suite again over the Turso driver (Custyard.Turso.Connection, Hrana
 # over HTTP) against a real libSQL server, the server Turso runs. One test
@@ -266,33 +266,27 @@ publish:
     paths: [published-image.json]
     expire_in: 90 days
 
-# Pushing a version tag (v1.2.3) gives the image main CI published for that
-# commit a version tag. Nothing is rebuilt: the version points at the same
-# digest as sha-<commit>, so only commits that passed main CI can be tagged.
-# An existing version tag is never moved to a different digest.
+# Pushing a protected version tag (v1.2.3) gives the image main CI published
+# for that commit a version tag. Nothing is rebuilt. image_tag.py takes the
+# digest from the publish record of a successful push-to-main pipeline, as
+# promotion does, and never from the sha-<commit> registry tag, which anyone
+# who can write the registry can repoint. It checks the image's revision and
+# source labels and never moves an existing version tag. The rule needs v*
+# to be a protected tag (Settings > Repository > Protected tags, Maintainers);
+# until it is, a version tag starts no pipeline. See
+# docs/ops/container-publishing.md.
 image-tag:
   stage: publish
-  image:
-    # oras v1.3.6 (Alpine-based), pinned by digest.
-    name: ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d004243d8003aeb807a3e15b2ed212cdd1326c9eb
-    entrypoint: [""]
+  image: python:3.12-slim
+  interruptible: false
   needs: []
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/ && $CI_PROJECT_PATH == "custyard/custyard"
-  variables:
-    IMAGE: $CI_REGISTRY_IMAGE
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/ && $CI_COMMIT_REF_PROTECTED == "true" && $CI_PROJECT_PATH == "custyard/custyard"
   script:
-    - echo "$CI_REGISTRY_PASSWORD" | oras login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-    - |
-      DIGEST=$(oras resolve "$IMAGE:sha-$CI_COMMIT_SHA") || {
-        echo "No published image for $CI_COMMIT_SHA; tag a commit whose main pipeline published one" >&2
-        exit 1
-      }
-      if EXISTING=$(oras resolve "$IMAGE:$CI_COMMIT_TAG" 2>/dev/null); then
-        [ "$EXISTING" = "$DIGEST" ] || { echo "$IMAGE:$CI_COMMIT_TAG already points at $EXISTING" >&2; exit 1; }
-      fi
-    - oras tag "$IMAGE@$DIGEST" "$CI_COMMIT_TAG"
-    - 'printf "Tagged: %s:%s\nDeploy by digest: %s@%s\n" "$IMAGE" "$CI_COMMIT_TAG" "$IMAGE" "$DIGEST"'
+    # A tag pipeline runs no other job, so the scripts are tested here first.
+    - python3 -m unittest discover -s .gitlab/scripts -p '*_test.py'
+    - python3 .gitlab/scripts/image_tag.py
+
 # Promotion: translated from .github/workflows/promote.yml. Run pipeline on
 # main with promote_environment set. promote:validate checks the candidate
 # against a successful push-to-main pipeline, its publish record and registry
@@ -358,7 +352,7 @@ promote:validate:
     name: $[[ inputs.promote_environment ]]
     action: prepare
   script:
-    - python3 -m unittest discover -s .gitlab/scripts -p promotion_test.py
+    - python3 -m unittest discover -s .gitlab/scripts -p '*_test.py'
     - python3 .gitlab/scripts/promotion.py validate
   artifacts:
     reports:

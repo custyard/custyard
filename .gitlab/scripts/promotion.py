@@ -22,6 +22,8 @@ REGISTRY = "registry.gitlab.com"
 IMAGE = REGISTRY + "/" + REPOSITORY
 REGISTRY_TOKEN_URL = ("https://gitlab.com/jwt/auth?service=container_registry"
                       f"&scope=repository:{REPOSITORY}:pull")
+# Only image_tag.py writes the registry, to add a version tag.
+REGISTRY_PUSH_TOKEN_URL = REGISTRY_TOKEN_URL + ",push"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 RECORD_FILE = "published-image.json"
@@ -31,12 +33,13 @@ MAX_RECORD_ARCHIVE = 65_536
 MAX_HEALTH_SIZE = 65_536
 # Job names in .gitlab-ci.yml; a parallel:matrix job reports one name per value.
 REQUIRED_JOBS = {"test", "turso: [turso]", "turso: [bunny]", "release", "security", "publish"}
-MANIFEST_TYPES = ", ".join([
+MANIFEST_MEDIA_TYPES = (
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.list.v2+json",
     "application/vnd.docker.distribution.manifest.v2+json",
-])
+)
+MANIFEST_TYPES = ", ".join(MANIFEST_MEDIA_TYPES)
 
 
 class ValidationError(Exception):
@@ -53,8 +56,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def read_bytes(url, headers=None, redirects=0, method="GET", data=None, limit=16_777_216):
-    """Never forward credentials when registries or artifacts redirect to storage."""
+def read_bytes(url, headers=None, redirects=0, method="GET", data=None, limit=16_777_216,
+               missing_ok=False):
+    """Never forward credentials when registries or artifacts redirect to storage.
+
+    With missing_ok, a GET answered 404 returns None instead of failing."""
     require(redirects <= 3, "Remote response redirected too many times")
     parts = urllib.parse.urlsplit(url)
     require(parts.scheme == "https" and not parts.username, "Remote URL must use HTTPS")
@@ -66,14 +72,19 @@ def read_bytes(url, headers=None, redirects=0, method="GET", data=None, limit=16
                 # The successful PATCH body is irrelevant and may contain app
                 # configuration. Do not parse it, retain it or print it.
                 return b""
+            if method == "PUT":
+                require(response.status == 201, "Registry did not accept the version tag")
+                return b""
             body = response.read(limit + 1)
             require(len(body) <= limit, "Remote metadata exceeds the supported size")
             return body
     except urllib.error.HTTPError as error:
         if error.code in (301, 302, 303, 307, 308) and error.headers.get("Location"):
-            require(method == "GET", "Bunny container update redirected unexpectedly")
+            require(method == "GET", "Remote update redirected unexpectedly")
             target = urllib.parse.urljoin(url, error.headers["Location"])
             return read_bytes(target, redirects=redirects + 1, limit=limit)
+        if error.code == 404 and missing_ok and method == "GET":
+            return None
         raise ValidationError("Remote metadata request failed") from None
 
 
@@ -125,7 +136,9 @@ def validate_pipeline_context():
             "Promotions must run from a manual pipeline on Custyard's protected main branch")
 
 
-def validate_ci(source_sha, digest):
+def published_jobs(source_sha):
+    """Yield (pipeline ID, publish job) for each successful push-to-main
+    pipeline of the commit whose release gates all passed, newest first."""
     query = urllib.parse.urlencode({"sha": source_sha, "ref": "main", "source": "push",
                                     "status": "success", "per_page": 100})
     pipelines = gitlab("pipelines?" + query)
@@ -145,17 +158,40 @@ def validate_ci(source_sha, digest):
         jobs = [job for job in jobs if isinstance(job, dict)]
         successful = {job.get("name") for job in jobs if job.get("status") == "success"}
         publish = [job for job in jobs if job.get("name") == "publish"]
-        if not (REQUIRED_JOBS <= successful and len(publish) == 1):
-            continue
+        if REQUIRED_JOBS <= successful and len(publish) == 1:
+            yield pipeline_id, publish[0]
+
+
+def validate_ci(source_sha, digest):
+    for pipeline_id, publish in published_jobs(source_sha):
         try:
-            validate_published_record(pipeline_id, publish[0], source_sha, digest)
+            validate_published_record(pipeline_id, publish, source_sha, digest)
         except ValidationError:
             continue
         return f"{SOURCE_URL}/-/pipelines/{pipeline_id}"
     raise ValidationError("Candidate has no successful push-to-main CI pipeline with all release/publish gates and a matching published image record")
 
 
-def validate_published_record(pipeline_id, job, source_sha, digest):
+def published_digest(source_sha):
+    """The digest main CI published for a commit, and that pipeline's URL.
+
+    The digest comes from the publish job's record, never from a registry
+    tag, which anyone who can write the registry can repoint. The newest
+    pipeline with a valid record wins, as it does for the sha-<commit> tag."""
+    for pipeline_id, publish in published_jobs(source_sha):
+        try:
+            record = read_published_record(pipeline_id, publish, source_sha)
+            digest = record.get("digest") if isinstance(record, dict) else None
+            require(isinstance(digest, str) and bool(DIGEST.fullmatch(digest)),
+                    "CI published image record has no immutable digest")
+            require_record(record, pipeline_id, publish, source_sha, digest)
+        except ValidationError:
+            continue
+        return digest, f"{SOURCE_URL}/-/pipelines/{pipeline_id}"
+    raise ValidationError("Commit has no successful push-to-main CI pipeline with all release/publish gates and a published image record")
+
+
+def read_published_record(pipeline_id, job, source_sha):
     # The record names the publish job that wrote it, so a retried publish
     # cannot borrow the record of an earlier attempt. Expired, legacy or
     # incomplete records fail closed.
@@ -173,14 +209,21 @@ def validate_published_record(pipeline_id, job, source_sha, digest):
     # GitLab serves one bounded member of the archive; nothing is extracted.
     body = gitlab_bytes(f"jobs/{job_id}/artifacts/{RECORD_FILE}", limit=MAX_RECORD_SIZE)
     try:
-        record = json.loads(body)
+        return json.loads(body)
     except ValueError:
         raise ValidationError("CI published image record could not be decoded") from None
+
+
+def require_record(record, pipeline_id, job, source_sha, digest):
     expected = {"version": 1, "repository": REPOSITORY, "image": IMAGE, "source_sha": source_sha,
-                "digest": digest, "pipeline_id": pipeline_id, "job_id": job_id}
+                "digest": digest, "pipeline_id": pipeline_id, "job_id": job.get("id")}
     require(isinstance(record, dict)
             and all(type(record.get(key)) is int for key in ("version", "pipeline_id", "job_id"))
             and record == expected, "Candidate digest does not match the image published by this CI publish job")
+
+
+def validate_published_record(pipeline_id, job, source_sha, digest):
+    require_record(read_published_record(pipeline_id, job, source_sha), pipeline_id, job, source_sha, digest)
 
 
 def verify_hash(body, digest):
@@ -189,14 +232,15 @@ def verify_hash(body, digest):
     return json.loads(body)
 
 
-def registry_token():
+def registry_token(push=False):
     headers = {}
     job_token = os.environ.get("CI_JOB_TOKEN", "")
     if job_token:
         credentials = base64.b64encode(("gitlab-ci-token:" + job_token).encode()).decode()
         headers["Authorization"] = "Basic " + credentials
-    token = json.loads(read_bytes(REGISTRY_TOKEN_URL, headers)).get("token")
-    require(isinstance(token, str) and bool(token), "Registry pull token could not be obtained")
+    url = REGISTRY_PUSH_TOKEN_URL if push else REGISTRY_TOKEN_URL
+    token = json.loads(read_bytes(url, headers)).get("token")
+    require(isinstance(token, str) and bool(token), "Registry token could not be obtained")
     return token
 
 
