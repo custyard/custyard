@@ -541,8 +541,12 @@ defmodule Custyard.Email.ImapPollTest do
 
       [message] = Repo.all(from m in Message, where: m.inbound_channel_id == ^channel.id)
 
-      assert [%{state: :fetched, filename: "invoice.pdf", sniffed_type: "application/pdf"}] =
+      assert [%{state: :fetched, filename: "invoice.pdf", sniffed_type: "application/pdf"} = row] =
                Custyard.Attachments.list_for_message(message.id)
+
+      # The decoded part is what the database holds.
+      stored = Custyard.Attachments.stored_file(row)
+      assert Custyard.Files.read(stored) == {:ok, "%PDF-1.4 test"}
     end
   end
 

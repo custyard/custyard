@@ -4,8 +4,9 @@ defmodule Custyard.AttachmentsTest do
 
   import Custyard.Factory
 
-  alias Custyard.{Attachments, MessageAttachment, Repo}
+  alias Custyard.{Attachments, Files, MessageAttachment, Repo}
   alias Custyard.Attachments.StubClient
+  alias Custyard.Files.{Chunk, StoredFile}
 
   defp scope(staff),
     do: Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
@@ -28,6 +29,30 @@ defmodule Custyard.AttachmentsTest do
     )
   end
 
+  defp sha256(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+  defp fetched(message, bytes) do
+    {:ok, [row]} = Attachments.fetch_for_message(message, [%{filename: "f.bin", content: bytes}])
+    row
+  end
+
+  # Content in the store that no attachment row names.
+  defp unreferenced(tenant_id, bytes) do
+    {:ok, file} = Files.put(tenant_id, :attachment, sha256(bytes), bytes)
+    file
+  end
+
+  defp stored_files(tenant_id),
+    do: Repo.all(from f in StoredFile, where: f.tenant_id == ^tenant_id, order_by: f.id)
+
+  defp chunks(file_id), do: Repo.aggregate(from(c in Chunk, where: c.file_id == ^file_id), :count)
+
+  # The orphan sweep goes by when a file was published.
+  defp publish_hours_ago(%StoredFile{id: id}, hours) do
+    at = DateTime.utc_now(:second) |> DateTime.add(-hours * 3600, :second)
+    Repo.update_all(from(f in StoredFile, where: f.id == ^id), set: [completed_at: at])
+  end
+
   describe "fetch_for_message/3" do
     test "stores the bytes content-addressed and records the sniffed type", %{message: message} do
       d = descriptor()
@@ -35,17 +60,20 @@ defmodule Custyard.AttachmentsTest do
 
       assert {:ok, [row]} = Attachments.fetch_for_message(message, [d])
 
-      sha = :crypto.hash(:sha256, @png) |> Base.encode16(case: :lower)
+      sha = sha256(@png)
       assert %MessageAttachment{state: :fetched, sha256: ^sha, filename: "photo.png"} = row
       assert row.sniffed_type == "image/png"
       assert row.content_type == "image/png"
       assert row.size == byte_size(@png)
 
-      assert row.storage_path ==
-               Path.join([Integer.to_string(message.tenant_id), binary_part(sha, 0, 2), sha])
+      assert %StoredFile{kind: :attachment, key: ^sha, sha256: ^sha} =
+               stored = Attachments.stored_file(row)
 
-      assert File.read!(Attachments.file_path(row)) == @png
-      assert String.starts_with?(Attachments.file_path(row), Attachments.dir())
+      assert stored.tenant_id == message.tenant_id
+      assert stored.size == byte_size(@png)
+      assert Files.read(stored) == {:ok, @png}
+      assert [%StoredFile{id: id}] = stored_files(message.tenant_id)
+      assert id == stored.id
     end
 
     test "never stores the signed URL", %{message: message} do
@@ -63,8 +91,52 @@ defmodule Custyard.AttachmentsTest do
       StubClient.put(b.url, "same bytes")
 
       assert {:ok, [ra, rb]} = Attachments.fetch_for_message(message, [a, b])
-      assert ra.storage_path == rb.storage_path
-      assert File.exists?(Attachments.file_path(ra))
+      assert ra.sha256 == rb.sha256
+      assert [%StoredFile{id: id}] = stored_files(message.tenant_id)
+      assert Attachments.stored_file(ra).id == id
+      assert Attachments.stored_file(rb).id == id
+      assert Files.read(Attachments.stored_file(rb)) == {:ok, "same bytes"}
+    end
+
+    test "two messages of a tenant with the same content share one stored file", %{
+      message: message
+    } do
+      bytes = :crypto.strong_rand_bytes(Files.chunk_bytes() + 17)
+      first = fetched(message, bytes)
+      second = fetched(insert_message(thread_id: message.thread_id), bytes)
+
+      assert first.id != second.id
+      assert [%StoredFile{id: id, chunk_count: 2}] = stored_files(message.tenant_id)
+      assert chunks(id) == 2
+      assert Attachments.stored_file(first).id == id
+      assert Attachments.stored_file(second).id == id
+    end
+
+    test "another tenant's identical content is a file of its own", %{message: message} do
+      other = insert_organization(tenant_id: insert_tenant().id)
+      theirs = insert_message(thread_id: insert_thread(organization_id: other.id).id)
+      bytes = "the same bytes in two tenants"
+
+      mine = Attachments.stored_file(fetched(message, bytes))
+      other_file = Attachments.stored_file(fetched(theirs, bytes))
+
+      assert mine.sha256 == other_file.sha256
+      assert mine.id != other_file.id
+      assert mine.tenant_id == message.tenant_id
+      assert other_file.tenant_id == other.tenant_id
+
+      # Removing one tenant's copy leaves the other's whole.
+      :ok = Files.delete(mine.tenant_id, :attachment, mine.key)
+      assert Files.read(other_file) == {:ok, bytes}
+    end
+
+    test "content of several chunks is stored and read back intact", %{message: message} do
+      bytes = :crypto.strong_rand_bytes(5 * Files.chunk_bytes() + 4097)
+      row = fetched(message, bytes)
+
+      assert row.size == byte_size(bytes)
+      assert %StoredFile{chunk_count: 6} = stored = Attachments.stored_file(row)
+      assert Files.read(stored) == {:ok, bytes}
     end
 
     test "a declared size past the cap is listed as skipped without a fetch", %{message: message} do
@@ -83,7 +155,9 @@ defmodule Custyard.AttachmentsTest do
 
       assert {:ok, [row]} = Attachments.fetch_for_message(message, [d], limit_bytes: 1_000)
       assert %{state: :skipped, skip_reason: "too_large"} = row
-      assert row.storage_path == nil
+      assert row.sha256 == nil
+      refute Attachments.stored_file(row)
+      assert stored_files(message.tenant_id) == []
     end
 
     test "the cap is cumulative across a message's attachments", %{message: message} do
@@ -109,7 +183,8 @@ defmodule Custyard.AttachmentsTest do
 
       assert {:ok, [row]} = Attachments.fetch_for_message(message, [d], skip: "suspect")
       assert %{state: :skipped, skip_reason: "suspect", filename: "invoice.exe"} = row
-      refute Attachments.file_path(row)
+      refute Attachments.stored_file(row)
+      assert stored_files(message.tenant_id) == []
     end
 
     test "a failed download is recorded, not raised", %{message: message} do
@@ -229,6 +304,25 @@ defmodule Custyard.AttachmentsTest do
       assert unfinished.sha256 == nil
       assert unfinished.batch_processing_token == "new-owner"
       assert later.state == :pending
+      assert stored_files(message.tenant_id) == []
+    end
+
+    # A hash can only be refused as a key when the file already under it is
+    # other content. The row must not then claim content it does not have.
+    test "content the store refuses is not recorded as fetched", %{message: message} do
+      bytes = "content whose place is taken"
+      {:ok, squatter} = Files.put(message.tenant_id, :attachment, sha256(bytes), "other content")
+
+      assert_raise RuntimeError, "attachment content was not stored: conflict", fn ->
+        Attachments.fetch_for_message(message, [%{filename: "f.bin", content: bytes}])
+      end
+
+      assert [%{state: :pending, batch_processing_token: nil} = row] =
+               Attachments.list_for_message(message.id)
+
+      refute Attachments.stored_file(row)
+      assert [%StoredFile{id: id}] = stored_files(message.tenant_id)
+      assert id == squatter.id
     end
 
     test "active claims block work until expiry and expired claims resume", %{message: message} do
@@ -361,7 +455,67 @@ defmodule Custyard.AttachmentsTest do
 
       assert {:ok, [row]} = Attachments.fetch_for_message(message, [d])
       assert row.filename == ".._.._etc_passwd"
-      refute String.contains?(row.storage_path, "..")
+      assert Attachments.stored_file(row).key == sha256("x")
+    end
+  end
+
+  describe "MessageAttachment.changeset/2" do
+    test "a fetched attachment needs its hash and size, and no path" do
+      attrs = %{tenant_id: 1, message_id: 1, state: :fetched}
+
+      assert %{sha256: ["can't be blank"], size: ["can't be blank"]} =
+               errors_on(MessageAttachment.changeset(%MessageAttachment{}, attrs))
+
+      complete = Map.merge(attrs, %{sha256: sha256("x"), size: 1, storage_path: "1/2d/2d71"})
+      changeset = MessageAttachment.changeset(%MessageAttachment{}, complete)
+
+      assert changeset.valid?
+      refute Map.has_key?(changeset.changes, :storage_path)
+    end
+  end
+
+  describe "stored_file/1" do
+    test "is nil for a row that is not fetched", %{message: message} do
+      assert {:ok, [skipped]} =
+               Attachments.fetch_for_message(message, [descriptor()], limit_bytes: 0)
+
+      refute Attachments.stored_file(skipped)
+      refute Attachments.stored_file(%MessageAttachment{state: :fetched, tenant_id: 1})
+
+      row = fetched(insert_message(thread_id: message.thread_id), "x")
+      assert %StoredFile{} = Attachments.stored_file(row)
+      refute Attachments.stored_file(%{row | state: :pending})
+    end
+
+    test "is nil once the content is gone", %{message: message} do
+      row = fetched(message, "here, then not")
+      assert %StoredFile{} = Attachments.stored_file(row)
+
+      :ok = Files.delete(row.tenant_id, :attachment, row.sha256)
+      refute Attachments.stored_file(row)
+    end
+
+    test "is nil while the content is still being written", %{message: message} do
+      row = fetched(message, "not published")
+      %StoredFile{id: id} = Attachments.stored_file(row)
+      Repo.update_all(from(f in StoredFile, where: f.id == ^id), set: [completed_at: nil])
+
+      refute Attachments.stored_file(row)
+    end
+
+    test "is nil for a file whose recorded hash is not its key", %{message: message} do
+      row = fetched(message, "the real content")
+      %StoredFile{id: id} = Attachments.stored_file(row)
+      Repo.update_all(from(f in StoredFile, where: f.id == ^id), set: [sha256: sha256("other")])
+
+      refute Attachments.stored_file(row)
+    end
+
+    test "never reaches another tenant's content", %{message: message} do
+      row = fetched(message, "tenant bound")
+      other = insert_tenant()
+
+      refute Attachments.stored_file(%{row | tenant_id: other.id})
     end
   end
 
@@ -430,51 +584,117 @@ defmodule Custyard.AttachmentsTest do
   end
 
   describe "sweep_orphan_files/0" do
-    test "removes files no row references and keeps the rest", %{message: message} do
-      kept = descriptor()
-      StubClient.put(kept.url, "kept-#{System.unique_integer()}")
-      {:ok, [kept_row]} = Attachments.fetch_for_message(message, [kept])
+    test "removes old content no row references, chunks included, and keeps the rest", %{
+      message: message
+    } do
+      tenant_id = message.tenant_id
+      kept_row = fetched(message, "referenced")
+      kept = Attachments.stored_file(kept_row)
+      orphan = unreferenced(tenant_id, :crypto.strong_rand_bytes(2 * Files.chunk_bytes() + 5))
+      young = unreferenced(tenant_id, "stored a moment ago")
+      {:ok, logo} = Files.put(tenant_id, :logo, "logo.png", @png)
 
-      orphan_sha =
-        :crypto.hash(:sha256, "orphan-#{System.unique_integer()}") |> Base.encode16(case: :lower)
+      assert chunks(orphan.id) == 3
+      Enum.each([kept, orphan, logo], &publish_hours_ago(&1, 25))
+      publish_hours_ago(young, 23)
 
-      orphan_path =
-        Path.join([
-          Attachments.dir(),
-          Integer.to_string(message.tenant_id),
-          binary_part(orphan_sha, 0, 2),
-          orphan_sha
-        ])
+      assert Attachments.sweep_orphan_files() == 1
 
-      File.mkdir_p!(Path.dirname(orphan_path))
-      File.write!(orphan_path, "orphan")
-      File.touch!(orphan_path, System.os_time(:second) - 90_000)
+      refute Repo.get(StoredFile, orphan.id)
+      assert chunks(orphan.id) == 0
+      assert Repo.aggregate(Chunk, :count) == chunks(kept.id) + chunks(young.id) + chunks(logo.id)
 
-      assert Attachments.sweep_orphan_files() >= 1
-      refute File.exists?(orphan_path)
-      assert File.exists?(Attachments.file_path(kept_row))
+      assert Files.read(Attachments.stored_file(kept_row)) == {:ok, "referenced"}
+      assert Files.read(Repo.get!(StoredFile, young.id)) == {:ok, "stored a moment ago"}
+      assert Files.read(Repo.get!(StoredFile, logo.id)) == {:ok, @png}
+      assert Attachments.sweep_orphan_files() == 0
     end
-  end
 
-  test "orphan cleanup leaves fresh final files and temporary writes alone", %{message: message} do
-    sha = :crypto.hash(:sha256, "fresh-#{System.unique_integer()}") |> Base.encode16(case: :lower)
+    test "content becomes an orphan when its last row goes", %{message: message} do
+      bytes = "attached to two messages"
+      first = fetched(message, bytes)
+      second = fetched(insert_message(thread_id: message.thread_id), bytes)
+      file = Attachments.stored_file(first)
+      publish_hours_ago(file, 48)
 
-    path =
-      Path.join([
-        Attachments.dir(),
-        Integer.to_string(message.tenant_id),
-        binary_part(sha, 0, 2),
-        sha
-      ])
+      Repo.delete!(first)
+      assert Attachments.sweep_orphan_files() == 0
+      assert Files.read(Attachments.stored_file(second)) == {:ok, bytes}
 
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, "fresh")
-    temporary = path <> ".tmp-123"
-    File.write!(temporary, "in progress")
-    File.touch!(temporary, System.os_time(:second) - 90_000)
-    Attachments.sweep_orphan_files()
-    assert File.exists?(path)
-    assert File.exists?(temporary)
+      Repo.delete!(second)
+      assert Attachments.sweep_orphan_files() == 1
+      refute Repo.get(StoredFile, file.id)
+      assert chunks(file.id) == 0
+    end
+
+    # A writer sets its row's sha256 before it stores the content, and the
+    # sweep relies on that: the hash alone must protect the file, whatever
+    # state the row is in.
+    test "a row that has only published its hash keeps the content", %{message: message} do
+      bytes = "reference first, content second"
+      file = unreferenced(message.tenant_id, bytes)
+      publish_hours_ago(file, 48)
+
+      Repo.insert!(%MessageAttachment{
+        tenant_id: message.tenant_id,
+        message_id: message.id,
+        position: 0,
+        state: :pending,
+        sha256: sha256(bytes)
+      })
+
+      assert Attachments.sweep_orphan_files() == 0
+      assert Files.read(Repo.get!(StoredFile, file.id)) == {:ok, bytes}
+    end
+
+    test "a reference in another tenant does not keep this tenant's content", %{message: message} do
+      bytes = "the same bytes in two tenants"
+      other = insert_organization(tenant_id: insert_tenant().id)
+
+      theirs =
+        fetched(insert_message(thread_id: insert_thread(organization_id: other.id).id), bytes)
+
+      mine = unreferenced(message.tenant_id, bytes)
+      Enum.each([mine, Attachments.stored_file(theirs)], &publish_hours_ago(&1, 48))
+
+      assert Attachments.sweep_orphan_files() == 1
+      refute Repo.get(StoredFile, mine.id)
+      assert Files.read(Attachments.stored_file(theirs)) == {:ok, bytes}
+    end
+
+    # Writes that were never published are Files.sweep_incomplete/1's to remove.
+    test "leaves a write that was never published alone", %{message: message} do
+      old = DateTime.utc_now(:second) |> DateTime.add(-48 * 3600, :second)
+
+      unpublished =
+        Repo.insert!(%StoredFile{
+          tenant_id: message.tenant_id,
+          kind: :attachment,
+          key: sha256("in progress"),
+          sha256: sha256("in progress"),
+          size: 11,
+          chunk_count: 1,
+          inserted_at: old
+        })
+
+      Repo.insert!(%Chunk{file_id: unpublished.id, position: 0, data: "in progress"})
+
+      assert Attachments.sweep_orphan_files() == 0
+      assert Repo.get(StoredFile, unpublished.id)
+      assert chunks(unpublished.id) == 1
+    end
+
+    test "content swept as an orphan is stored again by a later fetch", %{message: message} do
+      bytes = "gone and back"
+      first = fetched(message, bytes)
+      publish_hours_ago(Attachments.stored_file(first), 48)
+      Repo.delete!(first)
+      assert Attachments.sweep_orphan_files() == 1
+      assert stored_files(message.tenant_id) == []
+
+      again = fetched(insert_message(thread_id: message.thread_id), bytes)
+      assert Files.read(Attachments.stored_file(again)) == {:ok, bytes}
+    end
   end
 
   test "format_bytes/1" do

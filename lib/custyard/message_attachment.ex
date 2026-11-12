@@ -3,19 +3,21 @@ defmodule Custyard.MessageAttachment do
   A file attached to an inbound message (spec-inbound-channels D9).
 
   The provider hands Custyard a signed URL per attachment; the fetcher
-  downloads within the channel's per-message cap into a content-addressed
-  file under the attachment directory and records what it learned here. The
-  signed URL is never stored. `filename` is display data only: the file on
-  disk is named by its SHA-256, so a hostile filename can never become a
-  path. `sniffed_type` is derived from the bytes and is what the download
-  endpoint serves; the declared `content_type` is kept for the staff.
+  downloads within the channel's per-message cap, stores the content in the
+  database (`Custyard.Files`) and records what it learned here. The signed
+  URL is never stored. `filename` is display data only: the content is keyed
+  by `sha256` within the tenant, so a hostile filename never names anything
+  in storage. `sniffed_type` is derived from the bytes and is what the
+  download endpoint serves; the declared `content_type` is kept for the staff.
 
-  States: `fetched` (file on disk), `skipped` (listed but deliberately not
+  States: `fetched` (content stored), `skipped` (listed but deliberately not
   fetched: over the cap, suspect mail, fetching disabled) and `failed`
   (fetch attempted and lost).
   """
   use Ecto.Schema
   import Ecto.Changeset
+
+  @type t :: %__MODULE__{}
 
   @states [:pending, :fetched, :skipped, :failed]
   @skip_reasons ~w(over_limit suspect disabled fetch_failed too_large no_url invalid_descriptor)
@@ -32,7 +34,9 @@ defmodule Custyard.MessageAttachment do
     field :sniffed_type, :string
     field :size, :integer
     field :sha256, :string
-    field :storage_path, :string
+
+    # The table keeps a storage_path column from when content was a file on disk; nothing reads it.
+
     field :content_id, :string
     field :state, Ecto.Enum, values: @states
     field :skip_reason, :string
@@ -70,7 +74,6 @@ defmodule Custyard.MessageAttachment do
       :sniffed_type,
       :size,
       :sha256,
-      :storage_path,
       :content_id,
       :state,
       :skip_reason,
@@ -89,10 +92,10 @@ defmodule Custyard.MessageAttachment do
     |> unique_constraint([:message_id, :position])
   end
 
-  # A fetched attachment must point at a file.
+  # A fetched attachment must name its content: the hash is the key it is stored under.
   defp validate_fetched(changeset) do
     case get_field(changeset, :state) do
-      :fetched -> validate_required(changeset, [:sha256, :storage_path, :size])
+      :fetched -> validate_required(changeset, [:sha256, :size])
       _other -> changeset
     end
   end

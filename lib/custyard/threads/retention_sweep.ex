@@ -14,6 +14,11 @@ defmodule Custyard.Threads.RetentionSweep do
   rotated tokens at the end of their grace period. It is skipped on a dry
   run, which reports zero for its keys.
 
+  File content lives in the database (`Custyard.Files`), so the same pass
+  removes what nothing points at any more: attachment content whose rows
+  went with their messages (`attachment_files`) and writes that were started
+  and never published (`incomplete_files`). A dry run skips these too.
+
   Deliberately its own GenServer rather than a fifth task on
   `Scoring.Scheduler`: that runs every five minutes, and a bulk delete
   belongs nowhere near that cadence. First sweep is delayed rather than run
@@ -41,6 +46,7 @@ defmodule Custyard.Threads.RetentionSweep do
     channel_verifications: 0,
     channel_tokens: 0,
     attachment_files: 0,
+    incomplete_files: 0,
     message_drafts: 0
   }
 
@@ -67,7 +73,8 @@ defmodule Custyard.Threads.RetentionSweep do
   `opts` are passed through to `Threads.run_cleanup/1`, so a caller
   can pass `dry_run: true` or override either bound. Returns the counts map
   `run_cleanup/1` returns plus `channel_rejections`, `channel_verifications`
-  and `channel_tokens` from `InboundChannels.sweep_expired/0`, or a zeroed
+  and `channel_tokens` from `InboundChannels.sweep_expired/0`,
+  `attachment_files`, `incomplete_files` and `message_drafts`, or a zeroed
   map when the sweep fails — a failure is logged and the next interval
   retries.
   """
@@ -99,6 +106,7 @@ defmodule Custyard.Threads.RetentionSweep do
         :channel_verifications,
         :channel_tokens,
         :attachment_files,
+        :incomplete_files,
         :message_drafts
       ])
     else
@@ -109,8 +117,10 @@ defmodule Custyard.Threads.RetentionSweep do
         channel_rejections: rejections,
         channel_verifications: verifications,
         channel_tokens: tokens,
-        # Files whose attachment rows went with their swept threads.
+        # Stored content whose attachment rows went with their swept threads.
         attachment_files: Custyard.Attachments.sweep_orphan_files(),
+        # Writes of any kind that a crashed or failed writer never published.
+        incomplete_files: Custyard.Files.sweep_incomplete(),
         message_drafts: Custyard.MessageDrafts.sweep_expired()
       }
     end

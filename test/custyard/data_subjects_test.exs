@@ -8,6 +8,8 @@ defmodule Custyard.DataSubjectsTest do
 
   alias Custyard.{AuditEvent, Contact, Thread, DataSubjects, Message, Repo}
   alias Custyard.{InboundChannelRejection, MessageAttachment, MessageRecipientStatus}
+  alias Custyard.{Attachments, Files}
+  alias Custyard.Files.StoredFile
 
   defp scope(org) do
     key = {:dsar_scope, org.tenant_id}
@@ -628,6 +630,35 @@ defmodule Custyard.DataSubjectsTest do
       assert own.subject == "(erased)"
       assert own.contact_id == nil
       assert Repo.aggregate(InboundChannelRejection, :count) == 0
+    end
+
+    # The erasure removes the rows; the content they pointed at is removed by
+    # the orphan sweep once no other row of the tenant names it.
+    test "the content of the person's attachments goes with the next orphan sweep", ctx do
+      {:ok, [only_pat, also_alice]} =
+        Attachments.fetch_for_message(ctx.sent, [
+          %{filename: "passport.txt", content: "only Pat sent this"},
+          %{filename: "terms.txt", content: "Alice attached this too"}
+        ])
+
+      {:ok, [kept]} =
+        Attachments.fetch_for_message(ctx.cc, [
+          %{filename: "terms.txt", content: "Alice attached this too"}
+        ])
+
+      Repo.update_all(StoredFile,
+        set: [completed_at: DateTime.add(DateTime.utc_now(:second), -48 * 3600, :second)]
+      )
+
+      assert Attachments.sweep_orphan_files() == 0
+      assert {:ok, _} = DataSubjects.erase_subject(scope(ctx.org), "pat@example.com", ctx.org.id)
+      refute Repo.get(MessageAttachment, only_pat.id)
+      refute Repo.get(MessageAttachment, also_alice.id)
+
+      assert Attachments.sweep_orphan_files() == 1
+      refute Files.get(ctx.org.tenant_id, :attachment, only_pat.sha256)
+      assert Files.read(Attachments.stored_file(kept)) == {:ok, "Alice attached this too"}
+      assert [%StoredFile{}] = Repo.all(StoredFile)
     end
 
     test "keeps staff replies, without the person's address", ctx do

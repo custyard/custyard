@@ -1,27 +1,21 @@
 defmodule Custyard.Attachments.Scanner do
   @moduledoc """
-  Malware scanning boundary. A missing scanner or any unexpected result keeps
+  Malware scanning boundary. It scans bytes the caller already holds:
+  `Custyard.Attachments` passes a fresh download, or content read back from
+  the database for a rescan. A missing scanner or any unexpected result keeps
   the attachment quarantined. No engine diagnostics or file contents are logged.
   """
 
   @max_bytes 100 * 1_048_576
   @callback scan(binary(), keyword()) :: :clean | :infected | {:error, atom()}
 
+  @doc "The most content a scan accepts, in bytes. Callers do not load more than this."
   def max_bytes, do: @max_bytes
 
-  def scan_file(path, expected_sha, opts \\ []) do
-    with {:ok, %{size: size, type: :regular}} when size <= @max_bytes <- File.stat(path),
-         {:ok, bytes} <- File.read(path),
-         true <- byte_size(bytes) <= @max_bytes,
-         true <- digest(bytes) == expected_sha do
-      scan(bytes, opts)
-    else
-      _ -> :error
-    end
-  rescue
-    _ -> :error
-  end
-
+  @doc """
+  The verdict for `bytes`: `:clean` or `:infected` from the configured
+  scanner, `:pending` when none is configured, `:error` for anything else.
+  """
   def scan(bytes, opts \\ []) do
     case Keyword.get(opts, :scanner, Application.get_env(:custyard, :attachment_scanner)) do
       nil -> :pending
@@ -44,5 +38,4 @@ defmodule Custyard.Attachments.Scanner do
   defp verdict(:clean), do: :clean
   defp verdict(:infected), do: :infected
   defp verdict(_), do: :error
-  defp digest(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
 end

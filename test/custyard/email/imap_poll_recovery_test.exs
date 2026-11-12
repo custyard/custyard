@@ -4,13 +4,14 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
   failing and recovering, and credential key rotation
   (spec-inbound-channels D8, D9).
   """
-  # async: false - changes :attachment_dir and :credential_keys.
+  # async: false - changes :credential_keys.
   use Custyard.DataCase, async: false
 
   import Custyard.Factory
 
   alias Custyard.{Attachments, Thread, InboundChannel, InboundChannels, Message}
   alias Custyard.{Credentials, MessageAttachment}
+  alias Custyard.Files.{Chunk, StoredFile}
   alias Custyard.Email.ImapClient.Stub
   alias Custyard.Email.ImapPoll
 
@@ -67,16 +68,17 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
       Base.encode64("%PDF-1.4 #{System.unique_integer([:positive])}") <> "\r\n--b1--\r\n"
   end
 
-  # A regular file where the attachment directory's parent should be, so
-  # every write fails until the directory is restored.
-  defp block_attachment_storage(tmp_dir) do
-    original = Application.fetch_env!(:custyard, :attachment_dir)
-    blocker = Path.join(tmp_dir, "blocker")
-    File.write!(blocker, "")
-    Application.put_env(:custyard, :attachment_dir, Path.join(blocker, "attachments"))
-    on_exit(fn -> Application.put_env(:custyard, :attachment_dir, original) end)
-    original
+  # A trigger that refuses file content, so storing an attachment fails part
+  # way through until the trigger is dropped. It is created inside the test's
+  # transaction and rolled back with it.
+  defp block_attachment_storage do
+    Repo.query!("""
+    CREATE TRIGGER refuse_file_content BEFORE INSERT ON stored_file_chunks
+    BEGIN SELECT RAISE(ABORT, 'file content refused'); END
+    """)
   end
+
+  defp restore_attachment_storage, do: Repo.query!("DROP TRIGGER refuse_file_content")
 
   # A write that raised leaves its slot leased for five minutes; the next
   # poll comes later than that.
@@ -85,13 +87,11 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
   end
 
   describe "attachments that cannot be stored" do
-    @describetag :tmp_dir
-
     test "stop the session and are stored by a later poll without a second copy",
-         %{route: route, host: host, tmp_dir: tmp_dir} do
+         %{route: route, host: host} do
       channel = connected!(route, host)
       Stub.put_message(host, 1, with_attachment())
-      original = block_attachment_storage(tmp_dir)
+      block_attachment_storage()
 
       assert {:error, "attachments_failed"} = ImapPoll.poll(reload(channel))
 
@@ -102,8 +102,10 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
       assert [message] = Repo.all(Message)
       assert [%{state: state}] = Attachments.list_for_message(message.id)
       assert state in [:pending, :failed]
+      # The write that failed took its unpublished file with it.
+      assert Repo.aggregate(StoredFile, :count) == 0
 
-      Application.put_env(:custyard, :attachment_dir, original)
+      restore_attachment_storage()
       expire_attachment_leases()
 
       assert {:ok, %{imported: 1}} = ImapPoll.poll(stored)
@@ -113,18 +115,21 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
       assert stored.imap_message_attempts == 0
       assert Repo.aggregate(Thread, :count) == 1
       assert [^message] = Repo.all(Message)
-      assert [%{state: :fetched}] = Attachments.list_for_message(message.id)
+      assert [%{state: :fetched} = attachment] = Attachments.list_for_message(message.id)
+      assert [%StoredFile{id: file_id, completed_at: %DateTime{}}] = Repo.all(StoredFile)
+      assert Attachments.stored_file(attachment).id == file_id
+      assert Repo.aggregate(Chunk, :count) == 1
     end
 
     test "a retried message without a Message-ID is not stored twice",
-         %{route: route, host: host, tmp_dir: tmp_dir} do
+         %{route: route, host: host} do
       channel = connected!(route, host)
       Stub.put_message(host, 1, with_attachment(message_id: false))
-      original = block_attachment_storage(tmp_dir)
+      block_attachment_storage()
 
       assert {:error, "attachments_failed"} = ImapPoll.poll(reload(channel))
 
-      Application.put_env(:custyard, :attachment_dir, original)
+      restore_attachment_storage()
       expire_attachment_leases()
 
       assert {:ok, %{imported: 1}} = ImapPoll.poll(reload(channel))
@@ -134,7 +139,7 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
     end
 
     test "are passed over after five sessions so the folder keeps moving",
-         %{route: route, host: host, tmp_dir: tmp_dir} do
+         %{route: route, host: host} do
       channel = connected!(route, host)
       Stub.put_message(host, 1, with_attachment())
 
@@ -146,7 +151,7 @@ defmodule Custyard.Email.ImapPollRecoveryTest do
           "\r\nNo attachment.\r\n"
       )
 
-      block_attachment_storage(tmp_dir)
+      block_attachment_storage()
 
       for attempt <- 1..4 do
         assert {:error, "attachments_failed"} = ImapPoll.poll(reload(channel))

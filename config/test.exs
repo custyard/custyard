@@ -69,8 +69,10 @@ config :phoenix, :plug_init_mode, :runtime
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
 
-# Attachments land in a throwaway directory and are fetched from an in-memory
-# stub instead of the network (Custyard.Attachments.StubClient, test/support).
+# Attachments are fetched from an in-memory stub instead of the network
+# (Custyard.Attachments.StubClient, test/support) and stored in the test
+# database. attachment_dir is a throwaway directory that only the one-time
+# import of files left on disk by an older version reads.
 config :custyard,
   attachment_dir:
     Path.expand("../tmp/test_attachments#{System.get_env("MIX_TEST_PARTITION")}", __DIR__),
