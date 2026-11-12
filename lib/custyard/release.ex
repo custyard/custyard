@@ -3,7 +3,8 @@ defmodule Custyard.Release do
   Release tasks run with `bin/custyard eval`: migrations, the
   `bin/instance-admin`, `bin/dsar` and `bin/doctor` command lines
   (`rel/overlays/bin/*`; dsar's commands are `Custyard.Release.Dsar`), the
-  attachment rescan, and the SQLite export for moving the database to Turso.
+  attachment rescan, the import of files left on disk by earlier releases,
+  and the SQLite export for moving the database to Turso.
 
   None of these start the application. They load its configuration and start
   only the Repo (`Ecto.Migrator.with_repo/2`), so they are safe to run on a
@@ -19,6 +20,7 @@ defmodule Custyard.Release do
 
   alias Custyard.{InstanceAdmins, Repo}
   alias Custyard.Boot.{Build, Env, Probe, Report}
+  alias Custyard.Files.LegacyImport
   alias Custyard.Repo.Adapter
   alias Custyard.Release.Dsar
 
@@ -143,6 +145,66 @@ defmodule Custyard.Release do
 
   @doc "Rescan existing attachments with the configured scanner, returning verdict counts only."
   def scan_attachments, do: with_repo(fn -> Custyard.Attachments.rescan_all() end)
+
+  @doc """
+  Copies the attachments and logos an earlier release left on the volume
+  into the database (`Custyard.Files.LegacyImport`), prints what it
+  imported, what was missing and what failed, and how many referenced files
+  are still not in the database. Returns those counts.
+
+  The app does the same in the background on every boot. Run this to see
+  the numbers: once pending is 0, nothing reads `ATTACHMENT_DIR` or
+  `UPLOAD_DIR` any more. Running it again is safe, and nothing on disk is
+  changed. Run it as `custyard`, the user that owns the database and the
+  files, as for `export_sqlite/1`.
+
+      bin/custyard eval "Custyard.Release.import_legacy_files()"
+  """
+  def import_legacy_files do
+    result =
+      with_repo(fn ->
+        counts = LegacyImport.run()
+        Map.put(counts, :pending, LegacyImport.pending())
+      end)
+
+    case result do
+      {:error, reason} -> IO.puts(:stderr, "Error: #{admin_error_message(reason)}")
+      counts -> IO.write(legacy_import_text(counts))
+    end
+
+    result
+  end
+
+  defp legacy_import_text(counts) do
+    """
+    Legacy file import
+      imported  #{plural(counts.attachments, "attachment")}, #{plural(counts.logos, "logo")}
+      missing   #{counts.missing}
+      failed    #{counts.failed}
+      pending   #{counts.pending}
+    #{legacy_import_verdict(counts.pending)}\
+    """
+  end
+
+  defp legacy_import_verdict(0) do
+    """
+    Every referenced file is in the database. ATTACHMENT_DIR and UPLOAD_DIR are
+    no longer read.
+    """
+  end
+
+  defp legacy_import_verdict(pending) do
+    """
+    Not in the database: #{plural(pending, "referenced file")}.
+    A missing file was not found under ATTACHMENT_DIR or UPLOAD_DIR. A failed
+    file is there but was refused (not a regular file, too large, or not the
+    content its row names) or could not be stored. Removing the volume loses
+    any of them that are still on it.
+    """
+  end
+
+  defp plural(1, noun), do: "1 #{noun}"
+  defp plural(count, noun), do: "#{count} #{noun}s"
 
   @doc """
   Entry point for `rel/overlays/bin/instance-admin`; `argv` arrives from

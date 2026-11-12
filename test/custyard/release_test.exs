@@ -373,6 +373,126 @@ defmodule Custyard.ReleaseTest do
     end
   end
 
+  describe "import_legacy_files/0" do
+    @describetag :tmp_dir
+
+    # The command takes no options: it reads the configured directories.
+    setup %{tmp_dir: dir} do
+      keys = [:attachment_dir, :upload_dir]
+      previous = Map.new(keys, &{&1, Application.get_env(:custyard, &1)})
+      Application.put_env(:custyard, :attachment_dir, Path.join(dir, "attachments"))
+      Application.put_env(:custyard, :upload_dir, Path.join(dir, "uploads"))
+
+      on_exit(fn ->
+        Enum.each(previous, fn {key, value} -> Application.put_env(:custyard, key, value) end)
+      end)
+    end
+
+    defp sha256(bytes), do: :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
+
+    defp write!(path, bytes) do
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, bytes)
+    end
+
+    test "imports what is on disk and prints the counts and what is still pending", %{
+      tmp_dir: dir
+    } do
+      message = Custyard.Factory.insert_message()
+      tenant = Integer.to_string(message.tenant_id)
+      kept = sha256("%PDF-1.4 kept")
+      lost = sha256("%PDF-1.4 lost")
+
+      write!(
+        Path.join([dir, "attachments", tenant, binary_part(kept, 0, 2), kept]),
+        "%PDF-1.4 kept"
+      )
+
+      for {sha, position} <- [{kept, 0}, {lost, 1}] do
+        Repo.insert!(%Custyard.MessageAttachment{
+          tenant_id: message.tenant_id,
+          message_id: message.id,
+          position: position,
+          state: :fetched,
+          sha256: sha,
+          size: 13,
+          filename: "statement.pdf"
+        })
+      end
+
+      logo = Ecto.UUID.generate() <> ".png"
+      write!(Path.join([dir, "uploads", "logos", logo]), "logo")
+
+      Repo.update_all(from(t in Custyard.Tenant, where: t.id == ^message.tenant_id),
+        set: [logo_url: "/uploads/logos/" <> logo]
+      )
+
+      {output, log} =
+        with_log(fn ->
+          capture_io(fn ->
+            assert Release.import_legacy_files() ==
+                     %{attachments: 1, logos: 1, missing: 1, failed: 0, pending: 1}
+          end)
+        end)
+
+      assert output =~ """
+             Legacy file import
+               imported  1 attachment, 1 logo
+               missing   1
+               failed    0
+               pending   1
+             Not in the database: 1 referenced file.
+             """
+
+      assert output =~ "Removing the volume loses"
+      refute output =~ "Every referenced file"
+
+      for private <- [dir, kept, lost, logo, "statement.pdf"] do
+        refute output =~ private
+        refute log =~ private
+      end
+
+      assert log =~ "legacy_file_import_completed"
+
+      assert Custyard.Files.read(Custyard.Files.get(message.tenant_id, :attachment, kept)) ==
+               {:ok, "%PDF-1.4 kept"}
+
+      assert Custyard.Files.read(Custyard.Files.get(message.tenant_id, :logo, logo)) ==
+               {:ok, "logo"}
+
+      # The lost file's row goes; a rerun then has nothing to do or to report.
+      Repo.delete_all(from a in Custyard.MessageAttachment, where: a.sha256 == ^lost)
+
+      assert capture_io(fn ->
+               assert Release.import_legacy_files() ==
+                        %{attachments: 0, logos: 0, missing: 0, failed: 0, pending: 0}
+             end) == """
+             Legacy file import
+               imported  0 attachments, 0 logos
+               missing   0
+               failed    0
+               pending   0
+             Every referenced file is in the database. ATTACHMENT_DIR and UPLOAD_DIR are
+             no longer read.
+             """
+    end
+
+    test "an unconfigured verdict refuses before the database is opened" do
+      env = Env.read(%{"MAIL_ADAPTOR" => "x"}, config_env: :prod)
+
+      with_boot_env(env, fn ->
+        stderr =
+          capture_io(:stderr, fn ->
+            assert {:error, "configuration is incomplete; see the report above"} =
+                     Release.import_legacy_files()
+          end)
+
+        assert stderr =~ "Custyard is not configured yet"
+        assert stderr =~ "Error: configuration is incomplete"
+      end)
+    end
+  end
+
   describe "export_sqlite/1" do
     @describetag :tmp_dir
     @describetag skip: System.get_env("TURSO_TEST_URL") not in [nil, ""]

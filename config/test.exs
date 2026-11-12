@@ -57,6 +57,10 @@ config :custyard, start_intake_sweeps: false
 # outlive the SQL sandbox owner.
 config :custyard, start_outbound_queue: false
 
+# Run the import of files left on disk by earlier releases explicitly in
+# tests; a boot task would read the database outside the SQL sandbox.
+config :custyard, start_legacy_file_import: false
+
 # Public-intake notification mail still uses supervised tasks. Keep those
 # synchronous in tests so their database reads stay with the sandbox owner.
 config :custyard, deliver_replies_async?: false
