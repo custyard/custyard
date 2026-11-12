@@ -12,6 +12,9 @@ defmodule Custyard.Attachments.Scanner do
   @doc "The most content a scan accepts, in bytes. Callers do not load more than this."
   def max_bytes, do: @max_bytes
 
+  @doc "Whether a scanner is configured. Without one `scan/2` gives no verdict, only `:pending`."
+  def configured?, do: not is_nil(Application.get_env(:custyard, :attachment_scanner))
+
   @doc """
   The verdict for `bytes`: `:clean` or `:infected` from the configured
   scanner, `:pending` when none is configured, `:error` for anything else.

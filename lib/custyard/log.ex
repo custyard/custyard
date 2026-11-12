@@ -37,6 +37,8 @@ defmodule Custyard.Log do
     acknowledgment_configuration_invalid
     acknowledgment_processing_failed
     attachment_fetch_failed
+    attachment_scan_retry_completed
+    attachment_scan_retry_failed
     boot_database_probe_failed
     boot_database_recovered
     boot_first_run_completed
@@ -171,7 +173,7 @@ defmodule Custyard.Log do
   )
   @events Enum.map(@event_names, &String.to_atom/1)
   @context_keys ~w(request_id operation_id parent_operation_id tenant_id organization_id staff_id channel_id route_id thread_id message_id)a
-  @integer_fields ~w(staff_id session_staff_id organization_id tenant_id thread_id message_id channel_id inbound_channel_id route_id project_id audit_event_id slug_id contact_id source_id acknowledgment_id existing_organization_id new_organization_id uid port count limit current_count max_size max_recipients actual_size declared_size size_bytes recipient_count received_count message_count messages_processed retry_after_ms retry_after_s attempt duration_ms deleted_count deleted_threads deleted_messages deleted_attachments deleted_contacts deleted_staff deleted_routes deleted_channels organization_count quiet_after_hours threads_deleted messages_deleted attachments_deleted contacts_deleted staff_deleted routes_deleted channels_deleted rejection_count rows affected_rows generation score dormant_count notification_count contacts_to_delete threads_to_delete resolved_threads orphaned_contacts orphaned_tasks channel_rejections channel_verifications channel_tokens attachment_files legacy_attachment_files incomplete_files account_id instance_admin_id existing_tenant_id message_drafts imported_attachments imported_logos missing_files failed_files)a
+  @integer_fields ~w(staff_id session_staff_id organization_id tenant_id thread_id message_id channel_id inbound_channel_id route_id project_id audit_event_id slug_id contact_id source_id acknowledgment_id existing_organization_id new_organization_id uid port count limit current_count max_size max_recipients actual_size declared_size size_bytes recipient_count received_count message_count messages_processed retry_after_ms retry_after_s attempt duration_ms deleted_count deleted_threads deleted_messages deleted_attachments deleted_contacts deleted_staff deleted_routes deleted_channels organization_count quiet_after_hours threads_deleted messages_deleted attachments_deleted contacts_deleted staff_deleted routes_deleted channels_deleted rejection_count rows affected_rows generation score dormant_count notification_count contacts_to_delete threads_to_delete resolved_threads orphaned_contacts orphaned_tasks channel_rejections channel_verifications channel_tokens attachment_files legacy_attachment_files incomplete_files account_id instance_admin_id existing_tenant_id message_drafts imported_attachments imported_logos missing_files failed_files clean_scans infected_scans failed_scans pending_scans)a
   @boolean_fields ~w(enabled email_captured tls used_default configured accepted async tls_enabled)a
   @id_fields ~w(request_id operation_id parent_operation_id)a
   @reference_fields ~w(submission_ref source_ref receipt_ref)a

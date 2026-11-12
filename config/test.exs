@@ -53,6 +53,10 @@ config :custyard, start_scheduler: false
 # the sweep functions take an injectable clock and are tested directly.
 config :custyard, start_intake_sweeps: false
 
+# Retry failed attachment scans explicitly in tests; a background retry would
+# read the database outside the SQL sandbox.
+config :custyard, start_attachment_scan_retry: false
+
 # Drive the durable outbound scan explicitly in tests; a background scan would
 # outlive the SQL sandbox owner.
 config :custyard, start_outbound_queue: false

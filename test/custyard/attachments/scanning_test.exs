@@ -2,10 +2,13 @@ defmodule Custyard.Attachments.ScanningTest do
   use Custyard.DataCase, async: false
 
   import Custyard.Factory
+  import ExUnit.CaptureLog
 
-  alias Custyard.{Attachments, Files, Repo, Scope, Tenants}
-  alias Custyard.Attachments.Scanner
+  alias Custyard.{Attachments, Files, Message, Repo, Scope, Tenants, Thread}
+  alias Custyard.Attachments.{Scanner, ScanRetry}
   alias Custyard.Files.{Chunk, StoredFile}
+
+  @no_scans %{clean: 0, infected: 0, error: 0, pending: 0}
 
   setup do
     previous = Application.get_env(:custyard, :attachment_scanner)
@@ -238,6 +241,165 @@ defmodule Custyard.Attachments.ScanningTest do
     assert Repo.reload!(second).scan_status == :infected
   end
 
+  describe "retry_failed_scans/1" do
+    setup %{thread: thread} do
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{thread.id}")
+      %{now: DateTime.utc_now() |> DateTime.truncate(:second)}
+    end
+
+    test "retries a failed scan once its backoff has passed and refreshes the thread", %{
+      thread: %{id: thread_id} = thread,
+      now: now
+    } do
+      # Stored ten minutes ago and last scanned five minutes later, so due
+      # five minutes after that scan.
+      row = failed_scan(thread, DateTime.add(now, -600), DateTime.add(now, -300))
+      echo_scanner()
+
+      assert Attachments.retry_failed_scans(DateTime.add(now, -1)) == @no_scans
+      refute_received {:scanned, _bytes}
+      refute_received {:message_updated, _id}
+      assert Repo.reload!(row).scan_status == :error
+
+      assert Attachments.retry_failed_scans(now) == %{@no_scans | clean: 1}
+      assert_received {:scanned, "CUSTYARD_TEST_SCAN_ERROR" <> _}
+      assert_received {:message_updated, ^thread_id}
+      assert Repo.reload!(row).scan_status == :clean
+    end
+
+    test "the first retry comes a minute after the failed scan; a repeated failure only moves the backoff",
+         %{thread: thread, now: now} do
+      row = failed_scan(thread, DateTime.add(now, -30), DateTime.add(now, -30))
+
+      assert Attachments.retry_failed_scans(now) == @no_scans
+      assert Attachments.retry_failed_scans(DateTime.add(now, 30)) == %{@no_scans | error: 1}
+
+      retried = Repo.reload!(row)
+      assert retried.scan_status == :error
+      assert DateTime.compare(retried.scanned_at, row.scanned_at) == :gt
+      refute_received {:message_updated, _id}
+    end
+
+    test "rows stored more than a day ago are left to an explicit rescan", %{
+      thread: thread,
+      now: now
+    } do
+      # Due by its backoff, but stored a day and a second ago.
+      row = failed_scan(thread, DateTime.add(now, -86_401), DateTime.add(now, -86_341))
+
+      assert Attachments.retry_failed_scans(now) == @no_scans
+      assert Repo.reload!(row).scanned_at == row.scanned_at
+
+      # Two seconds earlier the same row was still inside the day.
+      assert Attachments.retry_failed_scans(DateTime.add(now, -2)) == %{@no_scans | error: 1}
+    end
+
+    test "clean, infected and pending verdicts are not rescanned", %{thread: thread, now: now} do
+      stored = DateTime.add(now, -7_200)
+      scanned = DateTime.add(now, -3_600)
+
+      rows =
+        for {bytes, attrs} <- [
+              {"Clean content", []},
+              {"CUSTYARD_TEST_INFECTED content", []},
+              {"Content scanned before a scanner existed", [scan_status: :pending]}
+            ] do
+          insert_message(thread_id: thread.id)
+          |> fetched(bytes)
+          |> Ecto.Changeset.change([inserted_at: stored, scanned_at: scanned] ++ attrs)
+          |> Repo.update!()
+        end
+
+      echo_scanner()
+      assert Attachments.retry_failed_scans(now) == @no_scans
+      refute_received {:scanned, _bytes}
+
+      assert Enum.map(rows, &Repo.reload!(&1).scan_status) == [:clean, :infected, :pending]
+      assert Enum.all?(rows, &(Repo.reload!(&1).scanned_at == scanned))
+    end
+
+    test "suspect threads and deleted messages are not rescanned", %{
+      customer: customer,
+      thread: thread,
+      now: now
+    } do
+      suspect_thread = insert_thread(organization_id: customer.id)
+      in_suspect = failed_scan(suspect_thread, DateTime.add(now, -600), DateTime.add(now, -300))
+      on_deleted = failed_scan(thread, DateTime.add(now, -600), DateTime.add(now, -300))
+
+      Repo.update_all(from(t in Thread, where: t.id == ^suspect_thread.id), set: [suspect: true])
+
+      Repo.update_all(from(m in Message, where: m.id == ^on_deleted.message_id),
+        set: [deleted_at: now]
+      )
+
+      echo_scanner()
+      assert Attachments.retry_failed_scans(now) == @no_scans
+      refute_received {:scanned, _bytes}
+      assert Repo.reload!(in_suspect).scan_status == :error
+      assert Repo.reload!(on_deleted).scan_status == :error
+    end
+
+    test "without a configured scanner nothing is rescanned", %{thread: thread, now: now} do
+      row = failed_scan(thread, DateTime.add(now, -600), DateTime.add(now, -300))
+      Application.put_env(:custyard, :attachment_scanner, nil)
+
+      assert Attachments.retry_failed_scans(now) == @no_scans
+
+      unchanged = Repo.reload!(row)
+      assert unchanged.scan_status == :error
+      assert unchanged.scanned_at == row.scanned_at
+    end
+  end
+
+  test "a failed scan is labelled as retried while the retry lasts", %{thread: thread} do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    recent = failed_scan(thread, DateTime.add(now, -60), DateTime.add(now, -60))
+    old = failed_scan(thread, DateTime.add(now, -86_401), DateTime.add(now, -86_401))
+
+    assert Attachments.scan_label(recent) == "Quarantined: security scan will be retried"
+    assert Attachments.scan_label(old) == "Quarantined: security scan failed"
+
+    # Nothing retries without a scanner.
+    Application.put_env(:custyard, :attachment_scanner, nil)
+    assert Attachments.scan_label(recent) == "Quarantined: security scan failed"
+  end
+
+  describe "ScanRetry" do
+    test "retries failed scans on its interval", %{thread: %{id: thread_id} = thread} do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      row = failed_scan(thread, DateTime.add(now, -600), DateTime.add(now, -300))
+      echo_scanner()
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "thread:#{thread_id}")
+
+      start_supervised!({ScanRetry, interval: 10})
+      assert_receive {:message_updated, ^thread_id}, 2_000
+      stop_supervised!(ScanRetry)
+
+      assert Repo.reload!(row).scan_status == :clean
+    end
+
+    test "a tick that raises is logged and the next tick still runs" do
+      test = self()
+
+      retry = fn ->
+        send(test, {:tick, self()})
+        raise "retry failed"
+      end
+
+      log =
+        capture_log(fn ->
+          pid = start_supervised!({ScanRetry, interval: 10, retry: retry})
+          assert_receive {:tick, ^pid}, 2_000
+          assert_receive {:tick, ^pid}, 2_000
+          stop_supervised!(ScanRetry)
+        end)
+
+      assert log =~ "attachment_scan_retry_failed"
+      refute log =~ "retry failed"
+    end
+  end
+
   defmodule EchoScanner do
     @behaviour Custyard.Attachments.Scanner
     def scan(bytes, opts) do
@@ -265,6 +427,25 @@ defmodule Custyard.Attachments.ScanningTest do
   end
 
   def scan(_bytes, _opts), do: :unexpected
+
+  # A fetched attachment, on a message of its own in `thread`, whose scan
+  # failed; stored at `inserted_at` and last scanned at `scanned_at`.
+  defp failed_scan(thread, inserted_at, scanned_at) do
+    row =
+      insert_message(thread_id: thread.id)
+      |> fetched("CUSTYARD_TEST_SCAN_ERROR #{System.unique_integer([:positive])}")
+
+    assert row.scan_status == :error
+
+    row
+    |> Ecto.Changeset.change(inserted_at: inserted_at, scanned_at: scanned_at)
+    |> Repo.update!()
+  end
+
+  defp echo_scanner do
+    Application.put_env(:custyard, :attachment_scanner, __MODULE__.EchoScanner)
+    Application.put_env(:custyard, :attachment_scanner_options, caller: self())
+  end
 
   defp fetched(message, bytes) do
     {:ok, [row]} =
