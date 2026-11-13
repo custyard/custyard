@@ -607,18 +607,32 @@ defmodule CustyardWeb.Staff.TasksLiveTest do
     end
 
     test "a task that becomes due moves to the due chip on the next tick", %{conn: conn} do
-      task = task(insert_organization(), "Due any second", due_at: from_now(1))
+      # Two seconds away, so the page is sure to load before the task is due.
+      task = task(insert_organization(), "Due in a moment", due_at: from_now(2))
 
       {:ok, view, _html} = live(conn, ~p"/app/tasks")
       assert has_element?(view, "#{row(task)}[data-due=upcoming]")
       assert chip_count(view, "due") == 0
 
-      Process.sleep(1100)
-      send(view.pid, :tick)
+      assert Enum.any?(1..40, fn _ ->
+               Process.sleep(100)
+               send(view.pid, :tick)
+               has_element?(view, "#{row(task)}[data-due=overdue]")
+             end)
 
-      assert has_element?(view, "#{row(task)}[data-due=overdue]")
       assert chip_count(view, "due") == 1
       assert chip_count(view, "upcoming") == 0
+    end
+
+    test "a tick reads no tasks while none has become due", %{conn: conn} do
+      task = task(insert_organization(), "Due tomorrow", due_at: from_now(86_400))
+
+      {:ok, view, _html} = live(conn, ~p"/app/tasks")
+
+      assert reads(fn ->
+               send(view.pid, :tick)
+               assert has_element?(view, row(task))
+             end) == %{}
     end
 
     test "other messages are ignored", %{conn: conn} do
