@@ -23,8 +23,8 @@ defmodule CustyardWeb.StaffNav do
 
   A page names the LiveViews that show it in `:views` and the detail views
   opened from it in `:below`. `admin: true` hides the page from agents; its
-  route already turns them away. The second-row test id is
-  `staff-subnav-` followed by the page id.
+  route already turns them away. The page id ends the second-row test id:
+  `staff-subnav-slugs`.
   """
   def sections do
     [
@@ -115,9 +115,11 @@ defmodule CustyardWeb.StaffNav do
   The top-level links `role` may see while `view` is on screen.
 
   Each link is a map with `:id`, `:label`, `:path`, `:testid` and `:current`.
-  `:current` is the `aria-current` value: `"page"` when the link leads to the
-  page on screen, `"true"` when that page is elsewhere in the section, and
-  nil for the other sections.
+  `:testid` is the end of the test id; the components put `staff-nav-`,
+  `staff-nav-mobile-` or `staff-subnav-` in front. `:current` is the
+  `aria-current` value: `"page"` when the link leads to the page on screen,
+  `"true"` when that page is elsewhere in the section, and nil for the other
+  sections.
   """
   def top_level(role, view) do
     active = active_section(view)
@@ -163,7 +165,7 @@ defmodule CustyardWeb.StaffNav do
           id: page.id,
           label: page.label,
           path: page.path,
-          testid: "staff-subnav-#{page.id}",
+          testid: Atom.to_string(page.id),
           current: current
         }
       end
@@ -226,7 +228,7 @@ defmodule CustyardWeb.StaffNav do
         navigate={link.path}
         class={second_class(link.current)}
         aria-current={link.current}
-        data-testid={link.testid}
+        data-testid={"staff-subnav-#{link.testid}"}
       >
         {link.label}
       </.link>

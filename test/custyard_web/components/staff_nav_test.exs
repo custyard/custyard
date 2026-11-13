@@ -69,9 +69,9 @@ defmodule CustyardWeb.StaffNavTest do
       links = StaffNav.second_level("admin", Staff.NeglectReportLive)
 
       assert Enum.map(links, &{&1.label, &1.path, &1.testid, &1.current}) == [
-               {"Queue", "/app", "staff-subnav-queue", nil},
-               {"All tasks", "/app/tasks", "staff-subnav-tasks", nil},
-               {"Neglect report", "/app/neglect", "staff-subnav-neglect", "page"}
+               {"Queue", "/app", "queue", nil},
+               {"All tasks", "/app/tasks", "tasks", nil},
+               {"Neglect report", "/app/neglect", "neglect", "page"}
              ]
     end
 
@@ -79,10 +79,9 @@ defmodule CustyardWeb.StaffNavTest do
       links = StaffNav.second_level("admin", Staff.SlugsLive)
 
       assert Enum.map(links, &{&1.label, &1.path, &1.testid, &1.current}) == [
-               {"All customers", "/app/customers", "staff-subnav-customers", nil},
-               {"Acknowledgments", "/app/settings/integrations", "staff-subnav-acknowledgments",
-                nil},
-               {"Slugs", "/app/settings/slugs", "staff-subnav-slugs", "page"}
+               {"All customers", "/app/customers", "customers", nil},
+               {"Acknowledgments", "/app/settings/integrations", "acknowledgments", nil},
+               {"Slugs", "/app/settings/slugs", "slugs", "page"}
              ]
     end
 
@@ -90,10 +89,10 @@ defmodule CustyardWeb.StaffNavTest do
       links = StaffNav.second_level("admin", Staff.SettingsLive)
 
       assert Enum.map(links, &{&1.label, &1.path, &1.testid}) == [
-               {"Workflow", "/app/settings/workflow", "staff-subnav-workflow"},
-               {"Support email setup", "/app/settings/email", "staff-subnav-email"},
-               {"Intake sources", "/app/settings/intake", "staff-subnav-intake"},
-               {"Tenant settings", "/app/settings/workspace", "staff-subnav-tenant"}
+               {"Workflow", "/app/settings/workflow", "workflow"},
+               {"Support email setup", "/app/settings/email", "email"},
+               {"Intake sources", "/app/settings/intake", "intake"},
+               {"Tenant settings", "/app/settings/workspace", "tenant"}
              ]
 
       assert current(links) == [:workflow]
