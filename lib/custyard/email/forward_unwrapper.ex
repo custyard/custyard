@@ -13,26 +13,14 @@ defmodule Custyard.Email.ForwardUnwrapper do
 
   `unwrap/2` returns the original sender (the only required field), the
   original subject (falling back to the outer subject without its `Fwd:`
-  prefix), the original body and the original's To and Cc recipients.
-  Anything the staff typed above the block is dropped: the original's
-  words are what becomes the message.
-
-  The same block carries a reply the staff sent from their own mailbox and
-  forwarded in afterwards (D6, "forwarded sent reply"). Its recipients say
-  whose thread it belongs to.
+  prefix) and the original body. Anything the staff typed above the
+  block is dropped: the customer's words are what becomes the message.
   """
 
   alias Custyard.Email.SenderMatcher
-  alias Custyard.EmailAddress
 
   @marker ~r/^[ \t>]*(?:-{3,}\s*(?:forwarded message|original message|forwarded)\s*-{3,}|begin forwarded message:)[ \t]*$/im
-  # `Bcc:` shows up when the forwarded message came from a Sent folder. It is
-  # read so it does not end up as the first line of the body.
-  @header ~r/^(from|date|sent|subject|to|cc|bcc|reply-to)\s*:\s*(.*)$/i
-  @recipient_headers ~w(to cc bcc)
-  @address ~r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+"i
-  # A quoted display name directly before `<address>`.
-  @quoted_name ~r/"[^"]*"\s*(?=<)/
+  @header ~r/^(from|date|sent|subject|to|cc|reply-to)\s*:\s*(.*)$/i
   @forward_prefix ~r/^\s*(?:(?:fwd?|fw|wg|tr|vs|doorst)\s*:\s*)+/i
 
   @doc "True when the subject carries a forward prefix (Fwd:, FW:, WG:, TR:)."
@@ -63,9 +51,7 @@ defmodule Custyard.Email.ForwardUnwrapper do
              email: String.t(),
              subject: String.t() | nil,
              body: String.t(),
-             date: String.t() | nil,
-             to: [String.t()],
-             cc: [String.t()]
+             date: String.t() | nil
            }}
           | :error
   def unwrap(body, outer_subject \\ nil)
@@ -91,9 +77,7 @@ defmodule Custyard.Email.ForwardUnwrapper do
          email: String.downcase(email),
          subject: subject(headers["subject"], outer_subject),
          body: rest |> Enum.join("\n") |> String.trim(),
-         date: headers["date"] || headers["sent"],
-         to: addresses(headers["to"]),
-         cc: addresses(headers["cc"])
+         date: headers["date"] || headers["sent"]
        }}
     else
       _missing -> :error
@@ -114,9 +98,8 @@ defmodule Custyard.Email.ForwardUnwrapper do
   end
 
   # Header lines may be preceded by blank lines (Apple Mail) and a long
-  # header may wrap onto the next line (see continuation/3). The block ends
-  # at the first blank line after at least one header, or after 12 header
-  # lines.
+  # header may wrap onto an indented continuation line. The block ends at the
+  # first blank line after at least one header, or after 12 header lines.
   defp take_headers([], headers, _count), do: {headers, []}
   defp take_headers(rest, headers, count) when count >= 12, do: {headers, rest}
 
@@ -131,7 +114,7 @@ defmodule Custyard.Email.ForwardUnwrapper do
       match = Regex.run(@header, String.trim_leading(line)) ->
         [_all, name, value] = match
         name = String.downcase(name)
-        {value, rest} = continuation(name, value, rest)
+        {value, rest} = continuation(value, rest)
         take_headers(rest, Map.put_new(headers, name, String.trim(value)), count + 1)
 
       map_size(headers) == 0 ->
@@ -143,51 +126,13 @@ defmodule Custyard.Email.ForwardUnwrapper do
     end
   end
 
-  # Most clients indent the rest of a wrapped header. Gmail wraps a long
-  # recipient list without indenting, often right after a `<`. So a line
-  # also continues a recipient header when the list is visibly unfinished or
-  # the line carries an address.
-  defp continuation(name, value, [next | rest] = lines) do
-    cond do
-      String.trim(next) == "" or Regex.match?(@header, String.trim_leading(next)) ->
-        {value, lines}
-
-      indented?(next) or (name in @recipient_headers and recipient_line?(value, next)) ->
-        continuation(name, value <> " " <> String.trim(next), rest)
-
-      true ->
-        {value, lines}
-    end
+  defp continuation(value, [<<ws, _::binary>> = next | rest]) when ws in [?\s, ?\t] do
+    if String.trim(next) == "" or Regex.match?(@header, String.trim_leading(next)),
+      do: {value, [next | rest]},
+      else: continuation(value <> " " <> String.trim(next), rest)
   end
 
-  defp continuation(_name, value, []), do: {value, []}
-
-  defp indented?(<<ws, _rest::binary>>) when ws in [?\s, ?\t], do: true
-  defp indented?(_line), do: false
-
-  defp recipient_line?(value, next) do
-    String.ends_with?(String.trim_trailing(value), [",", ";", "<"]) or
-      String.contains?(next, "@")
-  end
-
-  # The addresses on a To: or Cc: line, bare and lowercased, in the order
-  # written. Clients separate recipients with commas (Gmail, Apple Mail,
-  # Thunderbird, Proton) or semicolons (Outlook) and write each one as
-  # `Name <address>`, `"Name" <address>`, `Name [mailto:address]`,
-  # `'address'` or the bare address. The line is scanned for addresses
-  # because a display name can hold a comma. Proton repeats the address as a
-  # quoted display name, which is skipped. A recipient shown by name only
-  # has no address to return.
-  defp addresses(nil), do: []
-
-  defp addresses(value) do
-    @address
-    |> Regex.scan(Regex.replace(@quoted_name, value, " "))
-    |> Enum.map(fn [address] -> address |> String.trim("'") |> String.trim_trailing(".") end)
-    |> Enum.map(&String.downcase/1)
-    |> Enum.filter(&EmailAddress.valid?/1)
-    |> Enum.uniq()
-  end
+  defp continuation(value, rest), do: {value, rest}
 
   defp subject(nil, outer) when is_binary(outer), do: presence(strip_forward_prefix(outer))
   defp subject(nil, _outer), do: nil

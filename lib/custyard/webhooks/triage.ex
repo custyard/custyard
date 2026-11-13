@@ -12,32 +12,25 @@ defmodule Custyard.Webhooks.Triage do
 
     1. `{:own_echo, %Message{}}` - the Message-ID belongs to a staff
        reply Custyard sent from this organization (D4 archive copy).
-    2. `{:staff_sent_forward, %{original:, thread:, staff:, email:}}` - a
-       reply the staff sent from their own mailbox and forwarded in
-       afterwards: the forwarded original was itself sent by the tenant's
-       staff. `thread` is the thread it answers, found by the forward's
-       headers or else by the original's recipients and subject
-       (`Custyard.Email.ThreadMatcher.find_for_sent_reply/3`), or nil when
-       there is none.
-    3. `{:staff_sent, %{thread:, staff:, email:}}` - a reply the
+    2. `{:staff_sent, %{thread:, staff:, email:}}` - a reply the
        staff sent from their own mailbox, outside Custyard, that threads
        to a known thread.
-    4. `{:staff_forward, %{original:, staff:, email:}}` - customer
+    3. `{:staff_forward, %{original:, staff:, email:}}` - customer
        mail a staff forwarded in by hand (the backlog-import path):
        the original sender, subject and body are unwrapped from the
        forwarded block.
-    5. `{:verification, %{provider:, code:, link:}}` - a Gmail or Proton
+    4. `{:verification, %{provider:, code:, link:}}` - a Gmail or Proton
        forwarding confirmation.
-    6. `{:auto_response, reason}` - auto-submitted, bulk or bounce mail.
-    7. `{:suspect, reason}` - spam-flagged or DKIM+DMARC failing mail from a
+    5. `{:auto_response, reason}` - auto-submitted, bulk or bounce mail.
+    6. `{:suspect, reason}` - spam-flagged or DKIM+DMARC failing mail from a
        sender who is not a known contact in the organization. A contact
        whose only threads are themselves suspect does not count:
        suspect mail creates its own contact, and that must not whitelist
        the sender's next message. An staff clearing the suspect flag on
        any of those threads is what makes the sender known.
-    8. `{:customer, nil}` - everything else.
+    7. `{:customer, nil}` - everything else.
 
-  Classes 2 to 4 need an authenticated staff identity: `From` is
+  Classes 2 and 3 need an authenticated staff identity: `From` is
   forgeable, so the sender must be a staff account of the organization
   (or the channel's own public address) *and* the forwarded copy must carry
   a DKIM pass whose signing domain is aligned with the sender's domain.
@@ -63,13 +56,6 @@ defmodule Custyard.Webhooks.Triage do
 
   @type classification ::
           {:own_echo, struct()}
-          | {:staff_sent_forward,
-             %{
-               original: map(),
-               thread: struct() | nil,
-               staff: struct() | nil,
-               email: String.t()
-             }}
           | {:staff_sent, %{thread: struct(), staff: struct() | nil, email: String.t()}}
           | {:staff_forward, %{original: map(), staff: struct() | nil, email: String.t()}}
           | {:verification,
@@ -155,7 +141,7 @@ defmodule Custyard.Webhooks.Triage do
 
   defp echo_candidates(_message_id), do: []
 
-  # --- staff-sent capture, forwarded sent reply and manual forward (D6) ---
+  # --- staff-sent capture and manual forward (D6) ---
 
   defp staff_mail(_normalized, nil, _route, _channel), do: nil
 
@@ -165,91 +151,28 @@ defmodule Custyard.Webhooks.Triage do
         nil
 
       identity ->
-        original = forwarded_original(normalized)
         match = ThreadMatcher.find_in_tenant(normalized, route.tenant_id)
 
         case match do
           {:ok, thread} ->
-            if sent_forward?(normalized, original, identity, route, channel),
-              do: {:staff_sent_forward, sent_forward(identity, original, thread)},
-              else: {:staff_sent, Map.put(identity, :thread, thread)}
+            {:staff_sent, Map.put(identity, :thread, thread)}
 
           no_match when no_match in [:not_found, :ambiguous] ->
-            staff_forward(original, identity, route, channel)
+            staff_forward(normalized, identity)
         end
     end
   end
 
-  # The original message inside a forward, or nil when the mail is not a
-  # forward or its block cannot be read.
-  defp forwarded_original(normalized) do
+  defp staff_forward(normalized, identity) do
     subject = normalized[:subject]
     body = normalized[:body]
 
     if ForwardUnwrapper.forward_subject?(subject) or ForwardUnwrapper.forwarded_block?(body) do
       case ForwardUnwrapper.unwrap(body, subject) do
-        {:ok, original} -> original
+        {:ok, original} -> {:staff_forward, Map.put(identity, :original, original)}
         :error -> nil
       end
     end
-  end
-
-  # Mail that threads by its headers is unwrapped only when its subject says
-  # it is a forward. Outlook quotes the earlier message in a reply under the
-  # same "Original Message" line it uses for a forward, so a reply that
-  # quotes an earlier staff message must keep the words typed above it.
-  defp sent_forward?(normalized, original, identity, route, channel) do
-    original != nil and ForwardUnwrapper.forward_subject?(normalized[:subject]) and
-      staff_original?(original.email, identity, route, channel)
-  end
-
-  defp staff_forward(nil, _identity, _route, _channel), do: nil
-
-  defp staff_forward(original, identity, route, channel) do
-    if staff_original?(original.email, identity, route, channel) do
-      thread = sent_reply_thread(original, identity, route, channel)
-      {:staff_sent_forward, sent_forward(identity, original, thread)}
-    else
-      {:staff_forward, Map.put(identity, :original, original)}
-    end
-  end
-
-  defp sent_forward(identity, original, thread),
-    do: identity |> Map.put(:original, original) |> Map.put(:thread, thread)
-
-  # The forward's headers led nowhere, so the thread is found by who the
-  # original was sent to and its subject. The staff's own addresses are not
-  # customers: a copy to the support address must not pick a thread.
-  defp sent_reply_thread(original, identity, route, channel) do
-    own = [original.email, identity.email, channel && channel.public_address]
-    recipients = Enum.reject(original.to ++ original.cc, &(&1 in own))
-
-    case ThreadMatcher.find_for_sent_reply(recipients, original.subject, route.tenant_id) do
-      {:ok, thread} -> thread
-      :not_found -> nil
-    end
-  end
-
-  # The forwarded original was sent by the tenant's own staff: the forwarder,
-  # the channel's public address, another staff account or the public
-  # address of another channel. The first two need no query.
-  defp staff_original?(email, identity, route, channel) do
-    email == identity.email or channel_owned(email, channel) == {:ok, nil} or
-      tenant_staff_address?(email, route.tenant_id)
-  end
-
-  defp tenant_staff_address?(email, tenant_id) do
-    staff =
-      from s in StaffAccount,
-        where: s.tenant_id == ^tenant_id and s.email == ^StaffAccount.normalize_email(email),
-        select: s.id
-
-    channels =
-      from c in InboundChannel,
-        where: c.tenant_id == ^tenant_id and c.public_address == ^email,
-        select: c.id
-
-    Repo.exists?(from(address in subquery(union_all(staff, ^channels))))
   end
 
   # The sender is staff-owned (a staff account of this organization,

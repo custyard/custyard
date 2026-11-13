@@ -15,10 +15,6 @@ defmodule Custyard.Webhooks.Dispatcher do
      is checked then (D8).
   2. **Triage.** `Custyard.Webhooks.Triage.classify/3` sorts the delivery:
      - own outbound echo: audited, ignored; nothing is inserted
-     - staff reply sent from a mailbox, arriving as a copy or forwarded in
-       afterwards: appended to the thread it answers as a
-       `triage_class: :staff_sent` message without reactivating the thread.
-       A forwarded one that answers no known thread is audited and ignored
      - provider verification: captured on a `pending_verification` channel,
        otherwise logged as a provider notice; never a thread
      - auto-response / bulk / bounce: appended to the thread it answers as a
@@ -82,7 +78,6 @@ defmodule Custyard.Webhooks.Dispatcher do
           | :verification_captured
           | :provider_notice
           | :auto_response
-          | :staff_sent_unmatched
 
   @doc """
   Dispatch an incoming webhook through the route's registered purposes.
@@ -226,9 +221,6 @@ defmodule Custyard.Webhooks.Dispatcher do
         {:own_echo, message} ->
           handle_own_echo(route, normalized, channel, message)
 
-        {:staff_sent_forward, info} ->
-          handle_staff_sent_forward(route, normalized, channel, info)
-
         {:staff_sent, info} ->
           handle_staff_sent(route, normalized, channel, info)
 
@@ -263,40 +255,7 @@ defmodule Custyard.Webhooks.Dispatcher do
   # capture"): appended as a staff message so the thread is complete,
   # with the staff's action stamped on the thread. No reactivation,
   # no contact resolution, no notification; the staff already knows.
-  defp handle_staff_sent(route, normalized, channel, info),
-    do: append_staff_sent(route, normalized, channel, info, info.email)
-
-  # A sent reply the staff forwarded in afterwards (D6 "forwarded sent
-  # reply"): appended like a captured reply, but as the original it carries.
-  # The message gets the original's words, sender and recipients and a
-  # Message-ID made from it. The forward's own To, In-Reply-To,
-  # authentication, spam score and HTML describe the forward and are dropped.
-  defp handle_staff_sent_forward(
-         route,
-         normalized,
-         channel,
-         %{thread: %Thread{} = thread, original: original} = info
-       ) do
-    unwrapped =
-      normalized
-      |> Map.put(:body, original.body)
-      |> Map.put(:message_id, sent_forward_message_id(thread, original))
-      |> Map.put(:in_reply_to, nil)
-      |> Map.put(:to, nil)
-      |> replace_forward_facts(original.to, original.cc)
-
-    append_staff_sent(route, unwrapped, channel, info, original.email)
-  end
-
-  # No thread has one of the original's recipients as its contact and the
-  # same subject. The customer pipeline would make the staff member who
-  # wrote the reply a customer, so the mail is audited and dropped.
-  defp handle_staff_sent_forward(route, normalized, channel, %{thread: nil}) do
-    audit_triaged(route, normalized, channel, "staff_sent_unmatched", nil)
-    {:ignored, :staff_sent_unmatched}
-  end
-
-  defp append_staff_sent(route, normalized, channel, %{thread: thread} = info, sender_email) do
+  defp handle_staff_sent(route, normalized, channel, %{thread: thread} = info) do
     route_context =
       route
       |> route_context(channel, :staff_sent)
@@ -306,7 +265,7 @@ defmodule Custyard.Webhooks.Dispatcher do
       thread
       |> Purposes.SenderMatching.inbound_message_attrs(normalized, route_context)
       |> Map.put(:source, :staff)
-      |> Map.put(:sender_email, sender_email)
+      |> Map.put(:sender_email, info.email)
       |> Map.put(:triage_class, :staff_sent)
 
     case Message.insert_idempotent(attrs) do
@@ -328,42 +287,6 @@ defmodule Custyard.Webhooks.Dispatcher do
     end
   end
 
-  # A forwarded block carries no Message-ID, so the original is identified
-  # by what the block does carry: the thread, who sent it, the date line as
-  # the mail client wrote it and the text with whitespace collapsed.
-  # Forwarding the same sent message again gives the same id and
-  # Message.insert_idempotent/1 returns the stored row. The date keeps two
-  # replies with the same words apart. Without angle brackets, like the ids
-  # of the ticket adapters, it is never sent out as a threading header.
-  #
-  # The attachment step still finds the message, by its provider delivery
-  # id. Lettermint is the only source with the authentication results the
-  # staff identity check needs, and its deliveries carry one.
-  defp sent_forward_message_id(thread, original) do
-    digest =
-      [original.email, original.date || "", original.body]
-      |> Enum.map_join(<<0>>, &(&1 |> String.split() |> Enum.join(" ")))
-      |> then(&:crypto.hash(:sha256, &1))
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, 32)
-
-    "sent-forward-#{thread.id}-#{digest}@custyard.forward"
-  end
-
-  defp replace_forward_facts(normalized, to, cc) do
-    Map.update(normalized, :metadata, %{}, fn metadata ->
-      Map.merge(metadata, %{
-        to: to,
-        cc: cc,
-        reply_to: nil,
-        authentication: nil,
-        spam_score: nil,
-        is_spam: false,
-        html_body: nil
-      })
-    end)
-  end
-
   # Customer mail forwarded in by a staff (D6 "staff manual forward",
   # the backlog-import path): the unwrapped original runs through the
   # customer pipeline with the original sender as the contact, stamped with
@@ -375,7 +298,18 @@ defmodule Custyard.Webhooks.Dispatcher do
       |> Map.put(:from, original.from)
       |> Map.put(:subject, original.subject || normalized[:subject])
       |> Map.put(:body, original.body)
-      |> replace_forward_facts([], [])
+      |> Map.update(:metadata, %{}, fn metadata ->
+        metadata
+        |> Map.merge(%{
+          to: [],
+          cc: [],
+          reply_to: nil,
+          authentication: nil,
+          spam_score: nil,
+          is_spam: false,
+          html_body: nil
+        })
+      end)
 
     process_customer(route, unwrapped, channel, :staff_forward, forwarder_context(info))
   end

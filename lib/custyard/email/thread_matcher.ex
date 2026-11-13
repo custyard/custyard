@@ -6,20 +6,11 @@ defmodule Custyard.Email.ThreadMatcher do
   permits multiparty participants without granting portal credentials. Ambiguous
   references do not merge threads. Subject fallback additionally requires the
   same customer and a sender who already participated.
-
-  A reply the staff forwarded from their Sent folder has lost its headers. It
-  is matched by who it was sent to and its subject (`find_for_sent_reply/3`).
   """
 
-  alias Custyard.{Contact, Thread, Message, Organization, Prospect, Repo}
-  alias Custyard.Email.{ForwardUnwrapper, SenderMatcher}
+  alias Custyard.{Thread, Message, Organization, Prospect, Repo}
+  alias Custyard.Email.SenderMatcher
   import Ecto.Query
-
-  # Threads that carry email correspondence with a customer.
-  @email_sources [:email, :lettermint, :public_intake, :portal]
-  @reply_prefix ~r/^\s*(?:(?:re|aw|sv)\s*:\s*)+/iu
-  # A recipient with more threads than this is matched on the newest ones.
-  @sent_reply_candidates 200
 
   @doc "Find an email thread by headers within the receiving tenant."
   def find_in_tenant(parsed, tenant_id) when is_integer(tenant_id) do
@@ -42,7 +33,7 @@ defmodule Custyard.Email.ThreadMatcher do
       left_join: p in Prospect,
       on: p.thread_id == c.id,
       where: c.tenant_id == ^tenant_id and m.message_id in ^ids,
-      where: c.source in ^@email_sources,
+      where: c.source in [:email, :lettermint, :public_intake, :portal],
       distinct: true,
       limit: 2,
       select: c
@@ -131,98 +122,15 @@ defmodule Custyard.Email.ThreadMatcher do
     end
   end
 
-  @doc """
-  Find the thread a staff reply answered when only its recipients and subject
-  are known, as for a reply forwarded from the Sent folder.
-
-  `recipients` are the reply's To and Cc addresses, bare and lowercased, in
-  the order written. A thread qualifies when its contact, or the prospect of
-  a public-intake thread, is one of them and its subject equals `subject`
-  once reply and forward prefixes are removed from both. A thread of anyone
-  else never matches, whatever its subject.
-
-  The first recipient with a qualifying thread decides. Among that
-  recipient's threads an unresolved one comes before a resolved one, then
-  the most recently active. One query.
-  """
-  @spec find_for_sent_reply([String.t()], String.t() | nil, integer()) ::
-          {:ok, struct()} | :not_found
-  def find_for_sent_reply(recipients, subject, tenant_id)
-      when is_list(recipients) and is_integer(tenant_id) do
-    wanted = bare_subject(subject)
-
-    if recipients == [] or wanted == "" do
-      :not_found
-    else
-      recipients
-      |> sent_reply_candidates(tenant_id)
-      |> Enum.filter(fn {thread, _contact, _prospect} ->
-        bare_subject(thread.subject) == wanted
-      end)
-      |> Enum.min_by(&sent_reply_rank(&1, recipients), fn -> nil end)
-      |> case do
-        {thread, _contact, _prospect} -> {:ok, thread}
-        nil -> :not_found
-      end
-    end
-  end
-
-  def find_for_sent_reply(_recipients, _subject, _tenant_id), do: :not_found
-
-  # Subjects are compared in Elixir: the prefixes cannot be removed in SQL.
-  defp sent_reply_candidates(recipients, tenant_id) do
-    from(c in Thread,
-      left_join: ct in Contact,
-      on: ct.id == c.contact_id,
-      left_join: p in Prospect,
-      on: p.thread_id == c.id and is_nil(p.revoked_at),
-      where: c.tenant_id == ^tenant_id and c.source in ^@email_sources,
-      where: ct.email in ^recipients or p.email in ^recipients,
-      order_by: [desc: c.id],
-      limit: @sent_reply_candidates,
-      select: {c, ct.email, p.email}
-    )
-    |> Repo.all()
-  end
-
-  # Lowest wins: the recipient's place in the list, unresolved before
-  # resolved, then the latest activity, then the newest thread.
-  defp sent_reply_rank({thread, contact, prospect}, recipients) do
-    place = Enum.find_index(recipients, &(&1 in [contact, prospect]))
-    resolved = if thread.state == :resolved, do: 1, else: 0
-
-    {place, resolved, -last_activity(thread), -thread.id}
-  end
-
-  # The later of the customer's and the staff's last action. A thread nobody
-  # has acted on yet counts from when it was created.
-  defp last_activity(thread) do
-    [thread.last_customer_action_at, thread.last_staff_action_at]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.max(DateTime, fn -> thread.inserted_at end)
-    |> DateTime.to_unix()
-  end
-
   defp normalize_subject(subject) when is_binary(subject) do
     subject
-    |> String.replace(@reply_prefix, "")
+    |> String.replace(~r/^\s*(?:(?:re|aw|sv)\s*:\s*)+/iu, "")
     |> String.replace(~r/\s+/u, " ")
     |> String.trim()
     |> String.downcase()
   end
 
   defp normalize_subject(_subject), do: ""
-
-  # normalize_subject/1 with forward prefixes removed as well, in any order:
-  # "Fwd: Re: WG: Invoice" is "invoice".
-  defp bare_subject(subject) when is_binary(subject) do
-    stripped =
-      subject |> String.replace(@reply_prefix, "") |> ForwardUnwrapper.strip_forward_prefix()
-
-    if stripped == subject, do: normalize_subject(subject), else: bare_subject(stripped)
-  end
-
-  defp bare_subject(_subject), do: ""
 
   defp unique_match([thread]), do: {:ok, thread}
   defp unique_match(_none_or_ambiguous), do: :not_found
