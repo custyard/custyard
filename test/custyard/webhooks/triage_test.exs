@@ -299,6 +299,226 @@ defmodule Custyard.Webhooks.TriageTest do
     end
   end
 
+  describe "forwarded sent reply" do
+    setup %{org: org} do
+      staff =
+        insert_staff_account(
+          role: "admin",
+          organization_id: org.id,
+          email: "me@acme.example.com"
+        )
+
+      alice = insert_contact(organization_id: org.id, email: "alice@customer.example.com")
+
+      thread =
+        insert_thread(organization_id: org.id, contact_id: alice.id, subject: "Login broken")
+
+      insert_message(thread_id: thread.id, message_id: "<login@customer.example.com>")
+      %{staff: staff, alice: alice, thread: thread}
+    end
+
+    defp sent_block(from, to \\ "Alice <alice@customer.example.com>") do
+      """
+      Adding this to the thread.
+
+      ---------- Forwarded message ---------
+      From: #{from}
+      Date: Mon, 6 Oct 2025 at 09:12
+      Subject: Re: Login broken
+      To: #{to}
+
+      Fixed, please try again.
+      """
+    end
+
+    defp forward(overrides) do
+      staff_mail(
+        Map.merge(
+          %{subject: "Fwd: Re: Login broken", body: sent_block("Me <me@acme.example.com>")},
+          overrides
+        )
+      )
+    end
+
+    test "without a header match the thread is found by recipient and subject", %{
+      route: route,
+      staff: staff,
+      thread: thread
+    } do
+      assert {:staff_sent_forward, info} = Triage.classify(forward(%{}), route, nil)
+
+      assert info.thread.id == thread.id
+      assert info.staff.id == staff.id
+      assert info.email == "me@acme.example.com"
+      assert info.original.email == "me@acme.example.com"
+      assert info.original.to == ["alice@customer.example.com"]
+      assert info.original.body == "Fixed, please try again."
+    end
+
+    test "a header match comes first", %{org: org, route: route, thread: thread} do
+      other = insert_thread(organization_id: org.id, subject: "Something else")
+      insert_message(thread_id: other.id, message_id: "<other@customer.example.com>")
+
+      payload = forward(%{references: "<unknown@acme.example.com> <other@customer.example.com>"})
+
+      assert {:staff_sent_forward,
+              %{thread: %{id: id}, original: %{email: "me@acme.example.com"}}} =
+               Triage.classify(payload, route, nil)
+
+      assert id == other.id
+      refute id == thread.id
+    end
+
+    test "no matching thread is still a forwarded sent reply, with no thread", %{route: route} do
+      for payload <- [
+            forward(%{body: sent_block("Me <me@acme.example.com>", "bob@customer.example.com")}),
+            forward(%{
+              body: String.replace(sent_block("Me <me@acme.example.com>"), "Login", "Logout")
+            })
+          ] do
+        assert {:staff_sent_forward, %{thread: nil, original: %{email: "me@acme.example.com"}}} =
+                 Triage.classify(payload, route, nil)
+      end
+    end
+
+    test "the original may be from another staff account or any channel of the tenant", %{
+      org: org,
+      route: route,
+      thread: thread
+    } do
+      insert_staff_account(role: "agent", organization_id: org.id, email: "you@acme.example.com")
+      other_route = insert_inbound_route(organization_id: org.id, source: :lettermint)
+
+      insert_inbound_channel(
+        inbound_route_id: other_route.id,
+        public_address: "billing@acme.example.com",
+        state: :active
+      )
+
+      for from <- ["You <you@acme.example.com>", "Acme Billing <Billing@acme.example.com>"] do
+        assert {:staff_sent_forward, %{thread: %{id: id}}} =
+                 Triage.classify(forward(%{body: sent_block(from)}), route, nil)
+
+        assert id == thread.id
+      end
+    end
+
+    test "the original may be from the channel's public address", %{
+      route: route,
+      staff: staff,
+      thread: thread
+    } do
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "support@acme.example.com",
+          state: :active
+        )
+
+      payload = forward(%{body: sent_block("Acme Support <support@acme.example.com>")})
+
+      assert {:staff_sent_forward, info} = Triage.classify(payload, route, channel)
+      assert info.thread.id == thread.id
+      assert info.staff.id == staff.id
+      assert info.original.email == "support@acme.example.com"
+    end
+
+    test "the staff's own addresses among the recipients do not pick a thread", %{
+      org: org,
+      route: route,
+      thread: thread
+    } do
+      channel =
+        insert_inbound_channel(
+          inbound_route_id: route.id,
+          public_address: "support@acme.example.com",
+          state: :active
+        )
+
+      # Left behind by an earlier forward that went through the customer pipeline.
+      wrong = insert_contact(organization_id: org.id, email: "support@acme.example.com")
+      insert_thread(organization_id: org.id, contact_id: wrong.id, subject: "Re: Login broken")
+
+      to = "support@acme.example.com, Alice <alice@customer.example.com>"
+      payload = forward(%{body: sent_block("Me <me@acme.example.com>", to)})
+
+      assert {:staff_sent_forward, %{thread: %{id: id}}} =
+               Triage.classify(payload, route, channel)
+
+      assert id == thread.id
+
+      payload =
+        forward(%{body: sent_block("Me <me@acme.example.com>", "support@acme.example.com")})
+
+      assert {:staff_sent_forward, %{thread: nil}} = Triage.classify(payload, route, channel)
+    end
+
+    test "a reply that threads by headers and quotes an earlier staff message stays staff_sent",
+         %{route: route, thread: thread} do
+      body = """
+      One more thing: clear your cache first.
+
+      -----Original Message-----
+      From: Me <me@acme.example.com>
+      Sent: Monday, October 6, 2025 9:12 AM
+      To: Alice <alice@customer.example.com>
+      Subject: RE: Login broken
+
+      Fixed, please try again.
+      """
+
+      payload =
+        staff_mail(%{
+          subject: "RE: Login broken",
+          body: body,
+          in_reply_to: "<login@customer.example.com>"
+        })
+
+      assert {:staff_sent, %{thread: %{id: id}}} = Triage.classify(payload, route, nil)
+      assert id == thread.id
+    end
+
+    test "a forwarder who is not authenticated falls through as before", %{route: route} do
+      payload =
+        forward(%{})
+        |> put_metadata(%{
+          authentication: %{dkim: "fail", dkim_domain: "acme.example.com", dmarc: "pass"}
+        })
+
+      assert {:customer, nil} = Triage.classify(payload, route, nil)
+
+      payload =
+        forward(%{})
+        |> put_metadata(%{
+          authentication: %{dkim: "fail", dkim_domain: "acme.example.com", dmarc: "fail"}
+        })
+
+      assert {:suspect, :unauthenticated} = Triage.classify(payload, route, nil)
+    end
+
+    test "an original that staff did not send is a manual forward as before", %{
+      route: route,
+      thread: thread
+    } do
+      other = insert_tenant()
+      insert_staff_account(role: "admin", tenant_id: other.id, email: "them@other.example.com")
+
+      for from <- ["Alice <alice@customer.example.com>", "Them <them@other.example.com>"] do
+        # With and without a header match: neither is unwrapped as a sent reply.
+        assert {:staff_forward, %{original: %{subject: "Re: Login broken"}} = info} =
+                 Triage.classify(forward(%{body: sent_block(from)}), route, nil)
+
+        refute Map.has_key?(info, :thread)
+
+        payload =
+          forward(%{body: sent_block(from), in_reply_to: "<login@customer.example.com>"})
+
+        assert {:staff_sent, %{thread: %{id: id}}} = Triage.classify(payload, route, nil)
+        assert id == thread.id
+      end
+    end
+  end
+
   describe "provider verification" do
     test "Gmail confirmation carries the code from the subject and the google.com link", %{
       route: route
