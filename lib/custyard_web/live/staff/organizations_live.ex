@@ -11,24 +11,33 @@ defmodule CustyardWeb.Staff.OrganizationsLive do
      |> assign(:page_title, "Customers")
      |> assign(:editing_org, nil)
      |> assign(:show_form, false)
-     |> assign(
-       :form,
-       to_form(%{"name" => "", "domain" => "", "tier" => "standard"}, as: :customer)
-     )
+     |> assign(:form, blank_form())
      |> load(), layout: {CustyardWeb.Layouts, :staff}}
   end
 
-  def handle_event("show_form", _, socket),
-    do: {:noreply, socket |> assign(:show_form, true) |> assign(:editing_org, nil)}
+  # A blank form each time, or "Add customer" would open with the values of
+  # the customer edited last.
+  def handle_event("show_form", _, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_form, true)
+     |> assign(:editing_org, nil)
+     |> assign(:form, blank_form())}
+  end
 
   def handle_event("hide_form", _, socket), do: {:noreply, assign(socket, :show_form, false)}
 
   def handle_event("edit_org", %{"id" => id}, socket) do
-    case Organizations.get(socket.assigns.current_scope, id) do
-      nil ->
+    org = Organizations.get(socket.assigns.current_scope, id)
+
+    cond do
+      is_nil(org) ->
         {:noreply, put_flash(socket, :error, "Customer unavailable")}
 
-      org ->
+      not Authorization.can_manage_organization?(socket.assigns.current_staff, org.id) ->
+        {:noreply, put_flash(socket, :error, "Tenant administrator required")}
+
+      true ->
         {:noreply,
          socket
          |> assign(:editing_org, org)
@@ -79,6 +88,9 @@ defmodule CustyardWeb.Staff.OrganizationsLive do
       {:noreply, put_flash(socket, :error, "Tenant administrator required")}
     end
   end
+
+  defp blank_form,
+    do: to_form(%{"name" => "", "domain" => "", "tier" => "standard"}, as: :customer)
 
   defp load(socket),
     do:

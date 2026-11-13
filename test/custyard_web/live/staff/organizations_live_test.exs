@@ -214,13 +214,30 @@ defmodule CustyardWeb.Staff.OrganizationsLiveTest do
       refute has_element?(view, "button[phx-click=show_form]")
       refute has_element?(view, "button[phx-click=edit_org]")
 
-      # Hiding the buttons is not the guard: a forged save is refused.
-      render_click(view, "edit_org", %{"id" => to_string(org.id)})
+      # Hiding the buttons is not the guard: a forged edit opens no form and
+      # a forged save is refused.
+      assert render_click(view, "edit_org", %{"id" => to_string(org.id)}) =~
+               "Tenant administrator required"
+
+      refute has_element?(view, "#customer-form")
 
       view
       |> render_submit("save_org", %{"customer" => %{"name" => "Renamed by agent"}})
 
       assert Repo.reload!(org).name == "Acme"
+    end
+
+    test "add opens blank after another customer was edited", %{conn: conn} do
+      org = insert_organization(name: "Acme", domain: "acme.example.com")
+      {:ok, view, _html} = live(conn, "/app/customers")
+
+      view |> element("[data-testid=staff-customer-edit-#{org.id}]") |> render_click()
+      view |> element("[data-testid=staff-customer-cancel-btn]") |> render_click()
+      view |> element("button[phx-click=show_form]", "Add customer") |> render_click()
+
+      assert has_element?(view, "[data-testid=staff-customer-form-card] h2", "Add customer")
+      assert has_element?(view, "#customer-form input[name='customer[name]'][value='']")
+      assert has_element?(view, "#customer-form input[name='customer[domain]'][value='']")
     end
   end
 end
