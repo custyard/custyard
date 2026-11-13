@@ -4,9 +4,9 @@
     class="bg-white dark:bg-zinc-800 border-b border-gray-200 dark:border-zinc-700 px-4 py-2"
     data-testid="staff-layout-nav"
   >
-    <%!-- One row from 1280px up: workspace name, destinations, then the
+    <%!-- One row from 1024px up: workspace name, the four sections, then the
     account group (who is signed in, instance admin, log out) at the end.
-    From md to 1280px the destinations take a row of their own beneath, and
+    From md to 1024px the sections take a row of their own beneath, and
     below md they move into the menu. Link labels never break. --%>
     <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
       <span
@@ -19,7 +19,7 @@
       </span>
       <%!-- Desktop nav links - hidden on mobile --%>
       <nav
-        class="hidden items-center gap-x-0.5 gap-y-1 md:order-last md:flex md:w-full md:flex-wrap xl:order-none xl:w-auto xl:flex-none xl:flex-nowrap"
+        class="hidden items-center gap-x-0.5 gap-y-1 md:order-last md:flex md:w-full md:flex-wrap lg:order-none lg:w-auto lg:flex-none lg:flex-nowrap"
         aria-label="Staff"
       >
         <StaffNav.top_links role={@current_role} view={@socket.view} />
