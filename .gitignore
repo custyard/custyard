@@ -7,6 +7,7 @@
 .elixir_ls
 *.dump
 .agent-telemetry
+.zed/
 
 # The directory Mix will write compiled artifacts to.
 /_build/
