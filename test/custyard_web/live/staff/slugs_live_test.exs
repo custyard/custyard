@@ -70,11 +70,16 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
       assert html =~ "staff-slugs-empty"
     end
 
-    test "the nav entry renders next to intake sources", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
+    test "the customers section links to the page and marks it current", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
 
-      assert html =~ "staff-nav-slugs"
-      assert html =~ "staff-nav-intake-sources"
+      assert has_element?(
+               view,
+               "a[data-testid=staff-subnav-slugs][href='/app/settings/slugs'][aria-current=page]",
+               "Slugs"
+             )
+
+      assert has_element?(view, "a[data-testid=staff-nav-orgs][aria-current]", "Customers")
     end
   end
 

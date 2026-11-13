@@ -10,6 +10,9 @@ defmodule CustyardWeb.Layouts do
   """
   use CustyardWeb, :html
 
+  # The staff layout renders its links from the navigation data.
+  alias CustyardWeb.StaffNav
+
   embed_templates "layouts/*"
 
   def root_branding(assigns) do

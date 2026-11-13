@@ -96,12 +96,14 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
                live(authenticate(conn, admin), ~p"/app/settings/integrations")
     end
 
-    test "desktop and mobile navigation link to the page", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
+    test "the customers section links to the page", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
 
-      assert html =~ ~s(data-testid="staff-nav-acknowledgments")
-      assert html =~ ~s(data-testid="staff-nav-mobile-acknowledgments")
-      assert html =~ ~s(href="/app/settings/integrations")
+      assert has_element?(
+               view,
+               "a[data-testid=staff-subnav-acknowledgments][href='/app/settings/integrations']",
+               "Acknowledgments"
+             )
     end
   end
 
