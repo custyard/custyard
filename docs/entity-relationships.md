@@ -62,7 +62,9 @@ in `CustyardWeb.StaffNav`, and each page's path sits under its section.
   and not a page under Customers.
 - **Settings**: Workflow (`/app/settings/workflow`), Support email setup
   (`/app/settings/email`), Intake sources (`/app/settings/intake`), Tenant
-  settings (`/app/settings/tenant`). These configure the tenant. An intake
-  source configures a public intake page; a thread only records the key of
-  the source it came from. Every settings page needs an admin, so agents do
-  not see the section.
+  settings (`/app/settings/tenant`), Audit log (`/app/settings/audit`). The
+  first four configure the tenant. An intake source configures a public
+  intake page; a thread only records the key of the source it came from. The
+  audit log lists what staff and the system did in the tenant; it names every
+  staff member, so it sits with the pages only admins open. Every page here
+  needs an admin, so agents do not see the section.
