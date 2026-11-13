@@ -2089,6 +2089,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       {:ok, label} = Custyard.Labels.create_and_assign(scope, a, "Billing")
       {:ok, _} = Custyard.Labels.assign(scope, c, label.id)
 
+      # Needs reply is the default queue, so its links do not name it.
       {:ok, view, _html} =
         live(conn, ~p"/app/threads/#{a.id}?filter=needs_reply&label=#{label.id}&pos=0")
 
@@ -2097,12 +2098,128 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=needs_reply&label=#{label.id}&pos=1&after=#{a.id}']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?label=#{label.id}&pos=1&after=#{a.id}']"
              )
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-back][href='/app?filter=needs_reply&label=#{label.id}&at=#{a.id}']"
+               "a[data-testid=staff-thread-back][href='/app?label=#{label.id}&at=#{a.id}']"
+             )
+
+      # Any other filter is named, on the way on and on the way back.
+      {:ok, active, _html} =
+        live(conn, ~p"/app/threads/#{a.id}?filter=active&label=#{label.id}&pos=0")
+
+      assert has_element?(active, "[data-testid=staff-thread-queue-position]", "1 of 2 in active")
+
+      assert has_element?(
+               active,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=active&label=#{label.id}&pos=1&after=#{a.id}']"
+             )
+
+      assert has_element?(
+               active,
+               "a[data-testid=staff-thread-back][href='/app?filter=active&label=#{label.id}&at=#{a.id}']"
+             )
+    end
+
+    test "a link without a filter steps through needs reply; all is named", %{
+      conn: conn,
+      a: a,
+      b: b,
+      c: c
+    } do
+      # b has been answered: it is in the whole queue but needs no reply.
+      insert_message(thread_id: b.id, source: :staff, body: "Answered")
+
+      {:ok, default, _html} = live(conn, ~p"/app/threads/#{a.id}?pos=0")
+
+      assert has_element?(
+               default,
+               "[data-testid=staff-thread-queue-position]",
+               "1 of 2 in needs reply"
+             )
+
+      assert has_element?(
+               default,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?pos=1&after=#{a.id}']"
+             )
+
+      assert has_element?(default, "a[data-testid=staff-thread-back][href='/app?at=#{a.id}']")
+
+      {:ok, all, _html} = live(conn, ~p"/app/threads/#{a.id}?filter=all&pos=0")
+
+      assert has_element?(all, "[data-testid=staff-thread-queue-position]", "1 of 3")
+      refute has_element?(all, "[data-testid=staff-thread-queue-position]", "needs reply")
+
+      assert has_element?(
+               all,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{b.id}?filter=all&pos=1&after=#{a.id}&before=#{c.id}']"
+             )
+
+      assert has_element?(
+               all,
+               "a[data-testid=staff-thread-back][href='/app?filter=all&at=#{a.id}']"
+             )
+    end
+
+    test "previous and next follow a reversed list", %{conn: conn, a: a, b: b, c: c} do
+      # The list read c, b, a, and b was opened from its second row.
+      {:ok, view, _html} =
+        live(conn, ~p"/app/threads/#{b.id}?reverse=1&pos=1&after=#{c.id}&before=#{a.id}")
+
+      assert has_element?(view, "[data-testid=staff-thread-queue-position]", "2 of 3")
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{c.id}?reverse=1&pos=0&before=#{b.id}%2C#{a.id}']"
+             )
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{a.id}?reverse=1&pos=2&after=#{b.id}%2C#{c.id}']"
+             )
+
+      assert has_element?(
+               view,
+               "a[data-testid=staff-thread-back][href='/app?reverse=1&at=#{b.id}']"
+             )
+
+      # Stepping on keeps the order.
+      {:ok, next, _html} =
+        view
+        |> element("a[data-testid=staff-thread-next]")
+        |> render_click()
+        |> follow_redirect(conn)
+
+      assert has_element?(next, "[data-testid=staff-thread-subject]", "Thread A")
+      assert has_element?(next, "[data-testid=staff-thread-queue-position]", "3 of 3")
+      assert has_element?(next, "[data-testid=staff-thread-next-none]")
+
+      assert has_element?(
+               next,
+               "a[data-testid=staff-thread-prev][href^='/app/threads/#{b.id}?reverse=1&']"
+             )
+
+      # With a filter, the filter comes first.
+      {:ok, all, _html} = live(conn, ~p"/app/threads/#{c.id}?filter=all&reverse=1&pos=0")
+
+      assert has_element?(
+               all,
+               "a[data-testid=staff-thread-next][href='/app/threads/#{b.id}?filter=all&reverse=1&pos=1&after=#{c.id}&before=#{a.id}']"
+             )
+
+      assert has_element?(
+               all,
+               "a[data-testid=staff-thread-back][href='/app?filter=all&reverse=1&at=#{c.id}']"
+             )
+
+      # Anything but reverse=1 is the default order.
+      {:ok, forward, _html} = live(conn, ~p"/app/threads/#{b.id}?reverse=true&pos=1")
+
+      assert has_element?(
+               forward,
+               "a[data-testid=staff-thread-prev][href^='/app/threads/#{a.id}?pos=0']"
              )
     end
 
@@ -2122,12 +2239,12 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?filter=needs_reply&pos=0&before=#{c.id}']"
+               "a[data-testid=staff-thread-prev][href='/app/threads/#{a.id}?pos=0&before=#{c.id}']"
              )
 
       assert has_element?(
                view,
-               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?filter=needs_reply&pos=1&after=#{a.id}']"
+               "a[data-testid=staff-thread-next][href='/app/threads/#{c.id}?pos=1&after=#{a.id}']"
              )
     end
 

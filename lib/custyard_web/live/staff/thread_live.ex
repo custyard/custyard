@@ -1109,18 +1109,21 @@ defmodule CustyardWeb.Staff.ThreadLive do
   end
 
   # Which queue the staff member opened this conversation from: its filter,
-  # its label, the row's position and the ids listed around the row, as
-  # carried by the row link. Anything unrecognised falls back to the whole
-  # queue. The values only choose among queue queries that are tenant-scoped
-  # whatever is passed; the ids are only looked up in that queue's own list.
+  # its label, its order, the row's position and the ids listed around the
+  # row, as carried by the row link. A missing or unrecognised filter means
+  # the queue's default one, as it does on the queue page. The values only
+  # choose among queue queries that are tenant-scoped whatever is passed; the
+  # ids are only looked up in that queue's own list.
   defp queue_context(params) do
     filter = params["filter"]
 
     pos = query_integer(params["pos"], 0)
 
     %{
-      filter: if(filter in Threads.queue_filters(), do: filter, else: "all"),
+      filter:
+        if(filter in Threads.queue_filters(), do: filter, else: Threads.default_queue_filter()),
       label_id: query_integer(params["label"], 1),
+      reverse: params["reverse"] == "1",
       pos: pos,
       # Witnesses belong to a position: without one the page follows the
       # conversation's own place.
@@ -1156,7 +1159,12 @@ defmodule CustyardWeb.Staff.ThreadLive do
     %{filter: filter, label_id: label_id, pos: pos, after: after_ids, before: before_ids} =
       context = socket.assigns.queue_context
 
-    ids = Threads.queue_ids(socket.assigns.current_scope, filter: filter, label_id: label_id)
+    ids =
+      Threads.queue_ids(socket.assigns.current_scope,
+        filter: filter,
+        label_id: label_id,
+        reverse: context.reverse
+      )
 
     nav =
       QueueNav.neighbors(ids, socket.assigns.thread.id, pos, after: after_ids, before: before_ids)
@@ -1174,9 +1182,14 @@ defmodule CustyardWeb.Staff.ThreadLive do
   defp keep_place(context, %{place: nil}), do: context
   defp keep_place(context, %{place: place}), do: Map.merge(context, place)
 
-  defp queue_params(%{filter: filter, label_id: label_id}, extra) do
+  # The default filter is left out of a link; every other one is named.
+  defp queue_params(%{filter: filter, label_id: label_id, reverse: reverse}, extra) do
     Enum.reject(
-      [filter: if(filter != "all", do: filter), label: label_id] ++ extra,
+      [
+        filter: if(filter != Threads.default_queue_filter(), do: filter),
+        label: label_id,
+        reverse: if(reverse, do: 1)
+      ] ++ extra,
       fn {_key, value} -> is_nil(value) end
     )
   end

@@ -18,17 +18,42 @@ defmodule Custyard.Threads do
   import Ecto.Query
   require QueuePreview
 
+  @doc """
+  The attention queue of the scope's tenant: one row per listed thread, with
+  its message counts, `due_task_count` (unfinished tasks that have reached
+  their deadline) and `open_task_count` (every unfinished task, the due ones
+  included).
+
+  Options:
+    - `:filter` - one of `queue_filters/0`. Without it every thread in the
+      working queue is listed, as under `"all"`; the queue page opens on
+      `default_queue_filter/0`
+    - `:label_id`, `:organization_id` - narrow the list
+    - `:reverse` - `true` returns the same threads in exactly the opposite
+      order
+
+  A thread whose sender is ignored (`ignore_sender/2`) is listed by the
+  `"ignored"` filter and by no other.
+  """
   def list(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
     if Custyard.Scope.current_staff(scope),
       do: list_for_attention_queue(Keyword.put(opts, :tenant_id, tenant_id)),
       else: []
   end
 
-  @queue_filters ~w(all needs_reply new active waiting dormant snoozed due_tasks)
+  # In the order the queue page shows its chips.
+  @queue_filters ~w(needs_reply all new active waiting dormant snoozed due_tasks open_tasks ignored resolved)
+  @default_queue_filter "needs_reply"
   @queue_state_filters %{new: "new", active: "active", waiting: "waiting", dormant: "dormant"}
 
   @doc "The attention-queue filter names `list/2` understands."
   def queue_filters, do: @queue_filters
+
+  @doc """
+  The filter the queue opens on. A queue link without a `filter` parameter
+  means this one, on the queue page and in a conversation opened from it.
+  """
+  def default_queue_filter, do: @default_queue_filter
 
   @doc """
   Thread ids of the attention queue in listed order, for stepping to the
@@ -43,6 +68,7 @@ defmodule Custyard.Threads do
       |> exclude(:preload)
       |> select([c], c.id)
       |> Repo.all()
+      |> in_queue_order(opts)
     else
       []
     end
@@ -50,8 +76,7 @@ defmodule Custyard.Threads do
 
   @doc """
   How many threads each attention-queue filter lists, keyed by filter name
-  (`"all"`, `"needs_reply"`, `"new"`, `"active"`, `"waiting"`, `"dormant"`,
-  `"snoozed"`, `"due_tasks"`).
+  (every name in `queue_filters/0`).
 
   Takes the same `:label_id` and `:organization_id` options as `list/2` and
   applies the same visibility rules, so each count equals the length of the
@@ -116,7 +141,7 @@ defmodule Custyard.Threads do
   end
 
   defp list_for_attention_queue(opts) do
-    from([c, message_facts: mf, due_tasks: dt] in attention_queue_query(opts, true),
+    from([c, message_facts: mf, open_tasks: ot] in attention_queue_query(opts, true),
       select: %{
         thread: c,
         message_count: coalesce(mf.count, 0),
@@ -125,10 +150,20 @@ defmodule Custyard.Threads do
         exchange_count: coalesce(mf.exchanged, 0),
         # The 24h count behind the score's velocity term.
         recent_count: coalesce(mf.recent, 0),
-        due_task_count: coalesce(dt.count, 0)
+        due_task_count: coalesce(ot.due, 0),
+        # Every unfinished task, the due ones included.
+        open_task_count: coalesce(ot.count, 0)
       }
     )
     |> Repo.all()
+    |> in_queue_order(opts)
+  end
+
+  # The queue queries have no limit, so the reversed order is the listed rows
+  # back to front. That is always the exact opposite, and the order itself is
+  # defined in one place only.
+  defp in_queue_order(rows, opts) do
+    if Keyword.get(opts, :reverse) == true, do: Enum.reverse(rows), else: rows
   end
 
   # The one query behind the queue list and the queue order (queue_ids/2).
@@ -145,24 +180,15 @@ defmodule Custyard.Threads do
       from(c in Thread,
         # Left join: disambiguation/public-intake threads have nil organization_id
         left_join: o in assoc(c, :organization),
+        # The contact also says whether the sender is ignored.
         left_join: ct in assoc(c, :contact),
+        as: :contact,
         # Prospect preload feeds reply_channel/1 without N+1 queries
         left_join: p in assoc(c, :prospect),
         left_join: ch in assoc(c, :inbound_channel),
-        left_join: dt in subquery(due_task_subquery(now)),
-        as: :due_tasks,
-        on: dt.thread_id == c.id,
-        # Resolving/snoozing a thread must not hide an unfinished task
-        # that has reached its own deadline.
-        where: c.state != :resolved or not is_nil(dt.thread_id),
-        # The id settles equal scores, so the list and the previous/next
-        # links in a conversation agree on one order.
-        order_by: [
-          desc: coalesce(dt.count, 0),
-          asc: dt.due_at,
-          desc: c.cached_score,
-          asc: c.id
-        ],
+        left_join: ot in subquery(open_task_subquery(now)),
+        as: :open_tasks,
+        on: ot.thread_id == c.id,
         preload: [organization: o, contact: ct, prospect: p, inbound_channel: ch]
       )
 
@@ -170,9 +196,56 @@ defmodule Custyard.Threads do
     |> join_message_facts(tenant_id, message_facts?)
     |> apply_organization_filter(organization_id)
     |> apply_tenant_filter(tenant_id)
+    |> apply_queue_filter(filter, now)
+    |> apply_queue_order(filter)
+    |> apply_label_filter(Keyword.get(opts, :label_id))
+  end
+
+  # An ignored sender's threads are listed by the "ignored" filter and by no
+  # other, whatever their tasks say.
+  defp apply_queue_filter(query, "ignored", _now) do
+    from([c, contact: ct] in query,
+      where: not is_nil(ct.ignored_at) and c.state != :resolved
+    )
+  end
+
+  defp apply_queue_filter(query, filter, now) do
+    from([contact: ct] in query, where: is_nil(ct.ignored_at))
+    |> apply_membership(filter, now)
+  end
+
+  # An unfinished task is outstanding work wherever its thread sits, so
+  # resolved and snoozed threads are listed too.
+  defp apply_membership(query, "open_tasks", _now),
+    do: from([open_tasks: ot] in query, where: not is_nil(ot.thread_id))
+
+  defp apply_membership(query, "resolved", _now),
+    do: from(c in query, where: c.state == :resolved)
+
+  # The working queue, which every other filter narrows.
+  defp apply_membership(query, filter, now) do
+    # Resolving/snoozing a thread must not hide an unfinished task
+    # that has reached its own deadline.
+    from([c, open_tasks: ot] in query, where: c.state != :resolved or ot.due > 0)
     |> apply_snooze_filter(filter, now)
     |> apply_state_filter(filter)
-    |> apply_label_filter(Keyword.get(opts, :label_id))
+  end
+
+  # Resolved threads have no priority to rank by: the latest update leads.
+  defp apply_queue_order(query, "resolved"),
+    do: from(c in query, order_by: [desc: c.updated_at, desc: c.id])
+
+  # The id settles equal scores, so the list and the previous/next
+  # links in a conversation agree on one order.
+  defp apply_queue_order(query, _filter) do
+    from([c, open_tasks: ot] in query,
+      order_by: [
+        desc: coalesce(ot.due, 0),
+        asc: ot.due_at,
+        desc: c.cached_score,
+        asc: c.id
+      ]
+    )
   end
 
   defp join_message_facts(query, _tenant_id, false), do: query
@@ -185,34 +258,43 @@ defmodule Custyard.Threads do
     )
   end
 
-  # Unfinished tasks that have reached their deadline, per thread.
-  defp due_task_subquery(now) do
+  # Unfinished tasks per thread: how many there are (`count`), how many have
+  # reached their deadline (`due`) and the earliest deadline reached
+  # (`due_at`). A thread without an unfinished task has no row.
+  defp open_task_subquery(now) do
     from(t in Custyard.WorkItem,
-      where: t.state != :done and not is_nil(t.due_at) and t.due_at <= ^now,
+      where: t.state != :done and not is_nil(t.thread_id),
       group_by: t.thread_id,
-      select: %{thread_id: t.thread_id, count: count(t.id), due_at: min(t.due_at)}
+      select: %{
+        thread_id: t.thread_id,
+        count: count(t.id),
+        due: count(fragment("CASE WHEN ? THEN 1 END", t.due_at <= ^now)),
+        due_at: min(fragment("CASE WHEN ? THEN ? END", t.due_at <= ^now, t.due_at))
+      }
     )
   end
 
-  # One light row per open thread, tallied here rather than in one filtered
-  # query per chip. The rules mirror attention_queue_query/2 with
-  # apply_snooze_filter/3 and apply_state_filter/2; a test compares every
-  # count with the length of the matching list.
+  # One light row per thread, tallied here rather than in one filtered query
+  # per chip. Resolved threads are read too, because "resolved" and
+  # "open_tasks" list them. The rules mirror apply_queue_filter/3 and what it
+  # calls; a test compares every count with the length of the matching list.
   defp count_attention_queue(opts) do
     tenant_id = Keyword.get(opts, :tenant_id)
     # The list queries compare snoozed_until at whole seconds; so must the tally.
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     from(c in Thread,
+      left_join: ct in assoc(c, :contact),
       left_join: mf in subquery(QueuePreview.message_facts(tenant_id)),
       on: mf.thread_id == c.id,
-      left_join: dt in subquery(due_task_subquery(now)),
-      on: dt.thread_id == c.id,
-      where: c.state != :resolved or not is_nil(dt.thread_id),
+      left_join: ot in subquery(open_task_subquery(now)),
+      on: ot.thread_id == c.id,
       select: %{
         state: c.state,
         snoozed_until: c.snoozed_until,
-        due_count: coalesce(dt.count, 0),
+        ignored_at: ct.ignored_at,
+        due_count: coalesce(ot.due, 0),
+        open_count: coalesce(ot.count, 0),
         last_id: mf.last_id,
         last_staff_id: mf.last_staff_id
       }
@@ -224,13 +306,20 @@ defmodule Custyard.Threads do
     |> Enum.reduce(Map.new(@queue_filters, &{&1, 0}), &tally_queue_row(&1, &2, now))
   end
 
+  # An ignored sender's thread counts under "ignored" and nowhere else.
+  defp tally_queue_row(%{ignored_at: %DateTime{}} = row, counts, _now),
+    do: bump(counts, "ignored", row.state != :resolved)
+
   defp tally_queue_row(row, counts, now) do
     snoozed? =
       not is_nil(row.snoozed_until) and DateTime.compare(row.snoozed_until, now) != :lt
 
     due? = row.due_count > 0
+    resolved? = row.state == :resolved
+    # A resolved thread stays in the working queue only for a due task.
+    queued? = due? or not resolved?
     # A due task keeps a snoozed thread in every unsnoozed view.
-    listed? = due? or not snoozed?
+    listed? = queued? and (due? or not snoozed?)
 
     # The tallied form of the "needs_reply" clause of apply_state_filter/2.
     needs_reply? =
@@ -238,7 +327,9 @@ defmodule Custyard.Threads do
         (is_nil(row.last_id) or row.last_staff_id != row.last_id)
 
     counts
-    |> bump("snoozed", snoozed?)
+    |> bump("resolved", resolved?)
+    |> bump("open_tasks", row.open_count > 0)
+    |> bump("snoozed", queued? and snoozed?)
     |> bump("all", listed?)
     |> bump("due_tasks", due?)
     |> bump("needs_reply", listed? and needs_reply?)
@@ -254,8 +345,8 @@ defmodule Custyard.Threads do
   end
 
   defp apply_snooze_filter(query, _filter, now) do
-    from([c, due_tasks: dt] in query,
-      where: is_nil(c.snoozed_until) or c.snoozed_until < ^now or not is_nil(dt.thread_id)
+    from([c, open_tasks: ot] in query,
+      where: is_nil(c.snoozed_until) or c.snoozed_until < ^now or ot.due > 0
     )
   end
 
@@ -291,7 +382,7 @@ defmodule Custyard.Threads do
   defp apply_state_filter(query, "dormant"), do: from(c in query, where: c.state == :dormant)
 
   defp apply_state_filter(query, "due_tasks"),
-    do: from([due_tasks: dt] in query, where: not is_nil(dt.thread_id))
+    do: from([open_tasks: ot] in query, where: ot.due > 0)
 
   # Ours to answer: not parked as waiting, not resolved, and staff did not
   # send the newest message exchanged with the customer (see

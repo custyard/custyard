@@ -1,6 +1,7 @@
 defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
   use CustyardWeb.ConnCase, async: true
 
+  import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
   import Custyard.Factory
 
@@ -139,7 +140,125 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
     test "shows empty state when no threads", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/app")
 
-      assert html =~ "Nothing needs attention right now"
+      assert html =~ "Nothing needs a reply right now"
+    end
+  end
+
+  describe "default filter" do
+    setup do
+      org = insert_organization()
+      ours = insert_thread(organization_id: org.id, state: :active, subject: "Ours")
+      insert_message(thread_id: ours.id, body: "Any news?")
+
+      theirs = insert_thread(organization_id: org.id, state: :active, subject: "Theirs")
+      insert_message(thread_id: theirs.id, body: "Question")
+      insert_message(thread_id: theirs.id, source: :staff, body: "Answer")
+
+      %{ours: ours, theirs: theirs}
+    end
+
+    test "the queue opens on needs reply", %{conn: conn, ours: ours, theirs: theirs} do
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-needs_reply][aria-pressed=true]")
+      assert has_element?(view, "[data-testid=staff-queue-filter-all][aria-pressed=false]")
+      assert has_element?(view, "[data-testid=staff-queue-card-#{ours.id}]")
+      refute has_element?(view, "[data-testid=staff-queue-card-#{theirs.id}]")
+      assert has_element?(view, "[data-testid=staff-queue-count]", "1 conversation")
+
+      # A row of the default queue names no filter.
+      assert has_element?(
+               view,
+               "li#queue-row-#{ours.id} a[data-row-link][href='/app/threads/#{ours.id}?pos=0']"
+             )
+    end
+
+    test "all is a filter like any other, named in the address and in row links", %{
+      conn: conn,
+      ours: ours,
+      theirs: theirs
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      view |> element("[data-testid=staff-queue-filter-all]") |> render_click()
+      assert_patch(view, ~p"/app?filter=all&label=")
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-all][aria-pressed=true]")
+      assert has_element?(view, "[data-testid=staff-queue-card-#{ours.id}]")
+      assert has_element?(view, "[data-testid=staff-queue-card-#{theirs.id}]")
+
+      assert has_element?(
+               view,
+               "li#queue-row-#{theirs.id} a[data-row-link][href^='/app/threads/#{theirs.id}?filter=all&pos=']"
+             )
+
+      # Loaded from the address, too.
+      {:ok, loaded, _html} = live(conn, ~p"/app?filter=all")
+      assert has_element?(loaded, "[data-testid=staff-queue-card-#{theirs.id}]")
+    end
+
+    test "a filter that does not exist opens the default queue", %{
+      conn: conn,
+      ours: ours,
+      theirs: theirs
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app?filter=everything")
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-needs_reply][aria-pressed=true]")
+      assert has_element?(view, "[data-testid=staff-queue-card-#{ours.id}]")
+      refute has_element?(view, "[data-testid=staff-queue-card-#{theirs.id}]")
+    end
+
+    test "the chips come in the agreed order", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      chips =
+        view
+        |> element("[data-testid=staff-queue-filters]")
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.find("button")
+        |> Enum.map(fn chip ->
+          # The label is the chip's own text; the count sits in a span.
+          {"button", _attrs, [label | _count]} = chip
+          String.trim(label)
+        end)
+
+      assert chips ==
+               [
+                 "needs reply",
+                 "all",
+                 "new",
+                 "active",
+                 "waiting",
+                 "dormant",
+                 "snoozed",
+                 "tasks due",
+                 "open tasks",
+                 "ignored",
+                 "resolved"
+               ]
+    end
+  end
+
+  describe "empty lists" do
+    test "each filter says in its own words that it lists nothing", %{conn: conn} do
+      for {filter, sentence} <- [
+            {"needs_reply", "Nothing needs a reply right now."},
+            {"all", "Nothing needs attention right now."},
+            {"new", "No new conversations."},
+            {"active", "No active conversations."},
+            {"waiting", "Nothing is waiting on a customer."},
+            {"dormant", "No dormant conversations."},
+            {"snoozed", "Nothing is snoozed."},
+            {"due_tasks", "No tasks are due."},
+            {"open_tasks", "No conversations have open tasks."},
+            {"ignored", "No conversations from ignored senders."},
+            {"resolved", "No resolved conversations."}
+          ] do
+        {:ok, view, _html} = live(conn, ~p"/app?filter=#{filter}")
+        assert has_element?(view, "[data-testid=staff-queue-empty]", sentence), "filter #{filter}"
+      end
     end
   end
 
@@ -299,7 +418,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       {:ok, _view, html} = live(conn, ~p"/app")
 
       # Debug: check what the view is showing
-      refute html =~ "Nothing needs attention", "Should have threads to show"
+      refute html =~ "Nothing needs a reply", "Should have threads to show"
 
       # Admin should see their org's thread and not others
       # Test subjects first (more specific than org names which might not be in truncated output)
@@ -417,7 +536,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       {:ok, _view, html} = live(conn, ~p"/app")
 
       # Should see empty state, not the other org's thread
-      assert html =~ "Nothing needs attention right now"
+      assert html =~ "Nothing needs a reply right now"
       refute html =~ conv.subject
     end
   end
@@ -670,7 +789,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       parked = insert_thread(organization_id: org.id, state: :waiting)
       insert_message(thread_id: parked.id, body: "I will check with my team")
 
-      {:ok, view, _html} = live(conn, ~p"/app")
+      {:ok, view, _html} = live(conn, ~p"/app?filter=all")
 
       assert has_element?(
                view,
@@ -971,13 +1090,17 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       {:ok, view, _html} = live(conn, ~p"/app")
 
       for {filter, count} <- [
+            {"needs_reply", 3},
             {"all", 4},
             {"new", 2},
             {"active", 1},
             {"waiting", 1},
             {"dormant", 0},
             {"snoozed", 1},
-            {"due_tasks", 0}
+            {"due_tasks", 0},
+            {"open_tasks", 0},
+            {"ignored", 0},
+            {"resolved", 1}
           ] do
         assert view
                |> element("[data-testid=staff-queue-filter-count-#{filter}]")
@@ -1084,8 +1207,9 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       parked = insert_thread(organization_id: org.id, state: :waiting, subject: "Parked")
       insert_message(thread_id: parked.id, body: "Will check")
 
-      {:ok, view, _html} = live(conn, ~p"/app")
+      {:ok, view, _html} = live(conn, ~p"/app?filter=all")
 
+      assert has_element?(view, "[data-testid=staff-queue-card-#{replied.id}]")
       assert has_element?(view, "[data-testid=staff-queue-filter-needs_reply]", "needs reply")
       assert has_element?(view, "[data-testid=staff-queue-filter-count-needs_reply]", "1")
       assert has_element?(view, "[data-testid=staff-queue-filter-count-all]", "3")
@@ -1185,11 +1309,20 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
              )
 
       # Under a filter and a label, the links say which queue they belong to.
-      {:ok, filtered, _html} = live(conn, ~p"/app?filter=needs_reply&label=#{label.id}")
+      {:ok, filtered, _html} = live(conn, ~p"/app?filter=active&label=#{label.id}")
 
       assert has_element?(
                filtered,
-               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?filter=needs_reply&label=#{label.id}&pos=1&after=#{first.id}']"
+               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?filter=active&label=#{label.id}&pos=1&after=#{first.id}']"
+             )
+
+      # The default filter is the one a link does not name, even when the
+      # queue's own address does.
+      {:ok, default, _html} = live(conn, ~p"/app?filter=needs_reply&label=#{label.id}")
+
+      assert has_element?(
+               default,
+               "li#queue-row-#{second.id} a[data-row-link][href='/app/threads/#{second.id}?label=#{label.id}&pos=1&after=#{first.id}']"
              )
     end
 
@@ -1246,7 +1379,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       insert_message(thread_id: noted.id, body: "Only message")
       insert_message(thread_id: noted.id, source: :staff, is_internal_note: true, body: "Memo")
 
-      {:ok, view, _html} = live(conn, ~p"/app")
+      {:ok, view, _html} = live(conn, ~p"/app?filter=all")
       card = "[data-testid=staff-queue-card-#{conv.id}]"
 
       assert has_element?(
@@ -1304,6 +1437,306 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       plain_card = view |> element("[data-testid=staff-queue-card-#{plain.id}]") |> render()
       refute plain_card =~ "staff-queue-channel"
       refute plain_card =~ "staff-queue-suspect"
+    end
+  end
+
+  defp staff_scope_of(staff),
+    do: Custyard.Scope.for_staff(staff, Custyard.Tenants.get_tenant!(staff.tenant_id))
+
+  # Thread ids of the rows, top to bottom.
+  defp row_ids(view) do
+    view
+    |> render()
+    |> Floki.parse_document!()
+    |> Floki.find("#staff-queue-list > li")
+    |> Enum.flat_map(&Floki.attribute(&1, "id"))
+    |> Enum.map(&(&1 |> String.replace_prefix("queue-row-", "") |> String.to_integer()))
+  end
+
+  describe "reverse order" do
+    setup do
+      org = insert_organization()
+
+      # Queue order is score first, so these list as a, b, c.
+      [a, b, c] =
+        for score <- [90, 60, 30] do
+          thread = insert_thread(organization_id: org.id, state: :active, cached_score: score)
+          insert_message(thread_id: thread.id, body: "Question")
+          thread.id
+        end
+
+      %{org: org, a: a, b: b, c: c}
+    end
+
+    test "the toggle turns the list round and the address remembers it", %{
+      conn: conn,
+      a: a,
+      b: b,
+      c: c
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app")
+      toggle = "[data-testid=staff-queue-sort]"
+
+      assert row_ids(view) == [a, b, c]
+      assert has_element?(view, "#{toggle}[aria-pressed=false]", "Highest priority first")
+
+      view |> element(toggle) |> render_click()
+      assert_patch(view, ~p"/app?filter=needs_reply&label=&reverse=1")
+
+      assert row_ids(view) == [c, b, a]
+      assert has_element?(view, "#{toggle}[aria-pressed=true]", "Lowest priority first")
+
+      view |> element(toggle) |> render_click()
+      assert_patch(view, ~p"/app?filter=needs_reply&label=")
+      assert row_ids(view) == [a, b, c]
+
+      # Opened from the address.
+      {:ok, loaded, _html} = live(conn, ~p"/app?reverse=1")
+      assert row_ids(loaded) == [c, b, a]
+
+      # Only reverse=1 reverses.
+      {:ok, plain, _html} = live(conn, ~p"/app?reverse=yes")
+      assert row_ids(plain) == [a, b, c]
+    end
+
+    test "the toggle keeps the filter and the label; changing those keeps the order", %{
+      conn: conn,
+      staff: staff,
+      a: a,
+      b: b,
+      c: c
+    } do
+      scope = staff_scope_of(staff)
+
+      {:ok, label} =
+        Custyard.Labels.create_and_assign(scope, Repo.get!(Custyard.Thread, a), "VIP")
+
+      {:ok, _} = Custyard.Labels.assign(scope, Repo.get!(Custyard.Thread, c), label.id)
+
+      {:ok, view, _html} = live(conn, ~p"/app?filter=active&label=#{label.id}")
+      assert row_ids(view) == [a, c]
+
+      view |> element("[data-testid=staff-queue-sort]") |> render_click()
+      assert_patch(view, ~p"/app?filter=active&label=#{label.id}&reverse=1")
+      assert row_ids(view) == [c, a]
+
+      view |> element("[data-testid=staff-queue-filter-all]") |> render_click()
+      assert_patch(view, ~p"/app?filter=all&label=#{label.id}&reverse=1")
+      assert row_ids(view) == [c, a]
+
+      view |> form("#queue-label-filter") |> render_change(%{label: ""})
+      assert_patch(view, ~p"/app?filter=all&label=&reverse=1")
+      assert row_ids(view) == [c, b, a]
+      assert has_element?(view, "[data-testid=staff-queue-sort][aria-pressed=true]")
+    end
+
+    test "row links carry the order, so a conversation steps the way the list read", %{
+      conn: conn,
+      a: a,
+      b: b,
+      c: c
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app?reverse=1")
+
+      assert has_element?(
+               view,
+               "li#queue-row-#{c} a[data-row-link][href='/app/threads/#{c}?reverse=1&pos=0&before=#{b}%2C#{a}']"
+             )
+
+      assert has_element?(
+               view,
+               "li#queue-row-#{a} a[data-row-link][href='/app/threads/#{a}?reverse=1&pos=2&after=#{b}%2C#{c}']"
+             )
+
+      {:ok, all, _html} = live(conn, ~p"/app?filter=all&reverse=1")
+
+      assert has_element?(
+               all,
+               "li#queue-row-#{b} a[data-row-link][href='/app/threads/#{b}?filter=all&reverse=1&pos=1&after=#{c}&before=#{a}']"
+             )
+
+      # The default order adds nothing to a link.
+      {:ok, forward, _html} = live(conn, ~p"/app")
+      refute has_element?(forward, "a[data-row-link][href*='reverse']")
+    end
+  end
+
+  describe "tasks on rows" do
+    test "a row counts its due tasks and its other unfinished tasks apart", %{conn: conn} do
+      org = insert_organization()
+      past = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
+      future = DateTime.utc_now() |> DateTime.add(86_400) |> DateTime.truncate(:second)
+      task = fn thread, attrs -> insert_task([thread_id: thread.id] ++ attrs) end
+
+      both = insert_thread(organization_id: org.id, state: :active)
+      task.(both, due_at: past)
+      task.(both, [])
+      task.(both, due_at: future)
+      task.(both, state: :done)
+
+      one = insert_thread(organization_id: org.id, state: :active)
+      task.(one, [])
+
+      none = insert_thread(organization_id: org.id, state: :active)
+      task.(none, state: :done)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      card = fn thread -> "[data-testid=staff-queue-card-#{thread.id}]" end
+
+      assert has_element?(view, "#{card.(both)} [data-testid=queue-tasks-due]", "1 task due")
+      assert has_element?(view, "#{card.(both)} [data-testid=queue-tasks-open]", "2 open tasks")
+
+      assert has_element?(view, "#{card.(one)} [data-testid=queue-tasks-open]", "1 open task")
+      refute has_element?(view, "#{card.(one)} [data-testid=queue-tasks-open]", "1 open tasks")
+      refute has_element?(view, "#{card.(one)} [data-testid=queue-tasks-due]")
+
+      refute has_element?(view, "#{card.(none)} [data-testid=queue-tasks-open]")
+      refute has_element?(view, "#{card.(none)} [data-testid=queue-tasks-due]")
+    end
+
+    test "open tasks lists threads with an unfinished task, wherever they sit", %{conn: conn} do
+      org = insert_organization()
+      later = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      open = insert_thread(organization_id: org.id, state: :active)
+      resolved = insert_thread(organization_id: org.id, state: :resolved)
+      snoozed = insert_thread(organization_id: org.id, state: :active, snoozed_until: later)
+      done = insert_thread(organization_id: org.id, state: :active)
+      plain = insert_thread(organization_id: org.id, state: :active)
+
+      for thread <- [open, resolved, snoozed], do: insert_task(thread_id: thread.id)
+      insert_task(thread_id: done.id, state: :done)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-open_tasks]", "open tasks")
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-open_tasks]", "3")
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-due_tasks]", "0")
+
+      view |> element("[data-testid=staff-queue-filter-open_tasks]") |> render_click()
+      assert_patch(view, ~p"/app?filter=open_tasks&label=")
+
+      assert Enum.sort(row_ids(view)) == Enum.sort([open.id, resolved.id, snoozed.id])
+      refute has_element?(view, "[data-testid=staff-queue-card-#{done.id}]")
+      refute has_element?(view, "[data-testid=staff-queue-card-#{plain.id}]")
+    end
+  end
+
+  describe "resolved filter" do
+    test "lists resolved conversations, the latest update first", %{conn: conn} do
+      org = insert_organization()
+
+      at = fn thread, seconds_ago ->
+        Repo.update_all(from(t in Custyard.Thread, where: t.id == ^thread.id),
+          set: [updated_at: DateTime.add(DateTime.utc_now(:second), -seconds_ago)]
+        )
+
+        thread.id
+      end
+
+      oldest =
+        at.(insert_thread(organization_id: org.id, state: :resolved, cached_score: 90), 900)
+
+      newest = at.(insert_thread(organization_id: org.id, state: :resolved, cached_score: 10), 30)
+
+      middle =
+        at.(insert_thread(organization_id: org.id, state: :resolved, cached_score: 50), 300)
+
+      open = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app?filter=resolved")
+      toggle = "[data-testid=staff-queue-sort]"
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-resolved][aria-pressed=true]")
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-resolved]", "3")
+      assert row_ids(view) == [newest, middle, oldest]
+      refute has_element?(view, "[data-testid=staff-queue-card-#{open.id}]")
+      refute has_element?(view, "[data-testid=staff-queue-dismiss-btn]")
+
+      # This list is not ranked by priority, and the toggle does not say so.
+      assert has_element?(view, "#{toggle}[aria-pressed=false]", "Newest first")
+
+      view |> element(toggle) |> render_click()
+      assert_patch(view, ~p"/app?filter=resolved&label=&reverse=1")
+
+      assert row_ids(view) == [oldest, middle, newest]
+      assert has_element?(view, "#{toggle}[aria-pressed=true]", "Oldest first")
+    end
+  end
+
+  describe "query budget" do
+    # Every query the test process runs while `fun` does.
+    defp count_queries(fun) do
+      test_pid = self()
+      ref = make_ref()
+      name = "queue-budget-#{inspect(ref)}"
+
+      :telemetry.attach(
+        name,
+        [:custyard, :repo, :query],
+        fn _event, _measurements, _metadata, _config ->
+          if self() == test_pid, do: send(test_pid, {ref, :query})
+        end,
+        nil
+      )
+
+      fun.()
+      :telemetry.detach(name)
+
+      Stream.repeatedly(fn ->
+        receive do
+          {^ref, :query} -> :query
+        after
+          0 -> nil
+        end
+      end)
+      |> Enum.take_while(& &1)
+      |> length()
+    end
+
+    test "tasks, ignored senders and more rows add no query to a page load", %{conn: conn} do
+      org = insert_organization()
+
+      # Every thread here has a contact with an address. A row without one
+      # looks up its customer's default contact, which this test is not about.
+      plain =
+        insert_thread(
+          organization_id: org.id,
+          state: :active,
+          contact_id: insert_contact(organization_id: org.id).id
+        )
+
+      insert_message(thread_id: plain.id, body: "Hello")
+
+      load = fn filter ->
+        count_queries(fn -> assert html_response(get(conn, ~p"/app?filter=#{filter}"), 200) end)
+      end
+
+      # The first request of a session does some work of its own.
+      load.("all")
+      baseline = load.("all")
+      assert load.("needs_reply") == baseline
+
+      contact = insert_contact(organization_id: org.id)
+      past = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
+
+      for n <- 1..4 do
+        thread = insert_thread(organization_id: org.id, state: :active, contact_id: contact.id)
+        insert_message(thread_id: thread.id, body: "Message #{n}")
+        insert_task(thread_id: thread.id)
+        insert_task(thread_id: thread.id, due_at: past)
+      end
+
+      # A sender staff ignore, marked the way ignoring leaves the contact.
+      muted = insert_contact(organization_id: org.id)
+      insert_thread(organization_id: org.id, state: :active, contact_id: muted.id)
+      Repo.update!(Custyard.Contact.ignore_changeset(muted, DateTime.utc_now(:second)))
+      insert_task(thread_id: plain.id)
+
+      # Each of these lists at least one row now, as the baseline did.
+      for filter <- ~w(needs_reply all due_tasks open_tasks ignored) do
+        assert {filter, load.(filter)} == {filter, baseline}
+      end
     end
   end
 end

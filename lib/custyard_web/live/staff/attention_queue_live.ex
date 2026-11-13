@@ -38,7 +38,8 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
     socket =
       socket
-      |> assign(:filter, params["filter"] || "all")
+      |> assign(:filter, queue_filter(params["filter"]))
+      |> assign(:reverse, params["reverse"] == "1")
       |> assign(:labels, labels)
       |> assign(:label_id, label && label.id)
       # The conversation the staff member came back from, so the keyboard
@@ -58,14 +59,23 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
   defp positive_integer(_value), do: nil
 
+  # A link without a filter, or with one that does not exist, opens the
+  # default queue.
+  defp queue_filter(filter) do
+    if filter in Threads.queue_filters(), do: filter, else: Threads.default_queue_filter()
+  end
+
   @impl true
   def handle_event("filter", %{"filter" => filter}, socket) do
-    {:noreply,
-     push_patch(socket, to: ~p"/app?#{[filter: filter, label: socket.assigns.label_id]}")}
+    {:noreply, push_patch(socket, to: queue_path(socket, filter: filter))}
   end
 
   def handle_event("filter_label", %{"label" => label}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/app?#{[filter: socket.assigns.filter, label: label]}")}
+    {:noreply, push_patch(socket, to: queue_path(socket, label: label))}
+  end
+
+  def handle_event("toggle_reverse", _params, socket) do
+    {:noreply, push_patch(socket, to: queue_path(socket, reverse: not socket.assigns.reverse))}
   end
 
   def handle_event("toggle_score", %{"id" => id}, socket) do
@@ -176,6 +186,16 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     {:noreply, socket}
   end
 
+  # The queue's own address with one part changed: the filter, the label or
+  # the order. The other two are kept.
+  defp queue_path(socket, changes) do
+    filter = Keyword.get(changes, :filter, socket.assigns.filter)
+    label = Keyword.get(changes, :label, socket.assigns.label_id)
+    reverse? = Keyword.get(changes, :reverse, socket.assigns.reverse)
+
+    ~p"/app?#{[filter: filter, label: label] ++ if(reverse?, do: [reverse: 1], else: [])}"
+  end
+
   # Schedule a debounced reload - cancel any pending timer first
   defp schedule_reload(socket) do
     # Cancel existing timer if any
@@ -205,7 +225,13 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     settings = Scoring.preload_settings(socket.assigns.current_tenant.id)
 
     scope = socket.assigns.current_scope
-    threads = Threads.list(scope, filter: filter, label_id: socket.assigns.label_id)
+
+    threads =
+      Threads.list(scope,
+        filter: filter,
+        label_id: socket.assigns.label_id,
+        reverse: socket.assigns.reverse
+      )
 
     labels_by_thread = Labels.for_threads(Enum.map(threads, & &1.thread))
     # Snippet and last speaker for every row in one query (no per-row lookups).
@@ -234,6 +260,8 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           message_count: message_count,
           exchange_count: item.exchange_count,
           due_task_count: item.due_task_count,
+          # Unfinished tasks that have not reached a deadline.
+          open_task_count: item.open_task_count - item.due_task_count,
           labels: Map.get(labels_by_thread, conv.id, []),
           is_snoozed: is_snoozed,
           # Derived from preloaded contact/prospect — no extra queries
@@ -310,13 +338,17 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   defp messages_summary(%{exchange_count: exchanged}),
     do: "#{exchanged} exchanged with the customer"
 
-  # A row's link carries the queue it was opened from (filter, label and the
-  # row's place), so the conversation can offer previous and next in the
-  # same order.
-  defp thread_path(thread_id, filter, label_id, place) do
+  # A row's link carries the queue it was opened from (filter, label, order
+  # and the row's place), so the conversation can offer previous and next in
+  # the same order. The default filter is left out; every other one is named.
+  defp thread_path(thread_id, filter, label_id, reverse, place) do
     params =
       Enum.reject(
-        [filter: if(filter != "all", do: filter), label: label_id] ++ place,
+        [
+          filter: if(filter != Threads.default_queue_filter(), do: filter),
+          label: label_id,
+          reverse: if(reverse, do: 1)
+        ] ++ place,
         fn {_key, value} -> is_nil(value) end
       )
 
@@ -389,20 +421,42 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
     end
   end
 
-  @filters [
-    {"all", "all"},
-    {"needs_reply", "needs reply"},
-    {"new", "new"},
-    {"active", "active"},
-    {"waiting", "waiting"},
-    {"dormant", "dormant"},
-    {"snoozed", "snoozed"},
-    {"due_tasks", "tasks due"}
-  ]
+  # Chip label and empty-list sentence for each filter name.
+  @filter_copy %{
+    "needs_reply" => {"needs reply", "Nothing needs a reply right now."},
+    "all" => {"all", "Nothing needs attention right now."},
+    "new" => {"new", "No new conversations."},
+    "active" => {"active", "No active conversations."},
+    "waiting" => {"waiting", "Nothing is waiting on a customer."},
+    "dormant" => {"dormant", "No dormant conversations."},
+    "snoozed" => {"snoozed", "Nothing is snoozed."},
+    "due_tasks" => {"tasks due", "No tasks are due."},
+    "open_tasks" => {"open tasks", "No conversations have open tasks."},
+    "ignored" => {"ignored", "No conversations from ignored senders."},
+    "resolved" => {"resolved", "No resolved conversations."}
+  }
+
+  # The chips follow the order of Threads.queue_filters/0.
+  defp filter_chips do
+    for filter <- Threads.queue_filters(), do: {filter, elem(Map.fetch!(@filter_copy, filter), 0)}
+  end
+
+  defp empty_text(filter), do: elem(Map.fetch!(@filter_copy, filter), 1)
+
+  # What the order toggle calls the two orders. Resolved conversations are
+  # listed by their latest update, not by priority.
+  defp sort_labels("resolved"), do: {"Newest first", "Oldest first"}
+  defp sort_labels(_filter), do: {"Highest priority first", "Lowest priority first"}
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :filters, @filters)
+    {sort_label, reversed_sort_label} = sort_labels(assigns.filter)
+
+    assigns =
+      assigns
+      |> assign(:filters, filter_chips())
+      |> assign(:sort_label, sort_label)
+      |> assign(:reversed_sort_label, reversed_sort_label)
 
     ~H"""
     <div class="mx-auto w-full max-w-6xl px-3 py-4 sm:px-4" data-testid="staff-queue-page">
@@ -455,6 +509,11 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           <span data-testid="staff-queue-count">
             {length(@threads)} {if length(@threads) == 1, do: "conversation", else: "conversations"}
           </span>
+          <.sort_toggle
+            reversed={@reverse}
+            label={@sort_label}
+            reversed_label={@reversed_sort_label}
+          />
         </div>
       </div>
 
@@ -499,7 +558,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         class="rounded-lg border border-gray-200 bg-white py-12 text-center text-gray-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
         data-testid="staff-queue-empty"
       >
-        Nothing needs attention right now.
+        {empty_text(@filter)}
       </div>
       <%!-- j/k and the arrow keys move the selection (the focused row link),
       o or Enter opens it; data-select resumes at the conversation just left. --%>
@@ -515,7 +574,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         <.queue_row
           :for={{item, place} <- with_places(@threads)}
           item={item}
-          thread_path={thread_path(item.thread.id, @filter, @label_id, place)}
+          thread_path={thread_path(item.thread.id, @filter, @label_id, @reverse, place)}
           staff_id={@current_staff.id}
           show_score={@show_score_breakdown == item.thread.id}
           show_snooze={@show_snooze_menu == item.thread.id}
@@ -687,6 +746,16 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
                 {@item.due_task_count} {if @item.due_task_count == 1,
                   do: "task due",
                   else: "tasks due"}
+              </span>
+              <span
+                :if={@item.open_task_count > 0}
+                class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300"
+                data-testid="queue-tasks-open"
+                title="Unfinished tasks that have not reached a deadline."
+              >
+                {@item.open_task_count} {if @item.open_task_count == 1,
+                  do: "open task",
+                  else: "open tasks"}
               </span>
               <.urgency_badge urgency={@item.thread.urgency} />
               <span

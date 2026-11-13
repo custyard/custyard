@@ -241,7 +241,11 @@ defmodule Custyard.Threads.AttentionQueueTest do
                "waiting" => 2,
                "dormant" => 1,
                "snoozed" => 2,
-               "due_tasks" => 2
+               "due_tasks" => 2,
+               # The two overdue tasks are unfinished tasks as well.
+               "open_tasks" => 2,
+               "ignored" => 0,
+               "resolved" => 2
              }
 
       assert Map.keys(counts) |> Enum.sort() == Enum.sort(Threads.queue_filters())
@@ -296,6 +300,255 @@ defmodule Custyard.Threads.AttentionQueueTest do
 
       assert %{"all" => 0, "new" => 0, "due_tasks" => 0, "needs_reply" => 0} =
                Threads.queue_counts(c.scope)
+    end
+  end
+
+  describe "queue filters" do
+    test "there are eleven, in chip order, and the queue opens on needs reply" do
+      assert Threads.queue_filters() ==
+               ~w(needs_reply all new active waiting dormant snoozed due_tasks open_tasks ignored resolved)
+
+      assert Threads.default_queue_filter() == "needs_reply"
+      assert Threads.default_queue_filter() in Threads.queue_filters()
+    end
+  end
+
+  # One thread of every kind the filters tell apart: each state, snoozed,
+  # with a task that is due, open or done, and the same again for a sender
+  # staff ignore.
+  defp insert_queue_world(c) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    later = DateTime.add(now, 86_400)
+    ignored = insert_contact(organization_id: c.org.id)
+    heard = insert_contact(organization_id: c.org.id)
+
+    thread = fn attrs -> insert_thread([organization_id: c.org.id] ++ attrs) end
+
+    task = fn thread, attrs ->
+      {:ok, task} = Threads.create_task(Map.merge(%{title: "Task", thread_id: thread.id}, attrs))
+      task
+    end
+
+    threads = %{
+      new: thread.(state: :new),
+      active: thread.(state: :active, contact_id: heard.id),
+      answered: thread.(state: :active),
+      waiting: thread.(state: :waiting),
+      dormant: thread.(state: :dormant),
+      resolved: thread.(state: :resolved),
+      snoozed: thread.(state: :active, snoozed_until: later),
+      open_task: thread.(state: :active),
+      due_task: thread.(state: :waiting),
+      done_task: thread.(state: :active),
+      resolved_open_task: thread.(state: :resolved),
+      resolved_due_task: thread.(state: :resolved, contact_id: heard.id),
+      snoozed_open_task: thread.(state: :new, snoozed_until: later),
+      snoozed_due_task: thread.(state: :active, snoozed_until: later),
+      ignored: thread.(state: :new, contact_id: ignored.id),
+      ignored_snoozed: thread.(state: :active, contact_id: ignored.id, snoozed_until: later),
+      ignored_resolved: thread.(state: :resolved, contact_id: ignored.id),
+      ignored_due_task: thread.(state: :active, contact_id: ignored.id),
+      ignored_open_task: thread.(state: :waiting, contact_id: ignored.id),
+      ignored_resolved_due_task: thread.(state: :resolved, contact_id: ignored.id)
+    }
+
+    insert_message(thread_id: threads.answered.id, body: "Question")
+    insert_message(thread_id: threads.answered.id, source: :staff, body: "Answer")
+
+    for key <- [:open_task, :resolved_open_task, :snoozed_open_task, :ignored_open_task] do
+      task.(threads[key], %{})
+    end
+
+    for key <-
+          [:due_task, :resolved_due_task, :snoozed_due_task] ++
+            [:ignored_due_task, :ignored_resolved_due_task] do
+      task.(threads[key], %{due_at: DateTime.add(now, -60)})
+    end
+
+    # A deadline that has not come yet is an open task, not a due one.
+    task.(threads.open_task, %{due_at: later})
+    {:ok, _} = threads.done_task |> task.(%{}) |> Threads.update_task_state(:done)
+
+    ignore(ignored)
+    threads
+  end
+
+  # The mark staff leave on a sender they ignore.
+  defp ignore(contact, at \\ DateTime.utc_now(:second)) do
+    Repo.update!(Custyard.Contact.ignore_changeset(contact, at))
+  end
+
+  defp listed(scope, opts) do
+    scope |> Threads.list(opts) |> Enum.map(& &1.thread.id)
+  end
+
+  defp keys(threads, ids) do
+    names = Map.new(threads, fn {name, thread} -> {thread.id, name} end)
+    ids |> Enum.map(&Map.fetch!(names, &1)) |> Enum.sort()
+  end
+
+  describe "what each filter lists" do
+    setup c do
+      {:ok, threads: insert_queue_world(c)}
+    end
+
+    test "an ignored sender's threads are listed by the ignored filter only", c do
+      ignored =
+        ~w(ignored ignored_snoozed ignored_due_task ignored_open_task ignored_resolved ignored_resolved_due_task)a
+
+      for filter <- Threads.queue_filters() -- ["ignored"] do
+        names = keys(c.threads, listed(c.scope, filter: filter))
+        assert names -- ignored == names, "filter #{filter} lists an ignored sender"
+        assert names != [], "filter #{filter}"
+      end
+
+      # Unresolved ones, snoozed or not. A due task does not bring back a
+      # resolved one.
+      assert keys(c.threads, listed(c.scope, filter: "ignored")) ==
+               ~w(ignored ignored_due_task ignored_open_task ignored_snoozed)a
+    end
+
+    test "open_tasks lists every thread with an unfinished task", c do
+      assert keys(c.threads, listed(c.scope, filter: "open_tasks")) ==
+               Enum.sort(
+                 ~w(open_task due_task resolved_open_task resolved_due_task snoozed_open_task snoozed_due_task)a
+               )
+
+      rows = Map.new(Threads.list(c.scope, filter: "open_tasks"), &{&1.thread.id, &1})
+
+      # Two unfinished tasks, neither at its deadline yet.
+      assert %{open_task_count: 2, due_task_count: 0} = rows[c.threads.open_task.id]
+      assert %{open_task_count: 1, due_task_count: 1} = rows[c.threads.due_task.id]
+
+      # A finished task is not outstanding work.
+      refute Map.has_key?(rows, c.threads.done_task.id)
+
+      all = Map.new(Threads.list(c.scope), &{&1.thread.id, &1})
+      assert %{open_task_count: 0, due_task_count: 0} = all[c.threads.done_task.id]
+    end
+
+    test "due_tasks still lists only threads with a task at its deadline", c do
+      assert keys(c.threads, listed(c.scope, filter: "due_tasks")) ==
+               ~w(due_task resolved_due_task snoozed_due_task)a
+    end
+
+    test "a task without a deadline does not bring a resolved or snoozed thread back", c do
+      working = keys(c.threads, listed(c.scope, filter: "all"))
+
+      refute :resolved_open_task in working
+      refute :snoozed_open_task in working
+      assert :resolved_due_task in working
+      assert :snoozed_due_task in working
+    end
+
+    test "resolved lists resolved threads", c do
+      assert keys(c.threads, listed(c.scope, filter: "resolved")) ==
+               ~w(resolved resolved_due_task resolved_open_task)a
+    end
+
+    test "every count equals the length of its list, with and without a label", c do
+      {:ok, label} = Labels.create_and_assign(c.scope, c.threads.active, "Billing")
+
+      for key <- ~w(resolved snoozed open_task resolved_due_task ignored ignored_resolved)a do
+        {:ok, _} = Labels.assign(c.scope, c.threads[key], label.id)
+      end
+
+      for opts <- [[], [label_id: label.id]] do
+        counts = Threads.queue_counts(c.scope, opts)
+        assert Map.keys(counts) |> Enum.sort() == Enum.sort(Threads.queue_filters())
+
+        for filter <- Threads.queue_filters() do
+          assert counts[filter] == length(Threads.list(c.scope, [filter: filter] ++ opts)),
+                 "filter #{filter} with #{inspect(opts)}"
+        end
+      end
+
+      assert %{"ignored" => 1, "resolved" => 2, "open_tasks" => 2, "all" => 3} =
+               Threads.queue_counts(c.scope, label_id: label.id)
+    end
+
+    test "a sender who is no longer ignored is listed where the threads belong", c do
+      Custyard.Contact |> Repo.get!(c.threads.ignored.contact_id) |> ignore(nil)
+
+      assert listed(c.scope, filter: "ignored") == []
+      assert Threads.queue_counts(c.scope)["ignored"] == 0
+
+      assert c.threads.ignored.id in listed(c.scope, filter: "needs_reply")
+      assert c.threads.ignored_snoozed.id in listed(c.scope, filter: "snoozed")
+      assert c.threads.ignored_due_task.id in listed(c.scope, filter: "due_tasks")
+      assert c.threads.ignored_open_task.id in listed(c.scope, filter: "open_tasks")
+      assert c.threads.ignored_resolved.id in listed(c.scope, filter: "resolved")
+      assert c.threads.ignored_resolved_due_task.id in listed(c.scope, filter: "all")
+    end
+  end
+
+  describe "reverse order" do
+    setup c do
+      {:ok, threads: insert_queue_world(c)}
+    end
+
+    test "list/2 and queue_ids/2 return exactly the opposite order for every filter", c do
+      {:ok, label} = Labels.create_and_assign(c.scope, c.threads.active, "Billing")
+      {:ok, _} = Labels.assign(c.scope, c.threads.new, label.id)
+      {:ok, _} = Labels.assign(c.scope, c.threads.due_task, label.id)
+
+      for filter <- Threads.queue_filters(), opts <- [[], [label_id: label.id]] do
+        opts = [filter: filter] ++ opts
+        forward = listed(c.scope, opts)
+
+        assert listed(c.scope, opts ++ [reverse: true]) == Enum.reverse(forward),
+               "list with #{inspect(opts)}"
+
+        assert Threads.queue_ids(c.scope, opts ++ [reverse: true]) == Enum.reverse(forward),
+               "queue_ids with #{inspect(opts)}"
+
+        assert Threads.queue_ids(c.scope, opts ++ [reverse: false]) == forward
+      end
+
+      # Enough rows that an order can be told from its reverse.
+      assert length(listed(c.scope, filter: "all")) > 3
+    end
+  end
+
+  describe "resolved filter order" do
+    test "most recently updated first, and reverse flips it", c do
+      at = fn thread, seconds_ago ->
+        Repo.update_all(
+          from(t in Custyard.Thread, where: t.id == ^thread.id),
+          set: [updated_at: DateTime.add(DateTime.utc_now(:second), -seconds_ago)]
+        )
+
+        thread.id
+      end
+
+      # Scores would order these the other way round.
+      oldest =
+        at.(insert_thread(organization_id: c.org.id, state: :resolved, cached_score: 90), 300)
+
+      newest =
+        at.(insert_thread(organization_id: c.org.id, state: :resolved, cached_score: 10), 10)
+
+      middle =
+        at.(insert_thread(organization_id: c.org.id, state: :resolved, cached_score: 50), 100)
+
+      insert_thread(organization_id: c.org.id, state: :active)
+
+      assert listed(c.scope, filter: "resolved") == [newest, middle, oldest]
+      assert Threads.queue_ids(c.scope, filter: "resolved") == [newest, middle, oldest]
+      assert listed(c.scope, filter: "resolved", reverse: true) == [oldest, middle, newest]
+    end
+
+    test "threads updated in the same second list the newer one first", c do
+      stamp = DateTime.add(DateTime.utc_now(:second), -60)
+
+      [first, second] =
+        for _ <- 1..2, do: insert_thread(organization_id: c.org.id, state: :resolved).id
+
+      Repo.update_all(from(t in Custyard.Thread, where: t.id in ^[first, second]),
+        set: [updated_at: stamp]
+      )
+
+      assert listed(c.scope, filter: "resolved") == [second, first]
     end
   end
 
@@ -462,12 +715,28 @@ defmodule Custyard.Threads.AttentionQueueTest do
         snoozed_until: DateTime.add(now, 86_400)
       )
 
+      insert_thread(organization_id: c.org.id, state: :resolved, cached_score: 40)
+
+      # The highest score of all, and listed under "ignored" only.
+      contact = insert_contact(organization_id: c.org.id)
+
+      muted =
+        insert_thread(
+          organization_id: c.org.id,
+          state: :active,
+          cached_score: 99,
+          contact_id: contact.id
+        )
+
+      ignore(contact)
+
       for filter <- Threads.queue_filters() do
         listed = Threads.list(c.scope, filter: filter) |> Enum.map(& &1.thread.id)
         assert listed != [], "filter #{filter}"
         assert Threads.queue_ids(c.scope, filter: filter) == listed, "filter #{filter}"
       end
 
+      assert Threads.queue_ids(c.scope, filter: "ignored") == [muted.id]
       refute top.id in Threads.queue_ids(c.scope, filter: "needs_reply")
 
       all = Threads.queue_ids(c.scope)
