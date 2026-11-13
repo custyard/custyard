@@ -63,7 +63,7 @@ defmodule Custyard.AuditEvent.Payload do
     "category" =>
       ~w(message_too_large storage_unavailable source_mismatch invalid_json unmapped_organization invalid_evidence conflicting_submission processing_error),
     "class" =>
-      ~w(customer_message staff_sent own_echo auto_response provider_notice unreadable no_channel paused revoked verification_captured),
+      ~w(customer_message staff_sent staff_sent_unmatched own_echo auto_response provider_notice unreadable no_channel paused revoked verification_captured),
     "outcome" =>
       ~w(started replayed empty changed updated ignored error invalid_config invalid_url unreachable timeout auth_failed access_refused tls_failed connection_failed channel_failed queue_missing precondition_failed operation_failed audit_failed unroutable publication_failed publication_rejected publication_unconfirmed),
     "error_code" => ~w(invalid_payload storage_unavailable processing_error)
