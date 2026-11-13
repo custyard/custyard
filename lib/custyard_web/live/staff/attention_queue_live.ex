@@ -3,7 +3,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
   import CustyardWeb.StaffComponents
 
-  alias Custyard.{Threads, EmailSetup, Labels, Scoring}
+  alias Custyard.{Authorization, Threads, EmailSetup, Labels, Scoring}
   alias Custyard.Threads.{QueueNav, QueuePreview}
 
   # Debounce delay for PubSub-triggered reloads (milliseconds)
@@ -27,6 +27,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       |> assign(:show_score_breakdown, nil)
       |> assign(:show_snooze_menu, nil)
       |> assign(:reload_timer, nil)
+      |> assign(:can_dismiss, Authorization.can_set_thread_state?(socket.assigns.current_staff))
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :staff}}
   end
@@ -76,6 +77,18 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
   def handle_event("toggle_reverse", _params, socket) do
     {:noreply, push_patch(socket, to: queue_path(socket, reverse: not socket.assigns.reverse))}
+  end
+
+  # The thread needs no further action. Resolving it and noting why is
+  # Threads.dismiss/2; only the row and the message are handled here.
+  def handle_event("dismiss", %{"id" => id}, socket) do
+    with {id, ""} <- Integer.parse(id),
+         %{thread: thread} <- Enum.find(socket.assigns.threads, &(&1.thread.id == id)),
+         true <- thread.state != :resolved do
+      {:noreply, dismiss(socket, thread)}
+    else
+      _ -> {:noreply, socket}
+    end
   end
 
   def handle_event("toggle_score", %{"id" => id}, socket) do
@@ -184,6 +197,29 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   # Catch-all for unexpected PubSub messages to prevent LiveView crashes
   def handle_info(_msg, socket) do
     {:noreply, socket}
+  end
+
+  defp dismiss(socket, thread) do
+    if Authorization.can_set_thread_state?(socket.assigns.current_staff) do
+      case Threads.dismiss(socket.assigns.current_scope, thread.id) do
+        {:ok, _thread} ->
+          socket |> put_flash(:info, "Dismissed \"#{thread.subject}\"") |> reload_queue()
+
+        # A colleague resolved it first. The reload shows where it went.
+        {:error, :already_resolved} ->
+          reload_queue(socket)
+
+        {:error, :unauthorized} ->
+          socket
+          |> put_flash(:error, "You no longer have access to this thread")
+          |> reload_queue()
+
+        {:error, _changeset} ->
+          put_flash(socket, :error, "Failed to dismiss thread")
+      end
+    else
+      put_flash(socket, :error, "Only admins can change thread state")
+    end
   end
 
   # The queue's own address with one part changed: the filter, the label or
@@ -576,6 +612,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           item={item}
           thread_path={thread_path(item.thread.id, @filter, @label_id, @reverse, place)}
           staff_id={@current_staff.id}
+          can_dismiss={@can_dismiss}
           show_score={@show_score_breakdown == item.thread.id}
           show_snooze={@show_snooze_menu == item.thread.id}
         />
@@ -587,11 +624,12 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   attr :item, :map, required: true
   attr :thread_path, :string, required: true
   attr :staff_id, :integer, required: true
+  attr :can_dismiss, :boolean, required: true
   attr :show_score, :boolean, required: true
   attr :show_snooze, :boolean, required: true
 
   # One conversation, two lines: who and subject above, customer and the
-  # latest message below. The link is the whole row; the two row actions sit
+  # latest message below. The link is the whole row; the row actions sit
   # beside it (never inside it) in the space reserved under the age.
   defp queue_row(assigns) do
     item = assigns.item
@@ -626,7 +664,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       <div class="relative">
         <.link
           navigate={@thread_path}
-          class="grid grid-cols-[0.5rem_minmax(0,1fr)_auto_auto] gap-x-2.5 px-3 py-3 hover:bg-gray-50 focus:bg-indigo-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500 dark:hover:bg-zinc-700/40 dark:focus:bg-indigo-950/40 md:grid-cols-[0.5rem_13rem_minmax(0,1fr)_auto_4rem] md:gap-x-3"
+          class="grid grid-cols-[0.5rem_minmax(0,1fr)_auto_auto] gap-x-2.5 px-3 py-3 hover:bg-gray-50 focus:bg-indigo-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500 dark:hover:bg-zinc-700/40 dark:focus:bg-indigo-950/40 md:grid-cols-[0.5rem_13rem_minmax(0,1fr)_auto_5rem] md:gap-x-3"
           data-row-link
           data-testid="staff-queue-row-link"
         >
@@ -734,7 +772,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
               <% end %>
             </span>
             <span
-              class="mt-1 flex max-h-5 flex-wrap items-center gap-1.5 overflow-hidden pr-16 md:mt-0 md:max-w-[24rem] md:shrink-0 md:justify-end md:pr-0"
+              class="mt-1 flex max-h-5 flex-wrap items-center gap-1.5 overflow-hidden pr-24 md:mt-0 md:max-w-[24rem] md:shrink-0 md:justify-end md:pr-0"
               data-testid="staff-queue-chips"
             >
               <span
@@ -910,6 +948,20 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
               </button>
             </div>
           </div>
+          <%!-- Resolves the thread and notes why. A resolved row has nothing
+          left to dismiss. --%>
+          <button
+            :if={@can_dismiss and @item.thread.state != :resolved}
+            type="button"
+            phx-click="dismiss"
+            phx-value-id={@item.thread.id}
+            aria-label="Dismiss: no reply needed"
+            title="Dismiss: no reply needed"
+            class="flex h-8 w-8 items-center justify-center rounded md:h-7 md:w-7 text-gray-500 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:text-zinc-400 dark:hover:bg-zinc-600 dark:hover:text-zinc-100"
+            data-testid="staff-queue-dismiss-btn"
+          >
+            <.icon name="hero-check-circle-mini" class="h-4 w-4" />
+          </button>
         </div>
       </div>
 

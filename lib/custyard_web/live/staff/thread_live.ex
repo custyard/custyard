@@ -426,24 +426,14 @@ defmodule CustyardWeb.Staff.ThreadLive do
   def handle_event("set_state", %{"state" => state}, socket)
       when state in ~w(active waiting resolved) do
     if Authorization.can_set_thread_state?(socket.assigns.current_staff) do
-      thread = socket.assigns.thread
-      new_state = String.to_existing_atom(state)
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      case thread_mutation(socket, fn current, current_staff ->
-             if Authorization.can_set_thread_state?(current_staff) do
-               Threads.update_thread(current, %{
-                 state: new_state,
-                 last_staff_action_at: now
-               })
-             else
-               {:error, :unauthorized}
-             end
-           end) do
+      # The locked write, the score and the broadcasts are Threads.set_state/3,
+      # which the queue's Dismiss shares.
+      case Threads.set_state(
+             socket.assigns.current_scope,
+             socket.assigns.thread.id,
+             String.to_existing_atom(state)
+           ) do
         {:ok, _} ->
-          Scoring.calculate_and_cache(thread.id)
-          broadcast_thread_update(thread.id, thread.organization_id)
-
           {:noreply, reload_thread(socket)}
 
         {:error, :unauthorized} ->

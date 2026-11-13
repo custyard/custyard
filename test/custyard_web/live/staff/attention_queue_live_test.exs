@@ -1622,6 +1622,160 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
     end
   end
 
+  describe "dismiss" do
+    setup do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active, subject: "Refund request")
+      insert_message(thread_id: conv.id, body: "Where is my refund?")
+      other = insert_thread(organization_id: org.id, state: :active, subject: "Other matter")
+
+      %{org: org, conv: conv, other: other}
+    end
+
+    defp agent_conn(org) do
+      {:ok, agent} =
+        %StaffAccount{}
+        |> StaffAccount.changeset(%{
+          tenant_id: Process.get(:factory_tenant_id),
+          email: "agent-#{System.unique_integer([:positive])}@example.com",
+          password: "password123",
+          role: "agent",
+          organization_id: org.id
+        })
+        |> Repo.insert()
+
+      Phoenix.ConnTest.build_conn()
+      |> Phoenix.ConnTest.init_test_session(%{})
+      |> put_staff_session(agent.id)
+    end
+
+    test "resolves the conversation, notes why and takes the row out", %{
+      conn: conn,
+      staff: staff,
+      conv: conv,
+      other: other
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app")
+      card = "[data-testid=staff-queue-card-#{conv.id}]"
+      button = "#{card} button[data-testid=staff-queue-dismiss-btn]"
+
+      assert has_element?(
+               view,
+               "#{button}[title='Dismiss: no reply needed'][aria-label='Dismiss: no reply needed']"
+             )
+
+      # One click: no dialog in the way.
+      refute has_element?(view, "#{button}[data-confirm]")
+      # Beside the row's link like the other two actions, never inside it.
+      refute has_element?(view, "a[data-testid=staff-queue-row-link] button")
+      assert has_element?(view, "#{card} button[data-testid=staff-queue-score-toggle]")
+      assert has_element?(view, "#{card} button[data-testid=staff-queue-snooze-btn]")
+
+      html = view |> element(button) |> render_click()
+
+      assert html =~ "Dismissed &quot;Refund request&quot;"
+      refute has_element?(view, card)
+      assert has_element?(view, "[data-testid=staff-queue-card-#{other.id}]")
+
+      resolved = Repo.get!(Custyard.Thread, conv.id)
+      assert resolved.state == :resolved
+      assert DateTime.diff(DateTime.utc_now(), resolved.last_staff_action_at) in 0..5
+
+      assert %{body: "Dismissed from the queue without a reply.", author_staff_id: author} =
+               Repo.get_by!(Custyard.Message, thread_id: conv.id, is_internal_note: true)
+
+      assert author == staff.id
+
+      # It is listed under resolved, where the note says what happened.
+      view |> element("[data-testid=staff-queue-filter-resolved]") |> render_click()
+      assert_patch(view, ~p"/app?filter=resolved&label=")
+
+      assert has_element?(
+               view,
+               "#{card} [data-testid=staff-queue-snippet]",
+               "Note: Dismissed from the queue without a reply."
+             )
+
+      refute has_element?(view, button)
+    end
+
+    test "a resolved row has no dismiss button", %{conn: conn, org: org, conv: conv} do
+      # Resolved, but back in the queue for a task that is due.
+      resolved = insert_thread(organization_id: org.id, state: :resolved)
+
+      insert_task(
+        thread_id: resolved.id,
+        due_at: DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/app?filter=all")
+
+      assert has_element?(view, "[data-testid=staff-queue-card-#{resolved.id}]")
+
+      refute has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{resolved.id}] [data-testid=staff-queue-dismiss-btn]"
+             )
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-card-#{conv.id}] [data-testid=staff-queue-dismiss-btn]"
+             )
+
+      # Nor does the event act on one.
+      render_click(view, "dismiss", %{"id" => to_string(resolved.id)})
+      refute Repo.get_by(Custyard.Message, thread_id: resolved.id, is_internal_note: true)
+    end
+
+    test "staff who may not change thread state get no button and no effect", %{
+      org: org,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(agent_conn(org), ~p"/app")
+
+      assert has_element?(view, "[data-testid=staff-queue-card-#{conv.id}]")
+      refute has_element?(view, "[data-testid=staff-queue-dismiss-btn]")
+
+      html = render_click(view, "dismiss", %{"id" => to_string(conv.id)})
+
+      assert html =~ "Only admins can change thread state"
+      assert has_element?(view, "[data-testid=staff-queue-card-#{conv.id}]")
+      assert Repo.get!(Custyard.Thread, conv.id).state == :active
+      refute Repo.get_by(Custyard.Message, thread_id: conv.id, is_internal_note: true)
+    end
+
+    test "acts only on a conversation the list shows", %{conn: conn, org: org} do
+      later = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+      snoozed = insert_thread(organization_id: org.id, state: :active, snoozed_until: later)
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      for id <- [to_string(snoozed.id), "0", "not-a-number"] do
+        render_click(view, "dismiss", %{"id" => id})
+      end
+
+      assert Repo.get!(Custyard.Thread, snoozed.id).state == :active
+    end
+
+    test "only catches up when a colleague resolved the conversation first", %{
+      conn: conn,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app")
+      card = "[data-testid=staff-queue-card-#{conv.id}]"
+
+      Repo.update_all(from(t in Custyard.Thread, where: t.id == ^conv.id),
+        set: [state: :resolved]
+      )
+
+      view |> element("#{card} [data-testid=staff-queue-dismiss-btn]") |> render_click()
+
+      # Nothing was dismissed twice; the list simply catches up.
+      refute has_element?(view, card)
+      refute Repo.get_by(Custyard.Message, thread_id: conv.id, is_internal_note: true)
+    end
+  end
+
   describe "ignored senders" do
     setup %{staff: staff} do
       org = insert_organization()

@@ -1131,6 +1131,39 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       assert render(view) =~ "click to resume"
     end
+
+    test "records the staff action, rescores and tells open queues", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active, cached_score: 9_999)
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
+      id = conv.id
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{id}")
+      view |> element("[data-testid=staff-state-resolved]") |> render_click()
+
+      assert_receive {:thread_updated, ^id}
+      assert has_element?(view, "[data-testid=staff-state-reopen]")
+
+      updated = Repo.get!(Custyard.Thread, id)
+      assert updated.state == :resolved
+      assert DateTime.diff(DateTime.utc_now(), updated.last_staff_action_at) in 0..5
+      assert updated.cached_score == Scoring.calculate(updated)
+      # Marking resolved here leaves no note; dismissing from the queue does.
+      refute Repo.get_by(Custyard.Message, thread_id: id, is_internal_note: true)
+    end
+
+    test "an agent's state change is refused" do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} =
+        live(conn_for_staff(insert_scoped_staff(org.id, "agent")), ~p"/app/threads/#{conv.id}")
+
+      html = render_click(view, "set_state", %{"state" => "resolved"})
+
+      assert html =~ "Only admins can change thread state"
+      assert Repo.get!(Custyard.Thread, conv.id).state == :active
+    end
   end
 
   describe "ignore sender" do

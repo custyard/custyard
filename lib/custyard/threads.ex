@@ -514,9 +514,71 @@ defmodule Custyard.Threads do
     end
   end
 
+  @doc """
+  Change a thread's state as a staff action.
+
+  The state and `last_staff_action_at` are written under the staff access
+  lock. After the commit the score is recalculated and `{:thread_updated, id}`
+  goes out on `"threads"` and the customer's topic, so open queues and
+  conversations refresh.
+
+  Only staff who may change thread state get through
+  (`Custyard.Authorization.can_set_thread_state?/1`); anyone else gets
+  `{:error, :unauthorized}`.
+  """
+  def set_state(%Custyard.Scope{} = scope, id, new_state)
+      when new_state in [:active, :waiting, :resolved] do
+    scope
+    |> with_access(id, fn thread, staff ->
+      with :ok <- authorize_state_change(staff), do: put_state(thread, new_state)
+    end)
+    |> after_state_change()
+  end
+
+  @dismiss_note "Dismissed from the queue without a reply."
+
+  @doc """
+  Dismiss a thread from the attention queue: it needs no further action, for
+  example because the matter was settled outside Custyard.
+
+  Resolves the thread exactly as `set_state/3` does and leaves an internal
+  note by the staff member, so the timeline says why it closed without a
+  reply. A thread that is resolved already is left alone:
+  `{:error, :already_resolved}`.
+  """
+  def dismiss(%Custyard.Scope{} = scope, id) do
+    scope
+    |> with_access(id, fn thread, staff ->
+      with :ok <- authorize_state_change(staff),
+           :ok <- unresolved(thread),
+           {:ok, resolved} <- put_state(thread, :resolved),
+           {:ok, _note} <- insert_internal_note(resolved, staff, @dismiss_note) do
+        {:ok, resolved}
+      end
+    end)
+    |> after_state_change()
+  end
+
   defp authorize_state_change(staff) do
     if Authorization.can_set_thread_state?(staff), do: :ok, else: {:error, :unauthorized}
   end
+
+  defp unresolved(%Thread{state: :resolved}), do: {:error, :already_resolved}
+  defp unresolved(%Thread{}), do: :ok
+
+  defp put_state(thread, new_state) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    update_thread(thread, %{state: new_state, last_staff_action_at: now})
+  end
+
+  # Runs after the commit, so whoever reloads on the broadcast reads the new row.
+  defp after_state_change({:ok, %Thread{} = thread} = result) do
+    Custyard.Scoring.calculate_and_cache(thread.id)
+    broadcast_thread_updated(thread)
+    result
+  end
+
+  defp after_state_change(error), do: error
 
   defp broadcast_thread_updated(%Thread{id: id, organization_id: organization_id}) do
     Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, id})
@@ -948,30 +1010,34 @@ defmodule Custyard.Threads do
         with_staff_access(thread.id, staff, fn current, current_staff ->
           check_draft_version!(current, current_staff, opts)
 
-          changeset =
-            %Message{}
-            |> Message.changeset(%{
-              source: :staff,
-              body: body,
-              is_internal_note: true,
-              thread_id: current.id
-            })
-            |> Message.put_author(current_staff)
-
-          case Repo.insert(changeset) do
-            {:ok, message} ->
-              ReplyAudit.record!(:internal_note_created, message, current, current_staff)
-              touch_thread_updated_at(current.id)
-              complete_draft_submission!(message, current_staff, opts, :note)
-              {:ok, message}
-
-            error ->
-              error
+          with {:ok, message} <- insert_internal_note(current, current_staff, body) do
+            complete_draft_submission!(message, current_staff, opts, :note)
+            {:ok, message}
           end
         end)
 
       _ ->
         {:error, :unauthorized}
+    end
+  end
+
+  # The note, its audit record and the thread's activity time. Runs inside
+  # the caller's access transaction.
+  defp insert_internal_note(%Thread{} = thread, %StaffAccount{} = staff, body) do
+    changeset =
+      %Message{}
+      |> Message.changeset(%{
+        source: :staff,
+        body: body,
+        is_internal_note: true,
+        thread_id: thread.id
+      })
+      |> Message.put_author(staff)
+
+    with {:ok, message} <- Repo.insert(changeset) do
+      ReplyAudit.record!(:internal_note_created, message, thread, staff)
+      touch_thread_updated_at(thread.id)
+      {:ok, message}
     end
   end
 
