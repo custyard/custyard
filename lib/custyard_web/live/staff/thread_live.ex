@@ -1175,6 +1175,12 @@ defmodule CustyardWeb.Staff.ThreadLive do
 
   defp query_integer(_value, _min), do: nil
 
+  defp forward_sent_hint?(%{public_address: address, ingress_kind: kind})
+       when is_binary(address) and kind in [:forward, :mx],
+       do: true
+
+  defp forward_sent_hint?(_channel), do: false
+
   # Previous and next conversation in that queue's order. One id-only query.
   defp assign_queue_nav(socket) do
     %{filter: filter, label_id: label_id, pos: pos, after: after_ids, before: before_ids} =
@@ -1901,13 +1907,15 @@ defmodule CustyardWeb.Staff.ThreadLive do
               </button>
             </div>
             <%!-- Mail the channel receives from a staff mailbox joins the
-            conversation it answers. --%>
+            conversation it answers. Only forwarded and MX mail carries the
+            authentication results that prove the sender is staff; mail read
+            over IMAP does not, so those channels show no hint. --%>
             <p
-              :if={@thread.inbound_channel && @thread.inbound_channel.public_address}
+              :if={forward_sent_hint?(@thread.inbound_channel)}
               class="mt-2 text-xs text-gray-600 dark:text-zinc-400"
               data-testid="staff-forward-sent-hint"
             >
-              Replied from your own mailbox? Forward the sent message to
+              Replied from your own mailbox? Forward the sent message from your staff address to
               <span class="break-all font-medium text-gray-800 dark:text-zinc-200">{@thread.inbound_channel.public_address}</span>
               and it is added to this conversation.
             </p>

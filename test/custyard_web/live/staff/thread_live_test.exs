@@ -1347,7 +1347,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
         |> String.trim()
 
       assert hint ==
-               "Replied from your own mailbox? Forward the sent message to support@acme.example.com and it is added to this conversation."
+               "Replied from your own mailbox? Forward the sent message from your staff address to support@acme.example.com and it is added to this conversation."
 
       # Under the state buttons, and never the secret ingress address.
       {actions, _} = :binary.match(html, ~s(data-testid="staff-state-actions"))
@@ -1360,6 +1360,29 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       {:ok, _} = Threads.update_state(conv, :resolved)
       {:ok, resolved, _html} = live(conn, ~p"/app/threads/#{conv.id}")
       assert has_element?(resolved, "[data-testid=staff-forward-sent-hint]")
+    end
+
+    test "there is no hint on an IMAP channel, which cannot prove who sent a forward", %{
+      conn: conn
+    } do
+      org = insert_organization()
+
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          public_address: "support@acme.example.com",
+          ingress_kind: :imap,
+          imap_host: "imap.acme.example.com",
+          imap_username: "support@acme.example.com",
+          imap_password: "mailbox-password",
+          state: :active
+        )
+
+      conv = insert_thread(organization_id: org.id, inbound_channel_id: channel.id)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      refute has_element?(view, "[data-testid=staff-forward-sent-hint]")
     end
 
     test "there is no hint for a thread that did not arrive on a channel", %{conn: conn} do
