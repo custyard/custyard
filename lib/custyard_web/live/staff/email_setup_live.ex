@@ -261,7 +261,7 @@ defmodule CustyardWeb.Staff.EmailSetupLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <main class="mx-auto max-w-3xl p-6 space-y-8" id="email-setup">
+    <main class="w-full mx-auto max-w-3xl p-6 space-y-8" id="email-setup">
       <header>
         <h1 class="text-2xl font-semibold">Email setup</h1>
         <p class="mt-2 text-sm text-gray-600 dark:text-zinc-300">

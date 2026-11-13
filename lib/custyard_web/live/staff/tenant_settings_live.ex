@@ -208,7 +208,7 @@ defmodule CustyardWeb.Staff.TenantSettingsLive do
 
   def render(assigns) do
     ~H"""
-    <div class="max-w-2xl mx-auto p-6 space-y-8">
+    <div class="w-full max-w-2xl mx-auto p-6 space-y-8">
       <.header>
         Tenant settings<:subtitle>{@current_tenant.name} · {Tenants.host(@current_tenant)}</:subtitle>
       </.header>

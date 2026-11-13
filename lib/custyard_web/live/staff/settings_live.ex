@@ -276,7 +276,7 @@ defmodule CustyardWeb.Staff.SettingsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-2xl mx-auto p-4" data-testid="staff-settings-page">
+    <div class="w-full max-w-2xl mx-auto p-4" data-testid="staff-settings-page">
       <h1
         class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-6"
         data-testid="staff-settings-heading"

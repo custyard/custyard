@@ -18,17 +18,26 @@ defmodule CustyardWeb.Staff.OrganizationsLive do
   # A blank form each time, or "Add customer" would open with the values of
   # the customer edited last.
   def handle_event("show_form", _, socket) do
-    {:noreply,
-     socket
-     |> assign(:show_form, true)
-     |> assign(:editing_org, nil)
-     |> assign(:form, blank_form())}
+    if Authorization.can_create_organization?(socket.assigns.current_staff) do
+      {:noreply,
+       socket
+       |> assign(:show_form, true)
+       |> assign(:editing_org, nil)
+       |> assign(:form, blank_form())}
+    else
+      {:noreply, put_flash(socket, :error, "Tenant administrator required")}
+    end
   end
 
   def handle_event("hide_form", _, socket), do: {:noreply, assign(socket, :show_form, false)}
 
   def handle_event("edit_org", %{"id" => id}, socket) do
-    org = Organizations.get(socket.assigns.current_scope, id)
+    # The id comes from the client; anything that is not a row id finds nothing.
+    org =
+      case Integer.parse(to_string(id)) do
+        {id, ""} -> Organizations.get(socket.assigns.current_scope, id)
+        _ -> nil
+      end
 
     cond do
       is_nil(org) ->
@@ -81,12 +90,25 @@ defmodule CustyardWeb.Staff.OrganizationsLive do
           {:noreply,
            socket |> assign(:show_form, false) |> load() |> put_flash(:info, "Customer saved")}
 
-        {:error, changeset} ->
-          {:noreply, assign(socket, :form, to_form(changeset, as: :customer))}
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply, assign(socket, :form, to_form(show_taken_domain(changeset), as: :customer))}
       end
     else
       {:noreply, put_flash(socket, :error, "Tenant administrator required")}
     end
+  end
+
+  # A domain another customer already has breaks a unique index whose error
+  # lands on :tenant_id, a field the form does not have. Say it at the domain.
+  defp show_taken_domain(changeset) do
+    taken? =
+      Enum.any?(changeset.errors, fn {field, {_message, opts}} ->
+        field == :tenant_id and opts[:constraint] == :unique
+      end)
+
+    if taken? and not Keyword.has_key?(changeset.errors, :domain),
+      do: Ecto.Changeset.add_error(changeset, :domain, "is already used by another customer"),
+      else: changeset
   end
 
   defp blank_form,

@@ -234,7 +234,7 @@ defmodule CustyardWeb.Staff.ProjectsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto p-4" data-testid="staff-projects-page">
+    <div class="w-full max-w-4xl mx-auto p-4" data-testid="staff-projects-page">
       <div class="flex items-center justify-between mb-6">
         <h1
           class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
@@ -252,7 +252,7 @@ defmodule CustyardWeb.Staff.ProjectsLive do
       </div>
 
       <div class="mb-4">
-        <label for="org-filter" class="sr-only">Filter by organization</label>
+        <label for="org-filter" class="sr-only">Filter by customer</label>
         <select
           id="org-filter"
           phx-change="filter_org"
@@ -261,7 +261,7 @@ defmodule CustyardWeb.Staff.ProjectsLive do
           class="border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
           data-testid="staff-projects-org-filter"
         >
-          <option value="">All organizations</option>
+          <option value="">All customers</option>
           <option
             :for={org <- @organizations}
             value={org.id}
@@ -375,7 +375,7 @@ defmodule CustyardWeb.Staff.ProjectsLive do
             for="project-organization"
             class="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1"
           >
-            Organization
+            Customer
           </label>
           <select
             name="organization_id"
@@ -383,7 +383,7 @@ defmodule CustyardWeb.Staff.ProjectsLive do
             class="w-full border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded px-3 py-2 text-sm"
             data-testid="staff-project-org-select"
           >
-            <option value="">Internal project (no organization)</option>
+            <option value="">Internal project (no customer)</option>
             <option
               :for={org <- @organizations}
               value={org.id}

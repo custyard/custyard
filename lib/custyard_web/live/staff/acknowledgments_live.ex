@@ -161,7 +161,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
           "Configure this tenant integration before adding customer bindings",
         not Evidence.valid_identity?(external_id) &&
           "Source organization ID must be a nonblank identity of at most 255 bytes without surrounding spaces or control characters",
-        is_nil(organization) && "Choose an existing organization"
+        is_nil(organization) && "Choose an existing customer"
       ]
       |> Enum.filter(&is_binary/1)
 
@@ -222,7 +222,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
        "#{pending.source_organization_id} is already bound to another organization; bindings cannot be reassigned"}
 
   defp bind_result({:error, :organization_not_found}, _),
-    do: {:error, "That organization no longer exists"}
+    do: {:error, "That customer no longer exists"}
 
   defp bind_result({:error, :source_changed}, _),
     do: {:error, "The configured source changed; review the binding again"}
@@ -503,7 +503,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto p-4 overflow-y-auto" data-testid="staff-acknowledgments-page">
+    <div class="w-full max-w-4xl mx-auto p-4 overflow-y-auto" data-testid="staff-acknowledgments-page">
       <form
         phx-submit="configure_integration"
         class="mb-6 space-y-3"
@@ -713,7 +713,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
         data-testid="acknowledgments-bindings"
       >
         <h2 class="text-sm font-semibold text-gray-900 dark:text-zinc-100 mb-2">
-          Organization bindings
+          Customer bindings
         </h2>
         <p class="text-xs text-gray-500 dark:text-zinc-400 mb-4">
           Evidence is attributed only through an explicit binding of a source organization ID
@@ -731,7 +731,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
             <tr class="text-left text-gray-500 dark:text-zinc-400">
               <th class="font-medium py-1">Source</th>
               <th class="font-medium py-1">Source organization</th>
-              <th class="font-medium py-1">Custyard organization</th>
+              <th class="font-medium py-1">Customer</th>
               <th class="font-medium py-1">Bound (UTC)</th>
             </tr>
           </thead>
@@ -781,8 +781,8 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
           <.input
             field={@bind_form[:organization_id]}
             type="select"
-            label="Custyard organization"
-            prompt="Choose an organization"
+            label="Customer"
+            prompt="Choose a customer"
             options={@organizations}
           />
           <ul
@@ -817,7 +817,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLive do
               <dd class="break-all">{@pending_bind.source_organization_id}</dd>
             </div>
             <div>
-              <dt class="font-medium">Custyard organization</dt>
+              <dt class="font-medium">Customer</dt>
               <dd>{@pending_bind.organization_name}</dd>
             </div>
           </dl>

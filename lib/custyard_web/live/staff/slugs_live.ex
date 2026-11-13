@@ -67,7 +67,7 @@ defmodule CustyardWeb.Staff.SlugsLive do
      put_flash(
        socket,
        :error,
-       "Provisioned slugs belong to an organization and are released by deleting it"
+       "Provisioned slugs belong to a customer and are released by deleting it"
      )}
   end
 
@@ -108,7 +108,7 @@ defmodule CustyardWeb.Staff.SlugsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto p-4 overflow-y-auto" data-testid="staff-slugs-page">
+    <div class="w-full max-w-4xl mx-auto p-4 overflow-y-auto" data-testid="staff-slugs-page">
       <h1
         class="text-lg font-semibold text-gray-900 dark:text-zinc-100 mb-6"
         data-testid="staff-slugs-heading"

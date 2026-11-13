@@ -428,18 +428,26 @@ defmodule CustyardWeb.Staff.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/app/tasks")
 
       action = "#{row(task)} button[data-testid=staff-task-action]"
-      assert has_element?(view, "#{action}[data-action=done][aria-label='Mark done']")
+      # Each row's button names its task, so a list of them can be told apart.
+      assert has_element?(view, "#{action}[data-action=done][aria-label='Mark done: Call back']")
 
       view |> element(action) |> render_click()
 
       assert Repo.get!(WorkItem, task.id).state == :done
-      # Done tasks leave the open list.
+      # Done tasks leave the open list, and a screen reader is told why.
       refute has_element?(view, row(task))
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-tasks-announcement][role=status]",
+               "Marked done: Call back"
+             )
+
       assert chip_count(view, "open") == 0
       assert chip_count(view, "done") == 1
 
       view |> element(chip("done")) |> render_click()
-      assert has_element?(view, "#{action}[data-action=reopen][aria-label='Reopen']")
+      assert has_element?(view, "#{action}[data-action=reopen][aria-label='Reopen: Call back']")
 
       view |> element(action) |> render_click()
 

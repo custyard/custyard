@@ -161,7 +161,7 @@ defmodule CustyardWeb.Staff.ProjectDetailLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto py-8 px-4" data-testid="staff-project-detail">
+    <div class="w-full max-w-4xl mx-auto py-8 px-4" data-testid="staff-project-detail">
       <.link
         navigate={~p"/app/projects"}
         class="text-indigo-600 hover:text-indigo-800 mb-4 inline-block"

@@ -47,6 +47,7 @@ defmodule CustyardWeb.Staff.TasksLive do
       |> assign(:page_title, "All tasks")
       |> assign(:customers, nil)
       |> assign(:reload_timer, nil)
+      |> assign(:announcement, nil)
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :staff}}
   end
@@ -96,7 +97,11 @@ defmodule CustyardWeb.Staff.TasksLive do
 
         case Tasks.set_state(socket.assigns.current_scope, task, new_state) do
           {:ok, _task} ->
-            {:noreply, load_tasks(socket)}
+            # The row may leave the list, so say what happened where a screen
+            # reader hears it (the QueueKeys hook moves focus to the next row).
+            said = if new_state == :done, do: "Marked done", else: "Reopened"
+
+            {:noreply, socket |> assign(:announcement, "#{said}: #{task.title}") |> load_tasks()}
 
           {:error, :not_found} ->
             {:noreply, socket |> put_flash(:error, "That task no longer exists") |> load_tasks()}
@@ -271,14 +276,18 @@ defmodule CustyardWeb.Staff.TasksLive do
 
     ~H"""
     <div class="mx-auto w-full max-w-6xl px-3 py-4 sm:px-4" data-testid="staff-tasks-page">
-      <div class="mb-3 flex items-baseline justify-between gap-3">
+      <p class="sr-only" role="status" aria-live="polite" data-testid="staff-tasks-announcement">
+        {@announcement}
+      </p>
+      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1
           class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
           data-testid="staff-tasks-heading"
         >
           All tasks
         </h1>
-        <div class="flex items-baseline gap-4 text-xs text-gray-600 dark:text-zinc-400">
+        <%!-- Key hint, count, order: the same sequence as the attention queue. --%>
+        <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-zinc-400">
           <%!-- Keyboard hint: only where a keyboard is likely. --%>
           <p class="hidden lg:block" data-testid="staff-tasks-keys">
             <.kbd>j</.kbd>
@@ -288,6 +297,9 @@ defmodule CustyardWeb.Staff.TasksLive do
             <.kbd>Enter</.kbd>
             open
           </p>
+          <span class="whitespace-nowrap" data-testid="staff-tasks-count">
+            {length(@tasks)} {if length(@tasks) == 1, do: "task", else: "tasks"}
+          </span>
           <%!-- Finished tasks are listed by when they were last changed. --%>
           <.sort_toggle
             reversed={@reverse}
@@ -297,9 +309,6 @@ defmodule CustyardWeb.Staff.TasksLive do
             }
             testid="staff-tasks-sort"
           />
-          <span data-testid="staff-tasks-count">
-            {length(@tasks)} {if length(@tasks) == 1, do: "task", else: "tasks"}
-          </span>
         </div>
       </div>
 
@@ -500,7 +509,7 @@ defmodule CustyardWeb.Staff.TasksLive do
             phx-click="set_task_state"
             phx-value-id={@task.id}
             phx-value-state={if @done?, do: "open", else: "done"}
-            aria-label={if @done?, do: "Reopen", else: "Mark done"}
+            aria-label={"#{if @done?, do: "Reopen", else: "Mark done"}: #{@task.title}"}
             title={if @done?, do: "Reopen", else: "Mark done"}
             class="flex h-8 w-8 items-center justify-center rounded md:h-7 md:w-7 text-gray-500 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:text-zinc-400 dark:hover:bg-zinc-600 dark:hover:text-zinc-100"
             data-testid="staff-task-action"

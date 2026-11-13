@@ -214,8 +214,11 @@ defmodule CustyardWeb.Staff.OrganizationsLiveTest do
       refute has_element?(view, "button[phx-click=show_form]")
       refute has_element?(view, "button[phx-click=edit_org]")
 
-      # Hiding the buttons is not the guard: a forged edit opens no form and
+      # Hiding the buttons is not the guard: forged events open no form and
       # a forged save is refused.
+      assert render_click(view, "show_form") =~ "Tenant administrator required"
+      refute has_element?(view, "#customer-form")
+
       assert render_click(view, "edit_org", %{"id" => to_string(org.id)}) =~
                "Tenant administrator required"
 
@@ -225,6 +228,29 @@ defmodule CustyardWeb.Staff.OrganizationsLiveTest do
       |> render_submit("save_org", %{"customer" => %{"name" => "Renamed by agent"}})
 
       assert Repo.reload!(org).name == "Acme"
+    end
+
+    test "a domain another customer has is refused with a message at the field", %{conn: conn} do
+      insert_organization(name: "Acme", domain: "acme.example.com")
+      {:ok, view, _html} = live(conn, "/app/customers")
+
+      view |> element("button[phx-click=show_form]", "Add customer") |> render_click()
+
+      html =
+        view
+        |> form("#customer-form", customer: %{name: "Acme Two", domain: "acme.example.com"})
+        |> render_submit()
+
+      assert html =~ "is already used by another customer"
+      assert has_element?(view, "#customer-form")
+      refute has_element?(view, "[data-testid=staff-customer-name]", "Acme Two")
+    end
+
+    test "a forged edit with an id that is not a number is refused, not a crash", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/app/customers")
+
+      assert render_click(view, "edit_org", %{"id" => "abc"}) =~ "Customer unavailable"
+      refute has_element?(view, "#customer-form")
     end
 
     test "add opens blank after another customer was edited", %{conn: conn} do

@@ -125,7 +125,7 @@ defmodule CustyardWeb.Staff.ProjectsLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/app/projects")
 
-      assert html =~ "All organizations"
+      assert html =~ "All customers"
       assert html =~ "Org A"
       assert html =~ "Org B"
     end
@@ -255,7 +255,7 @@ defmodule CustyardWeb.Staff.ProjectsLiveTest do
       assert html =~ "New project"
       assert html =~ "Title"
       assert html =~ "Description"
-      assert html =~ "Organization"
+      assert has_element?(view, "label[for=project-organization]", "Customer")
       assert html =~ "Start date"
       assert html =~ "Target completion"
       assert html =~ "Visible in client portal"

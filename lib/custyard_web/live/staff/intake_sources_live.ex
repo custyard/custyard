@@ -307,7 +307,7 @@ defmodule CustyardWeb.Staff.IntakeSourcesLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-3xl mx-auto p-4 overflow-y-auto" data-testid="staff-intake-sources-page">
+    <div class="w-full max-w-3xl mx-auto p-4 overflow-y-auto" data-testid="staff-intake-sources-page">
       <div class="flex items-center justify-between mb-6">
         <h1
           class="text-lg font-semibold text-gray-900 dark:text-zinc-100"

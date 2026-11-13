@@ -116,7 +116,7 @@ defmodule CustyardWeb.Staff.OrganizationDetailLive do
 
   def render(assigns) do
     ~H"""
-    <div class="max-w-5xl mx-auto p-6 space-y-8">
+    <div class="w-full max-w-5xl mx-auto p-6 space-y-8">
       <.link navigate={~p"/app/customers"}>Customers</.link>
       <.header>
         {@organization.name}

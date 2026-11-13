@@ -129,6 +129,21 @@ Hooks.QueueKeys = {
     const link = start && this.el.querySelector(`#queue-row-${CSS.escape(start)} [data-row-link]`)
     if (link) this.select(link)
   },
+  // A row can leave the list while the focus is on it or on one of its
+  // buttons (dismissed, snoozed, a task marked done). The focus would fall to
+  // the page and the next j would start again from the top, so it moves to
+  // the row that took its place.
+  beforeUpdate() {
+    const row = document.activeElement?.closest?.("li")
+    const index = row ? Array.from(this.el.children).indexOf(row) : -1
+    this.focusIndex = index >= 0 ? index : null
+  },
+  updated() {
+    if (this.focusIndex === null || this.el.contains(document.activeElement)) return
+    const links = Array.from(this.el.querySelectorAll("[data-row-link]"))
+    if (links.length > 0) this.select(links[Math.min(this.focusIndex, links.length - 1)])
+    this.focusIndex = null
+  },
   destroyed() {
     window.removeEventListener("keydown", this.onKey)
   },

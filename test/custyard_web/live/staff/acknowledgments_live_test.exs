@@ -223,7 +223,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
       view |> element("[data-testid=acknowledgments-confirm-bind]") |> render_click()
 
       assert view |> element("[data-testid=acknowledgments-bind-result]") |> render() =~
-               "That organization no longer exists"
+               "That customer no longer exists"
 
       assert Acknowledgments.list_bindings(ack_scope(tenant_id())) == []
       assert binding_audits() == []
@@ -269,7 +269,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
 
       errors = view |> element("[data-testid=acknowledgments-bind-errors]") |> render()
       assert errors =~ "nonblank identity"
-      assert errors =~ "Choose an existing organization"
+      assert errors =~ "Choose an existing customer"
       refute has_element?(view, "[data-testid=acknowledgments-bind-confirmation]")
 
       # An id beyond signed 64 bits is refused before it reaches SQLite.
@@ -281,7 +281,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
       })
 
       assert view |> element("[data-testid=acknowledgments-bind-errors]") |> render() =~
-               "Choose an existing organization"
+               "Choose an existing customer"
 
       view
       |> form("[data-testid=acknowledgments-bind-form]",
