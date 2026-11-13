@@ -1320,7 +1320,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
     end
   end
 
-  describe "forwarding a reply sent from a mailbox" do
+  describe "a reply sent from a staff mailbox" do
     test "the hint names the public address of the channel the thread arrived on", %{
       conn: conn
     } do
@@ -1339,7 +1339,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       hint =
         view
-        |> element("[data-testid=staff-thread-sidebar] [data-testid=staff-forward-sent-hint]")
+        |> element("[data-testid=staff-thread-sidebar] [data-testid=staff-sent-hint]")
         |> render()
         |> Floki.parse_fragment!()
         |> Floki.text()
@@ -1347,22 +1347,22 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
         |> String.trim()
 
       assert hint ==
-               "Replied from your own mailbox? Forward the sent message from your staff address to support@acme.example.com and it is added to this conversation."
+               "Replying from your own mailbox? Send from your staff address with support@acme.example.com in Cc and the reply is added to this conversation."
 
       # Under the state buttons, and never the secret ingress address.
       {actions, _} = :binary.match(html, ~s(data-testid="staff-state-actions"))
-      {hint_at, _} = :binary.match(html, ~s(data-testid="staff-forward-sent-hint"))
+      {hint_at, _} = :binary.match(html, ~s(data-testid="staff-sent-hint"))
       {customer, _} = :binary.match(html, ~s(data-testid="staff-sidebar-org"))
       assert actions < hint_at and hint_at < customer
       refute html =~ channel.ingress_token
 
-      # A resolved conversation keeps it: that is when a reply sent elsewhere is added.
+      # A resolved conversation keeps it: a later reply from a mailbox is still added.
       {:ok, _} = Threads.update_state(conv, :resolved)
       {:ok, resolved, _html} = live(conn, ~p"/app/threads/#{conv.id}")
-      assert has_element?(resolved, "[data-testid=staff-forward-sent-hint]")
+      assert has_element?(resolved, "[data-testid=staff-sent-hint]")
     end
 
-    test "there is no hint on an IMAP channel, which cannot prove who sent a forward", %{
+    test "there is no hint on an IMAP channel, which cannot prove who sent the mail", %{
       conn: conn
     } do
       org = insert_organization()
@@ -1382,7 +1382,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
-      refute has_element?(view, "[data-testid=staff-forward-sent-hint]")
+      refute has_element?(view, "[data-testid=staff-sent-hint]")
     end
 
     test "there is no hint for a thread that did not arrive on a channel", %{conn: conn} do
@@ -1391,7 +1391,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
 
-      refute has_element?(view, "[data-testid=staff-forward-sent-hint]")
+      refute has_element?(view, "[data-testid=staff-sent-hint]")
     end
   end
 
