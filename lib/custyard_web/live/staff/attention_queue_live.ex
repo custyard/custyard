@@ -134,7 +134,15 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             {:thread_updated, id}
           )
 
-          {:noreply, socket |> assign(:show_snooze_menu, nil) |> reload_queue()}
+          # The row may leave the list; say where it went, as Dismiss does.
+          {:noreply,
+           socket
+           |> assign(:show_snooze_menu, nil)
+           |> put_flash(
+             :info,
+             "Snoozed \"#{thread.subject}\" until #{format_snooze_time(until)}"
+           )
+           |> reload_queue()}
 
         {:error, _changeset} ->
           {:noreply, put_flash(socket, :error, "Failed to snooze thread")}
@@ -158,7 +166,8 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             {:thread_updated, id}
           )
 
-          {:noreply, reload_queue(socket)}
+          {:noreply,
+           socket |> put_flash(:info, "Un-snoozed \"#{thread.subject}\"") |> reload_queue()}
 
         {:error, _changeset} ->
           {:noreply, put_flash(socket, :error, "Failed to un-snooze thread")}
@@ -353,6 +362,14 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   defp format_idle_time(hours), do: "#{div(hours, 24)}d"
 
   # Format snooze expiry time for display
+  # What a row's buttons call their conversation: every row has the same
+  # buttons, and a screen reader lists them without the row around them.
+  defp row_name(%{subject: subject}) when is_binary(subject) do
+    if String.trim(subject) == "", do: "(no subject)", else: subject
+  end
+
+  defp row_name(_thread), do: "(no subject)"
+
   defp format_snooze_time(datetime) do
     Calendar.strftime(datetime, "%b %d %H:%M")
   end
@@ -618,35 +635,39 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         </form>
       </div>
 
-      <div
-        :if={Enum.empty?(@threads)}
-        class="rounded-lg border border-gray-200 bg-white py-12 text-center text-gray-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
-        data-testid="staff-queue-empty"
-      >
-        {empty_text(@filter)}
-      </div>
       <%!-- j/k and the arrow keys move the selection (the focused row link),
-      o or Enter opens it; data-select resumes at the conversation just left. --%>
-      <ul
-        :if={not Enum.empty?(@threads)}
-        id="staff-queue-list"
-        phx-hook="QueueKeys"
-        data-select={@selected_id}
-        role="list"
-        class="divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white dark:divide-zinc-700 dark:border-zinc-700 dark:bg-zinc-800"
-        data-testid="staff-queue-list"
-      >
-        <.queue_row
-          :for={{item, place} <- with_places(@threads)}
-          item={item}
-          thread_path={thread_path(item.thread.id, @filter, @label_id, @reverse, place)}
-          staff_id={@current_staff.id}
-          can_dismiss={@can_dismiss}
-          order_note={order_note(@filter, @reverse)}
-          show_score={@show_score_breakdown == item.thread.id}
-          show_snooze={@show_snooze_menu == item.thread.id}
-        />
-      </ul>
+      o or Enter opens it; data-select resumes at the conversation just left.
+      The hook is on the element around the list: when the last row leaves,
+      it moves the focus to the note that the list is empty. --%>
+      <div id="staff-queue-rows" phx-hook="QueueKeys" data-select={@selected_id}>
+        <div
+          :if={Enum.empty?(@threads)}
+          tabindex="-1"
+          data-list-empty
+          class="rounded-lg border border-gray-200 bg-white py-12 text-center text-gray-500 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
+          data-testid="staff-queue-empty"
+        >
+          {empty_text(@filter)}
+        </div>
+        <ul
+          :if={not Enum.empty?(@threads)}
+          id="staff-queue-list"
+          role="list"
+          class="divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white dark:divide-zinc-700 dark:border-zinc-700 dark:bg-zinc-800"
+          data-testid="staff-queue-list"
+        >
+          <.queue_row
+            :for={{item, place} <- with_places(@threads)}
+            item={item}
+            thread_path={thread_path(item.thread.id, @filter, @label_id, @reverse, place)}
+            staff_id={@current_staff.id}
+            can_dismiss={@can_dismiss}
+            order_note={order_note(@filter, @reverse)}
+            show_score={@show_score_breakdown == item.thread.id}
+            show_snooze={@show_snooze_menu == item.thread.id}
+          />
+        </ul>
+      </div>
     </div>
     """
   end
@@ -670,6 +691,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
       assigns
       |> assign(:ours?, ours?)
       |> assign(:who, who(item.thread))
+      |> assign(:name, row_name(item.thread))
       |> assign(:customer, customer_line(item.thread))
       |> assign(:age, short_age(item.last_exchange_at))
       |> assign(:age_title, age_title(item))
@@ -910,7 +932,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             phx-value-id={@item.thread.id}
             aria-expanded={to_string(@show_score)}
             aria-controls={"queue-rank-#{@item.thread.id}"}
-            aria-label={if @show_score, do: "Hide score", else: "Why this rank?"}
+            aria-label={if @show_score, do: "Hide score: #{@name}", else: "Why this rank? #{@name}"}
             title={if @show_score, do: "Hide score", else: "Why this rank?"}
             class={[
               "flex h-8 w-8 items-center justify-center rounded md:h-7 md:w-7 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:hover:bg-zinc-600 dark:hover:text-zinc-100",
@@ -929,7 +951,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             type="button"
             phx-click="unsnooze"
             phx-value-id={@item.thread.id}
-            aria-label="Un-snooze"
+            aria-label={"Un-snooze: #{@name}"}
             title={"Un-snooze (snoozed until #{format_snooze_time(@item.thread.snoozed_until)})"}
             class="flex h-8 w-8 items-center justify-center rounded md:h-7 md:w-7 text-indigo-600 hover:bg-indigo-50 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
             data-testid="staff-queue-unsnooze-btn"
@@ -952,7 +974,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
               phx-value-id={@item.thread.id}
               aria-haspopup="menu"
               aria-expanded={to_string(@show_snooze)}
-              aria-label="Snooze"
+              aria-label={"Snooze: #{@name}"}
               title="Snooze"
               class={[
                 "flex h-8 w-8 items-center justify-center rounded md:h-7 md:w-7 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:hover:bg-zinc-600 dark:hover:text-zinc-100",
@@ -994,7 +1016,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             type="button"
             phx-click="dismiss"
             phx-value-id={@item.thread.id}
-            aria-label="Dismiss: no reply needed"
+            aria-label={"Dismiss, no reply needed: #{@name}"}
             title="Dismiss: no reply needed"
             class="flex h-8 w-8 items-center justify-center rounded md:h-7 md:w-7 text-gray-500 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:text-zinc-400 dark:hover:bg-zinc-600 dark:hover:text-zinc-100"
             data-testid="staff-queue-dismiss-btn"

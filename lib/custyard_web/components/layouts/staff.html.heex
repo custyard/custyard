@@ -57,7 +57,7 @@
           type="button"
           class="md:hidden shrink-0 p-2 text-gray-600 hover:text-gray-700 dark:text-zinc-300 dark:hover:text-zinc-200"
           phx-click={
-            JS.toggle(to: "#mobile-menu", display: "flex")
+            JS.toggle_class("hidden flex", to: "#mobile-menu")
             |> JS.toggle_attribute({"aria-expanded", "true", "false"})
           }
           aria-label="Toggle navigation menu"
@@ -76,12 +76,14 @@
         </button>
       </div>
     </div>
-    <%!-- Mobile menu - hidden by default, toggled by button. It opens as a
-    flex column; the default "block" would run the links together on one line. --%>
+    <%!-- Mobile menu - hidden by default. The button swaps "hidden" for
+    "flex", so it opens as a column (as a block the links would run together
+    on one line). It swaps classes and sets no inline display: md:hidden
+    still closes the menu when the window is widened while it is open. --%>
     <nav
       id="mobile-menu"
       aria-label="Staff menu"
-      class="hidden md:hidden mt-2 pb-2 border-t border-gray-200 dark:border-zinc-700 pt-2 flex flex-col gap-2"
+      class="hidden md:hidden mt-2 pb-2 border-t border-gray-200 dark:border-zinc-700 pt-2 flex-col gap-2"
     >
       <StaffNav.top_links role={@current_role} view={@socket.view} mobile />
       <.link

@@ -73,6 +73,29 @@ defmodule CustyardWeb.Staff.NavigationTest do
       assert String.ends_with?(admin_href, "/admin/login")
     end
 
+    test "the mobile menu opens by class, so a wide window still hides it", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      # An inline display would beat md:hidden and leave the menu open, with
+      # its button hidden, once the window is widened.
+      toggle = view |> element("button[data-testid=staff-nav-mobile-toggle]") |> render()
+      assert toggle =~ "toggle_class"
+      refute toggle =~ "display"
+
+      classes =
+        view
+        |> element("#mobile-menu")
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.attribute("class")
+        |> List.first()
+        |> String.split()
+
+      assert "hidden" in classes
+      assert "md:hidden" in classes
+      refute "flex" in classes
+    end
+
     test "keeps the account group", %{conn: conn, staff: staff} do
       {:ok, view, _html} = live(conn, ~p"/app")
 

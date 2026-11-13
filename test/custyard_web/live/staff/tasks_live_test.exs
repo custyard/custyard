@@ -94,10 +94,11 @@ defmodule CustyardWeb.Staff.TasksLiveTest do
         assert chip_count(view, name) == count, "#{name} should count #{count}"
       end
 
-      # The list is the one the keys of the attention queue work on.
+      # The list is the one the keys of the attention queue work on. The hook
+      # is on the element around it, which stays when the list empties.
       assert has_element?(
                view,
-               "ul#staff-tasks-list[phx-hook=QueueKeys][data-testid=staff-tasks-list]"
+               "#staff-tasks-rows[phx-hook=QueueKeys] > ul#staff-tasks-list[data-testid=staff-tasks-list]"
              )
 
       assert has_element?(
@@ -689,6 +690,13 @@ defmodule CustyardWeb.Staff.TasksLiveTest do
       empty = "[data-testid=staff-tasks-empty]"
       assert has_element?(view, empty, "No open tasks.")
       refute has_element?(view, "[data-testid=staff-tasks-list]")
+
+      # When the last task is marked done, the hook moves the focus here.
+      assert has_element?(
+               view,
+               "#staff-tasks-rows[phx-hook=QueueKeys] > #{empty}[tabindex='-1'][data-list-empty]"
+             )
+
       assert has_element?(view, "[data-testid=staff-tasks-count]", "0 tasks")
 
       for {name, message} <- [

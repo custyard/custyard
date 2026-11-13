@@ -353,25 +353,30 @@ defmodule CustyardWeb.Staff.TasksLive do
         </form>
       </div>
 
-      <div
-        :if={Enum.empty?(@tasks)}
-        class="rounded-lg border border-gray-200 bg-white py-12 text-center text-gray-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
-        data-testid="staff-tasks-empty"
-      >
-        {empty_message(@filter, @customer)}
-      </div>
       <%!-- j/k and the arrow keys move the selection (the focused row link),
-      o or Enter opens it. --%>
-      <ul
-        :if={not Enum.empty?(@tasks)}
-        id="staff-tasks-list"
-        phx-hook="QueueKeys"
-        role="list"
-        class="divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white dark:divide-zinc-700 dark:border-zinc-700 dark:bg-zinc-800"
-        data-testid="staff-tasks-list"
-      >
-        <.task_row :for={task <- @tasks} task={task} now={@now} />
-      </ul>
+      o or Enter opens it. The hook is on the element around the list: when
+      the last row leaves, it moves the focus to the note that the list is
+      empty. --%>
+      <div id="staff-tasks-rows" phx-hook="QueueKeys">
+        <div
+          :if={Enum.empty?(@tasks)}
+          tabindex="-1"
+          data-list-empty
+          class="rounded-lg border border-gray-200 bg-white py-12 text-center text-gray-500 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
+          data-testid="staff-tasks-empty"
+        >
+          {empty_message(@filter, @customer)}
+        </div>
+        <ul
+          :if={not Enum.empty?(@tasks)}
+          id="staff-tasks-list"
+          role="list"
+          class="divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white dark:divide-zinc-700 dark:border-zinc-700 dark:bg-zinc-800"
+          data-testid="staff-tasks-list"
+        >
+          <.task_row :for={task <- @tasks} task={task} now={@now} />
+        </ul>
+      </div>
     </div>
     """
   end

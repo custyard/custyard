@@ -100,6 +100,8 @@ const shortcutBlocked = (e) => {
 // rows and o opens it. The selection is the focused row link, so Enter opens
 // it natively, Tab carries on from it and screen readers announce the row.
 // data-select names the row to start from (the conversation just left).
+// The hook sits on the element around the list, which stays when the list
+// empties and the note marked data-list-empty takes its place.
 Hooks.QueueKeys = {
   mounted() {
     this.onKey = (e) => {
@@ -132,16 +134,22 @@ Hooks.QueueKeys = {
   // A row can leave the list while the focus is on it or on one of its
   // buttons (dismissed, snoozed, a task marked done). The focus would fall to
   // the page and the next j would start again from the top, so it moves to
-  // the row that took its place.
+  // the row that took its place, or to the note that the list is empty when
+  // it was the last one.
   beforeUpdate() {
-    const row = document.activeElement?.closest?.("li")
-    const index = row ? Array.from(this.el.children).indexOf(row) : -1
+    const list = this.el.querySelector(":scope > ul")
+    const rows = list ? Array.from(list.children) : []
+    const index = rows.findIndex(row => row.contains(document.activeElement))
     this.focusIndex = index >= 0 ? index : null
   },
   updated() {
     if (this.focusIndex === null || this.el.contains(document.activeElement)) return
     const links = Array.from(this.el.querySelectorAll("[data-row-link]"))
-    if (links.length > 0) this.select(links[Math.min(this.focusIndex, links.length - 1)])
+    if (links.length > 0) {
+      this.select(links[Math.min(this.focusIndex, links.length - 1)])
+    } else {
+      this.el.querySelector("[data-list-empty]")?.focus({preventScroll: true})
+    }
     this.focusIndex = null
   },
   destroyed() {

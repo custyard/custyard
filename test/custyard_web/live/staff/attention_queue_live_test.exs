@@ -280,9 +280,10 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       |> element(~s([phx-click=snooze][phx-value-id="#{conv.id}"][phx-value-duration="1h"]))
       |> render_click()
 
-      # Thread should be snoozed and removed from queue
-      html = render(view)
-      refute html =~ conv.subject
+      # Thread should be snoozed and removed from queue. The message that
+      # says so names it, so look for the row, not for the subject.
+      refute has_element?(view, "[data-testid=staff-queue-card-#{conv.id}]")
+      assert Repo.get!(Custyard.Thread, conv.id).snoozed_until
     end
   end
 
@@ -504,9 +505,10 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       |> element(~s([phx-click=snooze][phx-value-id="#{conv.id}"][phx-value-duration="1h"]))
       |> render_click()
 
-      # Thread should be snoozed
-      html = render(view)
-      refute html =~ conv.subject
+      # Thread should be snoozed. The message that says so names it, so look
+      # for the row, not for the subject.
+      refute has_element?(view, "[data-testid=staff-queue-card-#{conv.id}]")
+      assert Repo.get!(Custyard.Thread, conv.id).snoozed_until
     end
 
     test "scoped staff sees empty state when their org has no threads" do
@@ -841,12 +843,12 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
 
       assert has_element?(
                view,
-               "[data-testid=staff-queue-card-#{conv.id}] button[data-testid=staff-queue-score-toggle][aria-label='Why this rank?'][aria-expanded=false]"
+               "[data-testid=staff-queue-card-#{conv.id}] button[data-testid=staff-queue-score-toggle][aria-label='Why this rank? Opens on click'][aria-expanded=false]"
              )
 
       assert has_element?(
                view,
-               "[data-testid=staff-queue-card-#{conv.id}] button[data-testid=staff-queue-snooze-btn][aria-label=Snooze]"
+               "[data-testid=staff-queue-card-#{conv.id}] button[data-testid=staff-queue-snooze-btn][aria-label='Snooze: Opens on click']"
              )
     end
 
@@ -1132,7 +1134,83 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
     end
   end
 
+  describe "a row's buttons" do
+    test "name their conversation, since every row has the same buttons", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active, subject: "Refund request")
+      later = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+
+      snoozed =
+        insert_thread(
+          organization_id: org.id,
+          state: :active,
+          subject: "Invoice copy",
+          snoozed_until: later
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      card = "[data-testid=staff-queue-card-#{conv.id}]"
+
+      for {button, name} <- [
+            {"staff-queue-score-toggle", "Why this rank? Refund request"},
+            {"staff-queue-snooze-btn", "Snooze: Refund request"},
+            {"staff-queue-dismiss-btn", "Dismiss, no reply needed: Refund request"}
+          ] do
+        assert has_element?(
+                 view,
+                 ~s(#{card} button[data-testid=#{button}][aria-label="#{name}"])
+               ),
+               name
+      end
+
+      view |> element("#{card} [data-testid=staff-queue-score-toggle]") |> render_click()
+
+      assert has_element?(
+               view,
+               ~s(#{card} button[data-testid=staff-queue-score-toggle][aria-label="Hide score: Refund request"])
+             )
+
+      {:ok, view, _html} = live(conn, ~p"/app?filter=snoozed")
+
+      assert has_element?(
+               view,
+               ~s([data-testid=staff-queue-card-#{snoozed.id}] button[data-testid=staff-queue-unsnooze-btn][aria-label="Un-snooze: Invoice copy"])
+             )
+    end
+  end
+
+  describe "the empty list" do
+    test "can take the focus when the last row leaves", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      # The hook moves the focus to the note marked data-list-empty.
+      assert has_element?(
+               view,
+               "#staff-queue-rows[phx-hook=QueueKeys] > [data-testid=staff-queue-empty][tabindex='-1'][data-list-empty]"
+             )
+
+      refute has_element?(view, "#staff-queue-list")
+    end
+  end
+
   describe "snoozed rows" do
+    test "snoozing says which conversation and until when", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active, subject: "Refund request")
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      card = "[data-testid=staff-queue-card-#{conv.id}]"
+
+      view |> element("#{card} [data-testid=staff-queue-snooze-btn]") |> render_click()
+      html = view |> element("#{card} [data-testid=staff-queue-snooze-opt-1h]") |> render_click()
+
+      until = Repo.get!(Custyard.Thread, conv.id).snoozed_until
+      assert until
+
+      assert html =~
+               "Snoozed &quot;Refund request&quot; until #{Calendar.strftime(until, "%b %d %H:%M")}"
+    end
+
     test "can be un-snoozed from the snoozed filter", %{conn: conn} do
       org = insert_organization()
       later = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
@@ -1144,8 +1222,9 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       assert has_element?(view, "#{card} [data-testid=staff-queue-snoozed]", "snoozed until")
       refute has_element?(view, "#{card} [data-testid=staff-queue-snooze-btn]")
 
-      view |> element("#{card} [data-testid=staff-queue-unsnooze-btn]") |> render_click()
+      html = view |> element("#{card} [data-testid=staff-queue-unsnooze-btn]") |> render_click()
 
+      assert html =~ "Un-snoozed &quot;"
       refute has_element?(view, card)
       assert Repo.get!(Custyard.Thread, conv.id).snoozed_until == nil
     end
@@ -1294,8 +1373,10 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/app")
 
-      assert has_element?(view, "ul#staff-queue-list[phx-hook=QueueKeys]")
-      refute has_element?(view, "ul#staff-queue-list[data-select]")
+      # The hook is on the element around the list, which stays when the
+      # list empties.
+      assert has_element?(view, "#staff-queue-rows[phx-hook=QueueKeys] > ul#staff-queue-list")
+      refute has_element?(view, "#staff-queue-rows[data-select]")
       assert has_element?(view, "[data-testid=staff-queue-keys]", "move")
 
       assert has_element?(
@@ -1355,14 +1436,14 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       conv = insert_thread(organization_id: org.id, state: :active)
 
       {:ok, view, _html} = live(conn, ~p"/app?at=#{conv.id}")
-      assert has_element?(view, "ul#staff-queue-list[data-select='#{conv.id}']")
+      assert has_element?(view, "#staff-queue-rows[data-select='#{conv.id}']")
 
       # Changing the filter starts a fresh pass through the list.
       view |> element("[phx-click=filter][phx-value-filter=active]") |> render_click()
-      refute has_element?(view, "ul#staff-queue-list[data-select]")
+      refute has_element?(view, "#staff-queue-rows[data-select]")
 
       {:ok, junk, _html} = live(conn, ~p"/app?at=not-a-number")
-      refute has_element?(junk, "ul#staff-queue-list[data-select]")
+      refute has_element?(junk, "#staff-queue-rows[data-select]")
     end
   end
 
@@ -1672,7 +1753,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
 
       assert has_element?(
                view,
-               "#{button}[title='Dismiss: no reply needed'][aria-label='Dismiss: no reply needed']"
+               "#{button}[title='Dismiss: no reply needed'][aria-label='Dismiss, no reply needed: Refund request']"
              )
 
       # One click: no dialog in the way.
