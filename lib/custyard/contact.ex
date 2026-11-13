@@ -13,6 +13,10 @@ defmodule Custyard.Contact do
     # clears it. Informational only; sends are never blocked.
     field(:email_status, Ecto.Enum, values: @email_statuses, default: :valid)
     field(:email_status_at, :utc_datetime)
+    # Set when staff ignore this sender (Custyard.Threads.ignore_sender/2):
+    # their conversations leave the queue and notify nobody. Nil means not
+    # ignored. Changed only through ignore_changeset/2.
+    field(:ignored_at, :utc_datetime)
 
     belongs_to(:organization, Custyard.Organization)
     has_many(:threads, Custyard.Thread)
@@ -47,6 +51,15 @@ defmodule Custyard.Contact do
     |> validate_email()
     |> reset_email_status_on_change()
     |> unique_constraint([:email, :organization_id])
+  end
+
+  @doc """
+  Changeset for ignoring a sender (`ignored_at` set) or no longer ignoring
+  them (`nil`). Deliberately outside `changeset/2` and `update_changeset/2`
+  so no contact form can set it.
+  """
+  def ignore_changeset(contact, ignored_at) do
+    change(contact, ignored_at: ignored_at)
   end
 
   @doc "The email statuses a contact can carry."
