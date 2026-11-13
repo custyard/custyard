@@ -95,6 +95,22 @@ defmodule Custyard.AuditLogTest do
     end
   end
 
+  describe "parse_id/1" do
+    test "reads a positive integer and nothing else" do
+      assert AuditLog.parse_id("12") == 12
+      assert AuditLog.parse_id(12) == 12
+      assert AuditLog.parse_id("9223372036854775807") == 9_223_372_036_854_775_807
+
+      for value <- [nil, "", "abc", "12abc", "1.5", "0", "-3", 0, -3, 1.5, ["3"], %{"a" => "3"}] do
+        assert AuditLog.parse_id(value) == nil, inspect(value)
+      end
+
+      # Past 64 bits there is no such row, and the number cannot be bound.
+      assert AuditLog.parse_id("9223372036854775808") == nil
+      assert AuditLog.parse_id(String.duplicate("9", 40)) == nil
+    end
+  end
+
   describe "for_tenant/2 access" do
     test "is refused to an agent, a removed admin and a stale session", c do
       insert_audit_event(event_type: :outbound_pause_changed, source: "staff")
@@ -239,6 +255,18 @@ defmodule Custyard.AuditLogTest do
       for before <- [nil, 0, -3, "12", 1.5] do
         assert length(entries(c.scope, before: before)) == 4
       end
+    end
+
+    # A number past 64 bits cannot be bound to the query.
+    test "an id longer than the database holds is ignored", c do
+      too_long = 9_223_372_036_854_775_808
+
+      assert length(entries(c.scope, before: too_long)) == 4
+
+      assert {:ok, %{entries: listed, thread: nil}} =
+               AuditLog.for_tenant(c.scope, thread_id: too_long)
+
+      assert length(listed) == 4
     end
   end
 
@@ -551,6 +579,10 @@ defmodule Custyard.AuditLogTest do
 
       assert {:ok, %{entries: second, older: nil}} = AuditLog.for_instance(c.admin, before: older)
       assert length(second) == 3
+    end
+
+    test "an id longer than the database holds is ignored", c do
+      assert length(instance_entries(c.admin, before: 9_223_372_036_854_775_808)) == 3
     end
 
     test "every installation event type has an actor and a summary", c do

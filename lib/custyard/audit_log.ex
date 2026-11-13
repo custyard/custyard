@@ -150,6 +150,21 @@ defmodule Custyard.AuditLog do
   end
 
   @doc """
+  An id as it arrives in a URL parameter: the positive integer a string of
+  digits names. Anything else is nil, including a number longer than the
+  database holds. The pages read `thread` and `before` through this, so a
+  hand-edited address cannot fail a query.
+  """
+  def parse_id(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {id, ""} -> positive(id)
+      _ -> nil
+    end
+  end
+
+  def parse_id(value), do: positive(value)
+
+  @doc """
   The audit timeline of the scope's tenant, newest first.
 
   Options:
@@ -269,7 +284,11 @@ defmodule Custyard.AuditLog do
     end
   end
 
-  defp positive(value) when is_integer(value) and value > 0, do: value
+  # Ids are 64-bit in the database. A longer number names no row and cannot
+  # be bound to a query, so it is no id at all.
+  @max_id 9_223_372_036_854_775_807
+
+  defp positive(value) when is_integer(value) and value > 0 and value <= @max_id, do: value
   defp positive(_value), do: nil
 
   defp filtered_thread(tenant_id, thread_id) do
