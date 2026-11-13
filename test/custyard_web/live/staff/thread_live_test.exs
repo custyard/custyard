@@ -1320,6 +1320,58 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
     end
   end
 
+  describe "forwarding a reply sent from a mailbox" do
+    test "the hint names the public address of the channel the thread arrived on", %{
+      conn: conn
+    } do
+      org = insert_organization()
+
+      channel =
+        insert_inbound_channel(
+          organization_id: org.id,
+          public_address: "support@acme.example.com",
+          state: :active
+        )
+
+      conv = insert_thread(organization_id: org.id, inbound_channel_id: channel.id)
+
+      {:ok, view, html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      hint =
+        view
+        |> element("[data-testid=staff-thread-sidebar] [data-testid=staff-forward-sent-hint]")
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.text()
+        |> String.replace(~r/\s+/, " ")
+        |> String.trim()
+
+      assert hint ==
+               "Replied from your own mailbox? Forward the sent message to support@acme.example.com and it is added to this conversation."
+
+      # Under the state buttons, and never the secret ingress address.
+      {actions, _} = :binary.match(html, ~s(data-testid="staff-state-actions"))
+      {hint_at, _} = :binary.match(html, ~s(data-testid="staff-forward-sent-hint"))
+      {customer, _} = :binary.match(html, ~s(data-testid="staff-sidebar-org"))
+      assert actions < hint_at and hint_at < customer
+      refute html =~ channel.ingress_token
+
+      # A resolved conversation keeps it: that is when a reply sent elsewhere is added.
+      {:ok, _} = Threads.update_state(conv, :resolved)
+      {:ok, resolved, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      assert has_element?(resolved, "[data-testid=staff-forward-sent-hint]")
+    end
+
+    test "there is no hint for a thread that did not arrive on a channel", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      refute has_element?(view, "[data-testid=staff-forward-sent-hint]")
+    end
+  end
+
   describe "task CRUD" do
     test "creates a task", %{conn: conn} do
       org = insert_organization()

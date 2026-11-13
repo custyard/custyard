@@ -1900,6 +1900,17 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   else: "Ignore sender"}
               </button>
             </div>
+            <%!-- Mail the channel receives from a staff mailbox joins the
+            conversation it answers. --%>
+            <p
+              :if={@thread.inbound_channel && @thread.inbound_channel.public_address}
+              class="mt-2 text-xs text-gray-600 dark:text-zinc-400"
+              data-testid="staff-forward-sent-hint"
+            >
+              Replied from your own mailbox? Forward the sent message to
+              <span class="break-all font-medium text-gray-800 dark:text-zinc-200">{@thread.inbound_channel.public_address}</span>
+              and it is added to this conversation.
+            </p>
           </section>
 
           <%!-- Customer and contact, each shown once --%>
