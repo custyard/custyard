@@ -1152,6 +1152,41 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
       refute Repo.get_by(Custyard.Message, thread_id: id, is_internal_note: true)
     end
 
+    test "writes an audit event that names the staff member and both states", %{
+      conn: conn,
+      staff: staff
+    } do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      view |> element("[data-testid=staff-state-resolved]") |> render_click()
+
+      event =
+        Repo.get_by!(Custyard.AuditEvent, event_type: :thread_state_changed, thread_id: conv.id)
+
+      assert event.payload == %{"staff_id" => staff.id, "from" => "active", "to" => "resolved"}
+      assert event.source == "staff"
+    end
+
+    test "an admin gets a link to the conversation's audit log, an agent none", %{conn: conn} do
+      org = insert_organization()
+      conv = insert_thread(organization_id: org.id, state: :active)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-thread-sidebar] a[data-testid=staff-thread-audit-link][href='/app/settings/audit?thread=#{conv.id}&filter=everything']",
+               "Audit log of this conversation"
+             )
+
+      {:ok, agent_view, _html} =
+        live(conn_for_staff(insert_scoped_staff(org.id, "agent")), ~p"/app/threads/#{conv.id}")
+
+      refute has_element?(agent_view, "[data-testid=staff-thread-audit-link]")
+    end
+
     test "an agent's state change is refused" do
       org = insert_organization()
       conv = insert_thread(organization_id: org.id, state: :active)

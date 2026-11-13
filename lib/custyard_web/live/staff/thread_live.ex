@@ -1320,6 +1320,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
       |> assign(:contact_line, contact_line(assigns.thread))
       |> assign(:note?, assigns.composer_mode == :note)
       |> assign(:can_set_state, Authorization.can_set_thread_state?(assigns.current_staff))
+      |> assign(:can_view_audit, Authorization.can_view_audit_log?(assigns.current_staff))
       # The contact is preloaded with the thread, so this reads no row.
       |> assign(:sender_ignored?, Threads.sender_ignored?(assigns.thread))
 
@@ -1921,6 +1922,18 @@ defmodule CustyardWeb.Staff.ThreadLive do
               Replying from your own mailbox? Send from your staff address with
               <span class="break-words font-medium text-gray-800 dark:text-zinc-200">{@thread.inbound_channel.public_address}</span>
               in Cc and the reply is added to this conversation.
+            </p>
+            <%!-- Who changed the state, ignored the sender, replied or left a
+            note, and how the mail was processed. The audit log is an admin
+            page, so agents get no link. --%>
+            <p :if={@can_view_audit} class="mt-2 text-xs">
+              <.link
+                navigate={~p"/app/settings/audit?#{[thread: @thread.id, filter: "everything"]}"}
+                class="text-indigo-700 hover:underline dark:text-indigo-300"
+                data-testid="staff-thread-audit-link"
+              >
+                Audit log of this conversation
+              </.link>
             </p>
           </section>
 
