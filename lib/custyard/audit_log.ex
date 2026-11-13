@@ -39,9 +39,10 @@ defmodule Custyard.AuditLog do
     One audit event, ready to show.
 
     `actor` and `summary` are plain text. `thread` (`%{id, subject}`) and
-    `customer` (`%{id, name}`) are set for a tenant admin when the event has
-    them. `tenant` (`%{id, name}`) is set for an instance admin; nil there
-    means the event belongs to the installation.
+    `customer` (`%{id, public_id, name}`) are set for a tenant admin when the
+    event has them; the customer page is opened by `public_id`. `tenant`
+    (`%{id, name}`) is set for an instance admin; nil there means the event
+    belongs to the installation.
     """
     @enforce_keys [:id, :at, :event_type, :topic, :actor, :summary]
     defstruct [:id, :at, :event_type, :topic, :actor, :summary, :thread, :customer, :tenant]
@@ -198,7 +199,13 @@ defmodule Custyard.AuditLog do
           on:
             o.id == coalesce(e.organization_id, t.organization_id) and
               o.tenant_id == e.tenant_id,
-          select: %{event: e, thread_subject: t.subject, customer_id: o.id, customer: o.name}
+          select: %{
+            event: e,
+            thread_subject: t.subject,
+            customer_id: o.id,
+            customer_public_id: o.public_id,
+            customer: o.name
+          }
         )
         |> in_category(category(opts[:category]))
         |> of_thread(thread_id)
@@ -362,7 +369,9 @@ defmodule Custyard.AuditLog do
     %{
       entry(event, context)
       | thread: event.thread_id && %{id: event.thread_id, subject: row.thread_subject},
-        customer: row.customer_id && %{id: row.customer_id, name: row.customer},
+        customer:
+          row.customer_id &&
+            %{id: row.customer_id, public_id: row.customer_public_id, name: row.customer},
         tenant: nil
     }
   end

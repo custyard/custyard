@@ -280,7 +280,7 @@ defmodule Custyard.AuditLogTest do
       assert entry.actor == "ada@northwind.test"
       assert entry.summary == "Changed the state from active to resolved"
       assert entry.thread == %{id: c.thread.id, subject: "Refund request"}
-      assert entry.customer == %{id: c.org.id, name: "Acme Fittings"}
+      assert entry.customer == %{id: c.org.id, public_id: c.org.public_id, name: "Acme Fittings"}
       assert entry.tenant == nil
       assert %DateTime{} = entry.at
     end
@@ -302,7 +302,7 @@ defmodule Custyard.AuditLogTest do
       assert note.summary == "Added an internal note"
       assert change.summary == "Changed the state from active to resolved"
       # The note event names the thread only; the customer comes from it.
-      assert note.customer == %{id: c.org.id, name: "Acme Fittings"}
+      assert note.customer == %{id: c.org.id, public_id: c.org.public_id, name: "Acme Fittings"}
       assert note.thread.id == c.thread.id
     end
 

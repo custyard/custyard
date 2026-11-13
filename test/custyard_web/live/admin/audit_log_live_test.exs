@@ -169,11 +169,12 @@ defmodule CustyardWeb.Admin.AuditLogLiveTest do
 
       assert text(view, part(created, "topic")) == "Installation"
 
-      # No tenant, so no link.
-      installation =
-        ~s([data-testid="audit-entry-#{created}"] span[data-testid=audit-entry-tenant])
+      # No tenant, so nothing in its place and no link.
+      refute has_element?(
+               view,
+               ~s([data-testid="audit-entry-#{created}"] [data-testid=audit-entry-tenant])
+             )
 
-      assert text(view, installation) == "Installation"
       refute has_element?(view, ~s([data-testid="audit-entry-#{created}"] a))
 
       assert text(view, part(suspended, "actor")) == "root@install.test"

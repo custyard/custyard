@@ -13,7 +13,7 @@ defmodule CustyardWeb.AuditLogComponents do
 
   `audience` is who reads it. A tenant admin (`:tenant`) gets links to the
   thread and the customer of an entry. An instance admin (`:instance`) gets
-  the tenant an entry belongs to, or "Installation".
+  the tenant an entry belongs to; an installation event has none.
 
   `older_path` is the path of the next page, nil on the last one. The link is
   a patch, so the page keeps its LiveView.
@@ -59,26 +59,33 @@ defmodule CustyardWeb.AuditLogComponents do
           {Calendar.strftime(entry.at, "%Y-%m-%d %H:%M:%S")} UTC
         </time>
 
+        <%!-- What happened leads; who did it and where follow on one line. --%>
         <div class="min-w-0 flex-1">
-          <p class="text-sm text-gray-900 dark:text-zinc-100">
-            <span class="font-medium break-words" data-testid="audit-entry-actor">{entry.actor}</span>
-            <span class="break-words" data-testid="audit-entry-summary">{entry.summary}</span>
-          </p>
           <p
-            :if={context?(entry, @audience)}
-            class="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-600 dark:text-zinc-400"
+            class="break-words text-sm text-gray-900 dark:text-zinc-100"
+            data-testid="audit-entry-summary"
           >
+            {entry.summary}
+          </p>
+          <p class="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-600 dark:text-zinc-400">
+            <span class="max-w-full break-words">
+              by
+              <span
+                class="font-medium text-gray-800 dark:text-zinc-200"
+                data-testid="audit-entry-actor"
+              >{entry.actor}</span>
+            </span>
             <.link
               :if={@audience == :tenant and entry.thread}
               navigate={~p"/app/threads/#{entry.thread.id}"}
               class="max-w-full truncate text-indigo-700 hover:underline dark:text-indigo-300"
               data-testid="audit-entry-thread"
             >
-              {subject(entry.thread)}
+              {thread_subject(entry.thread)}
             </.link>
             <.link
               :if={@audience == :tenant and entry.customer}
-              navigate={~p"/app/customers/#{entry.customer.id}"}
+              navigate={~p"/app/customers/#{entry.customer.public_id}"}
               class="max-w-full truncate hover:underline"
               data-testid="audit-entry-customer"
             >
@@ -92,9 +99,6 @@ defmodule CustyardWeb.AuditLogComponents do
             >
               {entry.tenant.name || "Tenant #{entry.tenant.id}"}
             </.link>
-            <span :if={@audience == :instance and !entry.tenant} data-testid="audit-entry-tenant">
-              Installation
-            </span>
           </p>
         </div>
 
@@ -119,12 +123,10 @@ defmodule CustyardWeb.AuditLogComponents do
     """
   end
 
-  defp context?(entry, :tenant), do: entry.thread != nil or entry.customer != nil
-  defp context?(_entry, :instance), do: true
-
-  defp subject(%{subject: subject}) when is_binary(subject) do
+  @doc "The subject of an entry's thread as shown, with a stand-in for a blank one."
+  def thread_subject(%{subject: subject}) when is_binary(subject) do
     if String.trim(subject) == "", do: "(no subject)", else: subject
   end
 
-  defp subject(_thread), do: "(no subject)"
+  def thread_subject(_thread), do: "(no subject)"
 end
