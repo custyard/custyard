@@ -30,6 +30,8 @@ defmodule Custyard.AuditEvent.Payload do
     internal_note_created: @reply_keys,
     reply_retried: @reply_keys,
     outbound_pause_changed: ~w(staff_id paused),
+    thread_state_changed: ~w(staff_id from to),
+    sender_ignored: ~w(staff_id contact_id ignored),
     channel_created: @channel_keys ++ ~w(provider ingress_kind),
     channel_updated: @channel_keys ++ ~w(changed),
     channel_deleted: @channel_keys,
@@ -43,10 +45,11 @@ defmodule Custyard.AuditEvent.Payload do
     data_subject_erasure:
       ~w(erased sent_by_subject messages_erased attachments_removed threads_retitled contacts_removed rejections_removed audit_events_redacted redacted_audit_event_ids)
   }
-  @id_keys ~w(staff_id actor_staff_id instance_admin_id organization_id tenant_id host_id channel_id route_id thread_id message_id message_db_id)
+  @id_keys ~w(staff_id actor_staff_id instance_admin_id organization_id tenant_id host_id channel_id route_id thread_id contact_id message_id message_db_id)
   @id_list_keys ~w(deleted_message_ids forwarded_message_ids authored_message_ids redacted_audit_event_ids)
   @count_keys ~w(attempt grace_hours quiet_after_hours erased sent_by_subject messages_erased attachments_removed threads_retitled contacts_removed rejections_removed audit_events_redacted)
   @status_values ~w(pending sending sent delivered bounced suppressed failed withheld draft pending_verification awaiting_first_message active paused revoked unclaimed claimed confirmed provisioned verified partially_verified failed_verification not_found)
+  @thread_states ~w(new active waiting dormant resolved)
   @known_fields ~w(public_address display_name provider ingress_kind state default_organization_id default_project_id default_label_id reply_from sending_domain archive_copy attachment_limit_mb quiet_after_hours attention_bonus auto_response_handling imap_host imap_port imap_username imap_folder imap_password)
   @enums %{
     "actor" => ~w(staff system cli mix console),
@@ -102,7 +105,7 @@ defmodule Custyard.AuditEvent.Payload do
     |> Enum.uniq()
   end
 
-  defp value(key, item, _event) when key in ["has_code", "has_link", "paused"],
+  defp value(key, item, _event) when key in ["has_code", "has_link", "paused", "ignored"],
     do: if(is_boolean(item), do: item)
 
   defp value(key, item, _event) when key in ["timestamp", "last_received_at"] do
@@ -174,6 +177,10 @@ defmodule Custyard.AuditEvent.Payload do
          Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, item),
        do: item
   end
+
+  # Thread states, not the delivery and channel statuses below.
+  defp value(key, item, :thread_state_changed) when key in ["from", "to"],
+    do: enum(item, @thread_states)
 
   defp value(key, item, _event)
        when key in ["status", "from", "to", "recipient_from", "recipient_to"],

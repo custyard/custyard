@@ -1,8 +1,9 @@
 defmodule Custyard.AuditEvent do
   @moduledoc """
   Schema for persisting audit events (webhook processing, staff actions
-  such as slug release, staff accounts created or removed outside the UI,
-  and acknowledgment replays and bindings).
+  such as thread state changes, ignoring a sender and slug release, staff
+  accounts created or removed outside the UI, and acknowledgment replays and
+  bindings).
 
   Records are queryable by thread, organization, or message_id. New
   payloads use event-specific allowlists and internal IDs rather than duplicate
@@ -43,6 +44,10 @@ defmodule Custyard.AuditEvent do
                    :internal_note_created,
                    :reply_retried,
                    :outbound_pause_changed,
+                   # Staff actions on a thread: a state change (set state, dismiss)
+                   # and ignoring or unignoring its sender
+                   :thread_state_changed,
+                   :sender_ignored,
                    # Inbound channels (spec-inbound-channels D6/D7): admin actions and
                    # lifecycle transitions, the quiet-channel notice, and triage outcomes
                    # that did not become a customer message

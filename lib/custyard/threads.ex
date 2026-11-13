@@ -16,7 +16,7 @@ defmodule Custyard.Threads do
   }
 
   alias Custyard.Email.{OutboundQueue, ReplyAudit, ReplyRecipients}
-  alias Custyard.Threads.QueuePreview
+  alias Custyard.Threads.{ActionAudit, QueuePreview}
   import Ecto.Query
   require QueuePreview
 
@@ -551,9 +551,10 @@ defmodule Custyard.Threads do
   Change a thread's state as a staff action.
 
   The state and `last_staff_action_at` are written under the staff access
-  lock. After the commit the score is recalculated and `{:thread_updated, id}`
-  goes out on `"threads"` and the customer's topic, so open queues and
-  conversations refresh.
+  lock, together with a `:thread_state_changed` audit event that names the
+  staff member and both states. After the commit the score is recalculated
+  and `{:thread_updated, id}` goes out on `"threads"` and the customer's
+  topic, so open queues and conversations refresh.
 
   Only staff who may change thread state get through
   (`Custyard.Authorization.can_set_thread_state?/1`); anyone else gets
@@ -563,7 +564,7 @@ defmodule Custyard.Threads do
       when new_state in [:active, :waiting, :resolved] do
     scope
     |> with_access(id, fn thread, staff ->
-      with :ok <- authorize_state_change(staff), do: put_state(thread, new_state)
+      with :ok <- authorize_state_change(staff), do: change_state(thread, staff, new_state)
     end)
     |> after_state_change()
   end
@@ -584,7 +585,7 @@ defmodule Custyard.Threads do
     |> with_access(id, fn thread, staff ->
       with :ok <- authorize_state_change(staff),
            :ok <- unresolved(thread),
-           {:ok, resolved} <- put_state(thread, :resolved),
+           {:ok, resolved} <- change_state(thread, staff, :resolved),
            {:ok, _note} <- insert_internal_note(resolved, staff, @dismiss_note) do
         {:ok, resolved}
       end
@@ -599,9 +600,15 @@ defmodule Custyard.Threads do
   defp unresolved(%Thread{state: :resolved}), do: {:error, :already_resolved}
   defp unresolved(%Thread{}), do: :ok
 
-  defp put_state(thread, new_state) do
+  # The new state and the audit record of who set it. Runs inside the
+  # caller's access transaction, so neither is stored without the other.
+  defp change_state(thread, staff, new_state) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    update_thread(thread, %{state: new_state, last_staff_action_at: now})
+
+    with {:ok, updated} <- update_thread(thread, %{state: new_state, last_staff_action_at: now}) do
+      ActionAudit.state_changed!(thread, updated, staff)
+      {:ok, updated}
+    end
   end
 
   # Runs after the commit, so whoever reloads on the broadcast reads the new row.
@@ -629,6 +636,10 @@ defmodule Custyard.Threads do
   Returns `{:ok, contact}`, `{:error, :no_contact}` for a thread without a
   contact, or `{:error, :unauthorized}`. Broadcasts `{:thread_updated, id}`
   like a state change, so open queues refresh.
+
+  A `:sender_ignored` audit event names the staff member, the contact and
+  whether the sender is now ignored. It is written when that changes, not
+  when an ignored sender is ignored again.
   """
   def ignore_sender(%Custyard.Scope{} = scope, thread_id),
     do: set_sender_ignored(scope, thread_id, true)
@@ -642,11 +653,14 @@ defmodule Custyard.Threads do
       with_access(scope, thread_id, fn thread, staff ->
         with :ok <- authorize_state_change(staff),
              {:ok, contact} <- sender(thread),
-             {:ok, contact} <-
+             {:ok, updated} <-
                contact
                |> Contact.ignore_changeset(ignored_at(contact, ignore?))
                |> Repo.update() do
-          {:ok, {contact, thread}}
+          if is_nil(contact.ignored_at) == ignore?,
+            do: ActionAudit.sender_ignored!(thread, updated, staff, ignore?)
+
+          {:ok, {updated, thread}}
         end
       end)
 

@@ -32,6 +32,8 @@ defmodule Custyard.AuditEventTest do
                :internal_note_created,
                :reply_retried,
                :outbound_pause_changed,
+               :thread_state_changed,
+               :sender_ignored,
                :channel_created,
                :channel_updated,
                :channel_deleted,
@@ -337,6 +339,49 @@ defmodule Custyard.AuditEventTest do
                )
 
       assert event.payload == %{"channel_id" => 2, "changed" => ["display_name", "imap_password"]}
+    end
+
+    test "a thread state change keeps the staff id and thread states only" do
+      assert Payload.minimize(
+               %{
+                 "staff_id" => 7,
+                 "from" => :waiting,
+                 "to" => "resolved",
+                 "subject" => "Refund request",
+                 "staff_email" => "staff@example.com"
+               },
+               :thread_state_changed
+             ) == %{"staff_id" => 7, "from" => "waiting", "to" => "resolved"}
+
+      # A delivery status is not a thread state, and a thread state is not a
+      # delivery status.
+      assert Payload.minimize(%{"from" => "delivered", "to" => "bounced"}, :thread_state_changed) ==
+               %{"from" => nil, "to" => nil}
+
+      assert Payload.minimize(%{"from" => "waiting", "to" => "dormant"}, :delivery_status_updated) ==
+               %{"from" => nil, "to" => nil}
+
+      for state <- Custyard.Thread.states() do
+        assert Payload.minimize(%{"to" => state}, :thread_state_changed) ==
+                 %{"to" => Atom.to_string(state)}
+      end
+    end
+
+    test "ignoring a sender keeps ids and the flag, never the address" do
+      assert Payload.minimize(
+               %{
+                 "staff_id" => 7,
+                 "contact_id" => 12,
+                 "ignored" => true,
+                 "email" => "person@example.com"
+               },
+               :sender_ignored
+             ) == %{"staff_id" => 7, "contact_id" => 12, "ignored" => true}
+
+      assert Payload.minimize(
+               %{"contact_id" => "person@example.com", "ignored" => "yes"},
+               :sender_ignored
+             ) == %{"contact_id" => nil, "ignored" => nil}
     end
   end
 end
