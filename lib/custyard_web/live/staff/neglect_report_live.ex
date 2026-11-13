@@ -17,7 +17,7 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
 
     socket =
       socket
-      |> assign(:page_title, "Neglect Report")
+      |> assign(:page_title, "Neglect report")
       |> load_neglected()
 
     {:ok, socket, layout: {CustyardWeb.Layouts, :staff}}
@@ -91,102 +91,112 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
   defp format_idle_time(hours) when hours < 24, do: "#{hours}h idle"
   defp format_idle_time(hours), do: "#{div(hours, 24)}d idle"
 
+  # The page belongs to the attention queue section, so it uses the queue's
+  # container, heading row and bordered list. The second row of the
+  # navigation links back to the queue.
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-3xl mx-auto p-4" data-testid="staff-neglect-page">
-      <div class="flex items-center gap-3 mb-4">
-        <.link
-          navigate={~p"/app"}
-          class="text-sm text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
-          data-testid="staff-neglect-back"
+    <div class="mx-auto w-full max-w-6xl px-3 py-4 sm:px-4" data-testid="staff-neglect-page">
+      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h1
+          class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
+          data-testid="staff-neglect-heading"
         >
-          &larr; Queue
-        </.link>
-        <h1 class="text-lg font-semibold text-gray-900 dark:text-zinc-100">Neglect Report</h1>
-        <span class="text-sm text-gray-400 dark:text-zinc-500" data-testid="staff-neglect-count">
-          {@total_count} items past threshold
-        </span>
-      </div>
-
-      <div :if={@total_count > 0} class="flex gap-4 mb-6 text-sm">
-        <div
-          :if={@critical_count > 0}
-          class="flex items-center gap-1.5"
-          data-testid="staff-neglect-critical-count"
-        >
-          <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
-          <span class="text-gray-600 dark:text-zinc-400">{@critical_count} critical</span>
-        </div>
-        <div
-          :if={@warning_count > 0}
-          class="flex items-center gap-1.5"
-          data-testid="staff-neglect-warning-count"
-        >
-          <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
-          <span class="text-gray-600 dark:text-zinc-400">{@warning_count} warning</span>
+          Neglect report
+        </h1>
+        <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-zinc-400">
+          <span
+            :if={@critical_count > 0}
+            class="inline-flex items-baseline gap-1.5"
+            data-testid="staff-neglect-critical-count"
+          >
+            <span class="h-2 w-2 rounded-full bg-red-500" aria-hidden="true"></span>
+            {@critical_count} critical
+          </span>
+          <span
+            :if={@warning_count > 0}
+            class="inline-flex items-baseline gap-1.5"
+            data-testid="staff-neglect-warning-count"
+          >
+            <span class="h-2 w-2 rounded-full bg-amber-400" aria-hidden="true"></span>
+            {@warning_count} warning
+          </span>
+          <span data-testid="staff-neglect-count">
+            {@total_count} {if @total_count == 1, do: "item", else: "items"} past threshold
+          </span>
         </div>
       </div>
 
       <div
         :if={@total_count == 0}
-        class="text-center text-gray-400 dark:text-zinc-500 py-12"
+        class="rounded-lg border border-gray-200 bg-white py-12 text-center text-gray-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
         data-testid="staff-neglect-empty"
       >
         No items are currently past their neglect thresholds.
       </div>
 
-      <div class="space-y-6">
-        <div :for={{org, items} <- @grouped_threads} data-testid="staff-neglect-org-group">
-          <div class="flex items-center gap-2 mb-2">
-            <span
+      <div class="space-y-5">
+        <section :for={{org, items} <- @grouped_threads} data-testid="staff-neglect-org-group">
+          <div class="mb-1.5 flex items-center gap-2">
+            <h2
               class="text-sm font-medium text-gray-700 dark:text-zinc-300"
               data-testid="staff-neglect-org-name"
             >
               {if org, do: org.name, else: "Unlinked prospect"}
-            </span>
+            </h2>
             <.tier_badge :if={org} tier={org.tier} />
-            <span class="text-xs text-gray-400 dark:text-zinc-500">{length(items)} items</span>
+            <span class="text-xs text-gray-600 dark:text-zinc-400">
+              {length(items)} {if length(items) == 1, do: "item", else: "items"}
+            </span>
           </div>
 
-          <div class="space-y-2">
-            <.link
+          <ul
+            role="list"
+            class="divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white dark:divide-zinc-700 dark:border-zinc-700 dark:bg-zinc-800"
+          >
+            <li
               :for={item <- items}
-              navigate={~p"/app/threads/#{item.thread.id}"}
-              class="block"
-              data-testid={"staff-neglect-item-#{item.thread.id}"}
-            >
-              <div class={[
-                "bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-3 hover:shadow-sm transition-shadow flex items-center gap-3 border-l-4",
+              class={[
+                "border-l-4 first:rounded-t-lg last:rounded-b-lg",
                 border_color(item.neglect_status)
-              ]}>
+              ]}
+            >
+              <.link
+                navigate={~p"/app/threads/#{item.thread.id}"}
+                class="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 focus:bg-indigo-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500 dark:hover:bg-zinc-700/40 dark:focus:bg-indigo-950/40"
+                data-testid={"staff-neglect-item-#{item.thread.id}"}
+              >
                 <.neglect_badge level={item.neglect_status} />
-                <div class="flex-1 min-w-0">
-                  <div
-                    class="text-sm text-gray-800 dark:text-zinc-200 truncate"
+                <span class="min-w-0 flex-1">
+                  <span
+                    class="block truncate text-sm leading-5 text-gray-900 dark:text-zinc-100"
                     data-testid="staff-neglect-subject"
                   >
                     {item.thread.subject}
-                  </div>
-                  <div
-                    class="text-xs text-gray-500 dark:text-zinc-400"
+                  </span>
+                  <span
+                    class="block truncate text-xs leading-5 text-gray-500 dark:text-zinc-400"
                     data-testid="staff-neglect-contact"
                   >
                     {if item.thread.contact,
                       do: item.thread.contact.name || item.thread.contact.email,
                       else: "Unknown contact"}
-                  </div>
-                </div>
+                  </span>
+                </span>
                 <span
-                  class="text-xs text-gray-400 dark:text-zinc-500 whitespace-nowrap"
+                  class={[
+                    "whitespace-nowrap text-xs font-medium tabular-nums",
+                    idle_color(item.neglect_status)
+                  ]}
                   data-testid="staff-neglect-idle-time"
                 >
                   {format_idle_time(item.hours_idle)}
                 </span>
-              </div>
-            </.link>
-          </div>
-        </div>
+              </.link>
+            </li>
+          </ul>
+        </section>
       </div>
     </div>
     """
@@ -195,4 +205,9 @@ defmodule CustyardWeb.Staff.NeglectReportLive do
   defp border_color(:critical), do: "border-l-red-500"
   defp border_color(:warning), do: "border-l-amber-400"
   defp border_color(_), do: "border-l-transparent"
+
+  # The same colours the queue gives a conversation's age.
+  defp idle_color(:critical), do: "text-red-600 dark:text-red-400"
+  defp idle_color(:warning), do: "text-amber-700 dark:text-amber-400"
+  defp idle_color(_), do: "text-gray-500 dark:text-zinc-400"
 end

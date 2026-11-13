@@ -151,25 +151,49 @@ defmodule CustyardWeb.Staff.NeglectReportLiveTest do
     end
 
     test "renders neglect report page", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/app/neglect")
+      {:ok, view, _html} = live(conn, ~p"/app/neglect")
 
-      assert html =~ "Neglect Report"
+      assert has_element?(view, "h1[data-testid=staff-neglect-heading]", "Neglect report")
+      assert page_title(view) =~ "Neglect report"
+    end
+
+    test "is a page of the attention queue section", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/app/neglect")
+
+      assert has_element?(view, "a[data-testid=staff-nav-queue][aria-current]")
+      assert has_element?(view, "a[data-testid=staff-subnav-neglect][aria-current=page]")
+      # The second row leads back to the queue, so the page has no link of its own.
+      assert has_element?(view, "a[data-testid=staff-subnav-queue][href='/app']", "Queue")
+      refute has_element?(view, "[data-testid=staff-neglect-page] a[href='/app']")
     end
 
     test "shows empty state when no neglected threads", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/app/neglect")
+      {:ok, view, html} = live(conn, ~p"/app/neglect")
 
       assert html =~ "No items are currently past their neglect thresholds"
+      assert has_element?(view, "[data-testid=staff-neglect-count]", "0 items past threshold")
+      refute has_element?(view, "[data-testid=staff-neglect-org-group]")
     end
 
     test "shows neglected threads grouped by organization", %{conn: conn} do
       org = insert_organization(name: "Test Org", tier: :standard)
       conv = insert_neglected_thread(org.id)
 
-      {:ok, _view, html} = live(conn, ~p"/app/neglect")
+      {:ok, view, html} = live(conn, ~p"/app/neglect")
 
       assert html =~ "Test Org"
       assert html =~ conv.subject
+
+      # One bordered list per customer; each row is a link to the thread.
+      assert has_element?(
+               view,
+               "[data-testid=staff-neglect-org-group] ul[role=list] > li > a[data-testid=staff-neglect-item-#{conv.id}][href='/app/threads/#{conv.id}']",
+               conv.subject
+             )
+
+      assert has_element?(view, "[data-testid=staff-neglect-org-group] h2", "Test Org")
+      assert has_element?(view, "[data-testid=staff-neglect-count]", "1 item past threshold")
+      assert has_element?(view, "[data-testid=staff-neglect-idle-time]", "1d idle")
     end
 
     test "renders unlinked prospect group for nil-org threads without crashing", %{
