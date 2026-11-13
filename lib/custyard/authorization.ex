@@ -34,6 +34,9 @@ defmodule Custyard.Authorization do
   def can_manage_project?(staff, id), do: can_manage_organization?(staff, id)
   def can_set_thread_state?(staff), do: has_minimum_role?(staff, "admin")
 
+  @doc "The tenant's audit log names every staff member and what they did."
+  def can_view_audit_log?(staff), do: has_minimum_role?(staff, "admin")
+
   def can_access_thread?(%StaffAccount{tenant_id: id}, %{tenant_id: id})
       when is_integer(id) do
     true
