@@ -11,7 +11,7 @@ defmodule CustyardWeb.Staff.TasksLive do
 
   import CustyardWeb.StaffComponents
 
-  alias Custyard.{Organizations, Tasks, WorkItem}
+  alias Custyard.{Organizations, Tasks, Threads, WorkItem}
 
   # Debounce delay for PubSub-triggered reloads (milliseconds), as in the
   # attention queue: many updates in a row cost one reload.
@@ -32,8 +32,11 @@ defmodule CustyardWeb.Staff.TasksLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      # A task change is announced as an update of its conversation.
-      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
+      Phoenix.PubSub.subscribe(
+        Custyard.PubSub,
+        Threads.tasks_topic(socket.assigns.current_tenant.id)
+      )
+
       Process.send_after(self(), :tick, @tick_ms)
     end
 
@@ -113,7 +116,7 @@ defmodule CustyardWeb.Staff.TasksLive do
   def handle_event("set_task_state", _params, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_info({:thread_updated, _id}, socket) do
+  def handle_info({:task_changed, _id}, socket) do
     {:noreply, schedule_reload(socket)}
   end
 
@@ -285,10 +288,13 @@ defmodule CustyardWeb.Staff.TasksLive do
             <.kbd>Enter</.kbd>
             open
           </p>
+          <%!-- Finished tasks are listed by when they were last changed. --%>
           <.sort_toggle
             reversed={@reverse}
-            label="Due soonest first"
-            reversed_label="Due latest first"
+            label={if @filter == "done", do: "Latest change first", else: "Due soonest first"}
+            reversed_label={
+              if @filter == "done", do: "Earliest change first", else: "Due latest first"
+            }
             testid="staff-tasks-sort"
           />
           <span data-testid="staff-tasks-count">

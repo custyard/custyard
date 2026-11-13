@@ -572,6 +572,30 @@ defmodule CustyardWeb.Staff.TasksLiveTest do
       assert chip_count(view, "open") == 1
     end
 
+    test "a task added to a project appears", %{conn: conn} do
+      project = insert_project(organization_id: insert_organization().id, title: "Onboarding")
+
+      {:ok, view, _html} = live(conn, ~p"/app/tasks")
+      assert has_element?(view, "[data-testid=staff-tasks-empty]")
+
+      {:ok, task} = Threads.create_task(%{title: "Send the kit", project_id: project.id})
+
+      assert Enum.any?(1..40, fn _ ->
+               Process.sleep(50)
+               has_element?(view, row(task))
+             end)
+
+      assert has_element?(view, "#{row(task)} [data-testid=staff-task-place]", "Onboarding")
+    end
+
+    test "the done list names its own order", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/app/tasks?filter=done")
+      assert has_element?(view, "[data-testid=staff-tasks-sort]", "Latest change first")
+
+      {:ok, view, _html} = live(conn, ~p"/app/tasks?filter=done&reverse=1")
+      assert has_element?(view, "[data-testid=staff-tasks-sort]", "Earliest change first")
+    end
+
     test "a task finished in its conversation leaves the open list", %{conn: conn} do
       thread = insert_thread()
       task = insert_task(title: "Call back", thread_id: thread.id)
@@ -593,7 +617,11 @@ defmodule CustyardWeb.Staff.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/app/tasks")
 
       for _n <- 1..5 do
-        Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, thread.id})
+        Phoenix.PubSub.broadcast(
+          Custyard.PubSub,
+          Threads.tasks_topic(task.tenant_id),
+          {:task_changed, task.id}
+        )
       end
 
       # Nothing is read while the changes keep coming.

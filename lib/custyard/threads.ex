@@ -1604,8 +1604,18 @@ defmodule Custyard.Threads do
 
   defp task_changed(error), do: error
 
+  @doc "The topic that carries `{:task_changed, task_id}` for every task of a tenant."
+  def tasks_topic(tenant_id), do: "tasks:#{tenant_id}"
+
   @doc false
   def broadcast_task_change(task) do
+    # Every task, whatever it is attached to: the All tasks page listens here.
+    Phoenix.PubSub.broadcast(
+      Custyard.PubSub,
+      tasks_topic(task.tenant_id),
+      {:task_changed, task.id}
+    )
+
     if task.thread_id do
       event = {:thread_updated, task.thread_id}
       Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", event)
