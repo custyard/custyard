@@ -36,7 +36,7 @@ defmodule CustyardWeb.Live.StaffAuthTest do
   test "connected sockets recheck claim before processing an event", %{conn: conn} do
     staff = insert_staff_account(role: "admin")
     conn = conn |> init_test_session(%{}) |> put_staff_session(staff)
-    {:ok, view, _} = live(conn, "/app/settings/workspace")
+    {:ok, view, _} = live(conn, "/app/settings/tenant")
 
     staff
     |> Ecto.Changeset.change(session_claim: Account.generate_session_claim())
@@ -53,7 +53,7 @@ defmodule CustyardWeb.Live.StaffAuthTest do
   test "connected sockets recheck role before processing an event", %{conn: conn} do
     staff = insert_staff_account(role: "admin")
     conn = conn |> init_test_session(%{}) |> put_staff_session(staff)
-    {:ok, view, _} = live(conn, "/app/settings/workspace")
+    {:ok, view, _} = live(conn, "/app/settings/tenant")
     staff |> StaffAccount.role_changeset(%{role: "agent"}) |> Repo.update!()
 
     render_submit(view, "invite", %{

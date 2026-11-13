@@ -45,14 +45,14 @@ one thread. Claim slugs are tenant-local customer labels, never hosting keys.
 The staff navigation follows the ownership above. The top row has four
 sections. A second row lists the pages of the section on screen, and is left
 out when the viewer can see only one of them. The structure is written once,
-in `CustyardWeb.StaffNav`; URLs did not move when pages were regrouped.
+in `CustyardWeb.StaffNav`, and each page's path sits under its section.
 
 - **Attention Queue**: Queue (`/app`), All tasks (`/app/tasks`), Neglect
   report (`/app/neglect`). All three list work that is waiting: threads by
   rank, every task, and threads past their neglect threshold. A thread is
   opened from these lists, so the thread page belongs here too.
 - **Customers**: All customers (`/app/customers`), Acknowledgments
-  (`/app/settings/integrations`), Slugs (`/app/settings/slugs`). A customer
+  (`/app/customers/acknowledgments`), Slugs (`/app/customers/slugs`). A customer
   owns its contacts, threads and portal credentials, and its own page shows
   them. An acknowledgment is recorded against a customer through a binding,
   and a slug is the portal name a customer claimed, so both are customer
@@ -62,7 +62,7 @@ in `CustyardWeb.StaffNav`; URLs did not move when pages were regrouped.
   and not a page under Customers.
 - **Settings**: Workflow (`/app/settings/workflow`), Support email setup
   (`/app/settings/email`), Intake sources (`/app/settings/intake`), Tenant
-  settings (`/app/settings/workspace`). These configure the tenant. An intake
+  settings (`/app/settings/tenant`). These configure the tenant. An intake
   source configures a public intake page; a thread only records the key of
   the source it came from. Every settings page needs an admin, so agents do
-  not see the section. `/app/settings/staff` opens the Tenant settings page.
+  not see the section.

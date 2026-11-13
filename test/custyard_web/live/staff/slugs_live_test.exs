@@ -34,7 +34,7 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
     test "renders slug, status, email, expiry, and the thread link", %{conn: conn} do
       %{slug: slug, thread: thread} = claim!("listed-claim")
 
-      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
+      {:ok, _view, html} = live(conn, ~p"/app/customers/slugs")
 
       assert html =~ "staff-slugs-page"
       assert html =~ "listed-claim"
@@ -58,24 +58,24 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
         expires_at: nil
       )
 
-      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
+      {:ok, _view, html} = live(conn, ~p"/app/customers/slugs")
 
       assert html =~ "Confirmed"
       assert html =~ "Provisioned"
     end
 
     test "renders empty state when the registry is empty", %{conn: conn} do
-      {:ok, _view, html} = live(conn, ~p"/app/settings/slugs")
+      {:ok, _view, html} = live(conn, ~p"/app/customers/slugs")
 
       assert html =~ "staff-slugs-empty"
     end
 
     test "the customers section links to the page and marks it current", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/slugs")
 
       assert has_element?(
                view,
-               "a[data-testid=staff-subnav-slugs][href='/app/settings/slugs'][aria-current=page]",
+               "a[data-testid=staff-subnav-slugs][href='/app/customers/slugs'][aria-current=page]",
                "Slugs"
              )
 
@@ -88,7 +88,7 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
          %{conn: conn, staff: staff} do
       %{slug: slug, thread: thread} = claim!("give-back")
 
-      {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/slugs")
 
       view |> element("[data-testid=staff-slug-release-#{slug.id}]") |> render_click()
 
@@ -117,7 +117,7 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
       %{slug: slug, token: token} = claim!("confirmed-release")
       {:ok, _} = Slugs.confirm(token, slug.tenant_id)
 
-      {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/slugs")
 
       view |> element("[data-testid=staff-slug-release-#{slug.id}]") |> render_click()
 
@@ -139,7 +139,7 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
           expires_at: nil
         )
 
-      {:ok, view, html} = live(conn, ~p"/app/settings/slugs")
+      {:ok, view, html} = live(conn, ~p"/app/customers/slugs")
 
       # No release button renders for provisioned rows.
       refute html =~ "staff-slug-release-#{provisioned.id}"
@@ -178,7 +178,7 @@ defmodule CustyardWeb.Staff.SlugsLiveTest do
         |> Phoenix.ConnTest.init_test_session(%{})
         |> put_staff_session(staff.id)
 
-      assert {:error, {:redirect, %{to: "/app"}}} = live(conn, ~p"/app/settings/slugs")
+      assert {:error, {:redirect, %{to: "/app"}}} = live(conn, ~p"/app/customers/slugs")
     end
 
     test "non-super-admin cannot release via direct handle_event invocation" do

@@ -39,7 +39,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveIntegrationTest do
     put_failure(ctx, body("one"))
     await_failures(ctx, 1)
 
-    {:ok, view, _html} = live(ctx.conn, ~p"/app/settings/integrations")
+    {:ok, view, _html} = live(ctx.conn, ~p"/app/customers/acknowledgments")
     render_async(view)
 
     assert view |> element("[data-testid=acknowledgments-queue-work]") |> render() =~
@@ -56,7 +56,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveIntegrationTest do
     put_failure(ctx, body("ui-2"))
     await_failures(ctx, 2)
 
-    {:ok, view, _html} = live(ctx.conn, ~p"/app/settings/integrations")
+    {:ok, view, _html} = live(ctx.conn, ~p"/app/customers/acknowledgments")
     render_async(view)
 
     view |> element("[data-testid=acknowledgments-inspect]") |> render_click()
@@ -104,7 +104,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveIntegrationTest do
     put_failure(ctx, body("next"))
     await_failures(ctx, 2)
 
-    {:ok, view, _html} = live(ctx.conn, ~p"/app/settings/integrations")
+    {:ok, view, _html} = live(ctx.conn, ~p"/app/customers/acknowledgments")
     render_async(view)
     view |> element("[data-testid=acknowledgments-inspect]") |> render_click()
     render_async(view)
@@ -136,7 +136,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveIntegrationTest do
     put_failure(ctx, conflicting)
     await_failures(ctx, 2)
 
-    {:ok, view, _html} = live(ctx.conn, ~p"/app/settings/integrations")
+    {:ok, view, _html} = live(ctx.conn, ~p"/app/customers/acknowledgments")
     render_async(view)
     view |> element("[data-testid=acknowledgments-inspect]") |> render_click()
     render_async(view)
@@ -161,7 +161,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveIntegrationTest do
     put_failure(ctx, "{not json")
     await_failures(ctx, 1)
 
-    {:ok, view, _html} = live(ctx.conn, ~p"/app/settings/integrations")
+    {:ok, view, _html} = live(ctx.conn, ~p"/app/customers/acknowledgments")
     render_async(view)
     view |> element("[data-testid=acknowledgments-inspect]") |> render_click()
     render_async(view)
@@ -182,7 +182,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveIntegrationTest do
     await_failures(ctx, 1)
     Process.flag(:trap_exit, true)
 
-    {:ok, view, _html} = live(ctx.conn, ~p"/app/settings/integrations")
+    {:ok, view, _html} = live(ctx.conn, ~p"/app/customers/acknowledgments")
     render_async(view)
     view |> element("[data-testid=acknowledgments-inspect]") |> render_click()
     render_async(view)
@@ -215,7 +215,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveIntegrationTest do
     await_failures(ctx, 1)
     Process.flag(:trap_exit, true)
 
-    {:ok, view, _html} = live(ctx.conn, ~p"/app/settings/integrations")
+    {:ok, view, _html} = live(ctx.conn, ~p"/app/customers/acknowledgments")
     render_async(view)
     view |> element("[data-testid=acknowledgments-inspect]") |> render_click()
     Process.exit(view.pid, :kill)

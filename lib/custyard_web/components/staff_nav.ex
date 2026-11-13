@@ -49,11 +49,11 @@ defmodule CustyardWeb.StaffNav do
           page(
             :acknowledgments,
             "Acknowledgments",
-            ~p"/app/settings/integrations",
+            ~p"/app/customers/acknowledgments",
             [Staff.AcknowledgmentsLive],
             admin: true
           ),
-          page(:slugs, "Slugs", ~p"/app/settings/slugs", [Staff.SlugsLive], admin: true)
+          page(:slugs, "Slugs", ~p"/app/customers/slugs", [Staff.SlugsLive], admin: true)
         ]
       },
       %{
@@ -80,11 +80,10 @@ defmodule CustyardWeb.StaffNav do
           page(:intake, "Intake sources", ~p"/app/settings/intake", [Staff.IntakeSourcesLive],
             admin: true
           ),
-          # /app/settings/staff opens this same page, so it has no entry.
           page(
             :tenant,
             "Tenant settings",
-            ~p"/app/settings/workspace",
+            ~p"/app/settings/tenant",
             [Staff.TenantSettingsLive],
             admin: true
           )

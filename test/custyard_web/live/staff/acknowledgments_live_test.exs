@@ -93,15 +93,15 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
       admin = insert_staff_account(role: "agent")
 
       assert {:error, {:redirect, %{to: "/app"}}} =
-               live(authenticate(conn, admin), ~p"/app/settings/integrations")
+               live(authenticate(conn, admin), ~p"/app/customers/acknowledgments")
     end
 
     test "the customers section links to the page", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/app/settings/slugs")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/slugs")
 
       assert has_element?(
                view,
-               "a[data-testid=staff-subnav-acknowledgments][href='/app/settings/integrations']",
+               "a[data-testid=staff-subnav-acknowledgments][href='/app/customers/acknowledgments']",
                "Acknowledgments"
              )
     end
@@ -110,7 +110,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
   describe "subscription" do
     test "an unconfigured tenant can set up its subscription", %{conn: conn} do
       put_config(source: nil)
-      {:ok, view, html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, html} = live(conn, ~p"/app/customers/acknowledgments")
       assert html =~ "Configure tenant subscription"
       assert html =~ "Broker URL"
       assert view |> element("[data-testid=acknowledgments-status]") |> render() =~ "Disabled"
@@ -118,7 +118,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
     end
 
     test "disabled says how it is switched", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/acknowledgments")
 
       assert view |> element("[data-testid=acknowledgments-status]") |> render() =~ "Disabled"
       assert has_element?(view, "[data-testid=acknowledgments-disabled]")
@@ -135,7 +135,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
         source: "ots.eu.production"
       )
 
-      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/acknowledgments")
       html = render_async(view, 10_000)
 
       assert view |> element("[data-testid=acknowledgments-status]") |> render() =~ "Stopped"
@@ -156,7 +156,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
       {:ok, :created, binding} =
         Acknowledgments.bind(local_authority(tenant_id(), "cli"), "ots.other", "org-77", org.id)
 
-      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/acknowledgments")
 
       row = view |> element("[data-testid=acknowledgments-binding-#{binding.id}]") |> render()
       assert row =~ "ots.other"
@@ -169,7 +169,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
       staff: staff
     } do
       org = insert_organization(name: "Acme Support")
-      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/acknowledgments")
       render_async(view, 10_000)
 
       view
@@ -207,7 +207,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
     test "confirming after the organization was deleted binds nothing, even once another exists",
          %{conn: conn} do
       org = insert_organization(name: "Reviewed")
-      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/acknowledgments")
       render_async(view, 10_000)
 
       view
@@ -231,7 +231,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
 
     test "cancel leaves nothing bound", %{conn: conn} do
       org = insert_organization()
-      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/acknowledgments")
       render_async(view, 10_000)
 
       view
@@ -258,7 +258,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
           other.id
         )
 
-      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/acknowledgments")
       render_async(view, 10_000)
 
       view
@@ -302,7 +302,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
 
     test "the form is pinned to the configured source", %{conn: conn} do
       org = insert_organization()
-      {:ok, view, _html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, _html} = live(conn, ~p"/app/customers/acknowledgments")
       # Submissions are ignored while the initial refresh is in flight.
       render_async(view, 10_000)
 
@@ -328,7 +328,7 @@ defmodule CustyardWeb.Staff.AcknowledgmentsLiveTest do
     test "without a configured source, binding is left to the CLI", %{conn: conn} do
       put_config(enabled: false, url: nil, source: nil)
       org = insert_organization()
-      {:ok, view, html} = live(conn, ~p"/app/settings/integrations")
+      {:ok, view, html} = live(conn, ~p"/app/customers/acknowledgments")
 
       refute has_element?(view, "[data-testid=acknowledgments-bind-form]")
       assert html =~ "bin/acknowledgments bind"

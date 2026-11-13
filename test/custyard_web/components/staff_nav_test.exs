@@ -80,8 +80,8 @@ defmodule CustyardWeb.StaffNavTest do
 
       assert Enum.map(links, &{&1.label, &1.path, &1.testid, &1.current}) == [
                {"All customers", "/app/customers", "customers", nil},
-               {"Acknowledgments", "/app/settings/integrations", "acknowledgments", nil},
-               {"Slugs", "/app/settings/slugs", "slugs", "page"}
+               {"Acknowledgments", "/app/customers/acknowledgments", "acknowledgments", nil},
+               {"Slugs", "/app/customers/slugs", "slugs", "page"}
              ]
     end
 
@@ -92,7 +92,7 @@ defmodule CustyardWeb.StaffNavTest do
                {"Workflow", "/app/settings/workflow", "workflow"},
                {"Support email setup", "/app/settings/email", "email"},
                {"Intake sources", "/app/settings/intake", "intake"},
-               {"Tenant settings", "/app/settings/workspace", "tenant"}
+               {"Tenant settings", "/app/settings/tenant", "tenant"}
              ]
 
       assert current(links) == [:workflow]

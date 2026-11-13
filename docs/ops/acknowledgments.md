@@ -2,7 +2,7 @@
 
 Each tenant owns its acknowledgment subscription, source identity, queue name
 and encrypted broker credential. Tenant administrators configure it at
-`/app/settings/integrations`; no global source or broker URL supplies tenant
+`/app/customers/acknowledgments`; no global source or broker URL supplies tenant
 access. Set `CREDENTIAL_ENCRYPTION_KEY` before saving credentials.
 
 The instance operator provisions broker infrastructure. Tenant staff bind

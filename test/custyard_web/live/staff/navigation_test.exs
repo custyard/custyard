@@ -149,9 +149,9 @@ defmodule CustyardWeb.Staff.NavigationTest do
             {~p"/app/customers", [customers: "page", acknowledgments: nil, slugs: nil]},
             {~p"/app/customers/#{org.public_id}",
              [customers: "true", acknowledgments: nil, slugs: nil]},
-            {~p"/app/settings/integrations",
+            {~p"/app/customers/acknowledgments",
              [customers: nil, acknowledgments: "page", slugs: nil]},
-            {~p"/app/settings/slugs", [customers: nil, acknowledgments: nil, slugs: "page"]}
+            {~p"/app/customers/slugs", [customers: nil, acknowledgments: nil, slugs: "page"]}
           ] do
         {:ok, view, _html} = live(conn, path)
 
@@ -179,9 +179,7 @@ defmodule CustyardWeb.Staff.NavigationTest do
             {~p"/app/settings/workflow", :workflow},
             {~p"/app/settings/email", :email},
             {~p"/app/settings/intake", :intake},
-            {~p"/app/settings/workspace", :tenant},
-            # The same page under a second address.
-            {~p"/app/settings/staff", :tenant}
+            {~p"/app/settings/tenant", :tenant}
           ] do
         {:ok, view, _html} = live(conn, path)
 
@@ -207,7 +205,7 @@ defmodule CustyardWeb.Staff.NavigationTest do
 
       assert has_element?(
                settings,
-               "#{@second} a[data-testid=staff-subnav-tenant][href='/app/settings/workspace']",
+               "#{@second} a[data-testid=staff-subnav-tenant][href='/app/settings/tenant']",
                "Tenant settings"
              )
 
@@ -217,7 +215,7 @@ defmodule CustyardWeb.Staff.NavigationTest do
       refute html =~ "Tenant settings"
       refute has_element?(queue, "[data-testid=staff-subnav-email]")
       refute has_element?(queue, "[data-testid=staff-subnav-tenant]")
-      refute has_element?(queue, "a[href='/app/settings/workspace']")
+      refute has_element?(queue, "a[href='/app/settings/tenant']")
     end
 
     # The thread page fills the height left under the navigation. That holds

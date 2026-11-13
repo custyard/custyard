@@ -132,7 +132,7 @@ defmodule CustyardWeb.TenantWorkflowTest do
   } do
     op = staff(a, "admin")
     conn = conn |> init_test_session(%{}) |> put_staff_session(op)
-    {:ok, view, _} = live(conn, "/app/settings/workspace")
+    {:ok, view, _} = live(conn, "/app/settings/tenant")
 
     render_submit(view, "invite", %{
       "staff" => %{"email" => "forged@example.net", "role" => "super_admin"}

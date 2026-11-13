@@ -126,6 +126,19 @@ defmodule CustyardWeb.Router do
     get "/attachments/:id", AttachmentController, :show
     get "/attachments/:id/inline", AttachmentController, :inline
 
+    # Declared before the :staff session: /customers/acknowledgments and
+    # /customers/slugs must match ahead of /customers/:id.
+    live_session :staff_admin,
+      on_mount: [{CustyardWeb.Live.StaffAuth, :require_admin}],
+      layout: {CustyardWeb.Layouts, :staff} do
+      live "/customers/acknowledgments", AcknowledgmentsLive, :index
+      live "/customers/slugs", SlugsLive, :index
+      live "/settings/workflow", SettingsLive, :index
+      live "/settings/email", EmailSetupLive, :index
+      live "/settings/intake", IntakeSourcesLive, :index
+      live "/settings/tenant", TenantSettingsLive, :index
+    end
+
     live_session :staff,
       on_mount: [{CustyardWeb.Live.StaffAuth, :default}],
       layout: {CustyardWeb.Layouts, :staff} do
@@ -133,23 +146,11 @@ defmodule CustyardWeb.Router do
       live "/threads", AttentionQueueLive, :index
       live "/threads/:id", ThreadLive, :show
       live "/tasks", TasksLive, :index
-      live "/projects", ProjectsLive, :index
-      live "/projects/:id", ProjectDetailLive, :show
       live "/neglect", NeglectReportLive, :index
       live "/customers", OrganizationsLive, :index
       live "/customers/:id", OrganizationDetailLive, :show
-    end
-
-    live_session :staff_admin,
-      on_mount: [{CustyardWeb.Live.StaffAuth, :require_admin}],
-      layout: {CustyardWeb.Layouts, :staff} do
-      live "/settings/email", EmailSetupLive, :index
-      live "/settings/workspace", TenantSettingsLive, :index
-      live "/settings/staff", TenantSettingsLive, :index
-      live "/settings/intake", IntakeSourcesLive, :index
-      live "/settings/workflow", SettingsLive, :index
-      live "/settings/slugs", SlugsLive, :index
-      live "/settings/integrations", AcknowledgmentsLive, :index
+      live "/projects", ProjectsLive, :index
+      live "/projects/:id", ProjectDetailLive, :show
     end
   end
 

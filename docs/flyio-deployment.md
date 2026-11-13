@@ -141,7 +141,7 @@ variables above and for upgrading an app whose files are still on the volume.
 ## Colonel acknowledgments
 
 Each tenant configures its own encrypted broker credential, source and queue
-at `/app/settings/integrations`. `CREDENTIAL_ENCRYPTION_KEY` must be set before
+at `/app/customers/acknowledgments`. `CREDENTIAL_ENCRYPTION_KEY` must be set before
 storing the credential. Enabled active tenants have independent consumers;
 suspension stops their consumers. `ACKNOWLEDGMENTS_PREFETCH` controls process
 concurrency, while subscription identity and credentials remain database settings.
@@ -261,7 +261,7 @@ shows the tenant name, **Staff** and the signed-in email. Staff roles are admin
 or agent; memberships are tenant database records. Instance administration does
 not grant membership or access to customer data.
 
-Tenant admins manage staff at `/app/settings/workspace` and configure support
+Tenant admins manage staff at `/app/settings/tenant` and configure support
 mail at `/app/settings/email`. Installation mail configuration handles login
 mail independently of these tenant provider credentials.
 

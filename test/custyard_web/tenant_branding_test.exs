@@ -30,7 +30,7 @@ defmodule CustyardWeb.TenantBrandingTest do
     File.write!(source, "old logo")
     {:ok, old_url} = Uploads.save_logo(c.tenant.id, source, "old.png")
     {:ok, _} = Tenants.update_tenant(c.tenant, %{logo_url: old_url})
-    {:ok, view, html} = live(c.conn, "/app/settings/workspace")
+    {:ok, view, html} = live(c.conn, "/app/settings/tenant")
     assert html =~ ~s(content="Atlas Support")
     refute html =~ "/favicon.svg"
     refute has_element?(view, "input[name='tenant[logo_url]']")
@@ -69,7 +69,7 @@ defmodule CustyardWeb.TenantBrandingTest do
 
   test "an uploaded logo is stored in the database under the tenant and served as uploaded",
        c do
-    {:ok, view, _} = live(c.conn, "/app/settings/workspace")
+    {:ok, view, _} = live(c.conn, "/app/settings/tenant")
     upload_logo(view, "Brand Mark.PNG")
 
     view
@@ -101,7 +101,7 @@ defmodule CustyardWeb.TenantBrandingTest do
   end
 
   test "an uploaded SVG logo is served with the script-blocking policy", c do
-    {:ok, view, _} = live(c.conn, "/app/settings/workspace")
+    {:ok, view, _} = live(c.conn, "/app/settings/tenant")
 
     view
     |> file_input("#tenant-settings", :logo, [
@@ -134,7 +134,7 @@ defmodule CustyardWeb.TenantBrandingTest do
     # This tenant's logo_url names the other tenant's file, as a stale or
     # hand-edited row could. Replacing it must leave that file.
     {:ok, _} = Tenants.update_tenant(c.tenant, %{logo_url: other_url})
-    {:ok, view, _} = live(c.conn, "/app/settings/workspace")
+    {:ok, view, _} = live(c.conn, "/app/settings/tenant")
     upload_logo(view, "mine.png")
 
     view
@@ -148,7 +148,7 @@ defmodule CustyardWeb.TenantBrandingTest do
   end
 
   test "logo upload rejects unsupported files and shows actionable help", c do
-    {:ok, view, _} = live(c.conn, "/app/settings/workspace")
+    {:ok, view, _} = live(c.conn, "/app/settings/tenant")
 
     upload =
       file_input(view, "#tenant-settings", :logo, [
@@ -162,7 +162,7 @@ defmodule CustyardWeb.TenantBrandingTest do
   end
 
   test "logo upload rejects a file over 2 MB and stores nothing", c do
-    {:ok, view, _} = live(c.conn, "/app/settings/workspace")
+    {:ok, view, _} = live(c.conn, "/app/settings/tenant")
 
     upload =
       file_input(view, "#tenant-settings", :logo, [

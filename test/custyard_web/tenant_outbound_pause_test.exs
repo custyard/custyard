@@ -8,7 +8,7 @@ defmodule CustyardWeb.TenantOutboundPauseTest do
     tenant = insert_tenant()
     admin = insert_staff_account(tenant_id: tenant.id, role: "admin")
     conn = conn |> init_test_session(%{}) |> put_staff_session(admin)
-    {:ok, view, _} = live(conn, "/app/settings/workspace")
+    {:ok, view, _} = live(conn, "/app/settings/tenant")
     assert has_element?(view, "#outbound-email-control button", "Pause outbound email")
 
     view |> element("#outbound-email-control button") |> render_click()

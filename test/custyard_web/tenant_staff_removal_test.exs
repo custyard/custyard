@@ -16,7 +16,7 @@ defmodule CustyardWeb.TenantStaffRemovalTest do
   test "removing tenant staff is confirmed, audited and revokes open sessions", c do
     admin_conn = c.conn |> init_test_session(%{}) |> put_staff_session(c.admin)
     agent_conn = build_conn() |> init_test_session(%{}) |> put_staff_session(c.agent)
-    {:ok, admin_view, _} = live(admin_conn, "/app/settings/workspace")
+    {:ok, admin_view, _} = live(admin_conn, "/app/settings/tenant")
     {:ok, agent_view, _} = live(agent_conn, "/app")
     assert has_element?(admin_view, "[data-testid=staff-#{c.agent.id}] button[data-confirm]")
     refute has_element?(admin_view, "[data-testid=staff-#{c.admin.id}] button")
