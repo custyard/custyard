@@ -4,7 +4,12 @@ defmodule Custyard.Webhooks.Purposes.Notification do
 
   Sends notifications via configured channels (PubSub for now,
   extensible to Slack, push notifications, email).
+
+  A thread whose sender staff chose to ignore
+  (`Custyard.Threads.ignore_sender/2`) notifies nobody.
   """
+
+  alias Custyard.Threads
 
   require Custyard.Log, as: Log
 
@@ -12,12 +17,16 @@ defmodule Custyard.Webhooks.Purposes.Notification do
   Notify staffs about the new/updated thread.
   """
   def process(thread, _normalized, _route_context) do
-    # Broadcast a notification event for any real-time listeners
-    Phoenix.PubSub.broadcast(
-      Custyard.PubSub,
-      "staff:notifications",
-      {:new_message, thread.id}
-    )
+    # The sender is read here, when the notification would go out, so an
+    # ignore set a moment ago already counts.
+    if not Threads.sender_ignored?(thread) do
+      # Broadcast a notification event for any real-time listeners
+      Phoenix.PubSub.broadcast(
+        Custyard.PubSub,
+        "staff:notifications",
+        {:new_message, thread.id}
+      )
+    end
 
     :ok
   rescue

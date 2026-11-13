@@ -462,6 +462,37 @@ defmodule CustyardWeb.Staff.ThreadLive do
     {:noreply, socket}
   end
 
+  # Ignoring is by sender (the thread's contact), so it covers every
+  # conversation they have here and any they start later. Gated like a state
+  # change.
+  def handle_event("ignore_sender", %{"ignore" => ignore}, socket)
+      when ignore in ~w(true false) do
+    if Authorization.can_set_thread_state?(socket.assigns.current_staff) do
+      scope = socket.assigns.current_scope
+      id = socket.assigns.thread.id
+
+      result =
+        if ignore == "true",
+          do: Threads.ignore_sender(scope, id),
+          else: Threads.unignore_sender(scope, id)
+
+      case result do
+        {:ok, _contact} ->
+          {:noreply, reload_thread(socket)}
+
+        {:error, :unauthorized} ->
+          {:noreply, access_revoked(socket)}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "Failed to update the sender")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Only admins can ignore a sender")}
+    end
+  end
+
+  def handle_event("ignore_sender", _params, socket), do: {:noreply, socket}
+
   def handle_event("show_convert_form", _params, socket) do
     if Authorization.can_create_organization?(socket.assigns.current_staff) do
       {:noreply,
@@ -1292,6 +1323,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
       |> assign(:column, @column)
       |> assign(:contact_line, contact_line(assigns.thread))
       |> assign(:note?, assigns.composer_mode == :note)
+      |> assign(:can_set_state, Authorization.can_set_thread_state?(assigns.current_staff))
+      # The contact is preloaded with the thread, so this reads no row.
+      |> assign(:sender_ignored?, Threads.sender_ignored?(assigns.thread))
 
     ~H"""
     <div class="flex flex-1 min-h-0" data-testid="staff-thread-page">
@@ -1374,6 +1408,14 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   >
                     Not suspect
                   </button>
+                </span>
+                <span
+                  :if={@sender_ignored?}
+                  class="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300"
+                  title="Conversations from this sender stay out of the queue and notify nobody"
+                  data-testid="thread-sender-ignored-badge"
+                >
+                  sender ignored
                 </span>
                 <span
                   :if={@thread.language}
@@ -1838,6 +1880,35 @@ defmodule CustyardWeb.Staff.ThreadLive do
                   Mark resolved
                 </button>
               <% end %>
+              <%!-- By sender, not by thread. Pressed while the sender is
+              ignored; clicking again stops ignoring, so a mis-click is
+              undoable in place. --%>
+              <button
+                :if={@can_set_state and @thread.contact}
+                type="button"
+                phx-click="ignore_sender"
+                phx-value-ignore={to_string(not @sender_ignored?)}
+                data-confirm={
+                  if not @sender_ignored?,
+                    do:
+                      "Ignore this sender? This conversation and later ones from the same address leave the queue. They stay under the ignored filter."
+                }
+                aria-pressed={to_string(@sender_ignored?)}
+                class={[
+                  "w-full text-left text-sm px-3 py-1.5 rounded border",
+                  if(@sender_ignored?,
+                    do:
+                      "bg-gray-300 hover:bg-gray-200 text-gray-900 border-gray-400 font-medium dark:bg-zinc-500/40 dark:hover:bg-zinc-500/30 dark:text-zinc-100 dark:border-zinc-500",
+                    else:
+                      "bg-gray-50 hover:bg-gray-100 text-gray-800 border-gray-200 dark:bg-zinc-900/40 dark:hover:bg-zinc-700/60 dark:text-zinc-200 dark:border-zinc-700"
+                  )
+                ]}
+                data-testid="staff-state-ignore-sender"
+              >
+                {if @sender_ignored?,
+                  do: "Sender ignored. Click to stop ignoring",
+                  else: "Ignore sender"}
+              </button>
             </div>
           </section>
 

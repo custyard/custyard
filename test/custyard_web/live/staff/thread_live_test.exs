@@ -1133,6 +1133,160 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
     end
   end
 
+  describe "ignore sender" do
+    setup do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "digest@sender.example.com")
+      conv = insert_thread(organization_id: org.id, contact_id: contact.id, state: :active)
+      insert_message(thread_id: conv.id, body: "This week in numbers")
+
+      %{org: org, contact: contact, conv: conv}
+    end
+
+    defp ignored_at(contact), do: Repo.get!(Custyard.Contact, contact.id).ignored_at
+
+    test "the state section offers it, with a confirmation that says what happens", %{
+      conn: conn,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      button = "[data-testid=staff-state-actions] button[data-testid=staff-state-ignore-sender]"
+
+      assert has_element?(view, "#{button}[aria-pressed=false]", "Ignore sender")
+      refute has_element?(view, "[data-testid=thread-sender-ignored-badge]")
+
+      [confirm] =
+        view
+        |> element(button)
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.attribute("data-confirm")
+
+      assert confirm =~ "later ones from the same address leave the queue"
+      assert confirm =~ "ignored filter"
+    end
+
+    test "ignores the sender, shows it and lets the same control undo it", %{
+      conn: conn,
+      contact: contact,
+      conv: conv
+    } do
+      Phoenix.PubSub.subscribe(Custyard.PubSub, "threads")
+      id = conv.id
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{id}")
+      button = "button[data-testid=staff-state-ignore-sender]"
+
+      view |> element(button) |> render_click()
+
+      assert %DateTime{} = ignored_at(contact)
+      assert_receive {:thread_updated, ^id}
+
+      assert has_element?(
+               view,
+               "#{button}[aria-pressed=true]",
+               "Sender ignored. Click to stop ignoring"
+             )
+
+      # Stopping needs no confirmation.
+      refute has_element?(view, "#{button}[data-confirm]")
+
+      assert has_element?(
+               view,
+               "header [data-testid=thread-sender-ignored-badge]",
+               "sender ignored"
+             )
+
+      # The conversation left the queue it was opened from.
+      refute has_element?(view, "[data-testid=staff-thread-queue-nav]")
+
+      view |> element(button) |> render_click()
+
+      assert ignored_at(contact) == nil
+      assert has_element?(view, "#{button}[aria-pressed=false]", "Ignore sender")
+      refute has_element?(view, "[data-testid=thread-sender-ignored-badge]")
+      assert has_element?(view, "[data-testid=staff-thread-queue-nav]")
+    end
+
+    test "a resolved conversation offers it as well", %{conn: conn, org: org, contact: contact} do
+      resolved = insert_thread(organization_id: org.id, contact_id: contact.id, state: :resolved)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{resolved.id}")
+
+      assert has_element?(view, "[data-testid=staff-state-reopen]")
+      view |> element("[data-testid=staff-state-ignore-sender]") |> render_click()
+      assert %DateTime{} = ignored_at(contact)
+    end
+
+    test "another conversation of the same sender shows the badge too", %{
+      conn: conn,
+      org: org,
+      contact: contact,
+      conv: conv
+    } do
+      sibling = insert_thread(organization_id: org.id, contact_id: contact.id, state: :new)
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+      view |> element("[data-testid=staff-state-ignore-sender]") |> render_click()
+
+      {:ok, other, _html} = live(conn, ~p"/app/threads/#{sibling.id}")
+
+      assert has_element?(other, "[data-testid=thread-sender-ignored-badge]")
+      assert has_element?(other, "[data-testid=staff-state-ignore-sender][aria-pressed=true]")
+    end
+
+    test "a conversation without a contact has no such control", %{conn: conn} do
+      conv = insert_thread(organization_id: nil, source: :public_intake)
+
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      assert has_element?(view, "[data-testid=staff-state-actions]")
+      refute has_element?(view, "[data-testid=staff-state-ignore-sender]")
+      refute has_element?(view, "[data-testid=thread-sender-ignored-badge]")
+
+      # The event has nothing to act on.
+      html = render_click(view, "ignore_sender", %{"ignore" => "true"})
+      assert html =~ "Failed to update the sender"
+    end
+
+    test "staff who may not change thread state get no control and no effect", %{
+      org: org,
+      contact: contact,
+      conv: conv
+    } do
+      agent = conn_for_staff(insert_scoped_staff(org.id, "agent"))
+      {:ok, view, _html} = live(agent, ~p"/app/threads/#{conv.id}")
+
+      refute has_element?(view, "[data-testid=staff-state-ignore-sender]")
+
+      html = render_click(view, "ignore_sender", %{"ignore" => "true"})
+      assert html =~ "Only admins can ignore a sender"
+      assert ignored_at(contact) == nil
+
+      # They still see that a sender is ignored, and cannot undo it.
+      Repo.update!(Custyard.Contact.ignore_changeset(contact, ~U[2026-11-01 09:00:00Z]))
+      {:ok, view, _html} = live(agent, ~p"/app/threads/#{conv.id}")
+
+      assert has_element?(view, "[data-testid=thread-sender-ignored-badge]")
+      refute has_element?(view, "[data-testid=staff-state-ignore-sender]")
+
+      render_click(view, "ignore_sender", %{"ignore" => "false"})
+      assert ignored_at(contact) == ~U[2026-11-01 09:00:00Z]
+    end
+
+    test "an event without a clear yes or no does nothing", %{
+      conn: conn,
+      contact: contact,
+      conv: conv
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
+
+      render_click(view, "ignore_sender", %{"ignore" => "maybe"})
+      render_click(view, "ignore_sender", %{})
+
+      assert ignored_at(contact) == nil
+    end
+  end
+
   describe "task CRUD" do
     test "creates a task", %{conn: conn} do
       org = insert_organization()

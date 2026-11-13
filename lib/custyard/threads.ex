@@ -4,6 +4,8 @@ defmodule Custyard.Threads do
   """
 
   alias Custyard.{
+    Authorization,
+    Contact,
     Thread,
     EmailAddress,
     Message,
@@ -408,6 +410,8 @@ defmodule Custyard.Threads do
       left_join: ct in assoc(c, :contact),
       where: c.state != :resolved,
       where: is_nil(c.snoozed_until) or c.snoozed_until < ^now,
+      # Staff chose not to hear about an ignored sender's threads.
+      where: is_nil(ct.ignored_at),
       # Order by org name (nil sorts first), then by score
       order_by: [asc_nulls_first: o.name, desc: c.cached_score],
       preload: [organization: o, contact: ct]
@@ -508,6 +512,82 @@ defmodule Custyard.Threads do
 
       {:ok, updated}
     end
+  end
+
+  defp authorize_state_change(staff) do
+    if Authorization.can_set_thread_state?(staff), do: :ok, else: {:error, :unauthorized}
+  end
+
+  defp broadcast_thread_updated(%Thread{id: id, organization_id: organization_id}) do
+    Phoenix.PubSub.broadcast(Custyard.PubSub, "threads", {:thread_updated, id})
+    broadcast_to_org(organization_id, {:thread_updated, id})
+  end
+
+  @doc """
+  Ignore the sender of a thread, which is the thread's contact.
+
+  Every thread from that contact, this one and any that arrives later, is
+  listed only by the `"ignored"` queue filter, stays out of the neglect
+  report and causes no staff notification. `unignore_sender/2` undoes it.
+
+  Gated like a state change (`Custyard.Authorization.can_set_thread_state?/1`).
+  Returns `{:ok, contact}`, `{:error, :no_contact}` for a thread without a
+  contact, or `{:error, :unauthorized}`. Broadcasts `{:thread_updated, id}`
+  like a state change, so open queues refresh.
+  """
+  def ignore_sender(%Custyard.Scope{} = scope, thread_id),
+    do: set_sender_ignored(scope, thread_id, true)
+
+  @doc "Stop ignoring the sender of a thread. See `ignore_sender/2`."
+  def unignore_sender(%Custyard.Scope{} = scope, thread_id),
+    do: set_sender_ignored(scope, thread_id, false)
+
+  defp set_sender_ignored(scope, thread_id, ignore?) do
+    result =
+      with_access(scope, thread_id, fn thread, staff ->
+        with :ok <- authorize_state_change(staff),
+             {:ok, contact} <- sender(thread),
+             {:ok, contact} <-
+               contact
+               |> Contact.ignore_changeset(ignored_at(contact, ignore?))
+               |> Repo.update() do
+          {:ok, {contact, thread}}
+        end
+      end)
+
+    with {:ok, {contact, thread}} <- result do
+      # An open queue reloads its whole list on any thread update, so this one
+      # broadcast covers every thread the sender has there.
+      broadcast_thread_updated(thread)
+      {:ok, contact}
+    end
+  end
+
+  defp sender(%Thread{contact_id: nil}), do: {:error, :no_contact}
+
+  defp sender(%Thread{contact_id: id, tenant_id: tenant_id}) do
+    case Repo.get_by(Contact, id: id, tenant_id: tenant_id) do
+      nil -> {:error, :no_contact}
+      contact -> {:ok, contact}
+    end
+  end
+
+  # Ignoring an ignored sender again keeps the time of the first.
+  defp ignored_at(%Contact{ignored_at: %DateTime{} = at}, true), do: at
+  defp ignored_at(_contact, true), do: DateTime.utc_now() |> DateTime.truncate(:second)
+  defp ignored_at(_contact, false), do: nil
+
+  @doc """
+  Whether the thread's sender (its contact) is ignored. Reads the preloaded
+  contact when there is one, otherwise looks the contact up.
+  """
+  def sender_ignored?(%Thread{contact: %Contact{ignored_at: ignored_at}}),
+    do: not is_nil(ignored_at)
+
+  def sender_ignored?(%Thread{contact_id: nil}), do: false
+
+  def sender_ignored?(%Thread{contact_id: id}) do
+    Repo.exists?(from(ct in Contact, where: ct.id == ^id and not is_nil(ct.ignored_at)))
   end
 
   @doc """

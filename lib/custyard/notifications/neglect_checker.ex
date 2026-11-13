@@ -67,6 +67,7 @@ defmodule Custyard.Notifications.NeglectChecker do
   - Resolved threads (no longer need attention)
   - Currently snoozed threads
   - Suspect threads (triage flagged, not yet cleared by a staff)
+  - Threads of an ignored sender (`Custyard.Threads.ignore_sender/2`)
   """
   def list_notification_candidates(tenant_id, thresholds \\ nil) do
     now = DateTime.utc_now()
@@ -84,6 +85,8 @@ defmodule Custyard.Notifications.NeglectChecker do
       # clears the flag (spec-inbound-channels D6); unattended spam must not
       # page anyone.
       where: c.suspect == false,
+      # Staff chose to ignore this sender, so their threads alert nobody.
+      where: is_nil(ct.ignored_at),
       # Only load threads that have exceeded their tier's warning threshold
       # This is the key optimization - we filter in the DB instead of loading all
       where: ^past_warning_cutoff(thresholds),

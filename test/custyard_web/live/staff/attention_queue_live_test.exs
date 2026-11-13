@@ -1622,6 +1622,76 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
     end
   end
 
+  describe "ignored senders" do
+    setup %{staff: staff} do
+      org = insert_organization()
+      contact = insert_contact(organization_id: org.id, email: "digest@sender.example.com")
+
+      muted =
+        insert_thread(
+          organization_id: org.id,
+          contact_id: contact.id,
+          state: :active,
+          subject: "Weekly digest"
+        )
+
+      insert_message(thread_id: muted.id, body: "This week in numbers")
+      heard = insert_thread(organization_id: org.id, state: :active, subject: "Real question")
+
+      %{scope: staff_scope_of(staff), muted: muted, heard: heard}
+    end
+
+    test "leave every list but the ignored one, and its chip counts them", %{
+      conn: conn,
+      scope: scope,
+      muted: muted,
+      heard: heard
+    } do
+      {:ok, _} = Custyard.Threads.ignore_sender(scope, muted.id)
+
+      for filter <- ~w(needs_reply all active) do
+        {:ok, view, _html} = live(conn, ~p"/app?filter=#{filter}")
+
+        assert row_ids(view) == [heard.id], "filter #{filter}"
+        assert has_element?(view, "[data-testid=staff-queue-filter-count-#{filter}]", "1")
+      end
+
+      {:ok, view, _html} = live(conn, ~p"/app")
+      assert has_element?(view, "[data-testid=staff-queue-filter-ignored]", "ignored")
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-ignored]", "1")
+
+      view |> element("[data-testid=staff-queue-filter-ignored]") |> render_click()
+      assert_patch(view, ~p"/app?filter=ignored&label=")
+
+      assert row_ids(view) == [muted.id]
+
+      assert has_element?(
+               view,
+               "li#queue-row-#{muted.id} a[data-row-link][href='/app/threads/#{muted.id}?filter=ignored&pos=0']"
+             )
+    end
+
+    test "an open queue drops the sender's rows when they are ignored elsewhere", %{
+      conn: conn,
+      scope: scope,
+      muted: muted,
+      heard: heard
+    } do
+      {:ok, view, _html} = live(conn, ~p"/app")
+      assert Enum.sort(row_ids(view)) == Enum.sort([muted.id, heard.id])
+
+      {:ok, _} = Custyard.Threads.ignore_sender(scope, muted.id)
+
+      # The reload is debounced, so the row goes a moment after the broadcast.
+      assert Enum.any?(1..40, fn _ ->
+               Process.sleep(50)
+               row_ids(view) == [heard.id]
+             end)
+
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-ignored]", "1")
+    end
+  end
+
   describe "resolved filter" do
     test "lists resolved conversations, the latest update first", %{conn: conn} do
       org = insert_organization()
