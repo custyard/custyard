@@ -85,14 +85,15 @@ defmodule CustyardWeb.StaffNavTest do
              ]
     end
 
-    test "the settings section holds the four settings pages" do
+    test "the settings section holds the settings pages and the audit log" do
       links = StaffNav.second_level("admin", Staff.SettingsLive)
 
       assert Enum.map(links, &{&1.label, &1.path, &1.testid}) == [
                {"Workflow", "/app/settings/workflow", "workflow"},
                {"Support email setup", "/app/settings/email", "email"},
                {"Intake sources", "/app/settings/intake", "intake"},
-               {"Tenant settings", "/app/settings/tenant", "tenant"}
+               {"Tenant settings", "/app/settings/tenant", "tenant"},
+               {"Audit log", "/app/settings/audit", "audit"}
              ]
 
       assert current(links) == [:workflow]

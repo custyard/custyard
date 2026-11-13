@@ -137,6 +137,7 @@ defmodule CustyardWeb.Router do
       live "/settings/email", EmailSetupLive, :index
       live "/settings/intake", IntakeSourcesLive, :index
       live "/settings/tenant", TenantSettingsLive, :index
+      live "/settings/audit", AuditLogLive, :index
     end
 
     live_session :staff,
@@ -172,6 +173,7 @@ defmodule CustyardWeb.Router do
       live "/", TenantsLive, :index
       live "/tenants", TenantsLive, :index
       live "/tenants/:id/settings", TenantsLive, :show
+      live "/audit", AuditLogLive, :index
     end
   end
 

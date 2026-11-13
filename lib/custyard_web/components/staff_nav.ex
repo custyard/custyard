@@ -86,7 +86,8 @@ defmodule CustyardWeb.StaffNav do
             ~p"/app/settings/tenant",
             [Staff.TenantSettingsLive],
             admin: true
-          )
+          ),
+          page(:audit, "Audit log", ~p"/app/settings/audit", [Staff.AuditLogLive], admin: true)
         ]
       }
     ]

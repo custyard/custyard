@@ -429,6 +429,7 @@ defmodule CustyardWeb.StaffComponents do
   @doc """
   A filter chip with its count, as shown above the attention queue and the
   task list. Clicking sends `event` with `filter` set to the chip's value.
+  A chip without a `count` shows its label only.
 
   The test ids are `"\#{testid}-\#{value}"` for the chip and
   `"\#{testid}-count-\#{value}"` for its count.
@@ -440,7 +441,7 @@ defmodule CustyardWeb.StaffComponents do
   attr :current, :string, required: true
   attr :value, :string, required: true
   attr :label, :string, required: true
-  attr :count, :integer, required: true
+  attr :count, :integer, default: nil
   attr :event, :string, default: "filter"
   attr :testid, :string, default: "staff-queue-filter"
 
@@ -462,6 +463,7 @@ defmodule CustyardWeb.StaffComponents do
     >
       {@label}
       <span
+        :if={@count}
         class={[
           "tabular-nums",
           if(@current == @value,

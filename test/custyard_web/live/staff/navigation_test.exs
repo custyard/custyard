@@ -179,7 +179,8 @@ defmodule CustyardWeb.Staff.NavigationTest do
             {~p"/app/settings/workflow", :workflow},
             {~p"/app/settings/email", :email},
             {~p"/app/settings/intake", :intake},
-            {~p"/app/settings/tenant", :tenant}
+            {~p"/app/settings/tenant", :tenant},
+            {~p"/app/settings/audit", :audit}
           ] do
         {:ok, view, _html} = live(conn, path)
 
@@ -187,7 +188,7 @@ defmodule CustyardWeb.Staff.NavigationTest do
 
         assert second_row(view) ==
                  for(
-                   id <- [:workflow, :email, :intake, :tenant],
+                   id <- [:workflow, :email, :intake, :tenant, :audit],
                    do: {"staff-subnav-#{id}", if(id == current, do: "page")}
                  ),
                path
