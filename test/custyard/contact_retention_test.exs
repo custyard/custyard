@@ -42,6 +42,21 @@ defmodule Custyard.ContactRetentionTest do
     refute Repo.get(Contact, orphan.id)
   end
 
+  test "cleanup keeps an ignored sender's contact, which is the record of the ignore" do
+    customer = insert_organization()
+    ignored = insert_contact(organization_id: customer.id, email: "digest@sender.example.com")
+    orphan = insert_contact(organization_id: customer.id)
+
+    ignored
+    |> Contact.ignore_changeset(DateTime.utc_now(:second))
+    |> Repo.update!()
+
+    assert Threads.cleanup_orphaned_contacts(dry_run: true) == 1
+    assert Threads.cleanup_orphaned_contacts() == 1
+    assert Repo.get(Contact, ignored.id).ignored_at
+    refute Repo.get(Contact, orphan.id)
+  end
+
   test "thread references remain protected and the sweep removes only true orphans across tenants" do
     first = insert_organization()
     second = insert_organization(tenant_id: insert_tenant().id)

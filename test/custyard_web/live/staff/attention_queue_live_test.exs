@@ -1478,13 +1478,24 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       toggle = "[data-testid=staff-queue-sort]"
 
       assert row_ids(view) == [a, b, c]
-      assert has_element?(view, "#{toggle}[aria-pressed=false]", "Highest priority first")
+      assert has_element?(view, "#{toggle}[data-reversed=false]", "Highest priority first")
 
       view |> element(toggle) |> render_click()
       assert_patch(view, ~p"/app?filter=needs_reply&label=&reverse=1")
 
       assert row_ids(view) == [c, b, a]
-      assert has_element?(view, "#{toggle}[aria-pressed=true]", "Lowest priority first")
+      assert has_element?(view, "#{toggle}[data-reversed=true]", "Lowest priority first")
+
+      # The rank panel follows the order shown.
+      view
+      |> element("li#queue-row-#{c} [data-testid=staff-queue-score-toggle]")
+      |> render_click()
+
+      assert has_element?(
+               view,
+               "[data-testid=staff-queue-rank]",
+               "Lower scores are listed first."
+             )
 
       view |> element(toggle) |> render_click()
       assert_patch(view, ~p"/app?filter=needs_reply&label=")
@@ -1527,7 +1538,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       view |> form("#queue-label-filter") |> render_change(%{label: ""})
       assert_patch(view, ~p"/app?filter=all&label=&reverse=1")
       assert row_ids(view) == [c, b, a]
-      assert has_element?(view, "[data-testid=staff-queue-sort][aria-pressed=true]")
+      assert has_element?(view, "[data-testid=staff-queue-sort][data-reversed=true]")
     end
 
     test "row links carry the order, so a conversation steps the way the list read", %{
@@ -1825,6 +1836,62 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
              )
     end
 
+    test "their rows ask for nothing: no neglect mark, no turn, and a chip that says why", %{
+      conn: conn,
+      scope: scope,
+      muted: muted
+    } do
+      # Long past every neglect threshold.
+      Repo.update_all(from(t in Custyard.Thread, where: t.id == ^muted.id),
+        set: [
+          inserted_at: DateTime.add(DateTime.utc_now(:second), -30 * 86_400),
+          last_staff_action_at: nil
+        ]
+      )
+
+      {:ok, before, _html} = live(conn, ~p"/app?filter=all")
+      row = "li#queue-row-#{muted.id}"
+      assert has_element?(before, "#{row}[data-neglect=critical][data-turn=ours]")
+
+      {:ok, _} = Custyard.Threads.ignore_sender(scope, muted.id)
+      {:ok, view, _html} = live(conn, ~p"/app?filter=ignored")
+
+      assert has_element?(view, "#{row}[data-neglect=ok][data-turn=none]")
+      refute has_element?(view, "#{row} [data-testid=staff-queue-turn]")
+
+      assert has_element?(
+               view,
+               "#{row} [data-testid=staff-queue-sender-ignored]",
+               "sender ignored"
+             )
+
+      assert has_element?(view, "[data-testid=staff-queue-sort]", "Newest first")
+    end
+
+    test "a row dismissed from the ignored list is found under resolved", %{
+      conn: conn,
+      scope: scope,
+      muted: muted
+    } do
+      {:ok, _} = Custyard.Threads.ignore_sender(scope, muted.id)
+      {:ok, view, _html} = live(conn, ~p"/app?filter=ignored")
+
+      view
+      |> element("li#queue-row-#{muted.id} [data-testid=staff-queue-dismiss-btn]")
+      |> render_click()
+
+      assert row_ids(view) == []
+      assert has_element?(view, "[data-testid=staff-queue-filter-count-resolved]", "1")
+
+      {:ok, resolved, _html} = live(conn, ~p"/app?filter=resolved")
+      assert row_ids(resolved) == [muted.id]
+
+      assert has_element?(
+               resolved,
+               "li#queue-row-#{muted.id} [data-testid=staff-queue-sender-ignored]"
+             )
+    end
+
     test "an open queue drops the sender's rows when they are ignored elsewhere", %{
       conn: conn,
       scope: scope,
@@ -1877,14 +1944,30 @@ defmodule CustyardWeb.Staff.AttentionQueueLiveTest do
       refute has_element?(view, "[data-testid=staff-queue-card-#{open.id}]")
       refute has_element?(view, "[data-testid=staff-queue-dismiss-btn]")
 
+      # Closed long ago is not neglected.
+      Repo.update_all(from(t in Custyard.Thread, where: t.id == ^oldest),
+        set: [inserted_at: DateTime.add(DateTime.utc_now(:second), -30 * 86_400)]
+      )
+
+      {:ok, aged, _html} = live(conn, ~p"/app?filter=resolved")
+      assert has_element?(aged, "li#queue-row-#{oldest}[data-neglect=ok]")
+
+      # The rank panel does not claim the score orders this list.
+      aged
+      |> element("li#queue-row-#{oldest} [data-testid=staff-queue-score-toggle]")
+      |> render_click()
+
+      assert has_element?(aged, "[data-testid=staff-queue-rank]", "Score")
+      refute render(aged) =~ "scores are listed first"
+
       # This list is not ranked by priority, and the toggle does not say so.
-      assert has_element?(view, "#{toggle}[aria-pressed=false]", "Newest first")
+      assert has_element?(view, "#{toggle}[data-reversed=false]", "Newest first")
 
       view |> element(toggle) |> render_click()
       assert_patch(view, ~p"/app?filter=resolved&label=&reverse=1")
 
       assert row_ids(view) == [oldest, middle, newest]
-      assert has_element?(view, "#{toggle}[aria-pressed=true]", "Oldest first")
+      assert has_element?(view, "#{toggle}[data-reversed=true]", "Oldest first")
     end
   end
 

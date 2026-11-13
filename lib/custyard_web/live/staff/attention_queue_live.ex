@@ -275,7 +275,14 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
     threads =
       Enum.map(threads, fn %{thread: conv, message_count: message_count} = item ->
-        neglect_status = Scoring.neglect_status(conv, settings.thresholds)
+        sender_ignored? = Threads.sender_ignored?(conv)
+
+        # A resolved thread and an ignored sender's thread ask for nothing, so
+        # their rows carry no neglect mark. The neglect report leaves both out.
+        neglect_status =
+          if conv.state == :resolved or sender_ignored?,
+            do: :ok,
+            else: Scoring.neglect_status(conv, settings.thresholds)
 
         # breakdown/2 takes the 24h count, not the thread's total.
         breakdown =
@@ -303,7 +310,8 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           # Derived from preloaded contact/prospect — no extra queries
           reply_channel: Threads.reply_channel(conv),
           preview: preview,
-          turn: QueuePreview.turn(conv, preview),
+          sender_ignored?: sender_ignored?,
+          turn: if(sender_ignored?, do: :none, else: QueuePreview.turn(conv, preview)),
           last_exchange_at: (preview && preview.last_spoke_at) || conv.inserted_at
         }
       end)
@@ -479,10 +487,28 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
 
   defp empty_text(filter), do: elem(Map.fetch!(@filter_copy, filter), 1)
 
-  # What the order toggle calls the two orders. Resolved conversations are
-  # listed by their latest update, not by priority.
-  defp sort_labels("resolved"), do: {"Newest first", "Oldest first"}
+  # What the order toggle calls the two orders. Resolved conversations and
+  # those of ignored senders are listed by date, not by priority.
+  defp sort_labels(filter) when filter in ["resolved", "ignored"],
+    do: {"Newest first", "Oldest first"}
+
   defp sort_labels(_filter), do: {"Highest priority first", "Lowest priority first"}
+
+  # What the rank panel says about the order, where the score decides it.
+  defp order_note(filter, _reverse) when filter in ["resolved", "ignored"], do: nil
+  defp order_note(_filter, true), do: "Lower scores are listed first."
+  defp order_note(_filter, _reverse), do: "Higher scores are listed first."
+
+  # "ignored" and "resolved" list a bounded number (Threads.queue_limit/1);
+  # the chip still counts them all.
+  defp count_text(threads, total) do
+    shown = length(threads)
+    noun = if max(shown, total) == 1, do: "conversation", else: "conversations"
+
+    if total > shown,
+      do: "latest #{shown} of #{total} #{noun}",
+      else: "#{shown} #{noun}"
+  end
 
   @impl true
   def render(assigns) do
@@ -525,14 +551,15 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           class="mt-2 inline-block text-sm font-medium text-indigo-600 dark:text-indigo-300"
         >{if @email_setup.configured?, do: "Continue setup", else: "Set up email"}</.link>
       </section>
-      <div class="mb-3 flex items-baseline justify-between gap-3">
+      <%!-- On a narrow screen the count and the order drop under the heading. --%>
+      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1
           class="text-lg font-semibold text-gray-900 dark:text-zinc-100"
           data-testid="staff-queue-heading"
         >
           What needs attention
         </h1>
-        <div class="flex items-baseline gap-4 text-xs text-gray-600 dark:text-zinc-400">
+        <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-zinc-400">
           <%!-- Keyboard hint: only where a keyboard is likely. --%>
           <p class="hidden lg:block" data-testid="staff-queue-keys">
             <.kbd>j</.kbd>
@@ -542,8 +569,8 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
             <.kbd>Enter</.kbd>
             open
           </p>
-          <span data-testid="staff-queue-count">
-            {length(@threads)} {if length(@threads) == 1, do: "conversation", else: "conversations"}
+          <span class="whitespace-nowrap" data-testid="staff-queue-count">
+            {count_text(@threads, Map.get(@filter_counts, @filter, 0))}
           </span>
           <.sort_toggle
             reversed={@reverse}
@@ -553,9 +580,11 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         </div>
       </div>
 
-      <div class="mb-3 flex flex-wrap items-center gap-2">
+      <%!-- From md up the label select keeps its place at the right while the
+      chips wrap beside it; below md it takes a line of its own. --%>
+      <div class="mb-3 flex flex-wrap items-start gap-2 md:flex-nowrap">
         <div
-          class="flex flex-wrap gap-1.5"
+          class="flex min-w-0 flex-wrap gap-1.5 md:flex-1"
           role="group"
           aria-label="Filter by status"
           data-testid="staff-queue-filters"
@@ -573,7 +602,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           :if={@labels != []}
           id="queue-label-filter"
           phx-change="filter_label"
-          class="ml-auto flex items-center gap-2 text-xs"
+          class="ml-auto flex shrink-0 items-center gap-2 text-xs"
         >
           <label for="queue-label" class="text-gray-600 dark:text-zinc-300">Label</label>
           <select
@@ -613,6 +642,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           thread_path={thread_path(item.thread.id, @filter, @label_id, @reverse, place)}
           staff_id={@current_staff.id}
           can_dismiss={@can_dismiss}
+          order_note={order_note(@filter, @reverse)}
           show_score={@show_score_breakdown == item.thread.id}
           show_snooze={@show_snooze_menu == item.thread.id}
         />
@@ -625,6 +655,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
   attr :thread_path, :string, required: true
   attr :staff_id, :integer, required: true
   attr :can_dismiss, :boolean, required: true
+  attr :order_note, :string, default: nil
   attr :show_score, :boolean, required: true
   attr :show_snooze, :boolean, required: true
 
@@ -794,6 +825,14 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
                 {@item.open_task_count} {if @item.open_task_count == 1,
                   do: "open task",
                   else: "open tasks"}
+              </span>
+              <span
+                :if={@item.sender_ignored?}
+                class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-700 text-gray-700 dark:text-zinc-300"
+                title="Conversations from this sender are kept out of the queue."
+                data-testid="staff-queue-sender-ignored"
+              >
+                sender ignored
               </span>
               <.urgency_badge urgency={@item.thread.urgency} />
               <span
@@ -965,12 +1004,13 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
         </div>
       </div>
 
-      <.rank_details :if={@show_score} item={@item} />
+      <.rank_details :if={@show_score} item={@item} order_note={@order_note} />
     </li>
     """
   end
 
   attr :item, :map, required: true
+  attr :order_note, :string, default: nil
 
   # "Why this rank?": the score and the facts that no longer sit on the row.
   defp rank_details(assigns) do
@@ -985,7 +1025,7 @@ defmodule CustyardWeb.Staff.AttentionQueueLive do
           <span class="font-medium text-gray-900 dark:text-zinc-100" data-testid="staff-queue-score">
             Score {@item.thread.cached_score}.
           </span>
-          Higher scores are listed first.
+          {@order_note}
         </p>
         <.score_breakdown breakdown={@item.breakdown} show_total={false} />
       </div>

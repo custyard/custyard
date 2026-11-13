@@ -453,8 +453,9 @@ defmodule CustyardWeb.StaffComponents do
       aria-pressed={to_string(@current == @value)}
       data-testid={"#{@testid}-#{@value}"}
       class={[
-        "inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500",
-        @current == @value && "bg-indigo-100 font-medium text-indigo-800",
+        "inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500",
+        @current == @value &&
+          "bg-indigo-100 font-medium text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300",
         @current != @value &&
           "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
       ]}
@@ -463,7 +464,10 @@ defmodule CustyardWeb.StaffComponents do
       <span
         class={[
           "tabular-nums",
-          if(@current == @value, do: "text-indigo-700", else: "text-gray-600 dark:text-zinc-400")
+          if(@current == @value,
+            do: "text-indigo-700 dark:text-indigo-300",
+            else: "text-gray-600 dark:text-zinc-400"
+          )
         ]}
         data-testid={"#{@testid}-count-#{@value}"}
       >
@@ -495,6 +499,9 @@ defmodule CustyardWeb.StaffComponents do
   and sends `event` when clicked; the list owner flips its own state (the
   staff lists keep it in the URL as `reverse=1`).
 
+  The visible text is the current order, so the button has no pressed state:
+  "Due soonest first, not pressed" would read as that order being off.
+
   ## Examples
 
       <.sort_toggle reversed={@reverse} label="Highest priority first" reversed_label="Lowest priority first" />
@@ -506,21 +513,30 @@ defmodule CustyardWeb.StaffComponents do
   attr :testid, :string, default: "staff-queue-sort"
 
   def sort_toggle(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :current,
+        if(assigns.reversed, do: assigns.reversed_label, else: assigns.label)
+      )
+
     ~H"""
     <button
       type="button"
       phx-click={@event}
-      aria-pressed={to_string(@reversed)}
+      aria-label={"Order: #{@current}. Reverse the order"}
       title="Reverse the order"
       data-testid={@testid}
       data-reversed={to_string(@reversed)}
-      class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-gray-600 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
+      class="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-xs text-gray-600 hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
     >
+      <%!-- The text comes first so it, not the icon, sets the baseline the
+      button shares with the count beside it. --%>
+      <span>{@current}</span>
       <.icon
         name={if @reversed, do: "hero-bars-arrow-up-mini", else: "hero-bars-arrow-down-mini"}
         class="h-4 w-4"
       />
-      <span>{if @reversed, do: @reversed_label, else: @label}</span>
     </button>
     """
   end

@@ -392,11 +392,11 @@ defmodule Custyard.Threads.AttentionQueueTest do
       {:ok, threads: insert_queue_world(c)}
     end
 
-    test "an ignored sender's threads are listed by the ignored filter only", c do
+    test "an ignored sender's threads are listed by ignored, or by resolved once closed", c do
       ignored =
         ~w(ignored ignored_snoozed ignored_due_task ignored_open_task ignored_resolved ignored_resolved_due_task)a
 
-      for filter <- Threads.queue_filters() -- ["ignored"] do
+      for filter <- Threads.queue_filters() -- ["ignored", "resolved"] do
         names = keys(c.threads, listed(c.scope, filter: filter))
         assert names -- ignored == names, "filter #{filter} lists an ignored sender"
         assert names != [], "filter #{filter}"
@@ -441,9 +441,11 @@ defmodule Custyard.Threads.AttentionQueueTest do
       assert :snoozed_due_task in working
     end
 
-    test "resolved lists resolved threads", c do
+    # An ignored sender's resolved thread is listed here and nowhere else, so
+    # a thread dismissed from the ignored list can still be found.
+    test "resolved lists every resolved thread, ignored senders included", c do
       assert keys(c.threads, listed(c.scope, filter: "resolved")) ==
-               ~w(resolved resolved_due_task resolved_open_task)a
+               ~w(ignored_resolved ignored_resolved_due_task resolved resolved_due_task resolved_open_task)a
     end
 
     test "every count equals the length of its list, with and without a label", c do
@@ -463,7 +465,7 @@ defmodule Custyard.Threads.AttentionQueueTest do
         end
       end
 
-      assert %{"ignored" => 1, "resolved" => 2, "open_tasks" => 2, "all" => 3} =
+      assert %{"ignored" => 1, "resolved" => 3, "open_tasks" => 2, "all" => 3} =
                Threads.queue_counts(c.scope, label_id: label.id)
     end
 
@@ -507,6 +509,76 @@ defmodule Custyard.Threads.AttentionQueueTest do
 
       # Enough rows that an order can be told from its reverse.
       assert length(listed(c.scope, filter: "all")) > 3
+    end
+  end
+
+  describe "ignored and resolved lists are bounded" do
+    test "the newest are listed, the count is of all, and queue_ids agrees", c do
+      limit = Threads.queue_limit("resolved")
+      assert limit == Threads.queue_limit("ignored")
+      assert is_nil(Threads.queue_limit("all"))
+
+      now = DateTime.utc_now(:second)
+
+      rows =
+        for n <- 1..(limit + 3) do
+          %{
+            tenant_id: c.org.tenant_id,
+            organization_id: c.org.id,
+            subject: "Closed #{n}",
+            state: :resolved,
+            urgency: :normal,
+            source: :email,
+            cached_score: 0,
+            suspect: false,
+            inserted_at: now,
+            # The higher the number, the later the update.
+            updated_at: DateTime.add(now, n - limit - 10)
+          }
+        end
+
+      {_count, inserted} = Repo.insert_all(Custyard.Thread, rows, returning: [:id])
+      newest_first = inserted |> Enum.map(& &1.id) |> Enum.reverse()
+
+      listed = listed(c.scope, filter: "resolved")
+      assert listed == Enum.take(newest_first, limit)
+      assert Threads.queue_ids(c.scope, filter: "resolved") == listed
+      assert listed(c.scope, filter: "resolved", reverse: true) == Enum.reverse(listed)
+      assert Threads.queue_counts(c.scope)["resolved"] == limit + 3
+    end
+
+    test "an ignored sender's threads list the newest first", c do
+      contact = insert_contact(organization_id: c.org.id, email: "digest@sender.example.com")
+
+      contact
+      |> Custyard.Contact.ignore_changeset(DateTime.utc_now(:second))
+      |> Repo.update!()
+
+      at = fn thread, seconds_ago ->
+        Repo.update_all(
+          from(t in Custyard.Thread, where: t.id == ^thread.id),
+          set: [inserted_at: DateTime.add(DateTime.utc_now(:second), -seconds_ago)]
+        )
+
+        thread.id
+      end
+
+      thread = fn score ->
+        insert_thread(
+          organization_id: c.org.id,
+          contact_id: contact.id,
+          state: :active,
+          cached_score: score
+        )
+      end
+
+      # Scores would order these the other way round.
+      oldest = at.(thread.(90), 900)
+      newest = at.(thread.(10), 30)
+      middle = at.(thread.(50), 300)
+
+      assert listed(c.scope, filter: "ignored") == [newest, middle, oldest]
+      assert listed(c.scope, filter: "ignored", reverse: true) == [oldest, middle, newest]
     end
   end
 

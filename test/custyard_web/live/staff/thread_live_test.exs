@@ -1180,6 +1180,7 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
 
     test "the state section offers it, with a confirmation that says what happens", %{
       conn: conn,
+      contact: contact,
       conv: conv
     } do
       {:ok, view, _html} = live(conn, ~p"/app/threads/#{conv.id}")
@@ -1195,7 +1196,10 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
         |> Floki.parse_fragment!()
         |> Floki.attribute("data-confirm")
 
-      assert confirm =~ "later ones from the same address leave the queue"
+      # It names the address: the sender is the thread's contact, who may not
+      # be the person who wrote last.
+      assert confirm =~ "Ignore #{contact.email}?"
+      assert confirm =~ "Every conversation from this address, now and later, leaves the queue"
       assert confirm =~ "ignored filter"
     end
 
@@ -2092,8 +2096,15 @@ defmodule CustyardWeb.Staff.ThreadLiveTest do
                "details[data-testid=staff-sidebar-score] [data-testid=staff-score-breakdown]"
              )
 
-      # The contact's address is printed once.
-      sidebar = view |> element("[data-testid=staff-thread-sidebar]") |> render()
+      # The contact's address is printed once. The ignore control's
+      # confirmation names it too, but that is an attribute, not page text.
+      sidebar =
+        view
+        |> element("[data-testid=staff-thread-sidebar]")
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.text()
+
       assert length(String.split(sidebar, "alice@acme.com")) == 2
     end
 

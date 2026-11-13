@@ -1878,7 +1878,9 @@ defmodule CustyardWeb.Staff.ThreadLive do
               <% end %>
               <%!-- By sender, not by thread. Pressed while the sender is
               ignored; clicking again stops ignoring, so a mis-click is
-              undoable in place. --%>
+              undoable in place. The sender is the thread's contact, who may
+              not have written the newest message, so the dialog names the
+              address. --%>
               <button
                 :if={@can_set_state and @thread.contact}
                 type="button"
@@ -1887,7 +1889,7 @@ defmodule CustyardWeb.Staff.ThreadLive do
                 data-confirm={
                   if not @sender_ignored?,
                     do:
-                      "Ignore this sender? This conversation and later ones from the same address leave the queue. They stay under the ignored filter."
+                      "Ignore #{@thread.contact.email}? Every conversation from this address, now and later, leaves the queue. They stay under the ignored filter."
                 }
                 aria-pressed={to_string(@sender_ignored?)}
                 class={[

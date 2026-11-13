@@ -34,8 +34,12 @@ defmodule Custyard.Threads do
     - `:reverse` - `true` returns the same threads in exactly the opposite
       order
 
-  A thread whose sender is ignored (`ignore_sender/2`) is listed by the
-  `"ignored"` filter and by no other.
+  An unresolved thread whose sender is ignored (`ignore_sender/2`) is listed
+  by the `"ignored"` filter and by no other. `"resolved"` lists every resolved
+  thread, whoever sent it, so nothing closed is out of reach.
+
+  `"ignored"` and `"resolved"` only grow, so they list at most
+  `queue_limit/1` threads, the newest first.
   """
   def list(%Custyard.Scope{tenant_id: tenant_id} = scope, opts \\ []) do
     if Custyard.Scope.current_staff(scope),
@@ -48,8 +52,20 @@ defmodule Custyard.Threads do
   @default_queue_filter "needs_reply"
   @queue_state_filters %{new: "new", active: "active", waiting: "waiting", dormant: "dormant"}
 
+  # The two filters that keep what has left the working queue. Nothing takes
+  # a thread out of them but time, so each lists a bounded number.
+  @archive_filters ~w(ignored resolved)
+  @archive_limit 200
+
   @doc "The attention-queue filter names `list/2` understands."
   def queue_filters, do: @queue_filters
+
+  @doc """
+  The most threads `list/2` returns for a filter, or `nil` when it lists all.
+  `queue_counts/2` still counts every thread.
+  """
+  def queue_limit(filter) when filter in @archive_filters, do: @archive_limit
+  def queue_limit(_filter), do: nil
 
   @doc """
   The filter the queue opens on. A queue link without a `filter` parameter
@@ -200,16 +216,27 @@ defmodule Custyard.Threads do
     |> apply_tenant_filter(tenant_id)
     |> apply_queue_filter(filter, now)
     |> apply_queue_order(filter)
+    |> apply_queue_limit(queue_limit(filter))
     |> apply_label_filter(Keyword.get(opts, :label_id))
   end
 
-  # An ignored sender's threads are listed by the "ignored" filter and by no
-  # other, whatever their tasks say.
+  # Every row is one thread (each join matches at most one row), so the limit
+  # counts threads.
+  defp apply_queue_limit(query, nil), do: query
+  defp apply_queue_limit(query, limit), do: from(c in query, limit: ^limit)
+
+  # An ignored sender's unresolved threads are listed by the "ignored" filter
+  # and by no other, whatever their tasks say.
   defp apply_queue_filter(query, "ignored", _now) do
     from([c, contact: ct] in query,
       where: not is_nil(ct.ignored_at) and c.state != :resolved
     )
   end
+
+  # Every resolved thread, ignored senders included: a thread dismissed from
+  # the ignored list has to be findable somewhere.
+  defp apply_queue_filter(query, "resolved", _now),
+    do: from(c in query, where: c.state == :resolved)
 
   defp apply_queue_filter(query, filter, now) do
     from([contact: ct] in query, where: is_nil(ct.ignored_at))
@@ -220,9 +247,6 @@ defmodule Custyard.Threads do
   # resolved and snoozed threads are listed too.
   defp apply_membership(query, "open_tasks", _now),
     do: from([open_tasks: ot] in query, where: not is_nil(ot.thread_id))
-
-  defp apply_membership(query, "resolved", _now),
-    do: from(c in query, where: c.state == :resolved)
 
   # The working queue, which every other filter narrows.
   defp apply_membership(query, filter, now) do
@@ -236,6 +260,11 @@ defmodule Custyard.Threads do
   # Resolved threads have no priority to rank by: the latest update leads.
   defp apply_queue_order(query, "resolved"),
     do: from(c in query, order_by: [desc: c.updated_at, desc: c.id])
+
+  # Nor have an ignored sender's: the newest thread leads. Their updated_at
+  # moves with every score recalculation, so it says nothing about age.
+  defp apply_queue_order(query, "ignored"),
+    do: from(c in query, order_by: [desc: c.inserted_at, desc: c.id])
 
   # The id settles equal scores, so the list and the previous/next
   # links in a conversation agree on one order.
@@ -308,9 +337,13 @@ defmodule Custyard.Threads do
     |> Enum.reduce(Map.new(@queue_filters, &{&1, 0}), &tally_queue_row(&1, &2, now))
   end
 
-  # An ignored sender's thread counts under "ignored" and nowhere else.
-  defp tally_queue_row(%{ignored_at: %DateTime{}} = row, counts, _now),
-    do: bump(counts, "ignored", row.state != :resolved)
+  # An ignored sender's thread counts under "ignored" until it is resolved,
+  # then under "resolved", and nowhere else.
+  defp tally_queue_row(%{ignored_at: %DateTime{}} = row, counts, _now) do
+    counts
+    |> bump("ignored", row.state != :resolved)
+    |> bump("resolved", row.state == :resolved)
+  end
 
   defp tally_queue_row(row, counts, now) do
     snoozed? =
@@ -1789,7 +1822,10 @@ defmodule Custyard.Threads do
               where: p.contact_id == parent_as(:contact).id,
               select: 1
             )
-          )
+          ),
+        # An ignored sender's contact is the record of the ignore. Without it
+        # their next mail would start a new contact and be back in the queue.
+        where: is_nil(ct.ignored_at)
       )
 
     if dry_run do
