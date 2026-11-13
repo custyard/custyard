@@ -30,7 +30,7 @@ defmodule Custyard.Tenants do
 
   def create_tenant_for_admin(%InstanceAdmin{} = admin, attrs) do
     Repo.transaction(fn ->
-      lock_admin!(admin)
+      current = lock_admin!(admin)
       attrs = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
       tenant_attrs = Map.take(attrs, ~w(name slug))
 
@@ -42,10 +42,20 @@ defmodule Custyard.Tenants do
 
       hostname = Map.get(attrs, "hostname", Map.get(attrs, :hostname))
 
-      case add_host(tenant.id, hostname) do
-        {:ok, _} -> tenant
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
+      host =
+        case add_host(tenant.id, hostname) do
+          {:ok, host} -> host
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+
+      audit!(%{
+        tenant_id: tenant.id,
+        event_type: :tenant_created,
+        source: "instance_admin",
+        payload: %{instance_admin_id: current.id, host_id: host.id, hostname: host.hostname}
+      })
+
+      tenant
     end)
   end
 
@@ -157,20 +167,22 @@ defmodule Custyard.Tenants do
 
   def invite_staff(%StaffAccount{} = staff, tenant_id, attrs) do
     Repo.transaction(fn ->
-      lock_manager!(staff, tenant_id)
-      insert_staff!(tenant_id, attrs)
+      current = lock_manager!(staff, tenant_id)
+      insert_staff!(tenant_id, attrs, "staff", %{actor_staff_id: current.id})
     end)
   end
 
   def provision_staff(%InstanceAdmin{} = admin, tenant_id, attrs) do
     Repo.transaction(fn ->
-      lock_admin!(admin)
+      current = lock_admin!(admin)
       get_tenant!(tenant_id)
-      insert_staff!(tenant_id, attrs)
+      insert_staff!(tenant_id, attrs, "instance_admin", %{instance_admin_id: current.id})
     end)
   end
 
-  defp insert_staff!(tenant_id, attrs) do
+  # `via` is who created the account, a tenant admin ("staff") or an instance
+  # admin, and `actor` is their id under the payload key of that kind.
+  defp insert_staff!(tenant_id, attrs, via, actor) do
     changeset =
       StaffAccount.changeset(%StaffAccount{}, %{
         email: Map.get(attrs, "email", attrs[:email]),
@@ -180,6 +192,13 @@ defmodule Custyard.Tenants do
 
     case Repo.insert(changeset) do
       {:ok, staff} ->
+        audit!(%{
+          tenant_id: tenant_id,
+          event_type: :staff_created,
+          source: via,
+          payload: Map.merge(actor, %{staff_id: staff.id, role: staff.role, via: via})
+        })
+
         Log.info(:staff_account_created,
           staff_id: staff.id,
           tenant_id: staff.tenant_id,
@@ -339,13 +358,32 @@ defmodule Custyard.Tenants do
 
   def add_host_for_admin(%InstanceAdmin{} = admin, tenant_id, hostname) do
     Repo.transaction(fn ->
-      lock_admin!(admin)
+      current = lock_admin!(admin)
 
-      case add_host(tenant_id, hostname) do
-        {:ok, host} -> host
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
+      host =
+        case add_host(tenant_id, hostname) do
+          {:ok, host} -> host
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+
+      audit!(%{
+        tenant_id: tenant_id,
+        event_type: :tenant_host_added,
+        source: "instance_admin",
+        payload: %{instance_admin_id: current.id, host_id: host.id, hostname: host.hostname}
+      })
+
+      host
     end)
+  end
+
+  # The action and its audit record are one transaction: when the record
+  # cannot be written, the action is undone.
+  defp audit!(attrs) do
+    case AuditEvent.create(attrs) do
+      {:ok, event} -> event
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   def normalize_host(host) when is_binary(host),

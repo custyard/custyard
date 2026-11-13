@@ -137,6 +137,45 @@ defmodule CustyardWeb.Admin.AuditLogLiveTest do
     end
   end
 
+  describe "what an instance admin does on the tenants page" do
+    test "creating a tenant, adding a hostname and provisioning staff are listed", c do
+      conn = sign_in(c.admin)
+      {:ok, tenants, _html} = live(conn, ~p"/admin/tenants")
+
+      {:error, {:live_redirect, %{to: settings}}} =
+        tenants
+        |> form("#tenant-create",
+          tenant: %{name: "Globex", slug: "globex", hostname: "globex.example.com"}
+        )
+        |> render_submit()
+
+      {:ok, tenant, _html} = live(conn, settings)
+
+      tenant
+      |> form("form[phx-submit=host]", hostname: "help.globex.example.com")
+      |> render_submit()
+
+      tenant
+      |> form("form[phx-submit=staff]", staff: %{email: "hank@globex.test", role: "agent"})
+      |> render_submit()
+
+      {:ok, view, html} = live(conn, ~p"/admin/audit")
+      assert [provisioned, added, created | _] = entry_ids(html)
+
+      assert text(view, part(created, "summary")) == "Created the workspace at globex.example.com"
+      assert text(view, part(added, "summary")) == "Added the hostname help.globex.example.com"
+      assert text(view, part(provisioned, "summary")) == "Created an agent staff account"
+
+      for id <- [provisioned, added, created] do
+        assert text(view, part(id, "actor")) == "root@install.test"
+        assert text(view, part(id, "tenant")) == "Globex"
+      end
+
+      # The provisioned account is the tenant's; its address is not shown here.
+      refute html =~ "hank@globex.test"
+    end
+  end
+
   describe "the page" do
     test "has a title, says what it lists and that times are UTC", c do
       {:ok, view, _html} = live(sign_in(c.admin), ~p"/admin/audit")

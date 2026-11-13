@@ -2,8 +2,8 @@ defmodule Custyard.AuditEvent do
   @moduledoc """
   Schema for persisting audit events (webhook processing, staff actions
   such as thread state changes, ignoring a sender and slug release, staff
-  accounts created or removed outside the UI, and acknowledgment replays and
-  bindings).
+  accounts created or removed, tenants created and their hostnames added or
+  removed, and acknowledgment replays and bindings).
 
   Records are queryable by thread, organization, or message_id. New
   payloads use event-specific allowlists and internal IDs rather than duplicate
@@ -34,7 +34,9 @@ defmodule Custyard.AuditEvent do
                    :prospect_converted,
                    :staff_created,
                    :staff_removed,
+                   :tenant_created,
                    :tenant_status_changed,
+                   :tenant_host_added,
                    :tenant_host_removed,
                    :acknowledgment_replayed,
                    :acknowledgment_binding_created,

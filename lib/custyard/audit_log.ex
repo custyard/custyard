@@ -5,7 +5,8 @@ defmodule Custyard.AuditLog do
 
   A tenant admin reads every event of their own tenant (`for_tenant/2`). An
   instance admin reads installation events and what instance admins did to a
-  tenant, such as suspending it or removing a hostname (`for_instance/2`).
+  tenant: creating or suspending it, adding or removing a hostname,
+  provisioning a staff account (`for_instance/2`).
   They never read an event of a tenant's own work: instance administration
   carries no customer access.
 
@@ -98,7 +99,9 @@ defmodule Custyard.AuditLog do
        [
          :staff_created,
          :staff_removed,
+         :tenant_created,
          :tenant_status_changed,
+         :tenant_host_added,
          :tenant_host_removed,
          :outbound_pause_changed
        ]},
@@ -539,6 +542,13 @@ defmodule Custyard.AuditLog do
   defp summary(:staff_removed, payload, context),
     do: "Removed #{staff_account(payload, context)}"
 
+  defp summary(:tenant_created, payload, _context) do
+    case payload["hostname"] do
+      nil -> "Created the workspace"
+      hostname -> "Created the workspace at #{hostname}"
+    end
+  end
+
   defp summary(:tenant_status_changed, %{"status" => "suspended"}, _context),
     do: "Suspended the workspace"
 
@@ -546,6 +556,13 @@ defmodule Custyard.AuditLog do
     do: "Resumed the workspace"
 
   defp summary(:tenant_status_changed, _payload, _context), do: "Changed the workspace status"
+
+  defp summary(:tenant_host_added, payload, _context) do
+    case payload["hostname"] do
+      nil -> "Added a hostname"
+      hostname -> "Added the hostname #{hostname}"
+    end
+  end
 
   defp summary(:tenant_host_removed, payload, _context) do
     case payload["hostname"] do

@@ -389,6 +389,30 @@ defmodule Custyard.AuditLogTest do
     end
   end
 
+  describe "for_tenant/2 and what an instance admin did" do
+    test "shows the action and the account created, not which admin acted", c do
+      admin = instance_admin()
+      {:ok, _} = Tenants.add_host_for_admin(admin, c.tenant.id, "help.northwind.test")
+
+      {:ok, _} =
+        Tenants.provision_staff(admin, c.tenant.id, %{email: "hank@northwind.test", role: "agent"})
+
+      {:ok, _} =
+        Tenants.invite_staff(c.staff, c.tenant.id, %{email: "ivy@northwind.test", role: "admin"})
+
+      assert [invited, provisioned, added] = entries(c.scope, category: "workspace")
+
+      assert added.summary == "Added the hostname help.northwind.test"
+      assert added.actor == "Instance admin"
+      assert provisioned.summary == "Created the agent staff account hank@northwind.test"
+      assert provisioned.actor == "Instance admin"
+      assert invited.summary == "Created the admin staff account ivy@northwind.test"
+      assert invited.actor == "ada@northwind.test"
+
+      refute inspect([invited, provisioned, added]) =~ "root@install.test"
+    end
+  end
+
   describe "for_tenant/2 and what a stored row may hold" do
     test "a row from before payloads were minimized shows no address and no message text", c do
       insert_legacy_event(
@@ -494,6 +518,43 @@ defmodule Custyard.AuditLogTest do
       assert suspended.summary == "Suspended the workspace"
       assert suspended.tenant == %{id: c.tenant.id, name: "Northwind"}
       assert resumed.summary == "Resumed the workspace"
+    end
+
+    test "lists a tenant's creation, its hostnames and its provisioned staff", c do
+      {:ok, tenant} =
+        Tenants.create_tenant_for_admin(c.admin, %{
+          name: "Globex",
+          slug: "globex",
+          hostname: "globex.example.com"
+        })
+
+      {:ok, _} = Tenants.add_host_for_admin(c.admin, tenant.id, "help.globex.example.com")
+
+      {:ok, _} =
+        Tenants.provision_staff(c.admin, tenant.id, %{email: "hank@globex.test", role: "admin"})
+
+      assert [provisioned, added, created | _] = instance_entries(c.admin)
+
+      assert created.summary == "Created the workspace at globex.example.com"
+      assert added.summary == "Added the hostname help.globex.example.com"
+      # Tenant staff are not named here, also not the one just provisioned.
+      assert provisioned.summary == "Created an admin staff account"
+
+      for entry <- [provisioned, added, created] do
+        assert entry.actor == "root@install.test"
+        assert entry.topic == :workspace
+        assert entry.tenant == %{id: tenant.id, name: "Globex"}
+      end
+
+      refute inspect(provisioned) =~ "hank@globex.test"
+    end
+
+    test "leaves out a staff account a tenant admin invited", c do
+      {:ok, _} =
+        Tenants.invite_staff(c.staff, c.tenant.id, %{email: "ivy@northwind.test", role: "agent"})
+
+      assert [%{event_type: :staff_created} | _] = entries(c.scope, category: "workspace")
+      refute Enum.any?(instance_entries(c.admin), &(&1.event_type == :staff_created))
     end
 
     test "names a removed instance admin by nothing but the fact", c do

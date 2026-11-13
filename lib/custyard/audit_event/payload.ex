@@ -18,7 +18,9 @@ defmodule Custyard.AuditEvent.Payload do
     staff_created: ~w(staff_id actor_staff_id instance_admin_id tenant_id role via),
     staff_removed:
       ~w(staff_id actor_staff_id role deleted_message_ids forwarded_message_ids authored_message_ids),
+    tenant_created: ~w(instance_admin_id host_id hostname),
     tenant_status_changed: ~w(instance_admin_id status),
+    tenant_host_added: ~w(instance_admin_id host_id hostname),
     tenant_host_removed: ~w(instance_admin_id host_id hostname),
     acknowledgment_replayed:
       @actor_keys ++ ~w(source submission_id body_sha256 category attempt outcome),

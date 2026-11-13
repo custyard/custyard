@@ -23,7 +23,9 @@ defmodule Custyard.AuditEventTest do
                :prospect_converted,
                :staff_created,
                :staff_removed,
+               :tenant_created,
                :tenant_status_changed,
+               :tenant_host_added,
                :tenant_host_removed,
                :acknowledgment_replayed,
                :acknowledgment_binding_created,
@@ -365,6 +367,42 @@ defmodule Custyard.AuditEventTest do
         assert Payload.minimize(%{"to" => state}, :thread_state_changed) ==
                  %{"to" => Atom.to_string(state)}
       end
+    end
+
+    test "a created tenant and an added hostname keep the admin id and the hostname" do
+      for type <- [:tenant_created, :tenant_host_added] do
+        assert Payload.minimize(
+                 %{
+                   "instance_admin_id" => 3,
+                   "host_id" => 9,
+                   "hostname" => "help.example.com",
+                   "name" => "Northwind",
+                   "email" => "root@example.com"
+                 },
+                 type
+               ) == %{"instance_admin_id" => 3, "host_id" => 9, "hostname" => "help.example.com"}
+
+        assert Payload.minimize(%{"host_id" => "9", "hostname" => "person@example.com"}, type) ==
+                 %{"host_id" => nil, "hostname" => nil}
+      end
+    end
+
+    test "a created staff account keeps ids, the role and who created it, never the address" do
+      assert Payload.minimize(
+               %{
+                 "staff_id" => 7,
+                 "actor_staff_id" => 2,
+                 "role" => "agent",
+                 "via" => "staff",
+                 "email" => "new@example.com"
+               },
+               :staff_created
+             ) == %{"staff_id" => 7, "actor_staff_id" => 2, "role" => "agent", "via" => "staff"}
+
+      assert Payload.minimize(
+               %{"instance_admin_id" => 3, "role" => "super_admin", "via" => "new@example.com"},
+               :staff_created
+             ) == %{"instance_admin_id" => 3, "role" => nil, "via" => nil}
     end
 
     test "ignoring a sender keeps ids and the flag, never the address" do
